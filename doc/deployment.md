@@ -10,8 +10,8 @@ regular user (not root) using systemd user services and rootless Podman.
 - **Python 3.13+** (via uv)
 - **uv** (Python package manager)
 - **Git** and **GitHub CLI** (`gh`)
-- **Email account** with IMAP/SMTP access (see [Email Setup](#email-setup) for
-  DMARC considerations)
+- **Dedicated email account** with IMAP/SMTP access — one per repository (see
+  [Email Setup](#email-setup) for details)
 - **Git credentials** for fetching configured repositories (see below)
 
 ## Installation Steps
@@ -236,6 +236,17 @@ Keep `.env` secure (`chmod 600`). The file is gitignored and should never be
 committed.
 
 ## Email Setup
+
+### Dedicated Inbox Requirement
+
+> **⚠️ Warning:** Each repository requires its own dedicated email
+> account/inbox. Airut treats the inbox as a work queue — it continuously polls
+> for messages, processes every email it finds, and **permanently deletes
+> messages** after processing.
+>
+> **Never point Airut to an inbox used for other purposes** (such as your
+> personal email or a shared team inbox). Airut will attempt to process every
+> message and delete it.
 
 ### DMARC Requirements
 

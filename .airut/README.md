@@ -63,9 +63,13 @@ doesn't need to define `ENTRYPOINT`.
 Server-side configuration lives in `config/airut.yaml` (not in this directory).
 It handles:
 
-- Mail server credentials (IMAP/SMTP)
+- Mail server credentials (IMAP/SMTP) — **each repo needs a dedicated inbox**
 - Authorized senders and trusted authserv_id
 - Storage directory and git repo URL
 - Secrets pool (values that `!secret` tags reference)
+
+> **Note:** Airut treats the IMAP inbox as a work queue. It polls for messages,
+> processes every email, and permanently deletes messages after processing.
+> Never use a shared or personal email account.
 
 See `spec/repo-config.md` for the full schema.

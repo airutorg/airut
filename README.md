@@ -110,6 +110,11 @@ by sending instructions to Airut and reviewing the resulting PRs.
 
 ## Quick Start
 
+> **Important:** Each repository requires a dedicated email account. Airut
+> treats the inbox as a work queue and permanently deletes messages after
+> processing. See
+> [Dedicated Inbox Requirement](doc/deployment.md#dedicated-inbox-requirement).
+
 1. **Deploy Airut** on a Linux VM (see [deployment.md](doc/deployment.md))
 
 2. **Onboard a repository** by creating `.airut/` configuration (see

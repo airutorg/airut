@@ -138,7 +138,17 @@ EmailResponder
     │
     ▼
 SMTP send
+    │
+    ▼
+EmailListener
+    │
+    └──▶ Delete original message from IMAP inbox (expunge)
 ```
+
+**Email lifecycle:** Airut treats the IMAP inbox as a work queue. After
+processing a message (whether successful or not), it permanently deletes the
+message from the inbox. This is why each repository requires a dedicated email
+account — Airut will process and delete every message it finds.
 
 ### Storage Structure
 
