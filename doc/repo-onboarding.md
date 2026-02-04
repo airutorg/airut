@@ -6,7 +6,9 @@ email-based Claude Code interaction.
 ## Prerequisites
 
 - Airut server deployed (see [deployment.md](deployment.md))
-- Email account for the repository
+- **Dedicated email account** for the repository (see
+  [Dedicated Inbox Requirement](deployment.md#dedicated-inbox-requirement) —
+  Airut deletes processed messages)
 - Repository access for the agent's GitHub account
 - Claude API credentials
 
@@ -166,7 +168,10 @@ can be used as inspiration.
 
 ### 6. Configure Server
 
-Add the repository to your Airut server config (`config/airut.yaml`):
+Add the repository to your Airut server config (`config/airut.yaml`).
+
+> **Note:** The email account must be dedicated to this repository. Airut treats
+> the inbox as a work queue and permanently deletes messages after processing.
 
 ```yaml
 repos:

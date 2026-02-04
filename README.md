@@ -112,10 +112,14 @@ by sending instructions to Airut and reviewing the resulting PRs.
 
 1. **Deploy Airut** on a Linux VM (see [deployment.md](doc/deployment.md))
 
-2. **Onboard a repository** by creating `.airut/` configuration (see
+2. **Create a dedicated email account** for each repository — Airut treats the
+   inbox as a work queue and permanently deletes messages after processing (see
+   [Dedicated Inbox Requirement](doc/deployment.md#dedicated-inbox-requirement))
+
+3. **Onboard a repository** by creating `.airut/` configuration (see
    [repo-onboarding.md](doc/repo-onboarding.md))
 
-3. **Send an email** to your configured address:
+4. **Send an email** to your configured address:
 
    ```
    To: airut@example.com
@@ -124,7 +128,7 @@ by sending instructions to Airut and reviewing the resulting PRs.
    Please fix the typo in the README file.
    ```
 
-4. **Receive the response** with results and PR link
+5. **Receive the response** with results and PR link
 
 ## Project Structure
 
