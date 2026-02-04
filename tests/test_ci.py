@@ -48,120 +48,8 @@ class TestColorize:
             assert result == "test"
 
 
-class TestRunAuthorshipCheck:
-    """Tests for run_authorship_check function."""
-
-    def test_merge_base_failure(self) -> None:
-        """Returns failure when merge-base command fails."""
-        with patch("ci.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=1, stderr="not a git repo"
-            )
-            success, output = ci.run_authorship_check()
-            assert success is False
-            assert "Failed to get merge base" in output
-
-    def test_git_log_failure(self) -> None:
-        """Returns failure when git log command fails."""
-        with patch("ci.subprocess.run") as mock_run:
-            # First call (merge-base) succeeds
-            # Second call (git log) fails
-            mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="abc123\n"),
-                MagicMock(returncode=1, stderr="log failed"),
-            ]
-            success, output = ci.run_authorship_check()
-            assert success is False
-            assert "Failed to get commits" in output
-
-    def test_no_commits(self) -> None:
-        """Returns success when no commits to check."""
-        with patch("ci.subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="abc123\n"),
-                MagicMock(returncode=0, stdout=""),  # No commits
-            ]
-            success, output = ci.run_authorship_check()
-            assert success is True
-            assert "No commits to check" in output
-
-    def test_forbidden_author_name(self) -> None:
-        """Detects forbidden author name 'Claude'."""
-        with patch("ci.subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="abc123\n"),  # merge-base
-                MagicMock(returncode=0, stdout="def456\n"),  # git log commits
-                MagicMock(returncode=0, stdout="Claude\n"),  # author name
-                MagicMock(returncode=0, stdout="test@test.com\n"),  # email
-                MagicMock(returncode=0, stdout="Test commit\n"),  # message
-            ]
-            success, output = ci.run_authorship_check()
-            assert success is False
-            assert "forbidden author name 'Claude'" in output
-
-    def test_forbidden_email_domain(self) -> None:
-        """Detects forbidden author email domain."""
-        with patch("ci.subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="abc123\n"),
-                MagicMock(returncode=0, stdout="def456\n"),
-                MagicMock(returncode=0, stdout="John Doe\n"),
-                MagicMock(returncode=0, stdout="claude@anthropic.com\n"),
-                MagicMock(returncode=0, stdout="Test commit\n"),
-            ]
-            success, output = ci.run_authorship_check()
-            assert success is False
-            assert "forbidden author email domain" in output
-
-    def test_coauthored_by_in_message(self) -> None:
-        """Detects Co-Authored-By in commit message."""
-        with patch("ci.subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="abc123\n"),
-                MagicMock(returncode=0, stdout="def456\n"),
-                MagicMock(returncode=0, stdout="John Doe\n"),
-                MagicMock(returncode=0, stdout="john@example.com\n"),
-                MagicMock(
-                    returncode=0,
-                    stdout="Fix bug\n\nCo-Authored-By: Claude <c@a.com>\n",
-                ),
-            ]
-            success, output = ci.run_authorship_check()
-            assert success is False
-            assert "Co-Authored-By" in output
-
-    def test_valid_commits(self) -> None:
-        """Returns success for valid commits."""
-        with patch("ci.subprocess.run") as mock_run:
-            mock_run.side_effect = [
-                MagicMock(returncode=0, stdout="abc123\n"),
-                MagicMock(returncode=0, stdout="def456\n"),
-                MagicMock(returncode=0, stdout="John Doe\n"),
-                MagicMock(returncode=0, stdout="john@example.com\n"),
-                MagicMock(returncode=0, stdout="Fix bug\n"),
-            ]
-            success, output = ci.run_authorship_check()
-            assert success is True
-            assert "1 commit(s) passed" in output
-
-
 class TestRunStep:
     """Tests for run_step function."""
-
-    def test_authorship_check_step(self) -> None:
-        """Handles special authorship check step."""
-        step = ci.Step(
-            name="Check commit authorship",
-            command="__authorship_check__",
-            workflow="authorship",
-        )
-        with patch("ci.run_authorship_check") as mock_check:
-            mock_check.return_value = (True, "All good")
-            success, output = ci.run_step(
-                step, fix_mode=False, verbose=False, step_timeout=300
-            )
-            assert success is True
-            mock_check.assert_called_once()
 
     def test_command_success(self) -> None:
         """Returns success for passing command."""
@@ -297,15 +185,6 @@ class TestRunCi:
             captured = capsys.readouterr()
             assert "failed" in captured.out
 
-    def test_workflow_filter(self) -> None:
-        """Filters steps by workflow."""
-        with patch("ci.run_step") as mock_run_step:
-            mock_run_step.return_value = (True, "")
-            with patch.object(sys.stdout, "isatty", return_value=False):
-                ci.run_ci(workflows=["authorship"])
-            # Should only run authorship step
-            assert mock_run_step.call_count == 1
-
     def test_security_workflow_filter(self) -> None:
         """Filters steps by security workflow."""
         with patch("ci.run_step") as mock_run_step:
@@ -328,7 +207,7 @@ class TestRunCi:
         with patch("ci.run_step") as mock_run_step:
             mock_run_step.return_value = (True, "")
             with patch.object(sys.stdout, "isatty", return_value=False):
-                ci.run_ci(fix_mode=True, workflows=["authorship"])
+                ci.run_ci(fix_mode=True, workflows=["security"])
             # Check that fix_mode=True was passed
             call_args = mock_run_step.call_args
             assert call_args[0][1] is True  # fix_mode argument
@@ -338,7 +217,7 @@ class TestRunCi:
         with patch("ci.run_step") as mock_run_step:
             mock_run_step.return_value = (True, "output")
             with patch.object(sys.stdout, "isatty", return_value=False):
-                ci.run_ci(verbose=True, workflows=["authorship"])
+                ci.run_ci(verbose=True, workflows=["security"])
             # Check that verbose=True was passed
             call_args = mock_run_step.call_args
             assert call_args[0][2] is True  # verbose argument
@@ -425,11 +304,11 @@ class TestMain:
             mock_run_ci.return_value = 0
             with patch(
                 "sys.argv",
-                ["ci.py", "--workflow", "code", "--workflow", "authorship"],
+                ["ci.py", "--workflow", "code", "--workflow", "security"],
             ):
                 ci.main()
             mock_run_ci.assert_called_once_with(
-                workflows=["code", "authorship"],
+                workflows=["code", "security"],
                 fix_mode=False,
                 verbose=False,
                 step_timeout=ci.DEFAULT_STEP_TIMEOUT_SECONDS,
@@ -464,32 +343,6 @@ class TestDriftDetection:
         validation_steps = workflow_steps - setup_steps
         missing = validation_steps - ci_step_names
         assert not missing, f"Steps in code.yml not in ci.py: {missing}"
-
-    def test_authorship_workflow_steps_match(self) -> None:
-        """Verify ci.py covers authorship.yml check."""
-        workflow_path = (
-            Path(__file__).parent.parent / ".github/workflows/authorship.yml"
-        )
-        with open(workflow_path) as f:
-            workflow = yaml.safe_load(f)
-
-        # Extract step names from workflow
-        workflow_steps = set()
-        for job in workflow.get("jobs", {}).values():
-            for step in job.get("steps", []):
-                if "name" in step:
-                    workflow_steps.add(step["name"])
-
-        # Steps we skip (setup steps)
-        skipped_steps = {"Get merge base"}
-
-        # Get ci.py step names for authorship workflow
-        ci_step_names = {s.name for s in ci.STEPS if s.workflow == "authorship"}
-
-        # All validation steps should be in ci.py
-        validation_steps = workflow_steps - skipped_steps
-        missing = validation_steps - ci_step_names
-        assert not missing, f"Steps in authorship.yml not in ci.py: {missing}"
 
     def test_e2e_workflow_steps_match(self) -> None:
         """Verify ci.py covers all test steps from e2e.yml."""
