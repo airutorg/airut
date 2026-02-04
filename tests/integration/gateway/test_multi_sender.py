@@ -13,6 +13,7 @@ Tests that:
 """
 
 import threading
+import time
 
 from .conftest import MOCK_CONTAINER_COMMAND
 from .environment import IntegrationEnvironment
@@ -53,14 +54,45 @@ class TestMultipleSendersAuthorization:
             service_thread.start()
 
             try:
-                # Wait for both responses
-                response1 = env.email_server.wait_for_sent(timeout=15.0)
-                assert response1 is not None, (
-                    "Should receive response for Alice"
+                # Wait for inbox to be processed
+                processed = env.email_server.wait_until_inbox_empty(
+                    timeout=10.0
+                )
+                assert processed, "Service did not process messages in time"
+
+                # Wait for responses to both senders
+                # Note: wait_for_sent returns any matching message and doesn't
+                # track which messages were already returned. We must wait for
+                # both recipients to have received responses.
+                deadline = time.monotonic() + 30.0
+                while time.monotonic() < deadline:
+                    messages = env.email_server.get_sent_messages()
+                    to_addresses = {
+                        msg.get("To", "").lower() for msg in messages
+                    }
+                    has_alice = any(
+                        "alice@test.local" in addr for addr in to_addresses
+                    )
+                    has_bob = any(
+                        "bob@test.local" in addr for addr in to_addresses
+                    )
+                    if has_alice and has_bob:
+                        break
+                    time.sleep(0.05)
+
+                # Verify both received responses
+                messages = env.email_server.get_sent_messages()
+                assert len(messages) >= 2, (
+                    f"Should have at least 2 messages, got {len(messages)}"
                 )
 
-                response2 = env.email_server.wait_for_sent(timeout=15.0)
-                assert response2 is not None, "Should receive response for Bob"
+                to_addresses = {msg.get("To", "").lower() for msg in messages}
+                assert any(
+                    "alice@test.local" in addr for addr in to_addresses
+                ), f"Alice should receive a reply, got: {to_addresses}"
+                assert any("bob@test.local" in addr for addr in to_addresses), (
+                    f"Bob should receive a reply, got: {to_addresses}"
+                )
 
                 # Check that two conversations were created
                 sessions_dir = env.storage_dir / "sessions"
