@@ -1,0 +1,71 @@
+# Airut Repo Configuration
+
+This directory contains repo-specific Airut configuration. Files here are read
+from the git mirror's default branch at task start, so changes take effect after
+merging to main without server restart.
+
+## Files
+
+### `airut.yaml` — Repo Config
+
+Controls repo-specific behavior:
+
+```yaml
+default_model: opus         # Claude model when not specified via subaddressing
+timeout: 6000               # Max container execution time (seconds)
+
+network:
+  sandbox_enabled: true     # Enable network allowlist enforcement
+
+container_env:              # Environment variables for containers
+  GH_TOKEN: !secret GH_TOKEN              # Required secret from server pool
+  API_KEY: !secret? API_KEY               # Optional secret (skip if missing)
+  BUCKET_NAME: "my-bucket"                # Inline value (non-secret)
+```
+
+**YAML Tags:**
+
+- `!secret NAME` — resolve from server's secrets pool (error if missing)
+- `!secret? NAME` — optional secret (skip entry if missing)
+- `!env` is NOT allowed in repo config (security: prevents reading server env)
+
+### `network-allowlist.yaml` — Network Sandbox
+
+Defines which hosts containers can access. All HTTP(S) traffic is proxied and
+checked against this allowlist. See `doc/network-sandbox.md`.
+
+```yaml
+# Full-domain entries: all paths allowed
+domains:
+  - api.anthropic.com
+  - pypi.org
+
+# URL prefix entries: host + path prefix required
+url_prefixes:
+  - host: api.github.com
+    path: /repos/owner/repo
+```
+
+**Self-service workflow:** When the agent encounters a blocked request, it can
+edit this file and submit a PR. A human must review and merge before the change
+takes effect.
+
+### `container/Dockerfile` — Container Image
+
+Repo-defined base image. Controls what tools and dependencies are available in
+the Claude Code container. See `spec/image.md`.
+
+The server adds an overlay with the entrypoint script, so the repo Dockerfile
+doesn't need to define `ENTRYPOINT`.
+
+## Server Config
+
+Server-side configuration lives in `config/airut.yaml` (not in this directory).
+It handles:
+
+- Mail server credentials (IMAP/SMTP)
+- Authorized senders and trusted authserv_id
+- Storage directory and git repo URL
+- Secrets pool (values that `!secret` tags reference)
+
+See `spec/repo-config.md` for the full schema.

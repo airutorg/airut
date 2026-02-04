@@ -1,0 +1,39 @@
+# Repo-specific Airut configuration.
+#
+# Loaded from the git mirror (main branch) at the start of each task.
+# Changes take effect after merge to main without server restart.
+#
+# Tags:
+#   !secret NAME   - Inject a value from the server's secrets pool.
+#                    Errors if the server doesn't export that name.
+#   !secret? NAME  - Optional secret. Skip the entry if the server doesn't
+#                    export that name (no error).
+#   !env is NOT allowed (cannot read server environment variables).
+
+# Default Claude model when the sender does not specify one via
+# subaddressing (e.g. airut+opus@example.com).
+default_model: opus
+
+# Maximum time in seconds a Claude container may run before being killed.
+timeout: 6000
+
+network:
+  # Enable the network sandbox (default: true).
+  # When enabled, containers are placed on an isolated network and all HTTP(S)
+  # traffic is routed through a proxy that enforces the network allowlist
+  # (see .airut/network-allowlist.yaml). Set to false for unrestricted
+  # network access (break-glass override).
+  sandbox_enabled: true
+
+# Environment variables passed into every Claude Code container.
+# Values can be inline strings or !secret references to the server pool.
+# All resolved values are automatically redacted from service logs.
+# Entries whose value resolves to empty are skipped.
+container_env:
+  # Claude authentication (optional; OAuth token takes precedence if both set).
+  # Use !secret? so either or both can be absent from server config.
+  CLAUDE_CODE_OAUTH_TOKEN: !secret? CLAUDE_CODE_OAUTH_TOKEN
+  ANTHROPIC_API_KEY: !secret? ANTHROPIC_API_KEY
+
+  # GitHub token for git operations inside the container.
+  GH_TOKEN: !secret GH_TOKEN

@@ -1,0 +1,22 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: astral-sh/setup-uv@v4
+      - run: uv python install 3.13
+      - run: uv sync
+      - name: License check
+        run: uv run pip-licenses
+      - name: Vulnerability scan
+        run: uv run uv-secure uv.lock

@@ -1,0 +1,121 @@
+# Airut Server Configuration
+#
+# Server-side settings: infrastructure, credentials, and operator controls.
+# Repo-specific behaviour (git identity, model, timeout, container env,
+# network) is in .airut/airut.yaml (loaded from each repo's git mirror).
+#
+# Copy this file to config/airut.yaml and fill in your values.
+# config/airut.yaml is gitignored — never commit real credentials.
+#
+# Values tagged with !env are resolved from environment variables at load
+# time.  Use !env for secrets; put everything else inline.  You can also
+# load env vars from a .env file (auto-loaded from repo root).
+
+execution:
+  # Maximum number of Claude containers running in parallel (global).
+  max_concurrent: 3
+
+  # Seconds to wait for running containers to finish during graceful shutdown.
+  shutdown_timeout: 60
+
+  # Conversations with no activity for this many days are garbage-collected.
+  conversation_max_age_days: 7
+
+dashboard:
+  # Enable the web dashboard for monitoring tasks and viewing actions.
+  enabled: true
+
+  # Bind address and port for the dashboard HTTP server.
+  host: 127.0.0.1
+  port: 5200
+
+  # Public URL used in acknowledgment emails to link to task progress.
+  # Leave empty to omit task links from emails.
+  base_url: dashboard.example.com
+
+# Container runtime executable (podman or docker).
+container_command: podman
+
+# ---------------------------------------------------------------------------
+# Repositories
+# ---------------------------------------------------------------------------
+# Each entry under repos: defines a separate email inbox + git repository.
+# Every repo gets its own IMAP listener thread, SMTP credentials, authorized
+# sender, and secrets pool.  Repos share the global executor pool and
+# dashboard.
+
+repos:
+  # -------------------------------------------------------------------------
+  # Example: primary repository
+  # -------------------------------------------------------------------------
+  my-project:
+    email:
+      # IMAP server for receiving emails.
+      imap_server: mail.example.com
+      imap_port: 993
+
+      # SMTP server for sending reply emails.
+      smtp_server: mail.example.com
+      smtp_port: 587
+
+      # Email account credentials.  Use !env to keep passwords out of this
+      # file — the actual value comes from the environment / .env file.
+      username: airut
+      password: !env EMAIL_PASSWORD
+
+      # From address for outgoing emails (display name + address).
+      from: "Airut <airut@example.com>"
+
+    # Only emails from these addresses/patterns (with passing DMARC) are
+    # accepted. Supports wildcards for domain matching (e.g., *@company.com).
+    authorized_senders:
+      - you@example.com
+      # - *@company.com  # Uncomment to allow any sender from company.com
+
+    # The authserv-id to trust in Authentication-Results headers.
+    # Typically the hostname of your MX server.
+    trusted_authserv_id: mail.example.com
+
+    git:
+      # Repository URL cloned into each conversation workspace.
+      repo_url: https://github.com/you/my-project.git
+
+    # Root directory for this repo's persistent data: sessions, git mirror.
+    storage_dir: ~/airut-storage/my-project
+
+    imap:
+      # Seconds between IMAP polls (only used when use_idle is false).
+      poll_interval: 30
+
+      # Use IMAP IDLE for efficient push-based notifications (recommended).
+      use_idle: true
+
+      # Reconnect interval for IDLE mode in seconds (keep below 29 min).
+      idle_reconnect_interval: 1740
+
+    # Named pool of secrets available for this repo to reference via !secret
+    # and !secret? tags in .airut/airut.yaml.  Keys are logical names; values
+    # are resolved from the environment.
+    secrets:
+      ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
+      GH_TOKEN: !env GH_TOKEN
+
+  # -------------------------------------------------------------------------
+  # Example: additional repository (uncomment to use)
+  # -------------------------------------------------------------------------
+  # another-repo:
+  #   email:
+  #     imap_server: mail.example.com
+  #     smtp_server: mail.example.com
+  #     username: airut-other
+  #     password: !env OTHER_EMAIL_PASSWORD
+  #     from: "Airut <airut-other@example.com>"
+  #   authorized_senders:
+  #     - you@example.com
+  #   trusted_authserv_id: mail.example.com
+  #   git:
+  #     repo_url: https://github.com/you/another-repo.git
+  #   storage_dir: ~/airut-storage/another-repo
+  #   secrets:
+  #     ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
+  #     GH_TOKEN: !env GH_TOKEN

@@ -1,0 +1,89 @@
+[project]
+name = "airut"
+version = "0.1.0"
+description = "Headless Claude Code interaction via email"
+license = "MIT"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "aiosmtpd>=1.4.6",
+    "mdformat>=0.7",
+    "mdformat-frontmatter>=2",
+    "mdformat-gfm>=0.3",
+    "mdformat-ruff>=0.1",
+    "pip-licenses>=5.0",
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "pytest-socket>=0.7.0",
+    "pytest-xdist>=3.8.0",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0.3",
+    "ruff>=0.14",
+    "ty>=0.0.8",
+    "uv-secure>=0.6",
+    "werkzeug>=3.1.5",
+]
+
+[tool.ruff]
+line-length = 80
+target-version = "py313"
+src = ["lib", "scripts"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "F",      # Pyflakes
+    "I",      # isort
+    "W",      # pycodestyle warnings
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    "D",      # pydocstyle
+]
+ignore = [
+    "D1",     # Allow missing docstrings (enforce via review)
+]
+
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+[tool.ruff.lint.isort]
+known-first-party = ["lib"]
+force-single-line = false
+lines-after-imports = 2
+
+[tool.ty.environment]
+python-version = "3.13"
+
+[tool.ty.src]
+include = ["lib", "scripts", "tests"]
+
+[tool.ty.terminal]
+error-on-warning = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "--disable-socket --ignore=tests/integration"
+
+[tool.pip-licenses]
+# Allowed licenses for dependencies (using partial matching)
+# See: https://spdx.org/licenses/ for license identifiers
+# Note: partial-match allows "MIT" to match "MIT License", etc.
+allow-only = """
+Apache;
+BSD;
+ISC;
+MIT;
+MPL;
+Mozilla Public License;
+PSF;
+Python Software Foundation;
+Unlicense
+"""
+partial-match = true

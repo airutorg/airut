@@ -1,0 +1,453 @@
+# Email Gateway
+
+Headless email gateway for interacting with the codebase via Claude Code.
+Enables authorized users to send instructions via email and receive Claude's
+responses with full conversation state management.
+
+## Overview
+
+A persistent Python daemon that monitors email, spins up ephemeral Claude Code
+sessions in containers, and replies with results. Each email conversation maps
+to an isolated git checkout with persistent `.claude/` session state.
+
+**Key principle**: Email as a stateful interface to Claude Code, with git-based
+conversation isolation and container-based execution for security.
+
+## Architecture
+
+### Components
+
+- **EmailListener** - IMAP polling loop with authentication and quote stripping
+- **ConversationManager** - Git checkout management and state persistence
+- **ClaudeExecutor** - Podman container wrapper for Claude Code execution
+- **EmailResponder** - SMTP reply construction with threading support
+- **SenderAuthenticator** - DMARC verification on trusted headers
+- **SenderAuthorizer** - Sender allowlist checking
+
+### Data Flow
+
+```
+IMAP Server
+  -> EmailListener (poll/IDLE)
+    -> SenderAuthenticator + SenderAuthorizer
+    -> Parse subject for [ID:xyz123]
+    -> ConversationManager
+      -> Initialize/resume git checkout
+      -> Save attachments to inbox/
+    -> ClaudeExecutor
+      -> Spawn Podman container
+      -> Mount conversation repo
+      -> Run claude CLI
+    -> EmailResponder
+      -> Parse JSON output
+      -> Send SMTP reply with [ID:xyz123]
+```
+
+## Conversation State Management
+
+### Directory Structure
+
+Each conversation is an isolated session with git workspace and metadata:
+
+```
+{STORAGE_DIR}/
+├── git-mirror/                  # Local git mirror for fast clones
+│   └── (bare git repository)
+├── sessions/                    # All conversation sessions
+│   ├── abc12345/                # Session ID (8-char hex)
+│   │   ├── session.json         # Session metadata (NOT mounted to container)
+│   │   ├── workspace/           # Git workspace (mounted at /workspace)
+│   │   │   ├── .git/            # Git repository
+│   │   │   └── ...              # Full project structure
+│   │   ├── claude/              # Claude Code session state (mounted at /root/.claude)
+│   │   ├── inbox/               # Email attachments (mounted at /inbox)
+│   │   └── outbox/              # Files to attach to reply (mounted at /outbox)
+│   └── def67890/                # Another session
+│       ├── session.json
+│       └── workspace/
+```
+
+**Key Points:**
+
+- `session.json` stores Claude session IDs and metadata **outside the
+  workspace**
+- Session directories (claude, inbox, outbox) are mounted separately from the
+  workspace to keep the git repo clean
+- `git-mirror/` enables fast clones by avoiding network transfer
+  - Clones do NOT use `--reference` or `--shared` flags
+  - These flags create `.git/objects/info/alternates` file pointing to mirror
+  - When workspace is mounted in container, git cannot access paths outside the
+    mount point
+  - This causes "unable to find alternate object database" errors
+  - Instead, we perform regular clones that copy all objects into workspace
+  - All git objects are self-contained within the workspace directory
+  - **Container constraint**: The workspace must be fully self-contained with no
+    references to host filesystem paths outside the workspace
+
+### Lifecycle
+
+| Event                    | Action                                                                                                        |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| **New conversation**     | Generate 8-char ID, create `sessions/{id}/`, clone from mirror to `workspace/`                                |
+| **Resume conversation**  | Verify workspace exists, load session from `session.json`, preserve local state                               |
+| **User requests sync**   | Claude runs `git fetch origin && git rebase origin/main` manually in workspace                                |
+| **Conversation timeout** | Garbage collect sessions with no activity for 7 days (configurable via `execution.conversation_max_age_days`) |
+
+**Critical**: Conversations do NOT auto-sync with master to preserve Claude's
+work in progress. User must explicitly instruct Claude to update.
+
+## Email Protocol
+
+### Model Selection
+
+Users can select which Claude model to use via email subaddressing (plus
+addressing):
+
+- **Format**: `username+model@domain` (e.g., `airut+opus@example.com`,
+  `airut+haiku@example.com`)
+- **New conversation**: Model extracted from To address and stored in session
+- **Resumed conversation**: Stored model is used; any model in To address is
+  ignored
+- **No model specified**: Uses `default_model` from repo config (defaults to
+  "opus")
+
+**Supported models**: `opus`, `sonnet`, `haiku` (or any valid Claude Code model
+name)
+
+**Implementation**: Model is passed to Claude Code via `--model` CLI parameter,
+not embedded in settings.json.
+
+**Acknowledgment**: The auto-reply includes the model being used: "Your request
+has been received and is now being processed by opus."
+
+### Conversation Identification
+
+- **Subject format**: `[ID:xyz123] Topic goes here`
+- **New conversation**: No `[ID:...]` tag -> generate new UUID
+- **Existing conversation**: Extract UUID from subject tag
+
+### Message Parsing
+
+**Quote stripping** removes:
+
+- Lines starting with `>`
+- Quoted blocks after dividers (`-----Original Message-----`,
+  `On [Date], [User] wrote:`)
+- Standard email client signatures (`--`)
+
+**Attachment handling**:
+
+- Decode all attachments from MIME multipart
+- Save to `{REPO_DIR}/inbox/` preserving original filenames
+- Prepend to prompt:
+  `"I have placed new files in the inbox/ folder: {filenames}. {user_prompt}"`
+
+### Response Construction
+
+**Headers** for threading:
+
+- `In-Reply-To: {original_message_id}`
+- `References: {original_references}, {original_message_id}`
+- `Subject: Re: [ID:xyz123] {original_subject}`
+
+**Usage statistics footer**: Successful response emails include a footer with
+execution statistics when available:
+
+- Cost: API cost in USD (e.g., `Cost: $0.0123`)
+- Web searches: Number of web search tool invocations
+- Web fetches: Number of web fetch tool invocations
+
+Example footer: `Cost: $0.0423 | Web searches: 2 | Web fetches: 1`
+
+**Dashboard link**: When `DASHBOARD_BASE_URL` is configured, acknowledgment
+emails (sent when a task is queued) include a link to track progress:
+`{DASHBOARD_BASE_URL}/task/{conversation_id}`
+
+## Container Execution
+
+### Volume Mount Strategy
+
+All conversations are fully isolated with per-conversation configuration:
+
+| Mount                                          | Purpose                        | Mode       |
+| ---------------------------------------------- | ------------------------------ | ---------- |
+| `{STORAGE}/sessions/{ID}/workspace:/workspace` | Conversation workspace         | Read-write |
+| `{STORAGE}/sessions/{ID}/claude:/root/.claude` | Per-conversation session state | Read-write |
+| `{STORAGE}/sessions/{ID}/inbox:/inbox`         | Email attachments              | Read-write |
+| `{STORAGE}/sessions/{ID}/outbox:/outbox`       | Files to attach to reply       | Read-write |
+
+**Complete isolation:** Each conversation has its own workspace and session
+state. No host directories (SSH keys, gitconfig, gh config) are mounted. All
+session-specific directories (claude state, inbox, outbox) live outside the git
+workspace to keep it clean.
+
+**Claude Code settings:** The `.claude/settings.json` file is version-controlled
+in the repository and mounted as part of the workspace. It contains static
+settings like attribution preferences.
+
+**Git authentication:** The container image includes a static `.gitconfig` that
+uses `gh auth git-credential` as the credential helper, which authenticates via
+`GH_TOKEN` environment variable. This eliminates the need for SSH keys or host
+git configuration.
+
+**Git identity:** The container uses static values (`Airut` / `airut@airut.org`)
+for git user name and email, configured in the Dockerfile.
+
+### Container Environment Variables
+
+The executor passes environment variables defined in the `container_env:`
+section of `.airut/airut.yaml` (repo config) to the container. Values can be
+inline strings or `!secret` references resolved from the server's secrets pool.
+Only entries with non-empty resolved values are passed.
+
+See [repo-config.md](repo-config.md) for the full schema and examples.
+
+**Note:** `session.json` is stored in `{STORAGE}/sessions/{ID}/session.json` and
+is **NOT** mounted to the container, ensuring session metadata cannot be
+modified by Claude.
+
+### Security Isolation
+
+- **Complete conversation isolation**: Each conversation has its own workspace,
+  claude session state, inbox, and outbox with no shared state
+- **No host mounts**: No SSH keys, host gitconfig, or credential files mounted
+  from host
+- **Environment-only authentication**: All credentials (Claude API, GitHub
+  token, R2, etc.) passed via environment variables
+- **Read-write workspace**: Container can only modify conversation-specific
+  directories
+- **Network allowlist**: Containers on internal network with proxy-based
+  filtering (see [network-sandbox](../doc/network-sandbox.md))
+- **Resource limits**: Timeout configurable per-repo (default 300 seconds)
+
+### Image Build Strategy
+
+Container images use a two-layer build (repo base + server overlay) with
+content-addressed caching and 24-hour staleness rebuilds. See
+[image.md](image.md) for full details.
+
+Images are built at task start (not service startup), so Dockerfile changes take
+effect after merging to main without a server restart.
+
+### Session Resumption
+
+The service stores Claude's session metadata in `session.json` within each
+session directory (`{STORAGE}/sessions/{ID}/session.json`), outside the
+container workspace. This enables conversation continuity via Claude's
+`--resume` flag.
+
+**Resumption flow**:
+
+1. Before execution, load session metadata from `session.json`
+2. If a previous session_id exists, pass `--resume {session_id}` to Claude
+3. After execution, record the new session metadata for future resumption
+4. Claude maintains conversation context across email messages
+
+**Context compaction recovery**: When a resumed session fails with "Prompt is
+too long" (context compaction boundary exceeded), the service automatically
+retries with a fresh session. The recovery prompt includes the agent's last
+successful response for continuity and instructs the agent to check the
+workspace for ongoing work and be transparent about the context loss.
+
+See `lib/container/session.py` for the `SessionStore` and `SessionMetadata` data
+model.
+
+### Actions History
+
+The service captures Claude's full actions history using streaming JSON output
+(`--output-format stream-json --verbose`). Events are stored in the session file
+and displayed in the dashboard's actions viewer (`/task/{id}/actions`).
+
+## Configuration
+
+Configuration is split into two layers:
+
+- **Server config** (`config/airut.yaml`) — deployment infrastructure, mail
+  credentials, operator controls, and a `secrets` pool. Values use `!env` tags
+  to resolve from environment variables. A `.env` file is automatically loaded
+  from the repo root before resolving tags.
+- **Repo config** (`.airut/airut.yaml`) — repo-specific behavior: model,
+  timeout, network allowlist, and container environment variables. Loaded from
+  the git mirror at the start of each task. Uses `!secret` tags to reference the
+  server's secrets pool; `!env` tags are rejected.
+
+See [repo-config.md](repo-config.md) for the full repo config schema, YAML tag
+semantics, and loading flow.
+
+## Security Model
+
+### Authentication and Authorization
+
+Two logically separate layers, both required. See
+[authentication.md](authentication.md) for detailed design.
+
+1. **Authentication** (`SenderAuthenticator`): Verifies sender identity via
+   DMARC on trusted `Authentication-Results` headers.
+2. **Authorization** (`SenderAuthorizer`): Checks authenticated sender against
+   the allowed sender list.
+
+**Rationale**: Separating authentication from authorization allows extending
+either layer independently (e.g., adding domain-based rules to authorization
+without touching DMARC logic).
+
+### Credential Management
+
+- **Claude credentials**: `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`
+  configured in `container_env:` (use `!env` tags for secrets)
+- **Email credentials**: Password configured via `!env EMAIL_PASSWORD` in
+  `config/airut.yaml` (actual value in `.env` or environment)
+- **Git credentials**: `GH_TOKEN` in `container_env:` with
+  `gh auth git-credential` helper (no SSH keys mounted)
+- **AI service credentials**: Configured in `container_env:` (e.g.,
+  `GEMINI_API_KEY: !env GEMINI_API_KEY`)
+
+No host credential files are mounted — all authentication uses environment
+variables passed via the config file. See `config/airut.yaml` for the full list.
+
+### Attack Surface
+
+| Risk                  | Mitigation                                                                         |
+| --------------------- | ---------------------------------------------------------------------------------- |
+| Unauthorized access   | Sender whitelist + mandatory DMARC/SPF verification                                |
+| Email spoofing        | Always-on DMARC checks (no disable option)                                         |
+| Command injection     | Claude Code runs in isolated container                                             |
+| Data exfiltration     | Network allowlist via mitmproxy (see [network-sandbox](../doc/network-sandbox.md)) |
+| Resource exhaustion   | Execution timeout + conversation GC                                                |
+| Malicious attachments | Saved to `inbox/`, Claude decides how to handle                                    |
+
+## Error Handling
+
+### Git Failures
+
+- **Clone fails**: Reply "System Error: Could not initialize workspace"
+- **Repo corruption**: Auto-delete conversation directory, retry clone
+
+### Container Failures
+
+- **Podman crash**: Reply with stderr logs
+- **Timeout**: Kill container, reply "Execution timed out after 300 seconds"
+- **Build failure**: Reply "System Error: Container image unavailable"
+
+### Email Failures
+
+- **IMAP disconnect**: Retry with exponential backoff (10s, 30s, 60s, 300s)
+- **SMTP send failure**: Log error, retry once, then mark conversation as failed
+- **Parse error**: Reply "Could not parse your message. Please resend."
+
+### Conversation Limit
+
+**Hard limit**: 100 active conversations. When limit reached, garbage collect
+oldest inactive conversations.
+
+## Design Rationale
+
+### Why Git Clones Instead of Shared Repo?
+
+- **Isolation**: Each conversation can modify files without conflicts
+- **State preservation**: Claude's changes persist across messages
+- **Rollback**: Can delete corrupted conversation without affecting others
+- **Audit trail**: Each conversation has independent git history
+
+### Why Podman Instead of Direct Execution?
+
+- **Security**: Isolates Claude Code with `--dangerously-skip-permissions`
+- **Resource limits**: Container timeout prevents runaway processes
+- **Consistency**: Same environment as interactive usage
+- **Credential isolation**: Each conversation has separate Claude session
+
+### Why Email Instead of Web UI?
+
+- **Asynchronous**: User doesn't need to wait for Claude's response
+- **Accessible**: Works from any email client (phone, desktop, web)
+- **Stateful**: Email threading provides natural conversation history
+- **Simple**: No custom client needed, no authentication UI
+
+### Why Quote Stripping?
+
+- **Token efficiency**: Prevent exponential growth of quoted history
+- **Focus**: Claude only sees new instruction, not entire thread
+- **Context preservation**: Email headers maintain threading for user
+
+## Parallel Execution
+
+The service supports processing multiple conversations concurrently using a
+thread pool.
+
+### Thread Pool Architecture
+
+- **Worker pool**: `ThreadPoolExecutor` with configurable size
+  (`MAX_CONCURRENT_EXECUTIONS`, default: 3)
+- **Message flow**: IMAP polling runs in main thread; messages are submitted to
+  the worker pool for parallel execution
+- **Graceful shutdown**: Waits for pending executions with configurable timeout
+  (`SHUTDOWN_TIMEOUT_SECONDS`, default: 60)
+
+### Concurrency Safety
+
+| Component           | Strategy                                                                |
+| ------------------- | ----------------------------------------------------------------------- |
+| IMAP operations     | Main thread only (IMAP not thread-safe)                                 |
+| Container execution | Per-conversation locks prevent parallel processing of same conversation |
+| Image builds        | Serialized via `_build_lock`; cached by content hash with staleness     |
+
+### Per-Conversation Locking
+
+Messages to the same conversation are serialized to prevent race conditions:
+
+1. Extract conversation ID from subject
+2. If existing conversation: acquire per-conversation lock before processing
+3. If new conversation: no lock needed (unique ID generated)
+
+This allows parallel processing of different conversations while ensuring
+sequential processing within each conversation.
+
+## Update Coordination
+
+The email service coordinates with the auto-updater to prevent updates during
+active processing. See [auto-updater.md](auto-updater.md) for full details.
+
+### Lock File Mechanism
+
+Both services use an advisory file lock (`.update.lock` in repo root):
+
+- **Email service acquires lock** when it becomes busy (message processing or
+  Claude execution begins)
+- **Email service releases lock** when it becomes idle (all pending work
+  completes)
+- **Auto-updater checks lock** before applying updates; skips if locked
+
+### Busy State Transitions
+
+```
+IDLE (no lock)
+  -> Receive message
+    -> Submit to thread pool
+      -> Acquire lock (busy count 0 → 1)
+  -> Message processing completes
+    -> Future completes callback
+      -> If busy count 1 → 0: Release lock
+BUSY (lock held)
+  -> More messages arrive
+    -> Submit to thread pool (busy count increments)
+  -> Messages complete
+    -> Futures complete (busy count decrements)
+    -> When count reaches 0: Release lock → IDLE
+```
+
+### Implementation
+
+The lock is managed via `UpdateLock` class from `lib/update_lock.py`. The
+service tracks a "busy count" (pending futures) and acquires/releases the lock
+at state transitions (0→1 and 1→0).
+
+## Future Enhancements
+
+None currently planned. Previous items (rich HTML email, task stop/cancel) have
+been implemented.
+
+## Not In Scope
+
+- **Web UI**: Email-only interface by design
+- **Real-time chat**: Email is asynchronous
+- **Collaboration**: Single authorized sender per deployment
+- **Conversation export**: Use git log for audit trail

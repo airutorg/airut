@@ -1,0 +1,252 @@
+# Copyright (c) 2026 Pyry Haulos
+#
+# This software is released under the MIT License.
+# https://opensource.org/licenses/MIT
+
+"""Email message parsing utilities.
+
+This module provides utilities for parsing email messages, extracting
+conversation IDs, stripping quoted text, and handling attachments.
+"""
+
+import logging
+import re
+from email.message import Message
+from pathlib import Path
+
+
+logger = logging.getLogger(__name__)
+
+
+# Pattern to match [ID:abc12345] in subject lines
+CONVERSATION_ID_PATTERN = re.compile(r"\[ID:([0-9a-f]{8})\]")
+
+# Pattern to extract model name from email address with subaddressing
+# Matches: user+opus@domain.com, user+sonnet@domain.com, etc.
+MODEL_SUBADDRESS_PATTERN = re.compile(r"\+([a-zA-Z0-9_-]+)@")
+
+
+class ParseError(Exception):
+    """Base exception for parsing errors."""
+
+
+def extract_conversation_id(subject: str) -> str | None:
+    """Extract conversation ID from email subject line.
+
+    Looks for pattern: [ID:abc12345] in subject.
+
+    Args:
+        subject: Email subject line.
+
+    Returns:
+        8-character hex conversation ID, or None if not found.
+    """
+    match = CONVERSATION_ID_PATTERN.search(subject)
+    if match:
+        conversation_id = match.group(1)
+        logger.debug("Extracted conversation ID: %s", conversation_id)
+        return conversation_id
+
+    logger.debug("No conversation ID found in subject: %s", subject)
+    return None
+
+
+def extract_model_from_address(to_address: str) -> str | None:
+    """Extract model name from email To address using subaddressing.
+
+    Looks for pattern: username+modelname@domain in the To address.
+    For example, airut+opus@example.com extracts "opus".
+
+    Args:
+        to_address: Email To header (may be in "Name <email>" format).
+
+    Returns:
+        Model name string (lowercase), or None if not found.
+    """
+    # Extract email address from "Name <email@example.com>" format
+    if "<" in to_address and ">" in to_address:
+        email_addr = to_address.split("<")[1].split(">")[0]
+    else:
+        email_addr = to_address
+
+    match = MODEL_SUBADDRESS_PATTERN.search(email_addr)
+    if match:
+        model = match.group(1).lower()
+        logger.debug("Extracted model from To address: %s", model)
+        return model
+
+    logger.debug("No model subaddress found in To: %s", to_address)
+    return None
+
+
+def strip_quoted_text(body: str) -> str:
+    """Remove quoted text and signatures from email body.
+
+    Stripping rules:
+    - Remove lines starting with '>'
+    - Remove content after "-----Original Message-----"
+    - Remove content after "On [date], [name] wrote:" pattern
+    - Remove content after signature separator "--"
+
+    Args:
+        body: Raw email body text.
+
+    Returns:
+        Body with quotes removed.
+    """
+    lines = body.split("\n")
+    result_lines = []
+    original_line_count = len(lines)
+
+    for line in lines:
+        # Stop at signature separator
+        if line.strip() == "--":
+            break
+
+        # Stop at original message divider
+        if "-----Original Message-----" in line:
+            break
+
+        # Stop at "On [date], [name] wrote:" pattern
+        if re.match(r"^On .+, .+ wrote:$", line.strip()):
+            break
+
+        # Skip quoted lines
+        if line.startswith(">"):
+            continue
+
+        result_lines.append(line)
+
+    stripped_body = "\n".join(result_lines).strip()
+    removed_lines = original_line_count - len(result_lines)
+
+    if removed_lines > 0:
+        logger.debug("Stripped %d quoted/signature lines", removed_lines)
+
+    return stripped_body
+
+
+def extract_body(message: Message) -> str:
+    """Extract plain text body from email message.
+
+    Args:
+        message: Parsed email message.
+
+    Returns:
+        Plain text body (UTF-8 decoded).
+    """
+    if message.is_multipart():
+        # Log all parts for debugging
+        parts = []
+        for part in message.walk():
+            content_type = part.get_content_type()
+            parts.append(content_type)
+
+        logger.debug("Multipart message with parts: %s", ", ".join(parts))
+
+        for part in message.walk():
+            if part.get_content_type() == "text/plain":
+                payload = part.get_payload(decode=True)
+                if payload:
+                    body = payload.decode("utf-8", errors="replace")  # type: ignore[union-attr]
+                    logger.debug(
+                        "Extracted body from multipart message (%d chars)",
+                        len(body),
+                    )
+                    return body
+    else:
+        content_type = message.get_content_type()
+        logger.debug("Plain message with content type: %s", content_type)
+
+        payload = message.get_payload(decode=True)
+        if payload:
+            body = payload.decode("utf-8", errors="replace")  # type: ignore[union-attr]
+            logger.debug(
+                "Extracted body from plain message (%d chars)", len(body)
+            )
+            return body
+
+    logger.warning("No text/plain body found in message")
+    return ""
+
+
+def extract_attachments(
+    message: Message,
+    inbox_dir: Path,
+) -> list[str]:
+    """Extract attachments from email and save to inbox directory.
+
+    Args:
+        message: Parsed email message.
+        inbox_dir: Directory to save attachments (must exist).
+
+    Returns:
+        List of saved filenames.
+
+    Raises:
+        ValueError: If inbox_dir doesn't exist.
+    """
+    if not inbox_dir.exists():
+        raise ValueError(f"Inbox directory does not exist: {inbox_dir}")
+
+    filenames = []
+
+    if message.is_multipart():
+        for part in message.walk():
+            if part.get_content_disposition() == "attachment":
+                filename = part.get_filename()
+                if filename:
+                    filepath = inbox_dir / filename
+                    payload = part.get_payload(decode=True)
+                    if payload:
+                        with open(filepath, "wb") as f:
+                            f.write(payload)  # type: ignore[arg-type]
+                        filenames.append(filename)
+                        logger.debug(
+                            "Saved attachment: %s (%d bytes)",
+                            filename,
+                            len(payload),
+                        )
+
+    if filenames:
+        logger.info("Extracted %d attachments", len(filenames))
+    else:
+        logger.debug("No attachments found in message")
+
+    return filenames
+
+
+def collect_outbox_files(outbox_dir: Path) -> list[tuple[str, bytes]]:
+    """Collect files from outbox directory for email attachment.
+
+    Args:
+        outbox_dir: Directory to scan for files to attach.
+
+    Returns:
+        List of (filename, content) tuples for files to attach.
+        Returns empty list if directory doesn't exist or is empty.
+    """
+    if not outbox_dir.exists():
+        logger.debug("Outbox directory does not exist: %s", outbox_dir)
+        return []
+
+    attachments = []
+    for filepath in outbox_dir.iterdir():
+        if filepath.is_file():
+            try:
+                content = filepath.read_bytes()
+                attachments.append((filepath.name, content))
+                logger.debug(
+                    "Collected outbox file: %s (%d bytes)",
+                    filepath.name,
+                    len(content),
+                )
+            except OSError as e:
+                logger.warning("Failed to read outbox file %s: %s", filepath, e)
+
+    if attachments:
+        logger.info("Collected %d files from outbox", len(attachments))
+    else:
+        logger.debug("No files found in outbox")
+
+    return attachments

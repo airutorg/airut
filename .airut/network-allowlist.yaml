@@ -1,0 +1,44 @@
+# Network allowlist for Claude Code containers.
+#
+# Only hosts listed here are reachable from inside the container.
+# All other traffic is blocked by the mitmproxy-based network proxy.
+#
+# To request access to a new host, add it here and submit a PR.
+# See doc/network-sandbox.md for details.
+#
+# This file is read from the git mirror (main branch), not from the
+# conversation workspace.  Changes take effect after merging to main.
+#
+# Pattern matching uses fnmatch-style wildcards (* and ?):
+#   - "*.github.com" matches "api.github.com" but NOT "github.com"
+#   - "/api/*" matches "/api/foo" but NOT "/api"
+#   - "/api" matches only "/api" exactly (no implicit prefix matching)
+
+# Domains: all paths allowed (exact match unless wildcards used)
+domains:
+  # Claude API
+  - api.anthropic.com
+  - statsig.anthropic.com
+  - sentry.io
+
+  # Python packages (uv sync in entrypoint)
+  - pypi.org
+  - files.pythonhosted.org
+
+# URL patterns: domain + path pattern required (fnmatch wildcards supported)
+url_prefixes:
+  # GitHub - restricted to airut repositories
+  - host: github.com
+    path: /airutorg/airut*
+  - host: api.github.com
+    path: /repos/airutorg/airut*
+  - host: api.github.com
+    path: /graphql
+  - host: uploads.github.com
+    path: /repos/airutorg/airut*
+  - host: raw.githubusercontent.com
+    path: /airutorg/airut*
+  - host: objects.githubusercontent.com
+    path: /airutorg/airut*
+  - host: results-receiver.actions.githubusercontent.com
+    path: /rest/runs*

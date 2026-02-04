@@ -1,0 +1,26 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  e2e-email-gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: astral-sh/setup-uv@v4
+      - run: uv python install 3.13
+      - run: uv sync
+
+      - name: Run email gateway integration tests
+        run: |
+          uv run pytest tests/integration/ -n auto -v -x \
+            -W error::pytest.PytestUnraisableExceptionWarning \
+            -W error::RuntimeWarning \
+            --allow-hosts=127.0.0.1,localhost

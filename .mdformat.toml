@@ -1,0 +1,4 @@
+wrap = 80
+number = true
+
+exclude = [".venv/**", ".pytest_cache/**"]
