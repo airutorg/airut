@@ -57,7 +57,6 @@ class Step:
 # code.yml: Lint, Format check, Type check, Markdown format check,
 #           Test coverage, Worktree clean check
 # security.yml: License check, Vulnerability scan
-# authorship.yml: Check commit authorship
 # e2e.yml: E2E email gateway tests
 STEPS: list[Step] = [
     # code.yml steps
@@ -106,12 +105,6 @@ STEPS: list[Step] = [
         command="uv run uv-secure uv.lock",
         workflow="security",
     ),
-    # authorship.yml step
-    Step(
-        name="Check commit authorship",
-        command="__authorship_check__",  # Special marker for built-in check
-        workflow="authorship",
-    ),
     # e2e.yml steps
     Step(
         name="E2E email gateway tests",
@@ -141,86 +134,6 @@ def colorize(text: str, color: str) -> str:
     return text
 
 
-def run_authorship_check() -> tuple[bool, str]:
-    """Run the authorship check for commits since merge-base with main.
-
-    Returns:
-        Tuple of (success, output_message)
-    """
-    # Get merge base with origin/main
-    result = subprocess.run(
-        ["git", "merge-base", "HEAD", "origin/main"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return False, f"Failed to get merge base: {result.stderr}"
-
-    merge_base = result.stdout.strip()
-
-    # Get commits since merge base
-    result = subprocess.run(
-        ["git", "log", "--format=%H", f"{merge_base}..HEAD"],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return False, f"Failed to get commits: {result.stderr}"
-
-    commits = result.stdout.strip().split("\n")
-    if not commits or commits == [""]:
-        return True, "No commits to check"
-
-    errors: list[str] = []
-    for commit in commits:
-        # Get author name
-        result = subprocess.run(
-            ["git", "log", "-1", "--format=%an", commit],
-            capture_output=True,
-            text=True,
-        )
-        author_name = result.stdout.strip()
-
-        # Get author email
-        result = subprocess.run(
-            ["git", "log", "-1", "--format=%ae", commit],
-            capture_output=True,
-            text=True,
-        )
-        author_email = result.stdout.strip()
-
-        # Get commit message
-        result = subprocess.run(
-            ["git", "log", "-1", "--format=%B", commit],
-            capture_output=True,
-            text=True,
-        )
-        commit_msg = result.stdout
-
-        short_sha = commit[:7]
-
-        # Check for forbidden patterns
-        if author_name == "Claude":
-            errors.append(
-                f"Commit {short_sha} has forbidden author name 'Claude'"
-            )
-
-        if author_email.endswith("@anthropic.com"):
-            errors.append(
-                f"Commit {short_sha} has forbidden author email domain "
-                f"'@anthropic.com': {author_email}"
-            )
-
-        if "co-authored-by:" in commit_msg.lower():
-            errors.append(
-                f"Commit {short_sha} contains Co-Authored-By statement"
-            )
-
-    if errors:
-        return False, "\n".join(errors)
-    return True, f"All {len(commits)} commit(s) passed authorship check"
-
-
 def run_step(
     step: Step, fix_mode: bool, verbose: bool, step_timeout: int
 ) -> tuple[bool, str]:
@@ -235,10 +148,6 @@ def run_step(
     Returns:
         Tuple of (success, output_to_display)
     """
-    # Handle special authorship check
-    if step.command == "__authorship_check__":
-        return run_authorship_check()
-
     # Determine which command to run
     if fix_mode and step.fix_command:
         command = step.fix_command
@@ -334,13 +243,10 @@ def run_ci(
     for step, output in failed_steps:
         print()
         print(colorize(f"{step.name} failed:", RED + BOLD))
-        if step.command != "__authorship_check__":
-            cmd = (
-                step.fix_command
-                if fix_mode and step.fix_command
-                else step.command
-            )
-            print(f"Command: {cmd}")
+        cmd = (
+            step.fix_command if fix_mode and step.fix_command else step.command
+        )
+        print(f"Command: {cmd}")
         print("─" * 60)
         if output:
             print(output)
@@ -369,7 +275,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--workflow",
-        choices=["code", "security", "authorship", "e2e"],
+        choices=["code", "security", "e2e"],
         action="append",
         dest="workflows",
         help="Run only steps from specified workflow (can be repeated)",

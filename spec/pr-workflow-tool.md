@@ -60,8 +60,8 @@ Branch is 2 commit(s) behind base
 Status: ✓ All checks passed
 
 Checks:
-  ✓ authorship-check
   ✓ code-quality
+  ✓ security-scan
 ```
 
 ### Blocked State Example

@@ -83,16 +83,6 @@ The script derives steps from workflow files but filters for local relevance:
 | Test coverage   | `uv run pytest --cov=lib --cov-fail-under=100` | Yes     |
 | Worktree clean  | `git status --porcelain`                       | Yes     |
 
-#### From `authorship.yml`
-
-| Step             | Command                         | Include |
-| ---------------- | ------------------------------- | ------- |
-| Authorship check | (validates git author metadata) | Yes     |
-
-The authorship check validates commits since merge-base with main, checking for
-forbidden patterns (author name "Claude", email "@anthropic.com",
-"Co-Authored-By").
-
 #### From `e2e.yml`
 
 | Step                    | Command                                                   | Include |
