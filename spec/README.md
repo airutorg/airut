@@ -20,6 +20,11 @@ For high-level documentation, see [doc/](../doc/).
 
 - [image.md](image.md) — Two-layer container image build strategy
 
+## Network
+
+- [masked-secrets.md](masked-secrets.md) — Scope-restricted credentials with
+  proxy-level token replacement
+
 ## Dashboard
 
 - [dashboard.md](dashboard.md) — Web dashboard for task monitoring

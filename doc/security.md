@@ -40,8 +40,9 @@ tokens.
 
 **Defense in depth** — Multiple independent security layers ensure that failure
 of any single control doesn't compromise the system. Email authentication +
-sender allowlist, container isolation + network sandbox, environment-only
-secrets + log redaction — each layer catches threats the others might miss.
+sender allowlist, container isolation + network sandbox, masked secrets +
+environment-only injection + log redaction — each layer catches threats the
+others might miss.
 
 ## Security Layers
 
@@ -186,6 +187,19 @@ Containers use `gh auth git-credential` helper with `GH_TOKEN`:
 - Token scoped to repository operations
 - Credential helper configured in container image
 
+### Masked Secrets (Token Replacement)
+
+For credentials that should only be usable with specific services, use
+`masked_secrets` in the server config. Containers receive surrogate tokens
+instead of real credentials; the proxy swaps surrogates for real values only
+when the request host matches configured scopes.
+
+This prevents credential exfiltration — even if the container is compromised,
+the attacker only has surrogates that are useless outside scoped hosts.
+
+See [network-sandbox.md](network-sandbox.md#masked-secrets-token-replacement)
+for full details on configuration, security properties, and limitations.
+
 ## Dashboard Security
 
 The dashboard binds to localhost (`127.0.0.1:5200`) by default:
@@ -318,11 +332,15 @@ legitimate from malicious use of authorized channels.
 
 **Mitigations:**
 
-1. **Scope credentials to minimum** — A token that can only push to one repo
+1. **Use masked secrets** — Credentials configured as `masked_secrets` are never
+   exposed to the container. Even if the agent is tricked into exfiltrating
+   "credentials," it only has surrogates that are useless outside scoped hosts.
+   This is the strongest mitigation for credential exfiltration.
+2. **Scope credentials to minimum** — A token that can only push to one repo
    limits exfiltration to that repo
-2. **Review agent outputs** — PRs, commits, and email replies are human review
+3. **Review agent outputs** — PRs, commits, and email replies are human review
    points
-3. **Audit network logs** — `network-sandbox.log` shows all requests for
+4. **Audit network logs** — `network-sandbox.log` shows all requests for
    forensic analysis
 
 ### Realistic Security Expectations

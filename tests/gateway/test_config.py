@@ -13,6 +13,8 @@ import pytest
 from lib.gateway.config import (
     ConfigError,
     GlobalConfig,
+    MaskedSecret,
+    ReplacementEntry,
     RepoConfig,
     RepoServerConfig,
     ServerConfig,
@@ -23,8 +25,10 @@ from lib.gateway.config import (
     _raw_resolve,
     _resolve,
     _resolve_container_env,
+    _resolve_masked_secrets,
     _resolve_string_list,
     _SecretRef,
+    generate_surrogate,
 )
 from lib.logging import SecretFilter
 
@@ -407,6 +411,33 @@ def test_repo_server_config_secret_redaction(
     # Verify password and secrets values were registered
     assert password in SecretFilter._secrets
     assert api_key in SecretFilter._secrets
+
+
+def test_repo_server_config_masked_secret_redaction(
+    master_repo: Path, tmp_path: Path
+) -> None:
+    """Test that masked secret values are also redacted."""
+    password = "test_password"
+    masked_value = "ghp_masked_token_value"
+
+    # Clear any existing secrets
+    SecretFilter._secrets.clear()
+
+    _make_repo_server_config(
+        master_repo,
+        tmp_path,
+        email_password=password,
+        masked_secrets={
+            "GH_TOKEN": MaskedSecret(
+                value=masked_value,
+                scopes=frozenset(["api.github.com"]),
+                headers=("Authorization",),
+            )
+        },
+    )
+
+    # Verify masked secret value was registered
+    assert masked_value in SecretFilter._secrets
 
 
 def test_repo_server_config_empty_repo_url(tmp_path: Path) -> None:
@@ -858,11 +889,12 @@ class TestRepoConfigFromRaw:
     def test_minimal(self) -> None:
         """Minimal repo config with defaults."""
         raw: dict = {}
-        rc = RepoConfig._from_raw(raw, {})
+        rc, replacement_map = RepoConfig._from_raw(raw, {}, {})
         assert rc.default_model == "opus"
         assert rc.timeout == 300
         assert rc.network_sandbox_enabled is True
         assert rc.container_env == {}
+        assert replacement_map == {}
 
     def test_full(self) -> None:
         """Full repo config with all fields."""
@@ -876,7 +908,7 @@ class TestRepoConfigFromRaw:
             },
         }
         secrets = {"GH_TOKEN": "ghp_tok"}
-        rc = RepoConfig._from_raw(raw, secrets)
+        rc, replacement_map = RepoConfig._from_raw(raw, secrets, {})
         assert rc.default_model == "sonnet"
         assert rc.timeout == 6000
         assert rc.network_sandbox_enabled is False
@@ -884,6 +916,7 @@ class TestRepoConfigFromRaw:
             "INLINE": "value",
             "FROM_SERVER": "ghp_tok",
         }
+        assert replacement_map == {}
 
 
 class TestRepoConfigFromMirror:
@@ -893,9 +926,10 @@ class TestRepoConfigFromMirror:
         """Loads and parses config from git mirror."""
         mirror = MagicMock()
         mirror.read_file.return_value = "default_model: sonnet\ntimeout: 600\n"
-        rc = RepoConfig.from_mirror(mirror, {})
+        rc, replacement_map = RepoConfig.from_mirror(mirror, {})
         mirror.read_file.assert_called_once_with(".airut/airut.yaml")
         assert rc.default_model == "sonnet"
+        assert replacement_map == {}
 
     def test_mirror_read_error(self) -> None:
         """Mirror read failure raises ConfigError."""
@@ -924,7 +958,7 @@ class TestRepoConfigFromMirror:
         mirror.read_file.return_value = (
             "container_env:\n  MY_KEY: !secret SERVER_KEY\n"
         )
-        rc = RepoConfig.from_mirror(mirror, {"SERVER_KEY": "secret-val"})
+        rc, _ = RepoConfig.from_mirror(mirror, {"SERVER_KEY": "secret-val"})
         assert rc.container_env == {"MY_KEY": "secret-val"}
 
     def test_unknown_secret_raises(self) -> None:
@@ -942,7 +976,7 @@ class TestRepoConfigFromMirror:
         mirror.read_file.return_value = (
             "container_env:\n  MY_KEY: !secret? MISSING\n"
         )
-        rc = RepoConfig.from_mirror(mirror, {})
+        rc, _ = RepoConfig.from_mirror(mirror, {})
         assert rc.container_env == {}
 
     def test_optional_secret_present_resolved(self) -> None:
@@ -951,7 +985,7 @@ class TestRepoConfigFromMirror:
         mirror.read_file.return_value = (
             "container_env:\n  MY_KEY: !secret? SERVER_KEY\n"
         )
-        rc = RepoConfig.from_mirror(mirror, {"SERVER_KEY": "secret-val"})
+        rc, _ = RepoConfig.from_mirror(mirror, {"SERVER_KEY": "secret-val"})
         assert rc.container_env == {"MY_KEY": "secret-val"}
 
 
@@ -965,40 +999,46 @@ class TestResolveContainerEnv:
 
     def test_inline_values(self) -> None:
         """Inline string values pass through."""
-        result = _resolve_container_env({"K": "v"}, {})
+        result, replacement_map = _resolve_container_env({"K": "v"}, {}, {})
         assert result == {"K": "v"}
+        assert replacement_map == {}
 
     def test_secret_refs(self) -> None:
         """SecretRef values resolve from server secrets."""
-        result = _resolve_container_env({"K": _SecretRef("S")}, {"S": "val"})
+        result, replacement_map = _resolve_container_env(
+            {"K": _SecretRef("S")}, {"S": "val"}, {}
+        )
         assert result == {"K": "val"}
+        assert replacement_map == {}
 
     def test_missing_secret_raises(self) -> None:
         """Missing secret raises ConfigError."""
         with pytest.raises(ConfigError, match="not found"):
-            _resolve_container_env({"K": _SecretRef("S")}, {})
+            _resolve_container_env({"K": _SecretRef("S")}, {}, {})
 
     def test_empty_values_skipped(self) -> None:
         """Empty inline values are skipped."""
-        result = _resolve_container_env({"K": None}, {})
+        result, _ = _resolve_container_env({"K": None}, {}, {})
         assert result == {}
 
     def test_empty_secret_skipped(self) -> None:
         """Empty secret values are skipped."""
-        result = _resolve_container_env({"K": _SecretRef("S")}, {"S": ""})
+        result, _ = _resolve_container_env(
+            {"K": _SecretRef("S")}, {"S": ""}, {}
+        )
         assert result == {}
 
     def test_optional_secret_missing_skipped(self) -> None:
         """Missing optional secret (!secret?) is silently skipped."""
-        result = _resolve_container_env(
-            {"K": _SecretRef("S", optional=True)}, {}
+        result, _ = _resolve_container_env(
+            {"K": _SecretRef("S", optional=True)}, {}, {}
         )
         assert result == {}
 
     def test_optional_secret_present_resolved(self) -> None:
         """Present optional secret (!secret?) is resolved normally."""
-        result = _resolve_container_env(
-            {"K": _SecretRef("S", optional=True)}, {"S": "val"}
+        result, _ = _resolve_container_env(
+            {"K": _SecretRef("S", optional=True)}, {"S": "val"}, {}
         )
         assert result == {"K": "val"}
 
@@ -1010,6 +1050,363 @@ class TestResolveContainerEnv:
             "OPT_MISSING": _SecretRef("OPTIONAL_B", optional=True),
         }
         secrets = {"REQUIRED": "req-val", "OPTIONAL_A": "opt-val"}
-        result = _resolve_container_env(raw, secrets)
+        result, _ = _resolve_container_env(raw, secrets, {})
         # Required + present optional resolved; missing optional skipped
         assert result == {"REQ": "req-val", "OPT_PRESENT": "opt-val"}
+
+
+# ---------------------------------------------------------------------------
+# generate_surrogate
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateSurrogate:
+    """Tests for generate_surrogate."""
+
+    def test_preserves_length(self) -> None:
+        """Surrogate has same length as original."""
+        original = "abc123XYZ"
+        surrogate = generate_surrogate(original)
+        assert len(surrogate) == len(original)
+
+    def test_preserves_ghp_prefix(self) -> None:
+        """GitHub personal access token prefix is preserved."""
+        original = "ghp_aBcD1234567890eFgHiJkL"
+        surrogate = generate_surrogate(original)
+        assert surrogate.startswith("ghp_")
+        assert len(surrogate) == len(original)
+
+    def test_preserves_sk_ant_prefix(self) -> None:
+        """Anthropic API key prefix is preserved."""
+        original = "sk-ant-api03-abcdef1234567890"
+        surrogate = generate_surrogate(original)
+        assert surrogate.startswith("sk-ant-")
+        assert len(surrogate) == len(original)
+
+    def test_preserves_charset_alphanumeric(self) -> None:
+        """Alphanumeric charset is detected and used."""
+        original = "aAbBcC123"
+        for _ in range(10):  # Multiple runs to check randomness
+            surrogate = generate_surrogate(original)
+            # Should only contain alphanumerics (since original has no special)
+            assert surrogate.isalnum()
+            assert len(surrogate) == len(original)
+
+    def test_includes_special_chars_when_present(self) -> None:
+        """Special chars in original allow special chars in surrogate."""
+        original = "abc-def_ghi"
+        surrogates = {generate_surrogate(original) for _ in range(50)}
+        # With many samples, should see special chars
+        has_special = any("-" in s or "_" in s for s in surrogates)
+        assert has_special
+
+    def test_different_each_time(self) -> None:
+        """Surrogates are random (different each time)."""
+        original = "ghp_abcdefghijklmnopqrstuvwxyz1234"
+        surrogates = {generate_surrogate(original) for _ in range(10)}
+        # Should be at least 5 unique values (allowing some collisions)
+        assert len(surrogates) >= 5
+
+    def test_empty_suffix_uses_fallback_charset(self) -> None:
+        """Empty suffix after prefix uses fallback charset."""
+        # A prefix with nothing after it - suffix_len is 0
+        original = "ghp_"
+        surrogate = generate_surrogate(original)
+        # Should still be exactly the prefix (length 4, empty suffix)
+        assert surrogate == "ghp_"
+        assert len(surrogate) == len(original)
+
+
+# ---------------------------------------------------------------------------
+# _resolve_masked_secrets
+# ---------------------------------------------------------------------------
+
+
+class TestResolveMaskedSecrets:
+    """Tests for _resolve_masked_secrets."""
+
+    def test_empty_mapping(self) -> None:
+        """Empty mapping returns empty dict."""
+        result = _resolve_masked_secrets({}, "repos.test")
+        assert result == {}
+
+    def test_basic_masked_secret(self) -> None:
+        """Parses basic masked secret with value, scopes, and headers."""
+        raw = {
+            "GH_TOKEN": {
+                "value": "ghp_real_token",
+                "scopes": ["api.github.com", "*.githubusercontent.com"],
+                "headers": ["Authorization"],
+            }
+        }
+        result = _resolve_masked_secrets(raw, "repos.test")
+        assert "GH_TOKEN" in result
+        assert result["GH_TOKEN"].value == "ghp_real_token"
+        assert result["GH_TOKEN"].scopes == frozenset(
+            ["api.github.com", "*.githubusercontent.com"]
+        )
+        assert result["GH_TOKEN"].headers == ("Authorization",)
+
+    def test_empty_value_skipped(self) -> None:
+        """Empty value is silently skipped."""
+        raw = {
+            "GH_TOKEN": {
+                "value": "",
+                "scopes": ["api.github.com"],
+                "headers": ["Authorization"],
+            }
+        }
+        result = _resolve_masked_secrets(raw, "repos.test")
+        assert result == {}
+
+    def test_not_a_mapping_raises(self) -> None:
+        """Non-mapping value raises ConfigError."""
+        raw = {"GH_TOKEN": "just a string"}
+        with pytest.raises(ConfigError, match="must be a mapping"):
+            _resolve_masked_secrets(raw, "repos.test")
+
+    def test_missing_scopes_raises(self) -> None:
+        """Missing scopes raises ConfigError."""
+        raw = {"GH_TOKEN": {"value": "secret", "headers": ["Authorization"]}}
+        with pytest.raises(ConfigError, match="scopes is required"):
+            _resolve_masked_secrets(raw, "repos.test")
+
+    def test_empty_scopes_raises(self) -> None:
+        """Empty scopes list raises ConfigError."""
+        raw = {
+            "GH_TOKEN": {
+                "value": "secret",
+                "scopes": [],
+                "headers": ["Authorization"],
+            }
+        }
+        with pytest.raises(ConfigError, match="scopes cannot be empty"):
+            _resolve_masked_secrets(raw, "repos.test")
+
+    def test_scopes_not_list_raises(self) -> None:
+        """Non-list scopes raises ConfigError."""
+        raw = {
+            "GH_TOKEN": {
+                "value": "secret",
+                "scopes": "api.github.com",
+                "headers": ["Authorization"],
+            }
+        }
+        with pytest.raises(ConfigError, match="scopes must be a list"):
+            _resolve_masked_secrets(raw, "repos.test")
+
+    def test_custom_headers(self) -> None:
+        """Parses optional custom headers."""
+        raw = {
+            "API_KEY": {
+                "value": "secret",
+                "scopes": ["api.example.com"],
+                "headers": ["X-Custom-Header", "X-Api-Key"],
+            }
+        }
+        result = _resolve_masked_secrets(raw, "repos.test")
+        assert result["API_KEY"].headers == ("X-Custom-Header", "X-Api-Key")
+
+    def test_headers_not_list_raises(self) -> None:
+        """Non-list headers raises ConfigError."""
+        raw = {
+            "API_KEY": {
+                "value": "secret",
+                "scopes": ["api.example.com"],
+                "headers": "X-Api-Key",  # Should be a list
+            }
+        }
+        with pytest.raises(ConfigError, match="headers must be a list"):
+            _resolve_masked_secrets(raw, "repos.test")
+
+    def test_empty_headers_raises(self) -> None:
+        """Empty headers list raises ConfigError."""
+        raw = {
+            "API_KEY": {
+                "value": "secret",
+                "scopes": ["api.example.com"],
+                "headers": [],
+            }
+        }
+        with pytest.raises(ConfigError, match="headers cannot be empty"):
+            _resolve_masked_secrets(raw, "repos.test")
+
+    def test_missing_headers_raises(self) -> None:
+        """Missing headers raises ConfigError."""
+        raw = {
+            "API_KEY": {
+                "value": "secret",
+                "scopes": ["api.example.com"],
+            }
+        }
+        with pytest.raises(ConfigError, match="headers is required"):
+            _resolve_masked_secrets(raw, "repos.test")
+
+    def test_wildcard_headers(self) -> None:
+        """Headers can use fnmatch wildcards like '*'."""
+        raw = {
+            "API_KEY": {
+                "value": "secret",
+                "scopes": ["api.example.com"],
+                "headers": ["*"],
+            }
+        }
+        result = _resolve_masked_secrets(raw, "repos.test")
+        assert result["API_KEY"].headers == ("*",)
+
+
+# ---------------------------------------------------------------------------
+# Masked secrets in container_env resolution
+# ---------------------------------------------------------------------------
+
+
+class TestMaskedSecretResolution:
+    """Tests for masked secrets in _resolve_container_env."""
+
+    def test_masked_secret_generates_surrogate(self) -> None:
+        """Masked secret generates surrogate in container_env."""
+        raw_env = {"GH_TOKEN": _SecretRef("GH_TOKEN")}
+        masked_secrets = {
+            "GH_TOKEN": MaskedSecret(
+                value="ghp_realtoken1234",
+                scopes=frozenset(["api.github.com"]),
+                headers=("Authorization",),
+            )
+        }
+        result, replacement_map = _resolve_container_env(
+            raw_env, {}, masked_secrets
+        )
+
+        # container_env should have a surrogate, not the real value
+        assert "GH_TOKEN" in result
+        assert result["GH_TOKEN"] != "ghp_realtoken1234"
+        assert result["GH_TOKEN"].startswith("ghp_")
+
+        # replacement_map should have the mapping
+        surrogate = result["GH_TOKEN"]
+        assert surrogate in replacement_map
+        assert replacement_map[surrogate].real_value == "ghp_realtoken1234"
+        assert "api.github.com" in replacement_map[surrogate].scopes
+        assert replacement_map[surrogate].headers == ("Authorization",)
+
+    def test_masked_secret_with_custom_headers(self) -> None:
+        """Custom headers are passed through to replacement_map."""
+        raw_env = {"API_KEY": _SecretRef("API_KEY")}
+        masked_secrets = {
+            "API_KEY": MaskedSecret(
+                value="secret_value",
+                scopes=frozenset(["api.example.com"]),
+                headers=("X-Custom-Header",),
+            )
+        }
+        result, replacement_map = _resolve_container_env(
+            raw_env, {}, masked_secrets
+        )
+
+        surrogate = result["API_KEY"]
+        assert replacement_map[surrogate].headers == ("X-Custom-Header",)
+
+    def test_masked_secret_takes_priority_over_plain(self) -> None:
+        """Masked secret is used even if plain secret exists."""
+        raw_env = {"GH_TOKEN": _SecretRef("GH_TOKEN")}
+        plain_secrets = {"GH_TOKEN": "plain_value"}
+        masked_secrets = {
+            "GH_TOKEN": MaskedSecret(
+                value="masked_value",
+                scopes=frozenset(["api.github.com"]),
+                headers=("Authorization",),
+            )
+        }
+        result, replacement_map = _resolve_container_env(
+            raw_env, plain_secrets, masked_secrets
+        )
+
+        # Should use masked secret, not plain
+        assert result["GH_TOKEN"] != "plain_value"
+        assert result["GH_TOKEN"] != "masked_value"
+        assert len(replacement_map) == 1
+
+    def test_plain_secret_used_when_not_masked(self) -> None:
+        """Plain secret is used when no masked secret exists."""
+        raw_env = {"API_KEY": _SecretRef("API_KEY")}
+        plain_secrets = {"API_KEY": "plain_key"}
+        result, replacement_map = _resolve_container_env(
+            raw_env, plain_secrets, {}
+        )
+
+        assert result == {"API_KEY": "plain_key"}
+        assert replacement_map == {}
+
+    def test_mixed_masked_and_plain(self) -> None:
+        """Mix of masked and plain secrets works correctly."""
+        raw_env = {
+            "GH_TOKEN": _SecretRef("GH_TOKEN"),
+            "API_KEY": _SecretRef("API_KEY"),
+        }
+        plain_secrets = {"API_KEY": "plain_api_key"}
+        masked_secrets = {
+            "GH_TOKEN": MaskedSecret(
+                value="ghp_secret",
+                scopes=frozenset(["api.github.com"]),
+                headers=("Authorization",),
+            )
+        }
+        result, replacement_map = _resolve_container_env(
+            raw_env, plain_secrets, masked_secrets
+        )
+
+        # GH_TOKEN should be masked, API_KEY should be plain
+        assert result["GH_TOKEN"] != "ghp_secret"
+        assert result["API_KEY"] == "plain_api_key"
+        assert len(replacement_map) == 1
+
+
+# ---------------------------------------------------------------------------
+# ReplacementEntry
+# ---------------------------------------------------------------------------
+
+
+class TestReplacementEntry:
+    """Tests for ReplacementEntry."""
+
+    def test_to_dict(self) -> None:
+        """to_dict produces expected JSON-serializable format."""
+        entry = ReplacementEntry(
+            real_value="secret123",
+            scopes=("api.github.com", "*.example.com"),
+            headers=("Authorization",),
+        )
+        d = entry.to_dict()
+        assert d == {
+            "value": "secret123",
+            "scopes": ["api.github.com", "*.example.com"],
+            "headers": ["Authorization"],
+        }
+
+    def test_to_dict_with_wildcard_headers(self) -> None:
+        """to_dict includes wildcard headers."""
+        entry = ReplacementEntry(
+            real_value="secret123",
+            scopes=("api.github.com",),
+            headers=("*",),
+        )
+        d = entry.to_dict()
+        assert d == {
+            "value": "secret123",
+            "scopes": ["api.github.com"],
+            "headers": ["*"],
+        }
+
+    def test_to_dict_with_multiple_headers(self) -> None:
+        """to_dict includes multiple header patterns."""
+        entry = ReplacementEntry(
+            real_value="secret123",
+            scopes=("api.github.com",),
+            headers=("Authorization", "X-Api-*"),
+        )
+        d = entry.to_dict()
+        assert d == {
+            "value": "secret123",
+            "scopes": ["api.github.com"],
+            "headers": ["Authorization", "X-Api-*"],
+        }

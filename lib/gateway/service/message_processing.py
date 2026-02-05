@@ -233,9 +233,10 @@ def process_message(
         service._conv_repo_map[conv_id] = repo_id
 
         # Load repo config from git mirror
-        repo_config = RepoConfig.from_mirror(
+        repo_config, replacement_map = RepoConfig.from_mirror(
             conv_mgr.mirror,
             repo_handler.config.secrets,
+            repo_handler.config.masked_secrets,
         )
 
         if is_new:
@@ -366,6 +367,7 @@ def process_message(
                 conv_id,
                 mirror=conv_mgr.mirror,
                 session_dir=layout.session_dir,
+                replacement_map=replacement_map,
             )
 
         try:
@@ -409,6 +411,7 @@ def process_message(
                     conv_id,
                     mirror=conv_mgr.mirror,
                     session_dir=layout.session_dir,
+                    replacement_map=replacement_map,
                 )
 
             try:

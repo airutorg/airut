@@ -19,6 +19,7 @@ Lifecycle layers:
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 import tempfile
@@ -30,6 +31,7 @@ from typing import TYPE_CHECKING
 
 
 if TYPE_CHECKING:
+    from lib.gateway.config import ReplacementMap
     from lib.git_mirror import GitMirrorCache
 
 
@@ -109,6 +111,7 @@ class ProxyManager:
         self._lock = threading.Lock()
         self._active_proxies: dict[str, TaskProxy] = {}
         self._allowlist_tmpfiles: dict[str, Path] = {}
+        self._replacement_tmpfiles: dict[str, Path] = {}
         self._network_log_files: dict[str, Path] = {}
 
     # ------------------------------------------------------------------
@@ -164,6 +167,7 @@ class ProxyManager:
         *,
         mirror: GitMirrorCache,
         session_dir: Path | None = None,
+        replacement_map: ReplacementMap | None = None,
     ) -> TaskProxy:
         """Create internal network and start proxy container for a task.
 
@@ -176,6 +180,8 @@ class ProxyManager:
             session_dir: Optional session directory for network activity log.
                 If provided, network requests are logged to
                 ``session_dir/network-sandbox.log``.
+            replacement_map: Optional mapping of surrogate tokens to real
+                values with scope restrictions. Used for masked secrets.
 
         Returns:
             TaskProxy with connection details.
@@ -207,12 +213,17 @@ class ProxyManager:
         try:
             # Extract allowlist from git mirror
             allowlist_path = self._extract_allowlist(task_id, mirror=mirror)
+            # Write replacement map for masked secrets
+            replacement_path = self._write_replacement_map(
+                task_id, replacement_map or {}
+            )
             # Start proxy container on both networks
             self._run_proxy_container(
                 container_name,
                 network_name,
                 allowlist_path,
                 network_log_path=network_log_path,
+                replacement_path=replacement_path,
             )
             # Wait until mitmdump is accepting connections
             self._wait_for_proxy_ready(container_name)
@@ -221,6 +232,7 @@ class ProxyManager:
             self._remove_container(container_name)
             self._remove_network(network_name)
             self._cleanup_allowlist(task_id)
+            self._cleanup_replacement_map(task_id)
             self._cleanup_network_log(task_id)
             raise
 
@@ -253,6 +265,7 @@ class ProxyManager:
         self._remove_container(proxy.proxy_container_name)
         self._remove_network(proxy.network_name)
         self._cleanup_allowlist(task_id)
+        self._cleanup_replacement_map(task_id)
         # Note: we don't delete the network log file - it stays in session_dir
         # for later inspection and is cleaned up with session pruning
         self._network_log_files.pop(task_id, None)
@@ -392,6 +405,51 @@ class ProxyManager:
                 "Cleaned up allowlist for task %s: %s", task_id, tmppath
             )
 
+    def _write_replacement_map(
+        self,
+        task_id: str,
+        replacement_map: ReplacementMap,
+    ) -> Path:
+        """Write replacement map to temp file for proxy mounting.
+
+        Args:
+            task_id: Task identifier (for tracking cleanup).
+            replacement_map: Mapping of surrogate tokens to replacement config.
+
+        Returns:
+            Path to the temporary JSON file.
+        """
+        # Serialize to JSON format expected by proxy addon
+        data = {
+            surrogate: entry.to_dict()
+            for surrogate, entry in replacement_map.items()
+        }
+
+        fd, path = tempfile.mkstemp(
+            suffix=".json", prefix="airut-replacements-"
+        )
+        with open(fd, "w") as f:
+            json.dump(data, f)
+
+        tmppath = Path(path)
+        self._replacement_tmpfiles[task_id] = tmppath
+        logger.debug(
+            "Wrote replacement map for task %s: %s (%d entries)",
+            task_id,
+            tmppath,
+            len(replacement_map),
+        )
+        return tmppath
+
+    def _cleanup_replacement_map(self, task_id: str) -> None:
+        """Remove the temporary replacement map file for a task."""
+        tmppath = self._replacement_tmpfiles.pop(task_id, None)
+        if tmppath is not None:
+            tmppath.unlink(missing_ok=True)
+            logger.debug(
+                "Cleaned up replacement map for task %s: %s", task_id, tmppath
+            )
+
     def _create_network_log(self, task_id: str, session_dir: Path) -> Path:
         """Create the network log file in the session directory.
 
@@ -420,6 +478,7 @@ class ProxyManager:
         allowlist_path: Path,
         *,
         network_log_path: Path | None = None,
+        replacement_path: Path | None = None,
     ) -> None:
         """Start a proxy container in detached mode.
 
@@ -428,11 +487,12 @@ class ProxyManager:
             internal_network: Per-task internal network name.
             allowlist_path: Path to the allowlist YAML file to mount.
             network_log_path: Optional path to network log file to mount.
+            replacement_path: Optional path to replacement map JSON file.
 
         Raises:
             ProxyError: If container start fails.
         """
-        allowlist_script = self._docker_dir / "proxy-allowlist.py"
+        filter_script = self._docker_dir / "proxy-filter.py"
 
         cmd = [
             self._cmd,
@@ -448,10 +508,14 @@ class ProxyManager:
             "-v",
             f"{MITMPROXY_CONFDIR}:/mitmproxy-confdir:rw",
             "-v",
-            f"{allowlist_script}:/proxy-allowlist.py:ro",
+            f"{filter_script}:/proxy-filter.py:ro",
             "-v",
             f"{allowlist_path}:/network-allowlist.yaml:ro",
         ]
+
+        # Mount replacement map if provided
+        if replacement_path is not None:
+            cmd.extend(["-v", f"{replacement_path}:/replacements.json:ro"])
 
         # Mount network log file if provided
         if network_log_path is not None:
@@ -470,7 +534,7 @@ class ProxyManager:
                 "--set",
                 "flow_detail=0",
                 "-s",
-                "/proxy-allowlist.py",
+                "/proxy-filter.py",
             ]
         )
 

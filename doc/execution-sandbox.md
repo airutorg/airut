@@ -60,6 +60,13 @@ container_env:
 - All resolved values are registered for log redaction
 - Values loaded from git mirror's default branch (not workspace)
 
+For credentials that should only be usable with specific services (e.g., GitHub
+tokens for GitHub APIs), use **masked secrets** in the server config. The
+container receives a surrogate token; the proxy swaps it for the real value only
+when the request matches scoped hosts. See
+[network-sandbox.md](network-sandbox.md#masked-secrets-token-replacement) for
+details.
+
 Git authentication uses `gh auth git-credential` helper with `GH_TOKEN`,
 avoiding SSH key exposure.
 

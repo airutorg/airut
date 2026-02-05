@@ -235,6 +235,32 @@ GH_TOKEN=ghp_...
 Keep `.env` secure (`chmod 600`). The file is gitignored and should never be
 committed.
 
+### Masked Secrets
+
+For credentials that should only be usable with specific services, use
+`masked_secrets` instead of plain `secrets`. The container receives a surrogate
+token; the proxy swaps it for the real value only when the request host matches
+the scopes.
+
+```yaml
+repos:
+  my-project:
+    secrets:
+      ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY  # Plain (body tokens)
+
+    masked_secrets:
+      GH_TOKEN:
+        value: !env GH_TOKEN
+        scopes:
+          - "api.github.com"
+          - "*.githubusercontent.com"
+```
+
+This prevents credential exfiltration — even if the container is compromised,
+the attacker only has surrogates that are useless outside scoped hosts. See
+[network-sandbox.md](network-sandbox.md#masked-secrets-token-replacement) for
+full details.
+
 ## Email Setup
 
 ### Dedicated Inbox Requirement
