@@ -40,9 +40,8 @@ tokens.
 
 **Defense in depth** — Multiple independent security layers ensure that failure
 of any single control doesn't compromise the system. Email authentication +
-sender allowlist, container isolation + network sandbox, masked secrets +
-environment-only injection + log redaction — each layer catches threats the
-others might miss.
+sender allowlist, container isolation + network sandbox, surrogate credentials +
+environment-only injection — each layer catches threats the others might miss.
 
 ## Security Layers
 
@@ -67,8 +66,8 @@ The following diagram shows the security controls at each layer:
 ├─────────────────────────────────────────────────────────────────────┤
 │                       Credential Layer                              │
 │  ┌─────────────────────┐  ┌─────────────────────────────────────┐   │
-│  │ Environment-only    │  │ Log Redaction                       │   │
-│  │ secrets             │  │                                     │   │
+│  │ Environment-only    │  │ Surrogate Credentials               │   │
+│  │ secrets             │  │ (Masked Secrets)                    │   │
 │  └─────────────────────┘  └─────────────────────────────────────┘   │
 ├─────────────────────────────────────────────────────────────────────┤
 │                       Dashboard Layer                               │
@@ -195,7 +194,7 @@ instead of real credentials; the proxy swaps surrogates for real values only
 when the request host matches configured scopes.
 
 This prevents credential exfiltration — even if the container is compromised,
-the attacker only has surrogates that are useless outside scoped hosts.
+the attacker only has surrogates that are useless outside of the container.
 
 See [network-sandbox.md](network-sandbox.md#masked-secrets-token-replacement)
 for full details on configuration, security properties, and limitations.
