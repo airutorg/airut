@@ -96,9 +96,32 @@ repos:
     # Named pool of secrets available for this repo to reference via !secret
     # and !secret? tags in .airut/airut.yaml.  Keys are logical names; values
     # are resolved from the environment.
+    #
+    # Plain secrets are injected directly into the container environment.
+    # Use for credentials that don't support header-based auth or need to be
+    # used with arbitrary hosts.
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
-      GH_TOKEN: !env GH_TOKEN
+
+    # Masked secrets inject surrogate tokens into containers.  The proxy swaps
+    # surrogates for real values only when the request host matches scopes.
+    # This prevents credential exfiltration — even if the container is
+    # compromised, it only has useless surrogates.
+    #
+    # Required fields:
+    # - value: the secret value (supports !env)
+    # - scopes: fnmatch patterns for hosts where replacement is allowed
+    # - headers: fnmatch patterns for headers to scan (e.g., "*" for all)
+    #
+    # Basic Auth is automatically decoded/re-encoded for Authorization headers.
+    masked_secrets:
+      GH_TOKEN:
+        value: !env GH_TOKEN
+        scopes:
+          - "api.github.com"
+          - "*.githubusercontent.com"
+        headers:
+          - "Authorization"
 
   # -------------------------------------------------------------------------
   # Example: additional repository (uncomment to use)

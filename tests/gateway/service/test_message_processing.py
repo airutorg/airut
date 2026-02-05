@@ -40,9 +40,10 @@ class TestProcessMessage:
     def _patch_repo_config(self):
         """Patch RepoConfig.from_mirror for all process message tests."""
         rc = _make_repo_config()
+        # from_mirror now returns (RepoConfig, ReplacementMap) tuple
         with patch(
             "lib.gateway.service.message_processing.RepoConfig.from_mirror",
-            return_value=rc,
+            return_value=(rc, {}),
         ) as mock_rc:
             self._mock_repo_config = mock_rc
             self._repo_config = rc

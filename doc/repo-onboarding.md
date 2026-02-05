@@ -199,10 +199,26 @@ repos:
     imap:
       use_idle: true
 
+    # Plain secrets (injected directly into container)
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
-      GH_TOKEN: !env GH_TOKEN_YOUR_REPO
+
+    # Masked secrets (surrogate injected, real value only at proxy for scoped hosts)
+    # Prevents credential exfiltration even if container is compromised
+    masked_secrets:
+      GH_TOKEN:
+        value: !env GH_TOKEN_YOUR_REPO
+        scopes:
+          - "api.github.com"
+          - "*.githubusercontent.com"
+        headers:
+          - "Authorization"
 ```
+
+For credentials that should only be usable with specific services, prefer
+`masked_secrets` over `secrets`. Headers use fnmatch patterns (`*` for all). See
+[network-sandbox.md](network-sandbox.md#masked-secrets-token-replacement) for
+details.
 
 Add secrets to `.env`:
 

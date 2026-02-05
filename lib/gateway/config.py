@@ -22,6 +22,7 @@ email gateway can be deployed independently.
 
 import logging
 import os
+import secrets as secrets_module
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, overload
@@ -47,6 +48,126 @@ _BOOL_FALSY = frozenset({"false", "0", "no", "off"})
 
 class ConfigError(Exception):
     """Base exception for configuration errors."""
+
+
+# ---------------------------------------------------------------------------
+# Masked secrets (token replacement)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class MaskedSecret:
+    """A secret with scope restrictions for proxy-level replacement.
+
+    Masked secrets are not injected directly into containers. Instead,
+    a surrogate token is injected and the proxy swaps it for the real
+    value only when the request host matches a scope pattern.
+
+    Attributes:
+        value: The real secret value.
+        scopes: Fnmatch patterns for allowed hosts (e.g., "api.github.com").
+        headers: Fnmatch patterns for headers to scan (e.g., "Authorization",
+            "*" for all headers).
+    """
+
+    value: str
+    scopes: frozenset[str]
+    headers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ReplacementEntry:
+    """Entry in the replacement map for proxy token swapping.
+
+    Attributes:
+        real_value: The actual secret to substitute.
+        scopes: Fnmatch patterns for hosts where replacement is allowed.
+        headers: Fnmatch patterns for headers to scan.
+    """
+
+    real_value: str
+    scopes: tuple[str, ...]
+    headers: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dict for JSON export."""
+        return {
+            "value": self.real_value,
+            "scopes": list(self.scopes),
+            "headers": list(self.headers),
+        }
+
+
+#: Mapping of surrogate token to replacement entry.
+ReplacementMap = dict[str, ReplacementEntry]
+
+
+# Known token prefixes to preserve during surrogate generation.
+_TOKEN_PREFIXES = (
+    "github_pat_",  # GitHub fine-grained PAT
+    "ghp_",  # GitHub personal access token
+    "gho_",  # GitHub OAuth token
+    "ghs_",  # GitHub server-to-server token
+    "ghr_",  # GitHub refresh token
+    "sk-ant-",  # Anthropic API key
+    "sk-",  # OpenAI API key
+    "xoxb-",  # Slack bot token
+    "xoxp-",  # Slack user token
+)
+
+
+def generate_surrogate(original: str) -> str:
+    """Generate a surrogate token that mimics the original's format.
+
+    Preserves:
+    - Exact length
+    - Character set (uppercase, lowercase, digits, common special chars)
+    - Known prefixes (ghp_, sk-ant-, etc.)
+
+    Args:
+        original: The original secret value.
+
+    Returns:
+        A random surrogate with matching format.
+    """
+    # Detect and preserve known prefix
+    prefix = ""
+    suffix_source = original
+    for known in _TOKEN_PREFIXES:
+        if original.startswith(known):
+            prefix = known
+            suffix_source = original[len(known) :]
+            break
+
+    # Analyze character set of the suffix
+    has_upper = any(c.isupper() for c in suffix_source)
+    has_lower = any(c.islower() for c in suffix_source)
+    has_digit = any(c.isdigit() for c in suffix_source)
+    has_special = any(not c.isalnum() for c in suffix_source)
+
+    # Build charset for surrogate generation
+    charset = ""
+    if has_upper:
+        charset += "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    if has_lower:
+        charset += "abcdefghijklmnopqrstuvwxyz"
+    if has_digit:
+        charset += "0123456789"
+    if has_special:
+        # Use only safe special chars common in tokens
+        charset += "-_"
+
+    # Fallback if charset detection failed (e.g., empty suffix)
+    if not charset:
+        charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+    # Generate random suffix of matching length
+    suffix_len = len(suffix_source)
+    random_suffix = "".join(
+        secrets_module.choice(charset) for _ in range(suffix_len)
+    )
+
+    return prefix + random_suffix
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +494,7 @@ class RepoServerConfig:
         idle_reconnect_interval_seconds: Reconnect interval for IDLE mode.
         smtp_require_auth: Whether SMTP requires authentication.
         secrets: Per-repo secrets pool for ``!secret`` resolution.
+        masked_secrets: Secrets with scope restrictions for proxy replacement.
     """
 
     repo_id: str
@@ -392,6 +514,7 @@ class RepoServerConfig:
     idle_reconnect_interval_seconds: int = 29 * 60
     smtp_require_auth: bool = True
     secrets: dict[str, str] = field(default_factory=dict)
+    masked_secrets: dict[str, MaskedSecret] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate configuration and register secrets.
@@ -404,6 +527,11 @@ class RepoServerConfig:
         for value in self.secrets.values():
             if value:
                 SecretFilter.register_secret(value)
+
+        # Register masked secret real values for log redaction
+        for masked in self.masked_secrets.values():
+            if masked.value:
+                SecretFilter.register_secret(masked.value)
 
         if not self.git_repo_url:
             raise ValueError(
@@ -591,6 +719,10 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
     raw_secrets = raw.get("secrets", {})
     secrets = _resolve_secrets(raw_secrets)
 
+    # Resolve masked secrets
+    raw_masked = raw.get("masked_secrets", {})
+    masked_secrets = _resolve_masked_secrets(raw_masked, prefix)
+
     return RepoServerConfig(
         repo_id=repo_id,
         git_repo_url=_resolve(
@@ -645,7 +777,70 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
             imap.get("idle_reconnect_interval"), int, default=29 * 60
         ),
         secrets=secrets,
+        masked_secrets=masked_secrets,
     )
+
+
+def _resolve_masked_secrets(
+    raw_masked: dict,
+    prefix: str,
+) -> dict[str, MaskedSecret]:
+    """Resolve masked_secrets from server config.
+
+    Args:
+        raw_masked: Raw masked_secrets mapping from YAML.
+        prefix: Config path prefix for error messages.
+
+    Returns:
+        Mapping of secret name to MaskedSecret.
+
+    Raises:
+        ConfigError: If structure is invalid or required fields missing.
+    """
+    result: dict[str, MaskedSecret] = {}
+
+    for name, config in raw_masked.items():
+        name = str(name)
+        key = f"{prefix}.masked_secrets.{name}"
+
+        if not isinstance(config, dict):
+            raise ConfigError(
+                f"{key} must be a mapping with 'value', 'scopes', and 'headers'"
+            )
+
+        # Resolve value (supports !env)
+        raw_value = config.get("value")
+        value = _raw_resolve(raw_value)
+
+        # Skip if value is empty (like regular secrets)
+        if not value:
+            continue
+
+        # Parse scopes (required)
+        raw_scopes = config.get("scopes")
+        if raw_scopes is None:
+            raise ConfigError(f"{key}.scopes is required")
+        if not isinstance(raw_scopes, list):
+            raise ConfigError(f"{key}.scopes must be a list")
+        if not raw_scopes:
+            raise ConfigError(f"{key}.scopes cannot be empty")
+
+        scopes = frozenset(str(s) for s in raw_scopes)
+
+        # Parse headers (required, supports fnmatch patterns like "*")
+        raw_headers = config.get("headers")
+        if raw_headers is None:
+            raise ConfigError(f"{key}.headers is required")
+        if not isinstance(raw_headers, list):
+            raise ConfigError(f"{key}.headers must be a list")
+        if not raw_headers:
+            raise ConfigError(f"{key}.headers cannot be empty")
+
+        headers = tuple(str(h) for h in raw_headers)
+
+        result[name] = MaskedSecret(value=value, scopes=scopes, headers=headers)
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -696,19 +891,26 @@ class RepoConfig:
         cls,
         mirror: "GitMirrorCache",
         server_secrets: dict[str, str],
-    ) -> "RepoConfig":
+        masked_secrets: dict[str, MaskedSecret] | None = None,
+    ) -> tuple["RepoConfig", ReplacementMap]:
         """Load repo config from the git mirror.
 
         Reads ``.airut/airut.yaml`` from the mirror's default branch,
         parses it with ``!secret`` tag support, and resolves secret
         references against the server's secrets pool.
 
+        When ``masked_secrets`` is provided, secrets found in that pool
+        are replaced with surrogates, and a replacement map is returned
+        for the proxy to swap them back for authorized hosts.
+
         Args:
             mirror: Git mirror cache to read the file from.
             server_secrets: Server's secrets pool (name -> value).
+            masked_secrets: Server's masked secrets pool with scope info.
 
         Returns:
-            RepoConfig instance.
+            Tuple of (RepoConfig, ReplacementMap). The ReplacementMap
+            will be empty if no masked secrets were referenced.
 
         Raises:
             ConfigError: If the file is missing, malformed, or references
@@ -728,24 +930,25 @@ class RepoConfig:
                 f"Repo config must be a YAML mapping: {cls.CONFIG_PATH}"
             )
 
-        return cls._from_raw(raw, server_secrets)
+        return cls._from_raw(raw, server_secrets, masked_secrets or {})
 
     @classmethod
     def _from_raw(
         cls,
         raw: dict,
         server_secrets: dict[str, str],
-    ) -> "RepoConfig":
+        masked_secrets: dict[str, MaskedSecret],
+    ) -> tuple["RepoConfig", ReplacementMap]:
         """Build repo config from parsed YAML dict."""
         network_raw = raw.get("network", {})
 
         # Resolve container_env: inline values + !secret references
         raw_container_env = raw.get("container_env", {})
-        container_env = _resolve_container_env(
-            raw_container_env, server_secrets
+        container_env, replacement_map = _resolve_container_env(
+            raw_container_env, server_secrets, masked_secrets
         )
 
-        return cls(
+        config = cls(
             default_model=_resolve(
                 raw.get("default_model"), str, default="opus"
             ),
@@ -756,44 +959,73 @@ class RepoConfig:
             container_env=container_env,
         )
 
+        return config, replacement_map
+
 
 def _resolve_container_env(
     raw_env: dict,
     server_secrets: dict[str, str],
-) -> dict[str, str]:
+    masked_secrets: dict[str, MaskedSecret],
+) -> tuple[dict[str, str], ReplacementMap]:
     """Resolve container_env entries from repo config.
 
     Inline string values pass through.  ``_SecretRef`` placeholders
-    are resolved from the server's secrets pool.
+    are resolved from the server's secrets pool or masked_secrets pool.
+
+    For masked secrets, a surrogate token is generated and added to the
+    replacement map. The container receives the surrogate; the proxy
+    swaps it for the real value when the request host matches the scopes.
 
     Args:
         raw_env: Raw container_env mapping from YAML.
-        server_secrets: Server's secrets pool.
+        server_secrets: Server's plain secrets pool.
+        masked_secrets: Server's masked secrets pool with scope info.
 
     Returns:
-        Resolved environment variable mapping.
+        Tuple of (resolved env vars, replacement map for proxy).
 
     Raises:
         ConfigError: If a required ``!secret`` reference (not ``!secret?``)
-            is not in the server pool.
+            is not in either secrets pool.
     """
     resolved: dict[str, str] = {}
+    replacement_map: ReplacementMap = {}
+
     for key, value in raw_env.items():
         if isinstance(value, _SecretRef):
-            if value.name not in server_secrets:
-                if value.optional:
-                    # !secret? — gracefully skip missing optional secrets
-                    continue
-                raise ConfigError(
-                    f"container_env.{key}: !secret '{value.name}' "
-                    f"not found in server secrets pool"
-                )
-            secret_value = server_secrets[value.name]
-            if secret_value:
-                resolved[str(key)] = secret_value
+            # Check masked_secrets first
+            if value.name in masked_secrets:
+                masked = masked_secrets[value.name]
+                if masked.value:
+                    # Generate surrogate and add to replacement map
+                    surrogate = generate_surrogate(masked.value)
+                    resolved[str(key)] = surrogate
+                    replacement_map[surrogate] = ReplacementEntry(
+                        real_value=masked.value,
+                        scopes=tuple(sorted(masked.scopes)),
+                        headers=masked.headers,
+                    )
+                continue
+
+            # Fall back to plain secrets
+            if value.name in server_secrets:
+                secret_value = server_secrets[value.name]
+                if secret_value:
+                    resolved[str(key)] = secret_value
+                continue
+
+            # Not found in either pool
+            if value.optional:
+                # !secret? — gracefully skip missing optional secrets
+                continue
+            raise ConfigError(
+                f"container_env.{key}: !secret '{value.name}' "
+                f"not found in server secrets pool"
+            )
         else:
             # Inline value
             str_value = _raw_resolve(value)
             if str_value:
                 resolved[str(key)] = str_value
-    return resolved
+
+    return resolved, replacement_map

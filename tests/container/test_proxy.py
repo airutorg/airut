@@ -455,7 +455,7 @@ class TestRunProxyContainer:
         """Runs proxy with correct podman arguments."""
         allowlist = tmp_path / "allowlist.yaml"
         allowlist.write_text("domains: []\n")
-        (tmp_path / "proxy-allowlist.py").touch()
+        (tmp_path / "proxy-filter.py").touch()
         pm = _make_pm(docker_dir=tmp_path)
         pm._run_proxy_container("airut-proxy-abc", "airut-task-abc", allowlist)
         cmd = mock_run.call_args[0][0]
@@ -486,7 +486,7 @@ class TestRunProxyContainer:
         """Mounts network log file when path is provided."""
         allowlist = tmp_path / "allowlist.yaml"
         allowlist.write_text("domains: []\n")
-        (tmp_path / "proxy-allowlist.py").touch()
+        (tmp_path / "proxy-filter.py").touch()
         log_path = tmp_path / "network-sandbox.log"
         log_path.touch()
         pm = _make_pm(docker_dir=tmp_path)
@@ -592,6 +592,94 @@ class TestNetworkLogOperations:
         """Cleanup is safe for unknown task IDs."""
         pm = _make_pm()
         pm._cleanup_network_log("nonexistent")  # Should not raise
+
+
+class TestReplacementMapOperations:
+    """Tests for replacement map file operations."""
+
+    def test_write_replacement_map(self, tmp_path: Path) -> None:
+        """Writes replacement map to temp file."""
+        from lib.gateway.config import ReplacementEntry
+
+        pm = _make_pm()
+        replacement_map = {
+            "ghp_surrogate123": ReplacementEntry(
+                real_value="ghp_real456",
+                scopes=("api.github.com",),
+                headers=("Authorization",),
+            )
+        }
+        path = pm._write_replacement_map("task1", replacement_map)
+        try:
+            assert path.exists()
+            import json
+
+            data = json.loads(path.read_text())
+            assert "ghp_surrogate123" in data
+            assert data["ghp_surrogate123"]["value"] == "ghp_real456"
+            assert data["ghp_surrogate123"]["scopes"] == ["api.github.com"]
+            assert data["ghp_surrogate123"]["headers"] == ["Authorization"]
+            assert "task1" in pm._replacement_tmpfiles
+            assert pm._replacement_tmpfiles["task1"] == path
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_write_empty_replacement_map(self) -> None:
+        """Empty replacement map creates empty JSON file."""
+        pm = _make_pm()
+        path = pm._write_replacement_map("task1", {})
+        try:
+            assert path.exists()
+            import json
+
+            data = json.loads(path.read_text())
+            assert data == {}
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_cleanup_replacement_map(self, tmp_path: Path) -> None:
+        """Cleanup removes temp file and tracking."""
+        tmpfile = tmp_path / "replacements.json"
+        tmpfile.write_text("{}")
+        pm = _make_pm()
+        pm._replacement_tmpfiles["task1"] = tmpfile
+        pm._cleanup_replacement_map("task1")
+        assert not tmpfile.exists()
+        assert "task1" not in pm._replacement_tmpfiles
+
+    def test_cleanup_replacement_map_noop_for_unknown(self) -> None:
+        """Cleanup is safe for unknown task IDs."""
+        pm = _make_pm()
+        pm._cleanup_replacement_map("nonexistent")  # Should not raise
+
+
+class TestRunProxyContainerWithReplacement:
+    """Tests for _run_proxy_container with replacement map."""
+
+    @patch("lib.container.proxy.subprocess.run")
+    def test_mounts_replacement_map_when_provided(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """Mounts replacement map file when path is provided."""
+        allowlist = tmp_path / "allowlist.yaml"
+        allowlist.write_text("domains: []\n")
+        (tmp_path / "proxy-filter.py").touch()
+        replacement_path = tmp_path / "replacements.json"
+        replacement_path.write_text("{}")
+        pm = _make_pm(docker_dir=tmp_path)
+        pm._run_proxy_container(
+            "airut-proxy-abc",
+            "airut-task-abc",
+            allowlist,
+            replacement_path=replacement_path,
+        )
+        cmd = mock_run.call_args[0][0]
+        # Check replacement map volume mount
+        volume_indices = [i for i, v in enumerate(cmd) if v == "-v"]
+        volumes = [cmd[i + 1] for i in volume_indices]
+        assert any(
+            "replacements.json:/replacements.json:ro" in v for v in volumes
+        )
 
 
 class TestRemoveContainer:

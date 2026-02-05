@@ -24,7 +24,9 @@ You → Email → Airut → Claude Code (container) → PR → Email reply → Y
 **Key features:**
 
 - **Comprehensive sandboxing**: Container isolation plus network allowlist
-  prevents data exfiltration even if the agent is compromised
+  prevents data exfiltration even if the agent is compromised. Masked secrets
+  inject surrogate tokens into containers — real credentials only appear at the
+  proxy level for authorized hosts.
 - **Email-native authentication**: DMARC verification with sender allowlist — no
   API keys to manage
 - **Model selection via subaddressing**: Control costs by choosing the model per

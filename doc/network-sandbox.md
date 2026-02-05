@@ -20,6 +20,12 @@ servers.
 The network sandbox breaks this exfiltration path: even if the agent is tricked
 into making a request, it can only reach pre-approved hosts.
 
+**Combined with masked secrets** (see
+[below](#masked-secrets-token-replacement)), credentials can be scoped to
+specific hosts at the proxy level. Even if an attacker tricks the agent into
+sending credentials to an allowed host they control, the surrogate token is
+useless — real values only appear for requests to scoped domains.
+
 ## Security Model
 
 The security of the network sandbox rests on two properties:
@@ -127,13 +133,13 @@ isolation between concurrent tasks:
 
 ### Components
 
-| Component                       | Purpose                                  |
-| ------------------------------- | ---------------------------------------- |
-| `.airut/network-allowlist.yaml` | Allowlist configuration (domains + URLs) |
-| `docker/proxy.dockerfile`       | Proxy container image (slim + mitmproxy) |
-| `docker/proxy-allowlist.py`     | mitmproxy addon enforcing the allowlist  |
-| `lib/container/network.py`      | Podman args for sandbox integration      |
-| `lib/container/proxy.py`        | Per-task proxy lifecycle management      |
+| Component                       | Purpose                                       |
+| ------------------------------- | --------------------------------------------- |
+| `.airut/network-allowlist.yaml` | Allowlist configuration (domains + URLs)      |
+| `docker/proxy.dockerfile`       | Proxy container image (slim + mitmproxy)      |
+| `docker/proxy-filter.py`        | mitmproxy addon for allowlist + token masking |
+| `lib/container/network.py`      | Podman args for sandbox integration           |
+| `lib/container/proxy.py`        | Per-task proxy lifecycle management           |
 
 ## Configuration
 
@@ -201,6 +207,158 @@ When the agent encounters a blocked request:
 This flow lets agents discover and request access to new resources while keeping
 humans in the approval loop.
 
+## Masked Secrets (Token Replacement)
+
+The network allowlist controls *where* the agent can connect. Masked secrets
+control *what credentials* are usable at each destination. Together they provide
+layered protection against credential exfiltration.
+
+### Problem
+
+Even with a network allowlist, a compromised container could exfiltrate
+credentials to allowed hosts:
+
+- Send `GH_TOKEN` to a GitHub issue on a repo the attacker controls
+- Embed credentials in request parameters to an allowed API
+- Use an allowed webhook endpoint to leak secrets
+
+Plain secrets in `container_env` are fully exposed to the container — if the
+agent is tricked via prompt injection, it can read and exfiltrate them.
+
+### Solution
+
+Masked secrets inject **surrogate tokens** into containers instead of real
+credentials. The proxy swaps surrogates for real values only when the request
+host matches configured scopes.
+
+```yaml
+# In config/airut.yaml (server config)
+repos:
+  my-project:
+    masked_secrets:
+      GH_TOKEN:
+        value: !env GH_TOKEN
+        scopes:
+          - "api.github.com"
+          - "*.githubusercontent.com"
+```
+
+**How it works:**
+
+1. Container receives a surrogate token (random, format-preserving)
+2. Proxy intercepts outbound requests
+3. For requests to scoped hosts, proxy swaps surrogate → real value in headers
+4. Requests to other hosts see only the useless surrogate
+
+### Security Properties
+
+| Property                | Mechanism                                       |
+| ----------------------- | ----------------------------------------------- |
+| Credential isolation    | Container only sees surrogates, never real keys |
+| Scope enforcement       | Proxy only replaces for matching hosts          |
+| Exfiltration prevention | Surrogate useless at unauthorized endpoints     |
+| Fail-secure             | If proxy fails, no credentials reach network    |
+| Audit trail             | Network log shows `[masked: N]` for requests    |
+| Log safety              | Real values redacted; surrogates visible        |
+
+### Surrogate Generation
+
+Surrogates mimic the original token's format to avoid breaking client-side
+validation:
+
+- **Exact length** preserved
+- **Character set** preserved (uppercase, lowercase, digits, special)
+- **Known prefixes** preserved (`ghp_`, `sk-ant-`, `gho_`, `sk-`, etc.)
+
+Example:
+
+```
+Original:  ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+Surrogate: ghp_a8f2k9m3b7c1d4e6g5h0j2l8n4p6q9r3s7t1
+```
+
+Surrogates are generated with `secrets.choice()` (cryptographically secure) and
+are uncorrelated with the original value.
+
+### Headers Replaced
+
+Headers to scan are specified per masked secret using fnmatch patterns. Matching
+is **case-insensitive** per RFC 7230 (e.g., `"Authorization"` matches
+`authorization`, `AUTHORIZATION`, etc.):
+
+```yaml
+masked_secrets:
+  # Match only Authorization header
+  GH_TOKEN:
+    value: !env GH_TOKEN
+    scopes: ["api.github.com"]
+    headers: ["Authorization"]
+
+  # Match all headers
+  UNIVERSAL_TOKEN:
+    value: !env UNIVERSAL_TOKEN
+    scopes: ["api.example.com"]
+    headers: ["*"]
+
+  # GitLab-style header
+  GITLAB_TOKEN:
+    value: !env GITLAB_TOKEN
+    scopes: ["gitlab.com"]
+    headers: ["Private-Token"]
+```
+
+### Basic Auth Support
+
+For `Authorization` headers, the proxy handles both Bearer tokens and
+Base64-encoded Basic Auth. This enables git operations which use Basic Auth:
+
+```
+git push → Authorization: Basic <base64("x-access-token:ghp_surrogate...")>
+         → proxy decodes, replaces surrogate, re-encodes
+         → Authorization: Basic <base64("x-access-token:ghp_realtoken...")>
+```
+
+### Limitations
+
+1. **Header-only replacement**: Tokens in request body or query parameters are
+   not replaced. Use plain `secrets` if body tokens are required.
+
+2. **No response masking**: Real tokens are never sent to the container. If a
+   service echoes tokens in responses, they would be visible (but still redacted
+   in logs).
+
+### Configuration
+
+Repo config (`.airut/airut.yaml`) references secrets by name, unaware of whether
+they're masked or plain:
+
+```yaml
+container_env:
+  GH_TOKEN: !secret GH_TOKEN           # Required (error if missing)
+  API_KEY: !secret? API_KEY            # Optional (skip if missing)
+```
+
+The server determines at resolution time whether a secret is masked or plain.
+This separation means repos declare what they need; operators control how
+credentials are protected.
+
+### When to Use Masked Secrets
+
+Use `masked_secrets` for credentials that:
+
+- Are used via `Authorization`, `X-Api-Key`, or `X-Auth-Token` headers
+- Should only be usable with specific hosts (e.g., GitHub tokens for GitHub
+  APIs)
+- Carry high exfiltration risk if exposed
+
+Use plain `secrets` for credentials that:
+
+- Are passed in request bodies (not headers)
+- Need to work with arbitrary hosts
+- Are low-sensitivity (e.g., public API keys)
+
+See `spec/masked-secrets.md` for the full specification.
+
 ## Implementation Details
 
 ### CA Certificate Trust
@@ -223,10 +381,14 @@ This provides an audit trail of all allowed and blocked requests:
 
 ```
 === TASK START 2026-02-03T12:34:56Z ===
-allowed GET https://api.github.com/repos/your-org/your-repo/pulls -> 200
+allowed GET https://api.github.com/repos/your-org/your-repo/pulls -> 200 [masked: 1]
 BLOCKED GET https://evil.com/exfiltrate -> 403
-allowed POST https://api.anthropic.com/v1/messages -> 200
+allowed POST https://api.anthropic.com/v1/messages -> 200 [masked: 1]
 ```
+
+The `[masked: N]` suffix indicates that N masked secret tokens were replaced in
+that request. See [Masked Secrets](#masked-secrets-token-replacement) above for
+details.
 
 The log file is created in the session directory and persists with the session.
 It is cleaned up automatically when sessions are pruned.
