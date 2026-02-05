@@ -1648,3 +1648,142 @@ class TestNetworkLogsPage:
         assert "some unknown log format" in html
         # Should NOT have allowed/blocked/header classes
         assert 'class="log-line">' in html
+
+    def test_network_logs_highlights_error_responses(
+        self, tmp_path: Path
+    ) -> None:
+        """Test error responses (4xx/5xx) have orange styling."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        log_path = conv_dir / "network-sandbox.log"
+        log_path.write_text(
+            "allowed GET https://api.github.com -> 200\n"
+            "allowed GET https://api.example.com -> 404\n"
+            "allowed POST https://api.example.com/fail -> 500\n"
+        )
+
+        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/abc12345/network")
+        html = response.get_data(as_text=True)
+
+        # 200 should have allowed class (green)
+        assert 'class="log-line allowed"' in html
+        # 404 and 500 should have error class (orange)
+        assert html.count('class="log-line error"') == 2
+
+    def test_network_logs_bold_error_status_code(self, tmp_path: Path) -> None:
+        """Test error status codes are bold in error lines."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        log_path = conv_dir / "network-sandbox.log"
+        log_path.write_text("allowed GET https://api.example.com -> 500\n")
+
+        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/abc12345/network")
+        html = response.get_data(as_text=True)
+
+        # Status code should be wrapped in highlight span
+        assert '<span class="highlight">500</span>' in html
+
+    def test_network_logs_bold_blocked(self, tmp_path: Path) -> None:
+        """Test BLOCKED text is bold in blocked lines."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        log_path = conv_dir / "network-sandbox.log"
+        log_path.write_text("BLOCKED GET https://evil.com -> 403\n")
+
+        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/abc12345/network")
+        html = response.get_data(as_text=True)
+
+        # BLOCKED should be wrapped in highlight span
+        assert '<span class="highlight">BLOCKED</span>' in html
+
+    def test_network_logs_3xx_not_error(self, tmp_path: Path) -> None:
+        """Test 3xx responses are treated as success, not error."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        log_path = conv_dir / "network-sandbox.log"
+        log_path.write_text(
+            "allowed GET https://api.example.com -> 301\n"
+            "allowed GET https://api.example.com -> 304\n"
+        )
+
+        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/abc12345/network")
+        html = response.get_data(as_text=True)
+
+        # 3xx responses should have allowed class, not error
+        assert html.count('class="log-line allowed"') == 2
+        assert 'class="log-line error"' not in html
+
+    def test_network_logs_error_css_styling(self, tmp_path: Path) -> None:
+        """Test error class has orange styling in CSS."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        log_path = conv_dir / "network-sandbox.log"
+        log_path.write_text("allowed GET https://api.example.com -> 500\n")
+
+        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/abc12345/network")
+        html = response.get_data(as_text=True)
+
+        # Check that error styling is defined in CSS
+        assert ".log-line.error" in html
+        # Check highlight styling is defined
+        assert ".highlight" in html
+
+    def test_network_logs_allowed_without_status_code(
+        self, tmp_path: Path
+    ) -> None:
+        """Test allowed lines without status code are rendered as allowed."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        # Some hypothetical malformed log line without status code
+        log_path = conv_dir / "network-sandbox.log"
+        log_path.write_text("allowed GET https://api.example.com\n")
+
+        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/abc12345/network")
+        html = response.get_data(as_text=True)
+
+        # Line without status code should be rendered as allowed (green)
+        assert 'class="log-line allowed"' in html
+        # Should NOT be rendered as error
+        assert 'class="log-line error"' not in html
