@@ -264,3 +264,82 @@ repos declare what they need, the server controls what's actually available.
 - Proxy startup failure: Task aborts (no unproxied execution)
 - Secret resolution failure: Task aborts (no missing credentials)
 - DMARC check failure: Message rejected (no processing)
+
+## Security Limitations
+
+The security model provides strong containment but does not offer absolute
+protection. This section documents known limitations and realistic expectations.
+
+### Prompt Injection
+
+The sandbox does not prevent prompt injection attacks from succeeding — it
+limits their impact. If an agent reads content containing malicious instructions
+(from a webpage, API response, repository file, or email attachment), the agent
+may follow those instructions within the boundaries of its execution and network
+sandbox.
+
+**What the attacker can do** (within sandbox boundaries):
+
+- Execute arbitrary code in the container
+- Access any files in the workspace
+- Use credentials passed via environment variables
+- Make requests to allowlisted hosts
+- Create commits or PRs with malicious content
+
+**What the attacker cannot do** (blocked by sandbox):
+
+- Access hosts not on the network allowlist
+- Read host files outside mounted directories
+- Access other conversations or sessions
+- Persist beyond the container lifetime
+- Modify the active allowlist or configuration
+
+**Mitigations:**
+
+1. **Keep repository content safe** — Review all material entering the
+   repository (PRs, issues, imported files)
+2. **Minimize network allowlist** — Only allow hosts the agent genuinely needs
+3. **Scope credentials tightly** — Grant minimum permissions required (e.g.,
+   repo-scoped tokens, not org-wide)
+4. **Send trusted prompts** — Only send files and instructions from trusted
+   sources
+
+### Authorized Channel Exfiltration
+
+If prompt injection succeeds, the agent can exfiltrate data through channels it
+legitimately has access to. For example:
+
+- Embedding secrets in a GitHub PR description or commit message
+- Sending data to an allowlisted API that the attacker can query
+- Encoding information in allowed HTTP request parameters
+
+The network sandbox blocks unauthorized channels but cannot distinguish
+legitimate from malicious use of authorized channels.
+
+**Mitigations:**
+
+1. **Scope credentials to minimum** — A token that can only push to one repo
+   limits exfiltration to that repo
+2. **Review agent outputs** — PRs, commits, and email replies are human review
+   points
+3. **Audit network logs** — `network-sandbox.log` shows all requests for
+   forensic analysis
+
+### Realistic Security Expectations
+
+In practice, trusting all content the agent processes is not possible.
+Repository files may contain untrusted user input. Fetched web pages may have
+adversarial content. Email attachments may be crafted by attackers who know the
+system.
+
+**Security is therefore statistical rather than absolute.** The goal is to:
+
+1. Make attacks significantly harder than on an unsandboxed system
+2. Limit blast radius when attacks succeed
+3. Provide audit trails for detection and response
+4. Enable configuration that tilts odds strongly toward security
+
+Proper configuration — tight network allowlist, scoped credentials, reviewed
+repository content — makes successful exploitation substantially less likely and
+less damaging. But no configuration eliminates risk entirely when processing
+untrusted content with an AI agent.
