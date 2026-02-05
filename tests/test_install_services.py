@@ -659,18 +659,28 @@ def test_main_install_skip_updater(mock_repo_root: Path) -> None:
 
 
 def test_main_uninstall() -> None:
-    """Test main with --uninstall flag."""
+    """Test --uninstall removes all services including auto-updater."""
     with (
         patch("install_services.get_repo_root") as mock_get_root,
-        patch("install_services.uninstall_services") as mock_uninstall,
+        patch("install_services.get_systemd_user_dir") as mock_get_dir,
+        patch("install_services.uninstall_service") as mock_uninstall,
+        patch("install_services.systemctl_user") as mock_systemctl,
     ):
         mock_get_root.return_value = Path("/repo")
+        mock_systemd = MagicMock()
+        mock_get_dir.return_value = mock_systemd
 
         with patch("sys.argv", ["install_services.py", "--uninstall"]):
             result = install_services.main()
 
         assert result == 0
-        mock_uninstall.assert_called_once()
+        mock_systemctl.assert_called_once_with("daemon-reload")
+        # Verify ALL services are uninstalled, including updater services
+        assert mock_uninstall.call_count == 3
+        uninstalled_services = [c[0][0] for c in mock_uninstall.call_args_list]
+        assert "airut-updater.timer" in uninstalled_services
+        assert "airut-updater.service" in uninstalled_services
+        assert "airut.service" in uninstalled_services
 
 
 def test_main_update_available(mock_repo_root: Path) -> None:
