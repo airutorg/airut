@@ -72,6 +72,28 @@ git ls-remote https://github.com/your-org/your-repo.git
 For private repositories, ensure the authenticated account has read access to
 all repos configured in `config/airut.yaml`.
 
+**For Gerrit repositories**, use HTTP credentials with the git credential store
+instead of `gh`:
+
+```bash
+git config --global credential.helper store
+
+# Clone once to store credentials (can be removed afterward)
+git clone https://gerrit.example.com/a/my-project
+```
+
+When prompted, enter your Gerrit username and HTTP password (generated under
+Settings → HTTP Credentials in the Gerrit web UI). Verify access:
+
+```bash
+git ls-remote https://gerrit.example.com/a/my-project
+```
+
+See
+[repo-onboarding.md](repo-onboarding.md#alternative-gerrit-based-repositories)
+for the full Gerrit setup including container credential helpers and masked
+secrets configuration.
+
 ### 5. Enable Linger
 
 Systemd user services require linger to run without an active login session:
