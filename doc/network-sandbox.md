@@ -90,7 +90,8 @@ simply cannot establish non-HTTP connections. Supporting additional protocols is
 a potential future extension.
 
 To disable the sandbox entirely for debugging or emergencies, set
-`sandbox_enabled: false` in `.airut/airut.yaml` (see Configuration below).
+`sandbox_enabled: false` in either the repo config (`.airut/airut.yaml`) or
+server config (`config/airut.yaml`). See Configuration below.
 
 ## Architecture
 
@@ -145,16 +146,39 @@ isolation between concurrent tasks:
 
 ### Enabling/Disabling the Sandbox
 
-The network sandbox is controlled via `.airut/airut.yaml`:
+The network sandbox is controlled at two levels. Both default to `true`; the
+effective value is the **logical AND** — if either is `false`, the sandbox is
+disabled.
+
+**Repo config** (`.airut/airut.yaml`):
 
 ```yaml
 network:
   sandbox_enabled: true  # default; set to false to disable (break-glass)
 ```
 
+**Server config** (`config/airut.yaml`, per-repo):
+
+```yaml
+repos:
+  my-project:
+    network:
+      sandbox_enabled: true  # default; set to false to override repo config
+```
+
 When disabled, containers get unrestricted network access without the proxy.
 **Use only for debugging or emergencies** — this removes the exfiltration
 protection.
+
+The server-side setting is useful as a **break-glass** for operators: if a
+broken allowlist gets checked in, the operator can disable the sandbox
+server-side while a fix is prepared. Note that server config changes require a
+**server restart** to take effect.
+
+When the sandbox is disabled, a warning is logged showing both settings. If
+masked secrets are configured, an additional warning is logged because masked
+secrets depend on the proxy (see
+[Masked Secrets](#masked-secrets-token-replacement)).
 
 ### Network Allowlist
 
@@ -424,3 +448,51 @@ The proxy is managed by `ProxyManager` in `lib/container/proxy.py`:
 On startup, `ProxyManager` cleans orphaned resources from previous unclean
 shutdowns: containers matching `airut-proxy-*` and networks matching
 `airut-task-*` are removed.
+
+## Troubleshooting
+
+### Broken allowlist checked into main
+
+If a broken `.airut/network-allowlist.yaml` gets merged to the default branch
+(e.g., required domains were removed), use the server-side sandbox override to
+temporarily disable the sandbox:
+
+```yaml
+# In config/airut.yaml
+repos:
+  my-project:
+    network:
+      sandbox_enabled: false
+```
+
+After changing server config, **restart the server** for it to take effect. With
+the sandbox disabled, the agent has unrestricted network access and can create a
+PR to fix the allowlist. After the fix merges, re-enable the sandbox by removing
+the override (or setting it back to `true`) and restart again.
+
+### Masked secrets stopped working
+
+If API calls that previously worked start failing with authentication errors,
+check whether the sandbox was disabled on either side:
+
+1. Check repo config: `network.sandbox_enabled` in `.airut/airut.yaml`
+2. Check server config: `network.sandbox_enabled` under the repo's section
+
+Masked secrets require the proxy to swap surrogates for real values. When the
+sandbox is disabled, the proxy doesn't start, and the container receives
+surrogates that are not valid credentials. Look for this log warning:
+
+> Network sandbox is disabled but masked secrets are configured.
+
+**Fix**: Either re-enable the sandbox, or temporarily move credentials from
+`masked_secrets` to `secrets` (plain injection) in server config.
+
+### Debugging container network issues
+
+When investigating connectivity problems from inside a container:
+
+1. **Prefer the server-side override** — set `network.sandbox_enabled: false` in
+   server config and restart the server. This avoids modifying the repo.
+2. After debugging, re-enable the sandbox and restart.
+3. Check `session_dir/network-sandbox.log` for the audit trail of allowed and
+   blocked requests from previous tasks.

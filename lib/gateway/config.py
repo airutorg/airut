@@ -495,6 +495,9 @@ class RepoServerConfig:
         smtp_require_auth: Whether SMTP requires authentication.
         secrets: Per-repo secrets pool for ``!secret`` resolution.
         masked_secrets: Secrets with scope restrictions for proxy replacement.
+        network_sandbox_enabled: Server-side override for the network sandbox.
+            Effective sandbox state is the logical AND of this value and the
+            repo config's ``network.sandbox_enabled``.  Defaults to ``True``.
     """
 
     repo_id: str
@@ -515,6 +518,7 @@ class RepoServerConfig:
     smtp_require_auth: bool = True
     secrets: dict[str, str] = field(default_factory=dict)
     masked_secrets: dict[str, MaskedSecret] = field(default_factory=dict)
+    network_sandbox_enabled: bool = True
 
     def __post_init__(self) -> None:
         """Validate configuration and register secrets.
@@ -713,6 +717,7 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
     """
     email = raw.get("email", {})
     imap = raw.get("imap", {})
+    network = raw.get("network", {})
     prefix = f"repos.{repo_id}"
 
     # Resolve per-repo secrets
@@ -778,6 +783,9 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
         ),
         secrets=secrets,
         masked_secrets=masked_secrets,
+        network_sandbox_enabled=_resolve(
+            network.get("sandbox_enabled"), bool, default=True
+        ),
     )
 
 
@@ -892,6 +900,8 @@ class RepoConfig:
         mirror: "GitMirrorCache",
         server_secrets: dict[str, str],
         masked_secrets: dict[str, MaskedSecret] | None = None,
+        *,
+        server_sandbox_enabled: bool = True,
     ) -> tuple["RepoConfig", ReplacementMap]:
         """Load repo config from the git mirror.
 
@@ -907,6 +917,9 @@ class RepoConfig:
             mirror: Git mirror cache to read the file from.
             server_secrets: Server's secrets pool (name -> value).
             masked_secrets: Server's masked secrets pool with scope info.
+            server_sandbox_enabled: Server-side network sandbox setting.
+                The effective sandbox state is the logical AND of this
+                value and the repo config's ``network.sandbox_enabled``.
 
         Returns:
             Tuple of (RepoConfig, ReplacementMap). The ReplacementMap
@@ -930,7 +943,12 @@ class RepoConfig:
                 f"Repo config must be a YAML mapping: {cls.CONFIG_PATH}"
             )
 
-        return cls._from_raw(raw, server_secrets, masked_secrets or {})
+        return cls._from_raw(
+            raw,
+            server_secrets,
+            masked_secrets or {},
+            server_sandbox_enabled=server_sandbox_enabled,
+        )
 
     @classmethod
     def _from_raw(
@@ -938,6 +956,8 @@ class RepoConfig:
         raw: dict,
         server_secrets: dict[str, str],
         masked_secrets: dict[str, MaskedSecret],
+        *,
+        server_sandbox_enabled: bool = True,
     ) -> tuple["RepoConfig", ReplacementMap]:
         """Build repo config from parsed YAML dict."""
         network_raw = raw.get("network", {})
@@ -948,14 +968,35 @@ class RepoConfig:
             raw_container_env, server_secrets, masked_secrets
         )
 
+        repo_sandbox = _resolve(
+            network_raw.get("sandbox_enabled"), bool, default=True
+        )
+        # Effective sandbox = logical AND of server and repo settings.
+        # Either side can disable it independently.
+        effective_sandbox = server_sandbox_enabled and repo_sandbox
+
+        if not effective_sandbox:
+            logger.warning(
+                "Network sandbox disabled (server=%s, repo=%s)",
+                server_sandbox_enabled,
+                repo_sandbox,
+            )
+
+        if not effective_sandbox and replacement_map:
+            logger.warning(
+                "Network sandbox is disabled but masked secrets are "
+                "configured. Masked secrets require the proxy to swap "
+                "surrogates for real values — they will not work without "
+                "the sandbox. Consider using plain secrets instead, or "
+                "re-enable the sandbox."
+            )
+
         config = cls(
             default_model=_resolve(
                 raw.get("default_model"), str, default="opus"
             ),
             timeout=_resolve(raw.get("timeout"), int, default=300),
-            network_sandbox_enabled=_resolve(
-                network_raw.get("sandbox_enabled"), bool, default=True
-            ),
+            network_sandbox_enabled=effective_sandbox,
             container_env=container_env,
         )
 

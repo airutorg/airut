@@ -80,10 +80,17 @@ secrets:
   R2_ACCESS_KEY_ID: !env R2_ACCESS_KEY_ID
 ```
 
-The `network` block is removed from server config (moved to repo config).
-
 Fields moved to repo config: `execution.timeout`, `execution.default_model`,
-`container_env`, `network.sandbox_enabled`.
+`container_env`.
+
+### Server-Side Network Sandbox Override
+
+The server config retains an optional `network.sandbox_enabled` field per repo
+as a server-side override. The effective sandbox state is the logical AND of
+both settings — either side can disable the sandbox independently. See
+[doc/network-sandbox.md](../doc/network-sandbox.md#enablingdisabling-the-sandbox)
+for details and
+[masked secrets interaction](../spec/masked-secrets.md#network-sandbox-requirement).
 
 ## Loading Flow
 

@@ -237,6 +237,7 @@ def process_message(
             conv_mgr.mirror,
             repo_handler.config.secrets,
             repo_handler.config.masked_secrets,
+            server_sandbox_enabled=repo_handler.config.network_sandbox_enabled,
         )
 
         if is_new:

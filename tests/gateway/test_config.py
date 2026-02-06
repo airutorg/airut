@@ -5,6 +5,7 @@
 
 """Tests for email gateway configuration."""
 
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -684,6 +685,34 @@ class TestFromYaml:
             "R2_ACCOUNT_ID": "test-account",
         }
 
+    def test_network_sandbox_enabled_default(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """network_sandbox_enabled defaults to True when not specified."""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(
+            _MINIMAL_YAML.format(
+                repo_url=master_repo, storage_dir=tmp_path / "storage"
+            )
+        )
+        config = ServerConfig.from_yaml(yaml_path)
+        assert config.repos["test"].network_sandbox_enabled is True
+
+    def test_network_sandbox_enabled_false(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """network.sandbox_enabled: false is parsed from server config."""
+        yaml_content = (
+            _MINIMAL_YAML.format(
+                repo_url=master_repo, storage_dir=tmp_path / "storage"
+            )
+            + "    network:\n      sandbox_enabled: false\n"
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        config = ServerConfig.from_yaml(yaml_path)
+        assert config.repos["test"].network_sandbox_enabled is False
+
     def test_missing_file(self, tmp_path: Path) -> None:
         """Raise ConfigError when file does not exist."""
         with pytest.raises(ConfigError, match="Config file not found"):
@@ -918,6 +947,118 @@ class TestRepoConfigFromRaw:
         }
         assert replacement_map == {}
 
+    def test_server_sandbox_false_overrides_repo_true(self) -> None:
+        """Server sandbox_enabled=false disables even when repo is true."""
+        raw: dict = {}
+        rc, _ = RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=False)
+        assert rc.network_sandbox_enabled is False
+
+    def test_repo_sandbox_false_overrides_server_true(self) -> None:
+        """Repo sandbox_enabled=false disables even when server is true."""
+        raw = {"network": {"sandbox_enabled": False}}
+        rc, _ = RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=True)
+        assert rc.network_sandbox_enabled is False
+
+    def test_both_sandbox_false(self) -> None:
+        """Both false results in disabled."""
+        raw = {"network": {"sandbox_enabled": False}}
+        rc, _ = RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=False)
+        assert rc.network_sandbox_enabled is False
+
+    def test_both_sandbox_true(self) -> None:
+        """Both true results in enabled."""
+        raw: dict = {}
+        rc, _ = RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=True)
+        assert rc.network_sandbox_enabled is True
+
+    def test_server_sandbox_default_is_true(self) -> None:
+        """server_sandbox_enabled defaults to True when not passed."""
+        raw: dict = {}
+        rc, _ = RepoConfig._from_raw(raw, {}, {})
+        assert rc.network_sandbox_enabled is True
+
+    def test_warning_logged_when_server_disables_sandbox(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Warning logged when server config disables sandbox."""
+        raw: dict = {}
+        with caplog.at_level(logging.WARNING, logger="lib.gateway.config"):
+            RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=False)
+        assert "sandbox disabled" in caplog.text.lower()
+        assert "server=False" in caplog.text
+        assert "repo=True" in caplog.text
+
+    def test_warning_logged_when_repo_disables_sandbox(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Warning logged when repo config disables sandbox."""
+        raw = {"network": {"sandbox_enabled": False}}
+        with caplog.at_level(logging.WARNING, logger="lib.gateway.config"):
+            RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=True)
+        assert "sandbox disabled" in caplog.text.lower()
+        assert "server=True" in caplog.text
+        assert "repo=False" in caplog.text
+
+    def test_warning_logged_when_both_disable_sandbox(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Warning logged when both sides disable sandbox."""
+        raw = {"network": {"sandbox_enabled": False}}
+        with caplog.at_level(logging.WARNING, logger="lib.gateway.config"):
+            RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=False)
+        assert "sandbox disabled" in caplog.text.lower()
+        assert "server=False" in caplog.text
+        assert "repo=False" in caplog.text
+
+    def test_no_warning_when_sandbox_enabled(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """No warning when sandbox is enabled."""
+        raw: dict = {}
+        with caplog.at_level(logging.WARNING, logger="lib.gateway.config"):
+            RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=True)
+        assert "sandbox disabled" not in caplog.text.lower()
+
+    def test_warning_logged_when_sandbox_disabled_with_masked_secrets(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Warning when sandbox disabled but masked secrets are configured."""
+        masked_secrets = {
+            "GH_TOKEN": MaskedSecret(
+                value="ghp_realtoken1234",
+                scopes=frozenset(["api.github.com"]),
+                headers=("Authorization",),
+            )
+        }
+        raw = {
+            "container_env": {"GH_TOKEN": _SecretRef("GH_TOKEN")},
+        }
+        with caplog.at_level(logging.WARNING, logger="lib.gateway.config"):
+            RepoConfig._from_raw(
+                raw, {}, masked_secrets, server_sandbox_enabled=False
+            )
+        assert "masked secrets are configured" in caplog.text
+
+    def test_no_masked_warning_when_sandbox_enabled(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """No masked secrets warning when sandbox is enabled."""
+        masked_secrets = {
+            "GH_TOKEN": MaskedSecret(
+                value="ghp_realtoken1234",
+                scopes=frozenset(["api.github.com"]),
+                headers=("Authorization",),
+            )
+        }
+        raw = {
+            "container_env": {"GH_TOKEN": _SecretRef("GH_TOKEN")},
+        }
+        with caplog.at_level(logging.WARNING, logger="lib.gateway.config"):
+            RepoConfig._from_raw(
+                raw, {}, masked_secrets, server_sandbox_enabled=True
+            )
+        assert "masked secrets are configured" not in caplog.text
+
 
 class TestRepoConfigFromMirror:
     """Tests for RepoConfig.from_mirror."""
@@ -987,6 +1128,20 @@ class TestRepoConfigFromMirror:
         )
         rc, _ = RepoConfig.from_mirror(mirror, {"SERVER_KEY": "secret-val"})
         assert rc.container_env == {"MY_KEY": "secret-val"}
+
+    def test_server_sandbox_override(self) -> None:
+        """server_sandbox_enabled=False overrides repo default."""
+        mirror = MagicMock()
+        mirror.read_file.return_value = "default_model: opus\n"
+        rc, _ = RepoConfig.from_mirror(mirror, {}, server_sandbox_enabled=False)
+        assert rc.network_sandbox_enabled is False
+
+    def test_server_sandbox_default_true(self) -> None:
+        """server_sandbox_enabled defaults to True."""
+        mirror = MagicMock()
+        mirror.read_file.return_value = "default_model: opus\n"
+        rc, _ = RepoConfig.from_mirror(mirror, {})
+        assert rc.network_sandbox_enabled is True
 
 
 # ---------------------------------------------------------------------------
