@@ -5,6 +5,7 @@
 
 """Tests for the DNS responder used in the proxy container."""
 
+import io
 import struct
 from pathlib import Path
 
@@ -13,12 +14,15 @@ from docker.dns_responder import (
     QCLASS_IN,
     QTYPE_A,
     TTL,
+    _log_to_file,
+    _open_network_log,
     build_a_response,
     build_not_implemented,
     build_nxdomain,
     is_allowed,
     load_allowed_domains,
     parse_query,
+    qtype_name,
 )
 
 
@@ -222,3 +226,81 @@ class TestLoadAllowedDomains:
         allowlist.write_text("")
         patterns = load_allowed_domains(allowlist)
         assert patterns == []
+
+
+class TestQtypeName:
+    """Tests for qtype_name."""
+
+    def test_known_types(self) -> None:
+        """Returns name for common DNS query types."""
+        assert qtype_name(1) == "A"
+        assert qtype_name(28) == "AAAA"
+        assert qtype_name(15) == "MX"
+        assert qtype_name(16) == "TXT"
+
+    def test_unknown_type(self) -> None:
+        """Falls back to TYPE{n} for unknown types."""
+        assert qtype_name(999) == "TYPE999"
+
+
+class TestOpenNetworkLog:
+    """Tests for _open_network_log."""
+
+    def test_opens_existing_file(self, tmp_path: Path) -> None:
+        """Opens the log file for appending if it exists."""
+        log_path = tmp_path / "network-sandbox.log"
+        log_path.touch()
+        f = _open_network_log(log_path)
+        assert f is not None
+        f.write("test\n")
+        f.close()
+        assert log_path.read_text() == "test\n"
+
+    def test_returns_none_for_missing_file(self, tmp_path: Path) -> None:
+        """Returns None if the file does not exist."""
+        result = _open_network_log(tmp_path / "nonexistent.log")
+        assert result is None
+
+    def test_returns_none_on_open_error(self, tmp_path: Path) -> None:
+        """Returns None if the file cannot be opened."""
+        # Use a directory path to trigger OSError on open()
+        dir_path = tmp_path / "a_directory"
+        dir_path.mkdir()
+        result = _open_network_log(dir_path)
+        assert result is None
+
+
+class TestLogToFile:
+    """Tests for _log_to_file."""
+
+    def test_writes_line_with_newline(self) -> None:
+        """Appends message with trailing newline."""
+        buf = io.StringIO()
+        _log_to_file(buf, "BLOCKED DNS A evil.com -> NXDOMAIN")
+        assert buf.getvalue() == "BLOCKED DNS A evil.com -> NXDOMAIN\n"
+
+    def test_none_file_is_noop(self) -> None:
+        """Does nothing when log_file is None."""
+        _log_to_file(None, "should not crash")
+
+    def test_ignores_write_errors(self) -> None:
+        """Silently ignores OSError on write."""
+        buf = io.StringIO()
+        buf.close()  # Closed buffer raises ValueError (subclass of OSError? No)
+
+        # Use a mock that raises OSError
+        class FailWriter:
+            def write(self, _s: str) -> int:
+                raise OSError("disk full")
+
+            def flush(self) -> None:
+                raise OSError("disk full")
+
+        _log_to_file(FailWriter(), "should not crash")  # type: ignore[arg-type]
+
+    def test_multiple_writes(self) -> None:
+        """Multiple calls append sequentially."""
+        buf = io.StringIO()
+        _log_to_file(buf, "line 1")
+        _log_to_file(buf, "line 2")
+        assert buf.getvalue() == "line 1\nline 2\n"

@@ -15,6 +15,14 @@ real IPs itself when mitmproxy connects upstream.
 
 Only A queries are supported (returns NOTIMP for AAAA, MX, etc.).
 This is intentional: the client only needs to reach the proxy IP.
+
+All DNS decisions are logged to the network sandbox log file
+(``/network-sandbox.log``) when it exists, using the same file as
+the mitmproxy addon. Log format::
+
+    BLOCKED DNS A example.com -> NXDOMAIN
+    BLOCKED DNS AAAA example.com -> NOTIMP
+    allowed DNS A api.github.com -> 10.199.1.100
 """
 
 from __future__ import annotations
@@ -24,6 +32,7 @@ import socket
 import struct
 import sys
 from pathlib import Path
+from typing import TextIO
 
 import yaml
 
@@ -31,11 +40,54 @@ import yaml
 LISTEN_ADDR = "0.0.0.0"
 LISTEN_PORT = 53
 ALLOWLIST_PATH = Path("/network-allowlist.yaml")
+NETWORK_LOG_PATH = Path("/network-sandbox.log")
 
 # DNS constants
 QTYPE_A = 1
 QCLASS_IN = 1
 TTL = 60
+
+# Common DNS query type names (for logging).
+_QTYPE_NAMES: dict[int, str] = {
+    1: "A",
+    2: "NS",
+    5: "CNAME",
+    15: "MX",
+    16: "TXT",
+    28: "AAAA",
+    33: "SRV",
+    255: "ANY",
+}
+
+
+def qtype_name(qtype: int) -> str:
+    """Return a human-readable name for a DNS query type."""
+    return _QTYPE_NAMES.get(qtype, f"TYPE{qtype}")
+
+
+def _open_network_log(path: Path) -> TextIO | None:
+    """Open the network log file for appending, if it exists.
+
+    Returns None if the file doesn't exist or can't be opened.
+    """
+    if not path.exists():
+        return None
+    try:
+        return open(path, "a")
+    except OSError as e:
+        print(f"[dns] WARNING: could not open log file {path}: {e}", flush=True)
+        return None
+
+
+def _log_to_file(log_file: TextIO | None, message: str) -> None:
+    """Append a line to the network log file (best-effort)."""
+    if log_file is None:
+        return
+    try:
+        log_file.write(message + "\n")
+        log_file.flush()
+    except OSError:
+        pass
 
 
 def _match_pattern(pattern: str, value: str) -> bool:
@@ -151,8 +203,18 @@ def build_not_implemented(query: bytes, qname_end: int) -> bytes:
 # -- Main --------------------------------------------------------------------
 
 
-def run_dns_server(proxy_ip: str, patterns: list[str]) -> None:
-    """Run the DNS responder loop (blocks forever)."""
+def run_dns_server(
+    proxy_ip: str,
+    patterns: list[str],
+    log_file: TextIO | None = None,
+) -> None:
+    """Run the DNS responder loop (blocks forever).
+
+    Args:
+        proxy_ip: IP address to return for allowed A queries.
+        patterns: Allowlist domain patterns.
+        log_file: Optional file handle for the shared network log.
+    """
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((LISTEN_ADDR, LISTEN_PORT))
@@ -166,9 +228,14 @@ def run_dns_server(proxy_ip: str, patterns: list[str]) -> None:
 
             if qtype != QTYPE_A:
                 # Only A queries supported; AAAA, MX, etc. get NOTIMP
+                type_label = qtype_name(qtype)
                 print(
                     f"[dns] NOTIMP  {qname} type={qtype} from {addr[0]}",
                     flush=True,
+                )
+                _log_to_file(
+                    log_file,
+                    f"BLOCKED DNS {type_label} {name} -> NOTIMP",
                 )
                 sock.sendto(build_not_implemented(data, qend), addr)
                 continue
@@ -178,9 +245,17 @@ def run_dns_server(proxy_ip: str, patterns: list[str]) -> None:
                     f"[dns] ALLOW   {name} -> {proxy_ip} (from {addr[0]})",
                     flush=True,
                 )
+                _log_to_file(
+                    log_file,
+                    f"allowed DNS A {name} -> {proxy_ip}",
+                )
                 sock.sendto(build_a_response(data, proxy_ip, qend), addr)
             else:
                 print(f"[dns] BLOCKED {name} (from {addr[0]})", flush=True)
+                _log_to_file(
+                    log_file,
+                    f"BLOCKED DNS A {name} -> NXDOMAIN",
+                )
                 sock.sendto(build_nxdomain(data, qend), addr)
 
         except Exception as e:
@@ -202,7 +277,11 @@ def main() -> None:
     for p in patterns:
         print(f"[dns]   {p}", flush=True)
 
-    run_dns_server(proxy_ip, patterns)
+    log_file = _open_network_log(NETWORK_LOG_PATH)
+    if log_file is not None:
+        print(f"[dns] logging to {NETWORK_LOG_PATH}", flush=True)
+
+    run_dns_server(proxy_ip, patterns, log_file=log_file)
 
 
 if __name__ == "__main__":

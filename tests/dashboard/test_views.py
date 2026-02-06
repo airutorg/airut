@@ -1787,3 +1787,77 @@ class TestNetworkLogsPage:
         assert 'class="log-line allowed"' in html
         # Should NOT be rendered as error
         assert 'class="log-line error"' not in html
+
+    def test_network_logs_dns_blocked_lines(self, tmp_path: Path) -> None:
+        """Test DNS BLOCKED lines get blocked styling."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        log_path = conv_dir / "network-sandbox.log"
+        log_path.write_text(
+            "BLOCKED DNS A evil.com -> NXDOMAIN\n"
+            "BLOCKED DNS AAAA evil.com -> NOTIMP\n"
+        )
+
+        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/abc12345/network")
+        html = response.get_data(as_text=True)
+
+        # Both DNS BLOCKED lines should have blocked class
+        assert html.count('class="log-line blocked"') == 2
+        # BLOCKED should be highlighted (bold)
+        assert '<span class="highlight">BLOCKED</span>' in html
+
+    def test_network_logs_dns_allowed_lines(self, tmp_path: Path) -> None:
+        """Test DNS allowed lines get allowed (green) styling."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        log_path = conv_dir / "network-sandbox.log"
+        log_path.write_text("allowed DNS A api.github.com -> 10.199.1.100\n")
+
+        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/abc12345/network")
+        html = response.get_data(as_text=True)
+
+        # DNS allowed line should have allowed class (green)
+        assert 'class="log-line allowed"' in html
+        # Should NOT be treated as error (IP is not a 3-digit status code)
+        assert 'class="log-line error"' not in html
+
+    def test_network_logs_mixed_dns_and_http(self, tmp_path: Path) -> None:
+        """Test mixed DNS and HTTP log lines render correctly together."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        log_path = conv_dir / "network-sandbox.log"
+        log_path.write_text(
+            "=== TASK START 2026-02-03T12:34:56Z ===\n"
+            "allowed DNS A api.github.com -> 10.199.1.100\n"
+            "BLOCKED DNS A evil.com -> NXDOMAIN\n"
+            "allowed GET https://api.github.com/repos -> 200\n"
+            "BLOCKED GET https://evil.com/exfiltrate -> 403\n"
+        )
+
+        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/abc12345/network")
+        html = response.get_data(as_text=True)
+
+        assert 'class="log-line task-start"' in html
+        assert html.count('class="log-line allowed"') == 2
+        assert html.count('class="log-line blocked"') == 2
