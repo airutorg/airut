@@ -14,10 +14,10 @@ import pytest
 
 from lib.container.proxy import (
     CA_CERT_FILENAME,
+    DEFAULT_UPSTREAM_DNS,
     EGRESS_NETWORK,
     NETWORK_LOG_FILENAME,
     PROXY_IMAGE_NAME,
-    PROXY_PORT,
     TASK_NETWORK_PREFIX,
     TASK_PROXY_PREFIX,
     ProxyError,
@@ -46,34 +46,23 @@ def _make_pm(
 class TestTaskProxy:
     """Tests for TaskProxy dataclass."""
 
-    def test_defaults(self) -> None:
-        """Default port is 8080."""
-        tp = TaskProxy(
-            network_name="airut-task-abc",
-            proxy_container_name="airut-proxy-abc",
-            proxy_host="airut-proxy-abc",
-        )
-        assert tp.proxy_port == PROXY_PORT
-
     def test_all_fields(self) -> None:
         """All fields set correctly."""
         tp = TaskProxy(
             network_name="airut-task-x",
             proxy_container_name="airut-proxy-x",
-            proxy_host="airut-proxy-x",
-            proxy_port=9090,
+            proxy_ip="10.199.1.100",
         )
         assert tp.network_name == "airut-task-x"
         assert tp.proxy_container_name == "airut-proxy-x"
-        assert tp.proxy_host == "airut-proxy-x"
-        assert tp.proxy_port == 9090
+        assert tp.proxy_ip == "10.199.1.100"
 
     def test_frozen(self) -> None:
         """TaskProxy is immutable."""
         tp = TaskProxy(
             network_name="n",
             proxy_container_name="c",
-            proxy_host="h",
+            proxy_ip="10.199.1.100",
         )
         with pytest.raises(AttributeError):
             tp.network_name = "other"  # type: ignore[misc]
@@ -87,6 +76,7 @@ class TestProxyManagerInit:
         pm = _make_pm()
         assert pm._cmd == "podman"
         assert pm._docker_dir == Path("docker")
+        assert pm._upstream_dns == DEFAULT_UPSTREAM_DNS
         assert isinstance(pm._lock, type(threading.Lock()))
 
     def test_custom(self) -> None:
@@ -94,9 +84,11 @@ class TestProxyManagerInit:
         pm = _make_pm(
             container_command="docker",
             docker_dir=Path("/tmp/docker"),
+            upstream_dns="8.8.8.8",
         )
         assert pm._cmd == "docker"
         assert pm._docker_dir == Path("/tmp/docker")
+        assert pm._upstream_dns == "8.8.8.8"
 
 
 class TestProxyManagerStartup:
@@ -105,7 +97,7 @@ class TestProxyManagerStartup:
     @patch.object(ProxyManager, "_cleanup_orphans")
     @patch.object(ProxyManager, "_build_image")
     @patch.object(ProxyManager, "_ensure_ca_cert")
-    @patch.object(ProxyManager, "_recreate_network")
+    @patch.object(ProxyManager, "_recreate_egress_network")
     def test_startup_sequence(
         self,
         mock_recreate: MagicMock,
@@ -119,7 +111,7 @@ class TestProxyManagerStartup:
         mock_cleanup.assert_called_once()
         mock_build.assert_called_once()
         mock_ca.assert_called_once()
-        mock_recreate.assert_called_once_with(EGRESS_NETWORK, internal=False)
+        mock_recreate.assert_called_once()
 
 
 class TestProxyManagerShutdown:
@@ -136,10 +128,14 @@ class TestProxyManagerShutdown:
         pm = _make_pm()
         # Simulate active proxies
         pm._active_proxies["task1"] = TaskProxy(
-            network_name="n1", proxy_container_name="c1", proxy_host="c1"
+            network_name="n1",
+            proxy_container_name="c1",
+            proxy_ip="10.199.1.100",
         )
         pm._active_proxies["task2"] = TaskProxy(
-            network_name="n2", proxy_container_name="c2", proxy_host="c2"
+            network_name="n2",
+            proxy_container_name="c2",
+            proxy_ip="10.199.2.100",
         )
         pm.shutdown()
         assert mock_stop.call_count == 2
@@ -155,7 +151,9 @@ class TestProxyManagerShutdown:
         """Shutdown continues even if individual stop fails."""
         pm = _make_pm()
         pm._active_proxies["task1"] = TaskProxy(
-            network_name="n1", proxy_container_name="c1", proxy_host="c1"
+            network_name="n1",
+            proxy_container_name="c1",
+            proxy_ip="10.199.1.100",
         )
         pm.shutdown()
         mock_rm_net.assert_called_once_with(EGRESS_NETWORK)
@@ -166,7 +164,7 @@ class TestStartTaskProxy:
 
     @patch.object(ProxyManager, "_wait_for_proxy_ready")
     @patch.object(ProxyManager, "_run_proxy_container")
-    @patch.object(ProxyManager, "_create_network")
+    @patch.object(ProxyManager, "_create_internal_network")
     @patch.object(ProxyManager, "stop_task_proxy")
     def test_creates_network_and_container(
         self,
@@ -181,13 +179,15 @@ class TestStartTaskProxy:
         result = pm.start_task_proxy("abc123", mirror=mock_mirror)
         assert result.network_name == f"{TASK_NETWORK_PREFIX}abc123"
         assert result.proxy_container_name == f"{TASK_PROXY_PREFIX}abc123"
-        assert result.proxy_host == f"{TASK_PROXY_PREFIX}abc123"
-        assert result.proxy_port == PROXY_PORT
+        assert result.proxy_ip.startswith("10.199.")
+        assert result.proxy_ip.endswith(".100")
         # Idempotent: stops any existing proxy first
         mock_stop.assert_called_once_with("abc123")
-        mock_create.assert_called_once_with(
-            f"{TASK_NETWORK_PREFIX}abc123", internal=True
-        )
+        mock_create.assert_called_once()
+        # Verify internal network created with subnet and proxy_ip
+        create_kwargs = mock_create.call_args.kwargs
+        assert "subnet" in create_kwargs
+        assert "proxy_ip" in create_kwargs
         # Allowlist extracted from mirror
         mock_mirror.read_file.assert_called_once_with(
             ".airut/network-allowlist.yaml"
@@ -197,7 +197,7 @@ class TestStartTaskProxy:
 
     @patch.object(ProxyManager, "_wait_for_proxy_ready")
     @patch.object(ProxyManager, "_run_proxy_container")
-    @patch.object(ProxyManager, "_create_network")
+    @patch.object(ProxyManager, "_create_internal_network")
     @patch.object(ProxyManager, "stop_task_proxy")
     def test_creates_network_log_when_session_dir_provided(
         self,
@@ -221,15 +221,15 @@ class TestStartTaskProxy:
         assert pm._network_log_files["abc123"] == log_path
         # Run should be called with the log path
         mock_run.assert_called_once()
-        call_args = mock_run.call_args
-        assert call_args.kwargs.get("network_log_path") == log_path
+        call_kwargs = mock_run.call_args.kwargs
+        assert call_kwargs.get("network_log_path") == log_path
 
     @patch.object(ProxyManager, "_remove_network")
     @patch.object(ProxyManager, "_remove_container")
     @patch.object(
         ProxyManager, "_run_proxy_container", side_effect=ProxyError("fail")
     )
-    @patch.object(ProxyManager, "_create_network")
+    @patch.object(ProxyManager, "_create_internal_network")
     @patch.object(ProxyManager, "stop_task_proxy")
     def test_cleans_up_on_container_failure(
         self,
@@ -258,7 +258,7 @@ class TestStartTaskProxy:
         side_effect=ProxyError("not ready"),
     )
     @patch.object(ProxyManager, "_run_proxy_container")
-    @patch.object(ProxyManager, "_create_network")
+    @patch.object(ProxyManager, "_create_internal_network")
     @patch.object(ProxyManager, "stop_task_proxy")
     def test_cleans_up_on_health_check_failure(
         self,
@@ -280,7 +280,7 @@ class TestStartTaskProxy:
 
     @patch.object(ProxyManager, "_wait_for_proxy_ready")
     @patch.object(ProxyManager, "_run_proxy_container")
-    @patch.object(ProxyManager, "_create_network")
+    @patch.object(ProxyManager, "_create_internal_network")
     @patch.object(ProxyManager, "_remove_network")
     @patch.object(ProxyManager, "_remove_container")
     def test_idempotent_cleans_stale_proxy(
@@ -298,7 +298,7 @@ class TestStartTaskProxy:
         pm._active_proxies["dup"] = TaskProxy(
             network_name="old-net",
             proxy_container_name="old-container",
-            proxy_host="old-container",
+            proxy_ip="10.199.99.100",
         )
         result = pm.start_task_proxy("dup", mirror=mock_mirror)
         # Old resources cleaned up
@@ -323,7 +323,7 @@ class TestStopTaskProxy:
         pm._active_proxies["abc"] = TaskProxy(
             network_name="n-abc",
             proxy_container_name="c-abc",
-            proxy_host="c-abc",
+            proxy_ip="10.199.1.100",
         )
         # Simulate a temp file
         tmp = Path("/tmp/fake-allowlist.yaml")
@@ -406,7 +406,7 @@ class TestEnsureCaCert:
         mock_popen: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Generates cert by running mitmdump briefly."""
+        """Generates cert by running mitmdump with entrypoint override."""
         cert_path = tmp_path / CA_CERT_FILENAME
 
         # Simulate cert appearing after Popen starts
@@ -426,6 +426,10 @@ class TestEnsureCaCert:
         assert result == cert_path
         proc.terminate.assert_called_once()
         proc.wait.assert_called_once()
+        # Verify --entrypoint bash overrides proxy-entrypoint.sh
+        cmd = mock_popen.call_args[0][0]
+        assert "--entrypoint" in cmd
+        assert "bash" in cmd
 
     @patch("lib.container.proxy.subprocess.Popen")
     @patch("lib.container.proxy.time.sleep")
@@ -457,7 +461,12 @@ class TestRunProxyContainer:
         allowlist.write_text("domains: []\n")
         (tmp_path / "proxy-filter.py").touch()
         pm = _make_pm(docker_dir=tmp_path)
-        pm._run_proxy_container("airut-proxy-abc", "airut-task-abc", allowlist)
+        pm._run_proxy_container(
+            "airut-proxy-abc",
+            "airut-task-abc",
+            "10.199.1.100",
+            allowlist,
+        )
         cmd = mock_run.call_args[0][0]
         assert cmd[0] == "podman"
         assert "run" in cmd
@@ -465,13 +474,16 @@ class TestRunProxyContainer:
         assert "-d" in cmd
         assert "--name" in cmd
         assert "airut-proxy-abc" in cmd
-        # Check --quiet flag for reduced journalctl spam
-        assert "--quiet" in cmd
-        # Check both networks
+        # Check both networks with static IP on internal
         network_indices = [i for i, v in enumerate(cmd) if v == "--network"]
         networks = [cmd[i + 1] for i in network_indices]
-        assert "airut-task-abc" in networks
         assert EGRESS_NETWORK in networks
+        assert any("airut-task-abc:ip=10.199.1.100" in n for n in networks)
+        # Check environment variables
+        env_indices = [i for i, v in enumerate(cmd) if v == "-e"]
+        env_args = [cmd[i + 1] for i in env_indices]
+        assert "PROXY_IP=10.199.1.100" in env_args
+        assert f"UPSTREAM_DNS={DEFAULT_UPSTREAM_DNS}" in env_args
         # Check allowlist volume mount
         volume_indices = [i for i, v in enumerate(cmd) if v == "-v"]
         volumes = [cmd[i + 1] for i in volume_indices]
@@ -493,6 +505,7 @@ class TestRunProxyContainer:
         pm._run_proxy_container(
             "airut-proxy-abc",
             "airut-task-abc",
+            "10.199.1.100",
             allowlist,
             network_log_path=log_path,
         )
@@ -512,7 +525,9 @@ class TestRunProxyContainer:
         """Raises ProxyError on container start failure."""
         pm = _make_pm()
         with pytest.raises(ProxyError, match="Failed to start proxy"):
-            pm._run_proxy_container("c", "n", Path("/tmp/fake.yaml"))
+            pm._run_proxy_container(
+                "c", "n", "10.199.1.100", Path("/tmp/fake.yaml")
+            )
 
 
 class TestExtractAllowlist:
@@ -670,6 +685,7 @@ class TestRunProxyContainerWithReplacement:
         pm._run_proxy_container(
             "airut-proxy-abc",
             "airut-task-abc",
+            "10.199.1.100",
             allowlist,
             replacement_path=replacement_path,
         )
@@ -708,31 +724,60 @@ class TestNetworkOperations:
     """Tests for network create/remove operations."""
 
     @patch("lib.container.proxy.subprocess.run")
-    def test_create_internal(self, mock_run: MagicMock) -> None:
-        """Creates internal network with --internal flag."""
+    def test_create_internal_network(self, mock_run: MagicMock) -> None:
+        """Creates internal network with correct flags."""
         pm = _make_pm()
-        pm._create_network("test-net", internal=True)
+        pm._create_internal_network(
+            "test-net",
+            subnet="10.199.1.0/24",
+            proxy_ip="10.199.1.100",
+        )
         cmd = mock_run.call_args[0][0]
         assert "--internal" in cmd
+        assert "--disable-dns" in cmd
+        assert "--subnet" in cmd
+        subnet_idx = cmd.index("--subnet")
+        assert cmd[subnet_idx + 1] == "10.199.1.0/24"
+        assert "--route" in cmd
+        route_idx = cmd.index("--route")
+        assert "0.0.0.0/0,10.199.1.100," in cmd[route_idx + 1]
         assert "test-net" in cmd
-
-    @patch("lib.container.proxy.subprocess.run")
-    def test_create_non_internal(self, mock_run: MagicMock) -> None:
-        """Creates non-internal network without --internal."""
-        pm = _make_pm()
-        pm._create_network("test-net", internal=False)
-        cmd = mock_run.call_args[0][0]
-        assert "--internal" not in cmd
 
     @patch(
         "lib.container.proxy.subprocess.run",
         side_effect=subprocess.CalledProcessError(1, "podman", stderr="err"),
     )
-    def test_create_failure(self, mock_run: MagicMock) -> None:
-        """Raises ProxyError on network creation failure."""
+    def test_create_internal_network_failure(self, mock_run: MagicMock) -> None:
+        """Raises ProxyError on internal network creation failure."""
         pm = _make_pm()
-        with pytest.raises(ProxyError, match="Failed to create network"):
-            pm._create_network("bad-net", internal=False)
+        with pytest.raises(ProxyError, match="Failed to create internal"):
+            pm._create_internal_network(
+                "bad-net",
+                subnet="10.199.1.0/24",
+                proxy_ip="10.199.1.100",
+            )
+
+    @patch("lib.container.proxy.subprocess.run")
+    def test_create_egress_network(self, mock_run: MagicMock) -> None:
+        """Creates egress network with metric option."""
+        pm = _make_pm()
+        pm._create_egress_network()
+        cmd = mock_run.call_args[0][0]
+        assert "-o" in cmd
+        metric_idx = cmd.index("-o")
+        assert "metric=" in cmd[metric_idx + 1]
+        assert "--internal" not in cmd
+        assert EGRESS_NETWORK in cmd
+
+    @patch(
+        "lib.container.proxy.subprocess.run",
+        side_effect=subprocess.CalledProcessError(1, "podman", stderr="err"),
+    )
+    def test_create_egress_failure(self, mock_run: MagicMock) -> None:
+        """Raises ProxyError on egress network creation failure."""
+        pm = _make_pm()
+        with pytest.raises(ProxyError, match="Failed to create egress"):
+            pm._create_egress_network()
 
     @patch("lib.container.proxy.subprocess.run")
     def test_remove_network(self, mock_run: MagicMock) -> None:
@@ -751,18 +796,44 @@ class TestNetworkOperations:
         pm = _make_pm()
         pm._remove_network("missing")  # Should not raise
 
-    @patch.object(ProxyManager, "_create_network")
+    @patch.object(ProxyManager, "_create_egress_network")
     @patch.object(ProxyManager, "_remove_network")
-    def test_recreate(
+    def test_recreate_egress(
         self,
         mock_rm: MagicMock,
         mock_create: MagicMock,
     ) -> None:
-        """Recreate removes then creates."""
+        """Recreate removes then creates egress network."""
         pm = _make_pm()
-        pm._recreate_network("net", internal=True)
-        mock_rm.assert_called_once_with("net")
-        mock_create.assert_called_once_with("net", internal=True)
+        pm._recreate_egress_network()
+        mock_rm.assert_called_once_with(EGRESS_NETWORK)
+        mock_create.assert_called_once()
+
+
+class TestSubnetAllocation:
+    """Tests for ProxyManager._allocate_subnet()."""
+
+    def test_increments(self) -> None:
+        """Allocates sequential subnets."""
+        pm = _make_pm()
+        subnet1, ip1 = pm._allocate_subnet()
+        subnet2, ip2 = pm._allocate_subnet()
+        assert subnet1 == "10.199.1.0/24"
+        assert ip1 == "10.199.1.100"
+        assert subnet2 == "10.199.2.0/24"
+        assert ip2 == "10.199.2.100"
+
+    def test_wraps_at_254(self) -> None:
+        """Wraps around after reaching 254."""
+        pm = _make_pm()
+        pm._next_subnet_octet = 254
+        subnet, ip = pm._allocate_subnet()
+        assert subnet == "10.199.254.0/24"
+        assert ip == "10.199.254.100"
+        # Next allocation wraps to 1
+        subnet, ip = pm._allocate_subnet()
+        assert subnet == "10.199.1.0/24"
+        assert ip == "10.199.1.100"
 
 
 class TestCleanupOrphans:
@@ -817,6 +888,10 @@ class TestWaitForProxyReady:
         assert cmd[1] == "exec"
         assert cmd[2] == "proxy-abc"
         assert cmd[3] == "python3"
+        # Probe should check ports 80 and 443 (not 8080)
+        probe_script = cmd[5]
+        assert "80" in probe_script
+        assert "443" in probe_script
 
     @patch("lib.container.proxy.time.sleep")
     @patch("lib.container.proxy.subprocess.run")

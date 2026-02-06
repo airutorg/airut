@@ -279,6 +279,7 @@ def test_global_config_defaults() -> None:
     assert config.dashboard_port == 5200
     assert config.dashboard_base_url is None
     assert config.container_command == "podman"
+    assert config.upstream_dns == "1.1.1.1"
 
 
 def test_global_config_with_custom_values() -> None:
@@ -292,6 +293,7 @@ def test_global_config_with_custom_values() -> None:
         dashboard_port=8080,
         dashboard_base_url="https://dashboard.example.com",
         container_command="docker",
+        upstream_dns="8.8.8.8",
     )
 
     assert config.max_concurrent_executions == 5
@@ -302,6 +304,7 @@ def test_global_config_with_custom_values() -> None:
     assert config.dashboard_port == 8080
     assert config.dashboard_base_url == "https://dashboard.example.com"
     assert config.container_command == "docker"
+    assert config.upstream_dns == "8.8.8.8"
 
 
 def test_global_config_invalid_max_concurrent() -> None:

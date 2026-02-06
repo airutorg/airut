@@ -216,8 +216,8 @@ modified by Claude.
   token, R2, etc.) passed via environment variables
 - **Read-write workspace**: Container can only modify conversation-specific
   directories
-- **Network allowlist**: Containers on internal network with proxy-based
-  filtering (see [network-sandbox](../doc/network-sandbox.md))
+- **Network allowlist**: Containers on internal network with transparent
+  DNS-spoofing proxy (see [network-sandbox](../doc/network-sandbox.md))
 - **Resource limits**: Timeout configurable per-repo (default 300 seconds)
 
 ### Image Build Strategy

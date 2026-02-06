@@ -31,7 +31,7 @@ class TestGetNetworkArgs:
         tp = TaskProxy(
             network_name="test-net",
             proxy_container_name="test-proxy",
-            proxy_host="test-proxy",
+            proxy_ip="10.199.1.100",
         )
         with patch("lib.container.proxy.MITMPROXY_CONFDIR", tmp_path):
             args = get_network_args(tp)
@@ -39,12 +39,9 @@ class TestGetNetworkArgs:
         assert "--network" in args
         assert "test-net" in args
 
-        # Proxy env vars
-        env_args = [
-            a for i, a in enumerate(args) if i > 0 and args[i - 1] == "-e"
-        ]
-        assert "HTTP_PROXY=http://test-proxy:8080" in env_args
-        assert "HTTPS_PROXY=http://test-proxy:8080" in env_args
+        # DNS pointing to proxy IP
+        dns_idx = args.index("--dns")
+        assert args[dns_idx + 1] == "10.199.1.100"
 
         # CA cert mount
         mount_args = [
@@ -55,6 +52,9 @@ class TestGetNetworkArgs:
         assert CA_CONTAINER_PATH in mount_args[0]
 
         # CA trust env vars
+        env_args = [
+            a for i, a in enumerate(args) if i > 0 and args[i - 1] == "-e"
+        ]
         ca_env_vars = [
             a
             for a in env_args
@@ -70,53 +70,34 @@ class TestGetNetworkArgs:
         ]
         assert len(ca_env_vars) == 4
 
-        # Proxy opt-in env vars
-        assert "ELECTRON_GET_USE_PROXY=1" in env_args
+        # No cooperative proxy env vars (transparent proxy architecture)
+        assert not any("HTTP_PROXY=" in a for a in env_args)
+        assert not any("HTTPS_PROXY=" in a for a in env_args)
+        assert not any("GLOBAL_AGENT" in a for a in env_args)
+        assert not any("NODE_OPTIONS" in a for a in env_args)
+        assert not any("ELECTRON_GET_USE_PROXY" in a for a in env_args)
 
-        # Node.js global-agent env vars
-        assert any(
-            "NODE_OPTIONS=--require global-agent/bootstrap" in a
-            for a in env_args
-        )
-        assert any(
-            "GLOBAL_AGENT_HTTP_PROXY=http://test-proxy:8080" in a
-            for a in env_args
-        )
-        assert any(
-            "GLOBAL_AGENT_HTTPS_PROXY=http://test-proxy:8080" in a
-            for a in env_args
-        )
-        assert any(
-            "GLOBAL_AGENT_NO_PROXY=localhost,127.0.0.1" in a for a in env_args
-        )
-
-    def test_custom_host_and_port(self, tmp_path: Path) -> None:
-        """Respects custom proxy host and port."""
+    def test_custom_proxy_ip(self, tmp_path: Path) -> None:
+        """Respects custom proxy IP address."""
         cert = tmp_path / "mitmproxy-ca-cert.pem"
         cert.touch()
         tp = TaskProxy(
             network_name="test-net",
             proxy_container_name="test-proxy",
-            proxy_host="10.89.0.1",
+            proxy_ip="10.199.42.100",
         )
         with patch("lib.container.proxy.MITMPROXY_CONFDIR", tmp_path):
             args = get_network_args(tp)
 
-        env_args = [
-            a for i, a in enumerate(args) if i > 0 and args[i - 1] == "-e"
-        ]
-        assert any("HTTP_PROXY=http://10.89.0.1:8080" in a for a in env_args)
-        assert any(
-            "GLOBAL_AGENT_HTTP_PROXY=http://10.89.0.1:8080" in a
-            for a in env_args
-        )
+        dns_idx = args.index("--dns")
+        assert args[dns_idx + 1] == "10.199.42.100"
 
     def test_infra_not_ready_raises(self, tmp_path: Path) -> None:
         """Raises RuntimeError when CA cert is missing (fail-secure)."""
         tp = TaskProxy(
             network_name="test-net",
             proxy_container_name="test-proxy",
-            proxy_host="test-proxy",
+            proxy_ip="10.199.1.100",
         )
         with patch("lib.container.proxy.MITMPROXY_CONFDIR", tmp_path):
             with pytest.raises(RuntimeError, match="CA certificate not found"):

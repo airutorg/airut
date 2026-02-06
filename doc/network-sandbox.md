@@ -2,8 +2,8 @@
 
 The network sandbox restricts Claude Code container network access to a
 configurable set of trusted hosts, mitigating data exfiltration risk from prompt
-injection attacks. It works by routing all HTTP(S) traffic through a mitmproxy
-instance that enforces an allowlist.
+injection attacks. It works by transparently routing all traffic through an
+mitmproxy instance that enforces an allowlist — no `HTTP_PROXY` env vars needed.
 
 > **Terminology**: "Network sandbox" refers to the overall isolation concept.
 > "Network allowlist" is the configuration specifying permitted hosts. "Proxy"
@@ -66,14 +66,32 @@ The system fails secure at multiple levels:
 
 The following attack vectors have been analyzed and verified as mitigated:
 
-**DNS exfiltration**: Podman's `--internal` network flag configures aardvark-dns
-to resolve only container names on the same network. External DNS queries (e.g.,
-`<secret>.attacker.com`) return NXDOMAIN. The container cannot encode data into
-DNS queries because no external DNS resolution is available.
+**DNS exfiltration**: Podman's default DNS (aardvark-dns) forwards all queries
+to the host's upstream resolvers, which would allow a compromised container to
+encode stolen data in DNS queries to attacker-controlled domains — a common
+exfiltration channel that bypasses HTTP-level controls entirely. The transparent
+proxy eliminates this by replacing aardvark-dns with a custom DNS responder
+(`dns_responder.py`) inside the proxy container. It checks each query against
+the allowlist: allowed domains resolve to the proxy IP, blocked domains get
+NXDOMAIN. No queries are ever forwarded upstream. The container cannot encode
+data into DNS queries because the DNS responder never contacts external
+nameservers. The `--disable-dns` flag on the internal network prevents
+aardvark-dns from running, and `--dns <proxy_ip>` points all container DNS
+queries to the custom responder.
+
+**Non-HTTP traffic**: The client container's only network route points to the
+proxy IP (injected via `--route`). The proxy only listens on ports 80 and 443.
+Any attempt to connect on other ports (SSH, raw TCP, etc.) gets "connection
+refused" because no service is listening. No iptables or `CAP_NET_ADMIN` needed.
+
+**Direct IP access**: Even if the container hardcodes an external IP address
+(bypassing DNS), the default route sends the traffic to the proxy IP, where
+mitmproxy can only handle it as HTTP(S). Direct IP connections to non-proxy
+ports fail because no service is listening.
 
 **Proxy admin interface**: The proxy uses `mitmdump` (not `mitmweb`), so no web
-interface exists. Only port 8080 is exposed. Additionally, requests to the
-proxy's own hostname are filtered by the allowlist — the proxy checks ALL
+interface exists. Only ports 80 and 443 are exposed. Additionally, requests to
+the proxy's own hostname are filtered by the allowlist — the proxy checks ALL
 requests, including those addressed to itself.
 
 **Redirect following**: The proxy operates as a client-driven proxy, not a
@@ -84,10 +102,10 @@ independently. Redirects to blocked domains result in a 403.
 
 ### Limitations
 
-The sandbox currently supports **HTTP(S) traffic only**. Other protocols (raw
-TCP, SSH, etc.) are blocked entirely by the isolated network — the container
-simply cannot establish non-HTTP connections. Supporting additional protocols is
-a potential future extension.
+The sandbox handles **HTTP(S) traffic only**. Other protocols (raw TCP, SSH,
+etc.) are blocked entirely — the container's default route goes to the proxy,
+which only has HTTP(S) listeners. Non-HTTP connection attempts get "connection
+refused."
 
 To disable the sandbox entirely for debugging or emergencies, set
 `sandbox_enabled: false` in either the repo config (`.airut/airut.yaml`) or
@@ -100,47 +118,70 @@ setup required. On startup, it creates networks, builds the proxy image, and
 generates the CA certificate. The implementation uses rootless Podman, so no
 root privileges are needed.
 
+### Requirements
+
+- **Podman 4.x+** with **netavark** backend (provides `--route` and
+  `--disable-dns` flags for `podman network create`)
+- Rootless mode — no root privileges required
+- No `CAP_NET_ADMIN` needed on any container
+
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  Podman network: airut-task-{id} (--internal, per-task)      │
-│                                                              │
-│  ┌────────────────┐       ┌──────────────────────┐           │
-│  │  Claude Code   │──────▶│  airut-proxy-{id}    │─┐         │
-│  │  container     │ :8080 │  (mitmdump)          │ │         │
-│  └────────────────┘       └──────────────────────┘ │         │
-└────────────────────────────────────────────────────┼─────────┘
-                              ┌──────────────────────┼─────────┐
-                              │  Podman network:               │
-                              │  airut-egress (internet)       │
-                              └────────────────────────────────┘
+┌───────────────────────────────────────────────────────────┐
+│  Podman network: airut-task-{id}                          │
+│  (--internal, --disable-dns, --route → proxy IP)          │
+│                                                           │
+│  ┌────────────────┐    DNS    ┌──────────────────────┐    │
+│  │  Claude Code   │──────────▶│  airut-proxy-{id}    │─┐  │
+│  │  container     │  :80/:443 │  (mitmdump)          │ │  │
+│  │  (--dns proxy) │──────────▶│  + dns_responder.py  │ │  │
+│  └────────────────┘           └──────────────────────┘ │  │
+└────────────────────────────────────────────────────────┼──┘
+                              ┌──────────────────────────┼──┐
+                              │  Podman network:            │
+                              │  airut-egress (internet)    │
+                              │  (metric=5, wins over       │
+                              │   internal metric=10)       │
+                              └─────────────────────────────┘
 ```
 
 Each task gets its own internal network and proxy container, providing complete
 isolation between concurrent tasks:
 
-- **`airut-task-{id}`** (`--internal`): Per-task network. The Claude Code
-  container and its proxy are the only members. The `--internal` flag blocks
-  direct internet access.
-- **`airut-egress`**: Shared egress network. Only proxy containers connect here,
-  giving them internet access to forward allowed requests.
+- **`airut-task-{id}`** (`--internal --disable-dns`): Per-task network with a
+  `--route 0.0.0.0/0,<proxy_ip>,10` that sends all client traffic to the proxy.
+  The `--internal` flag blocks direct internet access. `--disable-dns` prevents
+  aardvark-dns from overriding the client's `--dns` setting.
+- **`airut-egress`** (`-o metric=5`): Shared egress network. Only proxy
+  containers connect here. The low metric (5) ensures the egress default route
+  wins over the internal route (metric 10) inside the dual-homed proxy.
 
-### Request Flow
+### Request Flow (Transparent DNS-Spoofing)
 
-1. Container makes HTTP(S) request via `HTTP_PROXY`/`HTTPS_PROXY` env vars
-2. mitmproxy terminates TLS (container trusts the mitmproxy CA)
-3. Allowlist addon checks host + path against configuration
-4. **Allowed**: Request forwarded to the internet
-5. **Blocked**: HTTP 403 returned with instructions on how to request access
+1. Container makes a DNS query (e.g., `api.github.com`)
+2. The query goes to the proxy IP (set via `--dns` on the container)
+3. `dns_responder.py` checks the domain against the allowlist:
+   - **Allowed**: Returns the proxy IP as the A record
+   - **Blocked**: Returns NXDOMAIN
+4. Container connects to the proxy IP on port 80/443
+5. mitmproxy in `regular` mode reads SNI (HTTPS) or Host header (HTTP)
+6. `proxy-filter.py` checks host + path against the allowlist:
+   - **Allowed**: mitmproxy connects upstream and forwards the request
+   - **Blocked**: HTTP 403 returned with instructions
+
+No `HTTP_PROXY`/`HTTPS_PROXY` env vars are set. This works transparently with
+all tools: Node.js, Go, curl, Python, git, and any other HTTP client.
 
 ### Components
 
-| Component                       | Purpose                                       |
-| ------------------------------- | --------------------------------------------- |
-| `.airut/network-allowlist.yaml` | Allowlist configuration (domains + URLs)      |
-| `docker/proxy.dockerfile`       | Proxy container image (slim + mitmproxy)      |
-| `docker/proxy-filter.py`        | mitmproxy addon for allowlist + token masking |
-| `lib/container/network.py`      | Podman args for sandbox integration           |
-| `lib/container/proxy.py`        | Per-task proxy lifecycle management           |
+| Component                       | Purpose                                              |
+| ------------------------------- | ---------------------------------------------------- |
+| `.airut/network-allowlist.yaml` | Allowlist configuration (domains + URLs)             |
+| `docker/proxy.dockerfile`       | Proxy container image (slim + mitmproxy + pyyaml)    |
+| `docker/proxy-entrypoint.sh`    | Starts DNS responder + mitmproxy in regular mode     |
+| `docker/dns_responder.py`       | DNS server: returns proxy IP or NXDOMAIN             |
+| `docker/proxy-filter.py`        | mitmproxy addon for allowlist + token masking        |
+| `lib/container/network.py`      | Podman args for sandbox integration (--dns, CA cert) |
+| `lib/container/proxy.py`        | Per-task proxy lifecycle management                  |
 
 ## Configuration
 
@@ -179,6 +220,19 @@ When the sandbox is disabled, a warning is logged showing both settings. If
 masked secrets are configured, an additional warning is logged because masked
 secrets depend on the proxy (see
 [Masked Secrets](#masked-secrets-token-replacement)).
+
+### Upstream DNS
+
+The proxy container needs its own DNS to resolve real hostnames when connecting
+upstream. This is configured in the server config:
+
+```yaml
+network:
+  upstream_dns: "1.1.1.1"  # default: Cloudflare DNS
+```
+
+This only affects the proxy container's resolution of real hostnames. Client
+containers never contact this DNS server — they only talk to `dns_responder.py`.
 
 ### Network Allowlist
 
@@ -385,57 +439,18 @@ See `spec/masked-secrets.md` for the full specification.
 
 ## Implementation Details
 
-### Proxy Environment Variables
-
-When the sandbox is enabled, the following environment variables are set on the
-container to route traffic through the proxy and trust the mitmproxy CA:
-
-| Variable                   | Purpose                                              |
-| -------------------------- | ---------------------------------------------------- |
-| `HTTP_PROXY`               | Routes HTTP traffic through the proxy                |
-| `HTTPS_PROXY`              | Routes HTTPS traffic through the proxy               |
-| `NODE_EXTRA_CA_CERTS`      | Trusts mitmproxy CA in Node.js                       |
-| `REQUESTS_CA_BUNDLE`       | Trusts mitmproxy CA in Python requests               |
-| `SSL_CERT_FILE`            | Trusts mitmproxy CA in Python ssl module             |
-| `CURL_CA_BUNDLE`           | Trusts mitmproxy CA in curl                          |
-| `ELECTRON_GET_USE_PROXY`   | Opts Electron-based tools into using the proxy       |
-| `NODE_OPTIONS`             | Loads global-agent at Node.js startup (`--require`)  |
-| `GLOBAL_AGENT_HTTP_PROXY`  | Configures global-agent HTTP proxy URL               |
-| `GLOBAL_AGENT_HTTPS_PROXY` | Configures global-agent HTTPS proxy URL              |
-| `GLOBAL_AGENT_NO_PROXY`    | Bypasses proxy for localhost (`localhost,127.0.0.1`) |
-
-The entrypoint also runs `update-ca-certificates` to add the mitmproxy CA to the
-system trust store (used by git, uv, and other system tools).
-
-### Node.js Proxy Support (global-agent)
-
-Node.js's built-in `http` and `https` modules ignore the standard
-`HTTP_PROXY`/`HTTPS_PROXY` environment variables. To ensure Node.js applications
-inside the container route traffic through the proxy, the sandbox uses
-[global-agent](https://github.com/gajus/global-agent):
-
-1. **Entrypoint**: If `GLOBAL_AGENT_HTTP_PROXY` is set and `npm` is available in
-   the container, the entrypoint installs `global-agent` globally via
-   `npm install -g global-agent`. This is a no-op if npm is not installed.
-2. **NODE_OPTIONS**: Set to `--require global-agent/bootstrap`, which loads the
-   agent at process startup for every Node.js process.
-3. **GLOBAL_AGENT\_\* vars**: Configure the proxy URL and exclusions.
-
-This ensures that any Node.js code the agent runs (npm scripts, custom tooling,
-etc.) respects the network sandbox without requiring per-project configuration.
-
 ### CA Certificate Trust
 
 mitmproxy intercepts HTTPS by terminating TLS with its own CA. All tools in the
 container must trust this CA:
 
-| Tool/Library         | Trust mechanism                        |
-| -------------------- | -------------------------------------- |
-| Node.js (Claude CLI) | `NODE_EXTRA_CA_CERTS` env var          |
-| Python requests      | `REQUESTS_CA_BUNDLE` env var           |
-| Python ssl module    | `SSL_CERT_FILE` env var                |
-| curl                 | `CURL_CA_BUNDLE` env var               |
-| git, uv, system      | `update-ca-certificates` in entrypoint |
+| Tool/Library          | Trust mechanism                        |
+| --------------------- | -------------------------------------- |
+| Node.js (Claude CLI)  | `NODE_EXTRA_CA_CERTS` env var          |
+| Python requests       | `REQUESTS_CA_BUNDLE` env var           |
+| Python ssl module     | `SSL_CERT_FILE` env var                |
+| curl                  | `CURL_CA_BUNDLE` env var               |
+| git, uv, system tools | `update-ca-certificates` in entrypoint |
 
 ### Session Network Logging
 
@@ -467,8 +482,8 @@ The proxy is managed by `ProxyManager` in `lib/container/proxy.py`:
 
 **Task lifecycle** (per-task resources):
 
-- `start_task_proxy()`: create internal network, start proxy container, health
-  check
+- `start_task_proxy()`: allocate subnet, create internal network with route,
+  start dual-homed proxy container, health check
 - `stop_task_proxy()`: remove container and network
 
 ### Resource Scoping

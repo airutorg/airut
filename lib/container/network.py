@@ -6,12 +6,19 @@
 """Network sandbox configuration for Claude Code containers.
 
 Provides the Podman command-line arguments needed to route container traffic
-through the network sandbox (per-task mitmproxy proxy). When the sandbox is
+through the network sandbox (per-task mitmproxy proxy).  When the sandbox is
 disabled (break-glass), returns an empty list so containers get unrestricted
 access.
 
-Each task gets its own proxy container on its own internal network. The
-proxy hostname is resolved via Podman's built-in DNS (aardvark-dns).
+The transparent proxy architecture works by:
+1. DNS: Client's ``--dns`` points to the proxy IP, which runs a DNS
+   responder returning the proxy IP for allowed domains (NXDOMAIN for blocked).
+2. Routing: The internal network's ``--route`` flag injects a default
+   route to the proxy IP, so all traffic reaches mitmproxy.
+3. TLS: mitmproxy in ``regular`` mode terminates TLS using SNI to
+   determine the real upstream host. The container trusts the mitmproxy CA.
+
+No ``HTTP_PROXY``/``HTTPS_PROXY`` env vars needed — fully transparent.
 """
 
 from __future__ import annotations
@@ -36,7 +43,7 @@ def get_network_args(task_proxy: TaskProxy | None) -> list[str]:
 
     When a ``TaskProxy`` is provided, returns arguments to:
     - Attach the container to the task's internal network
-    - Set HTTP(S)_PROXY environment variables pointing to the proxy container
+    - Set ``--dns`` to the proxy IP (DNS responder)
     - Mount and trust the mitmproxy CA certificate
 
     When ``task_proxy`` is None (sandbox disabled or no proxy), returns
@@ -59,16 +66,13 @@ def get_network_args(task_proxy: TaskProxy | None) -> list[str]:
 
     ca_cert_path = get_ca_cert_path()
 
-    proxy_url = f"http://{task_proxy.proxy_host}:{task_proxy.proxy_port}"
-
     args: list[str] = []
 
     # Attach to per-task internal network
     args.extend(["--network", task_proxy.network_name])
 
-    # Proxy environment variables
-    args.extend(["-e", f"HTTP_PROXY={proxy_url}"])
-    args.extend(["-e", f"HTTPS_PROXY={proxy_url}"])
+    # Point DNS to proxy (runs dns_responder.py)
+    args.extend(["--dns", task_proxy.proxy_ip])
 
     # Mount CA certificate
     args.extend(["-v", f"{ca_cert_path}:{CA_CONTAINER_PATH}:ro"])
@@ -79,20 +83,9 @@ def get_network_args(task_proxy: TaskProxy | None) -> list[str]:
     args.extend(["-e", f"SSL_CERT_FILE={CA_CONTAINER_PATH}"])
     args.extend(["-e", f"CURL_CA_BUNDLE={CA_CONTAINER_PATH}"])
 
-    # Opt tools into using the proxy that don't honor HTTP(S)_PROXY
-    args.extend(["-e", "ELECTRON_GET_USE_PROXY=1"])
-
-    # Node.js global-agent: patches Node's HTTP client to use the proxy.
-    # The entrypoint installs global-agent if npm is available; these env
-    # vars configure it.  NODE_OPTIONS loads the agent at process startup.
-    args.extend(["-e", "NODE_OPTIONS=--require global-agent/bootstrap"])
-    args.extend(["-e", f"GLOBAL_AGENT_HTTP_PROXY={proxy_url}"])
-    args.extend(["-e", f"GLOBAL_AGENT_HTTPS_PROXY={proxy_url}"])
-    args.extend(["-e", "GLOBAL_AGENT_NO_PROXY=localhost,127.0.0.1"])
-
     logger.info(
-        "Network sandbox enabled: proxy=%s, network=%s",
-        proxy_url,
+        "Network sandbox enabled: proxy_ip=%s, network=%s",
+        task_proxy.proxy_ip,
         task_proxy.network_name,
     )
     return args
