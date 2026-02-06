@@ -22,6 +22,8 @@ For high-level documentation, see [doc/](../doc/).
 
 ## Network
 
+- [network-sandbox.md](network-sandbox.md) — Proxy lifecycle, resource scoping,
+  log format, crash recovery
 - [masked-secrets.md](masked-secrets.md) — Scope-restricted credentials with
   proxy-level token replacement
 
