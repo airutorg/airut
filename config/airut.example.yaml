@@ -106,7 +106,7 @@ repos:
     # Server-side network sandbox override.  Both server and repo config
     # default to true; the effective value is the logical AND — if either
     # is false, the sandbox is disabled for this repo.  Useful as a
-    # break-glass when the agent corrupts the repo's network allowlist.
+    # break-glass when a broken allowlist gets checked in.
     #
     # network:
     #   sandbox_enabled: true

@@ -984,7 +984,9 @@ class TestRepoConfigFromRaw:
         raw: dict = {}
         with caplog.at_level(logging.WARNING, logger="lib.gateway.config"):
             RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=False)
-        assert "disabled by server config" in caplog.text
+        assert "sandbox disabled" in caplog.text.lower()
+        assert "server=False" in caplog.text
+        assert "repo=True" in caplog.text
 
     def test_warning_logged_when_repo_disables_sandbox(
         self, caplog: pytest.LogCaptureFixture
@@ -993,16 +995,29 @@ class TestRepoConfigFromRaw:
         raw = {"network": {"sandbox_enabled": False}}
         with caplog.at_level(logging.WARNING, logger="lib.gateway.config"):
             RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=True)
-        assert "disabled by repo config" in caplog.text
+        assert "sandbox disabled" in caplog.text.lower()
+        assert "server=True" in caplog.text
+        assert "repo=False" in caplog.text
 
-    def test_no_warning_when_both_disable_sandbox(
+    def test_warning_logged_when_both_disable_sandbox(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """No 'disabled by' warning when both sides disable."""
+        """Warning logged when both sides disable sandbox."""
         raw = {"network": {"sandbox_enabled": False}}
         with caplog.at_level(logging.WARNING, logger="lib.gateway.config"):
             RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=False)
-        assert "disabled by" not in caplog.text
+        assert "sandbox disabled" in caplog.text.lower()
+        assert "server=False" in caplog.text
+        assert "repo=False" in caplog.text
+
+    def test_no_warning_when_sandbox_enabled(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """No warning when sandbox is enabled."""
+        raw: dict = {}
+        with caplog.at_level(logging.WARNING, logger="lib.gateway.config"):
+            RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=True)
+        assert "sandbox disabled" not in caplog.text.lower()
 
     def test_warning_logged_when_sandbox_disabled_with_masked_secrets(
         self, caplog: pytest.LogCaptureFixture

@@ -975,13 +975,9 @@ class RepoConfig:
         # Either side can disable it independently.
         effective_sandbox = server_sandbox_enabled and repo_sandbox
 
-        if not effective_sandbox and repo_sandbox != server_sandbox_enabled:
-            disabled_by = (
-                "server config" if not server_sandbox_enabled else "repo config"
-            )
+        if not effective_sandbox:
             logger.warning(
-                "Network sandbox disabled by %s (server=%s, repo=%s)",
-                disabled_by,
+                "Network sandbox disabled (server=%s, repo=%s)",
                 server_sandbox_enabled,
                 repo_sandbox,
             )
