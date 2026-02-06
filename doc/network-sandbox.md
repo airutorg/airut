@@ -90,7 +90,8 @@ simply cannot establish non-HTTP connections. Supporting additional protocols is
 a potential future extension.
 
 To disable the sandbox entirely for debugging or emergencies, set
-`sandbox_enabled: false` in `.airut/airut.yaml` (see Configuration below).
+`sandbox_enabled: false` in either the repo config (`.airut/airut.yaml`) or
+server config (`config/airut.yaml`). See Configuration below.
 
 ## Architecture
 
@@ -145,16 +146,45 @@ isolation between concurrent tasks:
 
 ### Enabling/Disabling the Sandbox
 
-The network sandbox is controlled via `.airut/airut.yaml`:
+The network sandbox is controlled at two levels. Both default to `true`; the
+effective value is the **logical AND** — if either is `false`, the sandbox is
+disabled.
+
+**Repo config** (`.airut/airut.yaml`):
 
 ```yaml
 network:
   sandbox_enabled: true  # default; set to false to disable (break-glass)
 ```
 
+**Server config** (`config/airut.yaml`, per-repo):
+
+```yaml
+repos:
+  my-project:
+    network:
+      sandbox_enabled: true  # default; set to false to override repo config
+```
+
+| Server config | Repo config | Effective |
+| ------------- | ----------- | --------- |
+| `true`        | `true`      | **true**  |
+| `true`        | `false`     | **false** |
+| `false`       | `true`      | **false** |
+| `false`       | `false`     | **false** |
+
 When disabled, containers get unrestricted network access without the proxy.
 **Use only for debugging or emergencies** — this removes the exfiltration
 protection.
+
+The server-side setting is useful as a **break-glass** for operators: if the
+agent corrupts the network allowlist in the repo, the operator can disable the
+sandbox server-side immediately without waiting for a repo config fix to merge.
+
+When the sandbox is disabled, a warning is logged indicating which config layer
+disabled it. If masked secrets are configured, an additional warning is logged
+because masked secrets depend on the proxy (see
+[Masked Secrets](#masked-secrets-token-replacement)).
 
 ### Network Allowlist
 
@@ -424,3 +454,52 @@ The proxy is managed by `ProxyManager` in `lib/container/proxy.py`:
 On startup, `ProxyManager` cleans orphaned resources from previous unclean
 shutdowns: containers matching `airut-proxy-*` and networks matching
 `airut-task-*` are removed.
+
+## Troubleshooting
+
+### Agent broke the network allowlist
+
+If the agent creates a malformed `.airut/network-allowlist.yaml` that blocks its
+own access (e.g., removes required domains), use the server-side sandbox
+override to temporarily disable the sandbox:
+
+```yaml
+# In config/airut.yaml
+repos:
+  my-project:
+    network:
+      sandbox_enabled: false
+```
+
+This takes effect on the next task without requiring any repo changes. With the
+sandbox disabled, the agent has unrestricted network access and can create a PR
+to fix the allowlist. After the fix merges, re-enable the sandbox by removing
+the override (or setting it back to `true`).
+
+### Masked secrets stopped working
+
+If API calls that previously worked start failing with authentication errors,
+check whether the sandbox was disabled on either side:
+
+1. Check repo config: `network.sandbox_enabled` in `.airut/airut.yaml`
+2. Check server config: `network.sandbox_enabled` under the repo's section
+
+Masked secrets require the proxy to swap surrogates for real values. When the
+sandbox is disabled, the proxy doesn't start, and the container receives
+surrogates that are not valid credentials. Look for this log warning:
+
+> Network sandbox is disabled but masked secrets are configured.
+
+**Fix**: Either re-enable the sandbox, or temporarily move credentials from
+`masked_secrets` to `secrets` (plain injection) in server config.
+
+### Debugging container network issues
+
+When investigating connectivity problems from inside a container:
+
+1. **Prefer the server-side override** — set `network.sandbox_enabled: false` in
+   server config. This avoids modifying the repo and takes effect immediately on
+   the next task.
+2. After debugging, re-enable the sandbox.
+3. Check `session_dir/network-sandbox.log` for the audit trail of allowed and
+   blocked requests from previous tasks.

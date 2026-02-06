@@ -200,6 +200,30 @@ proxy-filter.py request()
 | Real      | Yes                          | No (redacted)   |
 | Surrogate | No                           | Yes (debugging) |
 
+## Network Sandbox Requirement
+
+Masked secrets depend on the network sandbox proxy to function. The proxy is
+what swaps surrogates for real values on matching requests. When the sandbox is
+disabled (`network.sandbox_enabled: false` in either repo or server config):
+
+- Surrogates are **still generated** and injected into the container
+- The proxy **never starts**, so surrogates are never swapped for real values
+- API calls using masked secrets will **fail** (the surrogate is not a valid
+  credential)
+
+This is by design — disabling the sandbox removes the proxy, and the proxy is
+the enforcement mechanism for masked secrets.
+
+**If you need to disable the sandbox but still need credentials**, temporarily
+move them from `masked_secrets` to `secrets` (plain injection) in server config.
+Remember to move them back after re-enabling the sandbox.
+
+A warning is logged when this condition is detected:
+
+> Network sandbox is disabled but masked secrets are configured. Masked secrets
+> require the proxy to swap surrogates for real values — they will not work
+> without the sandbox.
+
 ## Migration
 
 Existing `secrets` continue to work. To mask a secret:

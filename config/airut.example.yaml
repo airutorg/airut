@@ -103,6 +103,14 @@ repos:
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
 
+    # Server-side network sandbox override.  Both server and repo config
+    # default to true; the effective value is the logical AND — if either
+    # is false, the sandbox is disabled for this repo.  Useful as a
+    # break-glass when the agent corrupts the repo's network allowlist.
+    #
+    # network:
+    #   sandbox_enabled: true
+
     # Masked secrets inject surrogate tokens into containers.  The proxy swaps
     # surrogates for real values only when the request host matches scopes.
     # This prevents credential exfiltration — even if the container is
