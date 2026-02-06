@@ -18,19 +18,22 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && apt-get update \
     && apt-get install -y gh
 
-# Install uv (to ~/.local/bin)
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:$PATH"
-
-# Install Python 3.13 via uv
-RUN uv python install 3.13
-
 # Install Claude Code
 # NOTE: Run from a temp directory to work around OOM bug in installer when run
 # as root during container build (https://github.com/anthropics/claude-code/issues/22536)
 RUN mkdir /tmp/claude-install && cd /tmp/claude-install \
     && curl -fsSL https://claude.ai/install.sh | bash \
     && rm -rf /tmp/claude-install
+
+# Add ~/.local/bin to PATH — Airut requires `claude` to be in PATH
+# (also needed for `uv` below)
+ENV PATH="/root/.local/bin:$PATH"
+
+# Install uv (to ~/.local/bin)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install Python 3.13 via uv
+RUN uv python install 3.13
 
 # Configure git with gh credential helper
 # NOTE: Using COPY instead of heredoc because Podman's image builder
