@@ -1861,3 +1861,83 @@ class TestNetworkLogsPage:
         assert 'class="log-line task-start"' in html
         assert html.count('class="log-line allowed"') == 2
         assert html.count('class="log-line blocked"') == 2
+
+    def test_network_logs_error_lines(self, tmp_path: Path) -> None:
+        """Test ERROR lines (upstream failures) get conn-error styling."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        log_path = conv_dir / "network-sandbox.log"
+        log_path.write_text(
+            "ERROR GET https://api.example.com/path"
+            " -> Connection failed: Name or service not known\n"
+        )
+
+        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/abc12345/network")
+        html = response.get_data(as_text=True)
+
+        # ERROR line should have conn-error class (red)
+        assert 'class="log-line conn-error"' in html
+        # ERROR should be highlighted (bold)
+        assert '<span class="highlight">ERROR</span>' in html
+
+    def test_network_logs_error_css_styling_conn_error(
+        self, tmp_path: Path
+    ) -> None:
+        """Test conn-error class has red styling in CSS."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        log_path = conv_dir / "network-sandbox.log"
+        log_path.write_text(
+            "ERROR GET https://api.example.com -> Connection failed\n"
+        )
+
+        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/abc12345/network")
+        html = response.get_data(as_text=True)
+
+        # Check that conn-error styling is defined in CSS
+        assert ".log-line.conn-error" in html
+        assert "#e05f5f" in html
+
+    def test_network_logs_mixed_with_error_lines(self, tmp_path: Path) -> None:
+        """Test ERROR lines render correctly alongside other line types."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        log_path = conv_dir / "network-sandbox.log"
+        log_path.write_text(
+            "=== TASK START 2026-02-03T12:34:56Z ===\n"
+            "allowed DNS A api.github.com -> 10.199.1.100\n"
+            "allowed DNS A down.example.com -> 10.199.1.100\n"
+            "allowed GET https://api.github.com/repos -> 200\n"
+            "ERROR GET https://down.example.com"
+            " -> Connection failed: Name or service not known\n"
+            "BLOCKED DNS A evil.com -> NXDOMAIN\n"
+        )
+
+        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/abc12345/network")
+        html = response.get_data(as_text=True)
+
+        assert 'class="log-line task-start"' in html
+        assert html.count('class="log-line allowed"') == 3
+        assert html.count('class="log-line conn-error"') == 1
+        assert html.count('class="log-line blocked"') == 1

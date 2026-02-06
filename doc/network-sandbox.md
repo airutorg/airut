@@ -466,12 +466,17 @@ BLOCKED DNS AAAA evil.com -> NOTIMP
 allowed GET https://api.github.com/repos/your-org/your-repo/pulls -> 200 [masked: 1]
 BLOCKED GET https://evil.com/exfiltrate -> 403
 allowed POST https://api.anthropic.com/v1/messages -> 200 [masked: 1]
+ERROR GET https://down.example.com/api -> Connection failed: Name or service not known
 ```
 
 DNS log lines use the format `{BLOCKED|allowed} DNS {type} {domain} -> {result}`
 where type is the query type (A, AAAA, MX, etc.) and result is the DNS response
 (proxy IP for allowed, NXDOMAIN for blocked A queries, NOTIMP for non-A
 queries).
+
+ERROR lines indicate upstream connection failures — the domain passed the
+allowlist but mitmproxy could not connect (e.g. DNS resolution failure, timeout,
+connection refused). The format is `ERROR {METHOD} {URL} -> {error message}`.
 
 The `[masked: N]` suffix on HTTP lines indicates that N masked secret tokens
 were replaced in that request. See
