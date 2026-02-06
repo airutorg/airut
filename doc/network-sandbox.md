@@ -3,7 +3,8 @@
 The network sandbox restricts Claude Code container network access to a
 configurable set of trusted hosts, mitigating data exfiltration risk from prompt
 injection attacks. It works by transparently routing all traffic through an
-mitmproxy instance that enforces an allowlist — no `HTTP_PROXY` env vars needed.
+mitmproxy instance that enforces an allowlist — no `HTTP_PROXY` env vars needed,
+so it works with all tools (Node.js, Go, curl, Python, git).
 
 > **Terminology**: "Network sandbox" refers to the overall isolation concept.
 > "Network allowlist" is the configuration specifying permitted hosts. "Proxy"
@@ -66,23 +67,20 @@ The system fails secure at multiple levels:
 
 The following attack vectors have been analyzed and verified as mitigated:
 
-**DNS exfiltration**: Podman's default DNS (aardvark-dns) forwards all queries
-to the host's upstream resolvers, which would allow a compromised container to
-encode stolen data in DNS queries to attacker-controlled domains — a common
-exfiltration channel that bypasses HTTP-level controls entirely. The transparent
-proxy eliminates this by replacing aardvark-dns with a custom DNS responder
-(`dns_responder.py`) inside the proxy container. It checks each query against
-the allowlist: allowed domains resolve to the proxy IP, blocked domains get
-NXDOMAIN. No queries are ever forwarded upstream. The container cannot encode
-data into DNS queries because the DNS responder never contacts external
-nameservers. The `--disable-dns` flag on the internal network prevents
-aardvark-dns from running, and `--dns <proxy_ip>` points all container DNS
-queries to the custom responder.
+**DNS exfiltration**: Podman's default DNS (aardvark-dns) forwards queries to
+host resolvers, which would allow encoding stolen data in DNS queries to
+attacker-controlled domains. The sandbox replaces this with a custom DNS
+responder inside the proxy container that checks each query against the
+allowlist: allowed domains resolve to the proxy IP, blocked domains get
+NXDOMAIN. No queries are ever forwarded upstream — the DNS responder is
+authoritative for all domains. Podman's `--disable-dns` flag prevents
+aardvark-dns from running, and `--dns <proxy_ip>` points all container queries
+to the custom responder.
 
 **Non-HTTP traffic**: The client container's only network route points to the
-proxy IP (injected via `--route`). The proxy only listens on ports 80 and 443.
-Any attempt to connect on other ports (SSH, raw TCP, etc.) gets "connection
-refused" because no service is listening. No iptables or `CAP_NET_ADMIN` needed.
+proxy IP. The proxy only listens on ports 80 and 443. Any attempt to connect on
+other ports (SSH, raw TCP, etc.) gets "connection refused" because no service is
+listening. No iptables or `CAP_NET_ADMIN` needed.
 
 **Direct IP access**: Even if the container hardcodes an external IP address
 (bypassing DNS), the default route sends the traffic to the proxy IP, where
@@ -107,10 +105,6 @@ etc.) are blocked entirely — the container's default route goes to the proxy,
 which only has HTTP(S) listeners. Non-HTTP connection attempts get "connection
 refused."
 
-To disable the sandbox entirely for debugging or emergencies, set
-`sandbox_enabled: false` in either the repo config (`.airut/airut.yaml`) or
-server config (`config/airut.yaml`). See Configuration below.
-
 ## Architecture
 
 The Airut service manages sandbox infrastructure automatically — no separate
@@ -124,6 +118,8 @@ root privileges are needed.
   `--disable-dns` flags for `podman network create`)
 - Rootless mode — no root privileges required
 - No `CAP_NET_ADMIN` needed on any container
+
+### Network Topology
 
 ```
 ┌───────────────────────────────────────────────────────────┐
@@ -147,13 +143,13 @@ root privileges are needed.
 Each task gets its own internal network and proxy container, providing complete
 isolation between concurrent tasks:
 
-- **`airut-task-{id}`** (`--internal --disable-dns`): Per-task network with a
-  `--route 0.0.0.0/0,<proxy_ip>,10` that sends all client traffic to the proxy.
-  The `--internal` flag blocks direct internet access. `--disable-dns` prevents
-  aardvark-dns from overriding the client's `--dns` setting.
-- **`airut-egress`** (`-o metric=5`): Shared egress network. Only proxy
-  containers connect here. The low metric (5) ensures the egress default route
-  wins over the internal route (metric 10) inside the dual-homed proxy.
+- **Internal network** (`--internal --disable-dns`): Per-task network with a
+  `--route` that sends all client traffic to the proxy. The `--internal` flag
+  blocks direct internet access. `--disable-dns` prevents aardvark-dns from
+  overriding the client's `--dns` setting.
+- **Egress network**: Shared network with internet access. Only proxy containers
+  connect here. A lower route metric ensures the egress default route wins over
+  the internal route inside the dual-homed proxy.
 
 ### Request Flow (Transparent DNS-Spoofing)
 
@@ -168,20 +164,24 @@ isolation between concurrent tasks:
    - **Allowed**: mitmproxy connects upstream and forwards the request
    - **Blocked**: HTTP 403 returned with instructions
 
-No `HTTP_PROXY`/`HTTPS_PROXY` env vars are set. This works transparently with
-all tools: Node.js, Go, curl, Python, git, and any other HTTP client.
+### CA Certificate Trust
 
-### Components
+mitmproxy intercepts HTTPS by terminating TLS with its own CA. The CA
+certificate is generated once at gateway startup and mounted into every
+container. All tools must trust it — the container entrypoint runs
+`update-ca-certificates`, and per-tool env vars (`NODE_EXTRA_CA_CERTS`,
+`REQUESTS_CA_BUNDLE`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`) are set to cover tools
+that don't use the system store.
 
-| Component                       | Purpose                                              |
-| ------------------------------- | ---------------------------------------------------- |
-| `.airut/network-allowlist.yaml` | Allowlist configuration (domains + URLs)             |
-| `docker/proxy.dockerfile`       | Proxy container image (slim + mitmproxy + pyyaml)    |
-| `docker/proxy-entrypoint.sh`    | Starts DNS responder + mitmproxy in regular mode     |
-| `docker/dns_responder.py`       | DNS server: returns proxy IP or NXDOMAIN             |
-| `docker/proxy-filter.py`        | mitmproxy addon for allowlist + token masking        |
-| `lib/container/network.py`      | Podman args for sandbox integration (--dns, CA cert) |
-| `lib/container/proxy.py`        | Per-task proxy lifecycle management                  |
+### Network Logging
+
+Network activity is logged to `session_dir/network-sandbox.log` for each task,
+providing a complete audit trail from DNS resolution through HTTP request.
+Allowed and blocked requests are both logged. The `[masked: N]` suffix on HTTP
+lines indicates masked secret token replacements (see
+[Masked Secrets](#masked-secrets-token-replacement) below). Upstream connection
+errors are also logged. The log persists with the session and is visible in the
+dashboard.
 
 ## Configuration
 
@@ -325,14 +325,23 @@ repos:
         scopes:
           - "api.github.com"
           - "*.githubusercontent.com"
+        headers:
+          - "Authorization"
 ```
 
 **How it works:**
 
-1. Container receives a surrogate token (random, format-preserving)
-2. Proxy intercepts outbound requests
-3. For requests to scoped hosts, proxy swaps surrogate → real value in headers
-4. Requests to other hosts see only the useless surrogate
+1. Server generates a format-preserving surrogate (same length, charset, known
+   prefix like `ghp_`) using `secrets.choice()`
+2. Container receives the surrogate in its environment — never the real value
+3. Proxy intercepts outbound requests to scoped hosts
+4. For matching requests, proxy swaps surrogate → real value in specified
+   headers
+5. Requests to other hosts see only the useless surrogate
+
+The proxy also handles **Base64-encoded Basic Auth** (used by git operations):
+it decodes the `Authorization: Basic` header, replaces the surrogate, and
+re-encodes.
 
 ### Security Properties
 
@@ -345,63 +354,6 @@ repos:
 | Audit trail             | Network log shows `[masked: N]` for requests    |
 | Log safety              | Real values redacted; surrogates visible        |
 
-### Surrogate Generation
-
-Surrogates mimic the original token's format to avoid breaking client-side
-validation:
-
-- **Exact length** preserved
-- **Character set** preserved (uppercase, lowercase, digits, special)
-- **Known prefixes** preserved (`ghp_`, `sk-ant-`, `gho_`, `sk-`, etc.)
-
-Example:
-
-```
-Original:  ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-Surrogate: ghp_a8f2k9m3b7c1d4e6g5h0j2l8n4p6q9r3s7t1
-```
-
-Surrogates are generated with `secrets.choice()` (cryptographically secure) and
-are uncorrelated with the original value.
-
-### Headers Replaced
-
-Headers to scan are specified per masked secret using fnmatch patterns. Matching
-is **case-insensitive** per RFC 7230 (e.g., `"Authorization"` matches
-`authorization`, `AUTHORIZATION`, etc.):
-
-```yaml
-masked_secrets:
-  # Match only Authorization header
-  GH_TOKEN:
-    value: !env GH_TOKEN
-    scopes: ["api.github.com"]
-    headers: ["Authorization"]
-
-  # Match all headers
-  UNIVERSAL_TOKEN:
-    value: !env UNIVERSAL_TOKEN
-    scopes: ["api.example.com"]
-    headers: ["*"]
-
-  # GitLab-style header
-  GITLAB_TOKEN:
-    value: !env GITLAB_TOKEN
-    scopes: ["gitlab.com"]
-    headers: ["Private-Token"]
-```
-
-### Basic Auth Support
-
-For `Authorization` headers, the proxy handles both Bearer tokens and
-Base64-encoded Basic Auth. This enables git operations which use Basic Auth:
-
-```
-git push → Authorization: Basic <base64("x-access-token:ghp_surrogate...")>
-         → proxy decodes, replaces surrogate, re-encodes
-         → Authorization: Basic <base64("x-access-token:ghp_realtoken...")>
-```
-
 ### Limitations
 
 1. **Header-only replacement**: Tokens in request body or query parameters are
@@ -411,20 +363,10 @@ git push → Authorization: Basic <base64("x-access-token:ghp_surrogate...")>
    service echoes tokens in responses, they would be visible (but still redacted
    in logs).
 
-### Configuration
-
-Repo config (`.airut/airut.yaml`) references secrets by name, unaware of whether
-they're masked or plain:
-
-```yaml
-container_env:
-  GH_TOKEN: !secret GH_TOKEN           # Required (error if missing)
-  API_KEY: !secret? API_KEY            # Optional (skip if missing)
-```
-
-The server determines at resolution time whether a secret is masked or plain.
-This separation means repos declare what they need; operators control how
-credentials are protected.
+3. **Requires sandbox**: Masked secrets depend on the proxy. When the sandbox is
+   disabled, surrogates are still injected but never swapped — API calls using
+   masked secrets will fail. Move credentials to plain `secrets` if the sandbox
+   must be temporarily disabled.
 
 ### When to Use Masked Secrets
 
@@ -441,87 +383,8 @@ Use plain `secrets` for credentials that:
 - Need to work with arbitrary hosts
 - Are low-sensitivity (e.g., public API keys)
 
-See `spec/masked-secrets.md` for the full specification.
-
-## Implementation Details
-
-### CA Certificate Trust
-
-mitmproxy intercepts HTTPS by terminating TLS with its own CA. All tools in the
-container must trust this CA:
-
-| Tool/Library          | Trust mechanism                        |
-| --------------------- | -------------------------------------- |
-| Node.js (Claude CLI)  | `NODE_EXTRA_CA_CERTS` env var          |
-| Python requests       | `REQUESTS_CA_BUNDLE` env var           |
-| Python ssl module     | `SSL_CERT_FILE` env var                |
-| curl                  | `CURL_CA_BUNDLE` env var               |
-| git, uv, system tools | `update-ca-certificates` in entrypoint |
-
-### Session Network Logging
-
-Network activity is logged to `session_dir/network-sandbox.log` for each task.
-Both the DNS responder and the mitmproxy addon write to this shared log file,
-providing a complete audit trail from DNS resolution through HTTP request:
-
-```
-=== TASK START 2026-02-03T12:34:56Z ===
-allowed DNS A api.github.com -> 10.199.1.100
-BLOCKED DNS A evil.com -> NXDOMAIN
-BLOCKED DNS AAAA evil.com -> NOTIMP
-allowed GET https://api.github.com/repos/your-org/your-repo/pulls -> 200 [masked: 1]
-BLOCKED GET https://evil.com/exfiltrate -> 403
-allowed POST https://api.anthropic.com/v1/messages -> 200 [masked: 1]
-ERROR GET https://down.example.com/api -> Connection failed: Name or service not known
-```
-
-DNS log lines use the format `{BLOCKED|allowed} DNS {type} {domain} -> {result}`
-where type is the query type (A, AAAA, MX, etc.) and result is the DNS response
-(proxy IP for allowed, NXDOMAIN for blocked A queries, NOTIMP for non-A
-queries).
-
-ERROR lines indicate upstream connection failures — the domain passed the
-allowlist but mitmproxy could not connect (e.g. DNS resolution failure, timeout,
-connection refused). The format is `ERROR {METHOD} {URL} -> {error message}`.
-
-The `[masked: N]` suffix on HTTP lines indicates that N masked secret tokens
-were replaced in that request. See
-[Masked Secrets](#masked-secrets-token-replacement) above for details.
-
-The log file is created in the session directory and persists with the session.
-It is cleaned up automatically when sessions are pruned.
-
-### Proxy Lifecycle
-
-The proxy is managed by `ProxyManager` in `lib/container/proxy.py`:
-
-**Gateway lifecycle** (shared resources):
-
-- On startup: clean orphans, build image, ensure CA cert, create egress network
-- On shutdown: stop task proxies, remove egress network
-
-**Task lifecycle** (per-task resources):
-
-- `start_task_proxy()`: allocate subnet, create internal network with route,
-  start dual-homed proxy container, health check
-- `stop_task_proxy()`: remove container and network
-
-### Resource Scoping
-
-| Resource                             | Scope   | Created                  | Destroyed           |
-| ------------------------------------ | ------- | ------------------------ | ------------------- |
-| Egress network (`airut-egress`)      | Gateway | `startup()`              | `shutdown()`        |
-| Proxy image (`airut-proxy`)          | Gateway | `startup()`              | Never (cached)      |
-| CA certificate                       | Gateway | `startup()` (if missing) | Never               |
-| Internal network (`airut-task-{id}`) | Task    | `start_task_proxy()`     | `stop_task_proxy()` |
-| Proxy container (`airut-proxy-{id}`) | Task    | `start_task_proxy()`     | `stop_task_proxy()` |
-| Network log (`network-sandbox.log`)  | Task    | `start_task_proxy()`     | Session pruning     |
-
-### Crash Recovery
-
-On startup, `ProxyManager` cleans orphaned resources from previous unclean
-shutdowns: containers matching `airut-proxy-*` and networks matching
-`airut-task-*` are removed.
+See `spec/masked-secrets.md` for the full specification (surrogate format,
+replacement map, proxy addon details).
 
 ## Troubleshooting
 
@@ -570,3 +433,12 @@ When investigating connectivity problems from inside a container:
 2. After debugging, re-enable the sandbox and restart.
 3. Check `session_dir/network-sandbox.log` for the audit trail of allowed and
    blocked requests from previous tasks.
+
+## Further Reading
+
+- [spec/network-sandbox.md](../spec/network-sandbox.md) — Implementation details
+  (proxy lifecycle, resource scoping, log format, crash recovery)
+- [spec/masked-secrets.md](../spec/masked-secrets.md) — Full masked secrets
+  specification
+- [execution-sandbox.md](execution-sandbox.md) — Container isolation
+- [security.md](security.md) — Overall security model
