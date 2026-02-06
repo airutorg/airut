@@ -1619,9 +1619,6 @@ def render_network_page(task: TaskState, log_content: str | None) -> str:
         }}
         .log-line.conn-error {{
             color: #e05f5f;
-            background: #3c1f1f;
-            padding: 2px 8px;
-            margin: 0 -8px;
         }}
         .log-line.blocked {{
             color: #f48771;
