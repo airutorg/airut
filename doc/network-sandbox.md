@@ -455,18 +455,27 @@ container must trust this CA:
 ### Session Network Logging
 
 Network activity is logged to `session_dir/network-sandbox.log` for each task.
-This provides an audit trail of all allowed and blocked requests:
+Both the DNS responder and the mitmproxy addon write to this shared log file,
+providing a complete audit trail from DNS resolution through HTTP request:
 
 ```
 === TASK START 2026-02-03T12:34:56Z ===
+allowed DNS A api.github.com -> 10.199.1.100
+BLOCKED DNS A evil.com -> NXDOMAIN
+BLOCKED DNS AAAA evil.com -> NOTIMP
 allowed GET https://api.github.com/repos/your-org/your-repo/pulls -> 200 [masked: 1]
 BLOCKED GET https://evil.com/exfiltrate -> 403
 allowed POST https://api.anthropic.com/v1/messages -> 200 [masked: 1]
 ```
 
-The `[masked: N]` suffix indicates that N masked secret tokens were replaced in
-that request. See [Masked Secrets](#masked-secrets-token-replacement) above for
-details.
+DNS log lines use the format `{BLOCKED|allowed} DNS {type} {domain} -> {result}`
+where type is the query type (A, AAAA, MX, etc.) and result is the DNS response
+(proxy IP for allowed, NXDOMAIN for blocked A queries, NOTIMP for non-A
+queries).
+
+The `[masked: N]` suffix on HTTP lines indicates that N masked secret tokens
+were replaced in that request. See
+[Masked Secrets](#masked-secrets-token-replacement) above for details.
 
 The log file is created in the session directory and persists with the session.
 It is cleaned up automatically when sessions are pruned.
