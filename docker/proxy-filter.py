@@ -355,5 +355,14 @@ class ProxyFilter:
 
         self._log(f"allowed {flow.request.method} {url} -> {code}{suffix}")
 
+    def error(self, flow: http.HTTPFlow) -> None:
+        """Log upstream connection errors (e.g. DNS resolution failure)."""
+        if flow.metadata.get("allowlist_action") != "allowed":
+            return
+
+        url = flow.request.pretty_url
+        msg = flow.error.msg if flow.error else "unknown error"
+        self._log(f"ERROR {flow.request.method} {url} -> {msg}")
+
 
 addons = [ProxyFilter()]

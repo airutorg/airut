@@ -1617,6 +1617,9 @@ def render_network_page(task: TaskState, log_content: str | None) -> str:
         .log-line.error {{
             color: #e09c5f;
         }}
+        .log-line.conn-error {{
+            color: #e05f5f;
+        }}
         .log-line.blocked {{
             color: #f48771;
             background: #3c1f1f;
@@ -1684,6 +1687,13 @@ def _highlight_blocked(escaped_line: str) -> str:
     )
 
 
+def _highlight_error_prefix(escaped_line: str) -> str:
+    """Wrap 'ERROR' in a highlight span."""
+    return escaped_line.replace(
+        "ERROR", '<span class="highlight">ERROR</span>', 1
+    )
+
+
 def render_network_log_lines(log_content: str) -> str:
     """Render network log lines with appropriate styling.
 
@@ -1696,6 +1706,8 @@ def render_network_log_lines(log_content: str) -> str:
     Line types and their styling:
         - Task start headers (=== TASK START ...): blue
         - BLOCKED requests: red with dark red background, BLOCKED in bold
+        - ERROR lines (upstream failures): red with dark red background,
+          ERROR in bold
         - Allowed requests with error status (4xx/5xx): orange with dark orange
           background, status code in bold
         - Allowed requests with success status (2xx/3xx): green
@@ -1714,6 +1726,12 @@ def render_network_log_lines(log_content: str) -> str:
             # Make BLOCKED bold
             highlighted = _highlight_blocked(escaped)
             lines.append(f'<div class="log-line blocked">{highlighted}</div>')
+        elif line.startswith("ERROR"):
+            # Upstream connection error - make ERROR bold
+            highlighted = _highlight_error_prefix(escaped)
+            lines.append(
+                f'<div class="log-line conn-error">{highlighted}</div>'
+            )
         elif line.startswith("allowed"):
             # Check if this is an error response
             status_code = _extract_status_code(line)
