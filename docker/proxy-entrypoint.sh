@@ -16,12 +16,18 @@
 #
 # Environment:
 #   PROXY_IP       - this container's IP on the internal network
-#   UPSTREAM_DNS   - upstream DNS server for proxy's own resolution (default: 1.1.1.1)
+#   UPSTREAM_DNS   - upstream DNS server for proxy's own resolution (required)
 
 set -eu
 
 PROXY_IP="${PROXY_IP:-}"
-UPSTREAM_DNS="${UPSTREAM_DNS:-1.1.1.1}"
+UPSTREAM_DNS="${UPSTREAM_DNS:-}"
+
+if [ -z "$UPSTREAM_DNS" ]; then
+    echo "ERROR: UPSTREAM_DNS environment variable is required but not set." >&2
+    echo "Set network.upstream_dns in your server config (config/airut.yaml)." >&2
+    exit 1
+fi
 
 # -- Fix DNS for upstream resolution -----------------------------------------
 #

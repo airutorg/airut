@@ -95,6 +95,10 @@ def make_service(
         patch("lib.gateway.service.gateway.capture_version_info") as mock_ver,
         patch("lib.gateway.service.gateway.TaskTracker"),
         patch("lib.gateway.service.gateway.ProxyManager"),
+        patch(
+            "lib.gateway.service.gateway.get_system_resolver",
+            return_value="127.0.0.53",
+        ),
     ):
         mock_ver.return_value = MagicMock(
             git_sha="abc1234", worktree_clean=True

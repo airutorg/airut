@@ -303,3 +303,9 @@ _You have write access to this section. Populate it with lessons learned._
    `git rebase`, `git checkout .`, `git restore`, or `git clean`, ALWAYS commit
    or stash any uncommitted changes first. Uncommitted work cannot be recovered
    via reflog.
+
+4. **Never use `git reset --soft` to squash across branches**: When a feature
+   branch was created before the latest main commits,
+   `git reset --soft origin/main` keeps the old working tree and silently
+   reverts main's new changes. Instead, use `git cherry-pick` to replay commits
+   onto updated main, then squash, or use `git rebase origin/main` first.

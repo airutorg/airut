@@ -80,9 +80,6 @@ _SUBNET_MASK = "/24"
 _EGRESS_METRIC = 5
 _INTERNAL_ROUTE_METRIC = 10
 
-# Default upstream DNS for the proxy container's own resolution.
-DEFAULT_UPSTREAM_DNS = "1.1.1.1"
-
 
 @dataclass(frozen=True)
 class TaskProxy:
@@ -128,7 +125,8 @@ class ProxyManager:
         container_command: str = "podman",
         docker_dir: Path | None = None,
         egress_network: str = EGRESS_NETWORK,
-        upstream_dns: str = DEFAULT_UPSTREAM_DNS,
+        *,
+        upstream_dns: str,
     ) -> None:
         self._cmd = container_command
         self._docker_dir = docker_dir or Path("docker")

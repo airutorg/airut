@@ -433,6 +433,7 @@ class GlobalConfig:
         dashboard_base_url: Public URL for dashboard links in emails.
         container_command: Container runtime command (podman or docker).
         upstream_dns: Upstream DNS server for proxy container resolution.
+            ``None`` means auto-detect from ``/etc/resolv.conf``.
     """
 
     max_concurrent_executions: int = 3
@@ -443,7 +444,7 @@ class GlobalConfig:
     dashboard_port: int = 5200
     dashboard_base_url: str | None = None
     container_command: str = "podman"
-    upstream_dns: str = "1.1.1.1"
+    upstream_dns: str | None = None
 
     def __post_init__(self) -> None:
         """Validate configuration.
@@ -692,9 +693,7 @@ class ServerConfig:
             container_command=_resolve(
                 raw.get("container_command"), str, default="podman"
             ),
-            upstream_dns=_resolve(
-                network.get("upstream_dns"), str, default="1.1.1.1"
-            ),
+            upstream_dns=_resolve(network.get("upstream_dns"), str),
         )
 
         # Parse repos

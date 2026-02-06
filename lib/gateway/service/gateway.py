@@ -23,6 +23,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from email.message import Message
 from pathlib import Path
 
+from lib.container.dns import get_system_resolver
 from lib.container.proxy import ProxyManager
 from lib.dashboard import (
     DashboardServer,
@@ -123,11 +124,17 @@ class EmailGatewayService:
         # Repo status tracking (populated during start())
         self.repo_states: dict[str, RepoState] = {}
 
+        # Resolve upstream DNS: explicit config value or auto-detect from
+        # /etc/resolv.conf.  SystemResolverError propagates to fail startup.
+        upstream_dns = self.global_config.upstream_dns
+        if upstream_dns is None:
+            upstream_dns = get_system_resolver()
+
         # Proxy manager (shared gateway, per-task proxying)
         proxy_kwargs: dict[str, object] = {
             "container_command": self.global_config.container_command,
             "docker_dir": self.repo_root / "docker",
-            "upstream_dns": self.global_config.upstream_dns,
+            "upstream_dns": upstream_dns,
         }
         if self._egress_network is not None:
             proxy_kwargs["egress_network"] = self._egress_network

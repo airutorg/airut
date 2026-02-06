@@ -46,6 +46,10 @@ class TestEmailGatewayServiceInit:
             patch("lib.gateway.service.gateway.capture_version_info") as mv,
             patch("lib.gateway.service.gateway.TaskTracker"),
             patch("lib.gateway.service.gateway.ProxyManager"),
+            patch(
+                "lib.gateway.service.gateway.get_system_resolver",
+                return_value="127.0.0.53",
+            ),
         ):
             mv.return_value = MagicMock(git_sha="x", worktree_clean=True)
             EmailGatewayService(server_config, repo_root=None)
@@ -75,6 +79,10 @@ class TestEmailGatewayServiceInit:
             patch("lib.gateway.service.gateway.capture_version_info") as mv,
             patch("lib.gateway.service.gateway.TaskTracker"),
             patch("lib.gateway.service.gateway.ProxyManager") as mock_pm,
+            patch(
+                "lib.gateway.service.gateway.get_system_resolver",
+                return_value="127.0.0.53",
+            ),
         ):
             mv.return_value = MagicMock(git_sha="x", worktree_clean=True)
             EmailGatewayService(
@@ -387,6 +395,10 @@ class TestRepoHandlerInitError:
             patch("lib.gateway.service.gateway.capture_version_info") as mv,
             patch("lib.gateway.service.gateway.TaskTracker"),
             patch("lib.gateway.service.gateway.ProxyManager"),
+            patch(
+                "lib.gateway.service.gateway.get_system_resolver",
+                return_value="127.0.0.53",
+            ),
         ):
             mv.return_value = MagicMock(git_sha="x", worktree_clean=True)
             svc = EmailGatewayService(server_config, repo_root=tmp_path)
@@ -425,6 +437,10 @@ class TestRepoHandlerInitError:
             patch("lib.gateway.service.gateway.capture_version_info") as mv,
             patch("lib.gateway.service.gateway.TaskTracker"),
             patch("lib.gateway.service.gateway.ProxyManager"),
+            patch(
+                "lib.gateway.service.gateway.get_system_resolver",
+                return_value="127.0.0.53",
+            ),
         ):
             mv.return_value = MagicMock(git_sha="x", worktree_clean=True)
             svc = EmailGatewayService(server_config, repo_root=tmp_path)
@@ -820,3 +836,114 @@ class TestMain:
         captured_handler(2, None)
         assert mock_svc.running is False
         mock_svc.repo_handlers["test"].listener.interrupt.assert_called_once()
+
+
+class TestUpstreamDnsResolution:
+    """Tests for upstream DNS auto-detection in EmailGatewayService init."""
+
+    def test_auto_detects_when_upstream_dns_is_none(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """When upstream_dns is None, get_system_resolver() is called."""
+        from lib.gateway.config import GlobalConfig, ServerConfig
+
+        global_config = GlobalConfig(dashboard_enabled=False)
+        assert global_config.upstream_dns is None
+
+        server_config = ServerConfig(
+            global_config=global_config, repos={"test": email_config}
+        )
+
+        with (
+            patch("lib.gateway.service.repo_handler.EmailListener"),
+            patch("lib.gateway.service.repo_handler.EmailResponder"),
+            patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
+            patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
+            patch("lib.gateway.service.repo_handler.ConversationManager"),
+            patch("lib.gateway.service.repo_handler.ClaudeExecutor"),
+            patch("lib.gateway.service.gateway.UpdateLock"),
+            patch("lib.gateway.service.gateway.capture_version_info") as mv,
+            patch("lib.gateway.service.gateway.TaskTracker"),
+            patch("lib.gateway.service.gateway.ProxyManager") as mock_pm,
+            patch(
+                "lib.gateway.service.gateway.get_system_resolver",
+                return_value="192.168.1.1",
+            ) as mock_resolver,
+        ):
+            mv.return_value = MagicMock(git_sha="x", worktree_clean=True)
+            EmailGatewayService(server_config, repo_root=tmp_path)
+            mock_resolver.assert_called_once()
+            # ProxyManager should receive the auto-detected DNS
+            call_kwargs = mock_pm.call_args.kwargs
+            assert call_kwargs["upstream_dns"] == "192.168.1.1"
+
+    def test_uses_explicit_upstream_dns(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """Explicit upstream_dns skips get_system_resolver()."""
+        from lib.gateway.config import GlobalConfig, ServerConfig
+
+        global_config = GlobalConfig(
+            dashboard_enabled=False, upstream_dns="8.8.8.8"
+        )
+        server_config = ServerConfig(
+            global_config=global_config, repos={"test": email_config}
+        )
+
+        with (
+            patch("lib.gateway.service.repo_handler.EmailListener"),
+            patch("lib.gateway.service.repo_handler.EmailResponder"),
+            patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
+            patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
+            patch("lib.gateway.service.repo_handler.ConversationManager"),
+            patch("lib.gateway.service.repo_handler.ClaudeExecutor"),
+            patch("lib.gateway.service.gateway.UpdateLock"),
+            patch("lib.gateway.service.gateway.capture_version_info") as mv,
+            patch("lib.gateway.service.gateway.TaskTracker"),
+            patch("lib.gateway.service.gateway.ProxyManager") as mock_pm,
+            patch(
+                "lib.gateway.service.gateway.get_system_resolver",
+            ) as mock_resolver,
+        ):
+            mv.return_value = MagicMock(git_sha="x", worktree_clean=True)
+            EmailGatewayService(server_config, repo_root=tmp_path)
+            mock_resolver.assert_not_called()
+            # ProxyManager should receive the explicit DNS
+            call_kwargs = mock_pm.call_args.kwargs
+            assert call_kwargs["upstream_dns"] == "8.8.8.8"
+
+    def test_system_resolver_error_propagates(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """SystemResolverError propagates to caller."""
+        from lib.container.dns import SystemResolverError
+        from lib.gateway.config import GlobalConfig, ServerConfig
+
+        global_config = GlobalConfig(dashboard_enabled=False)
+        server_config = ServerConfig(
+            global_config=global_config, repos={"test": email_config}
+        )
+
+        with (
+            patch("lib.gateway.service.repo_handler.EmailListener"),
+            patch("lib.gateway.service.repo_handler.EmailResponder"),
+            patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
+            patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
+            patch("lib.gateway.service.repo_handler.ConversationManager"),
+            patch("lib.gateway.service.repo_handler.ClaudeExecutor"),
+            patch("lib.gateway.service.gateway.UpdateLock"),
+            patch("lib.gateway.service.gateway.capture_version_info") as mv,
+            patch("lib.gateway.service.gateway.TaskTracker"),
+            patch("lib.gateway.service.gateway.ProxyManager"),
+            patch(
+                "lib.gateway.service.gateway.get_system_resolver",
+                side_effect=SystemResolverError("No nameserver entries found"),
+            ),
+        ):
+            mv.return_value = MagicMock(git_sha="x", worktree_clean=True)
+            import pytest
+
+            with pytest.raises(
+                SystemResolverError, match="No nameserver entries"
+            ):
+                EmailGatewayService(server_config, repo_root=tmp_path)
