@@ -14,7 +14,6 @@ import pytest
 
 from lib.container.proxy import (
     CA_CERT_FILENAME,
-    DEFAULT_UPSTREAM_DNS,
     EGRESS_NETWORK,
     NETWORK_LOG_FILENAME,
     PROXY_IMAGE_NAME,
@@ -26,6 +25,10 @@ from lib.container.proxy import (
     get_ca_cert_path,
 )
 from lib.git_mirror import GitMirrorCache
+
+
+#: Upstream DNS value used across all ProxyManager tests.
+_TEST_UPSTREAM_DNS = "9.9.9.9"
 
 
 @pytest.fixture
@@ -40,6 +43,7 @@ def _make_pm(
     **kwargs: object,
 ) -> ProxyManager:
     """Create a ProxyManager with default args."""
+    kwargs.setdefault("upstream_dns", _TEST_UPSTREAM_DNS)
     return ProxyManager(**kwargs)  # type: ignore[arg-type]
 
 
@@ -76,8 +80,13 @@ class TestProxyManagerInit:
         pm = _make_pm()
         assert pm._cmd == "podman"
         assert pm._docker_dir == Path("docker")
-        assert pm._upstream_dns == DEFAULT_UPSTREAM_DNS
+        assert pm._upstream_dns == _TEST_UPSTREAM_DNS
         assert isinstance(pm._lock, type(threading.Lock()))
+
+    def test_upstream_dns_required(self) -> None:
+        """upstream_dns is a required keyword argument."""
+        with pytest.raises(TypeError, match="upstream_dns"):
+            ProxyManager()  # type: ignore[call-arg]
 
     def test_custom(self) -> None:
         """Custom values set correctly."""
@@ -483,7 +492,7 @@ class TestRunProxyContainer:
         env_indices = [i for i, v in enumerate(cmd) if v == "-e"]
         env_args = [cmd[i + 1] for i in env_indices]
         assert "PROXY_IP=10.199.1.100" in env_args
-        assert f"UPSTREAM_DNS={DEFAULT_UPSTREAM_DNS}" in env_args
+        assert f"UPSTREAM_DNS={_TEST_UPSTREAM_DNS}" in env_args
         # Check allowlist volume mount
         volume_indices = [i for i, v in enumerate(cmd) if v == "-v"]
         volumes = [cmd[i + 1] for i in volume_indices]

@@ -36,6 +36,12 @@ dashboard:
 # Container runtime executable (podman or docker).
 container_command: podman
 
+# Network settings.
+# network:
+#   # Upstream DNS server for proxy container resolution.
+#   # Auto-detected from /etc/resolv.conf when omitted.
+#   upstream_dns: "1.1.1.1"
+
 # ---------------------------------------------------------------------------
 # Repositories
 # ---------------------------------------------------------------------------

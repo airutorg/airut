@@ -9,6 +9,10 @@ Manages Claude Code execution in Podman containers, including image builds,
 network proxy management, and session storage layout.
 """
 
+from lib.container.dns import (
+    SystemResolverError,
+    get_system_resolver,
+)
 from lib.container.executor import (
     ClaudeExecutor,
     ContainerTimeoutError,
@@ -38,6 +42,9 @@ from lib.container.session_layout import (
 
 
 __all__ = [
+    # dns
+    "SystemResolverError",
+    "get_system_resolver",
     # executor
     "ClaudeExecutor",
     "ContainerTimeoutError",

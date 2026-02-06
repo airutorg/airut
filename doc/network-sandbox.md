@@ -224,12 +224,18 @@ secrets depend on the proxy (see
 ### Upstream DNS
 
 The proxy container needs its own DNS to resolve real hostnames when connecting
-upstream. This is configured in the server config:
+upstream. By default, Airut auto-detects the system resolver from
+`/etc/resolv.conf` (the first `nameserver` entry). You can override this in the
+server config:
 
 ```yaml
 network:
-  upstream_dns: "1.1.1.1"  # default: Cloudflare DNS
+  upstream_dns: "1.1.1.1"  # optional: override auto-detected system resolver
 ```
+
+If auto-detection fails (e.g., `/etc/resolv.conf` is missing or contains no
+`nameserver` entries), the service will refuse to start with a clear error
+message asking you to set `network.upstream_dns` explicitly.
 
 This only affects the proxy container's resolution of real hostnames. Client
 containers never contact this DNS server — they only talk to `dns_responder.py`.

@@ -279,7 +279,7 @@ def test_global_config_defaults() -> None:
     assert config.dashboard_port == 5200
     assert config.dashboard_base_url is None
     assert config.container_command == "podman"
-    assert config.upstream_dns == "1.1.1.1"
+    assert config.upstream_dns is None
 
 
 def test_global_config_with_custom_values() -> None:
