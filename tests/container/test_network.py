@@ -43,12 +43,8 @@ class TestGetNetworkArgs:
         env_args = [
             a for i, a in enumerate(args) if i > 0 and args[i - 1] == "-e"
         ]
-        proxy_urls = [a for a in env_args if "PROXY=http" in a]
-        assert len(proxy_urls) == 2
-        assert any("HTTP_PROXY=http://test-proxy:8080" in a for a in proxy_urls)
-        assert any(
-            "HTTPS_PROXY=http://test-proxy:8080" in a for a in proxy_urls
-        )
+        assert "HTTP_PROXY=http://test-proxy:8080" in env_args
+        assert "HTTPS_PROXY=http://test-proxy:8080" in env_args
 
         # CA cert mount
         mount_args = [
@@ -77,6 +73,23 @@ class TestGetNetworkArgs:
         # Proxy opt-in env vars
         assert "ELECTRON_GET_USE_PROXY=1" in env_args
 
+        # Node.js global-agent env vars
+        assert any(
+            "NODE_OPTIONS=--require global-agent/bootstrap" in a
+            for a in env_args
+        )
+        assert any(
+            "GLOBAL_AGENT_HTTP_PROXY=http://test-proxy:8080" in a
+            for a in env_args
+        )
+        assert any(
+            "GLOBAL_AGENT_HTTPS_PROXY=http://test-proxy:8080" in a
+            for a in env_args
+        )
+        assert any(
+            "GLOBAL_AGENT_NO_PROXY=localhost,127.0.0.1" in a for a in env_args
+        )
+
     def test_custom_host_and_port(self, tmp_path: Path) -> None:
         """Respects custom proxy host and port."""
         cert = tmp_path / "mitmproxy-ca-cert.pem"
@@ -93,6 +106,10 @@ class TestGetNetworkArgs:
             a for i, a in enumerate(args) if i > 0 and args[i - 1] == "-e"
         ]
         assert any("HTTP_PROXY=http://10.89.0.1:8080" in a for a in env_args)
+        assert any(
+            "GLOBAL_AGENT_HTTP_PROXY=http://10.89.0.1:8080" in a
+            for a in env_args
+        )
 
     def test_infra_not_ready_raises(self, tmp_path: Path) -> None:
         """Raises RuntimeError when CA cert is missing (fail-secure)."""

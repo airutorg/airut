@@ -82,6 +82,14 @@ def get_network_args(task_proxy: TaskProxy | None) -> list[str]:
     # Opt tools into using the proxy that don't honor HTTP(S)_PROXY
     args.extend(["-e", "ELECTRON_GET_USE_PROXY=1"])
 
+    # Node.js global-agent: patches Node's HTTP client to use the proxy.
+    # The entrypoint installs global-agent if npm is available; these env
+    # vars configure it.  NODE_OPTIONS loads the agent at process startup.
+    args.extend(["-e", "NODE_OPTIONS=--require global-agent/bootstrap"])
+    args.extend(["-e", f"GLOBAL_AGENT_HTTP_PROXY={proxy_url}"])
+    args.extend(["-e", f"GLOBAL_AGENT_HTTPS_PROXY={proxy_url}"])
+    args.extend(["-e", "GLOBAL_AGENT_NO_PROXY=localhost,127.0.0.1"])
+
     logger.info(
         "Network sandbox enabled: proxy=%s, network=%s",
         proxy_url,

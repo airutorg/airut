@@ -385,6 +385,45 @@ See `spec/masked-secrets.md` for the full specification.
 
 ## Implementation Details
 
+### Proxy Environment Variables
+
+When the sandbox is enabled, the following environment variables are set on the
+container to route traffic through the proxy and trust the mitmproxy CA:
+
+| Variable                   | Purpose                                              |
+| -------------------------- | ---------------------------------------------------- |
+| `HTTP_PROXY`               | Routes HTTP traffic through the proxy                |
+| `HTTPS_PROXY`              | Routes HTTPS traffic through the proxy               |
+| `NODE_EXTRA_CA_CERTS`      | Trusts mitmproxy CA in Node.js                       |
+| `REQUESTS_CA_BUNDLE`       | Trusts mitmproxy CA in Python requests               |
+| `SSL_CERT_FILE`            | Trusts mitmproxy CA in Python ssl module             |
+| `CURL_CA_BUNDLE`           | Trusts mitmproxy CA in curl                          |
+| `ELECTRON_GET_USE_PROXY`   | Opts Electron-based tools into using the proxy       |
+| `NODE_OPTIONS`             | Loads global-agent at Node.js startup (`--require`)  |
+| `GLOBAL_AGENT_HTTP_PROXY`  | Configures global-agent HTTP proxy URL               |
+| `GLOBAL_AGENT_HTTPS_PROXY` | Configures global-agent HTTPS proxy URL              |
+| `GLOBAL_AGENT_NO_PROXY`    | Bypasses proxy for localhost (`localhost,127.0.0.1`) |
+
+The entrypoint also runs `update-ca-certificates` to add the mitmproxy CA to the
+system trust store (used by git, uv, and other system tools).
+
+### Node.js Proxy Support (global-agent)
+
+Node.js's built-in `http` and `https` modules ignore the standard
+`HTTP_PROXY`/`HTTPS_PROXY` environment variables. To ensure Node.js applications
+inside the container route traffic through the proxy, the sandbox uses
+[global-agent](https://github.com/gajus/global-agent):
+
+1. **Entrypoint**: If `GLOBAL_AGENT_HTTP_PROXY` is set and `npm` is available in
+   the container, the entrypoint installs `global-agent` globally via
+   `npm install -g global-agent`. This is a no-op if npm is not installed.
+2. **NODE_OPTIONS**: Set to `--require global-agent/bootstrap`, which loads the
+   agent at process startup for every Node.js process.
+3. **GLOBAL_AGENT\_\* vars**: Configure the proxy URL and exclusions.
+
+This ensures that any Node.js code the agent runs (npm scripts, custom tooling,
+etc.) respects the network sandbox without requiring per-project configuration.
+
 ### CA Certificate Trust
 
 mitmproxy intercepts HTTPS by terminating TLS with its own CA. All tools in the
