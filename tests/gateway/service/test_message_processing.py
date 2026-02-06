@@ -138,6 +138,57 @@ class TestProcessMessage:
         assert success is False
         assert conv_id is None
 
+    def test_unauthorized_sender_rejected_before_conversation_lookup(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        """Authorization rejects before conversation ID is ever examined.
+
+        Even when the email subject contains a valid conversation ID,
+        an unauthorized sender must be rejected without any call to
+        conversation_manager.exists() or resume_existing().
+        """
+        svc, handler, _ = self._setup_svc(email_config, tmp_path)
+        handler.authenticator.authenticate.return_value = "intruder@evil.com"
+        handler.authorizer.is_authorized.return_value = False
+        msg = make_message(
+            subject="[ID:aabb1122] Continue task",
+            body="I want to hijack this conversation",
+        )
+        success, conv_id = process_message(svc, msg, "task1", handler)
+        assert success is False
+        assert conv_id is None
+        # Conversation manager must never be consulted
+        handler.conversation_manager.exists.assert_not_called()
+        handler.conversation_manager.resume_existing.assert_not_called()
+
+    def test_conversation_id_from_other_repo_treated_as_new(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        """A conversation ID that doesn't exist in this repo starts a new one.
+
+        When an email arrives with a conversation ID that belongs to a
+        different repo (not found in this repo's ConversationManager),
+        the system must treat it as a new conversation rather than
+        erroring or leaking state.
+        """
+        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        # The conversation ID exists in the subject but NOT in this repo
+        handler.conversation_manager.exists.return_value = False
+        msg = make_message(
+            subject="[ID:deadbeef] Continue task",
+            body="Work on this",
+        )
+
+        with patch(
+            "lib.gateway.service.message_processing.SessionStore",
+            return_value=mock_ss,
+        ):
+            success, conv_id = process_message(svc, msg, "task1", handler)
+        assert success is True
+        # Should create a new conversation, not resume
+        handler.conversation_manager.initialize_new.assert_called_once()
+        handler.conversation_manager.resume_existing.assert_not_called()
+
     def test_empty_body_rejected(
         self, email_config: Any, tmp_path: Path
     ) -> None:
