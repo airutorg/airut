@@ -43,7 +43,7 @@ class TestGetNetworkArgs:
         env_args = [
             a for i, a in enumerate(args) if i > 0 and args[i - 1] == "-e"
         ]
-        proxy_urls = [a for a in env_args if "PROXY=" in a]
+        proxy_urls = [a for a in env_args if "PROXY=http" in a]
         assert len(proxy_urls) == 2
         assert any("HTTP_PROXY=http://test-proxy:8080" in a for a in proxy_urls)
         assert any(
@@ -73,6 +73,9 @@ class TestGetNetworkArgs:
             )
         ]
         assert len(ca_env_vars) == 4
+
+        # Proxy opt-in env vars
+        assert "ELECTRON_GET_USE_PROXY=1" in env_args
 
     def test_custom_host_and_port(self, tmp_path: Path) -> None:
         """Respects custom proxy host and port."""
