@@ -37,6 +37,49 @@ You → Email → Airut → Claude Code (container) → PR → Email reply → Y
 - **File attachments**: Send files to `/inbox`; receive files from `/outbox`
 - **Web dashboard**: Monitor running tasks and view network activity logs
 
+## Guided Setup
+
+The easiest way to get started is to paste the prompt below into
+[Claude](https://claude.ai). It will read the docs and walk you through
+installation interactively.
+
+<details>
+<summary>Copy this prompt into your AI assistant</summary>
+
+```
+I want to set up Airut — a headless Claude Code interaction system that
+works via email.
+Help me install and deploy it step by step, interactively.
+
+Before we start, read these docs to understand the system (fetch all of
+them):
+
+- README: https://raw.githubusercontent.com/airutorg/airut/main/README.md
+- Deployment guide:
+  https://raw.githubusercontent.com/airutorg/airut/main/doc/deployment.md
+- Repo onboarding:
+  https://raw.githubusercontent.com/airutorg/airut/main/doc/repo-onboarding.md
+- Architecture:
+  https://raw.githubusercontent.com/airutorg/airut/main/doc/architecture.md
+- Agentic operation:
+  https://raw.githubusercontent.com/airutorg/airut/main/doc/agentic-operation.md
+- Security model:
+  https://raw.githubusercontent.com/airutorg/airut/main/doc/security.md
+- Execution sandbox:
+  https://raw.githubusercontent.com/airutorg/airut/main/doc/execution-sandbox.md
+- Network sandbox:
+  https://raw.githubusercontent.com/airutorg/airut/main/doc/network-sandbox.md
+- Example config:
+  https://raw.githubusercontent.com/airutorg/airut/main/config/airut.example.yaml
+
+After reading, guide me through setup one step at a time. Ask me questions to
+determine my environment (OS, email provider, GitHub vs Gerrit, etc.) before
+giving specific instructions. Cover both server deployment and onboarding my
+first repository.
+```
+
+</details>
+
 ## Why Email?
 
 ### A Super-Optimized Communication Medium
