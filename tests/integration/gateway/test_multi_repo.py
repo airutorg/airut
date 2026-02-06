@@ -49,6 +49,202 @@ def _stop_service(service, thread) -> None:
     thread.join(timeout=10.0)
 
 
+class TestCrossRepoIsolation:
+    """Test that conversation IDs cannot leak across repo boundaries."""
+
+    def test_conversation_id_from_other_repo_creates_new_conversation(
+        self,
+        tmp_path: Path,
+        create_email,
+        extract_conversation_id,
+    ) -> None:
+        """Conversation ID from repo-a is not accessible via repo-b.
+
+        When a sender authorized for repo-b sends an email to repo-b
+        containing a conversation ID that was created in repo-a, the
+        system must treat it as a new conversation (the ID doesn't exist
+        in repo-b's storage) rather than resuming repo-a's conversation.
+        """
+        env = IntegrationEnvironment.create_multi_repo(
+            tmp_path,
+            repo_ids=["repo-a", "repo-b"],
+            container_command=MOCK_CONTAINER_COMMAND,
+        )
+
+        try:
+            # Step 1: Create a conversation in repo-a
+            mock_code_a = """
+events = [
+    generate_system_event(session_id),
+    generate_assistant_event("Response from A"),
+    generate_result_event(session_id, "Done"),
+]
+"""
+            msg_a = create_email(
+                subject="Task for repo A",
+                body=mock_code_a,
+                recipient="repo-a@test.local",
+            )
+            env.email_server.inject_message_to("repo-a", msg_a)
+
+            service, thread = _start_service(env)
+
+            try:
+                resp_a = env.email_server.wait_for_sent(
+                    lambda m: "response from a" in get_message_text(m).lower(),
+                    timeout=_TIMEOUT,
+                )
+                assert resp_a is not None, "No response from repo-a"
+
+                conv_id_a = extract_conversation_id(resp_a["Subject"])
+                assert conv_id_a is not None
+
+                # Verify conversation exists in repo-a's storage
+                a_session = env.storage_dir / "repo-a" / "sessions" / conv_id_a
+                assert a_session.exists(), "Conversation should exist in repo-a"
+
+                # Step 2: Send email to repo-b with repo-a's conversation ID
+                mock_code_b = """
+events = [
+    generate_system_event(session_id),
+    generate_assistant_event("New conversation in B"),
+    generate_result_event(session_id, "Done"),
+]
+"""
+                msg_b = create_email(
+                    subject=f"[ID:{conv_id_a}] Hijack attempt",
+                    body=mock_code_b,
+                    recipient="repo-b@test.local",
+                )
+                env.email_server.inject_message_to("repo-b", msg_b)
+
+                resp_b = env.email_server.wait_for_sent(
+                    lambda m: (
+                        "new conversation in b" in get_message_text(m).lower()
+                    ),
+                    timeout=_TIMEOUT,
+                )
+                assert resp_b is not None, "No response from repo-b"
+
+                # The response should have a NEW conversation ID,
+                # not repo-a's ID
+                conv_id_b = extract_conversation_id(resp_b["Subject"])
+                assert conv_id_b is not None
+                assert conv_id_b != conv_id_a, (
+                    "repo-b must create a new conversation, "
+                    "not reuse repo-a's ID"
+                )
+
+                # Verify repo-b has its own session, repo-a's is untouched
+                b_session = env.storage_dir / "repo-b" / "sessions" / conv_id_b
+                assert b_session.exists(), (
+                    "New conversation should exist in repo-b"
+                )
+
+            finally:
+                _stop_service(service, thread)
+        finally:
+            env.cleanup()
+
+    def test_unauthorized_sender_cannot_resume_via_conversation_id(
+        self,
+        tmp_path: Path,
+        create_email,
+        extract_conversation_id,
+    ) -> None:
+        """Sender not authorized for a repo cannot interact with it.
+
+        Even when the email contains a valid conversation ID from that
+        repo, the authorization check rejects the message before any
+        conversation lookup occurs.
+        """
+        env = IntegrationEnvironment.create_multi_repo(
+            tmp_path,
+            repo_ids=["private", "public"],
+            container_command=MOCK_CONTAINER_COMMAND,
+            authorized_senders_per_repo={
+                "private": ["alice@test.local"],
+                "public": ["bob@test.local"],
+            },
+        )
+
+        try:
+            # Step 1: Alice creates a conversation in private repo
+            mock_code = """
+events = [
+    generate_system_event(session_id),
+    generate_assistant_event("Private response"),
+    generate_result_event(session_id, "Done"),
+]
+"""
+            msg_alice = create_email(
+                subject="Private task",
+                body=mock_code,
+                sender="alice@test.local",
+                recipient="private@test.local",
+            )
+            env.email_server.inject_message_to("private", msg_alice)
+
+            service, thread = _start_service(env)
+
+            try:
+                resp = env.email_server.wait_for_sent(
+                    lambda m: (
+                        "private response" in get_message_text(m).lower()
+                    ),
+                    timeout=_TIMEOUT,
+                )
+                assert resp is not None, "No response for Alice's task"
+
+                conv_id = extract_conversation_id(resp["Subject"])
+                assert conv_id is not None
+
+                # Step 2: Bob (authorized only for public) tries to send
+                # to private repo with Alice's conversation ID
+                msg_bob = create_email(
+                    subject=f"[ID:{conv_id}] Trying to access",
+                    body="I want to see private data",
+                    sender="bob@test.local",
+                    recipient="private@test.local",
+                )
+                env.email_server.inject_message_to("private", msg_bob)
+
+                # Wait for Bob's message to be processed (inbox empties)
+                processed = env.email_server.wait_until_inbox_empty(
+                    inbox_name="private",
+                    timeout=10.0,
+                )
+                assert processed, "Service did not process Bob's message"
+
+                # Bob should get no response (rejected at authorization)
+                import time
+
+                time.sleep(2)  # Brief wait to confirm no reply
+                sent = env.email_server.get_sent_messages()
+                bob_replies = [
+                    m for m in sent if m["To"] and "bob@test.local" in m["To"]
+                ]
+                assert len(bob_replies) == 0, (
+                    "Bob should not receive any reply from private repo"
+                )
+
+                # Verify no new sessions were created in private repo
+                private_sessions = env.storage_dir / "private" / "sessions"
+                session_dirs = [
+                    d
+                    for d in private_sessions.iterdir()
+                    if d.is_dir() and len(d.name) == 8
+                ]
+                assert len(session_dirs) == 1, (
+                    "Only Alice's conversation should exist"
+                )
+
+            finally:
+                _stop_service(service, thread)
+        finally:
+            env.cleanup()
+
+
 class TestMultiRepoRouting:
     """Test message routing across multiple repos."""
 

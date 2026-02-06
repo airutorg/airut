@@ -746,18 +746,24 @@ class TestEmailServer:
         """Clear all sent messages from the outbox."""
         self._outbox._messages.clear()
 
-    def wait_until_inbox_empty(self, timeout: float = 10.0) -> bool:
+    def wait_until_inbox_empty(
+        self,
+        timeout: float = 10.0,
+        inbox_name: str | None = None,
+    ) -> bool:
         """Wait until the inbox has no unprocessed messages.
 
         Args:
             timeout: Maximum time to wait in seconds.
+            inbox_name: Named inbox to check. If None, checks default inbox.
 
         Returns:
             True if inbox became empty, False if timeout.
         """
+        inbox = self._inboxes[inbox_name] if inbox_name else self._inbox
         deadline = time.monotonic() + timeout
         while True:
-            if self._inbox.count() == 0:
+            if inbox.count() == 0:
                 return True
             remaining = deadline - time.monotonic()
             if remaining <= 0:

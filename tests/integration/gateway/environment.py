@@ -226,6 +226,7 @@ class IntegrationEnvironment:
         tmp_path: Path,
         repo_ids: list[str],
         container_command: str = "podman",
+        authorized_senders_per_repo: dict[str, list[str]] | None = None,
     ) -> "IntegrationEnvironment":
         """Create environment with multiple repositories.
 
@@ -236,6 +237,10 @@ class IntegrationEnvironment:
             tmp_path: Temporary directory for test files.
             repo_ids: List of repo identifiers (at least 2).
             container_command: Container runtime command.
+            authorized_senders_per_repo: Optional per-repo sender allowlists.
+                Keys are repo IDs, values are lists of authorized sender
+                patterns.  Repos not in the dict default to
+                ``["user@test.local"]``.
 
         Returns:
             A started IntegrationEnvironment with multiple repos configured.
@@ -282,6 +287,11 @@ class IntegrationEnvironment:
                 first_master_repo = master_repo
             repo_storage = storage_dir / repo_id
             repo_storage.mkdir()
+            senders = (
+                authorized_senders_per_repo.get(repo_id, ["user@test.local"])
+                if authorized_senders_per_repo
+                else ["user@test.local"]
+            )
             repos[repo_id] = RepoServerConfig(
                 repo_id=repo_id,
                 imap_server="127.0.0.1",
@@ -291,7 +301,7 @@ class IntegrationEnvironment:
                 email_username=repo_id,
                 email_password="test",
                 email_from=f"{repo_id} <{repo_id}@test.local>",
-                authorized_senders=["user@test.local"],
+                authorized_senders=senders,
                 trusted_authserv_id="test.local",
                 git_repo_url=str(master_repo),
                 storage_dir=repo_storage,
