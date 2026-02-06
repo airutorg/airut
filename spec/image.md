@@ -13,10 +13,11 @@ Airut entrypoint).
 2. **Server controls the entrypoint**: The Airut server defines how Claude Code
    is invoked inside the container via `docker/airut-entrypoint.sh`. This is the
    interface contract between Airut and the container.
-3. **Content-addressed caching with staleness**: Images are cached by truncated
-   SHA-256 (16 hex chars) of their content inputs. A staleness check (24 hours)
-   ensures periodic rebuilds to pick up upstream tool updates (new Claude Code
-   versions, security patches) even when the Dockerfile itself hasn't changed.
+3. **Content-addressed caching with staleness**: Images are cached by full
+   SHA-256 hex digest (64 hex chars) of their content inputs. A staleness check
+   (24 hours) ensures periodic rebuilds to pick up upstream tool updates (new
+   Claude Code versions, security patches) even when the Dockerfile itself
+   hasn't changed.
 
 ## Architecture
 
@@ -25,12 +26,12 @@ Airut entrypoint).
 ```
 Layer 1: Repo Image (from git mirror)
   Source: .airut/container/Dockerfile (read from mirror's main branch)
-  Tag:    airut-repo:<sha256-of-dockerfile[:16]>
+  Tag:    airut-repo:<sha256-of-dockerfile>
   Contains: Ubuntu, system deps, Python, Claude Code, uv, etc.
 
 Layer 2: Server Overlay (from server checkout)
   Source: docker/airut-entrypoint.sh (local file)
-  Tag:    airut:<sha256-of-repo-tag-plus-entrypoint[:16]>
+  Tag:    airut:<sha256-of-repo-tag-plus-entrypoint>
   Contains: FROM repo image + COPY entrypoint + ENTRYPOINT directive
 ```
 
@@ -62,8 +63,8 @@ configuration files, scripts) in the image.
 ```
 1. List all files in .airut/container/ from git mirror (main branch)
 2. Read Dockerfile and any additional context files
-3. Compute repo_hash = sha256(Dockerfile + sorted context files)[:16]
-4. Compute overlay_hash = sha256(repo_tag + entrypoint content)[:16]
+3. Compute repo_hash = sha256(Dockerfile + sorted context files)
+4. Compute overlay_hash = sha256(repo_tag + entrypoint content)
 
 5. Check repo image: airut-repo:<repo_hash>
    EXISTS and age < 24 hours → reuse

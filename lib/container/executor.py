@@ -158,7 +158,7 @@ class ClaudeExecutor:
         """Compute SHA-256 hex digest of content."""
         if isinstance(content, str):
             content = content.encode()
-        return hashlib.sha256(content).hexdigest()[:16]
+        return hashlib.sha256(content).hexdigest()
 
     def _is_image_fresh(self, info: _ImageInfo) -> bool:
         """Check if an image is younger than max_age_hours."""

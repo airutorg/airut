@@ -958,7 +958,7 @@ class TestImageBuild:
 
         assert h1 == h2
         assert h1 != h3
-        assert len(h1) == 16
+        assert len(h1) == 64
 
     def test_content_hash_accepts_str(
         self, mock_mirror: MagicMock, docker_dir: Path
@@ -1019,7 +1019,7 @@ class TestImageBuild:
         tag = executor._build_repo_image(dockerfile)
 
         assert tag.startswith("airut-repo:")
-        assert len(tag.split(":")[1]) == 16
+        assert len(tag.split(":")[1]) == 64
 
         mock_run.assert_called_once()
         cmd = mock_run.call_args[0][0]
