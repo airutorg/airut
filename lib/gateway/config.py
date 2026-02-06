@@ -432,6 +432,7 @@ class GlobalConfig:
         dashboard_port: Dashboard server port.
         dashboard_base_url: Public URL for dashboard links in emails.
         container_command: Container runtime command (podman or docker).
+        upstream_dns: Upstream DNS server for proxy container resolution.
     """
 
     max_concurrent_executions: int = 3
@@ -442,6 +443,7 @@ class GlobalConfig:
     dashboard_port: int = 5200
     dashboard_base_url: str | None = None
     container_command: str = "podman"
+    upstream_dns: str = "1.1.1.1"
 
     def __post_init__(self) -> None:
         """Validate configuration.
@@ -667,6 +669,8 @@ class ServerConfig:
         execution = raw.get("execution", {})
         dashboard = raw.get("dashboard", {})
 
+        network = raw.get("network", {})
+
         global_config = GlobalConfig(
             max_concurrent_executions=_resolve(
                 execution.get("max_concurrent"), int, default=3
@@ -687,6 +691,9 @@ class ServerConfig:
             dashboard_base_url=_resolve(dashboard.get("base_url"), str),
             container_command=_resolve(
                 raw.get("container_command"), str, default="podman"
+            ),
+            upstream_dns=_resolve(
+                network.get("upstream_dns"), str, default="1.1.1.1"
             ),
         )
 

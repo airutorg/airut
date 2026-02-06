@@ -127,6 +127,7 @@ class EmailGatewayService:
         proxy_kwargs: dict[str, object] = {
             "container_command": self.global_config.container_command,
             "docker_dir": self.repo_root / "docker",
+            "upstream_dns": self.global_config.upstream_dns,
         }
         if self._egress_network is not None:
             proxy_kwargs["egress_network"] = self._egress_network

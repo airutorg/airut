@@ -9,12 +9,24 @@ Manages mitmproxy containers that enforce the network sandbox. Each task
 gets its own proxy container and internal network, providing complete
 network isolation between concurrent tasks.
 
-See ``spec/container/network-sandbox.md`` for the full design.
+Architecture (transparent DNS-spoofing proxy):
+
+- A custom DNS responder in the proxy container returns the proxy IP
+  for all allowed domains and NXDOMAIN for blocked domains.
+- The client container's default route points to the proxy IP via
+  Podman's ``--route`` flag on the internal network.
+- mitmproxy in ``regular`` mode uses SNI (HTTPS) and Host header (HTTP)
+  to determine the real upstream destination.
+- No ``HTTP_PROXY`` / ``HTTPS_PROXY`` env vars needed — transparent to
+  all tools (Node.js, Go, curl, etc.).
+- No ``CAP_NET_ADMIN``, no iptables, no ip_forward.
 
 Lifecycle layers:
 
 - **Gateway**: Egress network, proxy image, CA certificate (shared)
 - **Task**: Internal network + proxy container (per-task)
+
+See ``doc/network-sandbox.md`` for the full design.
 """
 
 from __future__ import annotations
@@ -39,7 +51,6 @@ logger = logging.getLogger(__name__)
 
 EGRESS_NETWORK = "airut-egress"
 PROXY_IMAGE_NAME = "airut-proxy"
-PROXY_PORT = 8080
 MITMPROXY_CONFDIR = Path.home() / ".airut-mitmproxy"
 CA_CERT_FILENAME = "mitmproxy-ca-cert.pem"
 
@@ -57,6 +68,21 @@ HEALTH_CHECK_INTERVAL = 0.2
 # Network sandbox log file name (created in session directory)
 NETWORK_LOG_FILENAME = "network-sandbox.log"
 
+# Subnet allocation for per-task internal networks.
+# Each task gets a /24 subnet from 10.199.{N}.0/24.
+# Proxy IP is always .100 on the subnet.
+_SUBNET_PREFIX = "10.199"
+_PROXY_HOST_OCTET = "100"
+_SUBNET_MASK = "/24"
+
+# Route metrics: egress must have lower metric than internal so the
+# proxy container's internet access uses the egress network.
+_EGRESS_METRIC = 5
+_INTERNAL_ROUTE_METRIC = 10
+
+# Default upstream DNS for the proxy container's own resolution.
+DEFAULT_UPSTREAM_DNS = "1.1.1.1"
+
 
 @dataclass(frozen=True)
 class TaskProxy:
@@ -65,14 +91,12 @@ class TaskProxy:
     Attributes:
         network_name: Per-task internal network name.
         proxy_container_name: Per-task proxy container name.
-        proxy_host: Proxy hostname (same as container name, resolved via DNS).
-        proxy_port: Proxy listen port (always 8080).
+        proxy_ip: Static IP of the proxy on the internal network.
     """
 
     network_name: str
     proxy_container_name: str
-    proxy_host: str
-    proxy_port: int = PROXY_PORT
+    proxy_ip: str
 
 
 class ProxyError(Exception):
@@ -104,15 +128,19 @@ class ProxyManager:
         container_command: str = "podman",
         docker_dir: Path | None = None,
         egress_network: str = EGRESS_NETWORK,
+        upstream_dns: str = DEFAULT_UPSTREAM_DNS,
     ) -> None:
         self._cmd = container_command
         self._docker_dir = docker_dir or Path("docker")
         self._egress_network = egress_network
+        self._upstream_dns = upstream_dns
         self._lock = threading.Lock()
         self._active_proxies: dict[str, TaskProxy] = {}
         self._allowlist_tmpfiles: dict[str, Path] = {}
         self._replacement_tmpfiles: dict[str, Path] = {}
         self._network_log_files: dict[str, Path] = {}
+        # Subnet allocator: next third-octet to try.
+        self._next_subnet_octet = 1
 
     # ------------------------------------------------------------------
     # Gateway lifecycle
@@ -133,7 +161,7 @@ class ProxyManager:
         self._cleanup_orphans()
         self._build_image()
         self._ensure_ca_cert()
-        self._recreate_network(self._egress_network, internal=False)
+        self._recreate_egress_network()
         logger.info("ProxyManager startup complete")
 
     def shutdown(self) -> None:
@@ -202,8 +230,11 @@ class ProxyManager:
             container_name,
         )
 
-        # Create per-task internal network
-        self._create_network(network_name, internal=True)
+        # Allocate subnet and create internal network with route to proxy
+        subnet, proxy_ip = self._allocate_subnet()
+        self._create_internal_network(
+            network_name, subnet=subnet, proxy_ip=proxy_ip
+        )
 
         # Create network log file if session_dir provided
         network_log_path: Path | None = None
@@ -221,11 +252,12 @@ class ProxyManager:
             self._run_proxy_container(
                 container_name,
                 network_name,
+                proxy_ip,
                 allowlist_path,
                 network_log_path=network_log_path,
                 replacement_path=replacement_path,
             )
-            # Wait until mitmdump is accepting connections
+            # Wait until mitmproxy is accepting connections
             self._wait_for_proxy_ready(container_name)
         except Exception:
             # Clean up network, container, and temp files on any failure
@@ -239,8 +271,7 @@ class ProxyManager:
         proxy = TaskProxy(
             network_name=network_name,
             proxy_container_name=container_name,
-            proxy_host=container_name,
-            proxy_port=PROXY_PORT,
+            proxy_ip=proxy_ip,
         )
         with self._lock:
             self._active_proxies[task_id] = proxy
@@ -270,6 +301,27 @@ class ProxyManager:
         # for later inspection and is cleaned up with session pruning
         self._network_log_files.pop(task_id, None)
         logger.info("Proxy stopped for task %s", task_id)
+
+    # ------------------------------------------------------------------
+    # Subnet allocation
+    # ------------------------------------------------------------------
+
+    def _allocate_subnet(self) -> tuple[str, str]:
+        """Allocate a /24 subnet and proxy IP for a new task network.
+
+        Uses a simple incrementing counter for the third octet. Podman
+        will reject the network creation if the subnet collides with an
+        existing one, which is handled by the caller.
+
+        Returns:
+            Tuple of (subnet_cidr, proxy_ip).
+        """
+        with self._lock:
+            octet = self._next_subnet_octet
+            self._next_subnet_octet = (octet % 254) + 1
+        subnet = f"{_SUBNET_PREFIX}.{octet}.0{_SUBNET_MASK}"
+        proxy_ip = f"{_SUBNET_PREFIX}.{octet}.{_PROXY_HOST_OCTET}"
+        return subnet, proxy_ip
 
     # ------------------------------------------------------------------
     # Image and CA cert
@@ -311,7 +363,8 @@ class ProxyManager:
         """Ensure mitmproxy CA certificate exists.
 
         Generates a new certificate by briefly running mitmdump if one does
-        not exist.
+        not exist.  The image entrypoint is overridden since the production
+        image uses ``proxy-entrypoint.sh``.
 
         Returns:
             Path to the CA certificate PEM file.
@@ -333,13 +386,14 @@ class ProxyManager:
                 self._cmd,
                 "run",
                 "--rm",
+                "--entrypoint",
+                "bash",
                 "-v",
                 f"{MITMPROXY_CONFDIR}:{container_confdir}:rw",
                 PROXY_IMAGE_NAME,
-                "--set",
-                f"confdir={container_confdir}",
-                "--listen-port",
-                "0",
+                "-c",
+                f"mitmdump --set confdir={container_confdir} "
+                "--listen-port 0 & sleep 3; kill $!",
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -475,6 +529,7 @@ class ProxyManager:
         self,
         container_name: str,
         internal_network: str,
+        proxy_ip: str,
         allowlist_path: Path,
         *,
         network_log_path: Path | None = None,
@@ -482,9 +537,13 @@ class ProxyManager:
     ) -> None:
         """Start a proxy container in detached mode.
 
+        The proxy is dual-homed: connected to the internal network (with a
+        static IP) and the egress network (for internet access).
+
         Args:
             container_name: Name for the container.
             internal_network: Per-task internal network name.
+            proxy_ip: Static IP address on the internal network.
             allowlist_path: Path to the allowlist YAML file to mount.
             network_log_path: Optional path to network log file to mount.
             replacement_path: Optional path to replacement map JSON file.
@@ -501,10 +560,17 @@ class ProxyManager:
             "-d",
             "--name",
             container_name,
-            "--network",
-            internal_network,
+            # Dual-homed: egress for internet, internal with static IP
             "--network",
             self._egress_network,
+            "--network",
+            f"{internal_network}:ip={proxy_ip}",
+            # Environment
+            "-e",
+            f"PROXY_IP={proxy_ip}",
+            "-e",
+            f"UPSTREAM_DNS={self._upstream_dns}",
+            # Volume mounts
             "-v",
             f"{MITMPROXY_CONFDIR}:/mitmproxy-confdir:rw",
             "-v",
@@ -521,22 +587,7 @@ class ProxyManager:
         if network_log_path is not None:
             cmd.extend(["-v", f"{network_log_path}:/network-sandbox.log:rw"])
 
-        cmd.extend(
-            [
-                PROXY_IMAGE_NAME,
-                "--quiet",
-                "--listen-host",
-                "0.0.0.0",
-                "--listen-port",
-                str(PROXY_PORT),
-                "--set",
-                "confdir=/mitmproxy-confdir",
-                "--set",
-                "flow_detail=0",
-                "-s",
-                "/proxy-filter.py",
-            ]
-        )
+        cmd.append(PROXY_IMAGE_NAME)
 
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True)
@@ -553,9 +604,9 @@ class ProxyManager:
         container_name: str,
         timeout: float = HEALTH_CHECK_TIMEOUT,
     ) -> None:
-        """Poll until mitmdump is listening on its port.
+        """Poll until mitmproxy is listening on ports 80 and 443.
 
-        Uses ``podman exec`` to make a TCP connection from inside the
+        Uses ``podman exec`` to make TCP connections from inside the
         container.  The proxy image is ``python:3.13-slim``, so Python
         stdlib is available for the probe.
 
@@ -569,8 +620,8 @@ class ProxyManager:
         deadline = time.monotonic() + timeout
         probe_script = (
             "import socket; "
-            f"s = socket.create_connection(('127.0.0.1', {PROXY_PORT}), "
-            "timeout=1); s.close()"
+            "socket.create_connection(('127.0.0.1', 80), timeout=1).close(); "
+            "socket.create_connection(('127.0.0.1', 443), timeout=1).close()"
         )
 
         while time.monotonic() < deadline:
@@ -619,38 +670,90 @@ class ProxyManager:
     # Network operations
     # ------------------------------------------------------------------
 
-    def _create_network(self, name: str, *, internal: bool) -> None:
-        """Create a Podman network.
+    def _create_internal_network(
+        self,
+        name: str,
+        *,
+        subnet: str,
+        proxy_ip: str,
+    ) -> None:
+        """Create a per-task internal network with route to proxy.
+
+        Creates an ``--internal`` network with ``--disable-dns`` and a
+        default route pointing to the proxy IP. The ``--disable-dns``
+        flag prevents aardvark-dns from overriding the client's
+        ``--dns`` setting.
 
         Args:
             name: Network name.
-            internal: If True, create with --internal (no internet).
+            subnet: CIDR subnet (e.g., "10.199.1.0/24").
+            proxy_ip: Proxy IP on this subnet (route target).
 
         Raises:
             ProxyError: If creation fails.
         """
-        cmd = [self._cmd, "network", "create"]
-        if internal:
-            cmd.append("--internal")
-        cmd.append(name)
+        cmd = [
+            self._cmd,
+            "network",
+            "create",
+            "--internal",
+            "--disable-dns",
+            "--subnet",
+            subnet,
+            "--route",
+            f"0.0.0.0/0,{proxy_ip},{_INTERNAL_ROUTE_METRIC}",
+            name,
+        ]
 
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True)
         except subprocess.CalledProcessError as e:
             raise ProxyError(
-                f"Failed to create network {name}: {e.stderr.strip()}"
+                f"Failed to create internal network {name}: {e.stderr.strip()}"
             ) from e
-        logger.debug("Created network: %s (internal=%s)", name, internal)
+        logger.debug(
+            "Created internal network: %s (subnet=%s, route->%s)",
+            name,
+            subnet,
+            proxy_ip,
+        )
 
-    def _recreate_network(self, name: str, *, internal: bool) -> None:
-        """Remove and recreate a network (idempotent).
+    def _create_egress_network(self) -> None:
+        """Create the shared egress network with a low route metric.
 
-        Args:
-            name: Network name.
-            internal: If True, create with --internal.
+        The egress network uses ``metric={_EGRESS_METRIC}`` so its
+        default route wins over the internal network's route
+        (``metric={_INTERNAL_ROUTE_METRIC}``) inside dual-homed proxy
+        containers.
+
+        Raises:
+            ProxyError: If creation fails.
         """
-        self._remove_network(name)
-        self._create_network(name, internal=internal)
+        cmd = [
+            self._cmd,
+            "network",
+            "create",
+            "-o",
+            f"metric={_EGRESS_METRIC}",
+            self._egress_network,
+        ]
+
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            raise ProxyError(
+                f"Failed to create egress network: {e.stderr.strip()}"
+            ) from e
+        logger.debug(
+            "Created egress network: %s (metric=%d)",
+            self._egress_network,
+            _EGRESS_METRIC,
+        )
+
+    def _recreate_egress_network(self) -> None:
+        """Remove and recreate the egress network (idempotent)."""
+        self._remove_network(self._egress_network)
+        self._create_egress_network()
 
     def _remove_network(self, name: str) -> None:
         """Force-remove a network (idempotent).

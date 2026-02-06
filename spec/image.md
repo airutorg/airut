@@ -49,7 +49,9 @@ Layer 2: Server Overlay (from server checkout)
 docker/
   airut-entrypoint.sh             # server-defined entrypoint
   proxy.dockerfile                # proxy container image
-  proxy-allowlist.py              # proxy allowlist addon
+  proxy-filter.py                 # mitmproxy allowlist/URL-prefix addon
+  proxy-entrypoint.sh             # proxy container entrypoint
+  dns_responder.py                # allowlist-enforcing DNS responder
 ```
 
 All files in `.airut/container/` are copied to the build context, allowing the
@@ -123,13 +125,11 @@ Builds produce new tags, so they don't affect running containers.
 
 ## Entrypoint Contract
 
-`docker/airut-entrypoint.sh` performs four tasks before running Claude Code:
+`docker/airut-entrypoint.sh` performs three tasks before running Claude Code:
 
 1. Sets `IS_SANDBOX=1` so Claude Code runs in permissive mode
 2. Trusts the mitmproxy CA certificate (for network sandbox)
-3. Installs `global-agent` via npm if the network sandbox is active and npm is
-   available (enables Node.js proxy support — see `doc/network-sandbox.md`)
-4. Runs `uv sync` to install Python dependencies from the workspace
+3. Runs `uv sync` to install Python dependencies from the workspace
 
 All Claude Code CLI flags (`--dangerously-skip-permissions`, `--model`,
 `--resume`, `--output-format`, etc.) are passed through as arguments by the

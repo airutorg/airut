@@ -61,7 +61,8 @@ The following diagram shows the security controls at each layer:
 ├─────────────────────────────────────────────────────────────────────┤
 │                        Network Layer                                │
 │  ┌─────────────────────┐  ┌─────────────────────────────────────┐   │
-│  │ Internal Network    │  │ Proxy Allowlist Enforcement         │   │
+│  │ Internal Network +  │  │ Proxy Allowlist Enforcement         │   │
+│  │ DNS Control         │  │ (HTTP/HTTPS + DNS)                  │   │
 │  └─────────────────────┘  └─────────────────────────────────────┘   │
 ├─────────────────────────────────────────────────────────────────────┤
 │                       Credential Layer                              │
@@ -138,10 +139,13 @@ See [network-sandbox.md](network-sandbox.md) for full details.
 **Key properties:**
 
 - Containers on internal network (no direct internet)
-- All HTTP(S) through mitmproxy enforcing allowlist
+- All HTTP(S) transparently routed through mitmproxy enforcing allowlist — no
+  `HTTP_PROXY` env vars needed, works with all tools (Node.js, Go, curl, etc.)
+- Custom DNS responder replaces Podman's default aardvark-dns — returns proxy IP
+  for allowed domains, NXDOMAIN for blocked, and never forwards queries upstream
+  (blocks DNS exfiltration)
 - Allowlist read from default branch (agent can't modify active list)
-- DNS queries to external hosts blocked (NXDOMAIN)
-- Per-task proxy container (isolated from other tasks)
+- Per-task proxy container and network (isolated from other tasks)
 
 ## Credential Management
 
