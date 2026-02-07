@@ -30,10 +30,11 @@ Airut handles the infrastructure that enables agentic operation:
   replies are sent automatically, conversation threading via `[ID:xyz123]` in
   subject
 - **Container isolation** — Each conversation runs in a dedicated Podman
-  container with controlled mounts (workspace, Claude session, inbox/outbox).
-  Claude Code runs with `--dangerously-skip-permissions` since interactive
-  approval isn't possible over email — the container sandbox provides the safety
-  boundary instead
+  container with controlled mounts (workspace, Claude session, inbox/outbox,
+  storage). The container is ephemeral; only the mounted directories persist
+  between tasks. Claude Code runs with `--dangerously-skip-permissions` since
+  interactive approval isn't possible over email — the container sandbox
+  provides the safety boundary instead
 - **Network sandbox** — All HTTP(S) traffic routed through a proxy that enforces
   an allowlist, preventing data exfiltration
 - **Credential injection** — Secrets passed via environment variables, never

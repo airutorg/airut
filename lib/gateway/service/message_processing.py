@@ -295,9 +295,12 @@ def process_message(
         email_context = (
             "User is interacting with this session via email interface "
             "and will receive your last reply as email. "
+            "After the reply, everything not in /workspace, /inbox, "
+            "and /storage is reset. "
             "Markdown formatting is supported in your responses. "
             "To send files back to the user, place them in the "
-            "/outbox/ directory root (no subdirectories).\n\n"
+            "/outbox/ directory root (no subdirectories). "
+            "Use /storage to persist files across messages.\n\n"
             "IMPORTANT: AskUserQuestion and plan mode tools "
             "(EnterPlanMode/ExitPlanMode) do not work over email "
             "interface. If you need clarification, include questions in "

@@ -61,7 +61,8 @@ Each conversation is an isolated session with git workspace and metadata:
 │   │   │   └── ...              # Full project structure
 │   │   ├── claude/              # Claude Code session state (mounted at /root/.claude)
 │   │   ├── inbox/               # Email attachments (mounted at /inbox)
-│   │   └── outbox/              # Files to attach to reply (mounted at /outbox)
+│   │   ├── outbox/              # Files to attach to reply (mounted at /outbox)
+│   │   └── storage/             # Conversation-scoped persistent data (mounted at /storage)
 │   └── def67890/                # Another session
 │       ├── session.json
 │       └── workspace/
@@ -71,8 +72,8 @@ Each conversation is an isolated session with git workspace and metadata:
 
 - `session.json` stores Claude session IDs and metadata **outside the
   workspace**
-- Session directories (claude, inbox, outbox) are mounted separately from the
-  workspace to keep the git repo clean
+- Session directories (claude, inbox, outbox, storage) are mounted separately
+  from the workspace to keep the git repo clean
 - `git-mirror/` enables fast clones by avoiding network transfer
   - Clones do NOT use `--reference` or `--shared` flags
   - These flags create `.git/objects/info/alternates` file pointing to mirror
@@ -169,17 +170,20 @@ emails (sent when a task is queued) include a link to track progress:
 
 All conversations are fully isolated with per-conversation configuration:
 
-| Mount                                               | Purpose                        | Mode       |
-| --------------------------------------------------- | ------------------------------ | ---------- |
-| `{STORAGE}/conversations/{ID}/workspace:/workspace` | Conversation workspace         | Read-write |
-| `{STORAGE}/conversations/{ID}/claude:/root/.claude` | Per-conversation session state | Read-write |
-| `{STORAGE}/conversations/{ID}/inbox:/inbox`         | Email attachments              | Read-write |
-| `{STORAGE}/conversations/{ID}/outbox:/outbox`       | Files to attach to reply       | Read-write |
+| Mount                                               | Purpose                             | Mode       |
+| --------------------------------------------------- | ----------------------------------- | ---------- |
+| `{STORAGE}/conversations/{ID}/workspace:/workspace` | Conversation workspace              | Read-write |
+| `{STORAGE}/conversations/{ID}/claude:/root/.claude` | Per-conversation session state      | Read-write |
+| `{STORAGE}/conversations/{ID}/inbox:/inbox`         | Email attachments                   | Read-write |
+| `{STORAGE}/conversations/{ID}/outbox:/outbox`       | Files to attach to reply            | Read-write |
+| `{STORAGE}/conversations/{ID}/storage:/storage`     | Conversation-scoped persistent data | Read-write |
 
 **Complete isolation:** Each conversation has its own workspace and session
 state. No host directories (SSH keys, gitconfig, gh config) are mounted. All
-session-specific directories (claude state, inbox, outbox) live outside the git
-workspace to keep it clean.
+session-specific directories (claude state, inbox, outbox, storage) live outside
+the git workspace to keep it clean. The container filesystem is ephemeral —
+everything outside the mounted directories is destroyed after each task
+execution.
 
 **Claude Code settings:** The `.claude/settings.json` file is version-controlled
 in the repository and mounted as part of the workspace. It contains static
@@ -209,7 +213,7 @@ container, ensuring session metadata cannot be modified by Claude.
 ### Security Isolation
 
 - **Complete conversation isolation**: Each conversation has its own workspace,
-  claude session state, inbox, and outbox with no shared state
+  claude session state, inbox, outbox, and storage with no shared state
 - **No host mounts**: No SSH keys, host gitconfig, or credential files mounted
   from host
 - **Environment-only authentication**: All credentials (Claude API, GitHub
@@ -347,6 +351,15 @@ oldest inactive conversations.
 - **State preservation**: Claude's changes persist across messages
 - **Rollback**: Can delete corrupted conversation without affecting others
 - **Audit trail**: Each conversation has independent git history
+
+### Why Ephemeral Containers?
+
+The container filesystem (outside mounted directories) is rebuilt from the
+repository's default branch at every task start. This enables a self-service
+workflow: the agent can propose changes to its own environment (Dockerfile,
+network allowlist, repo config) via a PR, and once the user merges it, the next
+task automatically runs with those changes. Persistent mounts (`/workspace`,
+`/storage`, etc.) preserve conversation state across this rebuild cycle.
 
 ### Why Podman Instead of Direct Execution?
 

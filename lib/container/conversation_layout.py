@@ -7,7 +7,8 @@
 
 Manages the directory structure for each conversation and generates
 the container mount configuration. All conversation-specific directories
-(claude state, inbox, outbox) live outside the git workspace to keep it clean.
+(claude state, inbox, outbox, storage) live outside the git workspace to
+keep it clean.
 
 Layout::
 
@@ -17,6 +18,7 @@ Layout::
       claude/                   # claude session state
       inbox/                    # email attachments
       outbox/                   # files to send back via email
+      storage/                  # conversation-scoped persistent storage
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ class ConversationLayout:
     claude: Path
     inbox: Path
     outbox: Path
+    storage: Path
 
 
 def create_conversation_layout(conversation_dir: Path) -> ConversationLayout:
@@ -60,14 +63,15 @@ def create_conversation_layout(conversation_dir: Path) -> ConversationLayout:
         claude=conversation_dir / "claude",
         inbox=conversation_dir / "inbox",
         outbox=conversation_dir / "outbox",
+        storage=conversation_dir / "storage",
     )
 
 
 def prepare_conversation(layout: ConversationLayout) -> None:
     """Create directories for a conversation.
 
-    Creates the claude, inbox, and outbox directories. Does NOT create
-    the workspace directory (that is the git clone's responsibility).
+    Creates the claude, inbox, outbox, and storage directories. Does NOT
+    create the workspace directory (that is the git clone's responsibility).
 
     Args:
         layout: Conversation layout with all paths.
@@ -76,6 +80,7 @@ def prepare_conversation(layout: ConversationLayout) -> None:
         layout.claude,
         layout.inbox,
         layout.outbox,
+        layout.storage,
     ]:
         directory.mkdir(parents=True, exist_ok=True)
         logger.debug("Created/verified directory: %s", directory)
@@ -95,4 +100,5 @@ def get_container_mounts(layout: ConversationLayout) -> list[str]:
         f"{layout.claude}:/root/.claude:rw",
         f"{layout.inbox}:/inbox:rw",
         f"{layout.outbox}:/outbox:rw",
+        f"{layout.storage}:/storage:rw",
     ]

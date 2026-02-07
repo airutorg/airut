@@ -22,12 +22,24 @@ restrictions, and credential scoping.
 
 Each conversation gets a fresh container with controlled mounts:
 
-| Mount Point     | Source                          | Access | Purpose                  |
-| --------------- | ------------------------------- | ------ | ------------------------ |
-| `/workspace`    | `conversations/{id}/workspace/` | rw     | Git checkout             |
-| `/root/.claude` | `conversations/{id}/claude/`    | rw     | Claude session state     |
-| `/inbox`        | `conversations/{id}/inbox/`     | rw     | Email attachments        |
-| `/outbox`       | `conversations/{id}/outbox/`    | rw     | Files to attach to reply |
+| Mount Point     | Source                          | Access | Purpose                             |
+| --------------- | ------------------------------- | ------ | ----------------------------------- |
+| `/workspace`    | `conversations/{id}/workspace/` | rw     | Git checkout                        |
+| `/root/.claude` | `conversations/{id}/claude/`    | rw     | Claude session state                |
+| `/inbox`        | `conversations/{id}/inbox/`     | rw     | Email attachments                   |
+| `/outbox`       | `conversations/{id}/outbox/`    | rw     | Files to attach to reply            |
+| `/storage`      | `conversations/{id}/storage/`   | rw     | Conversation-scoped persistent data |
+
+Everything outside these mount points is ephemeral — the container filesystem is
+destroyed after each task execution. Only the mounted directories persist
+between messages in a conversation.
+
+**Why ephemeral?** The container image is rebuilt from the repository's default
+branch at every task start. This means the agent can request new tools or
+dependencies (by modifying `.airut/container/Dockerfile`), create a PR, and once
+the user merges it, the next task automatically picks up the changes. The same
+applies to the network allowlist and repo configuration. Ephemeral containers
+make this self-service workflow possible.
 
 **What's NOT mounted:**
 

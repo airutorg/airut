@@ -27,6 +27,7 @@ class TestCreateConversationLayout:
         assert layout.claude == tmp_path / "conv" / "claude"
         assert layout.inbox == tmp_path / "conv" / "inbox"
         assert layout.outbox == tmp_path / "conv" / "outbox"
+        assert layout.storage == tmp_path / "conv" / "storage"
 
     def test_returns_frozen_dataclass(self, tmp_path: Path) -> None:
         """ConversationLayout is immutable."""
@@ -42,7 +43,7 @@ class TestPrepareConversation:
     """Tests for prepare_conversation() directory creation."""
 
     def test_creates_directories(self, tmp_path: Path) -> None:
-        """Creates claude, inbox, and outbox directories."""
+        """Creates claude, inbox, outbox, and storage directories."""
         layout = create_conversation_layout(tmp_path / "conv")
         layout.conversation_dir.mkdir(parents=True)
 
@@ -51,6 +52,7 @@ class TestPrepareConversation:
         assert layout.claude.is_dir()
         assert layout.inbox.is_dir()
         assert layout.outbox.is_dir()
+        assert layout.storage.is_dir()
 
     def test_does_not_create_workspace(self, tmp_path: Path) -> None:
         """Does not create workspace directory (git clone's job)."""
@@ -80,11 +82,12 @@ class TestGetContainerMounts:
         layout = create_conversation_layout(tmp_path / "conv")
         mounts = get_container_mounts(layout)
 
-        assert len(mounts) == 4
+        assert len(mounts) == 5
         assert f"{tmp_path / 'conv' / 'workspace'}:/workspace:rw" in mounts
         assert f"{tmp_path / 'conv' / 'claude'}:/root/.claude:rw" in mounts
         assert f"{tmp_path / 'conv' / 'inbox'}:/inbox:rw" in mounts
         assert f"{tmp_path / 'conv' / 'outbox'}:/outbox:rw" in mounts
+        assert f"{tmp_path / 'conv' / 'storage'}:/storage:rw" in mounts
 
     def test_workspace_is_readwrite(self, tmp_path: Path) -> None:
         """Workspace mount is read-write."""
