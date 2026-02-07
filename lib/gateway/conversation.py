@@ -36,20 +36,21 @@ class ConversationManager:
     """Manages isolated git checkouts for email conversations.
 
     Each conversation is identified by an 8-character hex UUID and gets:
-    - A session directory with metadata (session.json)
+    - A conversation directory with metadata (session.json)
     - A workspace subdirectory with git repo and Claude state
     - An inbox/ directory for email attachments
 
     Storage structure:
-        {storage_dir}/sessions/{id}/session.json - Session metadata
-        {storage_dir}/sessions/{id}/workspace/ - Git repo & workspace
+        {storage_dir}/conversations/{id}/session.json - Session metadata
+        {storage_dir}/conversations/{id}/workspace/ - Git repo & workspace
 
     Uses a local git mirror cache for fast clones and disk space savings.
 
     Attributes:
         repo_url: Git repository URL to clone from (ssh or https).
         storage_dir: Root storage directory for all data.
-        sessions_dir: Directory for session data (storage_dir/sessions).
+        conversations_dir: Directory for conversation data
+            (storage_dir/conversations).
         mirror: GitMirrorCache instance for fast clones.
     """
 
@@ -65,14 +66,14 @@ class ConversationManager:
         """
         self.repo_url = repo_url
         self.storage_dir = storage_dir
-        self.sessions_dir = storage_dir / "sessions"
+        self.conversations_dir = storage_dir / "conversations"
 
         if not self.repo_url:
             raise ValueError("Repository URL cannot be empty")
 
         # Create storage directories if they don't exist
         self.storage_dir.mkdir(parents=True, exist_ok=True)
-        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        self.conversations_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize git mirror cache (not hidden anymore)
         mirror_path = storage_dir / "git-mirror"
@@ -106,15 +107,15 @@ class ConversationManager:
             GitCloneError: If git clone fails.
         """
         conversation_id = self.generate_id()
-        session_dir = self.get_session_dir(conversation_id)
+        conversation_dir = self.get_conversation_dir(conversation_id)
         workspace_path = self.get_workspace_path(conversation_id)
 
         logger.info("Creating new conversation: %s", conversation_id)
         logger.debug("Cloning from mirror to %s", workspace_path)
 
         try:
-            # Create session directory
-            session_dir.mkdir(parents=True, exist_ok=True)
+            # Create conversation directory
+            conversation_dir.mkdir(parents=True, exist_ok=True)
 
             # Clone from mirror (acquires shared lock)
             self.mirror.clone_from_mirror(workspace_path)
@@ -131,9 +132,11 @@ class ConversationManager:
             )
 
             # Cleanup partial directory if it exists
-            if session_dir.exists():
-                logger.debug("Cleaning up partial session at %s", session_dir)
-                shutil.rmtree(session_dir)
+            if conversation_dir.exists():
+                logger.debug(
+                    "Cleaning up partial conversation at %s", conversation_dir
+                )
+                shutil.rmtree(conversation_dir)
 
             raise GitCloneError(
                 f"Failed to clone repository for conversation "
@@ -174,17 +177,17 @@ class ConversationManager:
 
         return workspace_path
 
-    def get_session_dir(self, conversation_id: str) -> Path:
-        """Get session directory for a conversation ID.
+    def get_conversation_dir(self, conversation_id: str) -> Path:
+        """Get conversation directory for a conversation ID.
 
         Args:
             conversation_id: 8-character hex conversation ID.
 
         Returns:
-            Path to session directory (contains session.json).
-            Example: /storage/sessions/abc12345/
+            Path to conversation directory (contains session.json).
+            Example: /storage/conversations/abc12345/
         """
-        return self.sessions_dir / conversation_id
+        return self.conversations_dir / conversation_id
 
     def get_workspace_path(self, conversation_id: str) -> Path:
         """Get workspace path for a conversation ID.
@@ -194,9 +197,9 @@ class ConversationManager:
 
         Returns:
             Path to workspace directory (contains git repo).
-            Example: /storage/sessions/abc12345/workspace/
+            Example: /storage/conversations/abc12345/workspace/
         """
-        return self.get_session_dir(conversation_id) / "workspace"
+        return self.get_conversation_dir(conversation_id) / "workspace"
 
     def exists(self, conversation_id: str) -> bool:
         """Check if a conversation exists.
@@ -212,7 +215,7 @@ class ConversationManager:
     def delete(self, conversation_id: str) -> bool:
         """Delete a conversation and all its files.
 
-        Deletes the entire session directory (session.json + workspace/).
+        Deletes the entire conversation directory (session.json + workspace/).
 
         Args:
             conversation_id: 8-character hex conversation ID.
@@ -220,9 +223,9 @@ class ConversationManager:
         Returns:
             True if conversation was deleted, False if it didn't exist.
         """
-        session_dir = self.get_session_dir(conversation_id)
+        conversation_dir = self.get_conversation_dir(conversation_id)
 
-        if not session_dir.exists():
+        if not conversation_dir.exists():
             logger.debug(
                 "Conversation %s does not exist, nothing to delete",
                 conversation_id,
@@ -230,22 +233,22 @@ class ConversationManager:
             return False
 
         logger.info("Deleting conversation: %s", conversation_id)
-        shutil.rmtree(session_dir)
-        logger.debug("Deleted session directory at %s", session_dir)
+        shutil.rmtree(conversation_dir)
+        logger.debug("Deleted conversation directory at %s", conversation_dir)
 
         return True
 
     def list_all(self) -> list[str]:
-        """List all conversation IDs in sessions directory.
+        """List all conversation IDs in conversations directory.
 
         Returns:
             List of 8-character hex conversation IDs.
         """
-        if not self.sessions_dir.exists():
+        if not self.conversations_dir.exists():
             return []
 
         conversation_ids = []
-        for item in self.sessions_dir.iterdir():
+        for item in self.conversations_dir.iterdir():
             if item.is_dir() and CONVERSATION_ID_PATTERN.match(item.name):
                 conversation_ids.append(item.name)
 

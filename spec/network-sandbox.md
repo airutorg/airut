@@ -14,7 +14,7 @@ high-level documentation (threat model, security properties, configuration), see
 | `docker/dns_responder.py`       | DNS server: returns proxy IP or NXDOMAIN             |
 | `docker/proxy-filter.py`        | mitmproxy addon for allowlist + token masking        |
 | `lib/container/network.py`      | Podman args for sandbox integration (--dns, CA cert) |
-| `lib/container/proxy.py`        | Per-task proxy lifecycle management                  |
+| `lib/container/proxy.py`        | Per-conversation proxy lifecycle management          |
 
 ## Proxy Lifecycle
 
@@ -25,7 +25,7 @@ The proxy is managed by `ProxyManager` in `lib/container/proxy.py`:
 - On startup: clean orphans, build image, ensure CA cert, create egress network
 - On shutdown: stop task proxies, remove egress network
 
-**Task lifecycle** (per-task resources):
+**Conversation lifecycle** (per-conversation resources):
 
 - `start_task_proxy()`: allocate subnet, create internal network with route,
   start dual-homed proxy container, health check
@@ -38,7 +38,7 @@ The proxy is managed by `ProxyManager` in `lib/container/proxy.py`:
 | Egress network (`airut-egress`)      | Gateway | `startup()`              | `shutdown()`        |
 | Proxy image (`airut-proxy`)          | Gateway | `startup()`              | Never (cached)      |
 | CA certificate                       | Gateway | `startup()` (if missing) | Never               |
-| Internal network (`airut-task-{id}`) | Task    | `start_task_proxy()`     | `stop_task_proxy()` |
+| Internal network (`airut-conv-{id}`) | Task    | `start_task_proxy()`     | `stop_task_proxy()` |
 | Proxy container (`airut-proxy-{id}`) | Task    | `start_task_proxy()`     | `stop_task_proxy()` |
 | Network log (`network-sandbox.log`)  | Task    | `start_task_proxy()`     | Session pruning     |
 
@@ -57,9 +57,9 @@ container must trust this CA:
 
 ## Session Network Logging
 
-Network activity is logged to `session_dir/network-sandbox.log` for each task.
-Both the DNS responder and the mitmproxy addon write to this shared log file,
-providing a complete audit trail from DNS resolution through HTTP request:
+Network activity is logged to `conversation_dir/network-sandbox.log` for each
+task. Both the DNS responder and the mitmproxy addon write to this shared log
+file, providing a complete audit trail from DNS resolution through HTTP request:
 
 ```
 === TASK START 2026-02-03T12:34:56Z ===
@@ -87,11 +87,11 @@ ERROR lines indicate upstream connection failures — the domain passed the
 allowlist but mitmproxy could not connect (e.g. DNS resolution failure, timeout,
 connection refused). The format is `ERROR {METHOD} {URL} -> {error message}`.
 
-The log file is created in the session directory and persists with the session.
-It is cleaned up automatically when sessions are pruned.
+The log file is created in the conversation directory and persists with the
+session. It is cleaned up automatically when conversations are pruned.
 
 ## Crash Recovery
 
 On startup, `ProxyManager` cleans orphaned resources from previous unclean
 shutdowns: containers matching `airut-proxy-*` and networks matching
-`airut-task-*` are removed.
+`airut-conv-*` are removed.

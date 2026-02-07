@@ -523,14 +523,14 @@ podman kill <container-id>
 **Corrupted session state:**
 
 ```bash
-# List sessions for a repo
-ls ~/airut-storage/my-project/sessions/
+# List conversations for a repo
+ls ~/airut-storage/my-project/conversations/
 
 # Remove a specific corrupted session
-rm -rf ~/airut-storage/my-project/sessions/<session-id>
+rm -rf ~/airut-storage/my-project/conversations/<session-id>
 
-# Or remove all sessions (forces fresh conversations)
-rm -rf ~/airut-storage/my-project/sessions/
+# Or remove all conversations (forces fresh starts)
+rm -rf ~/airut-storage/my-project/conversations/
 ```
 
 **Token expired or credentials invalid:**
@@ -559,7 +559,7 @@ Sessions are garbage-collected automatically, but you can clean up manually:
 
 ```bash
 # View storage usage
-du -sh ~/airut-storage/*/sessions/
+du -sh ~/airut-storage/*/conversations/
 
 # Prune old Podman images
 podman image prune -a

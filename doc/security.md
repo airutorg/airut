@@ -145,7 +145,7 @@ See [network-sandbox.md](network-sandbox.md) for full details.
   for allowed domains, NXDOMAIN for blocked, and never forwards queries upstream
   (blocks DNS exfiltration)
 - Allowlist read from default branch (agent can't modify active list)
-- Per-task proxy container and network (isolated from other tasks)
+- Per-conversation proxy container and network (isolated from other tasks)
 
 ## Credential Management
 
@@ -307,7 +307,7 @@ sandbox.
 
 - Access hosts not on the network allowlist
 - Read host files outside mounted directories
-- Access other conversations or sessions
+- Access other conversations
 - Persist beyond the container lifetime
 - Modify the active allowlist or configuration
 

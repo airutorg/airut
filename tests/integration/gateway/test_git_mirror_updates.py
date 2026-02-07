@@ -144,7 +144,10 @@ events = [
 
             # Verify conversation has the marker file
             conv_workspace = (
-                integration_env.storage_dir / "sessions" / conv_id / "workspace"
+                integration_env.storage_dir
+                / "conversations"
+                / conv_id
+                / "workspace"
             )
             conv_marker = conv_workspace / "marker1.txt"
             assert conv_marker.exists(), (
@@ -223,7 +226,7 @@ events = [
             # Verify first conversation has version 1
             conv1_workspace = (
                 integration_env.storage_dir
-                / "sessions"
+                / "conversations"
                 / conv_id1
                 / "workspace"
             )
@@ -276,7 +279,7 @@ events = [
             # THIS IS THE KEY ASSERTION that will fail before the fix
             conv2_workspace = (
                 integration_env.storage_dir
-                / "sessions"
+                / "conversations"
                 / conv_id2
                 / "workspace"
             )

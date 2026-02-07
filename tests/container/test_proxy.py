@@ -14,11 +14,11 @@ import pytest
 
 from lib.container.proxy import (
     CA_CERT_FILENAME,
+    CONV_NETWORK_PREFIX,
+    CONV_PROXY_PREFIX,
     EGRESS_NETWORK,
     NETWORK_LOG_FILENAME,
     PROXY_IMAGE_NAME,
-    TASK_NETWORK_PREFIX,
-    TASK_PROXY_PREFIX,
     ProxyError,
     ProxyManager,
     TaskProxy,
@@ -53,11 +53,11 @@ class TestTaskProxy:
     def test_all_fields(self) -> None:
         """All fields set correctly."""
         tp = TaskProxy(
-            network_name="airut-task-x",
+            network_name="airut-conv-x",
             proxy_container_name="airut-proxy-x",
             proxy_ip="10.199.1.100",
         )
-        assert tp.network_name == "airut-task-x"
+        assert tp.network_name == "airut-conv-x"
         assert tp.proxy_container_name == "airut-proxy-x"
         assert tp.proxy_ip == "10.199.1.100"
 
@@ -186,8 +186,8 @@ class TestStartTaskProxy:
         """Creates internal network, starts proxy, and checks health."""
         pm = _make_pm()
         result = pm.start_task_proxy("abc123", mirror=mock_mirror)
-        assert result.network_name == f"{TASK_NETWORK_PREFIX}abc123"
-        assert result.proxy_container_name == f"{TASK_PROXY_PREFIX}abc123"
+        assert result.network_name == f"{CONV_NETWORK_PREFIX}abc123"
+        assert result.proxy_container_name == f"{CONV_PROXY_PREFIX}abc123"
         assert result.proxy_ip.startswith("10.199.")
         assert result.proxy_ip.endswith(".100")
         # Idempotent: stops any existing proxy first
@@ -201,7 +201,7 @@ class TestStartTaskProxy:
         mock_mirror.read_file.assert_called_once_with(
             ".airut/network-allowlist.yaml"
         )
-        mock_health.assert_called_once_with(f"{TASK_PROXY_PREFIX}abc123")
+        mock_health.assert_called_once_with(f"{CONV_PROXY_PREFIX}abc123")
         assert "abc123" in pm._active_proxies
 
     @patch.object(ProxyManager, "_wait_for_proxy_ready")
@@ -217,12 +217,12 @@ class TestStartTaskProxy:
         mock_mirror: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Creates network log file when session_dir is provided."""
+        """Creates network log file when conversation_dir is provided."""
         pm = _make_pm()
         result = pm.start_task_proxy(
-            "abc123", mirror=mock_mirror, session_dir=tmp_path
+            "abc123", mirror=mock_mirror, conversation_dir=tmp_path
         )
-        assert result.network_name == f"{TASK_NETWORK_PREFIX}abc123"
+        assert result.network_name == f"{CONV_NETWORK_PREFIX}abc123"
         # Network log file should be created
         log_path = tmp_path / NETWORK_LOG_FILENAME
         assert log_path.exists()
@@ -253,8 +253,8 @@ class TestStartTaskProxy:
         pm = _make_pm()
         with pytest.raises(ProxyError, match="fail"):
             pm.start_task_proxy("xyz", mirror=mock_mirror)
-        mock_rm_container.assert_called_once_with(f"{TASK_PROXY_PREFIX}xyz")
-        mock_rm_net.assert_called_once_with(f"{TASK_NETWORK_PREFIX}xyz")
+        mock_rm_container.assert_called_once_with(f"{CONV_PROXY_PREFIX}xyz")
+        mock_rm_net.assert_called_once_with(f"{CONV_NETWORK_PREFIX}xyz")
         assert "xyz" not in pm._active_proxies
         # Temp file should be cleaned up
         assert "xyz" not in pm._allowlist_tmpfiles
@@ -283,8 +283,8 @@ class TestStartTaskProxy:
         pm = _make_pm()
         with pytest.raises(ProxyError, match="not ready"):
             pm.start_task_proxy("hc", mirror=mock_mirror)
-        mock_rm_container.assert_called_once_with(f"{TASK_PROXY_PREFIX}hc")
-        mock_rm_net.assert_called_once_with(f"{TASK_NETWORK_PREFIX}hc")
+        mock_rm_container.assert_called_once_with(f"{CONV_PROXY_PREFIX}hc")
+        mock_rm_net.assert_called_once_with(f"{CONV_NETWORK_PREFIX}hc")
         assert "hc" not in pm._active_proxies
 
     @patch.object(ProxyManager, "_wait_for_proxy_ready")
@@ -314,7 +314,7 @@ class TestStartTaskProxy:
         mock_rm_container.assert_any_call("old-container")
         mock_rm_net.assert_any_call("old-net")
         # New proxy returned
-        assert result.proxy_container_name == f"{TASK_PROXY_PREFIX}dup"
+        assert result.proxy_container_name == f"{CONV_PROXY_PREFIX}dup"
 
 
 class TestStopTaskProxy:
@@ -472,7 +472,7 @@ class TestRunProxyContainer:
         pm = _make_pm(docker_dir=tmp_path)
         pm._run_proxy_container(
             "airut-proxy-abc",
-            "airut-task-abc",
+            "airut-conv-abc",
             "10.199.1.100",
             allowlist,
         )
@@ -487,7 +487,7 @@ class TestRunProxyContainer:
         network_indices = [i for i, v in enumerate(cmd) if v == "--network"]
         networks = [cmd[i + 1] for i in network_indices]
         assert EGRESS_NETWORK in networks
-        assert any("airut-task-abc:ip=10.199.1.100" in n for n in networks)
+        assert any("airut-conv-abc:ip=10.199.1.100" in n for n in networks)
         # Check environment variables
         env_indices = [i for i, v in enumerate(cmd) if v == "-e"]
         env_args = [cmd[i + 1] for i in env_indices]
@@ -513,7 +513,7 @@ class TestRunProxyContainer:
         pm = _make_pm(docker_dir=tmp_path)
         pm._run_proxy_container(
             "airut-proxy-abc",
-            "airut-task-abc",
+            "airut-conv-abc",
             "10.199.1.100",
             allowlist,
             network_log_path=log_path,
@@ -693,7 +693,7 @@ class TestRunProxyContainerWithReplacement:
         pm = _make_pm(docker_dir=tmp_path)
         pm._run_proxy_container(
             "airut-proxy-abc",
-            "airut-task-abc",
+            "airut-conv-abc",
             "10.199.1.100",
             allowlist,
             replacement_path=replacement_path,
@@ -858,7 +858,7 @@ class TestCleanupOrphans:
         # Third call: rm container 2
         # Fourth call: network ls
         net_result = MagicMock()
-        net_result.stdout = "airut-task-old1\n"
+        net_result.stdout = "airut-conv-old1\n"
         # Fifth call: network rm
 
         mock_run.side_effect = [

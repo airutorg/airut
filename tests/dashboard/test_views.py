@@ -18,7 +18,7 @@ class TestActionsPage:
     """Tests for the actions viewer page."""
 
     def test_task_actions_endpoint(self, tmp_path: Path) -> None:
-        """Test /task/<id>/actions returns actions page."""
+        """Test /conversation/<id>/actions returns actions page."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
 
@@ -54,7 +54,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         assert response.status_code == 200
         assert response.content_type == "text/html; charset=utf-8"
 
@@ -64,12 +64,12 @@ class TestActionsPage:
         assert "Reply #1" in html
 
     def test_task_actions_not_found(self) -> None:
-        """Test /task/<id>/actions returns 404 for nonexistent task."""
+        """Test /conversation/<id>/actions returns 404 for nonexistent task."""
         tracker = TaskTracker()
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/nonexistent/actions")
+        response = client.get("/conversation/nonexistent/actions")
         assert response.status_code == 404
 
     def test_task_actions_no_session(self) -> None:
@@ -80,7 +80,7 @@ class TestActionsPage:
         server = DashboardServer(tracker)  # No work_dirs
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
@@ -155,7 +155,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html = response.get_data(as_text=True)
 
         # Check event content is rendered
@@ -192,7 +192,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html = response.get_data(as_text=True)
 
         # toggleEvent JS should exist (used for raw JSON)
@@ -222,11 +222,11 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345")
+        response = client.get("/conversation/abc12345")
         html = response.get_data(as_text=True)
 
         # Check link to actions page exists
-        assert "/task/abc12345/actions" in html
+        assert "/conversation/abc12345/actions" in html
         assert "View Actions" in html
 
     def test_render_event_body_tool_use(self, tmp_path: Path) -> None:
@@ -267,7 +267,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html = response.get_data(as_text=True)
 
         assert "Read" in html
@@ -315,7 +315,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html = response.get_data(as_text=True)
 
         assert "10 more lines" in html
@@ -358,7 +358,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html = response.get_data(as_text=True)
 
         assert "(error)" in html
@@ -404,7 +404,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html = response.get_data(as_text=True)
 
         # Check event container has error class
@@ -452,7 +452,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html = response.get_data(as_text=True)
 
         # Check event container does NOT have error class
@@ -502,7 +502,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         assert response.status_code == 200
         html = response.get_data(as_text=True)
 
@@ -551,7 +551,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         assert response.status_code == 200
         html = response.get_data(as_text=True)
 
@@ -585,7 +585,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html = response.get_data(as_text=True)
 
         # Raw JSON should be displayed for unknown types
@@ -617,7 +617,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html = response.get_data(as_text=True)
 
         assert "No events recorded" in html
@@ -649,7 +649,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html = response.get_data(as_text=True)
 
         assert "No content" in html
@@ -681,7 +681,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html = response.get_data(as_text=True)
 
         assert "No content" in html
@@ -716,7 +716,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html = response.get_data(as_text=True)
 
         assert "+5 more" in html
@@ -754,7 +754,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html = response.get_data(as_text=True)
 
         # Should show truncated result with ...
@@ -803,7 +803,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html_text = response.get_data(as_text=True)
 
         assert "Bash" in html_text
@@ -853,7 +853,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html_text = response.get_data(as_text=True)
 
         assert "timeout=120000ms" in html_text
@@ -941,7 +941,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html_text = response.get_data(as_text=True)
 
         # Write: shows path and line/char count
@@ -1005,7 +1005,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html_text = response.get_data(as_text=True)
 
         assert "CustomTool" in html_text
@@ -1056,7 +1056,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html_text = response.get_data(as_text=True)
 
         assert "(replace_all)" in html_text
@@ -1113,7 +1113,7 @@ class TestActionsPage:
         )
         client = Client(server._wsgi_app)
 
-        resp = client.get("/task/abc12345/actions")
+        resp = client.get("/conversation/abc12345/actions")
         html_text = resp.get_data(as_text=True)
 
         assert "- old line 0" in html_text
@@ -1164,7 +1164,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html_text = response.get_data(as_text=True)
 
         assert "/f.py" in html_text
@@ -1212,7 +1212,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html_text = response.get_data(as_text=True)
 
         assert "/TODO/" in html_text
@@ -1256,7 +1256,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html_text = response.get_data(as_text=True)
 
         assert "(empty)" in html_text
@@ -1297,7 +1297,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html_text = response.get_data(as_text=True)
 
         assert "No content" in html_text
@@ -1338,7 +1338,7 @@ class TestActionsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         html_text = response.get_data(as_text=True)
 
         assert "No content" in html_text
@@ -1348,7 +1348,7 @@ class TestNetworkLogsPage:
     """Tests for network logs viewer page."""
 
     def test_network_logs_endpoint(self, tmp_path: Path) -> None:
-        """Test /task/<id>/network returns network logs page."""
+        """Test /conversation/<id>/network returns network logs page."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
 
@@ -1366,7 +1366,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         assert response.status_code == 200
         assert response.content_type == "text/html; charset=utf-8"
 
@@ -1378,12 +1378,12 @@ class TestNetworkLogsPage:
         assert "evil.com" in html
 
     def test_network_logs_not_found(self) -> None:
-        """Test /task/<id>/network returns 404 for nonexistent task."""
+        """Test /conversation/<id>/network returns 404 for nonexistent task."""
         tracker = TaskTracker()
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/nonexistent/network")
+        response = client.get("/conversation/nonexistent/network")
         assert response.status_code == 404
 
     def test_network_logs_no_session_dir(self) -> None:
@@ -1394,7 +1394,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker)  # No work_dirs
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
@@ -1415,7 +1415,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
@@ -1433,7 +1433,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
@@ -1456,7 +1456,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
         # Check that blocked entries have the blocked class
@@ -1477,7 +1477,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
         # Check that task start has the task-start class (blue color)
@@ -1497,7 +1497,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
         # Check for scroll-to-end script
@@ -1527,11 +1527,11 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345")
+        response = client.get("/conversation/abc12345")
         html = response.get_data(as_text=True)
 
         # Check link to network logs page exists
-        assert "/task/abc12345/network" in html
+        assert "/conversation/abc12345/network" in html
         assert "View Network Logs" in html
 
     def test_network_logs_escapes_html(self, tmp_path: Path) -> None:
@@ -1550,7 +1550,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
         # Check that malicious script tag in log content is escaped
@@ -1571,11 +1571,11 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
         # Check back link
-        assert 'href="/task/abc12345"' in html
+        assert 'href="/conversation/abc12345"' in html
         assert "&larr; Back" in html
 
     def test_network_logs_read_error(self, tmp_path: Path) -> None:
@@ -1593,7 +1593,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
@@ -1618,7 +1618,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
         # Both lines should be present, empty line should be skipped
@@ -1641,7 +1641,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
         # Unknown format should be rendered as plain log-line
@@ -1669,7 +1669,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
         # 200 should have allowed class (green)
@@ -1691,7 +1691,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
         # Status code should be wrapped in highlight span
@@ -1711,7 +1711,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
         # BLOCKED should be wrapped in highlight span
@@ -1734,7 +1734,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
         # 3xx responses should have allowed class, not error
@@ -1755,7 +1755,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
         # Check that error styling is defined in CSS
@@ -1780,7 +1780,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
         # Line without status code should be rendered as allowed (green)
@@ -1805,7 +1805,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
         # Both DNS BLOCKED lines should have blocked class
@@ -1827,7 +1827,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
         # DNS allowed line should have allowed class (green)
@@ -1855,7 +1855,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
         assert 'class="log-line task-start"' in html
@@ -1879,7 +1879,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
         # ERROR line should have conn-error class (red)
@@ -1905,7 +1905,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
         # Check that conn-error styling is defined in CSS
@@ -1934,7 +1934,7 @@ class TestNetworkLogsPage:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/network")
+        response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
         assert 'class="log-line task-start"' in html

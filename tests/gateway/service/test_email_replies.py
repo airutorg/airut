@@ -62,10 +62,14 @@ class TestSendAcknowledgment:
         call_kwargs = handler.responder.send_reply.call_args[1]
         assert "[ID:conv123]" in call_kwargs["subject"]
         assert "started working" in call_kwargs["body"]
-        assert "https://dash.example.com/task/conv123" in call_kwargs["body"]
+        assert (
+            "https://dash.example.com/conversation/conv123"
+            in call_kwargs["body"]
+        )
         assert "html_body" in call_kwargs
         assert (
-            "https://dash.example.com/task/conv123" in call_kwargs["html_body"]
+            "https://dash.example.com/conversation/conv123"
+            in call_kwargs["html_body"]
         )
 
     def test_no_dashboard_url(self, email_config, tmp_path: Path) -> None:
@@ -142,7 +146,9 @@ class TestSendRejectionReply:
         )
         call_kwargs = handler.responder.send_reply.call_args[1]
         assert "Still processing" in call_kwargs["body"]
-        assert "https://dash.example.com/task/conv1" in call_kwargs["body"]
+        assert (
+            "https://dash.example.com/conversation/conv1" in call_kwargs["body"]
+        )
         assert call_kwargs["subject"].count("[ID:conv1]") == 1
 
     def test_without_dashboard(self, email_config, tmp_path: Path) -> None:
@@ -202,12 +208,14 @@ class TestSendReply:
 
     def test_outbox_files_attached(self, email_config, tmp_path: Path) -> None:
         svc, handler = make_service(email_config, tmp_path)
-        session_dir = tmp_path / "sessions" / "conv1"
-        session_dir.mkdir(parents=True)
-        outbox = session_dir / "outbox"
+        conversation_dir = tmp_path / "conversations" / "conv1"
+        conversation_dir.mkdir(parents=True)
+        outbox = conversation_dir / "outbox"
         outbox.mkdir()
         (outbox / "report.pdf").write_bytes(b"pdf content")
-        handler.conversation_manager.get_session_dir.return_value = session_dir
+        handler.conversation_manager.get_conversation_dir.return_value = (
+            conversation_dir
+        )
 
         msg = make_message()
         send_reply(handler, msg, "conv1", "Here's the report")
@@ -222,12 +230,14 @@ class TestSendReply:
         from lib.gateway import SMTPSendError
 
         svc, handler = make_service(email_config, tmp_path)
-        session_dir = tmp_path / "sessions" / "conv1"
-        session_dir.mkdir(parents=True)
-        outbox = session_dir / "outbox"
+        conversation_dir = tmp_path / "conversations" / "conv1"
+        conversation_dir.mkdir(parents=True)
+        outbox = conversation_dir / "outbox"
         outbox.mkdir()
         (outbox / "file.txt").write_bytes(b"data")
-        handler.conversation_manager.get_session_dir.return_value = session_dir
+        handler.conversation_manager.get_conversation_dir.return_value = (
+            conversation_dir
+        )
 
         # First call fails, second succeeds
         handler.responder.send_reply.side_effect = [

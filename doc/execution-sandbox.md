@@ -22,12 +22,12 @@ restrictions, and credential scoping.
 
 Each conversation gets a fresh container with controlled mounts:
 
-| Mount Point     | Source                     | Access | Purpose                  |
-| --------------- | -------------------------- | ------ | ------------------------ |
-| `/workspace`    | `sessions/{id}/workspace/` | rw     | Git checkout             |
-| `/root/.claude` | `sessions/{id}/claude/`    | rw     | Claude session state     |
-| `/inbox`        | `sessions/{id}/inbox/`     | rw     | Email attachments        |
-| `/outbox`       | `sessions/{id}/outbox/`    | rw     | Files to attach to reply |
+| Mount Point     | Source                          | Access | Purpose                  |
+| --------------- | ------------------------------- | ------ | ------------------------ |
+| `/workspace`    | `conversations/{id}/workspace/` | rw     | Git checkout             |
+| `/root/.claude` | `conversations/{id}/claude/`    | rw     | Claude session state     |
+| `/inbox`        | `conversations/{id}/inbox/`     | rw     | Email attachments        |
+| `/outbox`       | `conversations/{id}/outbox/`    | rw     | Files to attach to reply |
 
 **What's NOT mounted:**
 

@@ -75,7 +75,10 @@ events = [
             conv_id = extract_conversation_id(response["Subject"])
             assert conv_id is not None
             inbox_path = (
-                integration_env.storage_dir / "sessions" / conv_id / "inbox"
+                integration_env.storage_dir
+                / "conversations"
+                / conv_id
+                / "inbox"
             )
             assert inbox_path.exists(), (
                 f"Inbox directory not created: {inbox_path}"
@@ -140,7 +143,10 @@ events = [
 
             conv_id = extract_conversation_id(response["Subject"])
             inbox_path = (
-                integration_env.storage_dir / "sessions" / conv_id / "inbox"
+                integration_env.storage_dir
+                / "conversations"
+                / conv_id
+                / "inbox"
             )
 
             # Check all attachments were saved
@@ -214,7 +220,7 @@ events = [
             conv_id = extract_conversation_id(response["Subject"])
             attachment_path = (
                 integration_env.storage_dir
-                / "sessions"
+                / "conversations"
                 / conv_id
                 / "inbox"
                 / "binary.bin"
@@ -270,7 +276,10 @@ events = [
 
             conv_id = extract_conversation_id(response["Subject"])
             inbox_path = (
-                integration_env.storage_dir / "sessions" / conv_id / "inbox"
+                integration_env.storage_dir
+                / "conversations"
+                / conv_id
+                / "inbox"
             )
 
             # Inbox should exist but be empty (or contain only directories)

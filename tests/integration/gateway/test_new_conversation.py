@@ -79,7 +79,10 @@ events = [
 
             # Verify conversation directory was created
             conv_path = (
-                integration_env.storage_dir / "sessions" / conv_id / "workspace"
+                integration_env.storage_dir
+                / "conversations"
+                / conv_id
+                / "workspace"
             )
             assert conv_path.exists(), (
                 f"Conversation directory not created: {conv_path}"

@@ -20,7 +20,7 @@ from email.message import Message
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from lib.container.session_layout import create_session_layout
+from lib.container.conversation_layout import create_conversation_layout
 from lib.gateway.parsing import collect_outbox_files
 from lib.gateway.responder import SMTPSendError
 
@@ -73,8 +73,8 @@ def send_reply(
 
     # Collect attachments from outbox directory
     conv_mgr = repo_handler.conversation_manager
-    session_dir = conv_mgr.get_session_dir(conv_id)
-    outbox_path = create_session_layout(session_dir).outbox
+    conversation_dir = conv_mgr.get_conversation_dir(conv_id)
+    outbox_path = create_conversation_layout(conversation_dir).outbox
     attachments = collect_outbox_files(outbox_path)
     if attachments:
         logger.info(
@@ -181,7 +181,7 @@ def send_acknowledgment(
 
     dashboard_base_url = global_config.dashboard_base_url
     if dashboard_base_url:
-        task_url = f"{dashboard_base_url}/task/{conv_id}"
+        task_url = f"{dashboard_base_url}/conversation/{conv_id}"
         body = (
             f"I've started working on this and will reply shortly. "
             f"See progress at {task_url}"
@@ -280,7 +280,7 @@ def send_rejection_reply(
 
     dashboard_base_url = global_config.dashboard_base_url
     if dashboard_base_url:
-        task_url = f"{dashboard_base_url}/task/{conv_id}"
+        task_url = f"{dashboard_base_url}/conversation/{conv_id}"
         body = (
             "Your message could not be processed.\n"
             "\n"

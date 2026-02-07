@@ -457,7 +457,7 @@ class ClaudeExecutor:
         """Execute Claude Code in container with given prompt.
 
         Volume mounts are provided by the caller (typically built by
-        ``session_layout.get_container_mounts()``). Environment variables
+        ``conversation_layout.get_container_mounts()``). Environment variables
         come from repo config (per-task).
 
         Args:

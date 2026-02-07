@@ -123,7 +123,7 @@ root privileges are needed.
 
 ```
 ┌───────────────────────────────────────────────────────────┐
-│  Podman network: airut-task-{id}                          │
+│  Podman network: airut-conv-{id}                          │
 │  (--internal, --disable-dns, --route → proxy IP)          │
 │                                                           │
 │  ┌────────────────┐    DNS    ┌──────────────────────┐    │
@@ -143,9 +143,9 @@ root privileges are needed.
 Each task gets its own internal network and proxy container, providing complete
 isolation between concurrent tasks:
 
-- **Internal network** (`--internal --disable-dns`): Per-task network with a
-  `--route` that sends all client traffic to the proxy. The `--internal` flag
-  blocks direct internet access. `--disable-dns` prevents aardvark-dns from
+- **Internal network** (`--internal --disable-dns`): Per-conversation network
+  with a `--route` that sends all client traffic to the proxy. The `--internal`
+  flag blocks direct internet access. `--disable-dns` prevents aardvark-dns from
   overriding the client's `--dns` setting.
 - **Egress network**: Shared network with internet access. Only proxy containers
   connect here. A lower route metric ensures the egress default route wins over
@@ -175,8 +175,8 @@ that don't use the system store.
 
 ### Network Logging
 
-Network activity is logged to `session_dir/network-sandbox.log` for each task,
-providing a complete audit trail from DNS resolution through HTTP request.
+Network activity is logged to `conversation_dir/network-sandbox.log` for each
+task, providing a complete audit trail from DNS resolution through HTTP request.
 Allowed and blocked requests are both logged. The `[masked: N]` suffix on HTTP
 lines indicates masked secret token replacements (see
 [Masked Secrets](#masked-secrets-token-replacement) below). Upstream connection
@@ -460,8 +460,8 @@ When investigating connectivity problems from inside a container:
 1. **Prefer the server-side override** — set `network.sandbox_enabled: false` in
    server config and restart the server. This avoids modifying the repo.
 2. After debugging, re-enable the sandbox and restart.
-3. Check `session_dir/network-sandbox.log` for the audit trail of allowed and
-   blocked requests from previous tasks.
+3. Check `conversation_dir/network-sandbox.log` for the audit trail of allowed
+   and blocked requests from previous tasks.
 
 ## Further Reading
 

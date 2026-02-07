@@ -453,7 +453,10 @@ events = [
             # Verify outbox directory is cleaned up after send
             # Poll for a short time since cleanup happens after SMTP send
             outbox_path = (
-                integration_env.storage_dir / "sessions" / conv_id / "outbox"
+                integration_env.storage_dir
+                / "conversations"
+                / conv_id
+                / "outbox"
             )
 
             import time
