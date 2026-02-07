@@ -12,6 +12,7 @@ mitmproxy dependencies.
 """
 
 import fnmatch
+from typing import TypedDict
 
 
 def _match_pattern(pattern: str, value: str) -> bool:
@@ -56,6 +57,14 @@ def _match_header_pattern(pattern: str, header_name: str) -> bool:
     return pattern_lower == header_lower
 
 
+class UrlPrefixEntry(TypedDict, total=False):
+    """A single entry in the url_prefixes allowlist."""
+
+    host: str
+    path: str
+    methods: list[str]
+
+
 class MockNetworkAllowlist:
     """Test version of NetworkAllowlist without mitmproxy dependencies.
 
@@ -64,7 +73,7 @@ class MockNetworkAllowlist:
 
     def __init__(self) -> None:
         self.domains: list[str] = []
-        self.url_prefixes: list[dict[str, str | list[str]]] = []
+        self.url_prefixes: list[UrlPrefixEntry] = []
 
     def _is_allowed(self, host: str, path: str, method: str = "") -> bool:
         """Check if a host+path+method combination is allowed."""
@@ -76,12 +85,9 @@ class MockNetworkAllowlist:
 
         # Check URL pattern entries
         for entry in self.url_prefixes:
-            entry_host = str(entry.get("host", ""))
-            entry_path = str(entry.get("path", ""))
-            raw_methods = entry.get("methods", [])
-            entry_methods: list[str] = (
-                raw_methods if isinstance(raw_methods, list) else []
-            )
+            entry_host = entry.get("host", "")
+            entry_path = entry.get("path", "")
+            entry_methods = entry.get("methods", [])
 
             if _match_pattern(entry_host, host):
                 # Empty path means allow all paths on this host

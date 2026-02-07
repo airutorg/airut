@@ -28,10 +28,18 @@ import fnmatch
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, TextIO, TypedDict
 
 import yaml
 from mitmproxy import ctx, http
+
+
+class UrlPrefixEntry(TypedDict, total=False):
+    """A single entry in the url_prefixes allowlist."""
+
+    host: str
+    path: str
+    methods: list[str]
 
 
 # Path to optional session log file (mounted by proxy container)
@@ -120,7 +128,7 @@ class ProxyFilter:
 
     def __init__(self) -> None:
         self.domains: list[str] = []
-        self.url_prefixes: list[dict[str, Any]] = []
+        self.url_prefixes: list[UrlPrefixEntry] = []
         self.replacements: dict[str, dict[str, Any]] = {}
         self._log_file: TextIO | None = None
 
