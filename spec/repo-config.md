@@ -96,7 +96,7 @@ for details and
 
 1. Service starts, loads server config (`ServerConfig.from_yaml()`)
 2. Mirror is updated (`mirror.update_mirror()`)
-3. Per-task: `RepoConfig.from_mirror(mirror, server_secrets)` reads
+3. Per-conversation: `RepoConfig.from_mirror(mirror, server_secrets)` reads
    `.airut/airut.yaml` from the mirror's default branch
 4. YAML is parsed with a custom loader that handles `!secret` and rejects `!env`
 5. `!secret` references are resolved against the server's `secrets` dict
@@ -111,7 +111,7 @@ directory, and secrets pool. See `multi-repo.md` for the full design.
 
 ## Proxy Manager Lifecycle
 
-Since `network.sandbox_enabled` is now per-repo (per-task), the `ProxyManager`
-is always created and its gateway infrastructure (egress network, proxy image,
-CA cert) is set up at startup. Per-task proxy containers are only started when
-the repo config has `sandbox_enabled: true`.
+Since `network.sandbox_enabled` is now per-repo (per-conversation), the
+`ProxyManager` is always created and its gateway infrastructure (egress network,
+proxy image, CA cert) is set up at startup. Per-conversation proxy containers
+are only started when the repo config has `sandbox_enabled: true`.

@@ -96,7 +96,7 @@ class TestConversationManager:
         assert isinstance(workspace_path, Path)
         assert (
             workspace_path
-            == storage_dir / "sessions" / conversation_id / "workspace"
+            == storage_dir / "conversations" / conversation_id / "workspace"
         )
 
     @patch("subprocess.run")
@@ -115,9 +115,9 @@ class TestConversationManager:
             manager.initialize_new()
 
         # Verify no partial directories left behind
-        sessions_dir = storage_dir / "sessions"
-        if sessions_dir.exists():
-            for item in sessions_dir.iterdir():
+        conversations_dir = storage_dir / "conversations"
+        if conversations_dir.exists():
+            for item in conversations_dir.iterdir():
                 # If any session dirs exist, their workspaces shouldn't have git
                 if item.is_dir():
                     workspace = item / "workspace"
@@ -151,9 +151,9 @@ class TestConversationManager:
                 manager.initialize_new()
 
         # Verify partial directory was cleaned up
-        sessions_dir = storage_dir / "sessions"
-        if sessions_dir.exists():
-            for item in sessions_dir.iterdir():
+        conversations_dir = storage_dir / "conversations"
+        if conversations_dir.exists():
+            for item in conversations_dir.iterdir():
                 if item.is_dir():
                     workspace = item / "workspace"
                     if workspace.exists():
@@ -293,12 +293,12 @@ class TestConversationManager:
         # Create valid conversation
         id1, _ = manager.initialize_new()
 
-        # Create invalid directories in sessions/
-        sessions_dir = storage_dir / "sessions"
-        (sessions_dir / "invalid").mkdir()
-        (sessions_dir / "toolong123").mkdir()
-        (sessions_dir / "ABCDEF01").mkdir()  # Uppercase
-        (sessions_dir / ".hidden").mkdir()
+        # Create invalid directories in conversations/
+        conversations_dir = storage_dir / "conversations"
+        (conversations_dir / "invalid").mkdir()
+        (conversations_dir / "toolong123").mkdir()
+        (conversations_dir / "ABCDEF01").mkdir()  # Uppercase
+        (conversations_dir / ".hidden").mkdir()
 
         conversations = manager.list_all()
 
@@ -313,14 +313,14 @@ class TestConversationManager:
 
         path = manager.get_workspace_path("abcdef01")
 
-        assert path == storage_dir / "sessions" / "abcdef01" / "workspace"
+        assert path == storage_dir / "conversations" / "abcdef01" / "workspace"
 
-    def test_get_session_dir(
+    def test_get_conversation_dir(
         self, master_repo: Path, storage_dir: Path
     ) -> None:
-        """get_session_dir() returns correct path."""
+        """get_conversation_dir() returns correct path."""
         manager = ConversationManager(str(master_repo), storage_dir)
 
-        path = manager.get_session_dir("abcdef01")
+        path = manager.get_conversation_dir("abcdef01")
 
-        assert path == storage_dir / "sessions" / "abcdef01"
+        assert path == storage_dir / "conversations" / "abcdef01"

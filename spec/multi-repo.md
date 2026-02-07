@@ -13,10 +13,10 @@ each with its own email inbox, authorization, secrets, and storage.
 3. **Per-repo authorization.** Each repo has its own `authorized_senders` list
    and `trusted_authserv_id`. Different people can be authorized for different
    repos.
-4. **No shared state between repos.** Storage, git mirrors, sessions, secrets,
-   and email accounts are fully isolated per repo. The only shared resources are
-   the global task limit and infrastructure (dashboard, proxy gateway, container
-   runtime).
+4. **No shared state between repos.** Storage, git mirrors, conversations,
+   secrets, and email accounts are fully isolated per repo. The only shared
+   resources are the global task limit and infrastructure (dashboard, proxy
+   gateway, container runtime).
 5. **Shared git mirror within a repo.** Sessions for the same repository share
    the git mirror (as today).
 6. **Global task limit.** Tasks across all repositories count toward a single
@@ -134,8 +134,8 @@ Each repo gets fully isolated storage. No files are shared between repos.
 ```
 ~/email-service-storage/
 ├── airut/                        # Per-repo storage root
-│   ├── git-mirror/               # Shared across sessions for this repo
-│   └── sessions/
+│   ├── git-mirror/               # Shared across conversations for this repo
+│   └── conversations/
 │       ├── abc12345/
 │       │   ├── session.json
 │       │   ├── workspace/
@@ -146,7 +146,7 @@ Each repo gets fully isolated storage. No files are shared between repos.
 │       └── ...
 └── another-repo/                 # Second repo, fully isolated
     ├── git-mirror/
-    └── sessions/
+    └── conversations/
         └── ...
 ```
 
@@ -167,25 +167,25 @@ EmailGatewayService (orchestrator)
 │   │   └── executor: ClaudeExecutor        (per-repo mirror for images)
 │   └── "another-repo" → RepoHandler
 │       └── ...
-├── proxy_manager: ProxyManager     (shared gateway, per-task proxy)
+├── proxy_manager: ProxyManager     (shared gateway, per-conversation proxy)
 ├── tracker: TaskTracker            (shared, tasks tagged with repo + sender)
 ├── dashboard: DashboardServer      (shared)
 └── executor_pool: ThreadPoolExecutor (shared, global max_concurrent)
 ```
 
-| Component             | Scope    | Rationale                                           |
-| --------------------- | -------- | --------------------------------------------------- |
-| `EmailListener`       | Per-repo | Different IMAP inbox per repo                       |
-| `EmailResponder`      | Per-repo | Different SMTP credentials and from address         |
-| `SenderAuthenticator` | Per-repo | Different `trusted_authserv_id`                     |
-| `SenderAuthorizer`    | Per-repo | Different `authorized_senders`                      |
-| `ConversationManager` | Per-repo | Different storage directory and git mirror          |
-| `ClaudeExecutor`      | Per-repo | Different mirror (for image builds from Dockerfile) |
-| `ProxyManager`        | Shared   | Gateway infra shared; per-task proxy uses allowlist |
-| `TaskTracker`         | Shared   | Global view, tasks tagged with `repo_id`            |
-| `DashboardServer`     | Shared   | Single dashboard for all repos                      |
-| `ThreadPoolExecutor`  | Shared   | Global `max_concurrent` limit across repos          |
-| `UpdateLock`          | Shared   | One update lock for the server process              |
+| Component             | Scope    | Rationale                                                   |
+| --------------------- | -------- | ----------------------------------------------------------- |
+| `EmailListener`       | Per-repo | Different IMAP inbox per repo                               |
+| `EmailResponder`      | Per-repo | Different SMTP credentials and from address                 |
+| `SenderAuthenticator` | Per-repo | Different `trusted_authserv_id`                             |
+| `SenderAuthorizer`    | Per-repo | Different `authorized_senders`                              |
+| `ConversationManager` | Per-repo | Different storage directory and git mirror                  |
+| `ClaudeExecutor`      | Per-repo | Different mirror (for image builds from Dockerfile)         |
+| `ProxyManager`        | Shared   | Gateway infra shared; per-conversation proxy uses allowlist |
+| `TaskTracker`         | Shared   | Global view, tasks tagged with `repo_id`                    |
+| `DashboardServer`     | Shared   | Single dashboard for all repos                              |
+| `ThreadPoolExecutor`  | Shared   | Global `max_concurrent` limit across repos                  |
+| `UpdateLock`          | Shared   | One update lock for the server process                      |
 
 ### Listener Threading Model
 
@@ -229,7 +229,7 @@ back-reference to the service.
 ### Proxy Manager
 
 The `ProxyManager` is shared across repos. Its gateway infrastructure (egress
-network, proxy image, CA cert) is set up once at startup. Per-task proxy
+network, proxy image, CA cert) is set up once at startup. Per-conversation proxy
 containers are started based on each repo's `network.allowlist_enabled` setting.
 
 Currently `ProxyManager` holds a mirror reference to read the network allowlist.

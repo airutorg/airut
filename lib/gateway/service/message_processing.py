@@ -19,17 +19,17 @@ import traceback
 from email.message import Message
 from typing import TYPE_CHECKING
 
+from lib.container.conversation_layout import (
+    create_conversation_layout,
+    get_container_mounts,
+    prepare_conversation,
+)
 from lib.container.executor import (
     ContainerTimeoutError,
     ExecutionResult,
     extract_error_summary,
 )
 from lib.container.session import SessionStore
-from lib.container.session_layout import (
-    create_session_layout,
-    get_container_mounts,
-    prepare_session,
-)
 from lib.gateway.config import RepoConfig
 from lib.gateway.conversation import GitCloneError
 from lib.gateway.parsing import (
@@ -252,13 +252,13 @@ def process_message(
                 repo_config.default_model,
             )
 
-            session_dir = conv_mgr.get_session_dir(conv_id)
-            session_store = SessionStore(session_dir)
+            conversation_dir = conv_mgr.get_conversation_dir(conv_id)
+            session_store = SessionStore(conversation_dir)
             session_store.set_model(conv_id, model)
             service.tracker.set_task_model(conv_id, model)
         else:
-            session_dir = conv_mgr.get_session_dir(conv_id)
-            session_store = SessionStore(session_dir)
+            conversation_dir = conv_mgr.get_conversation_dir(conv_id)
+            session_store = SessionStore(conversation_dir)
             model = session_store.get_model() or repo_config.default_model
             if requested_model and requested_model != model:
                 logger.warning(
@@ -278,8 +278,8 @@ def process_message(
             )
 
         # Prepare session layout
-        layout = create_session_layout(session_dir)
-        prepare_session(layout)
+        layout = create_conversation_layout(conversation_dir)
+        prepare_conversation(layout)
 
         # Extract attachments
         filenames = extract_attachments(message, layout.inbox)
@@ -367,7 +367,7 @@ def process_message(
             task_proxy = service.proxy_manager.start_task_proxy(
                 conv_id,
                 mirror=conv_mgr.mirror,
-                session_dir=layout.session_dir,
+                conversation_dir=layout.conversation_dir,
                 replacement_map=replacement_map,
             )
 
@@ -411,7 +411,7 @@ def process_message(
                 task_proxy = service.proxy_manager.start_task_proxy(
                     conv_id,
                     mirror=conv_mgr.mirror,
-                    session_dir=layout.session_dir,
+                    conversation_dir=layout.conversation_dir,
                     replacement_map=replacement_map,
                 )
 

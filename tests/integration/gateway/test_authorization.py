@@ -58,10 +58,10 @@ class TestAuthorizationRejection:
 
             # Check that no conversation directory was created
             # Filter by 8-character conversation ID
-            sessions_dir = integration_env.storage_dir / "sessions"
+            conversations_dir = integration_env.storage_dir / "conversations"
             conversations = [
                 d
-                for d in sessions_dir.iterdir()
+                for d in conversations_dir.iterdir()
                 if d.is_dir()
                 and not d.name.startswith(".")
                 and len(d.name) == 8
@@ -103,10 +103,10 @@ class TestAuthorizationRejection:
 
             # Check that conversation directory was created
             # Filter by 8-character conversation ID
-            sessions_dir = integration_env.storage_dir / "sessions"
+            conversations_dir = integration_env.storage_dir / "conversations"
             conversations = [
                 d
-                for d in sessions_dir.iterdir()
+                for d in conversations_dir.iterdir()
                 if d.is_dir()
                 and not d.name.startswith(".")
                 and len(d.name) == 8
@@ -184,10 +184,10 @@ class TestAuthorizationRejection:
 
             # Check that no conversation directory was created
             # Filter by 8-character conversation ID
-            sessions_dir = integration_env.storage_dir / "sessions"
+            conversations_dir = integration_env.storage_dir / "conversations"
             conversations = [
                 d
-                for d in sessions_dir.iterdir()
+                for d in conversations_dir.iterdir()
                 if d.is_dir()
                 and not d.name.startswith(".")
                 and len(d.name) == 8
@@ -236,10 +236,10 @@ class TestAuthorizationRejection:
 
             # Check that no conversation directory was created
             # Filter by 8-character conversation ID
-            sessions_dir = integration_env.storage_dir / "sessions"
+            conversations_dir = integration_env.storage_dir / "conversations"
             conversations = [
                 d
-                for d in sessions_dir.iterdir()
+                for d in conversations_dir.iterdir()
                 if d.is_dir()
                 and not d.name.startswith(".")
                 and len(d.name) == 8

@@ -6,9 +6,15 @@
 """Container execution subsystem.
 
 Manages Claude Code execution in Podman containers, including image builds,
-network proxy management, and session storage layout.
+network proxy management, and conversation directory layout.
 """
 
+from lib.container.conversation_layout import (
+    ConversationLayout,
+    create_conversation_layout,
+    get_container_mounts,
+    prepare_conversation,
+)
 from lib.container.dns import (
     SystemResolverError,
     get_system_resolver,
@@ -32,12 +38,6 @@ from lib.container.session import (
     SessionMetadata,
     SessionReply,
     SessionStore,
-)
-from lib.container.session_layout import (
-    SessionLayout,
-    create_session_layout,
-    get_container_mounts,
-    prepare_session,
 )
 
 
@@ -63,9 +63,9 @@ __all__ = [
     "SessionMetadata",
     "SessionReply",
     "SessionStore",
-    # session_layout
-    "SessionLayout",
-    "create_session_layout",
+    # conversation_layout
+    "ConversationLayout",
+    "create_conversation_layout",
     "get_container_mounts",
-    "prepare_session",
+    "prepare_conversation",
 ]

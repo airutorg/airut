@@ -55,7 +55,7 @@ class DashboardServer:
             host: Host to bind to.
             port: Port to bind to.
             version_info: Optional version information to display.
-            work_dirs: Directories where conversation sessions are stored
+            work_dirs: Directories where conversation data is stored
                 (one per repo).  If provided, enables session data display.
             stop_callback: Optional callable to stop an execution.
                 Should accept conversation_id and return bool.
@@ -86,23 +86,29 @@ class DashboardServer:
                 Rule("/favicon.svg", endpoint="favicon"),
                 Rule("/.version", endpoint="version"),
                 Rule("/repo/<repo_id>", endpoint="repo_detail"),
-                Rule("/task/<conversation_id>", endpoint="task_detail"),
                 Rule(
-                    "/task/<conversation_id>/session",
+                    "/conversation/<conversation_id>",
+                    endpoint="task_detail",
+                ),
+                Rule(
+                    "/conversation/<conversation_id>/session",
                     endpoint="task_session_json",
                 ),
                 Rule(
-                    "/task/<conversation_id>/actions",
+                    "/conversation/<conversation_id>/actions",
                     endpoint="task_actions",
                 ),
                 Rule(
-                    "/task/<conversation_id>/network",
+                    "/conversation/<conversation_id>/network",
                     endpoint="task_network",
                 ),
-                Rule("/api/tasks", endpoint="api_tasks"),
-                Rule("/api/task/<conversation_id>", endpoint="api_task"),
+                Rule("/api/conversations", endpoint="api_tasks"),
                 Rule(
-                    "/api/task/<conversation_id>/stop",
+                    "/api/conversation/<conversation_id>",
+                    endpoint="api_task",
+                ),
+                Rule(
+                    "/api/conversation/<conversation_id>/stop",
                     endpoint="api_task_stop",
                     methods=["POST"],
                 ),

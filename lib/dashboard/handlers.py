@@ -57,7 +57,7 @@ class RequestHandlers:
         Args:
             tracker: Task tracker to query for state.
             version_info: Optional version information to display.
-            work_dirs: Directories where conversation sessions are stored.
+            work_dirs: Directories where conversation data is stored.
             stop_callback: Optional callable to stop an execution.
             repo_states: List of repository states to display.
         """
@@ -141,18 +141,18 @@ class RequestHandlers:
     def handle_task_detail(
         self, request: Request, conversation_id: str
     ) -> Response:
-        """Handle task detail page.
+        """Handle conversation detail page.
 
         Args:
             request: Incoming request.
-            conversation_id: Task ID to show.
+            conversation_id: Conversation ID to show.
 
         Returns:
-            HTML response with task details.
+            HTML response with conversation details.
         """
         result = self._load_task_with_session(conversation_id)
         if result is None:
-            return Response("Task not found", status=404)
+            return Response("Conversation not found", status=404)
         task, session = result
 
         return Response(
@@ -172,15 +172,15 @@ class RequestHandlers:
         Returns:
             JSON response with raw session file contents.
         """
-        session_dir = self._find_session_dir(conversation_id)
-        if session_dir is None:
+        conversation_dir = self._find_conversation_dir(conversation_id)
+        if conversation_dir is None:
             return Response(
                 json.dumps({"error": "Session data not available"}),
                 status=404,
                 content_type="application/json",
             )
 
-        session_path = session_dir / SESSION_FILE_NAME
+        session_path = conversation_dir / SESSION_FILE_NAME
         if not session_path.exists():
             return Response(
                 json.dumps({"error": "No session data for conversation"}),
@@ -212,14 +212,14 @@ class RequestHandlers:
 
         Args:
             request: Incoming request.
-            conversation_id: Task ID to show actions for.
+            conversation_id: Conversation ID to show actions for.
 
         Returns:
             HTML response with actions viewer.
         """
         result = self._load_task_with_session(conversation_id)
         if result is None:
-            return Response("Task not found", status=404)
+            return Response("Conversation not found", status=404)
         task, session = result
 
         return Response(
@@ -234,21 +234,21 @@ class RequestHandlers:
 
         Args:
             request: Incoming request.
-            conversation_id: Task ID to show network logs for.
+            conversation_id: Conversation ID to show network logs for.
 
         Returns:
             HTML response with network logs viewer.
         """
         result = self._load_task_with_session(conversation_id)
         if result is None:
-            return Response("Task not found", status=404)
+            return Response("Conversation not found", status=404)
         task, _ = result
 
         # Load network logs from session directory
-        session_dir = self._find_session_dir(conversation_id)
+        conversation_dir = self._find_conversation_dir(conversation_id)
         log_content: str | None = None
-        if session_dir is not None:
-            log_path = session_dir / NETWORK_LOG_FILENAME
+        if conversation_dir is not None:
+            log_path = conversation_dir / NETWORK_LOG_FILENAME
             if log_path.exists():
                 try:
                     log_content = log_path.read_text()
@@ -280,19 +280,19 @@ class RequestHandlers:
     def handle_api_task(
         self, request: Request, conversation_id: str
     ) -> Response:
-        """Handle JSON API for single task.
+        """Handle JSON API for single conversation.
 
         Args:
             request: Incoming request.
-            conversation_id: Task ID to return.
+            conversation_id: Conversation ID to return.
 
         Returns:
-            JSON response with task details, including session data.
+            JSON response with conversation details, including session data.
         """
         result = self._load_task_with_session(conversation_id)
         if result is None:
             return Response(
-                json.dumps({"error": "Task not found"}),
+                json.dumps({"error": "Conversation not found"}),
                 status=404,
                 content_type="application/json",
             )
@@ -388,11 +388,11 @@ class RequestHandlers:
     def handle_api_task_stop(
         self, request: Request, conversation_id: str
     ) -> Response:
-        """Handle task stop API endpoint.
+        """Handle conversation stop API endpoint.
 
         Args:
             request: Incoming request.
-            conversation_id: Task ID to stop.
+            conversation_id: Conversation ID to stop.
 
         Returns:
             JSON response with stop result.
@@ -446,14 +446,14 @@ class RequestHandlers:
                 content_type="application/json",
             )
 
-    def _find_session_dir(self, conversation_id: str) -> Path | None:
-        """Find the session directory for a conversation across all repos.
+    def _find_conversation_dir(self, conversation_id: str) -> Path | None:
+        """Find the conversation directory across all repos.
 
         Args:
             conversation_id: Conversation ID to locate.
 
         Returns:
-            Path to the session directory, or None if not found.
+            Path to the conversation directory, or None if not found.
         """
         for work_dir in self.work_dirs:
             candidate = work_dir / conversation_id
@@ -470,11 +470,11 @@ class RequestHandlers:
         Returns:
             SessionMetadata if available, None otherwise.
         """
-        session_dir = self._find_session_dir(conversation_id)
-        if session_dir is None:
+        conversation_dir = self._find_conversation_dir(conversation_id)
+        if conversation_dir is None:
             return None
 
-        store = SessionStore(session_dir)
+        store = SessionStore(conversation_dir)
         return store.load()
 
     def _load_task_from_disk(
@@ -496,7 +496,7 @@ class RequestHandlers:
         if not CONVERSATION_ID_PATTERN.match(conversation_id):
             return None
 
-        conversation_path = self._find_session_dir(conversation_id)
+        conversation_path = self._find_conversation_dir(conversation_id)
         if conversation_path is None or not conversation_path.exists():
             return None
 

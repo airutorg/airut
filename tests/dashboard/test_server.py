@@ -158,14 +158,14 @@ class TestDashboardServer:
         assert "not available" in response.get_data(as_text=True)
 
     def test_api_tasks_endpoint(self) -> None:
-        """Test /api/tasks endpoint."""
+        """Test /api/conversations endpoint."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/api/tasks")
+        response = client.get("/api/conversations")
         assert response.status_code == 200
         assert response.content_type == "application/json"
 
@@ -177,14 +177,14 @@ class TestDashboardServer:
         assert isinstance(data[0]["queued_at"], float)
 
     def test_api_task_endpoint(self) -> None:
-        """Test /api/task/<id> endpoint."""
+        """Test /api/conversation/<id> endpoint."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/api/task/abc12345")
+        response = client.get("/api/conversation/abc12345")
         assert response.status_code == 200
         assert response.content_type == "application/json"
 
@@ -193,12 +193,12 @@ class TestDashboardServer:
         assert data["subject"] == "Test Subject"
 
     def test_api_task_not_found(self) -> None:
-        """Test /api/task/<id> returns 404 for unknown task."""
+        """Test /api/conversation/<id> returns 404 for unknown task."""
         tracker = TaskTracker()
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/api/task/nonexistent")
+        response = client.get("/api/conversation/nonexistent")
         assert response.status_code == 404
         assert response.content_type == "application/json"
 
@@ -468,21 +468,21 @@ class TestDashboardServer:
         assert 'class="version-sha"' not in html
 
     def test_task_detail_endpoint(self) -> None:
-        """Test /task/<id> endpoint."""
+        """Test /conversation/<id> endpoint."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject <script>alert(1)</script>")
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345")
+        response = client.get("/conversation/abc12345")
         assert response.status_code == 200
         assert response.content_type == "text/html; charset=utf-8"
 
         html = response.get_data(as_text=True)
 
         # Check content
-        assert "Task: abc12345" in html
+        assert "Conversation: abc12345" in html
         assert "Test Subject" in html
         assert "QUEUED" in html
         assert "Back to Dashboard" in html
@@ -494,14 +494,14 @@ class TestDashboardServer:
         assert "<script>" not in html
 
     def test_task_detail_not_found(self) -> None:
-        """Test /task/<id> returns 404 for unknown task."""
+        """Test /conversation/<id> returns 404 for unknown task."""
         tracker = TaskTracker()
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/nonexistent")
+        response = client.get("/conversation/nonexistent")
         assert response.status_code == 404
-        assert "Task not found" in response.get_data(as_text=True)
+        assert "Conversation not found" in response.get_data(as_text=True)
 
     def test_index_empty_state(self) -> None:
         """Test dashboard with no tasks."""
@@ -513,7 +513,7 @@ class TestDashboardServer:
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
-        assert "No tasks" in html
+        assert "No conversations" in html
 
     def test_index_task_states_styling(self) -> None:
         """Test dashboard shows correct styling for task states."""
@@ -607,7 +607,7 @@ class TestDashboardServer:
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345")
+        response = client.get("/conversation/abc12345")
         html = response.get_data(as_text=True)
 
         # Check success styling and text
@@ -625,7 +625,7 @@ class TestDashboardServer:
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345")
+        response = client.get("/conversation/abc12345")
         html = response.get_data(as_text=True)
 
         # Check failed styling and text

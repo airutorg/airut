@@ -70,19 +70,19 @@ credential problems) while others continue processing emails.
 
 ### HTTP Endpoints
 
-| Route                     | Method | Description                            |
-| ------------------------- | ------ | -------------------------------------- |
-| `/`                       | GET    | Main dashboard with task lists         |
-| `/.version`               | GET    | Full git version info (plain text)     |
-| `/repo/{repo_id}`         | GET    | Repository detail view                 |
-| `/task/{conv_id}`         | GET    | Task detail view                       |
-| `/task/{conv_id}/session` | GET    | Raw session JSON                       |
-| `/task/{conv_id}/actions` | GET    | Actions timeline viewer                |
-| `/api/repos`              | GET    | JSON API for repository status         |
-| `/api/tasks`              | GET    | JSON API for task list                 |
-| `/api/task/{id}`          | GET    | JSON API for single task               |
-| `/api/task/{id}/stop`     | POST   | Stop a running task                    |
-| `/health`                 | GET    | Health check endpoint (includes repos) |
+| Route                             | Method | Description                            |
+| --------------------------------- | ------ | -------------------------------------- |
+| `/`                               | GET    | Main dashboard with task lists         |
+| `/.version`                       | GET    | Full git version info (plain text)     |
+| `/repo/{repo_id}`                 | GET    | Repository detail view                 |
+| `/conversation/{conv_id}`         | GET    | Task detail view                       |
+| `/conversation/{conv_id}/session` | GET    | Raw session JSON                       |
+| `/conversation/{conv_id}/actions` | GET    | Actions timeline viewer                |
+| `/api/repos`                      | GET    | JSON API for repository status         |
+| `/api/conversations`              | GET    | JSON API for task list                 |
+| `/api/conversation/{id}`          | GET    | JSON API for single task               |
+| `/api/conversation/{id}/stop`     | POST   | Stop a running task                    |
+| `/health`                         | GET    | Health check endpoint (includes repos) |
 
 ## Configuration
 
@@ -99,7 +99,8 @@ Port 5200 chosen to avoid conflict with Fava (5100) and stay in unprivileged
 range.
 
 When `DASHBOARD_BASE_URL` is set, acknowledgment emails include a link to track
-task progress (e.g., `https://dashboard.example.com/task/{conversation_id}`).
+task progress (e.g.,
+`https://dashboard.example.com/conversation/{conversation_id}`).
 
 ## Dependencies
 

@@ -100,7 +100,9 @@ events = [
                 assert conv_id_a is not None
 
                 # Verify conversation exists in repo-a's storage
-                a_session = env.storage_dir / "repo-a" / "sessions" / conv_id_a
+                a_session = (
+                    env.storage_dir / "repo-a" / "conversations" / conv_id_a
+                )
                 assert a_session.exists(), "Conversation should exist in repo-a"
 
                 # Step 2: Send email to repo-b with repo-a's conversation ID
@@ -136,7 +138,9 @@ events = [
                 )
 
                 # Verify repo-b has its own session, repo-a's is untouched
-                b_session = env.storage_dir / "repo-b" / "sessions" / conv_id_b
+                b_session = (
+                    env.storage_dir / "repo-b" / "conversations" / conv_id_b
+                )
                 assert b_session.exists(), (
                     "New conversation should exist in repo-b"
                 )
@@ -229,7 +233,7 @@ events = [
                 )
 
                 # Verify no new sessions were created in private repo
-                private_sessions = env.storage_dir / "private" / "sessions"
+                private_sessions = env.storage_dir / "private" / "conversations"
                 session_dirs = [
                     d
                     for d in private_sessions.iterdir()
@@ -296,12 +300,14 @@ events = [
                 # Verify storage isolation
                 conv_id = extract_conversation_id(response["Subject"])
                 assert conv_id is not None
-                alpha_session = env.storage_dir / "alpha" / "sessions" / conv_id
+                alpha_session = (
+                    env.storage_dir / "alpha" / "conversations" / conv_id
+                )
                 assert alpha_session.exists(), (
                     f"Session not in alpha storage: {alpha_session}"
                 )
 
-                beta_sessions = env.storage_dir / "beta" / "sessions"
+                beta_sessions = env.storage_dir / "beta" / "conversations"
                 if beta_sessions.exists():
                     assert not list(beta_sessions.iterdir()), (
                         "Beta storage should be empty"
@@ -385,8 +391,8 @@ events = [
                 )
 
                 # Verify sessions in correct storage dirs
-                a_sessions = env.storage_dir / "repo-a" / "sessions"
-                b_sessions = env.storage_dir / "repo-b" / "sessions"
+                a_sessions = env.storage_dir / "repo-a" / "conversations"
+                b_sessions = env.storage_dir / "repo-b" / "conversations"
                 assert a_sessions.exists() and list(a_sessions.iterdir()), (
                     "repo-a should have sessions"
                 )

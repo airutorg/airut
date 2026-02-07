@@ -169,10 +169,9 @@ class SessionStore:
         """Initialize session store for a conversation.
 
         Args:
-            session_dir: Path to session directory (parent of workspace/).
-                         Example: /storage/sessions/abc12345/
-                         Session file: /storage/sessions/abc12345/session.json
-                         Workspace: /storage/sessions/abc12345/workspace/
+            session_dir: Path to conversation directory (parent of
+                workspace/). Session file stored as session.json
+                alongside the workspace subdirectory.
         """
         self.session_dir = session_dir
         self._file_path = session_dir / SESSION_FILE_NAME

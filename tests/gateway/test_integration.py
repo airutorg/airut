@@ -1159,7 +1159,7 @@ Please help.
             call_kwargs = mock_send.call_args[1]
             body = call_kwargs["body"]
             html_body = call_kwargs["html_body"]
-            expected_url = "https://dashboard.example.com/task/abc12345"
+            expected_url = "https://dashboard.example.com/conversation/abc12345"
             # URL is in the body
             assert expected_url in body
             assert "started working" in body
@@ -1793,7 +1793,9 @@ class TestRejectionReply:
             )
 
             call_kwargs = mock_send.call_args[1]
-            expected_url = f"https://dashboard.example.com/task/{conv_id}"
+            expected_url = (
+                f"https://dashboard.example.com/conversation/{conv_id}"
+            )
             # URL is embedded in the conversation ID line (plain text)
             assert expected_url in call_kwargs["body"]
             assert conv_id in call_kwargs["body"]

@@ -3,11 +3,11 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Per-task proxy lifecycle management for Airut email gateway.
+"""Per-conversation proxy lifecycle management for Airut email gateway.
 
-Manages mitmproxy containers that enforce the network sandbox. Each task
-gets its own proxy container and internal network, providing complete
-network isolation between concurrent tasks.
+Manages mitmproxy containers that enforce the network sandbox. Each
+conversation gets its own proxy container and internal network, providing
+complete network isolation between concurrent conversations.
 
 Architecture (transparent DNS-spoofing proxy):
 
@@ -24,7 +24,7 @@ Architecture (transparent DNS-spoofing proxy):
 Lifecycle layers:
 
 - **Gateway**: Egress network, proxy image, CA certificate (shared)
-- **Task**: Internal network + proxy container (per-task)
+- **Conversation**: Internal network + proxy container (per-conversation)
 
 See ``doc/network-sandbox.md`` for the full design.
 """
@@ -54,22 +54,22 @@ PROXY_IMAGE_NAME = "airut-proxy"
 MITMPROXY_CONFDIR = Path.home() / ".airut-mitmproxy"
 CA_CERT_FILENAME = "mitmproxy-ca-cert.pem"
 
-# Prefixes for per-task resources.  Orphan cleanup uses prefix-based
+# Prefixes for per-conversation resources.  Orphan cleanup uses prefix-based
 # matching via ``podman ps --filter name=`` / ``podman network ls
 # --filter name=``.  This is safe in our controlled environment where
 # only this code creates resources with these prefixes.
-TASK_NETWORK_PREFIX = "airut-task-"
-TASK_PROXY_PREFIX = "airut-proxy-"
+CONV_NETWORK_PREFIX = "airut-conv-"
+CONV_PROXY_PREFIX = "airut-proxy-"
 
 # Maximum time to wait for the proxy to start accepting connections.
 HEALTH_CHECK_TIMEOUT = 5.0
 HEALTH_CHECK_INTERVAL = 0.2
 
-# Network sandbox log file name (created in session directory)
+# Network sandbox log file name (created in conversation directory)
 NETWORK_LOG_FILENAME = "network-sandbox.log"
 
-# Subnet allocation for per-task internal networks.
-# Each task gets a /24 subnet from 10.199.{N}.0/24.
+# Subnet allocation for per-conversation internal networks.
+# Each conversation gets a /24 subnet from 10.199.{N}.0/24.
 # Proxy IP is always .100 on the subnet.
 _SUBNET_PREFIX = "10.199"
 _PROXY_HOST_OCTET = "100"
@@ -104,9 +104,10 @@ class ProxyManager:
     """Manages proxy infrastructure lifecycle.
 
     Gateway-scoped resources (egress network, image, CA cert) are set up
-    once in ``startup()`` and torn down in ``shutdown()``.  Task-scoped
-    resources (internal network, proxy container) are created per-task via
-    ``start_task_proxy()`` and destroyed via ``stop_task_proxy()``.
+    once in ``startup()`` and torn down in ``shutdown()``.
+    Conversation-scoped resources (internal network, proxy container) are
+    created per-conversation via ``start_task_proxy()`` and destroyed via
+    ``stop_task_proxy()``.
 
     Thread Safety:
         ``_active_proxies`` is protected by ``_lock``.  Multiple threads
@@ -192,7 +193,7 @@ class ProxyManager:
         task_id: str,
         *,
         mirror: GitMirrorCache,
-        session_dir: Path | None = None,
+        conversation_dir: Path | None = None,
         replacement_map: ReplacementMap | None = None,
     ) -> TaskProxy:
         """Create internal network and start proxy container for a task.
@@ -203,9 +204,9 @@ class ProxyManager:
         Args:
             task_id: Unique task/conversation identifier.
             mirror: Git mirror to read the network allowlist from.
-            session_dir: Optional session directory for network activity log.
-                If provided, network requests are logged to
-                ``session_dir/network-sandbox.log``.
+            conversation_dir: Optional conversation directory for network
+                activity log. If provided, network requests are logged to
+                ``conversation_dir/network-sandbox.log``.
             replacement_map: Optional mapping of surrogate tokens to real
                 values with scope restrictions. Used for masked secrets.
 
@@ -218,8 +219,8 @@ class ProxyManager:
         # Tear down stale resources from a previous attempt (idempotent).
         self.stop_task_proxy(task_id)
 
-        network_name = f"{TASK_NETWORK_PREFIX}{task_id}"
-        container_name = f"{TASK_PROXY_PREFIX}{task_id}"
+        network_name = f"{CONV_NETWORK_PREFIX}{task_id}"
+        container_name = f"{CONV_PROXY_PREFIX}{task_id}"
 
         logger.info(
             "Starting proxy for task %s (network=%s, container=%s)",
@@ -234,10 +235,12 @@ class ProxyManager:
             network_name, subnet=subnet, proxy_ip=proxy_ip
         )
 
-        # Create network log file if session_dir provided
+        # Create network log file if conversation_dir provided
         network_log_path: Path | None = None
-        if session_dir is not None:
-            network_log_path = self._create_network_log(task_id, session_dir)
+        if conversation_dir is not None:
+            network_log_path = self._create_network_log(
+                task_id, conversation_dir
+            )
 
         try:
             # Extract allowlist from git mirror
@@ -295,8 +298,9 @@ class ProxyManager:
         self._remove_network(proxy.network_name)
         self._cleanup_allowlist(task_id)
         self._cleanup_replacement_map(task_id)
-        # Note: we don't delete the network log file - it stays in session_dir
-        # for later inspection and is cleaned up with session pruning
+        # Note: we don't delete the network log file - it stays in
+        # conversation_dir for later inspection and is cleaned up with
+        # conversation pruning
         self._network_log_files.pop(task_id, None)
         logger.info("Proxy stopped for task %s", task_id)
 
@@ -502,17 +506,17 @@ class ProxyManager:
                 "Cleaned up replacement map for task %s: %s", task_id, tmppath
             )
 
-    def _create_network_log(self, task_id: str, session_dir: Path) -> Path:
-        """Create the network log file in the session directory.
+    def _create_network_log(self, task_id: str, conversation_dir: Path) -> Path:
+        """Create the network log file in the conversation directory.
 
         Args:
             task_id: Task identifier (for tracking).
-            session_dir: Session directory to create log file in.
+            conversation_dir: Conversation directory to create log file in.
 
         Returns:
             Path to the created log file.
         """
-        log_path = session_dir / NETWORK_LOG_FILENAME
+        log_path = conversation_dir / NETWORK_LOG_FILENAME
         # Create empty file (proxy addon will append to it)
         log_path.touch(exist_ok=True)
         self._network_log_files[task_id] = log_path
@@ -775,10 +779,10 @@ class ProxyManager:
     # ------------------------------------------------------------------
 
     def _cleanup_orphans(self) -> None:
-        """Remove orphaned proxy containers and task networks.
+        """Remove orphaned proxy containers and conversation networks.
 
         Finds resources matching the ``airut-proxy-*`` and
-        ``airut-task-*`` naming patterns from previous unclean shutdowns
+        ``airut-conv-*`` naming patterns from previous unclean shutdowns
         and removes them.
         """
         # Clean orphaned containers
@@ -789,7 +793,7 @@ class ProxyManager:
                     "ps",
                     "-a",
                     "--filter",
-                    f"name={TASK_PROXY_PREFIX}",
+                    f"name={CONV_PROXY_PREFIX}",
                     "--format",
                     "{{.Names}}",
                 ],
@@ -813,7 +817,7 @@ class ProxyManager:
                     "network",
                     "ls",
                     "--filter",
-                    f"name={TASK_NETWORK_PREFIX}",
+                    f"name={CONV_NETWORK_PREFIX}",
                     "--format",
                     "{{.Name}}",
                 ],

@@ -106,7 +106,7 @@ class TestSessionDataIntegration:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345")
+        response = client.get("/conversation/abc12345")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
@@ -132,14 +132,14 @@ class TestSessionDataIntegration:
         server = DashboardServer(tracker)  # No work_dirs
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345")
+        response = client.get("/conversation/abc12345")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
         assert "No session data available" in html
 
     def test_task_session_json_endpoint(self, tmp_path: Path) -> None:
-        """Test /task/<id>/session returns raw JSON."""
+        """Test /conversation/<id>/session returns raw JSON."""
         tracker = TaskTracker()
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -161,7 +161,7 @@ class TestSessionDataIntegration:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/session")
+        response = client.get("/conversation/abc12345/session")
         assert response.status_code == 200
         assert response.content_type == "application/json"
 
@@ -171,12 +171,12 @@ class TestSessionDataIntegration:
         assert data["replies"][0]["session_id"] == "sess_123"
 
     def test_task_session_json_no_work_dirs(self) -> None:
-        """Test /task/<id>/session returns 404 when work_dirs not configured."""
+        """Returns 404 when work_dirs not configured."""
         tracker = TaskTracker()
         server = DashboardServer(tracker)  # No work_dirs
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/session")
+        response = client.get("/conversation/abc12345/session")
         assert response.status_code == 404
         assert response.content_type == "application/json"
 
@@ -184,17 +184,17 @@ class TestSessionDataIntegration:
         assert "error" in data
 
     def test_task_session_json_no_session_file(self, tmp_path: Path) -> None:
-        """Test /task/<id>/session returns 404 when no session file."""
+        """Test /conversation/<id>/session returns 404 when no session file."""
         tracker = TaskTracker()
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/nonexistent/session")
+        response = client.get("/conversation/nonexistent/session")
         assert response.status_code == 404
         assert response.content_type == "application/json"
 
     def test_task_session_json_dir_exists_no_file(self, tmp_path: Path) -> None:
-        """Test /task/<id>/session when dir exists but session.json doesn't."""
+        """Returns 404 when dir exists but session.json missing."""
         tracker = TaskTracker()
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -203,13 +203,13 @@ class TestSessionDataIntegration:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/session")
+        response = client.get("/conversation/abc12345/session")
         assert response.status_code == 404
         data = response.get_json()
         assert "No session data" in data["error"]
 
     def test_task_session_json_invalid_json(self, tmp_path: Path) -> None:
-        """Test /task/<id>/session handles invalid JSON gracefully."""
+        """Test /conversation/<id>/session handles invalid JSON gracefully."""
         tracker = TaskTracker()
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -221,7 +221,7 @@ class TestSessionDataIntegration:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/session")
+        response = client.get("/conversation/abc12345/session")
         assert response.status_code == 500
         assert response.content_type == "application/json"
 
@@ -229,7 +229,7 @@ class TestSessionDataIntegration:
         assert "error" in data
 
     def test_api_task_includes_session_data(self, tmp_path: Path) -> None:
-        """Test /api/task/<id> includes session data when available."""
+        """Test /api/conversation/<id> includes session data when available."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
 
@@ -253,7 +253,7 @@ class TestSessionDataIntegration:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/api/task/abc12345")
+        response = client.get("/api/conversation/abc12345")
         assert response.status_code == 200
 
         data = json.loads(response.get_data(as_text=True))
@@ -264,14 +264,14 @@ class TestSessionDataIntegration:
         assert len(data["session"]["replies"]) == 1
 
     def test_api_task_no_session_data(self) -> None:
-        """Test /api/task/<id> has null session when unavailable."""
+        """Test /api/conversation/<id> has null session when unavailable."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
 
         server = DashboardServer(tracker)  # No work_dirs
         client = Client(server._wsgi_app)
 
-        response = client.get("/api/task/abc12345")
+        response = client.get("/api/conversation/abc12345")
         assert response.status_code == 200
 
         data = json.loads(response.get_data(as_text=True))
@@ -279,14 +279,14 @@ class TestSessionDataIntegration:
         assert data["session"] is None
 
     def test_api_tasks_does_not_include_session(self) -> None:
-        """Test /api/tasks does not include session data for performance."""
+        """Excludes session data from list endpoint."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/api/tasks")
+        response = client.get("/api/conversations")
         assert response.status_code == 200
 
         data = json.loads(response.get_data(as_text=True))
@@ -319,7 +319,7 @@ class TestSessionDataIntegration:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345")
+        response = client.get("/conversation/abc12345")
         html = response.get_data(as_text=True)
 
         # Check error class is applied
@@ -361,7 +361,7 @@ class TestSessionDataIntegration:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345")
+        response = client.get("/conversation/abc12345")
         html = response.get_data(as_text=True)
 
         # Check both replies are displayed
@@ -462,7 +462,7 @@ class TestSessionDataIntegration:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345")
+        response = client.get("/conversation/abc12345")
         html = response.get_data(as_text=True)
 
         # Check token counts are displayed with labels
@@ -507,7 +507,7 @@ class TestSessionDataIntegration:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345")
+        response = client.get("/conversation/abc12345")
         html = response.get_data(as_text=True)
 
         # Check request/response sections are displayed
@@ -541,14 +541,14 @@ class TestSessionDataIntegration:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345")
+        response = client.get("/conversation/abc12345")
         html = response.get_data(as_text=True)
 
         # Request/Response sections should not be present
         assert 'class="text-section"' not in html
 
     def test_api_task_includes_request_response(self, tmp_path: Path) -> None:
-        """Test /api/task/<id> includes request/response text."""
+        """Test /api/conversation/<id> includes request/response text."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
 
@@ -573,14 +573,14 @@ class TestSessionDataIntegration:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/api/task/abc12345")
+        response = client.get("/api/conversation/abc12345")
         data = json.loads(response.get_data(as_text=True))
 
         assert data["session"]["replies"][0]["request_text"] == "Test request"
         assert data["session"]["replies"][0]["response_text"] == "Test response"
 
     def test_api_task_includes_events(self, tmp_path: Path) -> None:
-        """Test /api/task/<id> includes events in session data."""
+        """Test /api/conversation/<id> includes events in session data."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
 
@@ -607,7 +607,7 @@ class TestSessionDataIntegration:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/api/task/abc12345")
+        response = client.get("/api/conversation/abc12345")
         data = json.loads(response.get_data(as_text=True))
 
         assert "session" in data
@@ -786,11 +786,11 @@ class TestLoadPastTasks:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345")
+        response = client.get("/conversation/abc12345")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
-        assert "Task: abc12345" in html
+        assert "Conversation: abc12345" in html
         assert "[Past conversation abc12345]" in html
         assert "COMPLETED" in html
         # Session data should be displayed
@@ -820,7 +820,7 @@ class TestLoadPastTasks:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/api/task/abc12345")
+        response = client.get("/api/conversation/abc12345")
         assert response.status_code == 200
 
         data = json.loads(response.get_data(as_text=True))
@@ -854,7 +854,7 @@ class TestLoadPastTasks:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345")
+        response = client.get("/conversation/abc12345")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
@@ -1054,7 +1054,7 @@ class TestLoadPastTasks:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
@@ -1093,7 +1093,7 @@ class TestLoadPastTasks:
         server = DashboardServer(tracker, work_dirs=[tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/task/abc12345/actions")
+        response = client.get("/conversation/abc12345/actions")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
@@ -1196,7 +1196,7 @@ class TestStopEndpoint:
     """Tests for task stop API endpoint."""
 
     def test_stop_endpoint_success(self) -> None:
-        """Test POST /api/task/<id>/stop with successful stop."""
+        """Test POST /api/conversation/<id>/stop with successful stop."""
         tracker = TaskTracker()
         task_id = "abc12345"
         tracker.add_task(task_id, "Test Task")
@@ -1209,7 +1209,7 @@ class TestStopEndpoint:
         server = DashboardServer(tracker, stop_callback=mock_stop)
         client = Client(server._wsgi_app)
 
-        response = client.post(f"/api/task/{task_id}/stop")
+        response = client.post(f"/api/conversation/{task_id}/stop")
         assert response.status_code == 200
         data = response.get_json()
         assert data["success"] is True
@@ -1225,7 +1225,7 @@ class TestStopEndpoint:
         server = DashboardServer(tracker, stop_callback=mock_stop)
         client = Client(server._wsgi_app)
 
-        response = client.post("/api/task/nonexistent/stop")
+        response = client.post("/api/conversation/nonexistent/stop")
         assert response.status_code == 404
         data = response.get_json()
         assert "error" in data
@@ -1243,7 +1243,7 @@ class TestStopEndpoint:
         server = DashboardServer(tracker, stop_callback=mock_stop)
         client = Client(server._wsgi_app)
 
-        response = client.post(f"/api/task/{task_id}/stop")
+        response = client.post(f"/api/conversation/{task_id}/stop")
         assert response.status_code == 400
         data = response.get_json()
         assert "error" in data
@@ -1260,7 +1260,7 @@ class TestStopEndpoint:
         server = DashboardServer(tracker, stop_callback=None)
         client = Client(server._wsgi_app)
 
-        response = client.post(f"/api/task/{task_id}/stop")
+        response = client.post(f"/api/conversation/{task_id}/stop")
         assert response.status_code == 503
         data = response.get_json()
         assert "error" in data
@@ -1279,7 +1279,7 @@ class TestStopEndpoint:
         server = DashboardServer(tracker, stop_callback=mock_stop)
         client = Client(server._wsgi_app)
 
-        response = client.post(f"/api/task/{task_id}/stop")
+        response = client.post(f"/api/conversation/{task_id}/stop")
         assert response.status_code == 404
         data = response.get_json()
         assert data["success"] is False
@@ -1298,7 +1298,7 @@ class TestStopEndpoint:
         server = DashboardServer(tracker, stop_callback=mock_stop)
         client = Client(server._wsgi_app)
 
-        response = client.post(f"/api/task/{task_id}/stop")
+        response = client.post(f"/api/conversation/{task_id}/stop")
         assert response.status_code == 500
         data = response.get_json()
         assert "error" in data
@@ -1316,13 +1316,13 @@ class TestStopEndpoint:
         server = DashboardServer(tracker, stop_callback=mock_stop)
         client = Client(server._wsgi_app)
 
-        response = client.get(f"/task/{task_id}")
+        response = client.get(f"/conversation/{task_id}")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
         # Check stop button is present
         assert "stopTask()" in html
-        assert "Stop Task" in html
+        assert 'stopTask()">Stop</button>' in html
 
     def test_task_detail_without_stop_button(self) -> None:
         """Test task detail page excludes stop button for completed tasks."""
@@ -1337,9 +1337,9 @@ class TestStopEndpoint:
         server = DashboardServer(tracker, stop_callback=mock_stop)
         client = Client(server._wsgi_app)
 
-        response = client.get(f"/task/{task_id}")
+        response = client.get(f"/conversation/{task_id}")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
         # Check stop button is NOT present
-        assert "Stop Task" not in html
+        assert "stopTask()" not in html

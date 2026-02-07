@@ -4,11 +4,25 @@ Airut is an email gateway for headless Claude Code interaction. It treats Claude
 as a correspondent you exchange emails with — send instructions, receive
 results, reply to continue the conversation.
 
-## Conceptual Model
+## Concepts
+
+Airut organizes work around three concepts:
+
+- **Conversation** — an email thread. One email thread = one conversation,
+  identified by an 8-character hex ID. A conversation owns a git workspace,
+  persistent Claude session state, and a sandboxed execution environment. Tasks
+  within a conversation execute serially — only one task runs at a time.
+  Parallelism occurs across different conversations, not within one.
+- **Task** — an individual execution within a conversation. Each inbound email
+  triggers one task. A conversation contains one or more tasks, executed one at
+  a time in the order received.
+- **Session** — Claude Code's persistent context, identified by a `session_id`
+  stored in `session.json`. Used with `--resume` to continue Claude's context
+  across tasks within a conversation.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        Email Conversation                           │
+│                        Conversation                                 │
 │                                                                     │
 │   ┌─────────────────┐    ┌─────────────────┐    ┌───────────────┐   │
 │   │  Git Checkout   │ +  │  Claude Code    │ +  │   Sandbox     │   │
@@ -16,23 +30,19 @@ results, reply to continue the conversation.
 │   │                 │    │  (context)      │    │   container)  │   │
 │   └─────────────────┘    └─────────────────┘    └───────────────┘   │
 │                                                                     │
-│   Each email thread maps to an isolated agent session with its      │
-│   own repository checkout and persistent Claude context.            │
+│   ┌─────────┐  ┌─────────┐  ┌─────────┐                             │
+│   │ Task 1  │→ │ Task 2  │→ │ Task 3  │→ ...  (serial execution)    │
+│   └─────────┘  └─────────┘  └─────────┘                             │
+│                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
-
-An email conversation in Airut is:
-
-- **A git checkout** — the agent's workspace, cloned from the target repository
-- **A Claude Code session** — persistent context across messages via `--resume`
-- **A sandboxed environment** — container isolation, network allowlist
 
 Reply to continue the conversation. The agent picks up where it left off with
 full context of previous work.
 
 ## Technical Architecture
 
-This section describes how the implementation realizes the conceptual model.
+This section describes how the implementation realizes the concepts above.
 
 ### Component Overview
 
@@ -60,28 +70,56 @@ This section describes how the implementation realizes the conceptual model.
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Components:**
+Components are scoped to different levels of the system. The scope determines
+each component's lifetime and what resources it can access.
+
+**Service-scoped** — one instance per server process, shared across all repos:
 
 - **EmailGatewayService** — Top-level orchestrator that manages repo handlers,
   shared thread pool, dashboard, and graceful shutdown
-- **RepoHandler** — Per-repository component that owns email listener,
-  authenticator, conversation manager, and executor
+- **ProxyManager** — Manages proxy infrastructure (shared egress network, CA
+  certificate, container image) and creates per-task proxy containers
+- **ThreadPool** — Limits concurrent task execution across repositories
+- **TaskTracker** — Tracks task status for dashboard and monitoring
+- **Dashboard** — Optional web UI for viewing conversations and network logs
+
+**Repo-scoped** — one instance per repository, lives for the server lifetime:
+
+- **RepoHandler** — Per-repository component that owns all repo-scoped
+  components below
 - **EmailListener** — Polls IMAP inbox (or uses IDLE) for incoming messages
 - **SenderAuthenticator** — Verifies DMARC pass on trusted headers
 - **SenderAuthorizer** — Checks sender against repository allowlist
-- **ConversationManager** — Creates/resumes sessions, manages git workspaces
-- **ClaudeExecutor** — Builds images and runs Claude Code in containers
-- **ProxyManager** — Manages per-task mitmproxy containers for network sandbox
+- **ConversationManager** — Creates/resumes conversations, manages git mirror
+  and workspaces
+- **ClaudeExecutor** — Builds container images and runs Claude Code in
+  containers
 - **EmailResponder** — Sends replies via SMTP with proper threading headers
-- **ThreadPool** — Limits concurrent task execution across repositories
-- **TaskTracker** — Tracks task status for dashboard and monitoring
-- **Dashboard** — Optional web UI for viewing tasks and network logs
+- **GitMirrorCache** — Bare mirror repository for fast local clones
 
-### How It Maps to the Conceptual Model
+**Conversation-scoped** — created when a new email thread starts, persists
+across all tasks in that conversation:
+
+- **Conversation directory** — Contains workspace, Claude state, inbox/outbox
+- **Git workspace** — Full clone from the git mirror
+- **Claude session state** — `session.json` and `/root/.claude` state for
+  `--resume` across tasks
+- **Conversation lock** — Serializes task execution within a conversation
+
+**Task-scoped** — created when processing an inbound email, destroyed when the
+task completes:
+
+- **Container process** — Podman container running Claude Code
+- **Proxy container** — mitmproxy instance enforcing the network allowlist
+- **Internal network** (`airut-conv-{id}`) — Routes container traffic through
+  the proxy. Named by conversation ID since serial execution means at most one
+  task uses it at a time.
+
+### How It Maps to the Concepts
 
 | Concept            | Implementation                                             |
 | ------------------ | ---------------------------------------------------------- |
-| Email conversation | Conversation ID (`[ID:xyz123]`) + session directory        |
+| Email conversation | Conversation ID (`[ID:xyz123]`) + conversation directory   |
 | Git checkout       | `ConversationManager` clones from git mirror               |
 | Claude session     | Session ID stored in `session.json`, passed via `--resume` |
 | Container sandbox  | `ClaudeExecutor` runs Podman with controlled mounts        |
@@ -105,7 +143,7 @@ ConversationManager
     │
     ├──▶ Parse [ID:...] from subject, or generate new ID
     │
-    ├──▶ Create session directory, or resume existing
+    ├──▶ Create conversation directory, or resume existing
     │
     ├──▶ Clone workspace from git mirror (new) or reuse (resume)
     │
@@ -120,7 +158,7 @@ ClaudeExecutor
     │    mentions /inbox attachments and /outbox for replies)
     │
     ├──▶ Run Claude Code container with mounts:
-    │        /workspace  ← session workspace
+    │        /workspace  ← conversation workspace
     │        /inbox      ← email attachments
     │        /outbox     ← files to attach to reply
     │    For existing conversations, pass --resume {session_id}
@@ -152,12 +190,12 @@ account — Airut will process and delete every message it finds.
 
 ### Storage Structure
 
-Each conversation maps to a session directory:
+Each conversation maps to a directory:
 
 ```
 {storage_dir}/
 ├── git-mirror/              # Bare mirror for fast clones
-└── sessions/
+└── conversations/
     └── {conversation-id}/       # 8-char hex ID
         ├── session.json         # Session metadata (NOT mounted to container)
         ├── network-sandbox.log  # Proxy request log (allowed/blocked)
@@ -226,7 +264,7 @@ no custom client, and handles the asynchronous nature of agent work. The
 Each task runs in a rootless Podman container with:
 
 - Mounted workspace (git checkout)
-- Separate session state directory
+- Separate Claude session state directory
 - Network sandbox via mitmproxy (see [network-sandbox.md](network-sandbox.md))
 - Environment-only credentials (no host mounts)
 
@@ -234,8 +272,8 @@ See [execution-sandbox.md](execution-sandbox.md) for details.
 
 ### File-Based State
 
-Session state is stored as files on disk — no database. Each conversation has a
-directory containing workspace, Claude session state, inbox/outbox for
+Conversation state is stored as files on disk — no database. Each conversation
+has a directory containing workspace, Claude session state, inbox/outbox for
 attachments. This keeps the system simple and inspectable.
 
 ### Multi-Repository Support

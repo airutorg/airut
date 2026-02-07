@@ -65,8 +65,8 @@ class TestProcessMessage:
             "conv1",
             repo_path,
         )
-        handler.conversation_manager.get_session_dir.return_value = (
-            tmp_path / "sessions"
+        handler.conversation_manager.get_conversation_dir.return_value = (
+            tmp_path / "conversations"
         )
         handler.conversation_manager.get_workspace_path.return_value = repo_path
         handler.conversation_manager.mirror = MagicMock()

@@ -78,7 +78,9 @@ events = [
             assert len(conv_id) == 8
 
             # Get session directory
-            session_dir = integration_env.storage_dir / "sessions" / conv_id
+            session_dir = (
+                integration_env.storage_dir / "conversations" / conv_id
+            )
             session_store = SessionStore(session_dir)
 
             # Poll for session file updates during execution
@@ -211,8 +213,10 @@ def sync_between_events(event_num):
 
             while time.time() - start_time < max_wait:
                 # Find sync file in any conversation directory
-                sessions_dir = integration_env.storage_dir / "sessions"
-                for conv_dir in sessions_dir.iterdir():
+                conversations_dir = (
+                    integration_env.storage_dir / "conversations"
+                )
+                for conv_dir in conversations_dir.iterdir():
                     # Skip hidden directories
                     if conv_dir.is_dir() and not conv_dir.name.startswith("."):
                         # Sync file is in workspace subdirectory
@@ -338,8 +342,10 @@ def sync_between_events(event_num):
 
             while time.time() - start_time < max_wait:
                 # Find sync file in any conversation directory
-                sessions_dir = integration_env.storage_dir / "sessions"
-                for conv_dir in sessions_dir.iterdir():
+                conversations_dir = (
+                    integration_env.storage_dir / "conversations"
+                )
+                for conv_dir in conversations_dir.iterdir():
                     # Skip hidden directories
                     if conv_dir.is_dir() and not conv_dir.name.startswith("."):
                         # Sync file is in workspace subdirectory

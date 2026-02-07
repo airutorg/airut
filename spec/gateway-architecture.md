@@ -53,7 +53,7 @@ Each conversation is an isolated session with git workspace and metadata:
 {STORAGE_DIR}/
 ├── git-mirror/                  # Local git mirror for fast clones
 │   └── (bare git repository)
-├── sessions/                    # All conversation sessions
+├── conversations/                    # All conversations
 │   ├── abc12345/                # Session ID (8-char hex)
 │   │   ├── session.json         # Session metadata (NOT mounted to container)
 │   │   ├── workspace/           # Git workspace (mounted at /workspace)
@@ -86,12 +86,12 @@ Each conversation is an isolated session with git workspace and metadata:
 
 ### Lifecycle
 
-| Event                    | Action                                                                                                        |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| **New conversation**     | Generate 8-char ID, create `sessions/{id}/`, clone from mirror to `workspace/`                                |
-| **Resume conversation**  | Verify workspace exists, load session from `session.json`, preserve local state                               |
-| **User requests sync**   | Claude runs `git fetch origin && git rebase origin/main` manually in workspace                                |
-| **Conversation timeout** | Garbage collect sessions with no activity for 7 days (configurable via `execution.conversation_max_age_days`) |
+| Event                    | Action                                                                                                             |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| **New conversation**     | Generate 8-char ID, create `conversations/{id}/`, clone from mirror to `workspace/`                                |
+| **Resume conversation**  | Verify workspace exists, load session from `session.json`, preserve local state                                    |
+| **User requests sync**   | Claude runs `git fetch origin && git rebase origin/main` manually in workspace                                     |
+| **Conversation timeout** | Garbage collect conversations with no activity for 7 days (configurable via `execution.conversation_max_age_days`) |
 
 **Critical**: Conversations do NOT auto-sync with master to preserve Claude's
 work in progress. User must explicitly instruct Claude to update.
@@ -161,7 +161,7 @@ Example footer: `Cost: $0.0423 | Web searches: 2 | Web fetches: 1`
 
 **Dashboard link**: When `DASHBOARD_BASE_URL` is configured, acknowledgment
 emails (sent when a task is queued) include a link to track progress:
-`{DASHBOARD_BASE_URL}/task/{conversation_id}`
+`{DASHBOARD_BASE_URL}/conversation/{conversation_id}`
 
 ## Container Execution
 
@@ -169,12 +169,12 @@ emails (sent when a task is queued) include a link to track progress:
 
 All conversations are fully isolated with per-conversation configuration:
 
-| Mount                                          | Purpose                        | Mode       |
-| ---------------------------------------------- | ------------------------------ | ---------- |
-| `{STORAGE}/sessions/{ID}/workspace:/workspace` | Conversation workspace         | Read-write |
-| `{STORAGE}/sessions/{ID}/claude:/root/.claude` | Per-conversation session state | Read-write |
-| `{STORAGE}/sessions/{ID}/inbox:/inbox`         | Email attachments              | Read-write |
-| `{STORAGE}/sessions/{ID}/outbox:/outbox`       | Files to attach to reply       | Read-write |
+| Mount                                               | Purpose                        | Mode       |
+| --------------------------------------------------- | ------------------------------ | ---------- |
+| `{STORAGE}/conversations/{ID}/workspace:/workspace` | Conversation workspace         | Read-write |
+| `{STORAGE}/conversations/{ID}/claude:/root/.claude` | Per-conversation session state | Read-write |
+| `{STORAGE}/conversations/{ID}/inbox:/inbox`         | Email attachments              | Read-write |
+| `{STORAGE}/conversations/{ID}/outbox:/outbox`       | Files to attach to reply       | Read-write |
 
 **Complete isolation:** Each conversation has its own workspace and session
 state. No host directories (SSH keys, gitconfig, gh config) are mounted. All
@@ -202,9 +202,9 @@ Only entries with non-empty resolved values are passed.
 
 See [repo-config.md](repo-config.md) for the full schema and examples.
 
-**Note:** `session.json` is stored in `{STORAGE}/sessions/{ID}/session.json` and
-is **NOT** mounted to the container, ensuring session metadata cannot be
-modified by Claude.
+**Note:** `session.json` is stored in
+`{STORAGE}/conversations/{ID}/session.json` and is **NOT** mounted to the
+container, ensuring session metadata cannot be modified by Claude.
 
 ### Security Isolation
 
@@ -232,8 +232,8 @@ effect after merging to main without a server restart.
 ### Session Resumption
 
 The service stores Claude's session metadata in `session.json` within each
-session directory (`{STORAGE}/sessions/{ID}/session.json`), outside the
-container workspace. This enables conversation continuity via Claude's
+conversation directory (`{STORAGE}/conversations/{ID}/session.json`), outside
+the container workspace. This enables conversation continuity via Claude's
 `--resume` flag.
 
 **Resumption flow**:
@@ -256,7 +256,7 @@ model.
 
 The service captures Claude's full actions history using streaming JSON output
 (`--output-format stream-json --verbose`). Events are stored in the session file
-and displayed in the dashboard's actions viewer (`/task/{id}/actions`).
+and displayed in the dashboard's actions viewer (`/conversation/{id}/actions`).
 
 ## Configuration
 

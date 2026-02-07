@@ -95,10 +95,10 @@ class TestMultipleSendersAuthorization:
                 )
 
                 # Check that two conversations were created
-                sessions_dir = env.storage_dir / "sessions"
+                conversations_dir = env.storage_dir / "conversations"
                 conversations = [
                     d
-                    for d in sessions_dir.iterdir()
+                    for d in conversations_dir.iterdir()
                     if d.is_dir()
                     and not d.name.startswith(".")
                     and len(d.name) == 8
@@ -315,10 +315,10 @@ class TestMultipleSendersAuthorization:
                 )
 
                 # Verify two separate conversations were created
-                sessions_dir = env.storage_dir / "sessions"
+                conversations_dir = env.storage_dir / "conversations"
                 conversations = [
                     d
-                    for d in sessions_dir.iterdir()
+                    for d in conversations_dir.iterdir()
                     if d.is_dir()
                     and not d.name.startswith(".")
                     and len(d.name) == 8

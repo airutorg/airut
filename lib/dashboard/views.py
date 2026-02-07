@@ -435,7 +435,7 @@ def render_task_list(tasks: list[TaskState], status_class: str) -> str:
         HTML string for task list.
     """
     if not tasks:
-        return '<div class="empty">No tasks</div>'
+        return '<div class="empty">No conversations</div>'
 
     items = []
     for task in tasks:
@@ -479,7 +479,7 @@ def render_task_list(tasks: list[TaskState], status_class: str) -> str:
         items.append(f"""
             <div class="task {status_class} {success_class}">
                 <div class="task-id">
-                    <a href="/task/{task.conversation_id}">
+                    <a href="/conversation/{task.conversation_id}">
                         [{task.conversation_id}]
                     </a>
                     {repo_badge}{status_icon}
@@ -546,7 +546,7 @@ def render_task_detail(
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="refresh" content="10">
-    <title>Task {task.conversation_id} - Dashboard</title>
+    <title>Conversation {task.conversation_id} - Dashboard</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <style>
         * {{ box-sizing: border-box; }}
@@ -813,7 +813,7 @@ def render_task_detail(
 <body>
     <div class="back"><a href="/">&larr; Back to Dashboard</a></div>
     <div class="card">
-        <h1>Task: {task.conversation_id}</h1>
+        <h1>Conversation: {task.conversation_id}</h1>
 
         <div class="field">
             <div class="field-label">Subject</div>
@@ -1056,7 +1056,7 @@ def render_action_buttons(task: TaskState) -> str:
     """Render action buttons for task detail page.
 
     Shows View Actions, View Network Logs and View Raw JSON buttons always,
-    plus Stop Task button for in-progress tasks.
+    plus Stop button for in-progress tasks.
 
     Args:
         task: Task state to render buttons for.
@@ -1069,12 +1069,12 @@ def render_action_buttons(task: TaskState) -> str:
     if task.status == TaskStatus.IN_PROGRESS:
         stop_html = (
             '<button id="stop-btn" class="stop-btn"'
-            ' onclick="stopTask()">Stop Task</button>'
+            ' onclick="stopTask()">Stop</button>'
         )
 
-    actions = f"/task/{cid}/actions"
-    network = f"/task/{cid}/network"
-    session = f"/task/{cid}/session"
+    actions = f"/conversation/{cid}/actions"
+    network = f"/conversation/{cid}/network"
+    session = f"/conversation/{cid}/session"
     return f"""
         <div class="action-buttons">
             <a href="{actions}" class="action-btn primary"
@@ -1112,7 +1112,7 @@ def render_stop_script(task: TaskState) -> str:
             resultDiv.textContent = '';
             resultDiv.className = 'stop-result';
 
-            fetch('/api/task/{task.conversation_id}/stop', {{
+            fetch('/api/conversation/{task.conversation_id}/stop', {{
                 method: 'POST'
             }})
             .then(function(response) {{
@@ -1135,14 +1135,14 @@ def render_stop_script(task: TaskState) -> str:
                     resultDiv.textContent = msg;
                     resultDiv.className = 'stop-result error';
                     btn.disabled = false;
-                    btn.textContent = 'Stop Task';
+                    btn.textContent = 'Stop';
                 }}
             }})
             .catch(function(error) {{
                 resultDiv.textContent = 'Error: ' + error;
                 resultDiv.className = 'stop-result error';
                 btn.disabled = false;
-                btn.textContent = 'Stop Task';
+                btn.textContent = 'Stop';
             }});
         }}
     </script>"""
@@ -1529,7 +1529,7 @@ def render_actions_page(
 </head>
 <body>
     <div class="header">
-        <a href="/task/{task.conversation_id}">&larr; Back</a>
+        <a href="/conversation/{task.conversation_id}">&larr; Back</a>
         <h1>Actions: {task.conversation_id}</h1>
         <span class="subtitle">{escaped_subject}</span>
     </div>
@@ -1642,7 +1642,7 @@ def render_network_page(task: TaskState, log_content: str | None) -> str:
 </head>
 <body>
     <div class="header">
-        <a href="/task/{task.conversation_id}">&larr; Back</a>
+        <a href="/conversation/{task.conversation_id}">&larr; Back</a>
         <h1>Network Logs: {task.conversation_id}</h1>
         <span class="subtitle">{escaped_subject}</span>
     </div>

@@ -269,7 +269,7 @@ class EmailGatewayService:
         # Start dashboard (after repo init so we can report status)
         if self.global_config.dashboard_enabled:
             work_dirs = [
-                repo.conversation_manager.sessions_dir
+                repo.conversation_manager.conversations_dir
                 for repo_id, repo in self.repo_handlers.items()
                 if self.repo_states.get(
                     repo_id, RepoState("", RepoStatus.FAILED)
