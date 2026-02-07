@@ -4,6 +4,9 @@ This directory contains repo-specific Airut configuration. Files here are read
 from the git mirror's default branch at task start, so changes take effect after
 merging to main without server restart.
 
+For a minimal working example of `.airut/` configuration, see the
+[airut.org website repository](https://github.com/airutorg/website).
+
 ## Files
 
 ### `airut.yaml` — Repo Config

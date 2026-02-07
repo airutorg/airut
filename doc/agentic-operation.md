@@ -6,9 +6,11 @@ conversation management), **agentic operation requires proper configuration of
 the target repository** — including a well-crafted `CLAUDE.md`, workflow
 tooling, and GitHub branch protection.
 
-This repository serves as a reference implementation. When onboarding new
-repositories to Airut, these practices should be adapted and applied to achieve
-similar autonomous operation.
+This repository serves as a reference implementation. For a simpler starting
+point, the [airut.org website](https://github.com/airutorg/website) demonstrates
+a minimal Airut-managed project. When onboarding new repositories to Airut,
+these practices should be adapted and applied to achieve similar autonomous
+operation.
 
 ## Key Principles
 
