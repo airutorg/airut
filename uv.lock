@@ -17,7 +17,7 @@ wheels = [
 
 [[package]]
 name = "airut"
-version = "0.3.0"
+version = "0.4.0"
 source = { virtual = "." }
 dependencies = [
     { name = "aiosmtpd" },
