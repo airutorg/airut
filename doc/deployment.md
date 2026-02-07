@@ -163,18 +163,15 @@ uv run scripts/install_services.py
 This installs and starts:
 
 - `airut.service` — Email gateway service
-- `airut-updater.timer` — Auto-updater that pulls from origin when changes are
-  detected (see [Auto-Updater](#auto-updater))
+- `airut-updater.timer` — Auto-updater (default: checks for new tagged releases
+  every 6 hours). Use `--channel dev` to track `origin/main` instead. See
+  [Auto-Updater](#auto-updater) for details.
 
 Use `--skip-updater` to install without automatic updates:
 
 ```bash
 uv run scripts/install_services.py --skip-updater
 ```
-
-To control update frequency, you can clone Airut to a local git server or mirror
-repository. The updater pulls from whichever origin the local clone is
-configured to track.
 
 ### 8. Verify Installation
 
@@ -367,7 +364,26 @@ uv run scripts/install_services.py --uninstall
 
 ### Auto-Updater
 
-The updater timer checks for updates every 5 minutes:
+The updater supports two channels, selected at install time:
+
+| Channel         | Target          | Default Interval | Description          |
+| --------------- | --------------- | ---------------- | -------------------- |
+| `rel` (default) | Latest `v*` tag | 6 hours          | Stable releases only |
+| `dev`           | `origin/main`   | 30 minutes       | Tracks main branch   |
+
+```bash
+# Install with default rel channel
+uv run scripts/install_services.py
+
+# Install with dev channel
+uv run scripts/install_services.py --channel dev
+
+# Custom polling interval (in minutes)
+uv run scripts/install_services.py --channel dev --interval 15
+```
+
+The chosen channel and interval are persisted in the generated systemd unit
+files and survive self-updates.
 
 ```bash
 # View updater logs
@@ -379,10 +395,11 @@ systemctl --user list-timers
 
 When updates are available:
 
-1. Updater acquires lock (waits for busy service to become idle)
-2. Pulls latest from `origin/main`
-3. Reinstalls services with new code
-4. Services restart automatically
+1. Updater acquires lock (skips if service is busy)
+2. **rel channel**: Checks out latest `v*` tag (detached HEAD)
+3. **dev channel**: Pulls latest from `origin/main`
+4. Reinstalls services with new code
+5. Services restart automatically
 
 ### Update Coordination
 
@@ -390,7 +407,7 @@ The service and updater coordinate via `.update.lock`:
 
 - Service holds lock while processing messages
 - Updater skips update if lock is held
-- Timer retries in 5 minutes
+- Timer retries on next interval
 
 ## Dashboard
 
@@ -565,17 +582,16 @@ du -sh ~/airut-storage/*/conversations/
 podman image prune -a
 ```
 
-## Upgrading
+## Upgrading Manually
 
-If the auto-updater is enabled (default), updates are applied automatically when
-changes are detected on `origin/main`.
-
-To trigger an update manually:
+To trigger an update without waiting for the auto-updater:
 
 ```bash
 uv run scripts/install_services.py --update
 ```
 
-This checks for updates and applies them if available. If the auto-updater was
-not previously installed (e.g., `--skip-updater` was used), this command will
-not install it — it only updates the main service.
+To switch update channels, reinstall services:
+
+```bash
+uv run scripts/install_services.py --channel dev
+```
