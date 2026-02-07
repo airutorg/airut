@@ -129,6 +129,12 @@ You: approve and merge
 workflow — from the first working version onward, all development has been done
 by sending instructions to Airut and reviewing the resulting PRs.
 
+**Example project:** The
+[airut.org website](https://github.com/airutorg/website) is a minimal
+Airut-managed repository that demonstrates the email-to-deploy workflow with
+Cloudflare Pages. Its `.airut/` directory and `CLAUDE.md` serve as a good
+starting point for onboarding your own projects.
+
 ## Documentation
 
 ### High-Level Documentation

@@ -12,6 +12,12 @@ email-based Claude Code interaction.
 - Repository access for the agent's GitHub account
 - Claude API credentials
 
+## Example Project
+
+The [airut.org website repository](https://github.com/airutorg/website) is a
+minimal Airut-managed project. Its `.airut/` directory and `CLAUDE.md` serve as
+a practical reference for the steps below.
+
 ## Onboarding Steps
 
 ### 1. Create `.airut/` Directory
