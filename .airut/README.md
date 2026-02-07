@@ -38,15 +38,18 @@ Defines which hosts containers can access. All HTTP(S) traffic is proxied and
 checked against this allowlist. See `doc/network-sandbox.md`.
 
 ```yaml
-# Full-domain entries: all paths allowed
+# Full-domain entries: all paths and methods allowed
 domains:
   - api.anthropic.com
   - pypi.org
 
-# URL prefix entries: host + path prefix required
+# URL prefix entries: host + path required, optional method filter
 url_prefixes:
   - host: api.github.com
-    path: /repos/owner/repo
+    path: /repos/owner/repo*
+  - host: api.github.com
+    path: /graphql
+    methods: [POST]              # optional: restrict to specific HTTP methods
 ```
 
 **Self-service workflow:** When the agent encounters a blocked request, it can

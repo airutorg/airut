@@ -246,17 +246,18 @@ The allowlist at `.airut/network-allowlist.yaml` defines permitted hosts using
 fnmatch-style pattern matching:
 
 ```yaml
-# Domain entries: all paths allowed
+# Domain entries: all paths and methods allowed
 domains:
   - api.anthropic.com      # exact match
   - "*.github.com"         # matches api.github.com, NOT github.com
 
-# URL pattern entries: host + path pattern required
+# URL pattern entries: host + path pattern required, optional method filter
 url_prefixes:
   - host: api.github.com
     path: /repos/your-org/your-repo*   # matches /repos/your-org/your-repo and subpaths
   - host: api.github.com
     path: /graphql                 # exact match only
+    methods: [POST]                # only POST allowed (GraphQL is POST-only)
 ```
 
 #### Pattern Matching Rules
@@ -277,6 +278,34 @@ Both domains and paths support fnmatch-style wildcards (`*` and `?`):
 - `*.example.com` does NOT match `example.com` (requires subdomain)
 - No path normalization — `/api` and `/api/` are different patterns
 - Empty path in `url_prefixes` allows all paths on that host
+
+#### HTTP Method Filtering
+
+URL prefix entries can optionally restrict which HTTP methods are allowed using
+the `methods` field:
+
+```yaml
+url_prefixes:
+  - host: api.github.com
+    path: /graphql
+    methods: [POST]              # only POST allowed
+  - host: pypi.org
+    path: /simple*
+    methods: [GET, HEAD]         # read-only access
+  - host: api.github.com
+    path: /repos/org/repo*       # no methods field = all methods allowed
+```
+
+**Rules:**
+
+- `methods` is an optional list of HTTP method strings (e.g., `GET`, `POST`,
+  `HEAD`, `PUT`, `DELETE`, `PATCH`)
+- Omitting `methods` or setting it to an empty list allows all methods
+- Method comparison is case-insensitive (`get` and `GET` are equivalent)
+- Domain entries (`domains` section) always allow all methods — use
+  `url_prefixes` if you need method restrictions
+- The 403 response distinguishes method-blocked from host/path-blocked requests,
+  so agents get actionable feedback
 
 ### Agent Self-Service Flow
 

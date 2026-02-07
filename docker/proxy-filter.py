@@ -120,7 +120,7 @@ class ProxyFilter:
 
     def __init__(self) -> None:
         self.domains: list[str] = []
-        self.url_prefixes: list[dict[str, str]] = []
+        self.url_prefixes: list[dict[str, Any]] = []
         self.replacements: dict[str, dict[str, Any]] = {}
         self._log_file: TextIO | None = None
 
@@ -186,21 +186,26 @@ class ProxyFilter:
             except OSError:
                 pass  # Best effort file logging
 
-    def _is_allowed(self, host: str, path: str) -> bool:
-        """Check if a host+path combination is allowed.
+    def _is_allowed(self, host: str, path: str, method: str = "") -> bool:
+        """Check if a host+path+method combination is allowed.
 
         Uses fnmatch-style pattern matching for both domains and paths.
         Patterns containing * or ? are matched with fnmatch; others require
         exact match.
 
+        Domain entries allow all methods unconditionally. URL prefix entries
+        can optionally restrict allowed HTTP methods via a ``methods`` list.
+
         Args:
             host: Request hostname (e.g. "api.github.com").
             path: Request path (e.g. "/repos/your-org/your-repo/pulls").
+            method: HTTP method (e.g. "GET", "POST"). Empty means any.
 
         Returns:
             True if the request is allowed, False otherwise.
         """
         # Check domain entries (with wildcard support)
+        # Domain entries allow all methods unconditionally
         for domain in self.domains:
             if _match_pattern(domain, host):
                 return True
@@ -209,11 +214,16 @@ class ProxyFilter:
         for entry in self.url_prefixes:
             entry_host = entry.get("host", "")
             entry_path = entry.get("path", "")
+            entry_methods: list[str] = entry.get("methods", [])
 
             if _match_pattern(entry_host, host):
                 # Empty path means allow all paths on this host
                 if not entry_path or _match_pattern(entry_path, path):
-                    return True
+                    # Empty methods means allow all methods
+                    if not entry_methods or method.upper() in (
+                        m.upper() for m in entry_methods
+                    ):
+                        return True
 
         return False
 
@@ -312,12 +322,30 @@ class ProxyFilter:
         """Check allowlist and perform token replacement."""
         host = flow.request.pretty_host
         path = flow.request.path
+        method = flow.request.method
 
-        if not self._is_allowed(host, path):
+        if not self._is_allowed(host, path, method):
             # Block the request
             flow.metadata["allowlist_action"] = "BLOCKED"
             url = flow.request.pretty_url
-            self._log(f"BLOCKED {flow.request.method} {url} -> 403")
+            self._log(f"BLOCKED {method} {url} -> 403")
+
+            # Distinguish method-blocked from host/path-blocked for
+            # actionable agent feedback
+            if self._is_allowed(host, path):
+                message = (
+                    f"Method {method} is not allowed for this URL. "
+                    "To request access, add the method to the entry's "
+                    "'methods' list in "
+                    ".airut/network-allowlist.yaml and submit a PR."
+                )
+            else:
+                message = (
+                    "This host/path is not in the network allowlist. "
+                    "To request access, edit "
+                    ".airut/network-allowlist.yaml and submit a PR."
+                )
+
             flow.response = http.Response.make(
                 403,
                 json.dumps(
@@ -325,11 +353,8 @@ class ProxyFilter:
                         "error": "blocked_by_network_allowlist",
                         "host": host,
                         "path": path,
-                        "message": (
-                            "This host is not in the network allowlist. "
-                            "To request access, edit "
-                            ".airut/network-allowlist.yaml and submit a PR."
-                        ),
+                        "method": method,
+                        "message": message,
                     }
                 ),
                 {"Content-Type": "application/json"},
