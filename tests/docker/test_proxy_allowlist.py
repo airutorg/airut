@@ -12,6 +12,7 @@ mitmproxy dependencies.
 """
 
 import fnmatch
+from typing import TypedDict
 
 
 def _match_pattern(pattern: str, value: str) -> bool:
@@ -56,19 +57,28 @@ def _match_header_pattern(pattern: str, header_name: str) -> bool:
     return pattern_lower == header_lower
 
 
+class UrlPrefixEntry(TypedDict, total=False):
+    """A single entry in the url_prefixes allowlist."""
+
+    host: str
+    path: str
+    methods: list[str]
+
+
 class MockNetworkAllowlist:
     """Test version of NetworkAllowlist without mitmproxy dependencies.
 
-    Implements the same _is_allowed logic as docker/proxy-allowlist.py.
+    Implements the same _is_allowed logic as docker/proxy-filter.py.
     """
 
     def __init__(self) -> None:
         self.domains: list[str] = []
-        self.url_prefixes: list[dict[str, str]] = []
+        self.url_prefixes: list[UrlPrefixEntry] = []
 
-    def _is_allowed(self, host: str, path: str) -> bool:
-        """Check if a host+path combination is allowed."""
+    def _is_allowed(self, host: str, path: str, method: str = "") -> bool:
+        """Check if a host+path+method combination is allowed."""
         # Check domain entries (with wildcard support)
+        # Domain entries allow all methods unconditionally
         for domain in self.domains:
             if _match_pattern(domain, host):
                 return True
@@ -77,11 +87,16 @@ class MockNetworkAllowlist:
         for entry in self.url_prefixes:
             entry_host = entry.get("host", "")
             entry_path = entry.get("path", "")
+            entry_methods = entry.get("methods", [])
 
             if _match_pattern(entry_host, host):
                 # Empty path means allow all paths on this host
                 if not entry_path or _match_pattern(entry_path, path):
-                    return True
+                    # Empty methods means allow all methods
+                    if not entry_methods or method.upper() in (
+                        m.upper() for m in entry_methods
+                    ):
+                        return True
 
         return False
 
@@ -269,6 +284,181 @@ class TestNetworkAllowlistIsAllowed:
         al.url_prefixes = []
 
         assert al._is_allowed("any.host.com", "/any/path") is False
+
+
+class TestMethodFiltering:
+    """Tests for HTTP method filtering in url_prefixes."""
+
+    def test_no_methods_allows_all(self) -> None:
+        """Entry without methods field allows all HTTP methods."""
+        al = MockNetworkAllowlist()
+        al.url_prefixes = [{"host": "api.github.com", "path": "/graphql"}]
+
+        assert al._is_allowed("api.github.com", "/graphql", "GET") is True
+        assert al._is_allowed("api.github.com", "/graphql", "POST") is True
+        assert al._is_allowed("api.github.com", "/graphql", "DELETE") is True
+
+    def test_empty_methods_allows_all(self) -> None:
+        """Entry with empty methods list allows all HTTP methods."""
+        al = MockNetworkAllowlist()
+        al.url_prefixes = [
+            {"host": "api.github.com", "path": "/graphql", "methods": []}
+        ]
+
+        assert al._is_allowed("api.github.com", "/graphql", "GET") is True
+        assert al._is_allowed("api.github.com", "/graphql", "POST") is True
+
+    def test_specific_methods_allowed(self) -> None:
+        """Only listed methods are allowed."""
+        al = MockNetworkAllowlist()
+        al.url_prefixes = [
+            {
+                "host": "api.github.com",
+                "path": "/graphql",
+                "methods": ["POST"],
+            }
+        ]
+
+        assert al._is_allowed("api.github.com", "/graphql", "POST") is True
+        assert al._is_allowed("api.github.com", "/graphql", "GET") is False
+        assert al._is_allowed("api.github.com", "/graphql", "DELETE") is False
+
+    def test_multiple_methods(self) -> None:
+        """Multiple methods can be listed."""
+        al = MockNetworkAllowlist()
+        al.url_prefixes = [
+            {
+                "host": "pypi.org",
+                "path": "/simple*",
+                "methods": ["GET", "HEAD"],
+            }
+        ]
+
+        assert al._is_allowed("pypi.org", "/simple/foo", "GET") is True
+        assert al._is_allowed("pypi.org", "/simple/foo", "HEAD") is True
+        assert al._is_allowed("pypi.org", "/simple/foo", "POST") is False
+
+    def test_method_case_insensitive(self) -> None:
+        """Method comparison is case-insensitive."""
+        al = MockNetworkAllowlist()
+        al.url_prefixes = [
+            {
+                "host": "api.example.com",
+                "path": "/data",
+                "methods": ["GET", "POST"],
+            }
+        ]
+
+        assert al._is_allowed("api.example.com", "/data", "get") is True
+        assert al._is_allowed("api.example.com", "/data", "Get") is True
+        assert al._is_allowed("api.example.com", "/data", "post") is True
+        assert al._is_allowed("api.example.com", "/data", "Post") is True
+        assert al._is_allowed("api.example.com", "/data", "delete") is False
+
+    def test_domain_entries_ignore_methods(self) -> None:
+        """Domain entries always allow all methods (no method filtering)."""
+        al = MockNetworkAllowlist()
+        al.domains = ["api.anthropic.com"]
+
+        assert al._is_allowed("api.anthropic.com", "/v1", "GET") is True
+        assert al._is_allowed("api.anthropic.com", "/v1", "POST") is True
+        assert al._is_allowed("api.anthropic.com", "/v1", "DELETE") is True
+        assert al._is_allowed("api.anthropic.com", "/v1", "PATCH") is True
+
+    def test_method_filtering_combined_with_path(self) -> None:
+        """Method filtering works alongside path filtering."""
+        al = MockNetworkAllowlist()
+        al.url_prefixes = [
+            {
+                "host": "api.github.com",
+                "path": "/repos/org/repo*",
+                "methods": ["GET"],
+            }
+        ]
+
+        # Correct host, path, and method
+        assert (
+            al._is_allowed("api.github.com", "/repos/org/repo", "GET") is True
+        )
+        # Correct host and path, wrong method
+        assert (
+            al._is_allowed("api.github.com", "/repos/org/repo", "POST") is False
+        )
+        # Correct host and method, wrong path
+        assert al._is_allowed("api.github.com", "/other", "GET") is False
+
+    def test_multiple_entries_different_methods(self) -> None:
+        """Different entries can allow different methods for same host/path."""
+        al = MockNetworkAllowlist()
+        al.url_prefixes = [
+            {
+                "host": "api.github.com",
+                "path": "/graphql",
+                "methods": ["POST"],
+            },
+            {
+                "host": "api.github.com",
+                "path": "/repos/org*",
+                "methods": ["GET", "HEAD"],
+            },
+        ]
+
+        # GraphQL: POST only
+        assert al._is_allowed("api.github.com", "/graphql", "POST") is True
+        assert al._is_allowed("api.github.com", "/graphql", "GET") is False
+        # Repos: GET/HEAD only
+        assert al._is_allowed("api.github.com", "/repos/org/foo", "GET") is True
+        assert (
+            al._is_allowed("api.github.com", "/repos/org/foo", "HEAD") is True
+        )
+        assert (
+            al._is_allowed("api.github.com", "/repos/org/foo", "POST") is False
+        )
+
+    def test_entry_without_methods_alongside_restricted(self) -> None:
+        """Unrestricted entry coexists with method-restricted entries."""
+        al = MockNetworkAllowlist()
+        al.url_prefixes = [
+            {
+                "host": "api.github.com",
+                "path": "/graphql",
+                "methods": ["POST"],
+            },
+            {
+                "host": "api.github.com",
+                "path": "/repos*",
+            },
+        ]
+
+        # GraphQL: POST only
+        assert al._is_allowed("api.github.com", "/graphql", "POST") is True
+        assert al._is_allowed("api.github.com", "/graphql", "GET") is False
+        # Repos: all methods (no methods field)
+        assert al._is_allowed("api.github.com", "/repos/foo", "GET") is True
+        assert al._is_allowed("api.github.com", "/repos/foo", "POST") is True
+        assert al._is_allowed("api.github.com", "/repos/foo", "DELETE") is True
+
+    def test_empty_method_string_allowed_when_no_filter(self) -> None:
+        """Empty method string is allowed when no methods filter."""
+        al = MockNetworkAllowlist()
+        al.url_prefixes = [{"host": "example.com", "path": "/api"}]
+
+        assert al._is_allowed("example.com", "/api", "") is True
+
+    def test_methods_with_lowercase_config(self) -> None:
+        """Methods in config can be lowercase and still match."""
+        al = MockNetworkAllowlist()
+        al.url_prefixes = [
+            {
+                "host": "api.example.com",
+                "path": "/data",
+                "methods": ["get", "post"],
+            }
+        ]
+
+        assert al._is_allowed("api.example.com", "/data", "GET") is True
+        assert al._is_allowed("api.example.com", "/data", "POST") is True
+        assert al._is_allowed("api.example.com", "/data", "DELETE") is False
 
 
 class TestMatchHeaderPattern:
