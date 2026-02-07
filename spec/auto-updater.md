@@ -1,7 +1,7 @@
 # Auto-Updater Service
 
-Automatic service update mechanism that keeps services synchronized with the
-`origin/main` branch.
+Automatic service update mechanism that keeps Airut synchronized with upstream
+releases or the development branch.
 
 ## Overview
 
@@ -13,31 +13,51 @@ in-progress work.
 **Key principle**: Updates should never disrupt active email processing or
 Claude execution.
 
+## Update Channels
+
+The updater supports two channels, selected at install time via `--channel`:
+
+| Channel         | Target            | Default Interval | Description                      |
+| --------------- | ----------------- | ---------------- | -------------------------------- |
+| `rel` (default) | Latest `v*` tag   | 6 hours          | Stable tagged releases only      |
+| `dev`           | `origin/main` tip | 30 minutes       | Tracks main branch (development) |
+
+The channel is persisted in the generated `airut-updater.service` unit file's
+`ExecStart` line, so it survives service restarts and self-updates.
+
+The polling interval can be overridden with `--interval MINUTES` at install
+time. The override is persisted in the generated `airut-updater.timer` unit.
+
 ## Architecture
 
 ### Components
 
-- **airut-updater.timer** - Systemd timer triggering every 5 minutes
-- **airut-updater.service** - One-shot service running the update check
-- **install_services.py** - Update logic and service management
-- **UpdateLock** - File-based lock for coordinating with email service
+- **airut-updater.timer** — Systemd timer triggering at channel-appropriate
+  interval
+- **airut-updater.service** — One-shot service running the update check
+- **lib/install_services.py** — Update logic and service management
+- **scripts/install_services.py** — Thin CLI entry point
+- **UpdateLock** — File-based lock for coordinating with email service
 
 ### Update Flow
 
 ```
-Timer triggers (every 5 min)
-  -> install_services.py --update
+Timer triggers (per channel interval)
+  -> install_services.py --update --channel <channel>
     -> Try to acquire update lock (non-blocking)
       -> If locked: Log "Email service busy", exit 0
       -> If acquired: Hold lock and continue
-    -> git fetch origin
-    -> Compare HEAD vs origin/main
+    -> git fetch origin [--tags for rel]
+    -> Compare HEAD vs target
+      -> dev: HEAD vs origin/main
+      -> rel: HEAD vs latest v* tag commit
       -> If same: Exit (no updates)
       -> If different: Apply update
         -> Uninstall main services (not updater)
-        -> git reset --hard origin/main
+        -> dev: git checkout main && git reset --hard origin/main
+        -> rel: git checkout <tag> (detached HEAD)
         -> uv sync (update dependencies)
-        -> os.execv() to new installer
+        -> os.execv() to new installer with --skip-updater
           -> Reinstall services
           -> Lock auto-releases on exit
 ```
@@ -78,18 +98,43 @@ The email service is considered **idle** when:
 1. **No interrupted execution**: Updates only proceed when email service is idle
 2. **Crash recovery**: `flock()` auto-releases if either service terminates
 3. **No deadlock**: Non-blocking acquire means updater never waits indefinitely
-4. **Frequent retry**: Timer runs every 5 minutes, so updates apply soon after
-   service becomes idle
+4. **Retry on next interval**: Timer retries on next trigger, so updates apply
+   soon after service becomes idle
 
 ## Configuration
 
-### Systemd Timer
+### Install with Channel
+
+```bash
+# Default: rel channel, 6-hour polling
+uv run scripts/install_services.py
+
+# Explicit rel channel
+uv run scripts/install_services.py --channel rel
+
+# Dev channel (tracks main branch)
+uv run scripts/install_services.py --channel dev
+
+# Custom polling interval (any channel)
+uv run scripts/install_services.py --channel dev --interval 15
+```
+
+### Systemd Timer (rel channel, default)
 
 ```ini
 [Timer]
-OnCalendar=*:0/5      # Every 5 minutes
-OnBootSec=1min        # 1 minute after boot
-Persistent=true       # Catch up missed runs
+OnCalendar=*-*-* 0/6:00:00   # Every 6 hours
+OnBootSec=1min                # 1 minute after boot
+Persistent=true               # Catch up missed runs
+```
+
+### Systemd Timer (dev channel)
+
+```ini
+[Timer]
+OnCalendar=*:0/30     # Every 30 minutes
+OnBootSec=1min
+Persistent=true
 ```
 
 ### Systemd Service
@@ -98,7 +143,7 @@ Persistent=true       # Catch up missed runs
 [Service]
 Type=oneshot
 WorkingDirectory=%h/airut
-ExecStart=%h/.local/bin/uv run scripts/install_services.py --update
+ExecStart=%h/.local/bin/uv run scripts/install_services.py --update --channel rel
 ```
 
 ## Exit Codes
@@ -125,7 +170,7 @@ Note: "Email service busy" exits with code 0 (not an error condition).
 
 ### Why Non-Blocking Acquire?
 
-- **Fast failure**: Updater shouldn't wait; timer will retry in 5 minutes
+- **Fast failure**: Updater shouldn't wait; timer will retry on next interval
 - **No deadlock risk**: Blocking acquire could hang if email service holds lock
   indefinitely
 - **Simple logic**: Try once, succeed or skip
@@ -135,3 +180,17 @@ Note: "Email service busy" exits with code 0 (not an error condition).
 - **Not an error**: Being busy is expected behavior
 - **No systemd noise**: Prevents failed unit status in journal
 - **Timer continues**: Systemd timer triggers regardless of exit code
+
+### Why Two Channels?
+
+- **rel**: Predictable, stable updates for production deployments. Only moves to
+  explicitly tagged releases.
+- **dev**: Continuous updates for development/testing. Mirrors the previous
+  behavior of tracking `origin/main`.
+
+### Why Persist Channel in Unit File?
+
+The channel is embedded in the `ExecStart` line of `airut-updater.service`.
+Since `--skip-updater` is passed during the self-update handoff (`os.execv`),
+the updater unit is never regenerated during updates — preserving the originally
+chosen channel and interval.

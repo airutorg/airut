@@ -222,11 +222,12 @@ lib/                        - Library code
   markdown.py               - Markdown-to-HTML conversion
   logging.py                - Logging utilities
   git_version.py            - Git version management
+  install_services.py       - Service installation and auto-update logic
   update_lock.py            - Advisory file lock
 scripts/                    - CLI tools
   gateway/                  - Email gateway CLI
   ci.py, pr.py              - CI/PR tools
-  install_services.py       - Service installation
+  install_services.py       - Thin CLI entry point for service management
   check_markdown.py         - Markdown validation
 spec/                       - Design specifications (see spec/README.md)
 tests/                      - Unit tests (100% coverage required)
