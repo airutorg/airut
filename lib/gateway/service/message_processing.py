@@ -297,7 +297,7 @@ def process_message(
             "and will receive your last reply as email. "
             "Markdown formatting is supported in your responses. "
             "To send files back to the user, place them in the "
-            "/outbox/ directory.\n\n"
+            "/outbox/ directory root (no subdirectories).\n\n"
             "IMPORTANT: AskUserQuestion and plan mode tools "
             "(EnterPlanMode/ExitPlanMode) do not work over email "
             "interface. If you need clarification, include questions in "
