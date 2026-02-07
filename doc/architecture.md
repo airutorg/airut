@@ -202,7 +202,8 @@ Each conversation maps to a directory:
         ├── workspace/           # Git checkout → /workspace
         ├── claude/              # Claude state → /root/.claude
         ├── inbox/               # Attachments → /inbox
-        └── outbox/              # Reply files → /outbox
+        ├── outbox/              # Reply files → /outbox
+        └── storage/             # Persistent scratch space → /storage
 ```
 
 The git mirror is refreshed before each task starts. After refreshing, the
