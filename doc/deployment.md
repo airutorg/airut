@@ -163,31 +163,9 @@ uv run scripts/install_services.py
 This installs and starts:
 
 - `airut.service` — Email gateway service
-- `airut-updater.timer` — Auto-updater that checks for new tagged releases every
-  6 hours (see [Auto-Updater](#auto-updater))
-
-#### Update Channels
-
-The updater supports two channels:
-
-| Channel         | Target          | Default Interval | Description          |
-| --------------- | --------------- | ---------------- | -------------------- |
-| `rel` (default) | Latest `v*` tag | 6 hours          | Stable releases only |
-| `dev`           | `origin/main`   | 30 minutes       | Tracks main branch   |
-
-```bash
-# Default: rel channel (recommended for production)
-uv run scripts/install_services.py
-
-# Dev channel (tracks main, for development/testing)
-uv run scripts/install_services.py --channel dev
-
-# Custom polling interval (in minutes)
-uv run scripts/install_services.py --channel dev --interval 15
-```
-
-The chosen channel and interval are persisted in the generated systemd unit
-files and survive self-updates.
+- `airut-updater.timer` — Auto-updater (default: checks for new tagged releases
+  every 6 hours). Use `--channel dev` to track `origin/main` instead. See
+  [Auto-Updater](#auto-updater) for details.
 
 Use `--skip-updater` to install without automatic updates:
 
@@ -386,8 +364,26 @@ uv run scripts/install_services.py --uninstall
 
 ### Auto-Updater
 
-The updater timer checks for updates at the channel's configured interval (every
-6 hours for `rel`, every 30 minutes for `dev`):
+The updater supports two channels, selected at install time:
+
+| Channel         | Target          | Default Interval | Description          |
+| --------------- | --------------- | ---------------- | -------------------- |
+| `rel` (default) | Latest `v*` tag | 6 hours          | Stable releases only |
+| `dev`           | `origin/main`   | 30 minutes       | Tracks main branch   |
+
+```bash
+# Install with default rel channel
+uv run scripts/install_services.py
+
+# Install with dev channel
+uv run scripts/install_services.py --channel dev
+
+# Custom polling interval (in minutes)
+uv run scripts/install_services.py --channel dev --interval 15
+```
+
+The chosen channel and interval are persisted in the generated systemd unit
+files and survive self-updates.
 
 ```bash
 # View updater logs
@@ -586,26 +582,15 @@ du -sh ~/airut-storage/*/conversations/
 podman image prune -a
 ```
 
-## Upgrading
+## Upgrading Manually
 
-If the auto-updater is enabled (default), updates are applied automatically
-based on the configured channel:
-
-- **rel** (default): Updates when new `v*` tags are pushed
-- **dev**: Updates when `origin/main` advances
-
-To trigger an update manually:
+To trigger an update without waiting for the auto-updater:
 
 ```bash
 uv run scripts/install_services.py --update
-uv run scripts/install_services.py --update --channel dev  # Explicit channel
 ```
 
-This checks for updates and applies them if available. If the auto-updater was
-not previously installed (e.g., `--skip-updater` was used), this command will
-not install it — it only updates the main service.
-
-To switch channels, reinstall services:
+To switch update channels, reinstall services:
 
 ```bash
 uv run scripts/install_services.py --channel dev
