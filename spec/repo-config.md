@@ -69,6 +69,8 @@ The server config (`config/airut.yaml`) retains deployment-specific settings:
   `conversation_max_age_days`
 - `dashboard.*` — Web UI configuration
 - `container_command` — Container runtime (podman/docker)
+- `service_llm.*` — Optional Anthropic API key and model for Airut's internal
+  use (error summarization). Not passed to containers.
 
 The `container_env` block is replaced by `secrets` — a named pool of values that
 repos can reference via `!secret`:

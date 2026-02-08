@@ -36,6 +36,15 @@ dashboard:
 # Container runtime executable (podman or docker).
 container_command: podman
 
+# Service LLM — optional Anthropic API key for Airut's internal use.
+# Used to generate human-readable error summaries in reply emails.
+# This key is NOT passed to containers; it is only used by the gateway
+# service itself.
+#
+# service_llm:
+#   api_key: !env AIRUT_SERVICE_LLM_API_KEY
+#   model: claude-haiku-4-5  # default; any Anthropic model ID works
+
 # Network settings.
 # network:
 #   # Upstream DNS server for proxy container resolution.

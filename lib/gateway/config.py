@@ -434,6 +434,9 @@ class GlobalConfig:
         container_command: Container runtime command (podman or docker).
         upstream_dns: Upstream DNS server for proxy container resolution.
             ``None`` means auto-detect from ``/etc/resolv.conf``.
+        service_llm_api_key: Anthropic API key for Airut's internal use
+            (error summarization, etc.).  Not passed to containers.
+        service_llm_model: Model to use for service-internal LLM calls.
     """
 
     max_concurrent_executions: int = 3
@@ -445,6 +448,8 @@ class GlobalConfig:
     dashboard_base_url: str | None = None
     container_command: str = "podman"
     upstream_dns: str | None = None
+    service_llm_api_key: str | None = None
+    service_llm_model: str = "claude-haiku-4-5"
 
     def __post_init__(self) -> None:
         """Validate configuration.
@@ -467,6 +472,8 @@ class GlobalConfig:
                 f"Conversation max age must be >= 1 day: "
                 f"{self.conversation_max_age_days}"
             )
+        if self.service_llm_api_key:
+            SecretFilter.register_secret(self.service_llm_api_key)
 
 
 @dataclass(frozen=True)
@@ -672,6 +679,8 @@ class ServerConfig:
 
         network = raw.get("network", {})
 
+        service_llm = raw.get("service_llm", {})
+
         global_config = GlobalConfig(
             max_concurrent_executions=_resolve(
                 execution.get("max_concurrent"), int, default=3
@@ -694,6 +703,12 @@ class ServerConfig:
                 raw.get("container_command"), str, default="podman"
             ),
             upstream_dns=_resolve(network.get("upstream_dns"), str),
+            service_llm_api_key=_resolve(service_llm.get("api_key"), str),
+            service_llm_model=_resolve(
+                service_llm.get("model"),
+                str,
+                default="claude-haiku-4-5",
+            ),
         )
 
         # Parse repos

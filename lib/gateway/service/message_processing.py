@@ -30,6 +30,7 @@ from lib.container.executor import (
     extract_error_summary,
 )
 from lib.container.session import SessionStore
+from lib.error_explainer import explain_error
 from lib.gateway.config import RepoConfig
 from lib.gateway.conversation import GitCloneError
 from lib.gateway.parsing import (
@@ -56,6 +57,32 @@ if TYPE_CHECKING:
     from lib.gateway.service.repo_handler import RepoHandler
 
 logger = logging.getLogger(__name__)
+
+
+def _format_execution_failure(result: ExecutionResult) -> str:
+    """Format raw execution failure details for error explanation.
+
+    Args:
+        result: Failed execution result.
+
+    Returns:
+        Formatted error details string.
+    """
+    parts = [
+        f"Exit code: {result.exit_code}",
+        f"Error: {result.error_message}",
+    ]
+
+    error_summary = extract_error_summary(result.stdout)
+    if error_summary:
+        parts.append(f"\nClaude output:\n{error_summary}")
+
+    if result.stderr:
+        stderr_lines = result.stderr.strip().split("\n")
+        stderr_tail = "\n".join(stderr_lines[-10:])
+        parts.append(f"\nStderr (last 10 lines):\n{stderr_tail}")
+
+    return "\n".join(parts)
 
 
 def is_prompt_too_long_error(result: ExecutionResult) -> bool:
@@ -465,24 +492,13 @@ def process_message(
                 stats_footer = usage_stats.format_summary()
                 response_body = f"{response_body}\n\n*{stats_footer}*"
         else:
-            error_details = [
-                "Execution failed:",
-                f"Exit code: {result.exit_code}",
-                f"Error: {result.error_message}",
-            ]
-
-            error_summary = extract_error_summary(result.stdout)
-            if error_summary:
-                error_details.append("\nClaude output:")
-                error_details.append(f"```\n{error_summary}\n```")
-
-            if result.stderr:
-                stderr_lines = result.stderr.strip().split("\n")
-                stderr_tail = "\n".join(stderr_lines[-10:])
-                error_details.append("\nStderr (last 10 lines):")
-                error_details.append(f"```\n{stderr_tail}\n```")
-
-            response_body = "\n".join(error_details)
+            raw_details = _format_execution_failure(result)
+            global_cfg = service.global_config
+            response_body = explain_error(
+                error_message=raw_details,
+                api_key=global_cfg.service_llm_api_key,
+                model=global_cfg.service_llm_model,
+            )
             logger.error(
                 "Repo '%s': execution failed for conversation %s: %s",
                 repo_id,
@@ -515,12 +531,14 @@ def process_message(
 
     except ContainerTimeoutError as e:
         logger.error("Repo '%s': container execution timed out: %s", repo_id, e)
-        error_msg = (
-            f"Execution timed out after "
-            f"{repo_config.timeout} seconds.\n\n"
-            "Please try a simpler request or break it into "
-            "smaller steps.\n\n"
-            f"Technical details:\n{e}"
+        global_cfg = service.global_config
+        error_msg = explain_error(
+            error=e,
+            error_message=(
+                f"Execution timed out after {repo_config.timeout} seconds."
+            ),
+            api_key=global_cfg.service_llm_api_key,
+            model=global_cfg.service_llm_model,
         )
         send_error_reply(repo_handler, message, error_msg)
         if conv_id and session_store:
@@ -537,10 +555,13 @@ def process_message(
             repo_id,
             e,
         )
-        error_msg = (
-            "System Error: Could not initialize workspace.\n\n"
-            f"Technical details:\n{e}\n\n"
-            "Please contact the administrator."
+        global_cfg = service.global_config
+        error_msg = explain_error(
+            error=e,
+            error_message="Could not initialize workspace.",
+            traceback_str=traceback.format_exc(),
+            api_key=global_cfg.service_llm_api_key,
+            model=global_cfg.service_llm_model,
         )
         send_error_reply(repo_handler, message, error_msg)
         return False, None
@@ -550,11 +571,12 @@ def process_message(
             repo_id,
             e,
         )
-        error_msg = (
-            "An unexpected error occurred.\n\n"
-            f"Error: {type(e).__name__}: {e}\n\n"
-            f"Traceback:\n{traceback.format_exc()}\n\n"
-            "The administrator has been notified."
+        global_cfg = service.global_config
+        error_msg = explain_error(
+            error=e,
+            traceback_str=traceback.format_exc(),
+            api_key=global_cfg.service_llm_api_key,
+            model=global_cfg.service_llm_model,
         )
         send_error_reply(repo_handler, message, error_msg)
         if conv_id and session_store:

@@ -205,6 +205,11 @@ dashboard:
 
 container_command: podman    # or docker
 
+# Optional: Anthropic API key for human-readable error summaries
+# service_llm:
+#   api_key: !env AIRUT_SERVICE_LLM_API_KEY
+#   model: claude-haiku-4-5
+
 repos:
   my-project:
     email:

@@ -280,6 +280,8 @@ def test_global_config_defaults() -> None:
     assert config.dashboard_base_url is None
     assert config.container_command == "podman"
     assert config.upstream_dns is None
+    assert config.service_llm_api_key is None
+    assert config.service_llm_model == "claude-haiku-4-5"
 
 
 def test_global_config_with_custom_values() -> None:
@@ -294,6 +296,8 @@ def test_global_config_with_custom_values() -> None:
         dashboard_base_url="https://dashboard.example.com",
         container_command="docker",
         upstream_dns="8.8.8.8",
+        service_llm_api_key="sk-test-key",
+        service_llm_model="claude-sonnet-4-5",
     )
 
     assert config.max_concurrent_executions == 5
@@ -305,6 +309,8 @@ def test_global_config_with_custom_values() -> None:
     assert config.dashboard_base_url == "https://dashboard.example.com"
     assert config.container_command == "docker"
     assert config.upstream_dns == "8.8.8.8"
+    assert config.service_llm_api_key == "sk-test-key"
+    assert config.service_llm_model == "claude-sonnet-4-5"
 
 
 def test_global_config_invalid_max_concurrent() -> None:
@@ -327,6 +333,20 @@ def test_global_config_invalid_conversation_max_age() -> None:
         ValueError, match="Conversation max age must be >= 1 day: 0"
     ):
         GlobalConfig(conversation_max_age_days=0)
+
+
+def test_global_config_service_llm_api_key_redacted() -> None:
+    """Service LLM API key is registered with SecretFilter."""
+    SecretFilter._secrets.clear()
+    GlobalConfig(service_llm_api_key="sk-test-secret-key")
+    assert "sk-test-secret-key" in SecretFilter._secrets
+
+
+def test_global_config_service_llm_no_redaction_when_none() -> None:
+    """No SecretFilter registration when service_llm_api_key is None."""
+    SecretFilter._secrets.clear()
+    GlobalConfig(service_llm_api_key=None)
+    assert "None" not in SecretFilter._secrets
 
 
 # ---------------------------------------------------------------------------
@@ -636,6 +656,8 @@ class TestFromYaml:
         assert config.global_config.dashboard_port == 5200
         assert config.global_config.dashboard_base_url is None
         assert config.global_config.container_command == "podman"
+        assert config.global_config.service_llm_api_key is None
+        assert config.global_config.service_llm_model == "claude-haiku-4-5"
 
         # Repo config
         assert repo.imap_server == "imap.test.com"
@@ -715,6 +737,45 @@ class TestFromYaml:
         yaml_path.write_text(yaml_content)
         config = ServerConfig.from_yaml(yaml_path)
         assert config.repos["test"].network_sandbox_enabled is False
+
+    def test_service_llm_from_yaml(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """service_llm block is parsed from YAML."""
+        yaml_content = _MINIMAL_YAML.format(
+            repo_url=master_repo, storage_dir=tmp_path / "storage"
+        )
+        # Prepend service_llm block
+        yaml_content = (
+            "service_llm:\n"
+            "  api_key: sk-test-from-yaml\n"
+            "  model: claude-sonnet-4-5\n" + yaml_content
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+
+        config = ServerConfig.from_yaml(yaml_path)
+        assert config.global_config.service_llm_api_key == "sk-test-from-yaml"
+        assert config.global_config.service_llm_model == "claude-sonnet-4-5"
+
+    def test_service_llm_api_key_from_env(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """service_llm.api_key supports !env tag."""
+        yaml_content = (
+            "service_llm:\n"
+            "  api_key: !env AIRUT_SERVICE_KEY\n"
+            + _MINIMAL_YAML.format(
+                repo_url=master_repo, storage_dir=tmp_path / "storage"
+            )
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+
+        with patch.dict("os.environ", {"AIRUT_SERVICE_KEY": "sk-env-val"}):
+            config = ServerConfig.from_yaml(yaml_path)
+        assert config.global_config.service_llm_api_key == "sk-env-val"
+        assert config.global_config.service_llm_model == "claude-haiku-4-5"
 
     def test_missing_file(self, tmp_path: Path) -> None:
         """Raise ConfigError when file does not exist."""

@@ -14,7 +14,10 @@ import pytest
 from lib.container.executor import ExecutionResult
 from lib.gateway.config import RepoConfig
 from lib.gateway.service import build_recovery_prompt, is_prompt_too_long_error
-from lib.gateway.service.message_processing import process_message
+from lib.gateway.service.message_processing import (
+    _format_execution_failure,
+    process_message,
+)
 
 from .conftest import make_message, make_service, update_global
 
@@ -901,3 +904,69 @@ class TestBuildRecoveryPrompt:
         assert "[...truncated]" in result
         # Should contain first 3000 chars
         assert "x" * 3000 in result
+
+
+class TestFormatExecutionFailure:
+    """Tests for _format_execution_failure helper."""
+
+    def test_basic_failure(self) -> None:
+        result = ExecutionResult(
+            success=False,
+            output=None,
+            error_message="Container crashed",
+            stdout="",
+            stderr="",
+            exit_code=1,
+        )
+        formatted = _format_execution_failure(result)
+        assert "Exit code: 1" in formatted
+        assert "Container crashed" in formatted
+
+    def test_with_stderr(self) -> None:
+        stderr_lines = "\n".join(f"line{i}" for i in range(15))
+        result = ExecutionResult(
+            success=False,
+            output=None,
+            error_message="Crashed",
+            stdout="",
+            stderr=stderr_lines,
+            exit_code=1,
+        )
+        formatted = _format_execution_failure(result)
+        assert "Stderr (last 10 lines)" in formatted
+        assert "line14" in formatted
+        # Early lines should be truncated
+        assert "line0" not in formatted
+
+    def test_with_error_summary(self) -> None:
+        result = ExecutionResult(
+            success=False,
+            output=None,
+            error_message="Failed",
+            stdout='{"type":"assistant","message":{"content":'
+            '[{"type":"text","text":"Something broke"}]}}',
+            stderr="",
+            exit_code=1,
+        )
+        with patch(
+            "lib.gateway.service.message_processing.extract_error_summary",
+            return_value="Something broke",
+        ):
+            formatted = _format_execution_failure(result)
+        assert "Claude output" in formatted
+        assert "Something broke" in formatted
+
+    def test_no_stderr_no_summary(self) -> None:
+        result = ExecutionResult(
+            success=False,
+            output=None,
+            error_message="OOM",
+            stdout="",
+            stderr="",
+            exit_code=137,
+        )
+        formatted = _format_execution_failure(result)
+        assert "Exit code: 137" in formatted
+        assert "OOM" in formatted
+        assert "Stderr" not in formatted
+        assert "Claude output" not in formatted
