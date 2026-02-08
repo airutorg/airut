@@ -13,6 +13,8 @@ from werkzeug.test import Client
 from lib.dashboard.formatters import VersionInfo
 from lib.dashboard.server import DashboardServer
 from lib.dashboard.tracker import (
+    BootPhase,
+    BootState,
     RepoState,
     RepoStatus,
     TaskState,
@@ -102,7 +104,7 @@ class TestDashboardServer:
             ),
         ]
 
-        server = DashboardServer(tracker, repo_states=repo_states)
+        server = DashboardServer(tracker, repo_states=lambda: repo_states)
         client = Client(server._wsgi_app)
 
         response = client.get("/health")
@@ -226,7 +228,7 @@ class TestDashboardServer:
             ),
         ]
 
-        server = DashboardServer(tracker, repo_states=repo_states)
+        server = DashboardServer(tracker, repo_states=lambda: repo_states)
         client = Client(server._wsgi_app)
 
         response = client.get("/api/repos")
@@ -261,7 +263,7 @@ class TestDashboardServer:
             ),
         ]
 
-        server = DashboardServer(tracker, repo_states=repo_states)
+        server = DashboardServer(tracker, repo_states=lambda: repo_states)
         client = Client(server._wsgi_app)
 
         response = client.get("/repo/test-repo")
@@ -289,7 +291,7 @@ class TestDashboardServer:
             ),
         ]
 
-        server = DashboardServer(tracker, repo_states=repo_states)
+        server = DashboardServer(tracker, repo_states=lambda: repo_states)
         client = Client(server._wsgi_app)
 
         response = client.get("/repo/failed-repo")
@@ -332,7 +334,7 @@ class TestDashboardServer:
             ),
         ]
 
-        server = DashboardServer(tracker, repo_states=repo_states)
+        server = DashboardServer(tracker, repo_states=lambda: repo_states)
         client = Client(server._wsgi_app)
 
         response = client.get("/")
@@ -679,6 +681,180 @@ class TestDashboardServer:
         data = response.get_data(as_text=True)
         assert "<svg" in data
         assert "viewBox" in data
+
+    def test_health_endpoint_boot_state_booting(self) -> None:
+        """Test /health returns booting status during boot."""
+        tracker = TaskTracker()
+        boot_state = BootState(
+            phase=BootPhase.PROXY,
+            message="Building proxy image...",
+        )
+        server = DashboardServer(tracker, boot_state=boot_state)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/health")
+        data = json.loads(response.get_data(as_text=True))
+        assert data["status"] == "booting"
+        assert data["boot"]["phase"] == "proxy"
+        assert data["boot"]["message"] == "Building proxy image..."
+        assert "error" not in data["boot"]
+
+    def test_health_endpoint_boot_state_failed(self) -> None:
+        """Test /health returns error status when boot failed."""
+        tracker = TaskTracker()
+        boot_state = BootState(
+            phase=BootPhase.FAILED,
+            message="Connection refused",
+            error_message="Connection refused",
+            error_type="RuntimeError",
+        )
+        server = DashboardServer(tracker, boot_state=boot_state)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/health")
+        data = json.loads(response.get_data(as_text=True))
+        assert data["status"] == "error"
+        assert data["boot"]["phase"] == "failed"
+        assert data["boot"]["error"] == "Connection refused"
+
+    def test_health_endpoint_boot_state_ready_with_repos(self) -> None:
+        """Test /health returns ok when boot is ready with live repos."""
+        tracker = TaskTracker()
+        boot_state = BootState(phase=BootPhase.READY, message="Service ready")
+        repo_states = [
+            RepoState(
+                repo_id="r1",
+                status=RepoStatus.LIVE,
+                git_repo_url="https://example.com/r1",
+                imap_server="imap.example.com",
+                storage_dir="/s/r1",
+            ),
+        ]
+        server = DashboardServer(
+            tracker, boot_state=boot_state, repo_states=lambda: repo_states
+        )
+        client = Client(server._wsgi_app)
+
+        response = client.get("/health")
+        data = json.loads(response.get_data(as_text=True))
+        assert data["status"] == "ok"
+
+    def test_index_shows_boot_progress_banner(self) -> None:
+        """Test dashboard shows boot progress banner during boot."""
+        tracker = TaskTracker()
+        boot_state = BootState(
+            phase=BootPhase.REPOS,
+            message="Starting repository 'my-repo'...",
+        )
+        server = DashboardServer(tracker, boot_state=boot_state)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/")
+        html = response.get_data(as_text=True)
+
+        assert "boot-banner" in html
+        assert "boot-progress" in html
+        assert "Starting repositories..." in html
+        assert "Starting repository &#x27;my-repo&#x27;..." in html
+        # Fast refresh during boot
+        assert 'content="5"' in html
+
+    def test_index_shows_boot_error_banner(self) -> None:
+        """Test dashboard shows error banner when boot failed."""
+        tracker = TaskTracker()
+        boot_state = BootState(
+            phase=BootPhase.FAILED,
+            message="All repos failed",
+            error_message="All repos failed",
+            error_type="RuntimeError",
+            error_traceback="Traceback:\n  File test.py\nRuntimeError: fail",
+        )
+        server = DashboardServer(tracker, boot_state=boot_state)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/")
+        html = response.get_data(as_text=True)
+
+        assert "boot-banner" in html
+        assert "boot-error" in html
+        assert "Boot Failed: RuntimeError" in html
+        assert "All repos failed" in html
+        assert "boot-traceback" in html
+        assert "Traceback:" in html
+        # Normal refresh for failed state
+        assert 'content="30"' in html
+
+    def test_index_no_boot_banner_when_ready(self) -> None:
+        """Test dashboard hides boot banner when boot is complete."""
+        tracker = TaskTracker()
+        boot_state = BootState(
+            phase=BootPhase.READY,
+            message="Service ready",
+        )
+        server = DashboardServer(tracker, boot_state=boot_state)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/")
+        html = response.get_data(as_text=True)
+
+        # The boot banner div should not be rendered in the body
+        assert '<div class="boot-banner' not in html
+        assert 'content="30"' in html
+
+    def test_index_no_boot_banner_when_no_boot_state(self) -> None:
+        """Test dashboard hides boot banner when no boot state provided."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/")
+        html = response.get_data(as_text=True)
+
+        assert '<div class="boot-banner' not in html
+
+    def test_init_with_boot_state(self) -> None:
+        """Test server initialization with boot state."""
+        tracker = TaskTracker()
+        boot_state = BootState()
+        server = DashboardServer(tracker, boot_state=boot_state)
+        assert server.boot_state is boot_state
+        assert server._handlers.boot_state is boot_state
+
+    def test_boot_error_banner_without_traceback(self) -> None:
+        """Test boot error banner without traceback."""
+        tracker = TaskTracker()
+        boot_state = BootState(
+            phase=BootPhase.FAILED,
+            message="Config error",
+            error_message="Config error",
+            error_type="ValueError",
+        )
+        server = DashboardServer(tracker, boot_state=boot_state)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/")
+        html = response.get_data(as_text=True)
+
+        assert "boot-icon" in html  # Error icon rendered
+        assert "Boot Failed: ValueError" in html
+        # No <pre> tag with traceback rendered
+        assert "<pre" not in html
+
+    def test_boot_progress_starting_phase(self) -> None:
+        """Test boot progress banner shows STARTING phase."""
+        tracker = TaskTracker()
+        boot_state = BootState(
+            phase=BootPhase.STARTING,
+            message="Initializing...",
+        )
+        server = DashboardServer(tracker, boot_state=boot_state)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/")
+        html = response.get_data(as_text=True)
+
+        assert "Initializing..." in html
+        assert "boot-spinner" in html
 
 
 class TestDashboardServerStartStop:

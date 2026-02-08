@@ -55,6 +55,34 @@ The dashboard consists of two main components in `lib/dashboard/`:
 3. Execution completes → `TaskTracker.complete_task()` → State: COMPLETED
 4. Dashboard request → Render task list or detail view
 
+### Boot Progress Reporting
+
+The dashboard starts immediately when the service launches — before the full
+boot sequence (proxy setup, repo initialization) completes. This provides
+visibility into startup progress and errors from the moment the service starts.
+
+**Boot phases** (displayed as a banner on the main dashboard):
+
+1. **Starting** — Service initializing
+2. **Proxy** — Building proxy image and creating egress network
+3. **Repos** — Starting repository listeners (git mirror update, IMAP
+   connection)
+4. **Ready** — Boot complete, service operational (banner hidden)
+5. **Failed** — Boot error with full details (error type, message, traceback)
+
+During boot, the dashboard auto-refreshes every 5 seconds. After boot completes
+(or fails), it returns to the normal 30-second refresh interval.
+
+The `/health` endpoint reflects boot state: `"booting"` during startup,
+`"error"` on boot failure, `"ok"` when running with live repos, `"degraded"`
+when no repos are live.
+
+**Resilient mode** (`--resilient` CLI flag): When enabled, boot failures don't
+crash the service. Instead, the error is displayed on the dashboard and the
+service stays alive. The systemd service unit uses this flag to avoid restart
+loops caused by configuration issues. Default behavior (without the flag) is to
+exit on boot failure.
+
 ### Graceful Repo Initialization
 
 During service startup, each repository is initialized independently:
@@ -62,7 +90,8 @@ During service startup, each repository is initialized independently:
 1. Service attempts to start listener for each configured repo
 2. If a repo fails (e.g., IMAP auth error, git clone failure), error is recorded
 3. Service continues with repos that succeeded
-4. If ALL repos fail, service raises RuntimeError and exits
+4. If ALL repos fail, service raises RuntimeError and exits (unless resilient
+   mode)
 5. Dashboard displays status of all repos (live and failed)
 
 This enables partial operation when some repos have issues (e.g., temporary
@@ -177,10 +206,12 @@ populated from disk—only direct URL access triggers disk loading.
 
 ### Styling
 
-- Auto-refresh: 30 seconds (dashboard), 10 seconds (task detail)
+- Auto-refresh: 30 seconds (dashboard), 10 seconds (task detail), 5 seconds
+  (during boot)
 - Responsive layout (single column on mobile)
 - Color coding: yellow (queued), blue (in-progress), green (success), red
   (failed)
+- Boot banner: blue with spinner (in-progress), red with error details (failed)
 
 ## Security
 

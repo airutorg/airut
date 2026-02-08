@@ -21,7 +21,14 @@ from lib.dashboard.formatters import (
     format_duration,
     format_timestamp,
 )
-from lib.dashboard.tracker import RepoState, RepoStatus, TaskState, TaskStatus
+from lib.dashboard.tracker import (
+    BootPhase,
+    BootState,
+    RepoState,
+    RepoStatus,
+    TaskState,
+    TaskStatus,
+)
 
 
 # Load logo SVG at module import time. The assets folder is at repo root.
@@ -135,6 +142,79 @@ def render_repos_section(repo_states: list[RepoState] | None) -> str:
     </div>"""
 
 
+def _boot_refresh_interval(boot_state: BootState | None) -> int:
+    """Return the auto-refresh interval in seconds.
+
+    During boot (non-READY, non-FAILED), refreshes every 5 seconds.
+    Otherwise, uses the normal 30-second interval.
+
+    Args:
+        boot_state: Current boot state, or None.
+
+    Returns:
+        Refresh interval in seconds.
+    """
+    if boot_state is None:
+        return 30
+    if boot_state.phase in (BootPhase.READY, BootPhase.FAILED):
+        return 30
+    return 5
+
+
+def render_boot_state(boot_state: BootState | None) -> str:
+    """Render boot state banner HTML fragment.
+
+    Shows a progress banner during boot, or an error banner if boot failed.
+    Returns empty string when boot is complete or no boot_state is provided.
+
+    Args:
+        boot_state: Current boot state, or None.
+
+    Returns:
+        HTML string for boot state section.
+    """
+    if boot_state is None:
+        return ""
+
+    if boot_state.phase == BootPhase.READY:
+        return ""
+
+    if boot_state.phase == BootPhase.FAILED:
+        error_msg = html.escape(boot_state.error_message or "Unknown error")
+        error_type = html.escape(boot_state.error_type or "Error")
+        traceback_html = ""
+        if boot_state.error_traceback:
+            escaped_tb = html.escape(boot_state.error_traceback)
+            traceback_html = f'<pre class="boot-traceback">{escaped_tb}</pre>'
+        return f"""
+    <div class="boot-banner boot-error">
+        <div class="boot-icon">&#x2717;</div>
+        <div class="boot-content">
+            <div class="boot-title">Boot Failed: {error_type}</div>
+            <div class="boot-message">{error_msg}</div>
+            {traceback_html}
+        </div>
+    </div>"""
+
+    # In-progress boot phases
+    phase_labels = {
+        BootPhase.STARTING: "Initializing",
+        BootPhase.PROXY: "Starting proxy",
+        BootPhase.REPOS: "Starting repositories",
+    }
+    phase_label = phase_labels.get(boot_state.phase, "Booting")
+    message = html.escape(boot_state.message)
+
+    return f"""
+    <div class="boot-banner boot-progress">
+        <div class="boot-spinner"></div>
+        <div class="boot-content">
+            <div class="boot-title">{phase_label}...</div>
+            <div class="boot-message">{message}</div>
+        </div>
+    </div>"""
+
+
 def render_dashboard(
     counts: dict[str, int],
     queued: list[TaskState],
@@ -142,6 +222,7 @@ def render_dashboard(
     completed: list[TaskState],
     version_info: VersionInfo | None,
     repo_states: list[RepoState] | None = None,
+    boot_state: BootState | None = None,
 ) -> str:
     """Render main dashboard HTML.
 
@@ -152,6 +233,7 @@ def render_dashboard(
         completed: List of completed tasks.
         version_info: Optional version information.
         repo_states: Optional list of repository states.
+        boot_state: Optional boot state for progress reporting.
 
     Returns:
         HTML string for dashboard page.
@@ -161,7 +243,7 @@ def render_dashboard(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="refresh" content="30">
+    <meta http-equiv="refresh" content="{_boot_refresh_interval(boot_state)}">
     <title>Airut Dashboard</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <style>
@@ -372,6 +454,74 @@ def render_dashboard(
             color: #d9534f;
             margin-left: auto;
         }}
+        .boot-banner {{
+            max-width: 1400px;
+            border-radius: 8px;
+            padding: 16px 20px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }}
+        .boot-progress {{
+            background: #d9edf7;
+            border-left: 4px solid #5bc0de;
+        }}
+        .boot-error {{
+            background: #f2dede;
+            border-left: 4px solid #d9534f;
+        }}
+        .boot-icon {{
+            font-size: 20px;
+            color: #d9534f;
+            flex-shrink: 0;
+        }}
+        .boot-spinner {{
+            width: 20px;
+            height: 20px;
+            border: 3px solid #5bc0de;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            flex-shrink: 0;
+        }}
+        @keyframes spin {{
+            to {{ transform: rotate(360deg); }}
+        }}
+        .boot-content {{
+            flex: 1;
+            min-width: 0;
+        }}
+        .boot-title {{
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 4px;
+        }}
+        .boot-error .boot-title {{
+            color: #a94442;
+        }}
+        .boot-progress .boot-title {{
+            color: #31708f;
+        }}
+        .boot-message {{
+            font-size: 13px;
+            color: #555;
+        }}
+        .boot-traceback {{
+            margin-top: 8px;
+            padding: 12px;
+            background: #fff;
+            border: 1px solid #ebccd1;
+            border-radius: 4px;
+            font-family: "SF Mono", Consolas, monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 400px;
+            overflow-y: auto;
+            color: #a94442;
+        }}
     </style>
 </head>
 <body>
@@ -380,6 +530,7 @@ def render_dashboard(
         <h1>Airut Dashboard</h1>
     </div>
     {render_version_info(version_info)}
+    {render_boot_state(boot_state)}
     {render_repos_section(repo_states)}
     <div class="dashboard">
         <div class="column">

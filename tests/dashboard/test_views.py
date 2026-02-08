@@ -51,7 +51,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -152,7 +152,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -189,7 +189,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -219,7 +219,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345")
@@ -264,7 +264,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -312,7 +312,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -355,7 +355,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -401,7 +401,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -449,7 +449,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -499,7 +499,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -548,7 +548,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -582,7 +582,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -614,7 +614,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -646,7 +646,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -678,7 +678,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -713,7 +713,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -751,7 +751,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -800,7 +800,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -850,7 +850,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -938,7 +938,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -1002,7 +1002,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -1053,7 +1053,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -1109,7 +1109,7 @@ class TestActionsPage:
 
         server = DashboardServer(
             tracker,
-            work_dirs=[tmp_path],
+            work_dirs=lambda: [tmp_path],
         )
         client = Client(server._wsgi_app)
 
@@ -1161,7 +1161,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -1209,7 +1209,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -1253,7 +1253,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -1294,7 +1294,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -1335,7 +1335,7 @@ class TestActionsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -1363,7 +1363,7 @@ class TestNetworkLogsPage:
             "BLOCKED GET https://evil.com/exfiltrate -> 403\n"
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1412,7 +1412,7 @@ class TestNetworkLogsPage:
         log_path = conv_dir / "network-sandbox.log"
         log_path.write_text("")
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1430,7 +1430,7 @@ class TestNetworkLogsPage:
         conv_dir.mkdir()
         # Don't create log file
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1453,7 +1453,7 @@ class TestNetworkLogsPage:
             "BLOCKED GET https://evil.com -> 403\n"
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1474,7 +1474,7 @@ class TestNetworkLogsPage:
         log_path = conv_dir / "network-sandbox.log"
         log_path.write_text("=== TASK START 2026-02-03T12:34:56Z ===\n")
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1494,7 +1494,7 @@ class TestNetworkLogsPage:
         log_path = conv_dir / "network-sandbox.log"
         log_path.write_text("allowed GET https://api.github.com -> 200\n")
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1524,7 +1524,7 @@ class TestNetworkLogsPage:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345")
@@ -1547,7 +1547,7 @@ class TestNetworkLogsPage:
             "allowed GET https://example.com/<script>alert(1)</script> -> 200\n"
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1568,7 +1568,7 @@ class TestNetworkLogsPage:
         log_path = conv_dir / "network-sandbox.log"
         log_path.write_text("allowed GET https://api.github.com -> 200\n")
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1590,7 +1590,7 @@ class TestNetworkLogsPage:
         log_path = conv_dir / "network-sandbox.log"
         log_path.mkdir()
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1615,7 +1615,7 @@ class TestNetworkLogsPage:
             "allowed GET https://api.example.com -> 200\n"
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1638,7 +1638,7 @@ class TestNetworkLogsPage:
         log_path = conv_dir / "network-sandbox.log"
         log_path.write_text("some unknown log format\n")
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1666,7 +1666,7 @@ class TestNetworkLogsPage:
             "allowed POST https://api.example.com/fail -> 500\n"
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1688,7 +1688,7 @@ class TestNetworkLogsPage:
         log_path = conv_dir / "network-sandbox.log"
         log_path.write_text("allowed GET https://api.example.com -> 500\n")
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1708,7 +1708,7 @@ class TestNetworkLogsPage:
         log_path = conv_dir / "network-sandbox.log"
         log_path.write_text("BLOCKED GET https://evil.com -> 403\n")
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1731,7 +1731,7 @@ class TestNetworkLogsPage:
             "allowed GET https://api.example.com -> 304\n"
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1752,7 +1752,7 @@ class TestNetworkLogsPage:
         log_path = conv_dir / "network-sandbox.log"
         log_path.write_text("allowed GET https://api.example.com -> 500\n")
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1777,7 +1777,7 @@ class TestNetworkLogsPage:
         log_path = conv_dir / "network-sandbox.log"
         log_path.write_text("allowed GET https://api.example.com\n")
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1802,7 +1802,7 @@ class TestNetworkLogsPage:
             "BLOCKED DNS AAAA evil.com -> NOTIMP\n"
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1824,7 +1824,7 @@ class TestNetworkLogsPage:
         log_path = conv_dir / "network-sandbox.log"
         log_path.write_text("allowed DNS A api.github.com -> 10.199.1.100\n")
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1852,7 +1852,7 @@ class TestNetworkLogsPage:
             "BLOCKED GET https://evil.com/exfiltrate -> 403\n"
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1876,7 +1876,7 @@ class TestNetworkLogsPage:
             " -> Connection failed: Name or service not known\n"
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1902,7 +1902,7 @@ class TestNetworkLogsPage:
             "ERROR GET https://api.example.com -> Connection failed\n"
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")
@@ -1931,7 +1931,7 @@ class TestNetworkLogsPage:
             "BLOCKED DNS A evil.com -> NXDOMAIN\n"
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/network")

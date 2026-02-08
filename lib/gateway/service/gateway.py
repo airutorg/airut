@@ -19,6 +19,7 @@ import logging
 import signal
 import threading
 import time
+import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
 from email.message import Message
 from pathlib import Path
@@ -30,7 +31,7 @@ from lib.dashboard import (
     TaskTracker,
     VersionInfo,
 )
-from lib.dashboard.tracker import RepoState, RepoStatus
+from lib.dashboard.tracker import BootPhase, BootState, RepoState, RepoStatus
 from lib.gateway.config import ServerConfig
 from lib.gateway.parsing import extract_conversation_id
 from lib.gateway.service.email_replies import send_rejection_reply
@@ -120,6 +121,7 @@ class EmailGatewayService:
         self.tracker = TaskTracker()
         self.dashboard: DashboardServer | None = None
         self._version_info = capture_version_info(repo_root)
+        self.boot_state = BootState()
 
         # Repo status tracking (populated during start())
         self.repo_states: dict[str, RepoState] = {}
@@ -170,19 +172,117 @@ class EmailGatewayService:
             ", ".join(config.repos.keys()),
         )
 
-    def start(self) -> None:
+    def start(self, resilient: bool = False) -> None:
         """Start the service.
 
-        Starts all repo listeners, shared executor pool, dashboard, and GC.
-        Repos that fail to initialize are marked as failed but don't prevent
-        other repos from starting.
+        Starts dashboard immediately, then boots remaining components
+        (proxy, repos, executor) while reporting progress on the dashboard.
+
+        Args:
+            resilient: If True, catch boot errors and stay running with the
+                error displayed on the dashboard instead of crashing.
+                Useful for systemd services to avoid restart loops.
+
+        Raises:
+            RuntimeError: If all repos fail to initialize (unless resilient).
+        """
+        logger.info("Starting email gateway service...")
+
+        # Start dashboard immediately so it's visible during boot
+        self._start_dashboard_early()
+
+        try:
+            self._boot()
+        except Exception as e:
+            error_type = type(e).__name__
+            error_msg = str(e)
+            error_tb = traceback.format_exc()
+            self.boot_state.phase = BootPhase.FAILED
+            self.boot_state.message = error_msg
+            self.boot_state.error_message = error_msg
+            self.boot_state.error_type = error_type
+            self.boot_state.error_traceback = error_tb
+            self.boot_state.completed_at = time.time()
+            logger.error("Boot failed: %s: %s", error_type, error_msg)
+
+            if not resilient:
+                if self.dashboard:
+                    self.dashboard.stop()
+                raise
+
+            logger.info(
+                "Resilient mode: staying alive with boot error on dashboard"
+            )
+
+        # Block main thread until shutdown
+        try:
+            while self.running:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("Interrupted by user")
+
+    def _get_repo_states(self) -> list[RepoState]:
+        """Return current repo states for the dashboard.
+
+        Called by the dashboard on each request to get fresh state.
+
+        Returns:
+            List of current repo states.
+        """
+        return list(self.repo_states.values())
+
+    def _get_work_dirs(self) -> list[Path]:
+        """Return current work dirs for the dashboard.
+
+        Called by the dashboard on each request to get fresh state.
+        Only includes directories for repos that started successfully.
+
+        Returns:
+            List of work directories for live repos.
+        """
+        return [
+            repo.conversation_manager.conversations_dir
+            for repo_id, repo in self.repo_handlers.items()
+            if self.repo_states.get(
+                repo_id, RepoState("", RepoStatus.FAILED)
+            ).status
+            == RepoStatus.LIVE
+        ]
+
+    def _start_dashboard_early(self) -> None:
+        """Start the dashboard server before boot completes.
+
+        The dashboard receives callable providers for repo_states and
+        work_dirs, so it always reflects the latest state without
+        manual updates.
+        """
+        if not self.global_config.dashboard_enabled:
+            return
+
+        self.dashboard = DashboardServer(
+            tracker=self.tracker,
+            host=self.global_config.dashboard_host,
+            port=self.global_config.dashboard_port,
+            version_info=self._version_info,
+            work_dirs=self._get_work_dirs,
+            stop_callback=self._stop_execution,
+            repo_states=self._get_repo_states,
+            boot_state=self.boot_state,
+        )
+        self.dashboard.start()
+
+    def _boot(self) -> None:
+        """Execute the boot sequence.
+
+        Updates boot_state as each phase completes. On failure, the caller
+        is responsible for recording the error in boot_state.
 
         Raises:
             RuntimeError: If all repos fail to initialize.
         """
-        logger.info("Starting email gateway service...")
-
-        # Start proxy manager (gateway infrastructure)
+        # Phase: proxy
+        self.boot_state.phase = BootPhase.PROXY
+        self.boot_state.message = "Building proxy image and creating network..."
         self.proxy_manager.startup()
 
         # Initialize shared thread pool
@@ -203,6 +303,10 @@ class EmailGatewayService:
         )
         gc_thread.start()
 
+        # Phase: repos
+        self.boot_state.phase = BootPhase.REPOS
+        self.boot_state.message = "Starting repository listeners..."
+
         # Record repos that failed during __init__ (git mirror, etc.)
         for repo_id, (error_type, error_msg) in self._init_errors.items():
             repo_config = self.config.repos[repo_id]
@@ -220,6 +324,7 @@ class EmailGatewayService:
         listener_threads = []
         for repo_id, repo_handler in self.repo_handlers.items():
             config = repo_handler.config
+            self.boot_state.message = f"Starting repository '{repo_id}'..."
             try:
                 thread = repo_handler.start_listener()
                 listener_threads.append(thread)
@@ -266,27 +371,6 @@ class EmailGatewayService:
                 "Check credentials, network connectivity, and configuration."
             )
 
-        # Start dashboard (after repo init so we can report status)
-        if self.global_config.dashboard_enabled:
-            work_dirs = [
-                repo.conversation_manager.conversations_dir
-                for repo_id, repo in self.repo_handlers.items()
-                if self.repo_states.get(
-                    repo_id, RepoState("", RepoStatus.FAILED)
-                ).status
-                == RepoStatus.LIVE
-            ]
-            self.dashboard = DashboardServer(
-                tracker=self.tracker,
-                host=self.global_config.dashboard_host,
-                port=self.global_config.dashboard_port,
-                version_info=self._version_info,
-                work_dirs=work_dirs,
-                stop_callback=self._stop_execution,
-                repo_states=list(self.repo_states.values()),
-            )
-            self.dashboard.start()
-
         if failed_repos:
             logger.warning(
                 "Service started with %d of %d repo(s) failed: %s",
@@ -294,17 +378,15 @@ class EmailGatewayService:
                 len(self.repo_states),
                 ", ".join(r.repo_id for r in failed_repos),
             )
+
+        # Phase: ready
+        self.boot_state.phase = BootPhase.READY
+        self.boot_state.message = "Service ready"
+        self.boot_state.completed_at = time.time()
         logger.info(
             "Service ready. %d repo listener(s) running.",
             len(listener_threads),
         )
-
-        # Block main thread until shutdown
-        try:
-            while self.running:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            logger.info("Interrupted by user")
 
     def stop(self) -> None:
         """Stop the service gracefully."""
@@ -562,6 +644,14 @@ def main() -> int:
         action="store_true",
         help="Enable debug logging",
     )
+    parser.add_argument(
+        "--resilient",
+        action="store_true",
+        help=(
+            "Stay alive on boot failure with error on dashboard instead of "
+            "exiting. Useful for systemd services to avoid restart loops."
+        ),
+    )
     args = parser.parse_args()
 
     configure_logging(
@@ -594,7 +684,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, shutdown_handler)
 
     try:
-        service.start()
+        service.start(resilient=args.resilient)
         return 0
     except KeyboardInterrupt:
         logger.info("Interrupted by user")

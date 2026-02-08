@@ -11,7 +11,7 @@ for viewing task queue status and history.
 
 import logging
 import threading
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -26,7 +26,7 @@ from werkzeug.wrappers import Request, Response
 
 from lib.dashboard.formatters import VersionInfo
 from lib.dashboard.handlers import RequestHandlers
-from lib.dashboard.tracker import RepoState, TaskTracker
+from lib.dashboard.tracker import BootState, RepoState, TaskTracker
 
 
 logger = logging.getLogger(__name__)
@@ -44,9 +44,10 @@ class DashboardServer:
         host: str = "127.0.0.1",
         port: int = 5200,
         version_info: VersionInfo | None = None,
-        work_dirs: list[Path] | None = None,
+        work_dirs: Callable[[], list[Path]] | None = None,
         stop_callback: Any = None,
-        repo_states: list[RepoState] | None = None,
+        repo_states: Callable[[], list[RepoState]] | None = None,
+        boot_state: BootState | None = None,
     ) -> None:
         """Initialize dashboard server.
 
@@ -55,19 +56,20 @@ class DashboardServer:
             host: Host to bind to.
             port: Port to bind to.
             version_info: Optional version information to display.
-            work_dirs: Directories where conversation data is stored
-                (one per repo).  If provided, enables session data display.
+            work_dirs: Callable returning directories where conversation
+                data is stored (one per repo).  Called on each request.
             stop_callback: Optional callable to stop an execution.
                 Should accept conversation_id and return bool.
-            repo_states: List of repository states to display on dashboard.
+            repo_states: Callable returning list of repository states.
+                Called on each request to get current state.
+            boot_state: Shared boot state object for progress reporting.
         """
         self.tracker = tracker
         self.host = host
         self.port = port
         self.version_info = version_info
-        self.work_dirs = work_dirs or []
         self.stop_callback = stop_callback
-        self.repo_states = repo_states or []
+        self.boot_state = boot_state
         self._server: Any = None
         self._thread: threading.Thread | None = None
 
@@ -75,9 +77,10 @@ class DashboardServer:
         self._handlers = RequestHandlers(
             tracker=tracker,
             version_info=version_info,
-            work_dirs=self.work_dirs,
+            work_dirs=work_dirs,
             stop_callback=stop_callback,
-            repo_states=self.repo_states,
+            repo_states=repo_states,
+            boot_state=boot_state,
         )
 
         self._url_map = Map(
