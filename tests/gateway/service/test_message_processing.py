@@ -13,7 +13,11 @@ import pytest
 
 from lib.container.executor import ExecutionResult
 from lib.gateway.config import RepoConfig
-from lib.gateway.service import build_recovery_prompt, is_prompt_too_long_error
+from lib.gateway.service import (
+    build_recovery_prompt,
+    is_prompt_too_long_error,
+    is_session_corrupted_error,
+)
 from lib.gateway.service.message_processing import process_message
 
 from .conftest import make_message, make_service, update_global
@@ -797,6 +801,101 @@ class TestProcessMessage:
         # Should only be called once (no retry)
         assert handler.executor.execute.call_count == 1
 
+    def test_session_corrupted_retries_with_new_session(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        """API 4xx error triggers retry with fresh session."""
+        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+
+        # Simulate resuming an existing conversation
+        repo_path = tmp_path / "repo"
+        handler.conversation_manager.exists.return_value = True
+        handler.conversation_manager.resume_existing.return_value = repo_path
+        mock_ss.get_session_id_for_resume.return_value = "old-session-id"
+        mock_ss.get_last_successful_response.return_value = "Previous work."
+
+        # First call: API 400 (corrupted session); second call: success
+        corrupted_result = ExecutionResult(
+            success=False,
+            output=None,
+            error_message="Container execution failed (exit code 1).",
+            stdout="",
+            stderr=(
+                "API Error: 400\n"
+                '{"type":"error","error":{"type":"invalid_request_error",'
+                '"message":"unexpected tool_use_id"}}'
+            ),
+            exit_code=1,
+        )
+        success_result = ExecutionResult(
+            success=True,
+            output={
+                "events": [
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "content": [{"type": "text", "text": "Recovered!"}]
+                        },
+                    }
+                ],
+                "total_cost_usd": 0.02,
+            },
+            error_message="",
+            stdout="",
+            stderr="",
+            exit_code=0,
+        )
+        handler.executor.execute.side_effect = [
+            corrupted_result,
+            success_result,
+        ]
+
+        msg = make_message(subject="[ID:aabb1122] Test", body="Continue please")
+
+        with patch(
+            "lib.gateway.service.message_processing.SessionStore",
+            return_value=mock_ss,
+        ):
+            success, conv_id = process_message(svc, msg, "task1", handler)
+
+        assert success is True
+        # Should have been called twice: first with session_id, then without
+        assert handler.executor.execute.call_count == 2
+        first_call = handler.executor.execute.call_args_list[0]
+        second_call = handler.executor.execute.call_args_list[1]
+        assert first_call.kwargs["session_id"] == "old-session-id"
+        assert second_call.kwargs["session_id"] is None
+        # Recovery prompt should mention context loss
+        assert "context length limits" in second_call.kwargs["prompt"]
+
+    def test_session_corrupted_no_retry_without_session_id(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        """API 4xx without session_id does not retry (new conversation)."""
+        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        mock_ss.get_session_id_for_resume.return_value = None
+
+        handler.executor.execute.return_value = ExecutionResult(
+            success=False,
+            output=None,
+            error_message="Container execution failed (exit code 1).",
+            stdout="",
+            stderr="API Error: 400\ninvalid_request_error",
+            exit_code=1,
+        )
+
+        msg = make_message(body="Do something")
+
+        with patch(
+            "lib.gateway.service.message_processing.SessionStore",
+            return_value=mock_ss,
+        ):
+            success, conv_id = process_message(svc, msg, "task1", handler)
+
+        assert success is False
+        # Should only be called once (no retry)
+        assert handler.executor.execute.call_count == 1
+
 
 class TestIsPromptTooLongError:
     """Tests for is_prompt_too_long_error."""
@@ -844,6 +943,91 @@ class TestIsPromptTooLongError:
             exit_code=1,
         )
         assert is_prompt_too_long_error(result) is True
+
+
+class TestIsSessionCorruptedError:
+    """Tests for is_session_corrupted_error."""
+
+    def test_detects_400_in_stderr(self) -> None:
+        result = ExecutionResult(
+            success=False,
+            output=None,
+            error_message="Container execution failed (exit code 1).",
+            stdout="",
+            stderr=(
+                "API Error: 400\n"
+                '{"type":"error","error":{"type":"invalid_request_error",'
+                '"message":"messages.0.content.0: unexpected tool_use_id"}}'
+            ),
+            exit_code=1,
+        )
+        assert is_session_corrupted_error(result) is True
+
+    def test_detects_400_in_stdout(self) -> None:
+        result = ExecutionResult(
+            success=False,
+            output=None,
+            error_message="Container execution failed (exit code 1).",
+            stdout="API Error: 400\nsome details",
+            stderr="",
+            exit_code=1,
+        )
+        assert is_session_corrupted_error(result) is True
+
+    def test_detects_401(self) -> None:
+        result = ExecutionResult(
+            success=False,
+            output=None,
+            error_message="Container execution failed (exit code 1).",
+            stdout="",
+            stderr="API Error: 401\nUnauthorized",
+            exit_code=1,
+        )
+        assert is_session_corrupted_error(result) is True
+
+    def test_detects_403(self) -> None:
+        result = ExecutionResult(
+            success=False,
+            output=None,
+            error_message="Container execution failed (exit code 1).",
+            stdout="",
+            stderr="API Error: 403\nForbidden",
+            exit_code=1,
+        )
+        assert is_session_corrupted_error(result) is True
+
+    def test_ignores_successful_result(self) -> None:
+        result = ExecutionResult(
+            success=True,
+            output={"events": []},
+            error_message="",
+            stdout="API Error: 400",
+            stderr="",
+            exit_code=0,
+        )
+        assert is_session_corrupted_error(result) is False
+
+    def test_ignores_5xx_errors(self) -> None:
+        result = ExecutionResult(
+            success=False,
+            output=None,
+            error_message="Container execution failed (exit code 1).",
+            stdout="",
+            stderr="API Error: 529\nOverloaded",
+            exit_code=1,
+        )
+        assert is_session_corrupted_error(result) is False
+
+    def test_ignores_non_api_errors(self) -> None:
+        result = ExecutionResult(
+            success=False,
+            output=None,
+            error_message="Some other error",
+            stdout="Something went wrong",
+            stderr="FATAL: OOM",
+            exit_code=1,
+        )
+        assert is_session_corrupted_error(result) is False
 
 
 class TestBuildRecoveryPrompt:

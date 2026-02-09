@@ -247,11 +247,17 @@ the container workspace. This enables conversation continuity via Claude's
 3. After execution, record the new session metadata for future resumption
 4. Claude maintains conversation context across email messages
 
-**Context compaction recovery**: When a resumed session fails with "Prompt is
-too long" (context compaction boundary exceeded), the service automatically
-retries with a fresh session. The recovery prompt includes the agent's last
-successful response for continuity and instructs the agent to check the
-workspace for ongoing work and be transparent about the context loss.
+**Unresumable session recovery**: When a resumed session fails due to an
+unresumable error, the service automatically retries with a fresh session. The
+recovery prompt includes the agent's last successful response for continuity and
+instructs the agent to check the workspace for ongoing work and be transparent
+about the context loss. Two classes of errors trigger this recovery:
+
+- **Prompt too long** — context compaction boundary exceeded ("Prompt is too
+  long" in stdout)
+- **Session corrupted** — API 4xx client errors (e.g., `invalid_request_error`
+  from mismatched `tool_use_id`/`tool_result` pairs) indicating the session
+  state is invalid and cannot be resumed
 
 See `lib/container/session.py` for the `SessionStore` and `SessionMetadata` data
 model.

@@ -75,6 +75,37 @@ def is_prompt_too_long_error(result: ExecutionResult) -> bool:
     return "Prompt is too long" in result.stdout
 
 
+def is_session_corrupted_error(result: ExecutionResult) -> bool:
+    """Check if an execution failure is due to a corrupted/unresumable session.
+
+    Detects API 4xx errors that indicate the session state is invalid and
+    cannot be resumed. These include:
+    - 400: invalid_request_error (e.g., mismatched tool_use_id/tool_result)
+    - Other 4xx client errors from the Claude API
+
+    When this occurs, the session_id must be cleared so the next attempt
+    starts a fresh session rather than repeatedly hitting the same error.
+
+    Args:
+        result: Execution result from Claude.
+
+    Returns:
+        True if the error indicates a corrupted session.
+    """
+    if result.success:
+        return False
+
+    # Check both stdout and stderr for API error patterns.
+    # Claude Code outputs "API Error: <status>" when an API call fails.
+    combined = f"{result.stdout}\n{result.stderr}"
+    if "API Error: 4" not in combined:
+        return False
+
+    # Only treat as corrupted session if this was a resumed session.
+    # The error text alone is sufficient — we check session_id in the caller.
+    return True
+
+
 def build_recovery_prompt(
     last_response: str | None,
     email_context: str,
@@ -391,12 +422,24 @@ def process_message(
             if repo_config.network_sandbox_enabled and conv_id:
                 service.proxy_manager.stop_task_proxy(conv_id)
 
-        # Handle "Prompt is too long" by retrying with a new session
-        if is_prompt_too_long_error(result) and session_id is not None:
+        # Handle unresumable session errors by retrying with a new session.
+        # This covers both "Prompt is too long" (context compaction boundary)
+        # and API 4xx errors (corrupted session state, e.g., mismatched
+        # tool_use_id/tool_result pairs).
+        is_unresumable = is_prompt_too_long_error(
+            result
+        ) or is_session_corrupted_error(result)
+        if is_unresumable and session_id is not None:
+            reason = (
+                "prompt too long"
+                if is_prompt_too_long_error(result)
+                else "session corrupted (API 4xx)"
+            )
             logger.warning(
-                "Repo '%s': prompt too long for conversation %s, "
+                "Repo '%s': %s for conversation %s, "
                 "retrying with fresh session",
                 repo_id,
+                reason,
                 conv_id,
             )
 
