@@ -583,10 +583,12 @@ class TestProcessMessage:
         ):
             success, _ = process_message(svc, msg, "task1", handler)
         assert success is False
-        # Check that stderr tail is in reply
+        # Check that reply uses the short error format
         reply_call = handler.responder.send_reply.call_args_list[-1]
         body = reply_call[1]["body"]
-        assert "Stderr (last 10 lines)" in body
+        assert "An error occurred" in body
+        # stderr is no longer included in the email
+        assert "Stderr" not in body
 
     def test_failure_with_error_summary(
         self, email_config: Any, tmp_path: Path
@@ -615,6 +617,11 @@ class TestProcessMessage:
         ):
             success, _ = process_message(svc, msg, "task1", handler)
         assert success is False
+        # Claude output is included when error_summary exists
+        reply_call = handler.responder.send_reply.call_args_list[-1]
+        body = reply_call[1]["body"]
+        assert "Claude output:" in body
+        assert "Error summary text" in body
 
     def test_execution_failure_persists_session(
         self, email_config: Any, tmp_path: Path
