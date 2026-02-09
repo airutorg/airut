@@ -1,6 +1,6 @@
 [project]
 name = "airut"
-version = "0.4.0"
+version = "0.5.0"
 description = "Headless Claude Code interaction via email"
 license = "MIT"
 requires-python = ">=3.13,<3.14"
