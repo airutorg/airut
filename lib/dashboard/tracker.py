@@ -31,6 +31,43 @@ class RepoStatus(Enum):
     FAILED = "failed"
 
 
+class BootPhase(Enum):
+    """Service boot phase for progress reporting.
+
+    Tracks the current phase of service startup so the dashboard can
+    display boot progress.
+    """
+
+    STARTING = "starting"
+    PROXY = "proxy"
+    REPOS = "repos"
+    READY = "ready"
+    FAILED = "failed"
+
+
+@dataclass
+class BootState:
+    """Current boot state of the service.
+
+    Attributes:
+        phase: Current boot phase.
+        message: Human-readable description of current activity.
+        error_message: Error message if boot failed, None otherwise.
+        error_type: Exception type name if boot failed, None otherwise.
+        error_traceback: Full traceback string if boot failed, None otherwise.
+        started_at: Unix timestamp when boot started.
+        completed_at: Unix timestamp when boot completed (or failed).
+    """
+
+    phase: BootPhase = BootPhase.STARTING
+    message: str = "Initializing..."
+    error_message: str | None = None
+    error_type: str | None = None
+    error_traceback: str | None = None
+    started_at: float = field(default_factory=time.time)
+    completed_at: float | None = None
+
+
 @dataclass
 class RepoState:
     """State of a repository in the gateway.

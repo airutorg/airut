@@ -10,6 +10,7 @@ Provides handler functions for all dashboard HTTP endpoints.
 
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ from lib.container.session import (
 from lib.dashboard import views
 from lib.dashboard.formatters import VersionInfo
 from lib.dashboard.tracker import (
+    BootState,
     RepoState,
     TaskState,
     TaskStatus,
@@ -48,24 +50,29 @@ class RequestHandlers:
         self,
         tracker: TaskTracker,
         version_info: VersionInfo | None = None,
-        work_dirs: list[Path] | None = None,
+        work_dirs: Callable[[], list[Path]] | None = None,
         stop_callback: Any = None,
-        repo_states: list[RepoState] | None = None,
+        repo_states: Callable[[], list[RepoState]] | None = None,
+        boot_state: BootState | None = None,
     ) -> None:
         """Initialize request handlers.
 
         Args:
             tracker: Task tracker to query for state.
             version_info: Optional version information to display.
-            work_dirs: Directories where conversation data is stored.
+            work_dirs: Callable returning directories where conversation data
+                is stored.  Called on each request to get current state.
             stop_callback: Optional callable to stop an execution.
-            repo_states: List of repository states to display.
+            repo_states: Callable returning list of repository states.
+                Called on each request to get current state.
+            boot_state: Shared boot state object for progress reporting.
         """
         self.tracker = tracker
         self.version_info = version_info
-        self.work_dirs = work_dirs or []
+        self._work_dirs = work_dirs or (lambda: [])
         self.stop_callback = stop_callback
-        self.repo_states = repo_states or []
+        self._repo_states = repo_states or (lambda: [])
+        self.boot_state = boot_state
 
     def handle_favicon(self, request: Request) -> Response:
         """Handle favicon request.
@@ -107,7 +114,8 @@ class RequestHandlers:
                 in_progress,
                 completed,
                 self.version_info,
-                self.repo_states,
+                self._repo_states(),
+                boot_state=self.boot_state,
             ),
             content_type="text/html; charset=utf-8",
         )
@@ -316,7 +324,7 @@ class RequestHandlers:
             HTML response with repository details.
         """
         repo_state = next(
-            (r for r in self.repo_states if r.repo_id == repo_id), None
+            (r for r in self._repo_states() if r.repo_id == repo_id), None
         )
         if repo_state is None:
             return Response("Repository not found", status=404)
@@ -346,7 +354,7 @@ class RequestHandlers:
                 "storage_dir": r.storage_dir,
                 "initialized_at": r.initialized_at,
             }
-            for r in self.repo_states
+            for r in self._repo_states()
         ]
         return Response(
             json.dumps(repos),
@@ -362,26 +370,44 @@ class RequestHandlers:
         Returns:
             JSON response indicating server health.
         """
+        from lib.dashboard.tracker import BootPhase
+
         counts = self.tracker.get_counts()
         # Include repo status in health check
-        live_repos = sum(
-            1 for r in self.repo_states if r.status.value == "live"
-        )
-        failed_repos = sum(
-            1 for r in self.repo_states if r.status.value == "failed"
-        )
+        repo_states = self._repo_states()
+        live_repos = sum(1 for r in repo_states if r.status.value == "live")
+        failed_repos = sum(1 for r in repo_states if r.status.value == "failed")
+
+        # Determine overall status based on boot state
+        if self.boot_state and self.boot_state.phase == BootPhase.FAILED:
+            status = "error"
+        elif self.boot_state and self.boot_state.phase != BootPhase.READY:
+            status = "booting"
+        elif live_repos > 0:
+            status = "ok"
+        else:
+            status = "degraded"
+
+        result: dict[str, Any] = {
+            "status": status,
+            "tasks": counts,
+            "repos": {
+                "live": live_repos,
+                "failed": failed_repos,
+                "total": len(repo_states),
+            },
+        }
+
+        if self.boot_state:
+            result["boot"] = {
+                "phase": self.boot_state.phase.value,
+                "message": self.boot_state.message,
+            }
+            if self.boot_state.error_message:
+                result["boot"]["error"] = self.boot_state.error_message
+
         return Response(
-            json.dumps(
-                {
-                    "status": "ok" if live_repos > 0 else "degraded",
-                    "tasks": counts,
-                    "repos": {
-                        "live": live_repos,
-                        "failed": failed_repos,
-                        "total": len(self.repo_states),
-                    },
-                }
-            ),
+            json.dumps(result),
             content_type="application/json",
         )
 
@@ -455,7 +481,7 @@ class RequestHandlers:
         Returns:
             Path to the conversation directory, or None if not found.
         """
-        for work_dir in self.work_dirs:
+        for work_dir in self._work_dirs():
             candidate = work_dir / conversation_id
             if candidate.exists():
                 return candidate

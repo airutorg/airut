@@ -329,20 +329,17 @@ class TestDashboardRepoStatus:
             time.sleep(2)
 
             try:
-                # Check dashboard is running and has repo states
+                # Check dashboard is running and service has repo states
                 assert service.dashboard is not None
-                assert len(service.dashboard.repo_states) == 2
+                repo_states = service._get_repo_states()
+                assert len(repo_states) == 2
 
                 # Verify health endpoint would show correct status
                 live_count = sum(
-                    1
-                    for r in service.dashboard.repo_states
-                    if r.status == RepoStatus.LIVE
+                    1 for r in repo_states if r.status == RepoStatus.LIVE
                 )
                 failed_count = sum(
-                    1
-                    for r in service.dashboard.repo_states
-                    if r.status == RepoStatus.FAILED
+                    1 for r in repo_states if r.status == RepoStatus.FAILED
                 )
                 assert live_count == 1
                 assert failed_count == 1

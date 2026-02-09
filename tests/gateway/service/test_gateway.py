@@ -302,10 +302,9 @@ class TestStartStop:
             patch.object(handler, "_listener_loop", side_effect=fake_loop),
             patch("lib.gateway.service.gateway.DashboardServer") as mock_ds,
         ):
-            svc.dashboard = mock_ds.return_value
             update_global(svc, dashboard_enabled=True)
             svc.start()
-        svc.dashboard.start.assert_called_once()
+        mock_ds.return_value.start.assert_called_once()
 
     def test_stop_idempotent(self, email_config, tmp_path: Path) -> None:
         svc, handler = make_service(email_config, tmp_path)
@@ -536,6 +535,170 @@ class TestStartRepoInitFailure:
         assert svc.repo_states["repo2"].status == RepoStatus.FAILED
 
 
+class TestBootState:
+    def test_boot_state_ready_on_success(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """Boot state should be READY after successful start."""
+        from lib.dashboard.tracker import BootPhase
+
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, dashboard_enabled=False)
+
+        def fake_loop():
+            svc.running = False
+
+        with patch.object(handler, "_listener_loop", side_effect=fake_loop):
+            svc.start()
+
+        assert svc.boot_state.phase == BootPhase.READY
+        assert svc.boot_state.completed_at is not None
+
+    def test_boot_state_failed_on_error(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """Boot state should be FAILED when boot raises."""
+        import pytest
+
+        from lib.dashboard.tracker import BootPhase
+
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, dashboard_enabled=False)
+
+        handler.listener.connect.side_effect = RuntimeError(
+            "Connection refused"
+        )
+
+        with pytest.raises(RuntimeError, match="All 1 repo"):
+            svc.start()
+
+        assert svc.boot_state.phase == BootPhase.FAILED
+        assert svc.boot_state.error_message is not None
+        assert "All 1 repo" in svc.boot_state.error_message
+        assert svc.boot_state.error_type == "RuntimeError"
+        assert svc.boot_state.error_traceback is not None
+
+    def test_resilient_mode_stays_alive(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """Resilient mode should not raise on boot failure."""
+        from lib.dashboard.tracker import BootPhase
+
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, dashboard_enabled=False)
+
+        handler.listener.connect.side_effect = RuntimeError(
+            "Connection refused"
+        )
+
+        # Make main loop exit immediately after boot failure
+        with patch("time.sleep", side_effect=KeyboardInterrupt):
+            svc.start(resilient=True)
+
+        assert svc.boot_state.phase == BootPhase.FAILED
+        assert svc.boot_state.error_message is not None
+
+    def test_dashboard_stopped_on_boot_failure(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """Dashboard stopped cleanly on boot failure (non-resilient)."""
+        import pytest
+
+        svc, handler = make_service(
+            email_config, tmp_path, dashboard_enabled=True
+        )
+
+        handler.listener.connect.side_effect = RuntimeError("fail")
+
+        with (
+            patch("lib.gateway.service.gateway.DashboardServer") as mock_ds,
+            pytest.raises(RuntimeError, match="All 1 repo"),
+        ):
+            svc.start()
+
+        mock_ds.return_value.stop.assert_called_once()
+
+    def test_dashboard_started_early(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """Dashboard should start before boot completes."""
+        svc, handler = make_service(
+            email_config, tmp_path, dashboard_enabled=True
+        )
+
+        dashboard_started_during_boot = False
+
+        original_boot = svc._boot
+
+        def check_dashboard_then_boot():
+            nonlocal dashboard_started_during_boot
+            # Dashboard should already be started when _boot runs
+            dashboard_started_during_boot = svc.dashboard is not None
+            svc.running = False
+            return original_boot()
+
+        with (
+            patch.object(handler, "_listener_loop", side_effect=lambda: None),
+            patch("lib.gateway.service.gateway.DashboardServer") as mock_ds,
+        ):
+            svc._boot = check_dashboard_then_boot
+            svc.start()
+
+        assert dashboard_started_during_boot
+        mock_ds.return_value.start.assert_called_once()
+
+
+class TestStateProviders:
+    def test_get_repo_states(self, email_config, tmp_path: Path) -> None:
+        """_get_repo_states returns list of current repo states."""
+        from lib.dashboard.tracker import RepoState, RepoStatus
+
+        svc, _ = make_service(email_config, tmp_path)
+        svc.repo_states["r1"] = RepoState(
+            repo_id="r1",
+            status=RepoStatus.LIVE,
+            git_repo_url="https://example.com/r1",
+            imap_server="imap.example.com",
+            storage_dir="/s/r1",
+        )
+        result = svc._get_repo_states()
+        assert len(result) == 1
+        assert result[0].repo_id == "r1"
+
+    def test_get_work_dirs(self, email_config, tmp_path: Path) -> None:
+        """_get_work_dirs returns dirs for live repos only."""
+        from lib.dashboard.tracker import RepoState, RepoStatus
+
+        svc, handler = make_service(email_config, tmp_path)
+        svc.repo_states["test"] = RepoState(
+            repo_id="test",
+            status=RepoStatus.LIVE,
+            git_repo_url="https://example.com/r1",
+            imap_server="imap.example.com",
+            storage_dir="/s/test",
+        )
+        result = svc._get_work_dirs()
+        assert len(result) == 1
+        assert result[0] == handler.conversation_manager.conversations_dir
+
+    def test_get_work_dirs_excludes_failed(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """_get_work_dirs excludes repos that failed to start."""
+        from lib.dashboard.tracker import RepoState, RepoStatus
+
+        svc, _ = make_service(email_config, tmp_path)
+        svc.repo_states["test"] = RepoState(
+            repo_id="test",
+            status=RepoStatus.FAILED,
+            git_repo_url="https://example.com/r1",
+            imap_server="imap.example.com",
+            storage_dir="/s/test",
+        )
+        result = svc._get_work_dirs()
+        assert len(result) == 0
+
+
 class TestStopExecution:
     def test_found_in_handler(self, email_config, tmp_path: Path) -> None:
         svc, handler = make_service(email_config, tmp_path)
@@ -638,7 +801,7 @@ class TestMain:
             ),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False
+                debug=False, resilient=False
             )
             assert main() == 1
 
@@ -659,7 +822,7 @@ class TestMain:
             ),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False
+                debug=False, resilient=False
             )
             assert main() == 2
 
@@ -683,7 +846,7 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False
+                debug=False, resilient=False
             )
             assert main() == 3
         mock_svc.stop.assert_called_once()
@@ -708,7 +871,7 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False
+                debug=False, resilient=False
             )
             assert main() == 0
         mock_svc.stop.assert_called_once()
@@ -732,7 +895,7 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False
+                debug=False, resilient=False
             )
             assert main() == 0
         mock_svc.stop.assert_called_once()
@@ -757,7 +920,9 @@ class TestMain:
             ),
             patch.dict("os.environ", {}, clear=False),
         ):
-            mock_ap.return_value.parse_args.return_value = MagicMock(debug=True)
+            mock_ap.return_value.parse_args.return_value = MagicMock(
+                debug=True, resilient=False
+            )
             main()
 
         mock_cl.assert_called_once_with(
@@ -786,7 +951,7 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False
+                debug=False, resilient=False
             )
             main()
 
@@ -827,7 +992,7 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False
+                debug=False, resilient=False
             )
             main()
 
@@ -836,6 +1001,31 @@ class TestMain:
         captured_handler(2, None)
         assert mock_svc.running is False
         mock_svc.repo_handlers["test"].listener.interrupt.assert_called_once()
+
+    def test_resilient_flag_passed(self) -> None:
+        """Test that --resilient flag is passed to service.start()."""
+        mock_config = MagicMock()
+        mock_svc = MagicMock()
+        with (
+            patch("lib.gateway.service.gateway.configure_logging"),
+            patch(
+                "lib.gateway.service.gateway.argparse.ArgumentParser"
+            ) as mock_ap,
+            patch(
+                "lib.gateway.service.gateway.ServerConfig.from_yaml",
+                return_value=mock_config,
+            ),
+            patch(
+                "lib.gateway.service.gateway.EmailGatewayService",
+                return_value=mock_svc,
+            ),
+            patch.dict("os.environ", {}, clear=False),
+        ):
+            mock_ap.return_value.parse_args.return_value = MagicMock(
+                debug=False, resilient=True
+            )
+            assert main() == 0
+        mock_svc.start.assert_called_once_with(resilient=True)
 
 
 class TestUpstreamDnsResolution:

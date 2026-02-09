@@ -16,6 +16,8 @@ from lib.dashboard.formatters import (
 )
 from lib.dashboard.server import DashboardServer
 from lib.dashboard.tracker import (
+    BootPhase,
+    BootState,
     RepoState,
     RepoStatus,
     TaskState,
@@ -25,6 +27,8 @@ from lib.dashboard.tracker import (
 
 
 __all__ = [
+    "BootPhase",
+    "BootState",
     "DashboardServer",
     "RepoState",
     "RepoStatus",

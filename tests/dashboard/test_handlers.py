@@ -20,11 +20,11 @@ class TestSessionDataIntegration:
     """Tests for session data display in dashboard."""
 
     def test_init_with_work_dirs(self, tmp_path: Path) -> None:
-        """Test server initialization with work_dirs."""
+        """Test server initialization with work_dirs callable."""
         tracker = TaskTracker()
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
 
-        assert server.work_dirs == [tmp_path]
+        assert server._handlers._work_dirs() == [tmp_path]
 
     def test_load_session_without_work_dirs(self) -> None:
         """Test _load_session returns None when work_dirs not configured."""
@@ -37,7 +37,7 @@ class TestSessionDataIntegration:
     def test_load_session_conversation_not_found(self, tmp_path: Path) -> None:
         """Test _load_session returns None when conversation doesn't exist."""
         tracker = TaskTracker()
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
 
         result = server._load_session("nonexistent")
         assert result is None
@@ -48,7 +48,7 @@ class TestSessionDataIntegration:
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         result = server._load_session("abc12345")
         assert result is None
 
@@ -72,7 +72,7 @@ class TestSessionDataIntegration:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         result = server._load_session("abc12345")
 
         assert result is not None
@@ -103,7 +103,7 @@ class TestSessionDataIntegration:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345")
@@ -158,7 +158,7 @@ class TestSessionDataIntegration:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/session")
@@ -186,7 +186,7 @@ class TestSessionDataIntegration:
     def test_task_session_json_no_session_file(self, tmp_path: Path) -> None:
         """Test /conversation/<id>/session returns 404 when no session file."""
         tracker = TaskTracker()
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/nonexistent/session")
@@ -200,7 +200,7 @@ class TestSessionDataIntegration:
         conv_dir.mkdir()
         # No session.json inside
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/session")
@@ -218,7 +218,7 @@ class TestSessionDataIntegration:
         session_file = conv_dir / "session.json"
         session_file.write_text("not valid json {{{")
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/session")
@@ -250,7 +250,7 @@ class TestSessionDataIntegration:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/api/conversation/abc12345")
@@ -316,7 +316,7 @@ class TestSessionDataIntegration:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345")
@@ -358,7 +358,7 @@ class TestSessionDataIntegration:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345")
@@ -400,7 +400,7 @@ class TestSessionDataIntegration:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         result = server._task_to_dict(task, include_session=True)
 
         assert "session" in result
@@ -418,7 +418,7 @@ class TestSessionDataIntegration:
             status=TaskStatus.COMPLETED,
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         result = server._task_to_dict(task, include_session=False)
 
         assert "session" not in result
@@ -459,7 +459,7 @@ class TestSessionDataIntegration:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345")
@@ -504,7 +504,7 @@ class TestSessionDataIntegration:
             response_text="I'll help you with that task.",
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345")
@@ -538,7 +538,7 @@ class TestSessionDataIntegration:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345")
@@ -570,7 +570,7 @@ class TestSessionDataIntegration:
             response_text="Test response",
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/api/conversation/abc12345")
@@ -604,7 +604,7 @@ class TestSessionDataIntegration:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/api/conversation/abc12345")
@@ -641,7 +641,7 @@ class TestSessionDataIntegration:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
 
         # Load session manually
         session = server._load_session("abc12345")
@@ -679,7 +679,7 @@ class TestLoadPastTasks:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         result = server._load_task_from_disk("abc12345")
 
         assert result is not None
@@ -704,7 +704,7 @@ class TestLoadPastTasks:
     ) -> None:
         """Test _load_task_from_disk rejects invalid conversation IDs."""
         tracker = TaskTracker()
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
 
         # Invalid format: too short
         assert server._load_task_from_disk("abc123") is None
@@ -718,7 +718,7 @@ class TestLoadPastTasks:
     ) -> None:
         """Test _load_task_from_disk returns None for non-existent conv."""
         tracker = TaskTracker()
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
 
         result = server._load_task_from_disk("abc12345")
         assert result is None
@@ -729,7 +729,7 @@ class TestLoadPastTasks:
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()  # Directory exists but no session file
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         result = server._load_task_from_disk("abc12345")
         assert result is None
 
@@ -753,7 +753,7 @@ class TestLoadPastTasks:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         result = server._load_task_from_disk("abc12345")
 
         assert result is not None
@@ -783,7 +783,7 @@ class TestLoadPastTasks:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345")
@@ -817,7 +817,7 @@ class TestLoadPastTasks:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/api/conversation/abc12345")
@@ -851,7 +851,7 @@ class TestLoadPastTasks:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345")
@@ -896,7 +896,7 @@ class TestLoadPastTasks:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         result = server._load_task_from_disk("abc12345")
 
         assert result is not None
@@ -936,7 +936,7 @@ class TestLoadPastTasks:
             )
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         result = server._load_task_from_disk("abc12345")
 
         assert result is not None
@@ -997,7 +997,7 @@ class TestLoadPastTasks:
             )
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         result = server._load_task_from_disk("5287313b")
 
         assert result is not None
@@ -1051,7 +1051,7 @@ class TestLoadPastTasks:
             request_text="Help me with this task",
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -1090,7 +1090,7 @@ class TestLoadPastTasks:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
@@ -1128,7 +1128,7 @@ class TestLoadTaskWithSession:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         result = server._load_task_with_session("abc12345")
 
         assert result is not None
@@ -1159,7 +1159,7 @@ class TestLoadTaskWithSession:
             },
         )
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         result = server._load_task_with_session("abc12345")
 
         assert result is not None
@@ -1171,7 +1171,7 @@ class TestLoadTaskWithSession:
     def test_load_task_with_session_not_found(self, tmp_path: Path) -> None:
         """Test loading task that doesn't exist anywhere."""
         tracker = TaskTracker()
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
 
         result = server._load_task_with_session("abc12345")
         assert result is None
@@ -1183,7 +1183,7 @@ class TestLoadTaskWithSession:
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Memory Task")
 
-        server = DashboardServer(tracker, work_dirs=[tmp_path])
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         result = server._load_task_with_session("abc12345")
 
         assert result is not None
