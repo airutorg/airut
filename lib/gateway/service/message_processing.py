@@ -15,7 +15,6 @@ This module handles:
 from __future__ import annotations
 
 import logging
-import traceback
 from email.message import Message
 from typing import TYPE_CHECKING
 
@@ -516,11 +515,10 @@ def process_message(
     except ContainerTimeoutError as e:
         logger.error("Repo '%s': container execution timed out: %s", repo_id, e)
         error_msg = (
-            f"Execution timed out after "
-            f"{repo_config.timeout} seconds.\n\n"
-            "Please try a simpler request or break it into "
-            "smaller steps.\n\n"
-            f"Technical details:\n{e}"
+            f"The task was interrupted after {repo_config.timeout} seconds. "
+            "Work done so far has been saved.\n\n"
+            "Reply to resume — you can ask about progress or "
+            "request next steps."
         )
         send_error_reply(repo_handler, message, error_msg)
         if conv_id and session_store:
@@ -538,9 +536,10 @@ def process_message(
             e,
         )
         error_msg = (
-            "System Error: Could not initialize workspace.\n\n"
-            f"Technical details:\n{e}\n\n"
-            "Please contact the administrator."
+            "An error occurred while processing your message: "
+            "unable to create workspace. "
+            "To retry, send your message again.\n\n"
+            f"`{e}`"
         )
         send_error_reply(repo_handler, message, error_msg)
         return False, None
@@ -551,10 +550,9 @@ def process_message(
             e,
         )
         error_msg = (
-            "An unexpected error occurred.\n\n"
-            f"Error: {type(e).__name__}: {e}\n\n"
-            f"Traceback:\n{traceback.format_exc()}\n\n"
-            "The administrator has been notified."
+            "An error occurred while processing your message. "
+            "To retry, send your message again.\n\n"
+            f"`{type(e).__name__}: {e}`"
         )
         send_error_reply(repo_handler, message, error_msg)
         if conv_id and session_store:
