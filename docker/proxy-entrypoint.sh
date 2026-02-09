@@ -57,12 +57,32 @@ fi
 # connection_strategy=lazy: don't connect upstream until the request
 # is fully received. This lets proxy-filter.py check the allowlist
 # before any upstream connection is made.
+#
+# upstream_cert=false: don't connect upstream to sniff the server
+# certificate before completing the client TLS handshake. Combined
+# with connection_strategy=lazy, this ensures each request gets a
+# fresh upstream TLS connection with no cached certificate state.
+# Without this, a server that briefly had a bad certificate (e.g.
+# expired, wrong issuer) could remain unreachable even after the
+# certificate is fixed, because mitmproxy would reuse stale TLS
+# state from the failed connection.
+#
+# anticache: strip If-None-Match and If-Modified-Since headers from
+# requests so upstream servers always send full responses instead of
+# 304 Not Modified. Prevents stale cached responses.
+#
+# Connection: close header: force upstream connections to close after
+# each request. Prevents connection reuse that could carry stale TLS
+# or HTTP state between requests.
 
 exec mitmdump \
     --mode regular@80 \
     --mode regular@443 \
     --set connection_strategy=lazy \
+    --set upstream_cert=false \
     --set confdir=/mitmproxy-confdir \
     --set flow_detail=0 \
+    --anticache \
+    --modify-headers '/~q/Connection/close' \
     --showhost \
     -s /proxy-filter.py

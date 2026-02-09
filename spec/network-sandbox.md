@@ -16,6 +16,38 @@ high-level documentation (threat model, security properties, configuration), see
 | `lib/container/network.py`      | Podman args for sandbox integration (--dns, CA cert) |
 | `lib/container/proxy.py`        | Per-conversation proxy lifecycle management          |
 
+## Proxy Configuration
+
+The proxy runs `mitmdump` (mitmproxy's non-interactive mode) with the following
+key settings:
+
+| Flag                                      | Purpose                                                   |
+| ----------------------------------------- | --------------------------------------------------------- |
+| `--mode regular@80 --mode regular@443`    | Listen on ports 80 and 443 in regular proxy mode          |
+| `--set connection_strategy=lazy`          | Defer upstream connection until request is fully received |
+| `--set upstream_cert=false`               | Don't sniff upstream cert before client TLS handshake     |
+| `--anticache`                             | Strip `If-None-Match`/`If-Modified-Since` from requests   |
+| `--modify-headers '/~q/Connection/close'` | Force upstream connections to close after each request    |
+| `--set confdir=/mitmproxy-confdir`        | CA certificate location                                   |
+| `--set flow_detail=0`                     | Minimal flow logging to stdout                            |
+| `-s /proxy-filter.py`                     | Load allowlist + token masking addon                      |
+
+### Stale connection prevention
+
+Three flags work together to prevent stale upstream state from causing
+persistent failures (e.g., a server with a briefly-expired certificate remaining
+unreachable after the certificate is fixed):
+
+- **`upstream_cert=false`**: By default, mitmproxy eagerly connects upstream to
+  sniff the server certificate before completing the client TLS handshake. This
+  can cache stale TLS state from a failed connection. Disabling this ensures
+  each request gets a fresh TLS negotiation.
+- **`--anticache`**: Strips conditional request headers so upstream servers
+  always return full responses, never 304 Not Modified from stale cache state.
+- **`Connection: close`**: Forces each upstream connection to close after the
+  response, preventing keep-alive connection reuse that could carry stale TLS or
+  HTTP state between requests.
+
 ## Proxy Lifecycle
 
 The proxy is managed by `ProxyManager` in `lib/container/proxy.py`:
