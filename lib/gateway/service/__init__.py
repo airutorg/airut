@@ -24,6 +24,7 @@ from lib.gateway.service.gateway import (
 from lib.gateway.service.message_processing import (
     build_recovery_prompt,
     is_prompt_too_long_error,
+    is_session_corrupted_error,
     process_message,
 )
 from lib.gateway.service.repo_handler import RepoHandler
@@ -44,6 +45,7 @@ __all__ = [
     # message_processing
     "build_recovery_prompt",
     "is_prompt_too_long_error",
+    "is_session_corrupted_error",
     "process_message",
     # usage_stats
     "UsageStats",
