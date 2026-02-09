@@ -507,24 +507,15 @@ def process_message(
                 stats_footer = usage_stats.format_summary()
                 response_body = f"{response_body}\n\n*{stats_footer}*"
         else:
-            error_details = [
-                "Execution failed:",
-                f"Exit code: {result.exit_code}",
-                f"Error: {result.error_message}",
-            ]
-
+            response_body = (
+                "An error occurred while processing your message. "
+                "To retry, send your message again."
+            )
             error_summary = extract_error_summary(result.stdout)
             if error_summary:
-                error_details.append("\nClaude output:")
-                error_details.append(f"```\n{error_summary}\n```")
-
-            if result.stderr:
-                stderr_lines = result.stderr.strip().split("\n")
-                stderr_tail = "\n".join(stderr_lines[-10:])
-                error_details.append("\nStderr (last 10 lines):")
-                error_details.append(f"```\n{stderr_tail}\n```")
-
-            response_body = "\n".join(error_details)
+                response_body += (
+                    f"\n\nClaude output:\n```\n{error_summary}\n```"
+                )
             logger.error(
                 "Repo '%s': execution failed for conversation %s: %s",
                 repo_id,
