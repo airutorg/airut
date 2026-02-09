@@ -29,6 +29,19 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
 - `spec/image.md` — two-layer container image build
 - `spec/dashboard.md` — web dashboard endpoints and UI
 
+## Operational Workflows
+
+The `workflows/` directory contains step-by-step guides. **When a user request
+matches any pattern below, you MUST read the workflow file first before taking
+any action.** This is not optional - the workflow contains critical steps and
+context that cannot be summarized here.
+
+- **Preparing a release** → `workflows/release.md`
+  - Version bump, release notes, GitHub release creation
+
+Read the entire workflow before starting. Workflows are living documents -
+update them if outdated.
+
 ## Configuration
 
 Repo-specific configuration lives in `.airut/`. See `.airut/README.md` for
@@ -234,6 +247,7 @@ tests/                      - Unit tests (100% coverage required)
   container/                - Container execution tests
   dashboard/                - Dashboard tests
   gateway/                  - Email gateway tests
+workflows/                  - Step-by-step operational guides
 ```
 
 ## Key Scripts
