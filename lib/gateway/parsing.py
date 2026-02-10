@@ -14,6 +14,8 @@ import re
 from email.message import Message
 from pathlib import Path
 
+from lib.html_to_text import html_to_text
+
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +131,9 @@ def strip_quoted_text(body: str) -> str:
 def extract_body(message: Message) -> str:
     """Extract plain text body from email message.
 
+    Prefers text/plain parts. Falls back to converting text/html to plain
+    text when no text/plain part is available (common with Outlook).
+
     Args:
         message: Parsed email message.
 
@@ -144,6 +149,7 @@ def extract_body(message: Message) -> str:
 
         logger.debug("Multipart message with parts: %s", ", ".join(parts))
 
+        # First pass: look for text/plain
         for part in message.walk():
             if part.get_content_type() == "text/plain":
                 payload = part.get_payload(decode=True)
@@ -154,19 +160,43 @@ def extract_body(message: Message) -> str:
                         len(body),
                     )
                     return body
+
+        # Second pass: fall back to text/html
+        for part in message.walk():
+            if part.get_content_type() == "text/html":
+                payload = part.get_payload(decode=True)
+                if payload:
+                    html_body = payload.decode("utf-8", errors="replace")  # type: ignore[union-attr]
+                    body = html_to_text(html_body)
+                    logger.debug(
+                        "Extracted body from HTML part (%d chars HTML"
+                        " -> %d chars text)",
+                        len(html_body),
+                        len(body),
+                    )
+                    return body
     else:
         content_type = message.get_content_type()
         logger.debug("Plain message with content type: %s", content_type)
 
         payload = message.get_payload(decode=True)
         if payload:
-            body = payload.decode("utf-8", errors="replace")  # type: ignore[union-attr]
+            raw = payload.decode("utf-8", errors="replace")  # type: ignore[union-attr]
+            if content_type == "text/html":
+                body = html_to_text(raw)
+                logger.debug(
+                    "Converted HTML body to text (%d chars HTML"
+                    " -> %d chars text)",
+                    len(raw),
+                    len(body),
+                )
+                return body
             logger.debug(
-                "Extracted body from plain message (%d chars)", len(body)
+                "Extracted body from plain message (%d chars)", len(raw)
             )
-            return body
+            return raw
 
-    logger.warning("No text/plain body found in message")
+    logger.warning("No text body found in message")
     return ""
 
 
