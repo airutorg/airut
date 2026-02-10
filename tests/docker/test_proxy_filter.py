@@ -28,6 +28,13 @@ from mitmproxy.http import (  # type: ignore[attr-defined]
     MockRequest,
     MockResponse,
 )
+from tests.docker.vectors import (
+    REAL_ACCESS_KEY_ID,
+    SIGNING_REPLACEMENT,
+    SIGV4_AUTH,
+    SIGV4A_AUTH,
+    SURROGATE_ACCESS_KEY_ID,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -649,3 +656,518 @@ class TestAddons:
 
         assert len(addons) == 1
         assert isinstance(addons[0], ProxyFilter)
+
+
+# ---------------------------------------------------------------------------
+# AWS re-signing helpers
+# ---------------------------------------------------------------------------
+
+
+def _aws_flow(
+    *,
+    host: str = "mybucket.s3.amazonaws.com",
+    path: str = "/key",
+    method: str = "GET",
+    auth: str = SIGV4_AUTH,
+    content_sha256: str = "UNSIGNED-PAYLOAD",
+    extra_headers: dict[str, str] | None = None,
+) -> Any:
+    """Build a flow with AWS-style headers."""
+    headers: dict[str, str] = {
+        "Host": host,
+        "x-amz-date": "20260101T000000Z",
+        "x-amz-content-sha256": content_sha256,
+    }
+    if auth:
+        headers["Authorization"] = auth
+    if extra_headers:
+        headers.update(extra_headers)
+    url = f"https://{host}{path}"
+    return _flow(method=method, host=host, path=path, url=url, headers=headers)
+
+
+def _pf_with_signing() -> ProxyFilter:
+    """Build a ProxyFilter with signing credential replacements."""
+    pf = ProxyFilter()
+    pf.domains = ["*.amazonaws.com", "*.r2.cloudflarestorage.com"]
+    pf.replacements = {SURROGATE_ACCESS_KEY_ID: SIGNING_REPLACEMENT}
+    return pf
+
+
+# ---------------------------------------------------------------------------
+# ProxyFilter._try_resign_aws
+# ---------------------------------------------------------------------------
+
+
+class TestTryResignAws:
+    """Tests for ProxyFilter._try_resign_aws."""
+
+    def test_header_auth_resigns(self) -> None:
+        """Resign via Authorization header."""
+        pf = _pf_with_signing()
+        flow = _aws_flow()
+        result = pf._try_resign_aws(flow)
+        assert result is not None
+        assert REAL_ACCESS_KEY_ID in flow.request.headers["Authorization"]
+
+    def test_no_auth_no_presigned(self) -> None:
+        """Returns None when no Authorization and no presigned URL."""
+        pf = _pf_with_signing()
+        flow = _aws_flow(auth="")
+        # Remove Authorization header
+        flow.request.headers.pop("Authorization", None)
+        result = pf._try_resign_aws(flow)
+        assert result is None
+
+    def test_presigned_url_path(self) -> None:
+        """Falls through to presigned URL when no Authorization header."""
+        pf = _pf_with_signing()
+        query = (
+            "X-Amz-Algorithm=AWS4-HMAC-SHA256"
+            f"&X-Amz-Credential={SURROGATE_ACCESS_KEY_ID}/20260101/us-east-1/s3/aws4_request"
+            "&X-Amz-Date=20260101T000000Z"
+            "&X-Amz-Expires=3600"
+            "&X-Amz-SignedHeaders=host"
+            "&X-Amz-Signature=oldsig"
+        )
+        path = f"/key?{query}"
+        url = f"https://mybucket.s3.amazonaws.com{path}"
+        flow = _flow(
+            method="GET",
+            host="mybucket.s3.amazonaws.com",
+            path=path,
+            url=url,
+            headers={
+                "Host": "mybucket.s3.amazonaws.com",
+                "x-amz-date": "20260101T000000Z",
+                "x-amz-content-sha256": "UNSIGNED-PAYLOAD",
+            },
+        )
+        result = pf._try_resign_aws(flow)
+        assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# ProxyFilter._resign_header_auth
+# ---------------------------------------------------------------------------
+
+
+class TestResignHeaderAuth:
+    """Tests for ProxyFilter._resign_header_auth."""
+
+    def test_non_aws_auth(self) -> None:
+        """Returns None for non-AWS Authorization header."""
+        pf = _pf_with_signing()
+        flow = _aws_flow(auth="Bearer some_token")
+        result = pf._resign_header_auth(
+            flow, "mybucket.s3.amazonaws.com", "Bearer some_token"
+        )
+        assert result is None
+
+    def test_unknown_key_id(self) -> None:
+        """Returns None when key ID not in replacements."""
+        pf = _pf_with_signing()
+        auth = SIGV4_AUTH.replace(SURROGATE_ACCESS_KEY_ID, "AKIA_UNKNOWN")
+        result = pf._resign_header_auth(
+            _aws_flow(auth=auth),
+            "mybucket.s3.amazonaws.com",
+            auth,
+        )
+        assert result is None
+
+    def test_scope_mismatch(self) -> None:
+        """Returns None when host doesn't match scopes."""
+        pf = _pf_with_signing()
+        flow = _aws_flow(host="other.example.com")
+        result = pf._resign_header_auth(flow, "other.example.com", SIGV4_AUTH)
+        assert result is None
+
+    def test_not_signing_type(self) -> None:
+        """Returns None when replacement is not a signing credential."""
+        pf = ProxyFilter()
+        pf.replacements = {
+            SURROGATE_ACCESS_KEY_ID: {
+                "value": "real",
+                "scopes": ["*.amazonaws.com"],
+                "headers": ["Authorization"],
+            }
+        }
+        flow = _aws_flow()
+        result = pf._resign_header_auth(
+            flow, "mybucket.s3.amazonaws.com", SIGV4_AUTH
+        )
+        assert result is None
+
+    def test_successful_resign(self) -> None:
+        """Successfully re-signs and replaces Authorization header."""
+        pf = _pf_with_signing()
+        flow = _aws_flow()
+        result = pf._resign_header_auth(
+            flow, "mybucket.s3.amazonaws.com", SIGV4_AUTH
+        )
+        assert result is not None
+        assert REAL_ACCESS_KEY_ID in flow.request.headers["Authorization"]
+        assert result.region == "us-east-1"
+
+    def test_session_token_replacement(self) -> None:
+        """Session token header is replaced on re-sign."""
+        pf = _pf_with_signing()
+        flow = _aws_flow(
+            extra_headers={"x-amz-security-token": "surr_session_token"}
+        )
+        result = pf._resign_header_auth(
+            flow, "mybucket.s3.amazonaws.com", SIGV4_AUTH
+        )
+        assert result is not None
+        assert (
+            flow.request.headers["x-amz-security-token"]
+            == "real_session_token_value"
+        )
+
+    def test_clock_skew_warning(self) -> None:
+        """Logs warning when clock skew detected."""
+        pf = _pf_with_signing()
+        flow = _aws_flow()
+        # Override the x-amz-date with old timestamp
+        flow.request.headers["x-amz-date"] = "20200101T000000Z"
+        with patch.object(pf, "_log") as mock_log:
+            pf._resign_header_auth(
+                flow, "mybucket.s3.amazonaws.com", SIGV4_AUTH
+            )
+            assert any(
+                "clock skew" in str(c).lower() for c in mock_log.call_args_list
+            )
+
+    def test_resign_exception_returns_none(self) -> None:
+        """Returns None when resign_request raises."""
+        pf = _pf_with_signing()
+        flow = _aws_flow()
+        with patch(
+            "docker.proxy_filter.resign_request",
+            side_effect=ValueError("boom"),
+        ):
+            result = pf._resign_header_auth(
+                flow, "mybucket.s3.amazonaws.com", SIGV4_AUTH
+            )
+            assert result is None
+
+    def test_chunked_sets_up_resigner(self) -> None:
+        """Chunked streaming upload triggers resigner setup."""
+        pf = _pf_with_signing()
+        flow = _aws_flow(
+            method="PUT",
+            content_sha256="STREAMING-AWS4-HMAC-SHA256-PAYLOAD",
+        )
+        result = pf._resign_header_auth(
+            flow, "mybucket.s3.amazonaws.com", SIGV4_AUTH
+        )
+        assert result is not None
+        assert result.is_chunked
+        assert "chunked_resigner" in flow.metadata
+
+    def test_query_string_in_path(self) -> None:
+        """Path with query string is split correctly."""
+        pf = _pf_with_signing()
+        flow = _aws_flow(path="/key?param=val")
+        flow.request.path = "/key?param=val"
+        result = pf._resign_header_auth(
+            flow, "mybucket.s3.amazonaws.com", SIGV4_AUTH
+        )
+        assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# ProxyFilter._setup_chunked_resigner
+# ---------------------------------------------------------------------------
+
+
+class TestSetupChunkedResigner:
+    """Tests for ProxyFilter._setup_chunked_resigner."""
+
+    def test_sigv4_chunked(self) -> None:
+        """SigV4 chunked upload creates resigner with signing_key."""
+        pf = _pf_with_signing()
+        flow = _aws_flow(
+            method="PUT",
+            content_sha256="STREAMING-AWS4-HMAC-SHA256-PAYLOAD",
+        )
+        result = pf._resign_header_auth(
+            flow, "mybucket.s3.amazonaws.com", SIGV4_AUTH
+        )
+        assert result is not None
+        resigner = flow.metadata.get("chunked_resigner")
+        assert resigner is not None
+        assert not resigner._is_sigv4a
+
+    def test_sigv4a_chunked(self) -> None:
+        """SigV4A chunked upload creates resigner with ecdsa_key."""
+        pf = _pf_with_signing()
+        flow = _aws_flow(
+            method="PUT",
+            auth=SIGV4A_AUTH,
+            content_sha256="STREAMING-AWS4-ECDSA-P256-SHA256-PAYLOAD",
+        )
+        result = pf._resign_header_auth(
+            flow, "mybucket.s3.amazonaws.com", SIGV4A_AUTH
+        )
+        assert result is not None
+        resigner = flow.metadata.get("chunked_resigner")
+        assert resigner is not None
+        assert resigner._is_sigv4a
+
+    def test_trailer_mode(self) -> None:
+        """TRAILER content-sha256 sets has_trailer on resigner."""
+        pf = _pf_with_signing()
+        flow = _aws_flow(
+            method="PUT",
+            content_sha256="STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER",
+        )
+        result = pf._resign_header_auth(
+            flow, "mybucket.s3.amazonaws.com", SIGV4_AUTH
+        )
+        assert result is not None
+        resigner = flow.metadata.get("chunked_resigner")
+        assert resigner is not None
+        assert resigner._has_trailer
+
+
+# ---------------------------------------------------------------------------
+# ProxyFilter._resign_presigned
+# ---------------------------------------------------------------------------
+
+
+class TestResignPresigned:
+    """Tests for ProxyFilter._resign_presigned."""
+
+    def _presigned_flow(
+        self,
+        *,
+        host: str = "mybucket.s3.amazonaws.com",
+        key_id: str = SURROGATE_ACCESS_KEY_ID,
+        with_session_token: bool = False,
+    ) -> Any:
+        """Build a flow with presigned URL query parameters."""
+        query_parts = [
+            "X-Amz-Algorithm=AWS4-HMAC-SHA256",
+            f"X-Amz-Credential={key_id}/20260101/us-east-1/s3/aws4_request",
+            "X-Amz-Date=20260101T000000Z",
+            "X-Amz-Expires=3600",
+            "X-Amz-SignedHeaders=host",
+            "X-Amz-Signature=oldsig",
+        ]
+        if with_session_token:
+            query_parts.append("X-Amz-Security-Token=surr_session_token")
+        query = "&".join(query_parts)
+        path = f"/key?{query}"
+        url = f"https://{host}{path}"
+        return _flow(
+            method="GET",
+            host=host,
+            path=path,
+            url=url,
+            headers={"Host": host},
+        )
+
+    def test_no_presigned_params(self) -> None:
+        """Returns None when no presigned URL params."""
+        pf = _pf_with_signing()
+        flow = _flow(host="mybucket.s3.amazonaws.com", path="/key")
+        result = pf._resign_presigned(flow, "mybucket.s3.amazonaws.com")
+        assert result is None
+
+    def test_unknown_key_id(self) -> None:
+        """Returns None when key ID not in replacements."""
+        pf = _pf_with_signing()
+        flow = self._presigned_flow(key_id="AKIA_UNKNOWN")
+        result = pf._resign_presigned(flow, "mybucket.s3.amazonaws.com")
+        assert result is None
+
+    def test_scope_mismatch(self) -> None:
+        """Returns None when host doesn't match scopes."""
+        pf = _pf_with_signing()
+        flow = self._presigned_flow(host="other.example.com")
+        result = pf._resign_presigned(flow, "other.example.com")
+        assert result is None
+
+    def test_successful_resign(self) -> None:
+        """Re-signs presigned URL and replaces credential/signature."""
+        pf = _pf_with_signing()
+        flow = self._presigned_flow()
+        result = pf._resign_presigned(flow, "mybucket.s3.amazonaws.com")
+        assert result is not None
+        assert REAL_ACCESS_KEY_ID in flow.request.url
+        assert "oldsig" not in flow.request.url
+        assert result.region == "us-east-1"
+
+    def test_session_token_replacement(self) -> None:
+        """Surrogate session token in URL is replaced with real."""
+        pf = _pf_with_signing()
+        flow = self._presigned_flow(with_session_token=True)
+        result = pf._resign_presigned(flow, "mybucket.s3.amazonaws.com")
+        assert result is not None
+        assert "real_session_token_value" in flow.request.url
+        assert "surr_session_token" not in flow.request.url
+
+    def test_malformed_credential(self) -> None:
+        """Returns None when X-Amz-Credential has no /."""
+        pf = _pf_with_signing()
+        path = (
+            "/key?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+            "&X-Amz-Credential=noslash"
+            "&X-Amz-Date=20260101T000000Z"
+            "&X-Amz-Expires=3600"
+            "&X-Amz-SignedHeaders=host"
+            "&X-Amz-Signature=oldsig"
+        )
+        url = f"https://mybucket.s3.amazonaws.com{path}"
+        flow = _flow(
+            method="GET",
+            host="mybucket.s3.amazonaws.com",
+            path=path,
+            url=url,
+            headers={"Host": "mybucket.s3.amazonaws.com"},
+        )
+        result = pf._resign_presigned(flow, "mybucket.s3.amazonaws.com")
+        assert result is None
+
+    def test_resign_exception_returns_none(self) -> None:
+        """Returns None when resign_presigned_url raises."""
+        pf = _pf_with_signing()
+        flow = self._presigned_flow()
+        with patch(
+            "docker.proxy_filter.resign_presigned_url",
+            side_effect=ValueError("boom"),
+        ):
+            result = pf._resign_presigned(flow, "mybucket.s3.amazonaws.com")
+            assert result is None
+
+
+# ---------------------------------------------------------------------------
+# ProxyFilter.requestheaders
+# ---------------------------------------------------------------------------
+
+
+class TestRequestHeaders:
+    """Tests for ProxyFilter.requestheaders() hook."""
+
+    def test_blocked_returns_early(self) -> None:
+        """Blocked request doesn't attempt AWS re-signing."""
+        pf = ProxyFilter()  # No domains allowed
+        flow = _aws_flow()
+        pf.requestheaders(flow)
+        assert "aws_resigned" not in flow.metadata
+
+    def test_allowed_with_aws_resigning(self) -> None:
+        """Allowed request with AWS header triggers re-signing."""
+        pf = _pf_with_signing()
+        flow = _aws_flow()
+        pf.requestheaders(flow)
+        assert flow.metadata.get("aws_resigned") is True
+        assert flow.metadata.get("masked_count") == 1
+
+    def test_chunked_enables_streaming(self) -> None:
+        """Chunked re-signed request enables streaming mode."""
+        pf = _pf_with_signing()
+        flow = _aws_flow(
+            method="PUT",
+            content_sha256="STREAMING-AWS4-HMAC-SHA256-PAYLOAD",
+        )
+        pf.requestheaders(flow)
+        assert flow.request.stream is True
+
+    def test_non_chunked_no_streaming(self) -> None:
+        """Non-chunked re-signed request doesn't enable streaming."""
+        pf = _pf_with_signing()
+        flow = _aws_flow()
+        pf.requestheaders(flow)
+        assert flow.request.stream is False
+
+
+# ---------------------------------------------------------------------------
+# ProxyFilter.request — AWS re-signed skip
+# ---------------------------------------------------------------------------
+
+
+class TestRequestAwsSkip:
+    """Tests for request() skipping token replacement after AWS re-sign."""
+
+    def test_aws_resigned_skips_replace_tokens(self) -> None:
+        """When aws_resigned is set, _replace_tokens is not called."""
+        pf = _pf_with_signing()
+        flow = _aws_flow()
+        flow.metadata["aws_resigned"] = True
+        # Set allowlist so request passes
+        pf.request(flow)
+        assert flow.metadata.get("allowlist_action") == "allowed"
+
+
+# ---------------------------------------------------------------------------
+# ProxyFilter.request_data
+# ---------------------------------------------------------------------------
+
+
+class TestRequestData:
+    """Tests for ProxyFilter.request_data() hook."""
+
+    def test_no_resigner_passthrough(self) -> None:
+        """Data passes through when no chunked_resigner in metadata."""
+        pf = ProxyFilter()
+        flow = _flow()
+        result = pf.request_data(flow, b"raw data")
+        assert result == b"raw data"
+
+    def test_resigner_processes_data(self) -> None:
+        """Data is processed by the resigner when present."""
+        from docker.aws_signing import ChunkedResigner, derive_sigv4_signing_key
+
+        pf = ProxyFilter()
+        flow = _flow()
+        signing_key = derive_sigv4_signing_key(
+            "secret", "20260101", "us-east-1", "s3"
+        )
+        resigner = ChunkedResigner(
+            signing_key=signing_key,
+            ecdsa_key=None,
+            seed_signature="seed_sig",
+            timestamp="20260101T000000Z",
+            scope="20260101/us-east-1/s3/aws4_request",
+            is_sigv4a=False,
+            has_trailer=False,
+        )
+        flow.metadata["chunked_resigner"] = resigner
+        body = b"0;chunk-signature=aabb\r\n"
+        result = pf.request_data(flow, body)
+        assert b"chunk-signature=" in result
+
+    def test_resigner_exception_passthrough(self) -> None:
+        """On exception, data passes through and resigner is removed."""
+        pf = ProxyFilter()
+        flow = _flow()
+        mock_resigner = MagicMock()
+        mock_resigner.process.side_effect = ValueError("parse error")
+        flow.metadata["chunked_resigner"] = mock_resigner
+        result = pf.request_data(flow, b"raw data")
+        assert result == b"raw data"
+        assert "chunked_resigner" not in flow.metadata
+
+
+# ---------------------------------------------------------------------------
+# ProxyFilter.response — AWS region suffix
+# ---------------------------------------------------------------------------
+
+
+class TestResponseAwsRegion:
+    """Tests for response() including AWS region in log."""
+
+    def test_region_suffix(self) -> None:
+        """Region is appended to log when aws_region is set."""
+        pf = ProxyFilter()
+        flow = _flow(response_code=200)
+        flow.metadata["allowlist_action"] = "allowed"
+        flow.metadata["masked_count"] = 1
+        flow.metadata["aws_region"] = "us-west-2"
+        with patch.object(pf, "_log") as mock_log:
+            pf.response(flow)
+            msg = mock_log.call_args[0][0]
+            assert "[region: us-west-2]" in msg
+            assert "[masked: 1]" in msg

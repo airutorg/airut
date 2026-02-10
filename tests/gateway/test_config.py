@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from lib.gateway.config import (
+    SIGNING_TYPE_AWS_SIGV4,
     ConfigError,
     GlobalConfig,
     MaskedSecret,
@@ -19,6 +20,9 @@ from lib.gateway.config import (
     RepoConfig,
     RepoServerConfig,
     ServerConfig,
+    SigningCredential,
+    SigningCredentialEntry,
+    SigningCredentialField,
     _coerce_bool,
     _EnvVar,
     _make_loader,
@@ -27,8 +31,10 @@ from lib.gateway.config import (
     _resolve,
     _resolve_container_env,
     _resolve_masked_secrets,
+    _resolve_signing_credentials,
     _resolve_string_list,
     _SecretRef,
+    generate_session_token_surrogate,
     generate_surrogate,
 )
 from lib.logging import SecretFilter
@@ -1763,9 +1769,11 @@ class TestMaskedSecretResolution:
         # replacement_map should have the mapping
         surrogate = result["GH_TOKEN"]
         assert surrogate in replacement_map
-        assert replacement_map[surrogate].real_value == "ghp_realtoken1234"
-        assert "api.github.com" in replacement_map[surrogate].scopes
-        assert replacement_map[surrogate].headers == ("Authorization",)
+        entry = replacement_map[surrogate]
+        assert isinstance(entry, ReplacementEntry)
+        assert entry.real_value == "ghp_realtoken1234"
+        assert "api.github.com" in entry.scopes
+        assert entry.headers == ("Authorization",)
 
     def test_masked_secret_with_custom_headers(self) -> None:
         """Custom headers are passed through to replacement_map."""
@@ -1782,7 +1790,9 @@ class TestMaskedSecretResolution:
         )
 
         surrogate = result["API_KEY"]
-        assert replacement_map[surrogate].headers == ("X-Custom-Header",)
+        entry = replacement_map[surrogate]
+        assert isinstance(entry, ReplacementEntry)
+        assert entry.headers == ("X-Custom-Header",)
 
     def test_masked_secret_takes_priority_over_plain(self) -> None:
         """Masked secret is used even if plain secret exists."""
@@ -1888,3 +1898,594 @@ class TestReplacementEntry:
             "scopes": ["api.github.com"],
             "headers": ["Authorization", "X-Api-*"],
         }
+
+
+# ---------------------------------------------------------------------------
+# generate_session_token_surrogate
+# ---------------------------------------------------------------------------
+
+
+class TestGenerateSessionTokenSurrogate:
+    """Tests for generate_session_token_surrogate."""
+
+    def test_fixed_length(self) -> None:
+        """Surrogate is always 512 characters."""
+        surrogate = generate_session_token_surrogate()
+        assert len(surrogate) == 512
+
+    def test_alphanumeric(self) -> None:
+        """Surrogate contains only alphanumeric characters."""
+        surrogate = generate_session_token_surrogate()
+        assert surrogate.isalnum()
+
+    def test_different_each_time(self) -> None:
+        """Surrogates are random."""
+        surrogates = {generate_session_token_surrogate() for _ in range(10)}
+        assert len(surrogates) >= 5
+
+
+# ---------------------------------------------------------------------------
+# AWS access key ID prefix preservation
+# ---------------------------------------------------------------------------
+
+
+class TestAwsKeyIdSurrogate:
+    """Tests for AWS key ID surrogate generation."""
+
+    def test_akia_prefix_preserved(self) -> None:
+        """AKIA prefix is preserved in surrogate."""
+        original = "AKIAIOSFODNN7EXAMPLE"
+        surrogate = generate_surrogate(original)
+        assert surrogate.startswith("AKIA")
+        assert len(surrogate) == len(original)
+
+    def test_asia_prefix_preserved(self) -> None:
+        """ASIA prefix is preserved in surrogate."""
+        original = "ASIAIOSFODNN7EXAMPLE"
+        surrogate = generate_surrogate(original)
+        assert surrogate.startswith("ASIA")
+        assert len(surrogate) == len(original)
+
+
+# ---------------------------------------------------------------------------
+# SigningCredentialEntry
+# ---------------------------------------------------------------------------
+
+
+class TestSigningCredentialEntry:
+    """Tests for SigningCredentialEntry."""
+
+    def test_to_dict(self) -> None:
+        """to_dict produces expected JSON-serializable format."""
+        entry = SigningCredentialEntry(
+            access_key_id="AKIAIOSFODNN7EXAMPLE",
+            secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            session_token=None,
+            surrogate_session_token=None,
+            scopes=("*.amazonaws.com",),
+        )
+        d = entry.to_dict()
+        assert d == {
+            "type": SIGNING_TYPE_AWS_SIGV4,
+            "access_key_id": "AKIAIOSFODNN7EXAMPLE",
+            "secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "session_token": None,
+            "surrogate_session_token": None,
+            "scopes": ["*.amazonaws.com"],
+        }
+
+    def test_to_dict_with_session_token(self) -> None:
+        """to_dict includes session token when present."""
+        entry = SigningCredentialEntry(
+            access_key_id="AKIAIOSFODNN7EXAMPLE",
+            secret_access_key="secret",
+            session_token="real-session-token",
+            surrogate_session_token="surrogate-session-token",
+            scopes=("*.amazonaws.com",),
+        )
+        d = entry.to_dict()
+        assert d["session_token"] == "real-session-token"
+        assert d["surrogate_session_token"] == "surrogate-session-token"
+
+
+# ---------------------------------------------------------------------------
+# _resolve_signing_credentials
+# ---------------------------------------------------------------------------
+
+
+class TestResolveSigningCredentials:
+    """Tests for _resolve_signing_credentials."""
+
+    def test_empty_mapping(self) -> None:
+        """Empty mapping returns empty dict."""
+        result = _resolve_signing_credentials({}, "repos.test")
+        assert result == {}
+
+    def test_basic_signing_credential(self) -> None:
+        """Parses basic signing credential with name/value fields."""
+        raw = {
+            "AWS_PROD": {
+                "type": SIGNING_TYPE_AWS_SIGV4,
+                "access_key_id": {
+                    "name": "AWS_ACCESS_KEY_ID",
+                    "value": "AKIAIOSFODNN7EXAMPLE",
+                },
+                "secret_access_key": {
+                    "name": "AWS_SECRET_ACCESS_KEY",
+                    "value": "wJalrXUtnFEMI",
+                },
+                "scopes": ["*.amazonaws.com"],
+            }
+        }
+        result = _resolve_signing_credentials(raw, "repos.test")
+        assert "AWS_PROD" in result
+        cred = result["AWS_PROD"]
+        assert cred.access_key_id.name == "AWS_ACCESS_KEY_ID"
+        assert cred.access_key_id.value == "AKIAIOSFODNN7EXAMPLE"
+        assert cred.secret_access_key.value == "wJalrXUtnFEMI"
+        assert cred.session_token is None
+        assert "*.amazonaws.com" in cred.scopes
+
+    def test_with_session_token(self) -> None:
+        """Parses credential with session token."""
+        raw = {
+            "AWS_TEMP": {
+                "type": SIGNING_TYPE_AWS_SIGV4,
+                "access_key_id": {
+                    "name": "AWS_ACCESS_KEY_ID",
+                    "value": "ASIAIOSFODNN7EXAMPLE",
+                },
+                "secret_access_key": {
+                    "name": "AWS_SECRET_ACCESS_KEY",
+                    "value": "secret",
+                },
+                "session_token": {
+                    "name": "AWS_SESSION_TOKEN",
+                    "value": "token123",
+                },
+                "scopes": ["*.amazonaws.com"],
+            }
+        }
+        result = _resolve_signing_credentials(raw, "repos.test")
+        assert result["AWS_TEMP"].session_token is not None
+        assert result["AWS_TEMP"].session_token.value == "token123"
+
+    def test_invalid_type_raises(self) -> None:
+        """Invalid type raises ConfigError."""
+        raw = {
+            "BAD": {
+                "type": "hmac-sha512",
+                "access_key_id": {
+                    "name": "AWS_ACCESS_KEY_ID",
+                    "value": "AKIA",
+                },
+                "secret_access_key": {
+                    "name": "AWS_SECRET_ACCESS_KEY",
+                    "value": "secret",
+                },
+                "scopes": ["*"],
+            }
+        }
+        with pytest.raises(ConfigError, match="must be 'aws-sigv4'"):
+            _resolve_signing_credentials(raw, "repos.test")
+
+    def test_missing_key_id_raises(self) -> None:
+        """Missing access_key_id raises ConfigError."""
+        raw = {
+            "BAD": {
+                "type": SIGNING_TYPE_AWS_SIGV4,
+                "secret_access_key": {
+                    "name": "AWS_SECRET_ACCESS_KEY",
+                    "value": "secret",
+                },
+                "scopes": ["*"],
+            }
+        }
+        with pytest.raises(ConfigError, match="access_key_id is required"):
+            _resolve_signing_credentials(raw, "repos.test")
+
+    def test_missing_secret_key_raises(self) -> None:
+        """Missing secret_access_key raises ConfigError."""
+        raw = {
+            "BAD": {
+                "type": SIGNING_TYPE_AWS_SIGV4,
+                "access_key_id": {
+                    "name": "AWS_ACCESS_KEY_ID",
+                    "value": "AKIA",
+                },
+                "scopes": ["*"],
+            }
+        }
+        with pytest.raises(ConfigError, match="secret_access_key is required"):
+            _resolve_signing_credentials(raw, "repos.test")
+
+    def test_missing_scopes_raises(self) -> None:
+        """Missing scopes raises ConfigError."""
+        raw = {
+            "BAD": {
+                "type": SIGNING_TYPE_AWS_SIGV4,
+                "access_key_id": {
+                    "name": "AWS_ACCESS_KEY_ID",
+                    "value": "AKIA",
+                },
+                "secret_access_key": {
+                    "name": "AWS_SECRET_ACCESS_KEY",
+                    "value": "secret",
+                },
+            }
+        }
+        with pytest.raises(ConfigError, match="scopes is required"):
+            _resolve_signing_credentials(raw, "repos.test")
+
+    def test_empty_scopes_raises(self) -> None:
+        """Empty scopes raises ConfigError."""
+        raw = {
+            "BAD": {
+                "type": SIGNING_TYPE_AWS_SIGV4,
+                "access_key_id": {
+                    "name": "AWS_ACCESS_KEY_ID",
+                    "value": "AKIA",
+                },
+                "secret_access_key": {
+                    "name": "AWS_SECRET_ACCESS_KEY",
+                    "value": "secret",
+                },
+                "scopes": [],
+            }
+        }
+        with pytest.raises(ConfigError, match="scopes cannot be empty"):
+            _resolve_signing_credentials(raw, "repos.test")
+
+    def test_not_a_mapping_raises(self) -> None:
+        """Non-mapping value raises ConfigError."""
+        raw = {"BAD": "just a string"}
+        with pytest.raises(ConfigError, match="must be a mapping"):
+            _resolve_signing_credentials(raw, "repos.test")
+
+    def test_scopes_not_list_raises(self) -> None:
+        """Non-list scopes raises ConfigError."""
+        raw = {
+            "BAD": {
+                "type": SIGNING_TYPE_AWS_SIGV4,
+                "access_key_id": {
+                    "name": "AWS_ACCESS_KEY_ID",
+                    "value": "AKIA",
+                },
+                "secret_access_key": {
+                    "name": "AWS_SECRET_ACCESS_KEY",
+                    "value": "secret",
+                },
+                "scopes": "*.amazonaws.com",
+            }
+        }
+        with pytest.raises(ConfigError, match="scopes must be a list"):
+            _resolve_signing_credentials(raw, "repos.test")
+
+    def test_env_var_resolution(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """!env vars are resolved in signing credential field values."""
+        from lib.gateway.config import _EnvVar
+
+        monkeypatch.setenv("AWS_KEY", "AKIAIOSFODNN7EXAMPLE")
+        monkeypatch.setenv("AWS_SECRET", "secretkey")
+        raw = {
+            "AWS": {
+                "type": SIGNING_TYPE_AWS_SIGV4,
+                "access_key_id": {
+                    "name": "AWS_ACCESS_KEY_ID",
+                    "value": _EnvVar("AWS_KEY"),
+                },
+                "secret_access_key": {
+                    "name": "AWS_SECRET_ACCESS_KEY",
+                    "value": _EnvVar("AWS_SECRET"),
+                },
+                "scopes": ["*.amazonaws.com"],
+            }
+        }
+        result = _resolve_signing_credentials(raw, "repos.test")
+        assert result["AWS"].access_key_id.value == "AKIAIOSFODNN7EXAMPLE"
+        assert result["AWS"].secret_access_key.value == "secretkey"
+
+    def test_missing_field_name_raises(self) -> None:
+        """Field without name raises ConfigError."""
+        raw = {
+            "AWS": {
+                "type": SIGNING_TYPE_AWS_SIGV4,
+                "access_key_id": {"value": "AKIA"},
+                "secret_access_key": {
+                    "name": "AWS_SECRET_ACCESS_KEY",
+                    "value": "secret",
+                },
+                "scopes": ["*"],
+            }
+        }
+        with pytest.raises(ConfigError, match="name is required"):
+            _resolve_signing_credentials(raw, "repos.test")
+
+    def test_non_mapping_field_raises(self) -> None:
+        """Flat string field raises ConfigError."""
+        raw = {
+            "AWS": {
+                "type": SIGNING_TYPE_AWS_SIGV4,
+                "access_key_id": "AKIA",
+                "secret_access_key": {
+                    "name": "AWS_SECRET_ACCESS_KEY",
+                    "value": "secret",
+                },
+                "scopes": ["*"],
+            }
+        }
+        with pytest.raises(ConfigError, match="must be a mapping"):
+            _resolve_signing_credentials(raw, "repos.test")
+
+    def test_empty_required_field_value_raises(self) -> None:
+        """Required field with name but empty value raises ConfigError."""
+        raw = {
+            "AWS": {
+                "type": SIGNING_TYPE_AWS_SIGV4,
+                "access_key_id": {
+                    "name": "AWS_ACCESS_KEY_ID",
+                    "value": "",
+                },
+                "secret_access_key": {
+                    "name": "AWS_SECRET_ACCESS_KEY",
+                    "value": "secret",
+                },
+                "scopes": ["*"],
+            }
+        }
+        with pytest.raises(ConfigError, match="value is required"):
+            _resolve_signing_credentials(raw, "repos.test")
+
+    def test_empty_optional_session_token_returns_none(self) -> None:
+        """Optional session_token with empty value returns None."""
+        raw = {
+            "AWS": {
+                "type": SIGNING_TYPE_AWS_SIGV4,
+                "access_key_id": {
+                    "name": "AWS_ACCESS_KEY_ID",
+                    "value": "AKIAIOSFODNN7EXAMPLE",
+                },
+                "secret_access_key": {
+                    "name": "AWS_SECRET_ACCESS_KEY",
+                    "value": "secret",
+                },
+                "session_token": {
+                    "name": "AWS_SESSION_TOKEN",
+                    "value": "",
+                },
+                "scopes": ["*.amazonaws.com"],
+            }
+        }
+        result = _resolve_signing_credentials(raw, "repos.test")
+        assert result["AWS"].session_token is None
+
+
+# ---------------------------------------------------------------------------
+# Signing credential resolution in _resolve_container_env
+# ---------------------------------------------------------------------------
+
+
+class TestSigningCredentialResolution:
+    """Tests for signing credentials in _resolve_container_env."""
+
+    def _make_signing_cred(
+        self,
+        key_id: str = "AKIAIOSFODNN7EXAMPLE",
+        secret: str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        session_token: str | None = None,
+    ) -> SigningCredential:
+        return SigningCredential(
+            access_key_id=SigningCredentialField(
+                name="AWS_ACCESS_KEY_ID", value=key_id
+            ),
+            secret_access_key=SigningCredentialField(
+                name="AWS_SECRET_ACCESS_KEY", value=secret
+            ),
+            session_token=(
+                SigningCredentialField(
+                    name="AWS_SESSION_TOKEN", value=session_token
+                )
+                if session_token
+                else None
+            ),
+            scopes=frozenset(["*.amazonaws.com"]),
+        )
+
+    def test_basic_signing_credential_resolution(self) -> None:
+        """Signing credential fields generate surrogates via !secret."""
+        raw_env = {
+            "AWS_ACCESS_KEY_ID": _SecretRef("AWS_ACCESS_KEY_ID"),
+            "AWS_SECRET_ACCESS_KEY": _SecretRef("AWS_SECRET_ACCESS_KEY"),
+        }
+        signing_creds = {"AWS_PROD": self._make_signing_cred()}
+
+        result, replacement_map = _resolve_container_env(
+            raw_env, {}, {}, signing_credentials=signing_creds
+        )
+
+        # Container env should have surrogates
+        assert result["AWS_ACCESS_KEY_ID"].startswith("AKIA")
+        assert result["AWS_ACCESS_KEY_ID"] != "AKIAIOSFODNN7EXAMPLE"
+        assert result["AWS_SECRET_ACCESS_KEY"] != (
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        )
+
+        # Replacement map should have a SigningCredentialEntry
+        surrogate_key_id = result["AWS_ACCESS_KEY_ID"]
+        assert surrogate_key_id in replacement_map
+        entry = replacement_map[surrogate_key_id]
+        assert isinstance(entry, SigningCredentialEntry)
+        assert entry.access_key_id == "AKIAIOSFODNN7EXAMPLE"
+        assert entry.secret_access_key == (
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        )
+
+    def test_with_session_token(self) -> None:
+        """Session token generates fixed-length surrogate."""
+        raw_env = {
+            "AWS_ACCESS_KEY_ID": _SecretRef("AWS_ACCESS_KEY_ID"),
+            "AWS_SECRET_ACCESS_KEY": _SecretRef("AWS_SECRET_ACCESS_KEY"),
+            "AWS_SESSION_TOKEN": _SecretRef("AWS_SESSION_TOKEN"),
+        }
+        signing_creds = {
+            "AWS": self._make_signing_cred(session_token="real-token-value")
+        }
+
+        result, replacement_map = _resolve_container_env(
+            raw_env, {}, {}, signing_credentials=signing_creds
+        )
+
+        # Session token surrogate should be 512 chars
+        assert len(result["AWS_SESSION_TOKEN"]) == 512
+
+        # Entry should have real and surrogate session tokens
+        surrogate_key_id = result["AWS_ACCESS_KEY_ID"]
+        entry = replacement_map[surrogate_key_id]
+        assert isinstance(entry, SigningCredentialEntry)
+        assert entry.session_token == "real-token-value"
+        assert entry.surrogate_session_token == result["AWS_SESSION_TOKEN"]
+
+    def test_optional_session_token_skipped(self) -> None:
+        """Missing session token with !secret? is silently skipped."""
+        raw_env = {
+            "AWS_ACCESS_KEY_ID": _SecretRef("AWS_ACCESS_KEY_ID"),
+            "AWS_SECRET_ACCESS_KEY": _SecretRef("AWS_SECRET_ACCESS_KEY"),
+            "AWS_SESSION_TOKEN": _SecretRef("AWS_SESSION_TOKEN", optional=True),
+        }
+        signing_creds = {"AWS": self._make_signing_cred()}
+
+        result, replacement_map = _resolve_container_env(
+            raw_env, {}, {}, signing_credentials=signing_creds
+        )
+
+        # session_token is None, so !secret? resolves to nothing; secret name
+        # falls through to plain secrets where it's also not found; optional
+        # so silently skipped.
+        assert "AWS_SESSION_TOKEN" not in result
+        surrogate_key_id = result["AWS_ACCESS_KEY_ID"]
+        entry = replacement_map[surrogate_key_id]
+        assert isinstance(entry, SigningCredentialEntry)
+        assert entry.session_token is None
+        assert entry.surrogate_session_token is None
+
+    def test_missing_key_id_mapping_raises(self) -> None:
+        """Referencing only secret_access_key without key_id raises."""
+        raw_env = {
+            "AWS_SECRET": _SecretRef("AWS_SECRET_ACCESS_KEY"),
+        }
+        signing_creds = {"AWS": self._make_signing_cred()}
+
+        with pytest.raises(ConfigError, match="access_key_id.*not mapped"):
+            _resolve_container_env(
+                raw_env, {}, {}, signing_credentials=signing_creds
+            )
+
+    def test_unknown_secret_name_falls_through(self) -> None:
+        """Secret name not matching any signing field falls through."""
+        raw_env = {
+            "AWS_ACCESS_KEY_ID": _SecretRef("AWS_ACCESS_KEY_ID"),
+            "AWS_SECRET_ACCESS_KEY": _SecretRef("AWS_SECRET_ACCESS_KEY"),
+            "OTHER": _SecretRef("NONEXISTENT_SECRET", optional=True),
+        }
+        signing_creds = {"AWS": self._make_signing_cred()}
+
+        result, _ = _resolve_container_env(
+            raw_env, {}, {}, signing_credentials=signing_creds
+        )
+
+        # NONEXISTENT_SECRET is not in any pool; optional, so silently skipped.
+        assert "OTHER" not in result
+
+    def test_mixed_signing_and_masked(self) -> None:
+        """Signing credentials coexist with masked secrets."""
+        raw_env = {
+            "AWS_ACCESS_KEY_ID": _SecretRef("AWS_ACCESS_KEY_ID"),
+            "AWS_SECRET_ACCESS_KEY": _SecretRef("AWS_SECRET_ACCESS_KEY"),
+            "GH_TOKEN": _SecretRef("GH_TOKEN"),
+        }
+        signing_creds = {"AWS": self._make_signing_cred()}
+        masked = {
+            "GH_TOKEN": MaskedSecret(
+                value="ghp_real",
+                scopes=frozenset(["api.github.com"]),
+                headers=("Authorization",),
+            )
+        }
+
+        result, replacement_map = _resolve_container_env(
+            raw_env, {}, masked, signing_credentials=signing_creds
+        )
+
+        # Both should be in replacement map
+        assert len(replacement_map) == 2
+        assert result["GH_TOKEN"].startswith("ghp_")
+        assert result["AWS_ACCESS_KEY_ID"].startswith("AKIA")
+
+
+# ---------------------------------------------------------------------------
+# RepoServerConfig with signing_credentials
+# ---------------------------------------------------------------------------
+
+
+class TestRepoServerConfigSigningCredentials:
+    """Tests for RepoServerConfig with signing_credentials."""
+
+    def test_signing_credential_redaction(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Signing credential values are redacted in logs."""
+        SecretFilter._secrets.clear()
+
+        _make_repo_server_config(
+            master_repo,
+            tmp_path,
+            signing_credentials={
+                "AWS": SigningCredential(
+                    access_key_id=SigningCredentialField(
+                        name="AWS_ACCESS_KEY_ID",
+                        value="AKIAIOSFODNN7EXAMPLE",
+                    ),
+                    secret_access_key=SigningCredentialField(
+                        name="AWS_SECRET_ACCESS_KEY",
+                        value="wJalrXUtnFEMI",
+                    ),
+                    session_token=SigningCredentialField(
+                        name="AWS_SESSION_TOKEN",
+                        value="session123",
+                    ),
+                    scopes=frozenset(["*.amazonaws.com"]),
+                )
+            },
+        )
+
+        assert "AKIAIOSFODNN7EXAMPLE" in SecretFilter._secrets
+        assert "wJalrXUtnFEMI" in SecretFilter._secrets
+        assert "session123" in SecretFilter._secrets
+
+    def test_signing_credential_redaction_no_token(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Signing credential without session token redacts key+secret."""
+        SecretFilter._secrets.clear()
+
+        _make_repo_server_config(
+            master_repo,
+            tmp_path,
+            signing_credentials={
+                "AWS": SigningCredential(
+                    access_key_id=SigningCredentialField(
+                        name="AWS_ACCESS_KEY_ID",
+                        value="AKIAIOSFODNN7EXAMPLE",
+                    ),
+                    secret_access_key=SigningCredentialField(
+                        name="AWS_SECRET_ACCESS_KEY",
+                        value="wJalrXUtnFEMI",
+                    ),
+                    session_token=None,
+                    scopes=frozenset(["*.amazonaws.com"]),
+                )
+            },
+        )
+
+        assert "AKIAIOSFODNN7EXAMPLE" in SecretFilter._secrets
+        assert "wJalrXUtnFEMI" in SecretFilter._secrets

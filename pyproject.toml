@@ -6,6 +6,7 @@ license = "MIT"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "aiosmtpd>=1.4.6",
+    "cryptography>=46.0.4",
     "mdformat>=0.7",
     "msal>=1.31",
     "mdformat-frontmatter>=2",

@@ -648,6 +648,41 @@ class TestReplacementMapOperations:
         finally:
             path.unlink(missing_ok=True)
 
+    def test_write_signing_credential_replacement_map(self) -> None:
+        """Writes SigningCredentialEntry via replacement map."""
+        from lib.gateway.config import (
+            SIGNING_TYPE_AWS_SIGV4,
+            SigningCredentialEntry,
+        )
+
+        pm = _make_pm()
+        replacement_map = {
+            "AKIA_SURROGATE1234567": SigningCredentialEntry(
+                access_key_id="AKIAIOSFODNN7EXAMPLE",
+                secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                session_token=None,
+                surrogate_session_token=None,
+                scopes=("s3.us-east-1.amazonaws.com",),
+            )
+        }
+        path = pm._write_replacement_map("task2", replacement_map)
+        try:
+            import json
+
+            data = json.loads(path.read_text())
+            entry = data["AKIA_SURROGATE1234567"]
+            assert entry["type"] == SIGNING_TYPE_AWS_SIGV4
+            assert entry["access_key_id"] == "AKIAIOSFODNN7EXAMPLE"
+            assert (
+                entry["secret_access_key"]
+                == "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+            )
+            assert entry["session_token"] is None
+            assert entry["surrogate_session_token"] is None
+            assert entry["scopes"] == ["s3.us-east-1.amazonaws.com"]
+        finally:
+            path.unlink(missing_ok=True)
+
     def test_write_empty_replacement_map(self) -> None:
         """Empty replacement map creates empty JSON file."""
         pm = _make_pm()
