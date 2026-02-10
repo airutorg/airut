@@ -277,6 +277,153 @@ class TestAuthservIdMismatchLogging:
         assert header in record.message
 
 
+class TestEmptyAuthservId:
+    """Microsoft 365 / EOP omits authserv-id from Authentication-Results.
+
+    When trusted_authserv_id is empty string, the authserv-id check is
+    skipped and we rely solely on the first-header-only policy (the
+    receiving MTA prepends its header at the top per RFC 8601 §5).
+    """
+
+    def test_microsoft_style_dmarc_pass(self):
+        """Microsoft header with no authserv-id, dmarc=pass."""
+        auth = SenderAuthenticator("")
+        msg = _msg(
+            auth_results=(
+                "spf=pass (sender IP is 10.0.0.1)"
+                " smtp.mailfrom=example.com;"
+                " dkim=pass header.d=example.com;"
+                " dmarc=pass action=none header.from=example.com;"
+                "compauth=pass reason=100"
+            )
+        )
+        assert auth.authenticate(msg) == AUTHORIZED
+
+    def test_microsoft_style_dmarc_fail(self):
+        """Microsoft header with no authserv-id, dmarc=fail."""
+        auth = SenderAuthenticator("")
+        msg = _msg(
+            auth_results=(
+                "spf=pass (sender IP is 10.0.0.1)"
+                " smtp.mailfrom=example.com;"
+                " dmarc=fail action=none header.from=example.com"
+            )
+        )
+        assert auth.authenticate(msg) is None
+
+    def test_empty_authserv_id_still_uses_first_header_only(self):
+        """Injected second header with dmarc=pass is never examined."""
+        auth = SenderAuthenticator("")
+        msg = _msg(
+            auth_results=[
+                (
+                    "spf=pass smtp.mailfrom=example.com;"
+                    " dmarc=fail header.from=example.com"
+                ),
+                (
+                    "spf=pass smtp.mailfrom=example.com;"
+                    " dmarc=pass header.from=example.com"
+                ),
+            ]
+        )
+        assert auth.authenticate(msg) is None
+
+    def test_empty_authserv_id_no_semicolon(self):
+        """Malformed header without semicolon is still rejected."""
+        auth = SenderAuthenticator("")
+        msg = _msg(auth_results="dmarc=pass")
+        assert auth.authenticate(msg) is None
+
+    def test_empty_authserv_id_no_header(self):
+        """No Authentication-Results header is still rejected."""
+        auth = SenderAuthenticator("")
+        msg = _msg()
+        assert auth.authenticate(msg) is None
+
+
+class TestInternalAuthFallback:
+    """Microsoft 365 internal mail has no Authentication-Results.
+
+    Intra-org email in Microsoft 365 has no Authentication-Results
+    header.  Instead, EOP stamps X-MS-Exchange-Organization-AuthAs:
+    Internal.  When allow_internal_auth_fallback is enabled, this
+    header is accepted as authentication proof when (and only when)
+    no Authentication-Results header exists at all.
+    """
+
+    def _internal_msg(
+        self,
+        auth_as: str | None = "Internal",
+        auth_results: str | list[str] | None = None,
+        from_addr: str = AUTHORIZED,
+    ) -> Message:
+        """Build a message with Microsoft internal headers."""
+        msg = _msg(from_addr=from_addr, auth_results=auth_results)
+        if auth_as is not None:
+            msg["X-MS-Exchange-Organization-AuthAs"] = auth_as
+        return msg
+
+    def test_internal_auth_accepted(self):
+        """Internal message accepted when fallback enabled."""
+        auth = SenderAuthenticator("", allow_internal_auth_fallback=True)
+        msg = self._internal_msg()
+        assert auth.authenticate(msg) == AUTHORIZED
+
+    def test_fallback_disabled_rejects(self):
+        """Internal message rejected when fallback disabled."""
+        auth = SenderAuthenticator("", allow_internal_auth_fallback=False)
+        msg = self._internal_msg()
+        assert auth.authenticate(msg) is None
+
+    def test_fallback_default_disabled(self):
+        """Fallback is disabled by default."""
+        auth = SenderAuthenticator("")
+        msg = self._internal_msg()
+        assert auth.authenticate(msg) is None
+
+    def test_auth_results_present_no_fallback(self):
+        """Fallback does not apply when Authentication-Results exists."""
+        auth = SenderAuthenticator(TRUSTED, allow_internal_auth_fallback=True)
+        msg = self._internal_msg(auth_results=f"{TRUSTED}; dmarc=fail")
+        assert auth.authenticate(msg) is None
+
+    def test_auth_results_present_dmarc_pass(self):
+        """DMARC pass takes precedence over internal fallback."""
+        auth = SenderAuthenticator(TRUSTED, allow_internal_auth_fallback=True)
+        msg = self._internal_msg(auth_results=f"{TRUSTED}; dmarc=pass")
+        assert auth.authenticate(msg) == AUTHORIZED
+
+    def test_auth_as_anonymous_rejected(self):
+        """Non-Internal AuthAs value is rejected."""
+        auth = SenderAuthenticator("", allow_internal_auth_fallback=True)
+        msg = self._internal_msg(auth_as="Anonymous")
+        assert auth.authenticate(msg) is None
+
+    def test_no_auth_as_header_rejected(self):
+        """Missing AuthAs header is rejected."""
+        auth = SenderAuthenticator("", allow_internal_auth_fallback=True)
+        msg = self._internal_msg(auth_as=None)
+        assert auth.authenticate(msg) is None
+
+    def test_auth_as_case_insensitive(self):
+        """AuthAs comparison is case-insensitive."""
+        auth = SenderAuthenticator("", allow_internal_auth_fallback=True)
+        msg = self._internal_msg(auth_as="INTERNAL")
+        assert auth.authenticate(msg) == AUTHORIZED
+
+    def test_still_requires_valid_from(self):
+        """Fallback still validates the From header."""
+        auth = SenderAuthenticator("", allow_internal_auth_fallback=True)
+        msg = self._internal_msg(from_addr="Evil <a@x> <b@x>")
+        assert auth.authenticate(msg) is None
+
+    def test_auth_as_with_whitespace(self):
+        """AuthAs value with leading/trailing whitespace."""
+        auth = SenderAuthenticator("", allow_internal_auth_fallback=True)
+        msg = self._internal_msg(auth_as="  Internal  ")
+        assert auth.authenticate(msg) == AUTHORIZED
+
+
 class TestSubstringMatchBypass:
     """Partial/substring matches on DMARC results must not pass."""
 

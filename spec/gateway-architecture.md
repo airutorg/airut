@@ -313,8 +313,12 @@ without touching DMARC logic).
 
 - **Claude credentials**: `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`
   configured in `container_env:` (use `!env` tags for secrets)
-- **Email credentials**: Password configured via `!env EMAIL_PASSWORD` in
-  `config/airut.yaml` (actual value in `.env` or environment)
+- **Email credentials**: Either password auth or Microsoft OAuth2 (XOAUTH2):
+  - **Password auth**: `password: !env EMAIL_PASSWORD` in `config/airut.yaml`
+  - **Microsoft OAuth2**: `email.microsoft_oauth2:` block with `tenant_id`,
+    `client_id`, and `client_secret` (all supporting `!env` tags). Uses MSAL
+    Client Credentials flow with XOAUTH2 SASL mechanism for both IMAP and SMTP.
+    When OAuth2 is configured, the `password` field is optional.
 - **Git credentials**: `GH_TOKEN` in `container_env:` with
   `gh auth git-credential` helper (no SSH keys mounted)
 - **AI service credentials**: Configured in `container_env:` (e.g.,

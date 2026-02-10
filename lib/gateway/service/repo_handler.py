@@ -74,7 +74,10 @@ class RepoHandler:
 
         self.listener = EmailListener(config)
         self.responder = EmailResponder(config)
-        self.authenticator = SenderAuthenticator(config.trusted_authserv_id)
+        self.authenticator = SenderAuthenticator(
+            config.trusted_authserv_id,
+            allow_internal_auth_fallback=config.microsoft_internal_auth_fallback,
+        )
         self.authorizer = SenderAuthorizer(config.authorized_senders)
         self.conversation_manager = ConversationManager(
             repo_url=config.git_repo_url,
@@ -137,13 +140,18 @@ class RepoHandler:
             self._polling_loop()
 
     def _reconnect_with_backoff(
-        self, reconnect_attempts: int, max_reconnect_attempts: int
+        self,
+        reconnect_attempts: int,
+        max_reconnect_attempts: int,
+        *,
+        error: IMAPConnectionError | None = None,
     ) -> int:
         """Handle IMAP reconnection with exponential backoff.
 
         Args:
             reconnect_attempts: Current attempt count (will be incremented).
             max_reconnect_attempts: Max attempts before giving up.
+            error: The connection error that triggered the reconnect.
 
         Returns:
             Updated reconnect_attempts count.
@@ -154,10 +162,11 @@ class RepoHandler:
         reconnect_attempts += 1
         repo_id = self.config.repo_id
         logger.error(
-            "Repo '%s': IMAP connection error (attempt %d/%d)",
+            "Repo '%s': IMAP connection error (attempt %d/%d): %s",
             repo_id,
             reconnect_attempts,
             max_reconnect_attempts,
+            error or "unknown",
         )
 
         if reconnect_attempts >= max_reconnect_attempts:
@@ -217,10 +226,10 @@ class RepoHandler:
 
                 time.sleep(self.config.poll_interval_seconds)
 
-            except IMAPConnectionError:
+            except IMAPConnectionError as e:
                 try:
                     reconnect_attempts = self._reconnect_with_backoff(
-                        reconnect_attempts, max_reconnect_attempts
+                        reconnect_attempts, max_reconnect_attempts, error=e
                     )
                 except _ReconnectFailedError:
                     return
@@ -302,10 +311,10 @@ class RepoHandler:
                     )
                     last_reconnect = 0
 
-            except IMAPConnectionError:
+            except IMAPConnectionError as e:
                 try:
                     reconnect_attempts = self._reconnect_with_backoff(
-                        reconnect_attempts, max_reconnect_attempts
+                        reconnect_attempts, max_reconnect_attempts, error=e
                     )
                     last_reconnect = time.time()
                 except _ReconnectFailedError:

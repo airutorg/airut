@@ -72,6 +72,17 @@ repos:
       # From address for outgoing emails (display name + address).
       from: "Airut <airut@example.com>"
 
+      # Microsoft OAuth2 Client Credentials (for M365 / Azure AD).
+      # When configured, XOAUTH2 is used instead of password auth for
+      # both IMAP and SMTP.  Requires Azure AD app registration with
+      # IMAP.AccessAsApp permission and Exchange Online service principal.
+      # When using OAuth2, the password field above can be omitted.
+      #
+      # microsoft_oauth2:
+      #   tenant_id: !env AZURE_TENANT_ID
+      #   client_id: !env AZURE_CLIENT_ID
+      #   client_secret: !env AZURE_CLIENT_SECRET
+
     # Only emails from these addresses/patterns (with passing DMARC) are
     # accepted. Supports wildcards for domain matching (e.g., *@company.com).
     authorized_senders:
@@ -79,8 +90,16 @@ repos:
       # - *@company.com  # Uncomment to allow any sender from company.com
 
     # The authserv-id to trust in Authentication-Results headers.
-    # Typically the hostname of your MX server.
+    # Typically the hostname of your MX server (e.g., mail.example.com).
+    # Set to empty string "" for Microsoft 365/EOP, which omits the
+    # authserv-id from Authentication-Results headers.
     trusted_authserv_id: mail.example.com
+
+    # Accept X-MS-Exchange-Organization-AuthAs: Internal as authentication
+    # proof for intra-org email in Microsoft 365 (where EOP omits
+    # Authentication-Results entirely).  Only used when no
+    # Authentication-Results header is present.  Default: false.
+    # microsoft_internal_auth_fallback: true
 
     git:
       # Repository URL cloned into each conversation workspace.

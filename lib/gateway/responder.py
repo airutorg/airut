@@ -17,6 +17,10 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from lib.gateway.config import RepoServerConfig
+from lib.gateway.microsoft_oauth2 import (
+    MicrosoftOAuth2TokenError,
+    MicrosoftOAuth2TokenProvider,
+)
 from lib.markdown import markdown_to_html
 
 
@@ -41,6 +45,18 @@ class EmailResponder:
             config: Email service configuration.
         """
         self.config = config
+
+        # Create Microsoft OAuth2 token provider if configured
+        self._token_provider: MicrosoftOAuth2TokenProvider | None = None
+        if config.microsoft_oauth2_tenant_id:
+            assert config.microsoft_oauth2_client_id
+            assert config.microsoft_oauth2_client_secret
+            self._token_provider = MicrosoftOAuth2TokenProvider(
+                tenant_id=config.microsoft_oauth2_tenant_id,
+                client_id=config.microsoft_oauth2_client_id,
+                client_secret=config.microsoft_oauth2_client_secret,
+            )
+
         logger.debug(
             "Initialized email responder for: %s",
             config.smtp_server,
@@ -149,13 +165,33 @@ class EmailResponder:
                     server.ehlo()  # Re-identify after TLS for AUTH capabilities
                 # Only authenticate if required (allows testing without auth)
                 if self.config.smtp_require_auth:
-                    server.login(
-                        self.config.email_username, self.config.email_password
-                    )
+                    if self._token_provider:
+                        # Microsoft OAuth2: XOAUTH2 SASL mechanism
+                        auth_string = (
+                            self._token_provider.generate_xoauth2_string(
+                                self.config.email_username
+                            )
+                        )
+
+                        def _xoauth2_authobject(
+                            _challenge: bytes | None = None,
+                        ) -> str:
+                            return auth_string
+
+                        server.auth("XOAUTH2", _xoauth2_authobject)
+                    else:
+                        server.login(
+                            self.config.email_username,
+                            self.config.email_password,
+                        )
                 server.send_message(msg)
 
             logger.info("Sent email to %s: %s", to, subject)
 
-        except (smtplib.SMTPException, OSError) as e:
+        except (
+            smtplib.SMTPException,
+            OSError,
+            MicrosoftOAuth2TokenError,
+        ) as e:
             logger.error("Failed to send email: %s", e)
             raise SMTPSendError(f"Failed to send email: {e}")

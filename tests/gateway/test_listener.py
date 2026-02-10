@@ -57,6 +57,55 @@ def test_connect_success(email_config):
         assert listener.connection == mock_conn
 
 
+def test_connect_oauth2_xoauth2(microsoft_oauth2_email_config):
+    """Test IMAP connection with Microsoft OAuth2 uses XOAUTH2."""
+    listener = EmailListener(microsoft_oauth2_email_config)
+    assert listener._token_provider is not None
+
+    with (
+        patch("imaplib.IMAP4_SSL") as mock_imap,
+        patch.object(
+            listener._token_provider,
+            "generate_xoauth2_string",
+            return_value="user=test@company.com\x01auth=Bearer tok\x01\x01",
+        ) as mock_gen,
+    ):
+        mock_conn = MagicMock()
+        mock_imap.return_value = mock_conn
+
+        listener.connect()
+
+        mock_conn.login.assert_not_called()
+        mock_conn.authenticate.assert_called_once()
+        call_args = mock_conn.authenticate.call_args
+        assert call_args[0][0] == "XOAUTH2"
+        # The second arg is a callable; invoke it to verify the auth string
+        auth_fn = call_args[0][1]
+        # Empty challenge (initial auth) returns the auth string as bytes
+        assert (
+            auth_fn(b"") == b"user=test@company.com\x01auth=Bearer tok\x01\x01"
+        )
+        # Non-empty challenge (server error) returns empty bytes to abort
+        assert auth_fn(b"some-error-json") == b""
+        mock_gen.assert_called_once_with(
+            microsoft_oauth2_email_config.email_username
+        )
+
+
+def test_listener_init_no_token_provider(email_config):
+    """Test listener without OAuth2 config has no token provider."""
+    listener = EmailListener(email_config)
+    assert listener._token_provider is None
+    listener.close()
+
+
+def test_listener_init_with_token_provider(microsoft_oauth2_email_config):
+    """Test listener with OAuth2 config creates token provider."""
+    listener = EmailListener(microsoft_oauth2_email_config)
+    assert listener._token_provider is not None
+    listener.close()
+
+
 def test_connect_retry_success(email_config):
     """Test connection succeeds after retry."""
     listener = EmailListener(email_config)
@@ -183,6 +232,19 @@ def test_fetch_unread_imap_error(email_config):
     listener.connection = mock_conn
 
     mock_conn.select.side_effect = imaplib.IMAP4.error("IMAP error")
+
+    with pytest.raises(IMAPConnectionError, match="Failed to fetch messages"):
+        listener.fetch_unread()
+
+
+def test_fetch_unread_oserror(email_config):
+    """Test fetching wraps OSError (socket timeout) in IMAPConnectionError."""
+    listener = EmailListener(email_config)
+
+    mock_conn = MagicMock()
+    listener.connection = mock_conn
+
+    mock_conn.select.side_effect = OSError("The read operation timed out")
 
     with pytest.raises(IMAPConnectionError, match="Failed to fetch messages"):
         listener.fetch_unread()
@@ -1132,3 +1194,56 @@ def test_disconnect_no_warning_when_interrupted_with_error(
     # No warning should be logged since we're interrupted
     assert "Error during IMAP disconnect" not in caplog.text
     assert listener.connection is None
+
+
+def test_connect_oauth2_token_error_retries(microsoft_oauth2_email_config):
+    """Test OAuth2 token errors are retried in connect()."""
+    from lib.gateway.microsoft_oauth2 import MicrosoftOAuth2TokenError
+
+    listener = EmailListener(microsoft_oauth2_email_config)
+    assert listener._token_provider is not None
+
+    with (
+        patch("imaplib.IMAP4_SSL") as mock_imap,
+        patch.object(
+            listener._token_provider,
+            "generate_xoauth2_string",
+            side_effect=[
+                MicrosoftOAuth2TokenError("transient error"),
+                "user=test@company.com\x01auth=Bearer tok\x01\x01",
+            ],
+        ),
+        patch("time.sleep"),
+    ):
+        mock_conn = MagicMock()
+        mock_imap.return_value = mock_conn
+
+        listener.connect(max_retries=3)
+
+        # Should have succeeded on second attempt
+        mock_conn.authenticate.assert_called_once()
+
+
+def test_connect_oauth2_token_error_exhausted(microsoft_oauth2_email_config):
+    """Test OAuth2 token errors raise IMAPConnectionError after retries."""
+    from lib.gateway.microsoft_oauth2 import MicrosoftOAuth2TokenError
+
+    listener = EmailListener(microsoft_oauth2_email_config)
+    assert listener._token_provider is not None
+
+    with (
+        patch("imaplib.IMAP4_SSL") as mock_imap,
+        patch.object(
+            listener._token_provider,
+            "generate_xoauth2_string",
+            side_effect=MicrosoftOAuth2TokenError("invalid_client: Bad secret"),
+        ),
+        patch("time.sleep"),
+    ):
+        mock_conn = MagicMock()
+        mock_imap.return_value = mock_conn
+
+        with pytest.raises(
+            IMAPConnectionError, match="Failed to connect after 3 attempts"
+        ):
+            listener.connect(max_retries=3)

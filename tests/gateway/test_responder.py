@@ -17,6 +17,13 @@ def test_responder_init(email_config):
     """Test responder initialization."""
     responder = EmailResponder(email_config)
     assert responder.config == email_config
+    assert responder._token_provider is None
+
+
+def test_responder_init_with_oauth2(microsoft_oauth2_email_config):
+    """Test responder initialization with Microsoft OAuth2."""
+    responder = EmailResponder(microsoft_oauth2_email_config)
+    assert responder._token_provider is not None
 
 
 def test_send_reply_success(email_config):
@@ -417,3 +424,69 @@ def test_send_reply_with_unknown_extension_attachment(email_config):
         attachment = parts[1]
         assert attachment.get_filename() == "data.xyz123"
         assert attachment.get_content_type() == "application/octet-stream"
+
+
+def test_send_reply_oauth2_xoauth2(microsoft_oauth2_email_config):
+    """Test SMTP authentication with Microsoft OAuth2 uses XOAUTH2."""
+    responder = EmailResponder(microsoft_oauth2_email_config)
+    assert responder._token_provider is not None
+
+    with (
+        patch("smtplib.SMTP") as mock_smtp_class,
+        patch.object(
+            responder._token_provider,
+            "generate_xoauth2_string",
+            return_value="user=test@company.com\x01auth=Bearer tok\x01\x01",
+        ) as mock_gen,
+    ):
+        mock_server = MagicMock()
+        mock_smtp_class.return_value.__enter__.return_value = mock_server
+
+        responder.send_reply(
+            to="recipient@example.com",
+            subject="Test",
+            body="OAuth2 reply.",
+        )
+
+        # Should use auth() with XOAUTH2, not login()
+        mock_server.login.assert_not_called()
+        mock_server.auth.assert_called_once()
+        call_args = mock_server.auth.call_args
+        assert call_args[0][0] == "XOAUTH2"
+        # The second arg is a callable; invoke it to verify the auth string
+        auth_fn = call_args[0][1]
+        assert (
+            auth_fn(b"") == "user=test@company.com\x01auth=Bearer tok\x01\x01"
+        )
+        mock_gen.assert_called_once_with(
+            microsoft_oauth2_email_config.email_username
+        )
+        mock_server.send_message.assert_called_once()
+
+
+def test_send_reply_oauth2_token_error_raises_smtp_send_error(
+    microsoft_oauth2_email_config,
+):
+    """Test OAuth2 token errors are wrapped in SMTPSendError."""
+    from lib.gateway.microsoft_oauth2 import MicrosoftOAuth2TokenError
+
+    responder = EmailResponder(microsoft_oauth2_email_config)
+    assert responder._token_provider is not None
+
+    with (
+        patch("smtplib.SMTP") as mock_smtp_class,
+        patch.object(
+            responder._token_provider,
+            "generate_xoauth2_string",
+            side_effect=MicrosoftOAuth2TokenError("invalid_client: Bad secret"),
+        ),
+    ):
+        mock_server = MagicMock()
+        mock_smtp_class.return_value.__enter__.return_value = mock_server
+
+        with pytest.raises(SMTPSendError, match="Failed to send email"):
+            responder.send_reply(
+                to="recipient@example.com",
+                subject="Test",
+                body="OAuth2 reply.",
+            )

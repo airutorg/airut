@@ -20,6 +20,10 @@ from email.message import Message
 from email.parser import BytesParser
 
 from lib.gateway.config import RepoServerConfig
+from lib.gateway.microsoft_oauth2 import (
+    MicrosoftOAuth2TokenError,
+    MicrosoftOAuth2TokenProvider,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -51,6 +55,17 @@ class EmailListener:
         self.connection: imaplib.IMAP4_SSL | None = None
         self._idle_tag: str | None = None
         self._interrupted = False
+
+        # Create Microsoft OAuth2 token provider if configured
+        self._token_provider: MicrosoftOAuth2TokenProvider | None = None
+        if config.microsoft_oauth2_tenant_id:
+            assert config.microsoft_oauth2_client_id
+            assert config.microsoft_oauth2_client_secret
+            self._token_provider = MicrosoftOAuth2TokenProvider(
+                tenant_id=config.microsoft_oauth2_tenant_id,
+                client_id=config.microsoft_oauth2_client_id,
+                client_secret=config.microsoft_oauth2_client_secret,
+            )
 
         # Pipe for interrupting IDLE wait from another thread.
         # Writing to _interrupt_write will wake up select() on _interrupt_read.
@@ -93,9 +108,26 @@ class EmailListener:
                     self.config.imap_server, self.config.imap_port, timeout=10
                 )
 
-                self.connection.login(
-                    self.config.email_username, self.config.email_password
-                )
+                if self._token_provider:
+                    # Microsoft OAuth2: XOAUTH2 SASL mechanism
+                    auth_string = self._token_provider.generate_xoauth2_string(
+                        self.config.email_username
+                    ).encode("utf-8")
+
+                    def _xoauth2_callback(challenge: bytes) -> bytes:
+                        # XOAUTH2 protocol: server sends empty challenge
+                        # for initial auth.  If auth fails, server sends a
+                        # non-empty JSON error as a second challenge —
+                        # respond with empty bytes to get the final error.
+                        if challenge:
+                            return b""
+                        return auth_string
+
+                    self.connection.authenticate("XOAUTH2", _xoauth2_callback)
+                else:
+                    self.connection.login(
+                        self.config.email_username, self.config.email_password
+                    )
 
                 logger.info(
                     "Connected to IMAP server: %s",
@@ -103,7 +135,11 @@ class EmailListener:
                 )
                 return
 
-            except (imaplib.IMAP4.error, OSError) as e:
+            except (
+                imaplib.IMAP4.error,
+                OSError,
+                MicrosoftOAuth2TokenError,
+            ) as e:
                 logger.warning(
                     "IMAP connection attempt %d/%d failed: %s",
                     attempt,
@@ -165,7 +201,7 @@ class EmailListener:
                 logger.info("Fetched %d unread messages", len(messages))
             return messages
 
-        except imaplib.IMAP4.error as e:
+        except (imaplib.IMAP4.error, OSError) as e:
             raise IMAPConnectionError(f"Failed to fetch messages: {e}")
 
     def mark_as_read(self, msg_id: bytes) -> None:

@@ -507,6 +507,102 @@ def test_repo_server_config_invalid_idle_reconnect_interval(
 
 
 # ---------------------------------------------------------------------------
+# Microsoft OAuth2 config
+# ---------------------------------------------------------------------------
+
+
+def test_repo_server_config_oauth2_defaults(
+    master_repo: Path, tmp_path: Path
+) -> None:
+    """Microsoft OAuth2 fields default to None."""
+    config = _make_repo_server_config(master_repo, tmp_path)
+    assert config.microsoft_oauth2_tenant_id is None
+    assert config.microsoft_oauth2_client_id is None
+    assert config.microsoft_oauth2_client_secret is None
+
+
+def test_repo_server_config_oauth2_all_set(
+    master_repo: Path, tmp_path: Path
+) -> None:
+    """All three OAuth2 fields set is valid."""
+    config = _make_repo_server_config(
+        master_repo,
+        tmp_path,
+        microsoft_oauth2_tenant_id="tenant-123",
+        microsoft_oauth2_client_id="client-456",
+        microsoft_oauth2_client_secret="secret-789",
+    )
+    assert config.microsoft_oauth2_tenant_id == "tenant-123"
+    assert config.microsoft_oauth2_client_id == "client-456"
+    assert config.microsoft_oauth2_client_secret == "secret-789"
+
+
+def test_repo_server_config_oauth2_partial_raises(
+    master_repo: Path, tmp_path: Path
+) -> None:
+    """Partial OAuth2 config (only some fields set) raises ValueError."""
+    with pytest.raises(ValueError, match="microsoft_oauth2 requires all three"):
+        _make_repo_server_config(
+            master_repo,
+            tmp_path,
+            microsoft_oauth2_tenant_id="tenant-123",
+            # client_id and client_secret left as None
+        )
+
+    with pytest.raises(ValueError, match="microsoft_oauth2 requires all three"):
+        _make_repo_server_config(
+            master_repo,
+            tmp_path,
+            microsoft_oauth2_tenant_id="tenant-123",
+            microsoft_oauth2_client_id="client-456",
+            # client_secret left as None
+        )
+
+
+def test_repo_server_config_oauth2_secret_redaction(
+    master_repo: Path, tmp_path: Path
+) -> None:
+    """OAuth2 client secret is registered for log redaction."""
+    client_secret = "super-secret-oauth2-client-secret"
+    SecretFilter._secrets.clear()
+
+    _make_repo_server_config(
+        master_repo,
+        tmp_path,
+        microsoft_oauth2_tenant_id="tenant-123",
+        microsoft_oauth2_client_id="client-456",
+        microsoft_oauth2_client_secret=client_secret,
+    )
+
+    assert client_secret in SecretFilter._secrets
+
+
+# ---------------------------------------------------------------------------
+# Microsoft internal auth fallback config
+# ---------------------------------------------------------------------------
+
+
+def test_repo_server_config_internal_auth_fallback_default(
+    master_repo: Path, tmp_path: Path
+) -> None:
+    """microsoft_internal_auth_fallback defaults to False."""
+    config = _make_repo_server_config(master_repo, tmp_path)
+    assert config.microsoft_internal_auth_fallback is False
+
+
+def test_repo_server_config_internal_auth_fallback_enabled(
+    master_repo: Path, tmp_path: Path
+) -> None:
+    """microsoft_internal_auth_fallback can be set to True."""
+    config = _make_repo_server_config(
+        master_repo,
+        tmp_path,
+        microsoft_internal_auth_fallback=True,
+    )
+    assert config.microsoft_internal_auth_fallback is True
+
+
+# ---------------------------------------------------------------------------
 # ServerConfig.from_yaml
 # ---------------------------------------------------------------------------
 
@@ -872,6 +968,145 @@ class TestFromYaml:
             ServerConfig.from_yaml(yaml_path)
 
         mock_dotenv.assert_called_once()
+
+    def test_microsoft_oauth2_config(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Microsoft OAuth2 block is parsed from YAML."""
+        # Insert microsoft_oauth2 block inside the email: section
+        oauth2_block = (
+            "      microsoft_oauth2:\n"
+            "        tenant_id: my-tenant\n"
+            "        client_id: my-client\n"
+            "        client_secret: my-secret\n"
+        )
+        base = _MINIMAL_YAML.format(
+            repo_url=master_repo, storage_dir=tmp_path / "storage"
+        )
+        # Insert after the from: line (last line of email: section)
+        yaml_content = base.replace(
+            '      from: "Test <test@example.com>"\n',
+            '      from: "Test <test@example.com>"\n' + oauth2_block,
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+
+        config = ServerConfig.from_yaml(yaml_path)
+        repo = config.repos["test"]
+
+        assert repo.microsoft_oauth2_tenant_id == "my-tenant"
+        assert repo.microsoft_oauth2_client_id == "my-client"
+        assert repo.microsoft_oauth2_client_secret == "my-secret"
+
+    def test_microsoft_oauth2_env_vars(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Microsoft OAuth2 fields support !env tags."""
+        oauth2_block = (
+            "      microsoft_oauth2:\n"
+            "        tenant_id: !env AZURE_TENANT_ID\n"
+            "        client_id: !env AZURE_CLIENT_ID\n"
+            "        client_secret: !env AZURE_CLIENT_SECRET\n"
+        )
+        base = _MINIMAL_YAML.format(
+            repo_url=master_repo, storage_dir=tmp_path / "storage"
+        )
+        yaml_content = base.replace(
+            '      from: "Test <test@example.com>"\n',
+            '      from: "Test <test@example.com>"\n' + oauth2_block,
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+
+        with patch.dict(
+            "os.environ",
+            {
+                "AZURE_TENANT_ID": "env-tenant",
+                "AZURE_CLIENT_ID": "env-client",
+                "AZURE_CLIENT_SECRET": "env-secret",
+            },
+        ):
+            config = ServerConfig.from_yaml(yaml_path)
+
+        repo = config.repos["test"]
+        assert repo.microsoft_oauth2_tenant_id == "env-tenant"
+        assert repo.microsoft_oauth2_client_id == "env-client"
+        assert repo.microsoft_oauth2_client_secret == "env-secret"
+
+    def test_microsoft_oauth2_password_optional(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Password is not required when OAuth2 is configured."""
+        oauth2_block = (
+            "      microsoft_oauth2:\n"
+            "        tenant_id: my-tenant\n"
+            "        client_id: my-client\n"
+            "        client_secret: my-secret\n"
+        )
+        # Remove password and add microsoft_oauth2 in the email section
+        base = _MINIMAL_YAML.format(
+            repo_url=master_repo, storage_dir=tmp_path / "storage"
+        ).replace("      password: plain_password\n", "")
+        yaml_content = base.replace(
+            '      from: "Test <test@example.com>"\n',
+            '      from: "Test <test@example.com>"\n' + oauth2_block,
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+
+        config = ServerConfig.from_yaml(yaml_path)
+        repo = config.repos["test"]
+
+        assert repo.email_password == ""
+        assert repo.microsoft_oauth2_tenant_id == "my-tenant"
+
+    def test_microsoft_oauth2_absent_defaults_none(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Without microsoft_oauth2 block, fields default to None."""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(
+            _MINIMAL_YAML.format(
+                repo_url=master_repo, storage_dir=tmp_path / "storage"
+            )
+        )
+
+        config = ServerConfig.from_yaml(yaml_path)
+        repo = config.repos["test"]
+
+        assert repo.microsoft_oauth2_tenant_id is None
+        assert repo.microsoft_oauth2_client_id is None
+        assert repo.microsoft_oauth2_client_secret is None
+
+    def test_internal_auth_fallback_from_yaml(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """microsoft_internal_auth_fallback parsed from YAML."""
+        base = _MINIMAL_YAML.format(
+            repo_url=master_repo, storage_dir=tmp_path / "storage"
+        )
+        yaml_content = base + "    microsoft_internal_auth_fallback: true\n"
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+
+        config = ServerConfig.from_yaml(yaml_path)
+        repo = config.repos["test"]
+        assert repo.microsoft_internal_auth_fallback is True
+
+    def test_internal_auth_fallback_default_false(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """microsoft_internal_auth_fallback defaults to False."""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(
+            _MINIMAL_YAML.format(
+                repo_url=master_repo, storage_dir=tmp_path / "storage"
+            )
+        )
+
+        config = ServerConfig.from_yaml(yaml_path)
+        repo = config.repos["test"]
+        assert repo.microsoft_internal_auth_fallback is False
 
 
 # ---------------------------------------------------------------------------
