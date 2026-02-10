@@ -166,6 +166,7 @@ class TestIdleLoop:
             return []
 
         handler.listener.fetch_unread.side_effect = fake_fetch
+        handler.listener.idle_start.return_value = False  # entered IDLE
         handler.listener.idle_wait.return_value = True  # got notification
 
         handler._idle_loop()
@@ -185,6 +186,7 @@ class TestIdleLoop:
             return []
 
         handler.listener.fetch_unread.side_effect = fake_fetch
+        handler.listener.idle_start.return_value = False  # entered IDLE
         handler.listener.idle_wait.return_value = False  # timeout
 
         handler._idle_loop()
@@ -236,6 +238,47 @@ class TestIdleLoop:
         with patch.object(handler, "_submit_message"):
             handler._idle_loop()
 
+    def test_idle_start_has_pending_skips_idle(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """When idle_start detects pending messages, skip IDLE and re-fetch.
+
+        Reproduces the race condition where a message arrives between
+        fetch_unread() and IDLE.  idle_start() detects the unseen message
+        and returns True, causing the loop to skip IDLE and call
+        fetch_unread() again, which picks up the message.
+        """
+        svc, handler = make_service(email_config, tmp_path)
+        update_repo(handler, idle_reconnect_interval_seconds=99999)
+        fetch_count = 0
+
+        def fake_fetch():
+            nonlocal fetch_count
+            fetch_count += 1
+            if fetch_count == 1:
+                # First poll: inbox empty (message hasn't arrived yet)
+                return []
+            if fetch_count == 2:
+                # Second poll: message arrived during idle_start check
+                return [("1", make_message())]
+            svc.running = False
+            return []
+
+        handler.listener.fetch_unread.side_effect = fake_fetch
+        # First idle_start: detects pending message, returns True
+        # Second idle_start: no pending, enters IDLE normally
+        handler.listener.idle_start.side_effect = [True, False]
+        handler.listener.idle_wait.return_value = False
+
+        with patch.object(handler, "_submit_message") as mock_submit:
+            handler._idle_loop()
+
+        # Message should have been processed
+        mock_submit.assert_called_once()
+        handler.listener.delete_message.assert_called_once_with("1")
+        # idle_wait should only be called once (second idle_start entered IDLE)
+        handler.listener.idle_wait.assert_called_once()
+
     def test_idle_error_forces_reconnect(
         self, email_config, tmp_path: Path
     ) -> None:
@@ -255,7 +298,7 @@ class TestIdleLoop:
         handler.listener.fetch_unread.side_effect = fake_fetch
         handler.listener.idle_start.side_effect = [
             IMAPIdleError("idle broken"),
-            None,
+            False,
         ]
 
         handler._idle_loop()
@@ -329,6 +372,7 @@ class TestIdleLoop:
         update_repo(handler, idle_reconnect_interval_seconds=99999)
 
         handler.listener.fetch_unread.return_value = []
+        handler.listener.idle_start.return_value = False  # entered IDLE
 
         def stop_during_wait(timeout):
             svc.running = False
@@ -353,6 +397,7 @@ class TestIdleLoop:
             return []
 
         handler.listener.fetch_unread.side_effect = fake_fetch
+        handler.listener.idle_start.return_value = False  # entered IDLE
 
         # Always return a time far past reconnect interval -> idle_timeout = 0
         with patch("time.time", return_value=99999):

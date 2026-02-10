@@ -419,11 +419,14 @@ def test_idle_start_success(email_config):
     # Mock _new_tag to return a tag
     mock_conn._new_tag.return_value = b"A001"
     mock_conn.select.return_value = ("OK", [b"42"])
+    mock_conn.search.return_value = ("OK", [b""])
     mock_conn.readline.return_value = b"+ idling\r\n"
 
-    listener.idle_start()
+    result = listener.idle_start()
 
+    assert result is False
     mock_conn.select.assert_called_once_with("INBOX")
+    mock_conn.search.assert_called_once_with(None, "UNSEEN")
     mock_conn.send.assert_called_once_with(b"A001 IDLE\r\n")
     assert listener._idle_tag == "A001"
 
@@ -447,12 +450,38 @@ def test_idle_start_not_accepted(email_config):
 
     mock_conn._new_tag.return_value = b"A001"
     mock_conn.select.return_value = ("OK", [b"42"])
+    mock_conn.search.return_value = ("OK", [b""])
     mock_conn.readline.return_value = b"A001 BAD IDLE not supported\r\n"
 
     with pytest.raises(IMAPIdleError, match="IDLE not accepted"):
         listener.idle_start()
 
     # Tag should be cleared on failure
+    assert listener._idle_tag is None
+
+
+def test_idle_start_has_pending_messages(email_config):
+    """Test IDLE start returns True when unseen messages exist.
+
+    This covers the race condition where a message arrives between
+    fetch_unread() and IDLE: idle_start() detects the pending message
+    and returns True without entering IDLE.
+    """
+    listener = EmailListener(email_config)
+
+    mock_conn = MagicMock()
+    listener.connection = mock_conn
+
+    mock_conn.select.return_value = ("OK", [b"42"])
+    mock_conn.search.return_value = ("OK", [b"1 2"])
+
+    result = listener.idle_start()
+
+    assert result is True
+    mock_conn.select.assert_called_once_with("INBOX")
+    mock_conn.search.assert_called_once_with(None, "UNSEEN")
+    # IDLE command should NOT have been sent
+    mock_conn.send.assert_not_called()
     assert listener._idle_tag is None
 
 
