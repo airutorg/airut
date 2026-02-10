@@ -26,6 +26,8 @@ For high-level documentation, see [doc/](../doc/).
   log format, crash recovery
 - [masked-secrets.md](masked-secrets.md) — Scope-restricted credentials with
   proxy-level token replacement
+- [aws-sigv4-resigning.md](aws-sigv4-resigning.md) — AWS SigV4/SigV4A credential
+  masking via proxy re-signing
 
 ## Dashboard
 

@@ -21,6 +21,7 @@ version = "0.6.1"
 source = { virtual = "." }
 dependencies = [
     { name = "aiosmtpd" },
+    { name = "cryptography" },
     { name = "mdformat" },
     { name = "mdformat-frontmatter" },
     { name = "mdformat-gfm" },
@@ -42,6 +43,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aiosmtpd", specifier = ">=1.4.6" },
+    { name = "cryptography", specifier = ">=46.0.4" },
     { name = "mdformat", specifier = ">=0.7" },
     { name = "mdformat-frontmatter", specifier = ">=2" },
     { name = "mdformat-gfm", specifier = ">=0.3" },

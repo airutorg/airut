@@ -275,10 +275,45 @@ repos:
           - "*.githubusercontent.com"
 ```
 
-This prevents credential exfiltration — even if the container is compromised,
-the attacker only has surrogates that are useless outside scoped hosts. See
+Real credentials never enter the container — the proxy inserts them into
+upstream requests only for scoped hosts. A compromised container can still act
+within scope (make authenticated API calls), but cannot extract credentials for
+use outside the container. See
 [network-sandbox.md](network-sandbox.md#masked-secrets-token-replacement) for
 full details.
+
+### Signing Credentials (AWS)
+
+For AWS credentials (or any S3-compatible API), use `signing_credentials`
+instead of plain `secrets`. The container receives surrogate credentials; the
+proxy re-signs requests with the real credentials when the host matches scopes.
+
+```yaml
+repos:
+  my-project:
+    secrets:
+      ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY  # Plain (not AWS)
+
+    signing_credentials:
+      AWS_PROD:
+        type: aws-sigv4
+        access_key_id:
+          name: AWS_ACCESS_KEY_ID
+          value: !env AWS_ACCESS_KEY_ID
+        secret_access_key:
+          name: AWS_SECRET_ACCESS_KEY
+          value: !env AWS_SECRET_ACCESS_KEY
+        session_token:                           # optional
+          name: AWS_SESSION_TOKEN
+          value: !env AWS_SESSION_TOKEN
+        scopes:
+          - "*.amazonaws.com"
+```
+
+The repo config references these with standard `!secret` tags — it doesn't need
+to know about signing credentials. See
+[network-sandbox.md](network-sandbox.md#signing-credentials-aws-sigv4-re-signing)
+for details.
 
 ## Email Setup
 
