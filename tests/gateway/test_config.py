@@ -60,9 +60,9 @@ class TestRawResolve:
             assert _raw_resolve(_EnvVar("MISSING")) is None
 
     def test_envvar_empty(self) -> None:
-        """EnvVar resolves to None when env var is empty string."""
+        """EnvVar set to empty string resolves to empty string."""
         with patch.dict("os.environ", {"EMPTY": ""}):
-            assert _raw_resolve(_EnvVar("EMPTY")) is None
+            assert _raw_resolve(_EnvVar("EMPTY")) == ""
 
 
 class TestCoerceBool:
@@ -1367,6 +1367,36 @@ class TestRepoConfigFromMirror:
         rc, _ = RepoConfig.from_mirror(mirror, {"SERVER_KEY": "secret-val"})
         assert rc.container_env == {"MY_KEY": "secret-val"}
 
+    def test_secret_empty_string_resolved(self) -> None:
+        """!secret tag with empty string value resolves successfully."""
+        mirror = MagicMock()
+        mirror.read_file.return_value = (
+            "container_env:\n  MY_KEY: !secret SERVER_KEY\n"
+        )
+        rc, _ = RepoConfig.from_mirror(mirror, {"SERVER_KEY": ""})
+        assert rc.container_env == {"MY_KEY": ""}
+
+    def test_secret_tag_outside_container_env_raises(self) -> None:
+        """!secret tag outside container_env raises ConfigError."""
+        mirror = MagicMock()
+        mirror.read_file.return_value = "default_model: !secret MODEL\n"
+        with pytest.raises(ConfigError, match="!secret.*outside container_env"):
+            RepoConfig.from_mirror(mirror, {"MODEL": "sonnet"})
+
+    def test_optional_secret_tag_outside_container_env_raises(self) -> None:
+        """!secret? tag outside container_env raises ConfigError."""
+        mirror = MagicMock()
+        mirror.read_file.return_value = "timeout: !secret? TIMEOUT\n"
+        with pytest.raises(ConfigError, match="!secret.*outside container_env"):
+            RepoConfig.from_mirror(mirror, {})
+
+    def test_secret_tag_in_nested_list_raises(self) -> None:
+        """!secret tag nested inside a list outside container_env raises."""
+        mirror = MagicMock()
+        mirror.read_file.return_value = "extra:\n  - !secret NESTED_SECRET\n"
+        with pytest.raises(ConfigError, match="!secret.*outside container_env"):
+            RepoConfig.from_mirror(mirror, {"NESTED_SECRET": "val"})
+
     def test_server_sandbox_override(self) -> None:
         """server_sandbox_enabled=False overrides repo default."""
         mirror = MagicMock()
@@ -1414,12 +1444,26 @@ class TestResolveContainerEnv:
         result, _ = _resolve_container_env({"K": None}, {}, {})
         assert result == {}
 
-    def test_empty_secret_skipped(self) -> None:
-        """Empty secret values are skipped."""
+    def test_empty_string_secret_resolved(self) -> None:
+        """Secret configured with empty string is a valid value."""
         result, _ = _resolve_container_env(
             {"K": _SecretRef("S")}, {"S": ""}, {}
         )
-        assert result == {}
+        assert result == {"K": ""}
+
+    def test_missing_required_secret_not_in_pool_raises(self) -> None:
+        """Required !secret for name absent from server pool raises."""
+        with pytest.raises(ConfigError, match="not found"):
+            _resolve_container_env(
+                {"K": _SecretRef("NOPE")}, {"OTHER": "v"}, {}
+            )
+
+    def test_optional_secret_empty_string_resolved(self) -> None:
+        """Optional !secret? with empty string value resolves it."""
+        result, _ = _resolve_container_env(
+            {"K": _SecretRef("S", optional=True)}, {"S": ""}, {}
+        )
+        assert result == {"K": ""}
 
     def test_optional_secret_missing_skipped(self) -> None:
         """Missing optional secret (!secret?) is silently skipped."""
@@ -1446,6 +1490,34 @@ class TestResolveContainerEnv:
         result, _ = _resolve_container_env(raw, secrets, {})
         # Required + present optional resolved; missing optional skipped
         assert result == {"REQ": "req-val", "OPT_PRESENT": "opt-val"}
+
+    def test_empty_string_masked_secret_resolved(self) -> None:
+        """Masked secret with empty string value is resolved."""
+        masked = {
+            "S": MaskedSecret(
+                value="",
+                scopes=frozenset(["api.example.com"]),
+                headers=("*",),
+            )
+        }
+        # Empty string is still a valid configured value — should be set
+        result, rmap = _resolve_container_env(
+            {"K": _SecretRef("S")}, {}, masked
+        )
+        assert result == {"K": ""}
+        assert rmap == {}
+
+    def test_missing_masked_required_secret_raises(self) -> None:
+        """Required !secret absent from masked pool and plain pool raises."""
+        masked = {
+            "OTHER": MaskedSecret(
+                value="val",
+                scopes=frozenset(["api.example.com"]),
+                headers=("*",),
+            )
+        }
+        with pytest.raises(ConfigError, match="not found"):
+            _resolve_container_env({"K": _SecretRef("NOPE")}, {}, masked)
 
 
 # ---------------------------------------------------------------------------
@@ -1540,8 +1612,20 @@ class TestResolveMaskedSecrets:
         )
         assert result["GH_TOKEN"].headers == ("Authorization",)
 
-    def test_empty_value_skipped(self) -> None:
-        """Empty value is silently skipped."""
+    def test_none_value_skipped(self) -> None:
+        """None/null value is silently skipped."""
+        raw = {
+            "GH_TOKEN": {
+                "value": None,
+                "scopes": ["api.github.com"],
+                "headers": ["Authorization"],
+            }
+        }
+        result = _resolve_masked_secrets(raw, "repos.test")
+        assert result == {}
+
+    def test_empty_string_value_preserved(self) -> None:
+        """Empty string value is preserved (intentionally empty)."""
         raw = {
             "GH_TOKEN": {
                 "value": "",
@@ -1550,7 +1634,8 @@ class TestResolveMaskedSecrets:
             }
         }
         result = _resolve_masked_secrets(raw, "repos.test")
-        assert result == {}
+        assert "GH_TOKEN" in result
+        assert result["GH_TOKEN"].value == ""
 
     def test_not_a_mapping_raises(self) -> None:
         """Non-mapping value raises ConfigError."""
