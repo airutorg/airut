@@ -14,9 +14,11 @@ Provides two logically separate layers:
   sender is allowed to use the gateway.
 
 Security model:
-- Only Authentication-Results headers from the configured
-  ``trusted_authserv_id`` are considered (prevents header injection by
-  upstream relays or attackers).
+- Only the **first** (topmost) ``Authentication-Results`` header is
+  considered.  The receiving MTA prepends its header at the top
+  (RFC 8601 §5).  If the first header is not from the configured
+  ``trusted_authserv_id``, the message is rejected — lower headers are
+  never consulted, even if they have a matching authserv-id.
 - DMARC pass is required (SPF alone is insufficient because SPF does not
   validate the From header, only the envelope sender).
 - From header is parsed with strict validation, not the permissive
@@ -90,9 +92,10 @@ class SecurityValidationError(Exception):
 class SenderAuthenticator:
     """Verifies email authenticity via DMARC.
 
-    Checks that the email's Authentication-Results header from a trusted
-    mail server reports ``dmarc=pass``.  This confirms the From header
-    domain is authentic (not spoofed).
+    Checks only the **first** (topmost) ``Authentication-Results`` header.
+    If it is not from the configured trusted mail server, the message is
+    rejected without examining lower headers.  This confirms the From
+    header domain is authentic (not spoofed).
 
     Attributes:
         trusted_authserv_id: Hostname of the trusted mail server whose
@@ -148,18 +151,28 @@ class SenderAuthenticator:
         return sender
 
     def _verify_dmarc(self, message: Message) -> bool:
-        """Verify DMARC pass in Authentication-Results from trusted server.
+        """Verify DMARC pass in the first Authentication-Results header.
 
-        Only considers headers where the authserv-id matches the configured
-        trusted server.  SPF alone is not sufficient because SPF validates
-        the envelope sender (Return-Path), not the From header — an attacker
-        can pass SPF with their own domain while spoofing the From header.
+        Only considers the **first** (topmost) ``Authentication-Results``
+        header, period.  The receiving MTA prepends its header at the top
+        (RFC 8601 §5), so the first header is always from our MTA.  If the
+        first header's authserv-id does not match the configured trusted
+        server, the message is rejected — we do not search lower headers.
+
+        This prevents an attacker from injecting a forged header (with a
+        matching authserv-id and ``dmarc=pass``) below legitimate headers
+        from other servers.
+
+        SPF alone is not sufficient because SPF validates the envelope
+        sender (Return-Path), not the From header — an attacker can pass
+        SPF with their own domain while spoofing the From header.
 
         Args:
             message: Email message.
 
         Returns:
-            True if DMARC passes on a trusted Authentication-Results header.
+            True if the first Authentication-Results header is from the
+            trusted server and contains ``dmarc=pass``.
         """
         all_results: list[str] = message.get_all("Authentication-Results", [])  # type: ignore[assignment]
 
@@ -167,33 +180,41 @@ class SenderAuthenticator:
             logger.warning("No Authentication-Results header found")
             return False
 
+        # Only examine the first (topmost) Authentication-Results header.
+        auth_results = all_results[0]
+
+        # The authserv-id is the first token in the header value,
+        # terminated by a semicolon.  RFC 8601 §2.2.
+        header_stripped = auth_results.strip()
+        semi_idx = header_stripped.find(";")
+        if semi_idx < 0:
+            logger.warning(
+                "First Authentication-Results header malformed (no semicolon)"
+            )
+            return False
+        authserv_id = header_stripped[:semi_idx].strip().lower()
+
         trusted_id = self.trusted_authserv_id.lower()
+        if authserv_id != trusted_id:
+            logger.warning(
+                "First Authentication-Results header is from untrusted "
+                "server %s (expected %s)",
+                authserv_id,
+                trusted_id,
+            )
+            return False
 
-        for auth_results in all_results:
-            # The authserv-id is the first token in the header value,
-            # terminated by a semicolon.  RFC 8601 §2.2.
-            header_stripped = auth_results.strip()
-            semi_idx = header_stripped.find(";")
-            if semi_idx < 0:
-                continue
-            authserv_id = header_stripped[:semi_idx].strip().lower()
-
-            if authserv_id != trusted_id:
-                logger.debug(
-                    "Skipping Authentication-Results from untrusted server: %s",
-                    authserv_id,
-                )
-                continue
-
-            # Only accept dmarc=pass (not spf=pass alone)
-            if _DMARC_PASS_RE.search(auth_results):
-                logger.debug(
-                    "DMARC verification passed (authserv-id: %s)", authserv_id
-                )
-                return True
+        # Only accept dmarc=pass (not spf=pass alone).
+        if _DMARC_PASS_RE.search(auth_results):
+            logger.debug(
+                "DMARC verification passed (authserv-id: %s)", authserv_id
+            )
+            return True
 
         logger.warning(
-            "DMARC verification failed (no trusted header with dmarc=pass)"
+            "DMARC verification failed on first Authentication-Results "
+            "header (authserv-id: %s)",
+            authserv_id,
         )
         return False
 
