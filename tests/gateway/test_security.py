@@ -165,22 +165,26 @@ class TestSPFAloneInsufficient:
         assert auth.authenticate(msg) == AUTHORIZED
 
 
-class TestAuthservIdFiltering:
-    """Only trusted authserv-id headers are considered."""
+class TestFirstHeaderAuthservId:
+    """Only the first (topmost) Authentication-Results header is examined.
 
-    def test_untrusted_header_ignored(self):
-        """Fake header from attacker's server must not authenticate."""
+    The receiving MTA prepends its header at the top (RFC 8601 §5).
+    We stop at the very first header regardless of its authserv-id.
+    """
+
+    def test_untrusted_first_header_rejects(self):
+        """First header from untrusted server — reject immediately."""
         auth = SenderAuthenticator(TRUSTED)
         msg = _msg(auth_results="fake.server.com; dmarc=pass")
         assert auth.authenticate(msg) is None
 
-    def test_trusted_header_accepted(self):
+    def test_trusted_first_header_accepted(self):
         auth = SenderAuthenticator(TRUSTED)
         msg = _msg(auth_results=f"{TRUSTED}; dmarc=pass")
         assert auth.authenticate(msg) == AUTHORIZED
 
-    def test_mixed_headers_trusted_passes(self):
-        """Untrusted fail + trusted pass = authenticated."""
+    def test_untrusted_first_then_trusted_second_rejected(self):
+        """Untrusted first header — trusted header below is never examined."""
         auth = SenderAuthenticator(TRUSTED)
         msg = _msg(
             auth_results=[
@@ -188,23 +192,17 @@ class TestAuthservIdFiltering:
                 f"{TRUSTED}; dmarc=pass",
             ]
         )
-        assert auth.authenticate(msg) == AUTHORIZED
+        assert auth.authenticate(msg) is None
 
-    def test_mixed_headers_trusted_fails(self):
-        """Untrusted pass + trusted fail = not authenticated."""
+    def test_untrusted_first_pass_then_trusted_second_rejected(self):
+        """Untrusted first header with dmarc=pass — still rejected."""
         auth = SenderAuthenticator(TRUSTED)
         msg = _msg(
             auth_results=[
                 "untrusted.com; dmarc=pass",
-                f"{TRUSTED}; dmarc=fail",
+                f"{TRUSTED}; dmarc=pass",
             ]
         )
-        assert auth.authenticate(msg) is None
-
-    def test_injected_header_with_no_trusted(self):
-        """Only attacker-injected header, no trusted header."""
-        auth = SenderAuthenticator(TRUSTED)
-        msg = _msg(auth_results="attacker.com; dmarc=pass; spf=pass")
         assert auth.authenticate(msg) is None
 
     def test_authserv_id_case_insensitive(self):
@@ -214,9 +212,48 @@ class TestAuthservIdFiltering:
         assert auth.authenticate(msg) == AUTHORIZED
 
     def test_no_semicolon_in_header(self):
-        """Malformed header without semicolon is skipped."""
+        """Malformed first header without semicolon is rejected."""
         auth = SenderAuthenticator(TRUSTED)
         msg = _msg(auth_results="mx.example.com dmarc=pass")
+        assert auth.authenticate(msg) is None
+
+    def test_trusted_first_fails_second_trusted_passes_rejected(self):
+        """First trusted header fails — injected pass below is ignored.
+
+        This is the key security property: an attacker injects a forged
+        Authentication-Results header with dmarc=pass.  The real MTA
+        prepends its own header (with dmarc=fail) above it.  We must
+        reject based on the first header alone.
+        """
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(
+            auth_results=[
+                f"{TRUSTED}; dmarc=fail",
+                f"{TRUSTED}; dmarc=pass",
+            ]
+        )
+        assert auth.authenticate(msg) is None
+
+    def test_trusted_first_passes_second_trusted_ignored(self):
+        """First trusted header passes — lower headers are irrelevant."""
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(
+            auth_results=[
+                f"{TRUSTED}; dmarc=pass",
+                f"{TRUSTED}; dmarc=fail",
+            ]
+        )
+        assert auth.authenticate(msg) == AUTHORIZED
+
+    def test_trusted_first_spf_only_second_dmarc_pass_rejected(self):
+        """First header has only SPF — lower dmarc=pass is never seen."""
+        auth = SenderAuthenticator(TRUSTED)
+        msg = _msg(
+            auth_results=[
+                f"{TRUSTED}; spf=pass",
+                f"{TRUSTED}; dmarc=pass",
+            ]
+        )
         assert auth.authenticate(msg) is None
 
 

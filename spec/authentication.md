@@ -21,13 +21,17 @@ trusted `Authentication-Results` headers.
 2. **Parse From header** using strict extraction (not `email.utils.parseaddr`).
    Rejects malformed headers: multiple angle brackets, missing address, invalid
    format.
-3. **Find trusted Authentication-Results header**: Iterate all
-   `Authentication-Results` headers; only consider those whose authserv-id
-   (first token before `;`, per RFC 8601 section 2.2) matches
-   `trusted_authserv_id` (case-insensitive).
-4. **Require `dmarc=pass`**: The trusted header must contain `dmarc=pass` as a
+3. **Check the first Authentication-Results header only**: Take the **first**
+   (topmost) `Authentication-Results` header. The receiving MTA prepends its
+   header at the top (RFC 8601 §5), so this is always the authoritative one.
+   Lower headers are **never** examined — they may be attacker-injected.
+   - Extract the authserv-id (first token before `;`, per RFC 8601 §2.2).
+   - If the authserv-id does not match `trusted_authserv_id` (case-insensitive),
+     **reject immediately**.
+4. **Require `dmarc=pass`**: The first header must contain `dmarc=pass` as a
    whole token (not a substring like `dmarc=passthrough`). Matched
-   case-insensitively.
+   case-insensitively. If it does not contain `dmarc=pass`, authentication
+   fails.
 5. **Return authenticated sender address** (lowercase) on success, `None` on
    failure.
 
@@ -38,12 +42,18 @@ header. An attacker can send from `attacker@evil.com` (passing SPF for
 `evil.com`) while setting `From: ceo@company.com`. DMARC enforces alignment
 between SPF/DKIM identities and the `From` domain, closing this gap.
 
-### Why Filter by authserv-id
+### Why Only the First Header
 
 Email messages may contain multiple `Authentication-Results` headers from
-intermediate relays or injected by attackers. Without filtering, an attacker
-adds `Authentication-Results: fake.server.com; dmarc=pass` to their message.
-Only trusting headers from the configured mail server prevents this.
+intermediate relays or injected by attackers. An attacker can inject a header
+with the trusted authserv-id and `dmarc=pass` into their outbound message. While
+well-configured MTAs strip such forgeries (RFC 8601 §5), we do not rely on this.
+
+Only the **first** (topmost) `Authentication-Results` header is examined,
+regardless of its authserv-id. The receiving MTA always prepends its header
+above any headers present in the incoming message, so the first header is always
+from the MTA. If the first header is not from the trusted server, the message is
+rejected — we never search lower headers for a matching authserv-id.
 
 ## Authorization (`SenderAuthorizer`)
 
