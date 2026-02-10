@@ -284,5 +284,5 @@ def main() -> None:
     run_dns_server(proxy_ip, patterns, log_file=log_file)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()

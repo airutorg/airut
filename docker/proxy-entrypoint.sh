@@ -55,7 +55,7 @@ fi
 # the client connects directly (DNS spoofing pattern).
 #
 # connection_strategy=lazy: don't connect upstream until the request
-# is fully received. This lets proxy-filter.py check the allowlist
+# is fully received. This lets proxy_filter.py check the allowlist
 # before any upstream connection is made.
 
 exec mitmdump \
@@ -65,4 +65,4 @@ exec mitmdump \
     --set confdir=/mitmproxy-confdir \
     --set flow_detail=0 \
     --showhost \
-    -s /proxy-filter.py
+    -s /proxy_filter.py

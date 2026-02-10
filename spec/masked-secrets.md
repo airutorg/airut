@@ -135,7 +135,7 @@ class ReplacementEntry:
 
 ## Proxy Replacement
 
-The proxy addon (`docker/proxy-filter.py`) performs replacement in `request()`:
+The proxy addon (`docker/proxy_filter.py`) performs replacement in `request()`:
 
 1. Load replacement map from `/replacements.json` at startup
 2. For each request, check if host matches any surrogate's scopes
@@ -185,7 +185,7 @@ ProxyManager.start_task_proxy(replacement_map)
     └─ Proxy container starts with filter addon
            │
            ▼
-proxy-filter.py request()
+proxy_filter.py request()
     │
     ├─ Allowlist check (existing)
     ├─ Token replacement (if host matches scopes)

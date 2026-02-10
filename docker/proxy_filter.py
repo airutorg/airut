@@ -20,7 +20,7 @@ Supports fnmatch-style wildcards (* and ?) in both domain and path patterns:
 - "/api" matches only "/api" exactly (no implicit prefix matching)
 
 Usage:
-    mitmdump -s docker/proxy-filter.py
+    mitmdump -s docker/proxy_filter.py
 """
 
 import base64
@@ -227,9 +227,12 @@ class ProxyFilter:
             if _match_pattern(entry_host, host):
                 # Empty path means allow all paths on this host
                 if not entry_path or _match_pattern(entry_path, path):
-                    # Empty methods means allow all methods
-                    if not entry_methods or method.upper() in (
-                        m.upper() for m in entry_methods
+                    # Empty methods means allow all methods.
+                    # Empty method arg means "any method" (wildcard).
+                    if (
+                        not entry_methods
+                        or not method
+                        or method.upper() in (m.upper() for m in entry_methods)
                     ):
                         return True
 

@@ -214,7 +214,7 @@ is created AND GitHub CI passes (step 3).
 
 **All checks are mandatory. No workarounds or exceptions.**
 
-- **100% test coverage** - every line in `lib/` must be tested
+- **100% test coverage** - every line in `lib/` and `docker/` must be tested
 - **No `pytest.skip()`** - write proper mocks instead
 - **No `# type: ignore`** without specific error code and justification
 - **No `# noqa`** without specific code and justification
