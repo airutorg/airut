@@ -49,7 +49,7 @@ Layer 2: Server Overlay (from server checkout)
 docker/
   airut-entrypoint.sh             # server-defined entrypoint
   proxy.dockerfile                # proxy container image
-  proxy-filter.py                 # mitmproxy allowlist/URL-prefix addon
+  proxy_filter.py                 # mitmproxy allowlist/URL-prefix addon
   proxy-entrypoint.sh             # proxy container entrypoint
   dns_responder.py                # allowlist-enforcing DNS responder
 ```

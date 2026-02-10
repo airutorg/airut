@@ -12,7 +12,7 @@ high-level documentation (threat model, security properties, configuration), see
 | `docker/proxy.dockerfile`       | Proxy container image (slim + mitmproxy + pyyaml)    |
 | `docker/proxy-entrypoint.sh`    | Starts DNS responder + mitmproxy in regular mode     |
 | `docker/dns_responder.py`       | DNS server: returns proxy IP or NXDOMAIN             |
-| `docker/proxy-filter.py`        | mitmproxy addon for allowlist + token masking        |
+| `docker/proxy_filter.py`        | mitmproxy addon for allowlist + token masking        |
 | `lib/container/network.py`      | Podman args for sandbox integration (--dns, CA cert) |
 | `lib/container/proxy.py`        | Per-conversation proxy lifecycle management          |
 

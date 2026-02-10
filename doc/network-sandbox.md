@@ -160,7 +160,7 @@ isolation between concurrent tasks:
    - **Blocked**: Returns NXDOMAIN
 4. Container connects to the proxy IP on port 80/443
 5. mitmproxy in `regular` mode reads SNI (HTTPS) or Host header (HTTP)
-6. `proxy-filter.py` checks host + path against the allowlist:
+6. `proxy_filter.py` checks host + path against the allowlist:
    - **Allowed**: mitmproxy connects upstream and forwards the request
    - **Blocked**: HTTP 403 returned with instructions
 

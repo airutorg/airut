@@ -468,7 +468,7 @@ class TestRunProxyContainer:
         """Runs proxy with correct podman arguments."""
         allowlist = tmp_path / "allowlist.yaml"
         allowlist.write_text("domains: []\n")
-        (tmp_path / "proxy-filter.py").touch()
+        (tmp_path / "proxy_filter.py").touch()
         pm = _make_pm(docker_dir=tmp_path)
         pm._run_proxy_container(
             "airut-proxy-abc",
@@ -507,7 +507,7 @@ class TestRunProxyContainer:
         """Mounts network log file when path is provided."""
         allowlist = tmp_path / "allowlist.yaml"
         allowlist.write_text("domains: []\n")
-        (tmp_path / "proxy-filter.py").touch()
+        (tmp_path / "proxy_filter.py").touch()
         log_path = tmp_path / "network-sandbox.log"
         log_path.touch()
         pm = _make_pm(docker_dir=tmp_path)
@@ -687,7 +687,7 @@ class TestRunProxyContainerWithReplacement:
         """Mounts replacement map file when path is provided."""
         allowlist = tmp_path / "allowlist.yaml"
         allowlist.write_text("domains: []\n")
-        (tmp_path / "proxy-filter.py").touch()
+        (tmp_path / "proxy_filter.py").touch()
         replacement_path = tmp_path / "replacements.json"
         replacement_path.write_text("{}")
         pm = _make_pm(docker_dir=tmp_path)

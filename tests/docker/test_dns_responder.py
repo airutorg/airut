@@ -8,6 +8,7 @@
 import io
 import struct
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from docker.dns_responder import (
@@ -21,8 +22,10 @@ from docker.dns_responder import (
     build_nxdomain,
     is_allowed,
     load_allowed_domains,
+    main,
     parse_query,
     qtype_name,
+    run_dns_server,
 )
 
 
@@ -304,3 +307,240 @@ class TestLogToFile:
         _log_to_file(buf, "line 1")
         _log_to_file(buf, "line 2")
         assert buf.getvalue() == "line 1\nline 2\n"
+
+
+# ---------------------------------------------------------------------------
+# run_dns_server
+# ---------------------------------------------------------------------------
+
+
+class _StopServer(BaseException):
+    """Sentinel to break the infinite loop in run_dns_server.
+
+    Extends BaseException (not Exception) so that the ``except Exception``
+    handler inside ``run_dns_server`` does NOT catch it, letting the loop
+    actually terminate.
+    """
+
+
+class TestRunDnsServer:
+    """Tests for run_dns_server main loop."""
+
+    def _make_mock_socket(
+        self, queries: list[tuple[bytes, tuple[str, int]]]
+    ) -> MagicMock:
+        """Build a mock UDP socket that returns queries then stops."""
+        mock_sock = MagicMock()
+        # recvfrom returns each query in order, then raises to stop loop
+        mock_sock.recvfrom.side_effect = [
+            *queries,
+            _StopServer("done"),
+        ]
+        mock_sock.sendto = MagicMock()
+        return mock_sock
+
+    @patch("docker.dns_responder.socket.socket")
+    def test_allowed_a_query(self, mock_socket_cls: MagicMock) -> None:
+        """Allowed A query returns proxy IP response."""
+        query_data = _build_query("api.github.com")
+        mock_sock = self._make_mock_socket([(query_data, ("10.0.0.2", 12345))])
+        mock_socket_cls.return_value = mock_sock
+
+        with pytest.raises(_StopServer):
+            run_dns_server("10.0.0.1", ["*.github.com"])
+
+        mock_sock.sendto.assert_called_once()
+        sent_data = mock_sock.sendto.call_args[0][0]
+        # Response should contain the proxy IP
+        assert b"\x0a\x00\x00\x01" in sent_data  # 10.0.0.1
+
+    @patch("docker.dns_responder.socket.socket")
+    def test_blocked_a_query(self, mock_socket_cls: MagicMock) -> None:
+        """Blocked A query returns NXDOMAIN."""
+        query_data = _build_query("evil.com")
+        mock_sock = self._make_mock_socket([(query_data, ("10.0.0.2", 12345))])
+        mock_socket_cls.return_value = mock_sock
+
+        with pytest.raises(_StopServer):
+            run_dns_server("10.0.0.1", ["*.github.com"])
+
+        mock_sock.sendto.assert_called_once()
+        sent_data = mock_sock.sendto.call_args[0][0]
+        # NXDOMAIN: RCODE=3 in flags (byte 3, low nibble = 3)
+        flags = struct.unpack("!H", sent_data[2:4])[0]
+        assert flags & 0x000F == 3  # RCODE NXDOMAIN
+
+    @patch("docker.dns_responder.socket.socket")
+    def test_non_a_query_returns_notimp(
+        self, mock_socket_cls: MagicMock
+    ) -> None:
+        """Non-A query (e.g., AAAA) returns NOTIMP."""
+        query_data = _build_query("api.github.com", qtype=28)  # AAAA
+        mock_sock = self._make_mock_socket([(query_data, ("10.0.0.2", 12345))])
+        mock_socket_cls.return_value = mock_sock
+
+        with pytest.raises(_StopServer):
+            run_dns_server("10.0.0.1", ["*.github.com"])
+
+        mock_sock.sendto.assert_called_once()
+        sent_data = mock_sock.sendto.call_args[0][0]
+        # NOTIMP: RCODE=4 in flags
+        flags = struct.unpack("!H", sent_data[2:4])[0]
+        assert flags & 0x000F == 4  # RCODE NOTIMP
+
+    @patch("docker.dns_responder.socket.socket")
+    def test_with_log_file(self, mock_socket_cls: MagicMock) -> None:
+        """Log file receives messages for allowed and blocked queries."""
+        allowed = _build_query("api.github.com")
+        blocked = _build_query("evil.com")
+        mock_sock = self._make_mock_socket(
+            [
+                (allowed, ("10.0.0.2", 1)),
+                (blocked, ("10.0.0.2", 2)),
+            ]
+        )
+        mock_socket_cls.return_value = mock_sock
+
+        log_buf = io.StringIO()
+        with pytest.raises(_StopServer):
+            run_dns_server("10.0.0.1", ["*.github.com"], log_file=log_buf)
+
+        log_content = log_buf.getvalue()
+        assert "allowed DNS A api.github.com" in log_content
+        assert "BLOCKED DNS A evil.com" in log_content
+
+    @patch("docker.dns_responder.socket.socket")
+    def test_exception_in_loop_continues(
+        self, mock_socket_cls: MagicMock
+    ) -> None:
+        """Generic exceptions in the loop are caught and logged."""
+        mock_sock = MagicMock()
+        # First call raises generic error, second raises sentinel
+        mock_sock.recvfrom.side_effect = [
+            ValueError("bad packet"),
+            _StopServer("done"),
+        ]
+        mock_socket_cls.return_value = mock_sock
+
+        with pytest.raises(_StopServer):
+            run_dns_server("10.0.0.1", [])
+
+    @patch("docker.dns_responder.socket.socket")
+    def test_multiple_queries(self, mock_socket_cls: MagicMock) -> None:
+        """Multiple queries are processed sequentially."""
+        q1 = _build_query("allowed.com")
+        q2 = _build_query("also-allowed.com")
+        mock_sock = self._make_mock_socket(
+            [
+                (q1, ("10.0.0.2", 1)),
+                (q2, ("10.0.0.2", 2)),
+            ]
+        )
+        mock_socket_cls.return_value = mock_sock
+
+        with pytest.raises(_StopServer):
+            run_dns_server("10.0.0.1", ["allowed.com", "also-allowed.com"])
+
+        assert mock_sock.sendto.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+
+
+class TestMain:
+    """Tests for main() CLI entry point."""
+
+    @patch("docker.dns_responder.run_dns_server")
+    @patch("docker.dns_responder.load_allowed_domains", return_value=["*.com"])
+    def test_with_explicit_ip(
+        self,
+        mock_load: MagicMock,
+        mock_run: MagicMock,
+    ) -> None:
+        """Explicit proxy IP from sys.argv."""
+        with patch("sys.argv", ["dns_responder.py", "10.0.0.1"]):
+            main()
+        mock_run.assert_called_once()
+        assert mock_run.call_args[0][0] == "10.0.0.1"
+
+    @patch("docker.dns_responder.run_dns_server")
+    @patch("docker.dns_responder.load_allowed_domains", return_value=[])
+    @patch(
+        "docker.dns_responder.socket.gethostbyname",
+        return_value="172.17.0.2",
+    )
+    @patch(
+        "docker.dns_responder.socket.gethostname",
+        return_value="proxy-host",
+    )
+    def test_auto_detect_ip(
+        self,
+        mock_hostname: MagicMock,
+        mock_resolve: MagicMock,
+        mock_load: MagicMock,
+        mock_run: MagicMock,
+    ) -> None:
+        """Auto-detects proxy IP when not provided."""
+        with patch("sys.argv", ["dns_responder.py"]):
+            main()
+        mock_run.assert_called_once()
+        assert mock_run.call_args[0][0] == "172.17.0.2"
+
+    @patch("docker.dns_responder.run_dns_server")
+    @patch("docker.dns_responder.load_allowed_domains", return_value=["a.com"])
+    @patch("docker.dns_responder._open_network_log", return_value=None)
+    def test_no_log_file(
+        self,
+        mock_open_log: MagicMock,
+        mock_load: MagicMock,
+        mock_run: MagicMock,
+    ) -> None:
+        """No log file when _open_network_log returns None."""
+        with patch("sys.argv", ["dns_responder.py", "10.0.0.1"]):
+            main()
+        mock_run.assert_called_once()
+        assert mock_run.call_args.kwargs.get("log_file") is None
+
+    @patch("docker.dns_responder.run_dns_server")
+    @patch("docker.dns_responder.load_allowed_domains", return_value=["a.com"])
+    @patch("docker.dns_responder._open_network_log")
+    def test_with_log_file(
+        self,
+        mock_open_log: MagicMock,
+        mock_load: MagicMock,
+        mock_run: MagicMock,
+    ) -> None:
+        """Log file passed through when available."""
+        mock_log = io.StringIO()
+        mock_open_log.return_value = mock_log
+        with patch("sys.argv", ["dns_responder.py", "10.0.0.1"]):
+            main()
+        mock_run.assert_called_once()
+        assert mock_run.call_args.kwargs.get("log_file") is mock_log
+
+
+# ---------------------------------------------------------------------------
+# __main__ guard
+# ---------------------------------------------------------------------------
+
+
+class TestMainGuard:
+    """Tests for ``if __name__ == '__main__'`` entry point."""
+
+    def test_main_guard_invokes_main(self) -> None:
+        """``if __name__ == '__main__'`` calls main()."""
+        import docker.dns_responder as mod
+
+        with patch.object(mod, "main") as mock_main:
+            # Simulate `python dns_responder.py` by exec'ing the guard
+            exec(  # noqa: S102 -- testing __main__ guard
+                compile(
+                    'if __name__ == "__main__": main()',
+                    "<test>",
+                    "exec",
+                ),
+                {"__name__": "__main__", "main": mock_main},
+            )
+        mock_main.assert_called_once()

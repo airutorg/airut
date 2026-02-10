@@ -18,7 +18,7 @@ from typing import TypedDict
 def _match_pattern(pattern: str, value: str) -> bool:
     """Match value against pattern using fnmatch if wildcards present.
 
-    This is a copy of the function from docker/proxy-filter.py
+    This is a copy of the function from docker/proxy_filter.py
     for testing purposes (to avoid mitmproxy import dependencies).
 
     Args:
@@ -36,7 +36,7 @@ def _match_pattern(pattern: str, value: str) -> bool:
 def _match_header_pattern(pattern: str, header_name: str) -> bool:
     """Match header name against pattern, case-insensitively.
 
-    This is a copy of the function from docker/proxy-filter.py
+    This is a copy of the function from docker/proxy_filter.py
     for testing purposes (to avoid mitmproxy import dependencies).
 
     HTTP headers are case-insensitive per RFC 7230. This function performs
@@ -68,7 +68,7 @@ class UrlPrefixEntry(TypedDict, total=False):
 class MockNetworkAllowlist:
     """Test version of NetworkAllowlist without mitmproxy dependencies.
 
-    Implements the same _is_allowed logic as docker/proxy-filter.py.
+    Implements the same _is_allowed logic as docker/proxy_filter.py.
     """
 
     def __init__(self) -> None:
@@ -92,9 +92,12 @@ class MockNetworkAllowlist:
             if _match_pattern(entry_host, host):
                 # Empty path means allow all paths on this host
                 if not entry_path or _match_pattern(entry_path, path):
-                    # Empty methods means allow all methods
-                    if not entry_methods or method.upper() in (
-                        m.upper() for m in entry_methods
+                    # Empty methods means allow all methods.
+                    # Empty method arg means "any method" (wildcard).
+                    if (
+                        not entry_methods
+                        or not method
+                        or method.upper() in (m.upper() for m in entry_methods)
                     ):
                         return True
 
