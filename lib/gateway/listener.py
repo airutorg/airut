@@ -305,11 +305,20 @@ class EmailListener:
 
         logger.debug("Listener closed")
 
-    def idle_start(self) -> None:
+    def idle_start(self) -> bool:
         """Enter IDLE mode on the IMAP connection.
 
         Must be connected and have INBOX selected before calling this.
         After calling idle_start(), use idle_wait() to wait for notifications.
+
+        Performs a SEARCH UNSEEN check after SELECT but before sending the
+        IDLE command.  If unseen messages exist, returns True without entering
+        IDLE so the caller can fetch them instead.  This closes the race
+        window where a message arrives between fetch_unread() and IDLE.
+
+        Returns:
+            True if there are pending unseen messages (IDLE was NOT entered).
+            False if IDLE was entered successfully.
 
         Raises:
             IMAPConnectionError: If not connected to IMAP server.
@@ -322,6 +331,18 @@ class EmailListener:
             # Select INBOX first (required for IDLE)
             self.connection.select("INBOX")
 
+            # Check for unseen messages before entering IDLE.  This closes
+            # the race between the previous fetch_unread() and IDLE: if a
+            # message arrived in between, we detect it here and return
+            # without entering IDLE.
+            status, message_ids = self.connection.search(None, "UNSEEN")
+            if status == "OK" and message_ids[0].strip():
+                logger.debug(
+                    "Skipping IDLE: %d unseen messages pending",
+                    len(message_ids[0].split()),
+                )
+                return True
+
             # Send IDLE command and store tag for response matching
             self._idle_tag = self.connection._new_tag().decode()
             self.connection.send(f"{self._idle_tag} IDLE\r\n".encode())
@@ -333,6 +354,7 @@ class EmailListener:
                 raise IMAPIdleError(f"IDLE not accepted: {response.decode()}")
 
             logger.debug("Entered IDLE mode with tag %s", self._idle_tag)
+            return False
 
         except imaplib.IMAP4.error as e:
             self._idle_tag = None

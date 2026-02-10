@@ -271,7 +271,9 @@ class RepoHandler:
                     continue
 
                 try:
-                    self.listener.idle_start()
+                    has_pending = self.listener.idle_start()
+                    if has_pending:
+                        continue
 
                     time_until_reconnect = max(
                         0, reconnect_interval - (time.time() - last_reconnect)
