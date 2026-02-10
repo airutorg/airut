@@ -276,10 +276,14 @@ def _coerce_bool(value: object) -> bool:
 def _raw_resolve(value: object) -> str | None:
     """Resolve an ``_EnvVar`` to its string value, or stringify literals.
 
-    Returns None if the value is None or the env var is unset/empty.
+    Returns None if the value is None or the env var is not set.
+    Returns empty string if the env var is set to empty string.
     """
     if isinstance(value, _EnvVar):
-        return os.environ.get(value.var_name) or None
+        raw = os.environ.get(value.var_name)
+        if raw is None:
+            return None
+        return raw
     if value is None:
         return None
     return str(value)
@@ -368,12 +372,14 @@ def _resolve_secrets(raw_secrets: dict) -> dict[str, str]:
         raw_secrets: Raw mapping from YAML (values may be ``_EnvVar``).
 
     Returns:
-        Resolved mapping with only non-empty values.
+        Resolved mapping.  Entries whose value resolves to None (unset
+        env var, missing YAML value) are excluded.  Empty strings are
+        preserved — they represent intentionally empty values.
     """
     secrets: dict[str, str] = {}
     for key, value in raw_secrets.items():
         resolved = _raw_resolve(value)
-        if resolved:
+        if resolved is not None:
             secrets[str(key)] = resolved
     return secrets
 
@@ -884,8 +890,8 @@ def _resolve_masked_secrets(
         raw_value = config.get("value")
         value = _raw_resolve(raw_value)
 
-        # Skip if value is empty (like regular secrets)
-        if not value:
+        # Skip if value is None (env var unset / YAML null)
+        if value is None:
             continue
 
         # Parse scopes (required)
@@ -1024,6 +1030,10 @@ class RepoConfig:
         server_sandbox_enabled: bool = True,
     ) -> tuple["RepoConfig", ReplacementMap]:
         """Build repo config from parsed YAML dict."""
+        # Reject !secret tags outside container_env — they would be
+        # silently stringified by _resolve/_raw_resolve.
+        _reject_stray_secret_refs(raw)
+
         network_raw = raw.get("network", {})
 
         # Resolve container_env: inline values + !secret references
@@ -1067,6 +1077,35 @@ class RepoConfig:
         return config, replacement_map
 
 
+def _reject_stray_secret_refs(raw: dict) -> None:
+    """Raise if ``_SecretRef`` objects appear outside ``container_env``.
+
+    The YAML loader creates ``_SecretRef`` for every ``!secret`` /
+    ``!secret?`` tag, but only ``container_env`` knows how to resolve
+    them.  Anywhere else they'd be silently stringified to garbage.
+    """
+    for key, value in raw.items():
+        if key == "container_env":
+            continue
+        _check_secret_ref(value, key)
+
+
+def _check_secret_ref(value: object, path: str) -> None:
+    """Recursively check for ``_SecretRef`` in a parsed YAML value."""
+    if isinstance(value, _SecretRef):
+        tag = "!secret?" if value.optional else "!secret"
+        raise ConfigError(
+            f"{path}: {tag} '{value.name}' outside container_env — "
+            f"!secret tags are only supported inside container_env"
+        )
+    if isinstance(value, dict):
+        for k, v in value.items():
+            _check_secret_ref(v, f"{path}.{k}")
+    if isinstance(value, list):
+        for i, v in enumerate(value):
+            _check_secret_ref(v, f"{path}[{i}]")
+
+
 def _resolve_container_env(
     raw_env: dict,
     server_secrets: dict[str, str],
@@ -1102,7 +1141,7 @@ def _resolve_container_env(
             if value.name in masked_secrets:
                 masked = masked_secrets[value.name]
                 if masked.value:
-                    # Generate surrogate and add to replacement map
+                    # Non-empty masked secret: generate surrogate
                     surrogate = generate_surrogate(masked.value)
                     resolved[str(key)] = surrogate
                     replacement_map[surrogate] = ReplacementEntry(
@@ -1110,13 +1149,14 @@ def _resolve_container_env(
                         scopes=tuple(sorted(masked.scopes)),
                         headers=masked.headers,
                     )
+                else:
+                    # Empty string is a valid configured value
+                    resolved[str(key)] = ""
                 continue
 
             # Fall back to plain secrets
             if value.name in server_secrets:
-                secret_value = server_secrets[value.name]
-                if secret_value:
-                    resolved[str(key)] = secret_value
+                resolved[str(key)] = server_secrets[value.name]
                 continue
 
             # Not found in either pool
@@ -1130,7 +1170,7 @@ def _resolve_container_env(
         else:
             # Inline value
             str_value = _raw_resolve(value)
-            if str_value:
+            if str_value is not None:
                 resolved[str(key)] = str_value
 
     return resolved, replacement_map
