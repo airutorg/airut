@@ -198,9 +198,10 @@ class SenderAuthenticator:
         if authserv_id != trusted_id:
             logger.warning(
                 "First Authentication-Results header is from untrusted "
-                "server %s (expected %s)",
+                "server %s (expected %s): %s",
                 authserv_id,
                 trusted_id,
+                auth_results.strip(),
             )
             return False
 

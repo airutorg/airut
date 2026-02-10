@@ -5,8 +5,11 @@
 
 """Tests for email authentication and authorization."""
 
+import logging
 from email.message import Message
 from email.parser import BytesParser
+
+import pytest
 
 from lib.gateway.security import (
     SenderAuthenticator,
@@ -255,6 +258,23 @@ class TestFirstHeaderAuthservId:
             ]
         )
         assert auth.authenticate(msg) is None
+
+
+class TestAuthservIdMismatchLogging:
+    """Authserv-id mismatch logs the header value for debugging."""
+
+    def test_logs_header_on_mismatch(self, caplog: pytest.LogCaptureFixture):
+        """Warning includes actual header so misconfigurations are obvious."""
+        auth = SenderAuthenticator(TRUSTED)
+        header = "wrong.server.com; dmarc=pass; spf=pass"
+        msg = _msg(auth_results=header)
+        with caplog.at_level(logging.WARNING, logger="lib.gateway.security"):
+            auth.authenticate(msg)
+        assert len(caplog.records) == 1
+        record = caplog.records[0]
+        assert "wrong.server.com" in record.message
+        assert TRUSTED in record.message
+        assert header in record.message
 
 
 class TestSubstringMatchBypass:
