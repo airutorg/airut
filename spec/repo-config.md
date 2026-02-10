@@ -61,6 +61,10 @@ resolved values are registered for log redaction.
 The server config (`config/airut.yaml`) retains deployment-specific settings:
 
 - `email.*` — Mail server connectivity and credentials
+- `email.microsoft_oauth2.*` — Microsoft OAuth2 Client Credentials for M365
+  (tenant_id, client_id, client_secret). When configured, XOAUTH2 SASL is used
+  for both IMAP and SMTP instead of password auth. The `email.password` field
+  becomes optional when OAuth2 is configured.
 - `authorized_senders`, `trusted_authserv_id` — Access control
 - `git.repo_url` — Repository to clone
 - `storage_dir` — Server filesystem path

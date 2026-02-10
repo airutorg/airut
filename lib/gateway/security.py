@@ -19,8 +19,15 @@ Security model:
   (RFC 8601 §5).  If the first header is not from the configured
   ``trusted_authserv_id``, the message is rejected — lower headers are
   never consulted, even if they have a matching authserv-id.
+- When ``trusted_authserv_id`` is empty, the authserv-id check is skipped
+  (for Microsoft 365 / EOP which omits it from the header).
 - DMARC pass is required (SPF alone is insufficient because SPF does not
   validate the From header, only the envelope sender).
+- When ``allow_internal_auth_fallback`` is enabled and no
+  ``Authentication-Results`` header exists, the message is accepted if
+  ``X-MS-Exchange-Organization-AuthAs: Internal`` is present.  This
+  covers intra-org email in Microsoft 365 where EOP skips external
+  authentication entirely.
 - From header is parsed with strict validation, not the permissive
   ``email.utils.parseaddr``.
 """
@@ -97,22 +104,44 @@ class SenderAuthenticator:
     rejected without examining lower headers.  This confirms the From
     header domain is authentic (not spoofed).
 
+    When ``allow_internal_auth_fallback`` is enabled and the message has
+    **no** ``Authentication-Results`` header at all, the authenticator
+    accepts the message if the ``X-MS-Exchange-Organization-AuthAs``
+    header is ``Internal``.  This covers intra-org email in Microsoft 365
+    where Exchange Online Protection skips external authentication
+    entirely for messages sent within the same tenant.
+
     Attributes:
         trusted_authserv_id: Hostname of the trusted mail server whose
             Authentication-Results headers are accepted.
+        allow_internal_auth_fallback: Accept
+            ``X-MS-Exchange-Organization-AuthAs: Internal`` when no
+            ``Authentication-Results`` header is present.
     """
 
-    def __init__(self, trusted_authserv_id: str) -> None:
+    def __init__(
+        self,
+        trusted_authserv_id: str,
+        *,
+        allow_internal_auth_fallback: bool = False,
+    ) -> None:
         """Initialize authenticator.
 
         Args:
             trusted_authserv_id: The authserv-id to trust in
                 Authentication-Results headers.
+            allow_internal_auth_fallback: When True, accept messages
+                with ``X-MS-Exchange-Organization-AuthAs: Internal``
+                as authenticated when no ``Authentication-Results``
+                header is present.
         """
         self.trusted_authserv_id = trusted_authserv_id
+        self.allow_internal_auth_fallback = allow_internal_auth_fallback
         logger.debug(
-            "Initialized sender authenticator (authserv-id: %s)",
+            "Initialized sender authenticator (authserv-id: %s, "
+            "internal_auth_fallback: %s)",
             trusted_authserv_id,
+            allow_internal_auth_fallback,
         )
 
     def authenticate(self, message: Message) -> str | None:
@@ -120,6 +149,10 @@ class SenderAuthenticator:
 
         Verifies DMARC pass from a trusted Authentication-Results header,
         then extracts and returns the From address using strict parsing.
+
+        When ``allow_internal_auth_fallback`` is enabled and there is no
+        ``Authentication-Results`` header at all, the message is accepted
+        if ``X-MS-Exchange-Organization-AuthAs: Internal`` is present.
 
         Args:
             message: Email message to authenticate.
@@ -145,7 +178,8 @@ class SenderAuthenticator:
             return None
 
         if not self._verify_dmarc(message):
-            return None
+            if not self._verify_internal_auth(message):
+                return None
 
         logger.debug("Sender authenticated: %s", sender)
         return sender
@@ -166,6 +200,12 @@ class SenderAuthenticator:
         SPF alone is not sufficient because SPF validates the envelope
         sender (Return-Path), not the From header — an attacker can pass
         SPF with their own domain while spoofing the From header.
+
+        When ``trusted_authserv_id`` is empty, the authserv-id check is
+        skipped.  This supports Microsoft 365 / EOP which omits the
+        authserv-id from the ``Authentication-Results`` header (an
+        RFC 8601 violation).  Security relies on the first-header-only
+        policy — the MTA always prepends its header at the top.
 
         Args:
             message: Email message.
@@ -192,18 +232,27 @@ class SenderAuthenticator:
                 "First Authentication-Results header malformed (no semicolon)"
             )
             return False
-        authserv_id = header_stripped[:semi_idx].strip().lower()
 
+        # When trusted_authserv_id is empty, skip the authserv-id check.
+        # This supports Microsoft 365 / EOP which omits the authserv-id
+        # from Authentication-Results headers (non-standard).
         trusted_id = self.trusted_authserv_id.lower()
-        if authserv_id != trusted_id:
-            logger.warning(
-                "First Authentication-Results header is from untrusted "
-                "server %s (expected %s): %s",
-                authserv_id,
-                trusted_id,
-                auth_results.strip(),
+        if trusted_id:
+            authserv_id = header_stripped[:semi_idx].strip().lower()
+            if authserv_id != trusted_id:
+                logger.warning(
+                    "First Authentication-Results header is from untrusted "
+                    "server %s (expected %s): %s",
+                    authserv_id,
+                    trusted_id,
+                    auth_results.strip(),
+                )
+                return False
+        else:
+            authserv_id = "(not checked)"
+            logger.debug(
+                "Skipping authserv-id check (trusted_authserv_id is empty)"
             )
-            return False
 
         # Only accept dmarc=pass (not spf=pass alone).
         if _DMARC_PASS_RE.search(auth_results):
@@ -216,6 +265,64 @@ class SenderAuthenticator:
             "DMARC verification failed on first Authentication-Results "
             "header (authserv-id: %s)",
             authserv_id,
+        )
+        return False
+
+    def _verify_internal_auth(self, message: Message) -> bool:
+        """Fall back to Microsoft internal authentication header.
+
+        When ``allow_internal_auth_fallback`` is enabled and the message
+        has **no** ``Authentication-Results`` header, checks for the
+        ``X-MS-Exchange-Organization-AuthAs: Internal`` header.
+
+        Microsoft 365 / Exchange Online does not generate
+        ``Authentication-Results`` for messages sent within the same
+        tenant (intra-org mail).  Instead, it stamps the message with
+        ``X-MS-Exchange-Organization-AuthAs: Internal``.
+
+        This fallback only activates when there are **no**
+        ``Authentication-Results`` headers at all.  If any such header
+        exists (even with a DMARC failure), this fallback does not apply
+        — DMARC is the authoritative mechanism.
+
+        Reference:
+            https://techcommunity.microsoft.com/blog/exchange/
+            demystifying-and-troubleshooting-hybrid-mail-flow-
+            when-is-a-message-internal/1420838
+
+        Args:
+            message: Email message.
+
+        Returns:
+            True if the internal auth fallback is enabled and the
+            message is authenticated as internal Microsoft mail.
+        """
+        if not self.allow_internal_auth_fallback:
+            return False
+
+        # Only fall back when there are NO Authentication-Results headers.
+        all_results: list[str] = message.get_all("Authentication-Results", [])  # type: ignore[assignment]
+        if all_results:
+            return False
+
+        auth_as: str | None = message.get("X-MS-Exchange-Organization-AuthAs")
+        if auth_as is None:
+            logger.warning(
+                "No Authentication-Results header and no "
+                "X-MS-Exchange-Organization-AuthAs header found"
+            )
+            return False
+
+        if auth_as.strip().lower() == "internal":
+            logger.debug(
+                "Sender authenticated via "
+                "X-MS-Exchange-Organization-AuthAs: Internal"
+            )
+            return True
+
+        logger.warning(
+            "X-MS-Exchange-Organization-AuthAs is %r (expected Internal)",
+            auth_as.strip(),
         )
         return False
 

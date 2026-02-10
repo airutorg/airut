@@ -7,6 +7,7 @@ requires-python = ">=3.13,<3.14"
 dependencies = [
     "aiosmtpd>=1.4.6",
     "mdformat>=0.7",
+    "msal>=1.31",
     "mdformat-frontmatter>=2",
     "mdformat-gfm>=0.3",
     "mdformat-ruff>=0.1",

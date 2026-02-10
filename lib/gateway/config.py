@@ -491,7 +491,8 @@ class RepoServerConfig:
         authorized_senders: List of email patterns allowed to send commands.
             Supports wildcards (e.g., ``*@company.com``).
         trusted_authserv_id: The authserv-id to trust in
-            Authentication-Results headers.
+            Authentication-Results headers.  Set to empty string for
+            Microsoft 365 / EOP which omits the authserv-id.
         poll_interval_seconds: Seconds between IMAP polls.
         use_imap_idle: Whether to use IMAP IDLE instead of polling.
         idle_reconnect_interval_seconds: Reconnect interval for IDLE mode.
@@ -501,6 +502,17 @@ class RepoServerConfig:
         network_sandbox_enabled: Server-side override for the network sandbox.
             Effective sandbox state is the logical AND of this value and the
             repo config's ``network.sandbox_enabled``.  Defaults to ``True``.
+        microsoft_internal_auth_fallback: When True and no
+            ``Authentication-Results`` header is present, accept
+            messages with ``X-MS-Exchange-Organization-AuthAs: Internal``
+            as authenticated.  Covers intra-org email in Microsoft 365
+            where EOP omits external authentication headers.
+        microsoft_oauth2_tenant_id: Azure AD tenant ID for OAuth2 client
+            credentials flow.  When set (along with client_id and
+            client_secret), XOAUTH2 is used instead of password auth.
+        microsoft_oauth2_client_id: Azure AD application (client) ID.
+        microsoft_oauth2_client_secret: Azure AD client secret value
+            (auto-redacted in logs).
     """
 
     repo_id: str
@@ -522,6 +534,10 @@ class RepoServerConfig:
     secrets: dict[str, str] = field(default_factory=dict)
     masked_secrets: dict[str, MaskedSecret] = field(default_factory=dict)
     network_sandbox_enabled: bool = True
+    microsoft_internal_auth_fallback: bool = False
+    microsoft_oauth2_tenant_id: str | None = None
+    microsoft_oauth2_client_id: str | None = None
+    microsoft_oauth2_client_secret: str | None = None
 
     def __post_init__(self) -> None:
         """Validate configuration and register secrets.
@@ -530,6 +546,23 @@ class RepoServerConfig:
             ValueError: If configuration is invalid.
         """
         SecretFilter.register_secret(self.email_password)
+
+        # Register Microsoft OAuth2 client secret for log redaction
+        if self.microsoft_oauth2_client_secret:
+            SecretFilter.register_secret(self.microsoft_oauth2_client_secret)
+
+        # Validate Microsoft OAuth2: all three fields must be set or all None
+        oauth2_fields = (
+            self.microsoft_oauth2_tenant_id,
+            self.microsoft_oauth2_client_id,
+            self.microsoft_oauth2_client_secret,
+        )
+        oauth2_set = [f for f in oauth2_fields if f is not None]
+        if 0 < len(oauth2_set) < 3:
+            raise ValueError(
+                f"Repo '{self.repo_id}': microsoft_oauth2 requires all three "
+                f"fields (tenant_id, client_id, client_secret) to be set"
+            )
 
         for value in self.secrets.values():
             if value:
@@ -734,6 +767,20 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
     raw_masked = raw.get("masked_secrets", {})
     masked_secrets = _resolve_masked_secrets(raw_masked, prefix)
 
+    # Resolve Microsoft OAuth2 config (optional block)
+    ms_oauth2 = email.get("microsoft_oauth2", {})
+    ms_tenant_id: str | None = (
+        _resolve(ms_oauth2.get("tenant_id"), str) if ms_oauth2 else None
+    )
+    ms_client_id: str | None = (
+        _resolve(ms_oauth2.get("client_id"), str) if ms_oauth2 else None
+    )
+    ms_client_secret: str | None = (
+        _resolve(ms_oauth2.get("client_secret"), str) if ms_oauth2 else None
+    )
+
+    has_oauth2 = ms_tenant_id or ms_client_id or ms_client_secret
+
     return RepoServerConfig(
         repo_id=repo_id,
         git_repo_url=_resolve(
@@ -763,10 +810,15 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
             str,
             required=f"{prefix}.email.username",
         ),
-        email_password=_resolve(
-            email.get("password"),
-            str,
-            required=f"{prefix}.email.password",
+        # email.password is required only when OAuth2 is not configured
+        email_password=(
+            _resolve(email.get("password"), str, default="")
+            if has_oauth2
+            else _resolve(
+                email.get("password"),
+                str,
+                required=f"{prefix}.email.password",
+            )
         ),
         email_from=_resolve(
             email.get("from"), str, required=f"{prefix}.email.from"
@@ -792,6 +844,12 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
         network_sandbox_enabled=_resolve(
             network.get("sandbox_enabled"), bool, default=True
         ),
+        microsoft_internal_auth_fallback=_resolve(
+            raw.get("microsoft_internal_auth_fallback"), bool, default=False
+        ),
+        microsoft_oauth2_tenant_id=ms_tenant_id,
+        microsoft_oauth2_client_id=ms_client_id,
+        microsoft_oauth2_client_secret=ms_client_secret,
     )
 
 
