@@ -129,6 +129,15 @@ has been received and is now being processed by opus."
 
 ### Message Parsing
 
+**Body extraction** from MIME messages:
+
+- Prefer `text/plain` parts in multipart messages
+- Fall back to `text/html` if no `text/plain` is available (common with Outlook)
+- HTML is converted to plain text with markdown-like formatting (bold, italic,
+  links, tables, lists, headings, code blocks) via `lib/html_to_text`
+- Non-multipart messages use the content type to decide: `text/html` is
+  converted, everything else is used as-is
+
 **Quote stripping** removes:
 
 - Lines starting with `>`

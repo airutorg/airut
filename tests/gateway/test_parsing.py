@@ -212,15 +212,37 @@ def test_extract_body_multipart() -> None:
     assert body == "This is the text body."
 
 
-def test_extract_body_multipart_no_text_plain() -> None:
-    """Test extracting body from multipart with no text/plain."""
+def test_extract_body_multipart_html_fallback() -> None:
+    """Test extracting body from multipart with only text/html."""
     msg = MIMEMultipart()
 
-    html_part = MIMEText("<p>Only HTML here</p>", "html")
+    html_part = MIMEText("<p>Only <b>HTML</b> here</p>", "html")
     msg.attach(html_part)
 
     body = extract_body(msg)
-    assert body == ""
+    assert "Only **HTML** here" in body
+
+
+def test_extract_body_multipart_prefers_text_plain() -> None:
+    """Test that text/plain is preferred over text/html in multipart."""
+    msg = MIMEMultipart()
+
+    text_part = MIMEText("Plain text version.")
+    msg.attach(text_part)
+
+    html_part = MIMEText("<p>HTML version.</p>", "html")
+    msg.attach(html_part)
+
+    body = extract_body(msg)
+    assert body == "Plain text version."
+
+
+def test_extract_body_html_only_message() -> None:
+    """Test extracting body from a non-multipart text/html message."""
+    msg = MIMEText("<p>Hello <em>world</em></p>", "html")
+
+    body = extract_body(msg)
+    assert "Hello *world*" in body
 
 
 def test_extract_body_empty() -> None:
