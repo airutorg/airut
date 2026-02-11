@@ -372,7 +372,7 @@ class TestBuildImage:
 
     @patch("lib.container.proxy.subprocess.run")
     def test_build_success(self, mock_run: MagicMock, tmp_path: Path) -> None:
-        """Builds image with correct command."""
+        """Builds image with correct command including --no-cache."""
         dockerfile = tmp_path / "proxy.dockerfile"
         dockerfile.touch()
         pm = _make_pm(docker_dir=tmp_path)
@@ -381,6 +381,7 @@ class TestBuildImage:
         cmd = mock_run.call_args[0][0]
         assert cmd[0] == "podman"
         assert cmd[1] == "build"
+        assert "--no-cache" in cmd
         assert "-t" in cmd
         assert PROXY_IMAGE_NAME in cmd
 
@@ -468,7 +469,6 @@ class TestRunProxyContainer:
         """Runs proxy with correct podman arguments."""
         allowlist = tmp_path / "allowlist.yaml"
         allowlist.write_text("domains: []\n")
-        (tmp_path / "proxy_filter.py").touch()
         pm = _make_pm(docker_dir=tmp_path)
         pm._run_proxy_container(
             "airut-proxy-abc",
@@ -493,12 +493,14 @@ class TestRunProxyContainer:
         env_args = [cmd[i + 1] for i in env_indices]
         assert "PROXY_IP=10.199.1.100" in env_args
         assert f"UPSTREAM_DNS={_TEST_UPSTREAM_DNS}" in env_args
-        # Check allowlist volume mount
+        # Check allowlist volume mount (proxy_filter.py is baked into image)
         volume_indices = [i for i, v in enumerate(cmd) if v == "-v"]
         volumes = [cmd[i + 1] for i in volume_indices]
         assert any(
             "allowlist.yaml:/network-allowlist.yaml:ro" in v for v in volumes
         )
+        # proxy_filter.py should NOT be bind-mounted (it's COPY'd in image)
+        assert not any("proxy_filter.py" in v for v in volumes)
 
     @patch("lib.container.proxy.subprocess.run")
     def test_mounts_network_log_when_provided(
@@ -507,7 +509,6 @@ class TestRunProxyContainer:
         """Mounts network log file when path is provided."""
         allowlist = tmp_path / "allowlist.yaml"
         allowlist.write_text("domains: []\n")
-        (tmp_path / "proxy_filter.py").touch()
         log_path = tmp_path / "network-sandbox.log"
         log_path.touch()
         pm = _make_pm(docker_dir=tmp_path)
@@ -687,7 +688,6 @@ class TestRunProxyContainerWithReplacement:
         """Mounts replacement map file when path is provided."""
         allowlist = tmp_path / "allowlist.yaml"
         allowlist.write_text("domains: []\n")
-        (tmp_path / "proxy_filter.py").touch()
         replacement_path = tmp_path / "replacements.json"
         replacement_path.write_text("{}")
         pm = _make_pm(docker_dir=tmp_path)
