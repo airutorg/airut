@@ -135,7 +135,7 @@ class EmailGatewayService:
         # Proxy manager (shared gateway, per-task proxying)
         proxy_kwargs: dict[str, object] = {
             "container_command": self.global_config.container_command,
-            "docker_dir": self.repo_root / "docker",
+            "proxy_dir": self.repo_root / "proxy",
             "upstream_dns": upstream_dns,
         }
         if self._egress_network is not None:

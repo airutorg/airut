@@ -3,9 +3,9 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Shared fixtures for docker/ module tests.
+"""Shared fixtures for proxy/ module tests.
 
-Installs mitmproxy mocks so ``docker.proxy_filter`` can be imported
+Installs mitmproxy mocks so ``proxy.proxy_filter`` can be imported
 without the real mitmproxy package (which is only installed inside the
 proxy container).
 """
@@ -118,18 +118,18 @@ def _install_mitmproxy_mock() -> None:
     http_mod.MockHeaders = _MockHeaders  # type: ignore[attr-defined]
 
 
-def _add_docker_to_path() -> None:
-    """Add ``docker/`` to sys.path for bare ``import aws_signing``.
+def _add_proxy_to_path() -> None:
+    """Add ``proxy/`` to sys.path for bare ``import aws_signing``.
 
     Inside the container, ``aws_signing.py`` lives at ``/aws_signing.py``
     and is imported via bare ``from aws_signing import ...``.  In tests,
-    ``docker/`` must be on sys.path for that import to work.
+    ``proxy/`` must be on sys.path for that import to work.
     """
-    docker_dir = str(Path(__file__).parent.parent.parent / "docker")
-    if docker_dir not in sys.path:
-        sys.path.insert(0, docker_dir)
+    proxy_dir = str(Path(__file__).parent.parent.parent / "proxy")
+    if proxy_dir not in sys.path:
+        sys.path.insert(0, proxy_dir)
 
 
 # Run at import time (before any test collection touches proxy_filter)
 _install_mitmproxy_mock()
-_add_docker_to_path()
+_add_proxy_to_path()

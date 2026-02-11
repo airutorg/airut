@@ -5,7 +5,7 @@
 
 """Tests for AWS SigV4/SigV4A re-signing logic.
 
-Tests the signing functions defined in docker/aws_signing.py. Since
+Tests the signing functions defined in proxy/aws_signing.py. Since
 the file is a proxy addon helper, we test the logic by importing
 the key functions directly.
 """
@@ -13,7 +13,7 @@ the key functions directly.
 import hashlib
 from unittest.mock import patch
 
-from docker.aws_signing import (
+from proxy.aws_signing import (
     ChunkedResigner,
     ParsedAuth,
     _uri_encode,
@@ -1145,10 +1145,10 @@ class TestSigV4AKeyDerivationExhaustion:
     def test_key_derivation_fails_after_254(self) -> None:
         """Raises RuntimeError if no valid key found."""
         # Always return a value > P256_ORDER - 2 to force all iterations to fail
-        from docker.aws_signing import _P256_ORDER
+        from proxy.aws_signing import _P256_ORDER
 
         big = (_P256_ORDER - 1).to_bytes(32, "big")
-        with patch("docker.aws_signing._hmac_sha256", return_value=big):
+        with patch("proxy.aws_signing._hmac_sha256", return_value=big):
             import pytest
 
             with pytest.raises(RuntimeError, match="254 iterations"):

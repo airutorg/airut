@@ -157,14 +157,16 @@ class IntegrationEnvironment:
         storage_dir.mkdir()
         mitmproxy_confdir = tmp_path / "mitmproxy-confdir"
 
-        # Create docker infrastructure files
+        # Create infrastructure files
         docker_dir = tmp_path / "docker"
         docker_dir.mkdir(exist_ok=True)
-        (docker_dir / "proxy.dockerfile").write_text("FROM scratch\n")
-        (docker_dir / "proxy-allowlist.py").write_text("")
         (docker_dir / "airut-entrypoint.sh").write_text(
             '#!/usr/bin/env bash\nexec claude "$@"\n'
         )
+
+        proxy_dir = tmp_path / "proxy"
+        proxy_dir.mkdir(exist_ok=True)
+        (proxy_dir / "proxy.dockerfile").write_text("FROM scratch\n")
 
         # Start email server
         email_server = TestEmailServer(username="test", password="test")
@@ -255,14 +257,16 @@ class IntegrationEnvironment:
         storage_dir.mkdir()
         mitmproxy_confdir = tmp_path / "mitmproxy-confdir"
 
-        # Docker infrastructure files (shared)
+        # Infrastructure files (shared)
         docker_dir = tmp_path / "docker"
         docker_dir.mkdir(exist_ok=True)
-        (docker_dir / "proxy.dockerfile").write_text("FROM scratch\n")
-        (docker_dir / "proxy-allowlist.py").write_text("")
         (docker_dir / "airut-entrypoint.sh").write_text(
             '#!/usr/bin/env bash\nexec claude "$@"\n'
         )
+
+        proxy_dir = tmp_path / "proxy"
+        proxy_dir.mkdir(exist_ok=True)
+        (proxy_dir / "proxy.dockerfile").write_text("FROM scratch\n")
 
         # Start email server with per-repo inboxes
         email_server = TestEmailServer(username="test", password="test")

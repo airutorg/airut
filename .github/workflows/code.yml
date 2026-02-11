@@ -25,7 +25,7 @@ jobs:
       - name: Markdown format check
         run: uv run python scripts/check_markdown.py
       - name: Test coverage
-        run: uv run pytest -n auto --cov=lib --cov-fail-under=100
+        run: uv run pytest -n auto --cov=lib --cov=proxy --cov-fail-under=100
       - name: Worktree clean check
         run: |
           if [[ -n $(git status --porcelain) ]]; then

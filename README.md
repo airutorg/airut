@@ -194,7 +194,8 @@ airut/
 ├── spec/                  # Implementation specifications
 ├── .airut/                # Repo-specific Airut configuration
 ├── config/                # Server configuration templates
-├── docker/                # Container images (proxy, entrypoint)
+├── docker/                # Container entrypoint (airut-entrypoint.sh)
+├── proxy/                 # Network sandbox (proxy filter, DNS, AWS signing)
 ├── lib/                   # Library code
 │   ├── container/         # Container execution (executor, proxy, session)
 │   ├── dashboard/         # Web dashboard server

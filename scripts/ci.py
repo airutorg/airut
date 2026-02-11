@@ -86,7 +86,7 @@ STEPS: list[Step] = [
     Step(
         name="Test coverage",
         command=(
-            "uv run pytest -n auto --cov=lib --cov=docker --cov-fail-under=100"
+            "uv run pytest -n auto --cov=lib --cov=proxy --cov-fail-under=100"
         ),
         workflow="code",
     ),
