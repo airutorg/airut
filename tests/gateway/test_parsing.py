@@ -229,6 +229,61 @@ def test_extract_body_utf8_decoding() -> None:
     assert "café" in body or "caf" in body
 
 
+def test_extract_body_non_utf8_charset_plain() -> None:
+    """Test extracting plain text body with non-UTF-8 charset (ISO-8859-1)."""
+    msg = MIMEText("Hello caf\xe9 na\xefve", _charset="iso-8859-1")
+    body = extract_body(msg)
+    assert "café" in body
+    assert "naïve" in body
+
+
+def test_extract_body_non_utf8_charset_html() -> None:
+    """Test extracting HTML body with non-UTF-8 charset (ISO-8859-1).
+
+    Email clients may declare non-UTF-8 charsets. The parser must use the
+    declared charset from the MIME headers rather than assuming UTF-8.
+    """
+    html_content = "<html><body><p>R\xe9sum\xe9 received</p></body></html>"
+    msg = MIMEText(html_content, "html", _charset="iso-8859-1")
+    body = extract_body(msg)
+    assert "Résumé received" in body
+
+
+def test_extract_body_non_utf8_charset_multipart() -> None:
+    """Test multipart message with non-UTF-8 charset parts.
+
+    When both text/plain and text/html parts use a non-UTF-8 charset,
+    the HTML part (preferred) must be decoded using the correct charset.
+    """
+    msg = MIMEMultipart("alternative")
+
+    text_part = MIMEText("Caf\xe9 menu", _charset="iso-8859-1")
+    msg.attach(text_part)
+
+    html_content = "<html><body><p>Caf\xe9 menu</p></body></html>"
+    html_part = MIMEText(html_content, "html", _charset="iso-8859-1")
+    msg.attach(html_part)
+
+    body = extract_body(msg)
+    assert "Café menu" in body
+
+
+def test_extract_body_non_utf8_charset_fallback_plain() -> None:
+    """Test multipart with non-UTF-8 charset falling back to text/plain.
+
+    When only a text/plain part is available with a non-UTF-8 charset,
+    the parser must still decode it correctly.
+    """
+    msg = MIMEMultipart()
+
+    text_part = MIMEText("Stra\xdfe und Gru\xdf", _charset="iso-8859-1")
+    msg.attach(text_part)
+
+    body = extract_body(msg)
+    assert "Straße" in body
+    assert "Gruß" in body
+
+
 def test_extract_attachments_with_files(tmp_path: Path) -> None:
     """Test extracting attachments from message."""
     inbox_dir = tmp_path / "inbox"

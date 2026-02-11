@@ -133,20 +133,28 @@ has been received and is now being processed by opus."
 
 - Prefer `text/html` parts in multipart messages for reliable quote handling
 - Fall back to `text/plain` when no HTML part is available
+- Decode using the charset declared in the MIME part headers (e.g. `big5`,
+  `iso-8859-1`), falling back to UTF-8 when no charset is declared
 - HTML is converted to plain text with markdown-like formatting (bold, italic,
   links, tables, lists, headings, code blocks) via `lib/html_to_text`
 - Non-multipart messages use the content type to decide: `text/html` is
   converted, everything else is used as-is
 
 **Quote stripping** uses client-specific HTML structural markers (more reliable
-than text-based heuristics) to identify quoted reply containers:
+than text-based heuristics) to identify quoted content. Two strategies:
+
+*Container elements* — content inside the element is quoted:
 
 - Outlook web/mobile: `<div id="mail-editor-reference-message-container">`
-- Outlook desktop: `<div id="divRplyFwdMsg">`
 - Gmail: `<div class="gmail_quote">`
 - Yahoo: `<div class="yahoo_quoted">`
 - Thunderbird/Apple Mail: `<blockquote type="cite">`
 - Thunderbird: `<div class="moz-cite-prefix">`
+
+*Boundary elements* — everything from this element to end of body is quoted:
+
+- Outlook desktop: `<div id="divRplyFwdMsg">` (the `From:/Sent:/To:/Subject:`
+  header is inside this div, but the quoted body is in sibling elements)
 
 Quote blocks followed by non-quote content (inline replies) are rendered as
 markdown blockquotes (`> ` prefixed lines) so the LLM sees the context the user
