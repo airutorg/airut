@@ -11,6 +11,7 @@ conversation IDs and handling attachments.
 
 import logging
 import re
+from email.header import decode_header
 from email.message import Message
 from pathlib import Path
 
@@ -30,6 +31,36 @@ MODEL_SUBADDRESS_PATTERN = re.compile(r"\+([a-zA-Z0-9_-]+)@")
 
 class ParseError(Exception):
     """Base exception for parsing errors."""
+
+
+def decode_subject(message: Message) -> str:
+    """Decode the Subject header from an email message.
+
+    Email clients may encode headers using RFC 2047 encoded-words
+    (e.g., ``=?big5?B?...?=``).  Python's ``Message.get()`` returns the
+    raw encoded form, so this function uses ``email.header.decode_header``
+    to produce a proper Unicode string.
+
+    Args:
+        message: Parsed email message.
+
+    Returns:
+        Decoded subject string, or empty string if not present.
+    """
+    raw = message.get("Subject", "")
+    if not raw:
+        return ""
+
+    parts = decode_header(raw)
+    decoded_parts: list[str] = []
+    for data, charset in parts:
+        if isinstance(data, bytes):
+            decoded_parts.append(
+                data.decode(charset or "utf-8", errors="replace")
+            )
+        else:
+            decoded_parts.append(data)
+    return " ".join(decoded_parts)
 
 
 def extract_conversation_id(subject: str) -> str | None:

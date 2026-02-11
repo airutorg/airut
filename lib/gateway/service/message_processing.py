@@ -32,6 +32,7 @@ from lib.container.session import SessionStore
 from lib.gateway.config import RepoConfig
 from lib.gateway.conversation import GitCloneError
 from lib.gateway.parsing import (
+    decode_subject,
     extract_attachments,
     extract_body,
     extract_conversation_id,
@@ -171,7 +172,7 @@ def process_message(
         Tuple of (success, conversation_id).
     """
     sender = message.get("From", "")
-    subject = message.get("Subject", "")
+    subject = decode_subject(message)
     message_id = message.get("Message-ID", "")
     to_address = message.get("To", "")
     repo_id = repo_handler.config.repo_id

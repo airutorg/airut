@@ -7,6 +7,7 @@
 
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.parser import BytesParser
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +15,7 @@ import pytest
 
 from lib.gateway.parsing import (
     collect_outbox_files,
+    decode_subject,
     extract_attachments,
     extract_body,
     extract_conversation_id,
@@ -58,6 +60,76 @@ def test_extract_conversation_id_invalid_format() -> None:
     subject = "[ID:abcdefgh] Something"
     conv_id = extract_conversation_id(subject)
     assert conv_id is None
+
+
+def test_decode_subject_plain() -> None:
+    """Test decoding a plain (non-encoded) subject."""
+    msg = MIMEText("body")
+    msg["Subject"] = "Re: [ID:abc12345] Fix the bug"
+    assert decode_subject(msg) == "Re: [ID:abc12345] Fix the bug"
+
+
+def test_decode_subject_rfc2047_base64() -> None:
+    """Test decoding an RFC 2047 base64-encoded subject.
+
+    Email clients like Outlook may encode the entire subject using a
+    non-UTF-8 charset when the body contains characters from that charset.
+    The conversation ID must still be extractable after decoding.
+    """
+    # =?big5?B?...?= encodes "Re: [ID:abcd1234] Test subject" in big5
+    raw = (
+        b"Subject: =?big5?B?UmU6IFtJRDphYmNkMTIzNF0gVGVzdCBzdWJqZWN0?=\r\n"
+        b"From: user@example.com\r\n"
+        b"\r\n"
+        b"body\r\n"
+    )
+    msg = BytesParser().parsebytes(raw)
+    subject = decode_subject(msg)
+    assert subject == "Re: [ID:abcd1234] Test subject"
+    assert extract_conversation_id(subject) == "abcd1234"
+
+
+def test_decode_subject_rfc2047_non_ascii() -> None:
+    """Test decoding RFC 2047 subject with non-ASCII characters.
+
+    When a subject contains characters outside ASCII (e.g., curly quotes),
+    Outlook encodes the whole subject in the body's charset. The ID must
+    still be extractable.
+    """
+    # big5 0xA1 0xA6 is the right single quotation mark (')
+    # "Re: [ID:deadbeef] User\xa1\xa6s report" in big5
+    raw = (
+        b"Subject: =?big5?B?UmU6IFtJRDpkZWFkYmVlZl0gVXNlcqGmcyByZXBvcnQ=?=\r\n"
+        b"From: user@example.com\r\n"
+        b"\r\n"
+        b"body\r\n"
+    )
+    msg = BytesParser().parsebytes(raw)
+    subject = decode_subject(msg)
+    assert extract_conversation_id(subject) == "deadbeef"
+    assert "User" in subject
+    assert "report" in subject
+
+
+def test_decode_subject_rfc2047_quoted_printable() -> None:
+    """Test decoding an RFC 2047 quoted-printable encoded subject."""
+    raw = (
+        b"Subject: =?utf-8?Q?Re=3A_=5BID=3Aaabb0011=5D_Caf=C3=A9_menu?=\r\n"
+        b"From: user@example.com\r\n"
+        b"\r\n"
+        b"body\r\n"
+    )
+    msg = BytesParser().parsebytes(raw)
+    subject = decode_subject(msg)
+    assert extract_conversation_id(subject) == "aabb0011"
+    assert "Caf" in subject
+
+
+def test_decode_subject_missing() -> None:
+    """Test decoding when Subject header is absent."""
+    raw = b"From: user@example.com\r\n\r\nbody\r\n"
+    msg = BytesParser().parsebytes(raw)
+    assert decode_subject(msg) == ""
 
 
 def test_extract_model_from_address_basic() -> None:

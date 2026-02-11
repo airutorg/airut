@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from lib.container.conversation_layout import create_conversation_layout
-from lib.gateway.parsing import collect_outbox_files
+from lib.gateway.parsing import collect_outbox_files, decode_subject
 from lib.gateway.responder import SMTPSendError
 
 
@@ -47,7 +47,7 @@ def send_reply(
         body: Response body text.
     """
     sender = original_message.get("From", "")
-    original_subject = original_message.get("Subject", "")
+    original_subject = decode_subject(original_message)
     message_id = original_message.get("Message-ID")
     references = original_message.get("References", "").split()
 
@@ -158,7 +158,7 @@ def send_acknowledgment(
     """
     del model  # Unused - acknowledgment no longer includes model info
     sender = original_message.get("From", "")
-    original_subject = original_message.get("Subject", "")
+    original_subject = decode_subject(original_message)
     message_id = original_message.get("Message-ID")
     references = original_message.get("References", "").split()
 
@@ -223,7 +223,7 @@ def send_error_reply(
         error_message: Error message to send.
     """
     sender = original_message.get("From", "")
-    subject = original_message.get("Subject", "")
+    subject = decode_subject(original_message)
     message_id = original_message.get("Message-ID")
 
     try:
@@ -255,7 +255,7 @@ def send_rejection_reply(
         global_config: Global configuration for dashboard URL.
     """
     sender = original_message.get("From", "")
-    original_subject = original_message.get("Subject", "")
+    original_subject = decode_subject(original_message)
     message_id = original_message.get("Message-ID")
     references = original_message.get("References", "").split()
 
