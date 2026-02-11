@@ -42,6 +42,9 @@ logger = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _DEFAULT_CONFIG_PATH = "config/airut.yaml"
 
+#: Signing type identifier for AWS SigV4/SigV4A credential re-signing.
+SIGNING_TYPE_AWS_SIGV4 = "aws-sigv4"
+
 _BOOL_TRUTHY = frozenset({"true", "1", "yes", "on"})
 _BOOL_FALSY = frozenset({"false", "0", "no", "off"})
 
@@ -53,6 +56,9 @@ class ConfigError(Exception):
 # ---------------------------------------------------------------------------
 # Masked secrets (token replacement)
 # ---------------------------------------------------------------------------
+
+#: Fixed surrogate length for session tokens (STS tokens vary 400–1200+).
+_SESSION_TOKEN_SURROGATE_LENGTH = 512
 
 
 @dataclass(frozen=True)
@@ -98,8 +104,77 @@ class ReplacementEntry:
         }
 
 
+@dataclass(frozen=True)
+class SigningCredentialField:
+    """A single field in a signing credential with name/value pair.
+
+    The ``name`` is the secret name visible to repo config (via ``!secret``),
+    and ``value`` is the real credential.
+    """
+
+    name: str
+    value: str
+
+
+@dataclass(frozen=True)
+class SigningCredential:
+    """AWS-style signing credential for proxy re-signing.
+
+    Unlike masked secrets (simple token replacement), signing credentials
+    require the proxy to re-sign requests using the real secret key.
+
+    Each field has a ``name``/``value`` structure. The name declares the
+    secret name visible to repo config; the repo uses plain ``!secret``
+    references without knowing about signing credentials.
+
+    Attributes:
+        access_key_id: Access key ID with name/value.
+        secret_access_key: Secret access key with name/value.
+        session_token: Optional STS session token with name/value.
+        scopes: Fnmatch patterns for allowed hosts.
+    """
+
+    access_key_id: SigningCredentialField
+    secret_access_key: SigningCredentialField
+    session_token: SigningCredentialField | None
+    scopes: frozenset[str]
+
+
+@dataclass(frozen=True)
+class SigningCredentialEntry:
+    """Entry in the replacement map for AWS-style signing credentials.
+
+    Keyed by the surrogate access key ID. The proxy detects requests
+    signed with the surrogate key ID and re-signs with real credentials.
+
+    Attributes:
+        access_key_id: Real access key ID.
+        secret_access_key: Real secret access key.
+        session_token: Real session token (optional).
+        surrogate_session_token: Surrogate session token (for swapping).
+        scopes: Fnmatch patterns for hosts where re-signing is allowed.
+    """
+
+    access_key_id: str
+    secret_access_key: str
+    session_token: str | None
+    surrogate_session_token: str | None
+    scopes: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dict for JSON export."""
+        return {
+            "type": SIGNING_TYPE_AWS_SIGV4,
+            "access_key_id": self.access_key_id,
+            "secret_access_key": self.secret_access_key,
+            "session_token": self.session_token,
+            "surrogate_session_token": self.surrogate_session_token,
+            "scopes": list(self.scopes),
+        }
+
+
 #: Mapping of surrogate token to replacement entry.
-ReplacementMap = dict[str, ReplacementEntry]
+ReplacementMap = dict[str, ReplacementEntry | SigningCredentialEntry]
 
 
 # Known token prefixes to preserve during surrogate generation.
@@ -113,6 +188,8 @@ _TOKEN_PREFIXES = (
     "sk-",  # OpenAI API key
     "xoxb-",  # Slack bot token
     "xoxp-",  # Slack user token
+    "AKIA",  # AWS long-term access key ID
+    "ASIA",  # AWS temporary access key ID (STS)
 )
 
 
@@ -168,6 +245,22 @@ def generate_surrogate(original: str) -> str:
     )
 
     return prefix + random_suffix
+
+
+def generate_session_token_surrogate() -> str:
+    """Generate a fixed-length surrogate for AWS STS session tokens.
+
+    STS tokens vary in length (400–1200+ chars). The surrogate uses a
+    fixed length to avoid leaking information about the real token.
+
+    Returns:
+        A random 512-character alphanumeric string.
+    """
+    charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    return "".join(
+        secrets_module.choice(charset)
+        for _ in range(_SESSION_TOKEN_SURROGATE_LENGTH)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -539,6 +632,9 @@ class RepoServerConfig:
     smtp_require_auth: bool = True
     secrets: dict[str, str] = field(default_factory=dict)
     masked_secrets: dict[str, MaskedSecret] = field(default_factory=dict)
+    signing_credentials: dict[str, SigningCredential] = field(
+        default_factory=dict
+    )
     network_sandbox_enabled: bool = True
     microsoft_internal_auth_fallback: bool = False
     microsoft_oauth2_tenant_id: str | None = None
@@ -578,6 +674,13 @@ class RepoServerConfig:
         for masked in self.masked_secrets.values():
             if masked.value:
                 SecretFilter.register_secret(masked.value)
+
+        # Register signing credential real values for log redaction
+        for signing in self.signing_credentials.values():
+            SecretFilter.register_secret(signing.access_key_id.value)
+            SecretFilter.register_secret(signing.secret_access_key.value)
+            if signing.session_token:
+                SecretFilter.register_secret(signing.session_token.value)
 
         if not self.git_repo_url:
             raise ValueError(
@@ -787,6 +890,10 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
 
     has_oauth2 = ms_tenant_id or ms_client_id or ms_client_secret
 
+    # Resolve signing credentials
+    raw_signing = raw.get("signing_credentials", {})
+    signing_credentials = _resolve_signing_credentials(raw_signing, prefix)
+
     return RepoServerConfig(
         repo_id=repo_id,
         git_repo_url=_resolve(
@@ -847,6 +954,7 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
         ),
         secrets=secrets,
         masked_secrets=masked_secrets,
+        signing_credentials=signing_credentials,
         network_sandbox_enabled=_resolve(
             network.get("sandbox_enabled"), bool, default=True
         ),
@@ -922,6 +1030,121 @@ def _resolve_masked_secrets(
 
 
 # ---------------------------------------------------------------------------
+def _resolve_signing_credential_field(
+    raw: Any,
+    field_path: str,
+    *,
+    required: bool = True,
+) -> SigningCredentialField | None:
+    """Resolve a signing credential field with name/value structure.
+
+    Args:
+        raw: Raw YAML value (should be a dict with 'name' and 'value').
+        field_path: Config path for error messages.
+        required: Whether the field is required.
+
+    Returns:
+        SigningCredentialField or None if optional and not present.
+    """
+    if raw is None:
+        if required:
+            raise ConfigError(f"{field_path} is required")
+        return None
+
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{field_path} must be a mapping with 'name'/'value'")
+
+    name = raw.get("name")
+    if not name:
+        raise ConfigError(f"{field_path}.name is required")
+    name = str(name)
+
+    raw_value = raw.get("value")
+    value = _raw_resolve(raw_value)
+    if not value:
+        if required:
+            raise ConfigError(f"{field_path}.value is required")
+        return None
+
+    return SigningCredentialField(name=name, value=value)
+
+
+def _resolve_signing_credentials(
+    raw_signing: dict,
+    prefix: str,
+) -> dict[str, SigningCredential]:
+    """Resolve signing_credentials from server config.
+
+    Each credential field uses a ``name``/``value`` structure where
+    ``name`` declares the secret name visible to repo config, and
+    ``value`` provides the real credential.
+
+    Args:
+        raw_signing: Raw signing_credentials mapping from YAML.
+        prefix: Config path prefix for error messages.
+
+    Returns:
+        Mapping of credential name to SigningCredential.
+
+    Raises:
+        ConfigError: If structure is invalid or required fields missing.
+    """
+    result: dict[str, SigningCredential] = {}
+
+    for name, config in raw_signing.items():
+        name = str(name)
+        key = f"{prefix}.signing_credentials.{name}"
+
+        if not isinstance(config, dict):
+            raise ConfigError(f"{key} must be a mapping")
+
+        # Validate type
+        cred_type = config.get("type")
+        if cred_type != SIGNING_TYPE_AWS_SIGV4:
+            raise ConfigError(
+                f"{key}.type must be 'aws-sigv4', got {cred_type!r}"
+            )
+
+        # Resolve access_key_id (required)
+        access_key_id = _resolve_signing_credential_field(
+            config.get("access_key_id"), f"{key}.access_key_id"
+        )
+        assert access_key_id is not None  # required field
+
+        # Resolve secret_access_key (required)
+        secret_access_key = _resolve_signing_credential_field(
+            config.get("secret_access_key"), f"{key}.secret_access_key"
+        )
+        assert secret_access_key is not None  # required field
+
+        # Resolve session_token (optional)
+        session_token = _resolve_signing_credential_field(
+            config.get("session_token"),
+            f"{key}.session_token",
+            required=False,
+        )
+
+        # Parse scopes (required)
+        raw_scopes = config.get("scopes")
+        if raw_scopes is None:
+            raise ConfigError(f"{key}.scopes is required")
+        if not isinstance(raw_scopes, list):
+            raise ConfigError(f"{key}.scopes must be a list")
+        if not raw_scopes:
+            raise ConfigError(f"{key}.scopes cannot be empty")
+
+        scopes = frozenset(str(s) for s in raw_scopes)
+
+        result[name] = SigningCredential(
+            access_key_id=access_key_id,
+            secret_access_key=secret_access_key,
+            session_token=session_token,
+            scopes=scopes,
+        )
+
+    return result
+
+
 # Repo configuration (loaded from .airut/airut.yaml in git mirror)
 # ---------------------------------------------------------------------------
 
@@ -970,6 +1193,7 @@ class RepoConfig:
         mirror: "GitMirrorCache",
         server_secrets: dict[str, str],
         masked_secrets: dict[str, MaskedSecret] | None = None,
+        signing_credentials: dict[str, SigningCredential] | None = None,
         *,
         server_sandbox_enabled: bool = True,
     ) -> tuple["RepoConfig", ReplacementMap]:
@@ -983,10 +1207,16 @@ class RepoConfig:
         are replaced with surrogates, and a replacement map is returned
         for the proxy to swap them back for authorized hosts.
 
+        When ``signing_credentials`` is provided, ``!secret`` references
+        whose names match signing credential field names are resolved
+        with surrogates. A ``SigningCredentialEntry`` is added to the
+        replacement map for the proxy to re-sign requests.
+
         Args:
             mirror: Git mirror cache to read the file from.
             server_secrets: Server's secrets pool (name -> value).
             masked_secrets: Server's masked secrets pool with scope info.
+            signing_credentials: Server's signing credentials pool.
             server_sandbox_enabled: Server-side network sandbox setting.
                 The effective sandbox state is the logical AND of this
                 value and the repo config's ``network.sandbox_enabled``.
@@ -1017,6 +1247,7 @@ class RepoConfig:
             raw,
             server_secrets,
             masked_secrets or {},
+            signing_credentials=signing_credentials or {},
             server_sandbox_enabled=server_sandbox_enabled,
         )
 
@@ -1027,6 +1258,7 @@ class RepoConfig:
         server_secrets: dict[str, str],
         masked_secrets: dict[str, MaskedSecret],
         *,
+        signing_credentials: dict[str, SigningCredential] | None = None,
         server_sandbox_enabled: bool = True,
     ) -> tuple["RepoConfig", ReplacementMap]:
         """Build repo config from parsed YAML dict."""
@@ -1039,7 +1271,10 @@ class RepoConfig:
         # Resolve container_env: inline values + !secret references
         raw_container_env = raw.get("container_env", {})
         container_env, replacement_map = _resolve_container_env(
-            raw_container_env, server_secrets, masked_secrets
+            raw_container_env,
+            server_secrets,
+            masked_secrets,
+            signing_credentials=signing_credentials or {},
         )
 
         repo_sandbox = _resolve(
@@ -1106,10 +1341,57 @@ def _check_secret_ref(value: object, path: str) -> None:
             _check_secret_ref(v, f"{path}[{i}]")
 
 
+@dataclass(frozen=True)
+class _SigningSecretInfo:
+    """Internal: links a secret name to its signing credential group."""
+
+    cred_name: str
+    field_name: str  # "access_key_id" | "secret_access_key" | "session_token"
+    real_value: str
+    credential: SigningCredential
+
+
+def _build_signing_secret_map(
+    signing_credentials: dict[str, SigningCredential],
+) -> dict[str, _SigningSecretInfo]:
+    """Build a mapping from secret name to signing credential info.
+
+    This enables transparent ``!secret`` resolution — the repo config
+    references secret names (e.g., ``AWS_ACCESS_KEY_ID``) without knowing
+    they belong to a signing credential group.
+
+    Args:
+        signing_credentials: Resolved signing credentials from server config.
+
+    Returns:
+        Mapping of secret name to signing credential info.
+    """
+    result: dict[str, _SigningSecretInfo] = {}
+
+    for cred_name, cred in signing_credentials.items():
+        for field_name, field_obj in [
+            ("access_key_id", cred.access_key_id),
+            ("secret_access_key", cred.secret_access_key),
+            ("session_token", cred.session_token),
+        ]:
+            if field_obj is None:
+                continue
+            result[field_obj.name] = _SigningSecretInfo(
+                cred_name=cred_name,
+                field_name=field_name,
+                real_value=field_obj.value,
+                credential=cred,
+            )
+
+    return result
+
+
 def _resolve_container_env(
     raw_env: dict,
     server_secrets: dict[str, str],
     masked_secrets: dict[str, MaskedSecret],
+    *,
+    signing_credentials: dict[str, SigningCredential] | None = None,
 ) -> tuple[dict[str, str], ReplacementMap]:
     """Resolve container_env entries from repo config.
 
@@ -1120,10 +1402,18 @@ def _resolve_container_env(
     replacement map. The container receives the surrogate; the proxy
     swaps it for the real value when the request host matches the scopes.
 
+    Signing credentials are resolved transparently: the repo config uses
+    plain ``!secret`` references (e.g., ``!secret AWS_ACCESS_KEY_ID``),
+    and the resolver detects that the secret name belongs to a signing
+    credential group. Surrogates are generated and a
+    ``SigningCredentialEntry`` is added to the replacement map keyed by
+    the surrogate access key ID.
+
     Args:
         raw_env: Raw container_env mapping from YAML.
         server_secrets: Server's plain secrets pool.
         masked_secrets: Server's masked secrets pool with scope info.
+        signing_credentials: Server's signing credentials pool.
 
     Returns:
         Tuple of (resolved env vars, replacement map for proxy).
@@ -1134,9 +1424,36 @@ def _resolve_container_env(
     """
     resolved: dict[str, str] = {}
     replacement_map: ReplacementMap = {}
+    signing_secret_map = _build_signing_secret_map(signing_credentials or {})
+
+    # Track signing credentials that have been referenced so we can
+    # build a single SigningCredentialEntry per credential set.
+    # Maps credential name -> {field_name: (env_key, surrogate)}
+    signing_refs: dict[str, dict[str, tuple[str, str]]] = {}
 
     for key, value in raw_env.items():
         if isinstance(value, _SecretRef):
+            # Check if secret name belongs to a signing credential
+            signing_info = signing_secret_map.get(value.name)
+            if signing_info is not None:
+                # Generate surrogate for the signing credential field
+                if signing_info.field_name == "session_token":
+                    surrogate = generate_session_token_surrogate()
+                else:
+                    surrogate = generate_surrogate(signing_info.real_value)
+
+                resolved[str(key)] = surrogate
+
+                # Track for building SigningCredentialEntry later
+                cred_name = signing_info.cred_name
+                if cred_name not in signing_refs:
+                    signing_refs[cred_name] = {}
+                signing_refs[cred_name][signing_info.field_name] = (
+                    str(key),
+                    surrogate,
+                )
+                continue
+
             # Check masked_secrets first
             if value.name in masked_secrets:
                 masked = masked_secrets[value.name]
@@ -1159,7 +1476,7 @@ def _resolve_container_env(
                 resolved[str(key)] = server_secrets[value.name]
                 continue
 
-            # Not found in either pool
+            # Not found in any pool
             if value.optional:
                 # !secret? — gracefully skip missing optional secrets
                 continue
@@ -1172,5 +1489,32 @@ def _resolve_container_env(
             str_value = _raw_resolve(value)
             if str_value is not None:
                 resolved[str(key)] = str_value
+
+    # Build SigningCredentialEntry for each referenced signing credential.
+    # Keyed by the surrogate access_key_id so the proxy can detect it.
+    for cred_name, fields in signing_refs.items():
+        signing_creds = signing_credentials or {}
+        cred = signing_creds[cred_name]
+
+        if "access_key_id" not in fields:
+            raise ConfigError(
+                f"Signing credential '{cred_name}' referenced but "
+                f"'access_key_id' field not mapped in container_env"
+            )
+
+        surrogate_key_id = fields["access_key_id"][1]
+        surrogate_session_token = (
+            fields["session_token"][1] if "session_token" in fields else None
+        )
+
+        replacement_map[surrogate_key_id] = SigningCredentialEntry(
+            access_key_id=cred.access_key_id.value,
+            secret_access_key=cred.secret_access_key.value,
+            session_token=(
+                cred.session_token.value if cred.session_token else None
+            ),
+            surrogate_session_token=surrogate_session_token,
+            scopes=tuple(sorted(cred.scopes)),
+        )
 
     return resolved, replacement_map

@@ -324,3 +324,15 @@ _You have write access to this section. Populate it with lessons learned._
    `git reset --soft origin/main` keeps the old working tree and silently
    reverts main's new changes. Instead, use `git cherry-pick` to replay commits
    onto updated main, then squash, or use `git rebase origin/main` first.
+
+5. **SigV4 double URI encode is per-service**: S3 is the only AWS service that
+   uses single URI encoding for canonical URIs. All other services (Bedrock,
+   DynamoDB, etc.) require double encoding: `%3A` → `%253A` in the canonical
+   URI. Always check the `service` component from the credential scope, not the
+   hostname.
+
+6. **All proxy code must be COPY'd, never volume-mounted**: The proxy container
+   image must `COPY` all Python files (`proxy_filter.py`, `aws_signing.py`,
+   `dns_responder.py`) at build time. Never volume-mount code files — this
+   creates a split where some files update on restart and others don't. Build
+   with `--no-cache` to guarantee freshness.

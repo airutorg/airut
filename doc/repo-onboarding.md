@@ -222,9 +222,13 @@ repos:
 ```
 
 For credentials that should only be usable with specific services, prefer
-`masked_secrets` over `secrets`. Headers use fnmatch patterns (`*` for all). See
+`masked_secrets` over `secrets`. Headers use fnmatch patterns (`*` for all). For
+AWS credentials, use `signing_credentials` — the proxy re-signs requests instead
+of replacing header tokens. See
 [network-sandbox.md](network-sandbox.md#masked-secrets-token-replacement) for
-details.
+masked secrets and
+[network-sandbox.md](network-sandbox.md#signing-credentials-aws-sigv4-re-signing)
+for signing credentials.
 
 Add secrets to `.env`:
 

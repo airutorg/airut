@@ -68,7 +68,7 @@ The following diagram shows the security controls at each layer:
 │                       Credential Layer                              │
 │  ┌─────────────────────┐  ┌─────────────────────────────────────┐   │
 │  │ Environment-only    │  │ Surrogate Credentials               │   │
-│  │ secrets             │  │ (Masked Secrets)                    │   │
+│  │ secrets             │  │ (Masked Secrets + Signing Creds)    │   │
 │  └─────────────────────┘  └─────────────────────────────────────┘   │
 ├─────────────────────────────────────────────────────────────────────┤
 │                       Dashboard Layer                               │
@@ -197,11 +197,43 @@ For credentials that should only be usable with specific services, use
 instead of real credentials; the proxy swaps surrogates for real values only
 when the request host matches configured scopes.
 
-This prevents credential exfiltration — even if the container is compromised,
-the attacker only has surrogates that are useless outside of the container.
+Real credentials never enter the container — they stay with the proxy and are
+only inserted into upstream requests to scoped hosts. A compromised container
+can still make authenticated requests to scoped hosts through the proxy, but
+cannot extract the real credentials for use outside the container. The ability
+to act is bound to the container's lifetime and the proxy's scope.
 
 See [network-sandbox.md](network-sandbox.md#masked-secrets-token-replacement)
 for full details on configuration, security properties, and limitations.
+
+### Signing Credentials (AWS SigV4 Re-signing)
+
+AWS credentials present a unique challenge: the secret key never appears in HTTP
+headers. Instead, it is used to compute HMAC (SigV4) or ECDSA (SigV4A)
+signatures over the request. Simple string replacement cannot work — the proxy
+must **re-sign** outbound requests with the real credentials.
+
+`signing_credentials` in the server config handle this transparently:
+
+1. Container receives **surrogate** AWS credentials (format-preserving: same
+   AKIA/ASIA prefix, same lengths)
+2. AWS SDK in the container signs requests normally using the surrogates
+3. Proxy intercepts requests to scoped hosts, verifies the surrogate signature,
+   and re-signs with the real credentials
+4. Re-signing covers Authorization headers, presigned URLs, and chunked transfer
+   encoding (S3 `aws-chunked`)
+
+**Repo config is transparent** — it uses `!secret AWS_ACCESS_KEY_ID` just like
+any other secret. The server admin decides whether to use plain secrets or
+signing credentials; the repo config is unchanged either way.
+
+This works with any S3-compatible API (AWS, Cloudflare R2, MinIO, etc.), not
+just `*.amazonaws.com`.
+
+See
+[network-sandbox.md](network-sandbox.md#signing-credentials-aws-sigv4-re-signing)
+for configuration details, and `spec/aws-sigv4-resigning.md` for the full
+specification.
 
 ## Dashboard Security
 
@@ -335,10 +367,15 @@ legitimate from malicious use of authorized channels.
 
 **Mitigations:**
 
-1. **Use masked secrets** — Credentials configured as `masked_secrets` are never
-   exposed to the container. Even if the agent is tricked into exfiltrating
-   "credentials," it only has surrogates that are useless outside scoped hosts.
-   This is the strongest mitigation for credential exfiltration.
+1. **Use masked secrets and signing credentials** — Real credentials configured
+   as `masked_secrets` or `signing_credentials` never enter the container. The
+   proxy inserts them into upstream requests only for scoped hosts. A
+   compromised container can still act within the boundaries of what the
+   credentials and scopes allow (e.g., make API calls to scoped hosts), but
+   cannot extract the real credentials. The ability to act is bound to the
+   container's lifetime and the proxy's enforcement — once the container stops,
+   or if the attacker tries to use the credentials from outside, they are
+   useless. This is the strongest mitigation for credential exfiltration.
 2. **Scope credentials to minimum** — A token that can only push to one repo
    limits exfiltration to that repo
 3. **Review agent outputs** — PRs, commits, and email replies are human review

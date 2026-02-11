@@ -553,8 +553,6 @@ class ProxyManager:
         Raises:
             ProxyError: If container start fails.
         """
-        filter_script = self._docker_dir / "proxy_filter.py"
-
         cmd = [
             self._cmd,
             "run",
@@ -572,11 +570,9 @@ class ProxyManager:
             f"PROXY_IP={proxy_ip}",
             "-e",
             f"UPSTREAM_DNS={self._upstream_dns}",
-            # Volume mounts
+            # Volume mounts: only per-task config and mutable state
             "-v",
             f"{MITMPROXY_CONFDIR}:/mitmproxy-confdir:rw",
-            "-v",
-            f"{filter_script}:/proxy_filter.py:ro",
             "-v",
             f"{allowlist_path}:/network-allowlist.yaml:ro",
         ]

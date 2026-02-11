@@ -6,15 +6,16 @@ high-level documentation (threat model, security properties, configuration), see
 
 ## Components
 
-| Component                       | Purpose                                              |
-| ------------------------------- | ---------------------------------------------------- |
-| `.airut/network-allowlist.yaml` | Allowlist configuration (domains + URLs + methods)   |
-| `docker/proxy.dockerfile`       | Proxy container image (slim + mitmproxy + pyyaml)    |
-| `docker/proxy-entrypoint.sh`    | Starts DNS responder + mitmproxy in regular mode     |
-| `docker/dns_responder.py`       | DNS server: returns proxy IP or NXDOMAIN             |
-| `docker/proxy_filter.py`        | mitmproxy addon for allowlist + token masking        |
-| `lib/container/network.py`      | Podman args for sandbox integration (--dns, CA cert) |
-| `lib/container/proxy.py`        | Per-conversation proxy lifecycle management          |
+| Component                       | Purpose                                               |
+| ------------------------------- | ----------------------------------------------------- |
+| `.airut/network-allowlist.yaml` | Allowlist configuration (domains + URLs + methods)    |
+| `docker/proxy.dockerfile`       | Proxy container image (slim + mitmproxy + pyyaml)     |
+| `docker/proxy-entrypoint.sh`    | Starts DNS responder + mitmproxy in regular mode      |
+| `docker/dns_responder.py`       | DNS server: returns proxy IP or NXDOMAIN              |
+| `docker/proxy_filter.py`        | mitmproxy addon: allowlist, token masking, re-signing |
+| `docker/aws_signing.py`         | AWS SigV4/SigV4A request re-signing                   |
+| `lib/container/network.py`      | Podman args for sandbox integration (--dns, CA cert)  |
+| `lib/container/proxy.py`        | Per-conversation proxy lifecycle management           |
 
 ## Proxy Lifecycle
 

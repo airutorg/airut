@@ -21,11 +21,15 @@ servers.
 The network sandbox breaks this exfiltration path: even if the agent is tricked
 into making a request, it can only reach pre-approved hosts.
 
-**Combined with masked secrets** (see
-[below](#masked-secrets-token-replacement)), credentials can be scoped to
-specific hosts at the proxy level. Even if an attacker tricks the agent into
-sending credentials to an allowed host they control, the surrogate token is
-useless — real values only appear for requests to scoped domains.
+**Combined with masked secrets and signing credentials** (see
+[below](#masked-secrets-token-replacement) and
+[Signing Credentials](#signing-credentials-aws-sigv4-re-signing)), real
+credentials never enter the container — they stay with the proxy and are only
+inserted into upstream requests to scoped hosts. A compromised container can
+still make authenticated requests to scoped hosts through the proxy, but cannot
+extract the real credentials for use elsewhere. The attacker's ability to act is
+bound to the container's lifetime and the proxy's scope — once the container
+stops, the credentials are inaccessible.
 
 ## Security Model
 
@@ -415,6 +419,140 @@ Use plain `secrets` for credentials that:
 See `spec/masked-secrets.md` for the full specification (surrogate format,
 replacement map, proxy addon details).
 
+## Signing Credentials (AWS SigV4 Re-signing)
+
+Masked secrets handle credentials that appear verbatim in headers (bearer
+tokens, API keys). AWS credentials are different — the secret key is used to
+compute HMAC or ECDSA signatures over the request and never appears on the wire.
+Signing credentials extend the proxy to **re-sign** requests instead of
+performing string replacement.
+
+### Problem
+
+If you pass AWS credentials as plain secrets, the container has the real access
+key ID, secret access key, and session token. A compromised container could
+exfiltrate these to any allowed host, and the attacker gains full access to
+whatever AWS resources the credentials allow.
+
+Masked secrets don't solve this either — AWS SDKs don't send the secret key in
+headers, so there's nothing to replace.
+
+### Solution
+
+`signing_credentials` in the server config inject **surrogate** AWS credentials
+into the container. The AWS SDK signs requests normally using the surrogates.
+The proxy then:
+
+1. Intercepts requests to scoped hosts (e.g., `*.amazonaws.com`)
+2. Verifies the request was signed with the surrogate credentials
+3. Re-signs the request with the real credentials
+4. Forwards the correctly-signed request upstream
+
+```yaml
+# In config/airut.yaml (server config)
+repos:
+  my-project:
+    signing_credentials:
+      AWS_PROD:
+        type: aws-sigv4
+        access_key_id:
+          name: AWS_ACCESS_KEY_ID        # secret name for repo config
+          value: !env AWS_ACCESS_KEY_ID
+        secret_access_key:
+          name: AWS_SECRET_ACCESS_KEY
+          value: !env AWS_SECRET_ACCESS_KEY
+        session_token:                   # optional (STS temporary credentials)
+          name: AWS_SESSION_TOKEN
+          value: !env AWS_SESSION_TOKEN
+        scopes:
+          - "*.amazonaws.com"
+```
+
+The repo config uses standard `!secret` references — it doesn't know signing
+credentials are involved:
+
+```yaml
+# In .airut/airut.yaml (repo config)
+container_env:
+  AWS_ACCESS_KEY_ID: !secret AWS_ACCESS_KEY_ID
+  AWS_SECRET_ACCESS_KEY: !secret AWS_SECRET_ACCESS_KEY
+  AWS_SESSION_TOKEN: !secret? AWS_SESSION_TOKEN
+```
+
+### What gets re-signed
+
+| Authentication method | Where credentials appear        | Re-signed |
+| --------------------- | ------------------------------- | --------- |
+| Authorization header  | `AWS4-HMAC-SHA256 Credential=…` | Yes       |
+| Presigned URL         | `X-Amz-Credential=…` in query   | Yes       |
+| Chunked upload        | Per-chunk signatures in body    | Yes       |
+| SigV4A (multi-region) | `AWS4-ECDSA-P256-SHA256` header | Yes       |
+
+### Surrogate format
+
+Surrogates are format-preserving:
+
+- **Access key ID**: Same length (20 chars), preserves `AKIA`/`ASIA` prefix
+- **Secret access key**: Same length (40 chars), same charset
+- **Session token**: Fixed 512 characters (avoids leaking real token length)
+
+### Transparent upgrade path
+
+The server admin can switch between plain secrets and signing credentials
+without any repo config changes:
+
+**Plain secrets** (no masking — container gets real values):
+
+```yaml
+secrets:
+  AWS_ACCESS_KEY_ID: !env AWS_ACCESS_KEY_ID
+  AWS_SECRET_ACCESS_KEY: !env AWS_SECRET_ACCESS_KEY
+```
+
+**Signing credentials** (proxy re-signs — container gets surrogates):
+
+```yaml
+signing_credentials:
+  AWS_PROD:
+    type: aws-sigv4
+    access_key_id:
+      name: AWS_ACCESS_KEY_ID
+      value: !env AWS_ACCESS_KEY_ID
+    secret_access_key:
+      name: AWS_SECRET_ACCESS_KEY
+      value: !env AWS_SECRET_ACCESS_KEY
+    scopes: ["*.amazonaws.com"]
+```
+
+In both cases, the repo config uses `!secret AWS_ACCESS_KEY_ID`.
+
+### Security properties
+
+| Property                | Mechanism                                                          |
+| ----------------------- | ------------------------------------------------------------------ |
+| Secret key isolation    | Container never sees real secret key                               |
+| Scope enforcement       | Proxy only re-signs for matching hosts                             |
+| Exfiltration resistance | Surrogate credentials are useless outside the proxy                |
+| Contained blast radius  | Attacker can act within scope but only through proxy               |
+| Fail-secure             | If proxy fails, surrogates are not valid AWS credentials           |
+| Audit trail             | Network log shows `[masked: 1] [region: …]` for re-signed requests |
+| S3-compatible           | Works with AWS, Cloudflare R2, MinIO, any SigV4 service            |
+
+### Limitations
+
+1. **SigV4/SigV4A only**: Only AWS-style HMAC-SHA256 and ECDSA-P256 signing is
+   supported. Other signing protocols (e.g., GCP, Azure) are not covered.
+
+2. **Requires sandbox**: Like masked secrets, signing credentials depend on the
+   proxy. When the sandbox is disabled, the container has surrogate credentials
+   that fail to authenticate.
+
+3. **Single signing credential per host**: If multiple signing credential sets
+   have overlapping scopes, the proxy matches the first one found.
+
+See `spec/aws-sigv4-resigning.md` for the full specification (surrogate
+generation, re-signing algorithm, chunked transfer encoding, data flow).
+
 ## Troubleshooting
 
 ### Broken allowlist checked into main
@@ -451,7 +589,8 @@ surrogates that are not valid credentials. Look for this log warning:
 > Network sandbox is disabled but masked secrets are configured.
 
 **Fix**: Either re-enable the sandbox, or temporarily move credentials from
-`masked_secrets` to `secrets` (plain injection) in server config.
+`masked_secrets`/`signing_credentials` to `secrets` (plain injection) in server
+config.
 
 ### Debugging container network issues
 
@@ -469,5 +608,7 @@ When investigating connectivity problems from inside a container:
   (proxy lifecycle, resource scoping, log format, crash recovery)
 - [spec/masked-secrets.md](../spec/masked-secrets.md) — Full masked secrets
   specification
+- [spec/aws-sigv4-resigning.md](../spec/aws-sigv4-resigning.md) — AWS
+  SigV4/SigV4A re-signing specification
 - [execution-sandbox.md](execution-sandbox.md) — Container isolation
 - [security.md](security.md) — Overall security model

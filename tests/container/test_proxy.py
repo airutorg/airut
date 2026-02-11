@@ -468,7 +468,7 @@ class TestRunProxyContainer:
         """Runs proxy with correct podman arguments."""
         allowlist = tmp_path / "allowlist.yaml"
         allowlist.write_text("domains: []\n")
-        (tmp_path / "proxy_filter.py").touch()
+
         pm = _make_pm(docker_dir=tmp_path)
         pm._run_proxy_container(
             "airut-proxy-abc",
@@ -499,6 +499,8 @@ class TestRunProxyContainer:
         assert any(
             "allowlist.yaml:/network-allowlist.yaml:ro" in v for v in volumes
         )
+        # proxy_filter.py is COPY'd into the image, not mounted
+        assert not any("proxy_filter.py" in v for v in volumes)
 
     @patch("lib.container.proxy.subprocess.run")
     def test_mounts_network_log_when_provided(
@@ -507,7 +509,7 @@ class TestRunProxyContainer:
         """Mounts network log file when path is provided."""
         allowlist = tmp_path / "allowlist.yaml"
         allowlist.write_text("domains: []\n")
-        (tmp_path / "proxy_filter.py").touch()
+
         log_path = tmp_path / "network-sandbox.log"
         log_path.touch()
         pm = _make_pm(docker_dir=tmp_path)
@@ -648,6 +650,41 @@ class TestReplacementMapOperations:
         finally:
             path.unlink(missing_ok=True)
 
+    def test_write_signing_credential_replacement_map(self) -> None:
+        """Writes SigningCredentialEntry via replacement map."""
+        from lib.gateway.config import (
+            SIGNING_TYPE_AWS_SIGV4,
+            SigningCredentialEntry,
+        )
+
+        pm = _make_pm()
+        replacement_map = {
+            "AKIA_SURROGATE1234567": SigningCredentialEntry(
+                access_key_id="AKIAIOSFODNN7EXAMPLE",
+                secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                session_token=None,
+                surrogate_session_token=None,
+                scopes=("s3.us-east-1.amazonaws.com",),
+            )
+        }
+        path = pm._write_replacement_map("task2", replacement_map)
+        try:
+            import json
+
+            data = json.loads(path.read_text())
+            entry = data["AKIA_SURROGATE1234567"]
+            assert entry["type"] == SIGNING_TYPE_AWS_SIGV4
+            assert entry["access_key_id"] == "AKIAIOSFODNN7EXAMPLE"
+            assert (
+                entry["secret_access_key"]
+                == "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+            )
+            assert entry["session_token"] is None
+            assert entry["surrogate_session_token"] is None
+            assert entry["scopes"] == ["s3.us-east-1.amazonaws.com"]
+        finally:
+            path.unlink(missing_ok=True)
+
     def test_write_empty_replacement_map(self) -> None:
         """Empty replacement map creates empty JSON file."""
         pm = _make_pm()
@@ -687,7 +724,7 @@ class TestRunProxyContainerWithReplacement:
         """Mounts replacement map file when path is provided."""
         allowlist = tmp_path / "allowlist.yaml"
         allowlist.write_text("domains: []\n")
-        (tmp_path / "proxy_filter.py").touch()
+
         replacement_path = tmp_path / "replacements.json"
         replacement_path.write_text("{}")
         pm = _make_pm(docker_dir=tmp_path)

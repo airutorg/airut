@@ -156,6 +156,31 @@ repos:
         headers:
           - "Authorization"
 
+    # Signing credentials handle AWS-style request signing (SigV4/SigV4A).
+    # Unlike masked secrets (which replace tokens in headers), the proxy
+    # re-signs outbound requests with real AWS credentials.  Containers
+    # receive format-preserving surrogates that the AWS SDK uses normally.
+    #
+    # Each field has a name (the secret name repos reference via !secret)
+    # and a value (the real credential).  The repo config is transparent —
+    # it uses !secret AWS_ACCESS_KEY_ID just like any other secret.
+    #
+    # Works with any S3-compatible API (AWS, Cloudflare R2, MinIO, etc.).
+    # signing_credentials:
+    #   AWS_PROD:
+    #     type: aws-sigv4
+    #     access_key_id:
+    #       name: AWS_ACCESS_KEY_ID
+    #       value: !env AWS_ACCESS_KEY_ID
+    #     secret_access_key:
+    #       name: AWS_SECRET_ACCESS_KEY
+    #       value: !env AWS_SECRET_ACCESS_KEY
+    #     session_token:                       # optional (STS temp credentials)
+    #       name: AWS_SESSION_TOKEN
+    #       value: !env AWS_SESSION_TOKEN
+    #     scopes:
+    #       - "*.amazonaws.com"
+
   # -------------------------------------------------------------------------
   # Example: additional repository (uncomment to use)
   # -------------------------------------------------------------------------

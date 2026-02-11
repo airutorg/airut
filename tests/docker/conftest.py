@@ -50,6 +50,7 @@ def _install_mitmproxy_mock() -> None:
             path: str = "/",
             headers: dict | None = None,
             stream: bool = False,
+            content: bytes = b"",
         ) -> None:
             self.method = method
             self.url = url
@@ -58,12 +59,18 @@ def _install_mitmproxy_mock() -> None:
             self.path = path
             self.headers = _MockHeaders(headers or {})
             self.stream = stream
+            self.content = content
 
     class _MockResponse:
         """Minimal mitmproxy Response stand-in."""
 
-        def __init__(self, status_code: int = 200) -> None:
+        def __init__(
+            self,
+            status_code: int = 200,
+            content: bytes = b"",
+        ) -> None:
             self.status_code = status_code
+            self.content = content
 
         @staticmethod
         def make(

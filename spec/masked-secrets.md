@@ -232,3 +232,11 @@ Existing `secrets` continue to work. To mask a secret:
 2. Add `scopes` list (fnmatch patterns for allowed hosts)
 3. Add `headers` list (fnmatch patterns, e.g., `["Authorization"]` or `["*"]`)
 4. No repo config changes needed
+
+## AWS Credentials
+
+Masked secrets handle credentials that appear verbatim in headers. AWS
+credentials require a different approach — the secret key is used to compute
+request signatures, not sent as a header value. For AWS credentials (or any
+S3-compatible API), use `signing_credentials` instead. See
+[aws-sigv4-resigning.md](aws-sigv4-resigning.md) for the full specification.

@@ -15,8 +15,9 @@
 # to determine the real upstream destination.
 #
 # Environment:
-#   PROXY_IP       - this container's IP on the internal network
-#   UPSTREAM_DNS   - upstream DNS server for proxy's own resolution (required)
+#   PROXY_IP        - this container's IP on the internal network
+#   UPSTREAM_DNS    - upstream DNS server for proxy's own resolution (required)
+#   DEBUG_SIGNING   - (dev) set to "1" for verbose AWS re-signing diagnostics
 
 set -eu
 

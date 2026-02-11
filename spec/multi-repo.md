@@ -103,7 +103,8 @@ repos:
 
 - **Secrets are per-repo.** Both repos can declare `GH_TOKEN: !secret GH_TOKEN`
   in their `.airut/airut.yaml`, but the server resolves them from different
-  environment variables (`GH_TOKEN_AIRUT` vs `GH_TOKEN_OTHER`).
+  environment variables (`GH_TOKEN_AIRUT` vs `GH_TOKEN_OTHER`). This applies to
+  `secrets`, `masked_secrets`, and `signing_credentials` alike.
 - **SMTP is per-repo.** Replies come from the same email address that receives
   tasks for that repo.
 - **`authorized_senders` is a list** supporting multiple senders per repo with
@@ -274,6 +275,8 @@ class RepoServerConfig:
     idle_reconnect_interval_seconds: int
     smtp_require_auth: bool
     secrets: dict[str, str]
+    masked_secrets: dict[str, MaskedSecret]
+    signing_credentials: dict[str, SigningCredential]
 
 
 @dataclass(frozen=True)
@@ -285,7 +288,8 @@ class ServerConfig:
 ```
 
 `RepoConfig` (loaded from `.airut/airut.yaml` in the git mirror) is unchanged.
-Its `from_mirror()` receives the per-repo `secrets` dict.
+Its `from_mirror()` receives the per-repo `secrets`, `masked_secrets`, and
+`signing_credentials` dicts.
 
 ## Dashboard Changes
 
