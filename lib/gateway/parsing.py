@@ -110,13 +110,15 @@ def extract_body(message: Message) -> str:
             if part.get_content_type() == "text/html":
                 payload = part.get_payload(decode=True)
                 if payload:
-                    html_body = payload.decode("utf-8", errors="replace")  # type: ignore[union-attr]
+                    charset = part.get_content_charset() or "utf-8"
+                    html_body = payload.decode(charset, errors="replace")  # type: ignore[union-attr]
                     body = html_to_text(html_body, strip_quotes=True)
                     logger.debug(
                         "Extracted body from HTML part (%d chars HTML"
-                        " -> %d chars text)",
+                        " -> %d chars text, charset=%s)",
                         len(html_body),
                         len(body),
+                        charset,
                     )
                     return body
 
@@ -125,10 +127,13 @@ def extract_body(message: Message) -> str:
             if part.get_content_type() == "text/plain":
                 payload = part.get_payload(decode=True)
                 if payload:
-                    body = payload.decode("utf-8", errors="replace")  # type: ignore[union-attr]
+                    charset = part.get_content_charset() or "utf-8"
+                    body = payload.decode(charset, errors="replace")  # type: ignore[union-attr]
                     logger.debug(
-                        "Extracted body from multipart message (%d chars)",
+                        "Extracted body from multipart message"
+                        " (%d chars, charset=%s)",
                         len(body),
+                        charset,
                     )
                     return body
     else:
@@ -137,18 +142,22 @@ def extract_body(message: Message) -> str:
 
         payload = message.get_payload(decode=True)
         if payload:
-            raw = payload.decode("utf-8", errors="replace")  # type: ignore[union-attr]
+            charset = message.get_content_charset() or "utf-8"
+            raw = payload.decode(charset, errors="replace")  # type: ignore[union-attr]
             if content_type == "text/html":
                 body = html_to_text(raw, strip_quotes=True)
                 logger.debug(
                     "Converted HTML body to text (%d chars HTML"
-                    " -> %d chars text)",
+                    " -> %d chars text, charset=%s)",
                     len(raw),
                     len(body),
+                    charset,
                 )
                 return body
             logger.debug(
-                "Extracted body from plain message (%d chars)", len(raw)
+                "Extracted body from plain message (%d chars, charset=%s)",
+                len(raw),
+                charset,
             )
             return raw
 

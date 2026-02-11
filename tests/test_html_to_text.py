@@ -936,3 +936,78 @@ def test_strip_quotes_interleaved_conversation() -> None:
     # Third quote -> Stripped because nothing follows
     assert "Original Footer info" not in result
     assert "[quoted text removed]" in result
+
+
+def test_strip_quotes_outlook_desktop_sibling_body() -> None:
+    """Test Outlook desktop divRplyFwdMsg with quoted body in sibling elements.
+
+    Outlook desktop puts the From/Sent/To/Subject header inside
+    <div id="divRplyFwdMsg">, but the actual quoted message body is in
+    a separate sibling <div> after it. The quote boundary detection must
+    suppress both the header div and all subsequent sibling content.
+    """
+    html = (
+        "<html><body>"
+        "<div><p>Sounds good, let's proceed.</p></div>"
+        "<hr>"
+        '<div id="divRplyFwdMsg" dir="ltr">'
+        '<font face="Calibri, sans-serif" style="font-size:11pt">'
+        "<b>From:</b> Bot &lt;bot@example.com&gt;<br>"
+        "<b>Sent:</b> Monday, January 5, 2026 3:00 PM<br>"
+        "<b>To:</b> User &lt;user@example.com&gt;<br>"
+        "<b>Subject:</b> Re: Analysis report</font>"
+        "<div>&nbsp;</div>"
+        "</div>"
+        "<div>The analysis is complete. Here are the results:<br><br>"
+        "<strong>Summary</strong><br><br>"
+        "Found 5 issues across 3 modules.<br><br>"
+        "<ol>"
+        "<li><strong>Module A</strong> has a memory leak</li>"
+        "<li><strong>Module B</strong> has a race condition</li>"
+        "<li><strong>Module C</strong> needs refactoring</li>"
+        "</ol><br>"
+        "Reply to approve the fix plan.<br><br>"
+        "<em>Cost: $1.50</em></div>"
+        "</body></html>"
+    )
+    result = html_to_text(html, strip_quotes=True)
+
+    assert "Sounds good, let's proceed." in result
+    # All quoted content (both header and body sibling) must be stripped
+    assert "bot@example.com" not in result
+    assert "Analysis report" not in result
+    assert "analysis is complete" not in result
+    assert "memory leak" not in result
+    assert "race condition" not in result
+    assert "Module C" not in result
+    assert "Cost" not in result
+    assert "[quoted text removed]" in result
+
+
+def test_strip_quotes_outlook_desktop_boundary_with_signature() -> None:
+    """Test Outlook desktop with signature div before the quote boundary.
+
+    Outlook mobile inserts a body-separator div and a signature div
+    between the user's reply and the quoted content. These should be
+    preserved while everything from divRplyFwdMsg onward is stripped.
+    """
+    html = (
+        "<html><body>"
+        '<div style="font-family: Aptos; font-size: 12pt;">'
+        "Please go ahead.</div>"
+        '<div id="body-separator"><br></div>'
+        '<div id="signature"><div></div></div>'
+        "<hr>"
+        '<div id="divRplyFwdMsg" dir="ltr">'
+        "<b>From:</b> Assistant &lt;assistant@example.com&gt;<br>"
+        "<b>Sent:</b> Tuesday, February 3, 2026 10:00 AM<br>"
+        "</div>"
+        "<div>Here is the detailed report with findings.</div>"
+        "</body></html>"
+    )
+    result = html_to_text(html, strip_quotes=True)
+
+    assert "Please go ahead." in result
+    assert "assistant@example.com" not in result
+    assert "detailed report" not in result
+    assert "[quoted text removed]" in result

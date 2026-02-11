@@ -22,14 +22,20 @@ Supported conversions:
 - Paragraphs/breaks (<p>, <br>) → newlines
 - HTML entities → decoded characters
 
-When strip_quotes=True, handles quoted reply containers from major email
-clients:
+When strip_quotes=True, handles quoted reply markers from major email
+clients using two strategies:
+
+Container elements (content *inside* the element is quoted):
 - Outlook web/mobile: <div id="mail-editor-reference-message-container">
-- Outlook desktop: <div id="divRplyFwdMsg">
 - Gmail: <div class="gmail_quote">
 - Yahoo: <div class="yahoo_quoted">
 - Thunderbird/Apple Mail: <blockquote type="cite">
 - Thunderbird: <div class="moz-cite-prefix">
+
+Boundary elements (everything from this element onward is quoted):
+- Outlook desktop: <div id="divRplyFwdMsg">
+  (The From/Sent/To/Subject header is inside this div, but the quoted
+  body is in sibling elements after it.)
 
 Quote blocks followed by non-quote content (inline replies) are rendered
 as markdown blockquotes ("> " prefixed lines) so the LLM sees the context
@@ -41,10 +47,20 @@ import re
 from html.parser import HTMLParser
 
 
-# Element IDs that mark quoted reply containers
-_QUOTE_IDS = frozenset(
+# Element IDs that mark quoted reply containers.
+# Content *inside* these elements is quoted.
+_QUOTE_CONTAINER_IDS = frozenset(
     {
         "mail-editor-reference-message-container",
+    }
+)
+
+# Element IDs that mark quote boundaries.
+# Everything from this element onward (including siblings) is quoted.
+# Outlook desktop uses <div id="divRplyFwdMsg"> for the From/Sent/To/Subject
+# header, but the actual quoted body is in sibling elements after it.
+_QUOTE_BOUNDARY_IDS = frozenset(
+    {
         "divrplyfwdmsg",
     }
 )
@@ -89,11 +105,14 @@ def _is_quote_element(
     tag: str,
     attrs: dict[str, str | None],
 ) -> bool:
-    """Check if a tag/attrs combination is a known quote container."""
-    # Check id attribute
+    """Check if tag/attrs is a known quote container or boundary."""
     element_id = attrs.get("id")
-    if element_id and element_id.lower() in _QUOTE_IDS:
-        return True
+    if element_id:
+        element_id_lower = element_id.lower()
+        if element_id_lower in _QUOTE_CONTAINER_IDS:
+            return True
+        if element_id_lower in _QUOTE_BOUNDARY_IDS:
+            return True
 
     # Check class attribute
     class_attr = attrs.get("class")
@@ -109,6 +128,19 @@ def _is_quote_element(
             return True
 
     return False
+
+
+def _is_quote_boundary(attrs: dict[str, str | None]) -> bool:
+    """Check if element marks a quote boundary (rest of document is quoted).
+
+    Unlike container elements where only the content *inside* the element
+    is quoted, boundary elements indicate that everything from this point
+    to the end of the document is quoted content. This handles Outlook
+    desktop's ``divRplyFwdMsg`` pattern where the ``From:/Sent:/To:``
+    header is inside the div, but the quoted body is in sibling elements.
+    """
+    element_id = attrs.get("id")
+    return bool(element_id and element_id.lower() in _QUOTE_BOUNDARY_IDS)
 
 
 class _HTMLToTextParser(HTMLParser):
@@ -135,6 +167,12 @@ class _HTMLToTextParser(HTMLParser):
         # markdown "> " lines. Otherwise get_text() replaces it with
         # "[quoted text removed]".
         self._pending_quote: str | None = None
+
+        # When a quote *boundary* element (e.g. divRplyFwdMsg) is seen,
+        # all remaining content in the document is quoted. This flag
+        # causes all subsequent tags and data to be forwarded to the
+        # quote sub-parser regardless of nesting.
+        self._quote_rest = False
 
         # Inline formatting state
         self._in_bold = False
@@ -163,7 +201,7 @@ class _HTMLToTextParser(HTMLParser):
 
     @property
     def _in_quote(self) -> bool:
-        return len(self._quote_tags) > 0
+        return self._quote_rest or len(self._quote_tags) > 0
 
     def handle_starttag(
         self, tag: str, attrs: list[tuple[str, str | None]]
@@ -186,6 +224,11 @@ class _HTMLToTextParser(HTMLParser):
                     self._quote_parser._output.append(self._pending_quote)
                     self._quote_parser._output.append("\n")
                     self._pending_quote = None
+                # Boundary elements (e.g. divRplyFwdMsg) mean everything
+                # from here to end of document is quoted.
+                if _is_quote_boundary(attr_dict):
+                    self._quote_rest = True
+                    return
             self._quote_tags.append(tag)
             self._quote_nesting.append(0)
             return
@@ -193,7 +236,7 @@ class _HTMLToTextParser(HTMLParser):
         if self._in_quote:
             # Track nested opens of the same tag as the quote container
             # so we can match the correct closing tag.
-            if tag == self._quote_tags[-1]:
+            if self._quote_tags and tag == self._quote_tags[-1]:
                 self._quote_nesting[-1] += 1
             # Forward to sub-parser for content conversion
             if self._quote_parser is not None:
@@ -271,6 +314,12 @@ class _HTMLToTextParser(HTMLParser):
 
         # Track closing tags inside quote regions
         if self._in_quote:
+            if self._quote_rest:
+                # Boundary mode: forward everything to sub-parser.
+                # No nesting tracking needed — we consume until EOF.
+                if self._quote_parser is not None:
+                    self._quote_parser.handle_endtag(tag)
+                return
             if tag == self._quote_tags[-1]:
                 if self._quote_nesting[-1] > 0:
                     # Closing a nested same-tag element, not the
@@ -398,6 +447,13 @@ class _HTMLToTextParser(HTMLParser):
         Returns:
             Converted plain text.
         """
+        # Finalize quote-rest mode: the sub-parser is still active
+        # because boundary quotes consume until EOF with no closing tag.
+        if self._quote_rest and self._quote_parser is not None:
+            self._pending_quote = self._quote_parser.get_text()
+            self._quote_parser = None
+            self._quote_rest = False
+
         # Replace trailing unflushed quote with marker
         if self._pending_quote is not None:
             self._ensure_block_break()
