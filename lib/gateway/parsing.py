@@ -25,8 +25,10 @@ logger = logging.getLogger(__name__)
 CONVERSATION_ID_PATTERN = re.compile(r"\[ID:([0-9a-f]{8})\]")
 
 # Pattern to extract conversation ID from structured Airut Message-IDs.
-# Matches: <airut.{8-hex-chars}.{timestamp}@domain>
-AIRUT_MESSAGE_ID_PATTERN = re.compile(r"<airut\.([0-9a-f]{8})\.\d+@")
+# Matches: <airut.{8-hex-chars}.{timestamp}.{nonce}@domain>
+# The trailing segments (timestamp, nonce) are matched flexibly with
+# [\w.]+ to tolerate format changes without breaking thread resolution.
+AIRUT_MESSAGE_ID_PATTERN = re.compile(r"<airut\.([0-9a-f]{8})\.[\w.]+@")
 
 # Pattern to extract model name from email address with subaddressing
 # Matches: user+opus@domain.com, user+sonnet@domain.com, etc.

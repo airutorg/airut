@@ -216,6 +216,15 @@ def test_extract_conversation_id_from_headers_various_domains() -> None:
     assert conv_id == "abc12345"
 
 
+def test_extract_conversation_id_from_headers_with_nonce() -> None:
+    """Test extraction from Message-ID that includes a nonce segment."""
+    conv_id = extract_conversation_id_from_headers(
+        references=[],
+        in_reply_to="<airut.abc12345.1700000000.a1b2@example.com>",
+    )
+    assert conv_id == "abc12345"
+
+
 def test_extract_model_from_address_basic() -> None:
     """Test extracting model from simple email address."""
     model = extract_model_from_address("airut+opus@example.com")

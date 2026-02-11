@@ -12,6 +12,7 @@ via SMTP with proper threading headers.
 import logging
 import mimetypes
 import re
+import secrets
 import smtplib
 import time
 from email.mime.application import MIMEApplication
@@ -52,11 +53,15 @@ def _extract_domain(email_from: str) -> str:
 def generate_message_id(conv_id: str, email_from: str) -> str:
     """Generate a structured Message-ID encoding the conversation ID.
 
-    Format: ``<airut.{conv_id}.{timestamp}@{domain}>``
+    Format: ``<airut.{conv_id}.{timestamp}.{nonce}@{domain}>``
 
     The conversation ID can be extracted from this Message-ID by other
     Airut instances or the same instance when processing reply headers
     (In-Reply-To / References).
+
+    A 4-character random nonce ensures uniqueness when multiple emails
+    are sent for the same conversation within the same second (e.g.,
+    acknowledgment followed by an immediate rejection).
 
     Args:
         conv_id: 8-character hex conversation ID.
@@ -68,7 +73,8 @@ def generate_message_id(conv_id: str, email_from: str) -> str:
     """
     domain = _extract_domain(email_from)
     timestamp = int(time.time())
-    return f"<airut.{conv_id}.{timestamp}@{domain}>"
+    nonce = secrets.token_hex(2)
+    return f"<airut.{conv_id}.{timestamp}.{nonce}@{domain}>"
 
 
 class SMTPSendError(Exception):

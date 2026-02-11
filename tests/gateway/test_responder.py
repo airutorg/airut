@@ -533,12 +533,14 @@ def test_generate_message_id_with_display_name() -> None:
     assert "<airut.deadbeef." in msg_id
 
 
-def test_generate_message_id_format_is_consistent() -> None:
-    """Test repeated calls produce valid Message-IDs."""
-    for _ in range(3):
-        msg_id = generate_message_id("abc12345", "bot@example.com")
-        assert msg_id.startswith("<airut.abc12345.")
-        assert msg_id.endswith("@example.com>")
+def test_generate_message_id_unique_nonce() -> None:
+    """Test that nonce ensures uniqueness across rapid calls."""
+    ids = {
+        generate_message_id("abc12345", "bot@example.com") for _ in range(20)
+    }
+    # With 4-hex-char nonce (65536 values), 20 calls within the
+    # same second should produce distinct IDs.
+    assert len(ids) == 20
 
 
 def test_send_reply_with_message_id(email_config):
