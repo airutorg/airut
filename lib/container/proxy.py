@@ -115,7 +115,7 @@ class ProxyManager:
 
     Attributes:
         container_command: Container runtime (podman or docker).
-        docker_dir: Path to directory containing proxy.dockerfile.
+        proxy_dir: Path to directory containing proxy.dockerfile.
     """
 
     #: Path to the network allowlist inside the repo.
@@ -124,13 +124,13 @@ class ProxyManager:
     def __init__(
         self,
         container_command: str = "podman",
-        docker_dir: Path | None = None,
+        proxy_dir: Path | None = None,
         egress_network: str = EGRESS_NETWORK,
         *,
         upstream_dns: str,
     ) -> None:
         self._cmd = container_command
-        self._docker_dir = docker_dir or Path("docker")
+        self._proxy_dir = proxy_dir or Path("proxy")
         self._egress_network = egress_network
         self._upstream_dns = upstream_dns
         self._lock = threading.Lock()
@@ -335,7 +335,7 @@ class ProxyManager:
         Raises:
             ProxyError: If build fails.
         """
-        dockerfile = self._docker_dir / "proxy.dockerfile"
+        dockerfile = self._proxy_dir / "proxy.dockerfile"
         if not dockerfile.exists():
             raise ProxyError(f"Proxy Dockerfile not found: {dockerfile}")
 
@@ -349,7 +349,7 @@ class ProxyManager:
                     PROXY_IMAGE_NAME,
                     "-f",
                     str(dockerfile),
-                    str(self._docker_dir),
+                    str(self._proxy_dir),
                 ],
                 check=True,
                 capture_output=True,

@@ -79,7 +79,7 @@ class TestProxyManagerInit:
         """Default values set correctly."""
         pm = _make_pm()
         assert pm._cmd == "podman"
-        assert pm._docker_dir == Path("docker")
+        assert pm._proxy_dir == Path("proxy")
         assert pm._upstream_dns == _TEST_UPSTREAM_DNS
         assert isinstance(pm._lock, type(threading.Lock()))
 
@@ -92,11 +92,11 @@ class TestProxyManagerInit:
         """Custom values set correctly."""
         pm = _make_pm(
             container_command="docker",
-            docker_dir=Path("/tmp/docker"),
+            proxy_dir=Path("/tmp/proxy"),
             upstream_dns="8.8.8.8",
         )
         assert pm._cmd == "docker"
-        assert pm._docker_dir == Path("/tmp/docker")
+        assert pm._proxy_dir == Path("/tmp/proxy")
         assert pm._upstream_dns == "8.8.8.8"
 
 
@@ -366,7 +366,7 @@ class TestBuildImage:
 
     def test_missing_dockerfile(self, tmp_path: Path) -> None:
         """Raises ProxyError if Dockerfile missing."""
-        pm = _make_pm(docker_dir=tmp_path)
+        pm = _make_pm(proxy_dir=tmp_path)
         with pytest.raises(ProxyError, match="Proxy Dockerfile not found"):
             pm._build_image()
 
@@ -375,7 +375,7 @@ class TestBuildImage:
         """Builds image with correct command."""
         dockerfile = tmp_path / "proxy.dockerfile"
         dockerfile.touch()
-        pm = _make_pm(docker_dir=tmp_path)
+        pm = _make_pm(proxy_dir=tmp_path)
         pm._build_image()
         mock_run.assert_called_once()
         cmd = mock_run.call_args[0][0]
@@ -392,7 +392,7 @@ class TestBuildImage:
         """Raises ProxyError on build failure."""
         dockerfile = tmp_path / "proxy.dockerfile"
         dockerfile.touch()
-        pm = _make_pm(docker_dir=tmp_path)
+        pm = _make_pm(proxy_dir=tmp_path)
         with pytest.raises(ProxyError, match="Proxy image build failed"):
             pm._build_image()
 
@@ -469,7 +469,7 @@ class TestRunProxyContainer:
         allowlist = tmp_path / "allowlist.yaml"
         allowlist.write_text("domains: []\n")
 
-        pm = _make_pm(docker_dir=tmp_path)
+        pm = _make_pm(proxy_dir=tmp_path)
         pm._run_proxy_container(
             "airut-proxy-abc",
             "airut-conv-abc",
@@ -512,7 +512,7 @@ class TestRunProxyContainer:
 
         log_path = tmp_path / "network-sandbox.log"
         log_path.touch()
-        pm = _make_pm(docker_dir=tmp_path)
+        pm = _make_pm(proxy_dir=tmp_path)
         pm._run_proxy_container(
             "airut-proxy-abc",
             "airut-conv-abc",
@@ -727,7 +727,7 @@ class TestRunProxyContainerWithReplacement:
 
         replacement_path = tmp_path / "replacements.json"
         replacement_path.write_text("{}")
-        pm = _make_pm(docker_dir=tmp_path)
+        pm = _make_pm(proxy_dir=tmp_path)
         pm._run_proxy_container(
             "airut-proxy-abc",
             "airut-conv-abc",

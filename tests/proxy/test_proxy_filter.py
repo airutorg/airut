@@ -5,7 +5,7 @@
 
 """Tests for the proxy filter mitmproxy addon.
 
-Tests the actual ``docker/proxy_filter.py`` module with mitmproxy mocked
+Tests the actual ``proxy/proxy_filter.py`` module with mitmproxy mocked
 out via ``conftest.py``.  This gives proper coverage measurement unlike
 the ``test_proxy_allowlist.py`` tests which exercise reimplemented copies.
 """
@@ -15,20 +15,20 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from docker.proxy_filter import (
-    ProxyFilter,
-    _decode_basic_auth,
-    _encode_basic_auth,
-    _match_header_pattern,
-    _match_pattern,
-)
 from mitmproxy.http import (  # type: ignore[attr-defined]
     MockError,
     MockHTTPFlow,
     MockRequest,
     MockResponse,
 )
-from tests.docker.vectors import (
+from proxy.proxy_filter import (
+    ProxyFilter,
+    _decode_basic_auth,
+    _encode_basic_auth,
+    _match_header_pattern,
+    _match_pattern,
+)
+from tests.proxy.vectors import (
     REAL_ACCESS_KEY_ID,
     SIGNING_REPLACEMENT,
     SIGV4_AUTH,
@@ -181,7 +181,7 @@ class TestProxyFilterLoad:
         log_path = tmp_path / "network-sandbox.log"
         log_path.touch()
         pf = ProxyFilter()
-        with patch("docker.proxy_filter.NETWORK_LOG_PATH", log_path):
+        with patch("proxy.proxy_filter.NETWORK_LOG_PATH", log_path):
             pf._setup_file_logging()
         assert pf._log_file is not None
         pf._log_file.close()
@@ -192,7 +192,7 @@ class TestProxyFilterLoad:
         """No log file when path doesn't exist."""
         pf = ProxyFilter()
         with patch(
-            "docker.proxy_filter.NETWORK_LOG_PATH",
+            "proxy.proxy_filter.NETWORK_LOG_PATH",
             tmp_path / "nonexistent.log",
         ):
             pf._setup_file_logging()
@@ -204,7 +204,7 @@ class TestProxyFilterLoad:
         log_path.touch()
         pf = ProxyFilter()
         with (
-            patch("docker.proxy_filter.NETWORK_LOG_PATH", log_path),
+            patch("proxy.proxy_filter.NETWORK_LOG_PATH", log_path),
             patch("builtins.open", side_effect=OSError("denied")),
         ):
             pf._setup_file_logging()
@@ -218,7 +218,7 @@ class TestProxyFilterLoad:
             "  - host: pypi.org\n    path: /simple*\n"
         )
         pf = ProxyFilter()
-        with patch("docker.proxy_filter.Path", return_value=config_path):
+        with patch("proxy.proxy_filter.Path", return_value=config_path):
             pf._load_allowlist()
         assert "api.github.com" in pf.domains
         assert len(pf.url_prefixes) == 1
@@ -242,7 +242,7 @@ class TestProxyFilterLoad:
         }
         repl_path.write_text(json.dumps(repl_data))
         pf = ProxyFilter()
-        with patch("docker.proxy_filter.REPLACEMENTS_PATH", repl_path):
+        with patch("proxy.proxy_filter.REPLACEMENTS_PATH", repl_path):
             pf._load_replacements()
         assert "ghp_surr" in pf.replacements
 
@@ -250,7 +250,7 @@ class TestProxyFilterLoad:
         """Missing file leaves empty replacements."""
         pf = ProxyFilter()
         with patch(
-            "docker.proxy_filter.REPLACEMENTS_PATH",
+            "proxy.proxy_filter.REPLACEMENTS_PATH",
             tmp_path / "nonexistent.json",
         ):
             pf._load_replacements()
@@ -261,7 +261,7 @@ class TestProxyFilterLoad:
         repl_path = tmp_path / "replacements.json"
         repl_path.write_text("not json!")
         pf = ProxyFilter()
-        with patch("docker.proxy_filter.REPLACEMENTS_PATH", repl_path):
+        with patch("proxy.proxy_filter.REPLACEMENTS_PATH", repl_path):
             pf._load_replacements()
         assert pf.replacements == {}
 
@@ -610,7 +610,7 @@ class TestProxyFilterResponse:
             pf.response(flow)
             assert "?" in mock_log.call_args[0][0]
 
-    @patch("docker.proxy_filter.DEBUG_SIGNING", True)
+    @patch("proxy.proxy_filter.DEBUG_SIGNING", True)
     def test_aws_error_body_logged_on_4xx(self) -> None:
         """AWS re-signed requests log response body on 4xx."""
         body = b'{"message":"AccessDeniedException"}'
@@ -636,7 +636,7 @@ class TestProxyFilterResponse:
             calls = [c[0][0] for c in mock_log.call_args_list]
             assert not any("aws-error-body:" in c for c in calls)
 
-    @patch("docker.proxy_filter.DEBUG_SIGNING", True)
+    @patch("proxy.proxy_filter.DEBUG_SIGNING", True)
     def test_aws_error_body_not_logged_on_2xx(self) -> None:
         """AWS re-signed requests don't log body on success."""
         pf = ProxyFilter()
@@ -648,7 +648,7 @@ class TestProxyFilterResponse:
             calls = [c[0][0] for c in mock_log.call_args_list]
             assert not any("aws-error-body:" in c for c in calls)
 
-    @patch("docker.proxy_filter.DEBUG_SIGNING", True)
+    @patch("proxy.proxy_filter.DEBUG_SIGNING", True)
     def test_aws_error_body_not_logged_without_resign(self) -> None:
         """Non-AWS requests don't log error body."""
         pf = ProxyFilter()
@@ -659,7 +659,7 @@ class TestProxyFilterResponse:
             calls = [c[0][0] for c in mock_log.call_args_list]
             assert not any("aws-error-body:" in c for c in calls)
 
-    @patch("docker.proxy_filter.DEBUG_SIGNING", True)
+    @patch("proxy.proxy_filter.DEBUG_SIGNING", True)
     def test_aws_error_body_truncated(self) -> None:
         """Large error bodies are truncated to prevent log flooding."""
         body = b"X" * 8000
@@ -676,7 +676,7 @@ class TestProxyFilterResponse:
             # Should contain at most 4096 chars of body + prefix + suffix
             assert len(error_calls[0]) < 4300
 
-    @patch("docker.proxy_filter.DEBUG_SIGNING", True)
+    @patch("proxy.proxy_filter.DEBUG_SIGNING", True)
     def test_aws_error_body_empty_not_logged(self) -> None:
         """Empty response body is not logged."""
         pf = ProxyFilter()
@@ -688,7 +688,7 @@ class TestProxyFilterResponse:
             calls = [c[0][0] for c in mock_log.call_args_list]
             assert not any("aws-error-body:" in c for c in calls)
 
-    @patch("docker.proxy_filter.DEBUG_SIGNING", True)
+    @patch("proxy.proxy_filter.DEBUG_SIGNING", True)
     def test_aws_error_body_invalid_utf8(self) -> None:
         """Invalid UTF-8 response body is silently skipped."""
         body = b"\xff\xfe\x00\x01"  # Invalid UTF-8 bytes
@@ -749,7 +749,7 @@ class TestAddons:
     """Tests for module-level addons list."""
 
     def test_addons_contains_proxy_filter(self) -> None:
-        from docker.proxy_filter import addons
+        from proxy.proxy_filter import addons
 
         assert len(addons) == 1
         assert isinstance(addons[0], ProxyFilter)
@@ -940,7 +940,7 @@ class TestResignHeaderAuth:
         pf = _pf_with_signing()
         flow = _aws_flow()
         with patch(
-            "docker.proxy_filter.resign_request",
+            "proxy.proxy_filter.resign_request",
             side_effect=ValueError("boom"),
         ):
             result = pf._resign_header_auth(
@@ -1104,7 +1104,7 @@ class TestSetupChunkedResigner:
 class TestDebugSigningLogs:
     """Tests for DEBUG_SIGNING-gated diagnostic logging."""
 
-    @patch("docker.proxy_filter.DEBUG_SIGNING", True)
+    @patch("proxy.proxy_filter.DEBUG_SIGNING", True)
     def test_perform_resign_logs_context(self) -> None:
         """Pre-signing context is logged when DEBUG_SIGNING is on."""
         pf = _pf_with_signing()
@@ -1131,7 +1131,7 @@ class TestDebugSigningLogs:
             assert not any("creq_hash=" in c for c in calls)
             assert not any("canonical_request=" in c for c in calls)
 
-    @patch("docker.proxy_filter.DEBUG_SIGNING", True)
+    @patch("proxy.proxy_filter.DEBUG_SIGNING", True)
     def test_deferred_resign_logs_with_debug(self) -> None:
         """Deferred signing is logged when DEBUG_SIGNING is on."""
         pf = _pf_with_signing()
@@ -1150,7 +1150,7 @@ class TestDebugSigningLogs:
             calls = [c[0][0] for c in mock_log.call_args_list]
             assert not any("deferred" in c for c in calls)
 
-    @patch("docker.proxy_filter.DEBUG_SIGNING", True)
+    @patch("proxy.proxy_filter.DEBUG_SIGNING", True)
     def test_debug_log_normalizes_authority(self) -> None:
         """Debug log normalizes :authority to host in signed_headers."""
         pf = _pf_with_signing()
@@ -1295,7 +1295,7 @@ class TestResignPresigned:
         pf = _pf_with_signing()
         flow = self._presigned_flow()
         with patch(
-            "docker.proxy_filter.resign_presigned_url",
+            "proxy.proxy_filter.resign_presigned_url",
             side_effect=ValueError("boom"),
         ):
             result = pf._resign_presigned(flow, "mybucket.s3.amazonaws.com")
@@ -1453,7 +1453,7 @@ class TestDeferredResigning:
         """Deferred re-sign uses sha256(body), not UNSIGNED-PAYLOAD."""
         import hashlib
 
-        from docker.aws_signing import (
+        from proxy.aws_signing import (
             build_canonical_request,
             build_sigv4_string_to_sign,
             derive_sigv4_signing_key,
@@ -1522,7 +1522,7 @@ class TestDeferredResigning:
         auth = flow.request.headers["Authorization"]
         proxy_sig = auth.split("Signature=")[1]
 
-        from docker.aws_signing import (
+        from proxy.aws_signing import (
             build_canonical_request,
             build_sigv4_string_to_sign,
             derive_sigv4_signing_key,
@@ -1574,7 +1574,7 @@ class TestDeferredResigning:
         """
         import hashlib
 
-        from docker.aws_signing import (
+        from proxy.aws_signing import (
             build_canonical_request,
             build_sigv4_string_to_sign,
             derive_sigv4_signing_key,
@@ -1662,7 +1662,7 @@ class TestDeferredResigning:
         """
         import hashlib
 
-        from docker.aws_signing import (
+        from proxy.aws_signing import (
             build_sigv4_string_to_sign,
             canonical_uri,
             derive_sigv4_signing_key,
@@ -1759,7 +1759,7 @@ class TestDeferredResigning:
         """
         import hashlib
 
-        from docker.aws_signing import (
+        from proxy.aws_signing import (
             build_sigv4_string_to_sign,
             derive_sigv4_signing_key,
             sigv4_sign,
@@ -1849,7 +1849,7 @@ class TestDeferredResigning:
         """
         import hashlib
 
-        from docker.aws_signing import (
+        from proxy.aws_signing import (
             build_sigv4_string_to_sign,
             derive_sigv4_signing_key,
             sigv4_sign,
@@ -1964,7 +1964,7 @@ class TestRequestData:
 
     def test_resigner_processes_data(self) -> None:
         """Data is processed by the resigner when present."""
-        from docker.aws_signing import ChunkedResigner, derive_sigv4_signing_key
+        from proxy.aws_signing import ChunkedResigner, derive_sigv4_signing_key
 
         pf = ProxyFilter()
         flow = _flow()

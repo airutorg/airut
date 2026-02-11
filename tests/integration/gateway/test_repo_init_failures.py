@@ -42,14 +42,15 @@ class TestImapConnectionFailures:
         storage_dir = tmp_path / "storage"
         storage_dir.mkdir()
 
-        # Docker infrastructure
+        # Infrastructure files
         docker_dir = tmp_path / "docker"
         docker_dir.mkdir()
-        (docker_dir / "proxy.dockerfile").write_text("FROM scratch\n")
-        (docker_dir / "proxy-allowlist.py").write_text("")
         (docker_dir / "airut-entrypoint.sh").write_text(
             '#!/usr/bin/env bash\nexec claude "$@"\n'
         )
+        proxy_dir = tmp_path / "proxy"
+        proxy_dir.mkdir()
+        (proxy_dir / "proxy.dockerfile").write_text("FROM scratch\n")
 
         # Create config pointing to a port with nothing listening
         # Port 9999 is typically unused
@@ -107,14 +108,15 @@ class TestImapConnectionFailures:
         storage_dir = tmp_path / "storage"
         storage_dir.mkdir()
 
-        # Docker infrastructure
+        # Infrastructure files
         docker_dir = tmp_path / "docker"
         docker_dir.mkdir()
-        (docker_dir / "proxy.dockerfile").write_text("FROM scratch\n")
-        (docker_dir / "proxy-allowlist.py").write_text("")
         (docker_dir / "airut-entrypoint.sh").write_text(
             '#!/usr/bin/env bash\nexec claude "$@"\n'
         )
+        proxy_dir = tmp_path / "proxy"
+        proxy_dir.mkdir()
+        (proxy_dir / "proxy.dockerfile").write_text("FROM scratch\n")
 
         global_config = GlobalConfig(
             dashboard_enabled=False,
@@ -163,14 +165,15 @@ class TestGitCloneFailures:
         storage_dir = tmp_path / "storage"
         storage_dir.mkdir()
 
-        # Docker infrastructure
+        # Infrastructure files
         docker_dir = tmp_path / "docker"
         docker_dir.mkdir()
-        (docker_dir / "proxy.dockerfile").write_text("FROM scratch\n")
-        (docker_dir / "proxy-allowlist.py").write_text("")
         (docker_dir / "airut-entrypoint.sh").write_text(
             '#!/usr/bin/env bash\nexec claude "$@"\n'
         )
+        proxy_dir = tmp_path / "proxy"
+        proxy_dir.mkdir()
+        (proxy_dir / "proxy.dockerfile").write_text("FROM scratch\n")
 
         global_config = GlobalConfig(
             dashboard_enabled=False,

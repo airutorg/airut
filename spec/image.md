@@ -45,13 +45,16 @@ Layer 2: Server Overlay (from server checkout)
     Dockerfile                    # repo-defined base image
     <other files>                 # additional files for build context
 
-# On the Airut server (local checkout, docker/ directory)
+# On the Airut server (local checkout)
 docker/
   airut-entrypoint.sh             # server-defined entrypoint
+
+proxy/
   proxy.dockerfile                # proxy container image
   proxy_filter.py                 # mitmproxy allowlist/URL-prefix addon
   proxy-entrypoint.sh             # proxy container entrypoint
   dns_responder.py                # allowlist-enforcing DNS responder
+  aws_signing.py                  # AWS SigV4/SigV4A request re-signing
 ```
 
 All files in `.airut/container/` are copied to the build context, allowing the

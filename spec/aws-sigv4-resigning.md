@@ -688,8 +688,8 @@ replaced).
 
 ### Proxy Container
 
-The re-signing logic runs in `docker/proxy_filter.py` inside the proxy
-container. New dependencies:
+The re-signing logic runs in `proxy/proxy_filter.py` inside the proxy container.
+New dependencies:
 
 - **`hmac` + `hashlib`** (stdlib) — SigV4 signing key derivation and signature
   computation. Already available.
@@ -699,7 +699,7 @@ container. New dependencies:
 - **`urllib.parse`** (stdlib) — URL encoding for canonical request construction.
   Already available.
 
-The proxy Dockerfile (`docker/proxy.dockerfile`) needs `cryptography` added to
+The proxy Dockerfile (`proxy/proxy.dockerfile`) needs `cryptography` added to
 its pip install.
 
 ### No SDK Dependency

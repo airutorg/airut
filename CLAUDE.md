@@ -214,7 +214,7 @@ is created AND GitHub CI passes (step 3).
 
 **All checks are mandatory. No workarounds or exceptions.**
 
-- **100% test coverage** - every line in `lib/` and `docker/` must be tested
+- **100% test coverage** - every line in `lib/` and `proxy/` must be tested
 - **No `pytest.skip()`** - write proper mocks instead
 - **No `# type: ignore`** without specific error code and justification
 - **No `# noqa`** without specific code and justification
@@ -225,7 +225,8 @@ is created AND GitHub CI passes (step 3).
 ```
 .airut/                     - Repo-specific Airut configuration
 config/                     - Server configuration templates
-docker/                     - Container images (proxy)
+docker/                     - Container entrypoint (airut-entrypoint.sh)
+proxy/                      - Network sandbox (proxy filter, DNS, AWS signing)
 lib/                        - Library code
   container/                - Container execution (executor, proxy, session)
   dashboard/                - Web dashboard server

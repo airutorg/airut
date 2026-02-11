@@ -12,7 +12,7 @@ The container image is built in two layers:
 1. **Repo image**: Built from ``.airut/container/Dockerfile`` read from the git
    mirror. Contains the tools and dependencies the repository needs.
 2. **Overlay image**: Built on top of the repo image, adding the Airut-specific
-   entrypoint script from the server's ``docker/`` directory.
+   entrypoint script from the server's ``docker/`` directory (entrypoint).
 
 Images are cached by content hash (SHA-256 of Dockerfile / entrypoint) and
 rebuilt when stale (default 24 hours) to pick up upstream tool updates.

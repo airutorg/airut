@@ -24,7 +24,7 @@ Supports fnmatch-style wildcards (* and ?) in both domain and path patterns:
 - "/api" matches only "/api" exactly (no implicit prefix matching)
 
 Usage:
-    mitmdump -s docker/proxy_filter.py
+    mitmdump -s proxy/proxy_filter.py
 """
 
 import base64
