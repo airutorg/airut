@@ -19,6 +19,7 @@ from lib.gateway.parsing import (
     extract_attachments,
     extract_body,
     extract_conversation_id,
+    extract_conversation_id_from_headers,
     extract_model_from_address,
 )
 
@@ -130,6 +131,89 @@ def test_decode_subject_missing() -> None:
     raw = b"From: user@example.com\r\n\r\nbody\r\n"
     msg = BytesParser().parsebytes(raw)
     assert decode_subject(msg) == ""
+
+
+def test_extract_conversation_id_from_headers_in_reply_to() -> None:
+    """Test extracting conversation ID from In-Reply-To header."""
+    conv_id = extract_conversation_id_from_headers(
+        references=[],
+        in_reply_to="<airut.abc12345.1700000000@example.com>",
+    )
+    assert conv_id == "abc12345"
+
+
+def test_extract_conversation_id_from_headers_references() -> None:
+    """Test extracting conversation ID from References header."""
+    conv_id = extract_conversation_id_from_headers(
+        references=[
+            "<original@user.com>",
+            "<airut.deadbeef.1700000000@example.com>",
+        ],
+    )
+    assert conv_id == "deadbeef"
+
+
+def test_extract_conversation_id_from_headers_prefers_in_reply_to() -> None:
+    """Test that In-Reply-To is preferred over References."""
+    conv_id = extract_conversation_id_from_headers(
+        references=["<airut.aaaaaaaa.1700000000@example.com>"],
+        in_reply_to="<airut.bbbbbbbb.1700000001@example.com>",
+    )
+    assert conv_id == "bbbbbbbb"
+
+
+def test_extract_conversation_id_from_headers_newest_reference() -> None:
+    """Test that newest reference (last in list) is preferred."""
+    conv_id = extract_conversation_id_from_headers(
+        references=[
+            "<airut.aaaaaaaa.1700000000@example.com>",
+            "<other@user.com>",
+            "<airut.bbbbbbbb.1700000001@example.com>",
+        ],
+    )
+    assert conv_id == "bbbbbbbb"
+
+
+def test_extract_conversation_id_from_headers_no_airut_ids() -> None:
+    """Test with no Airut Message-IDs in headers."""
+    conv_id = extract_conversation_id_from_headers(
+        references=["<msg1@user.com>", "<msg2@gmail.com>"],
+        in_reply_to="<msg3@outlook.com>",
+    )
+    assert conv_id is None
+
+
+def test_extract_conversation_id_from_headers_empty() -> None:
+    """Test with empty headers."""
+    conv_id = extract_conversation_id_from_headers(
+        references=[],
+        in_reply_to=None,
+    )
+    assert conv_id is None
+
+
+def test_extract_conversation_id_from_headers_invalid_format() -> None:
+    """Test with malformed Airut Message-IDs."""
+    # Too short conv_id
+    conv_id = extract_conversation_id_from_headers(
+        references=["<airut.abc.1700000000@example.com>"],
+    )
+    assert conv_id is None
+
+    # Non-hex characters
+    conv_id = extract_conversation_id_from_headers(
+        references=["<airut.ghijklmn.1700000000@example.com>"],
+    )
+    assert conv_id is None
+
+
+def test_extract_conversation_id_from_headers_various_domains() -> None:
+    """Test that domain portion doesn't affect extraction."""
+    conv_id = extract_conversation_id_from_headers(
+        references=[],
+        in_reply_to="<airut.abc12345.1700000000@mail.company.co.uk>",
+    )
+    assert conv_id == "abc12345"
 
 
 def test_extract_model_from_address_basic() -> None:

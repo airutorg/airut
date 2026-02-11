@@ -36,6 +36,7 @@ from lib.gateway.parsing import (
     extract_attachments,
     extract_body,
     extract_conversation_id,
+    extract_conversation_id_from_headers,
     extract_model_from_address,
 )
 from lib.gateway.service.email_replies import (
@@ -210,8 +211,12 @@ def process_message(
         )
         return False, None
 
-    # Extract conversation ID
-    conv_id = extract_conversation_id(subject)
+    # Extract conversation ID: headers first, then subject fallback
+    references = message.get("References", "").split()
+    in_reply_to = message.get("In-Reply-To")
+    conv_id = extract_conversation_id_from_headers(
+        references, in_reply_to
+    ) or extract_conversation_id(subject)
     conv_mgr = repo_handler.conversation_manager
     is_new = not conv_mgr.exists(conv_id) if conv_id else True
 

@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 # Pattern to match [ID:abc12345] in subject lines
 CONVERSATION_ID_PATTERN = re.compile(r"\[ID:([0-9a-f]{8})\]")
 
+# Pattern to extract conversation ID from structured Airut Message-IDs.
+# Matches: <airut.{8-hex-chars}.{timestamp}@domain>
+AIRUT_MESSAGE_ID_PATTERN = re.compile(r"<airut\.([0-9a-f]{8})\.\d+@")
+
 # Pattern to extract model name from email address with subaddressing
 # Matches: user+opus@domain.com, user+sonnet@domain.com, etc.
 MODEL_SUBADDRESS_PATTERN = re.compile(r"\+([a-zA-Z0-9_-]+)@")
@@ -81,6 +85,48 @@ def extract_conversation_id(subject: str) -> str | None:
         return conversation_id
 
     logger.debug("No conversation ID found in subject: %s", subject)
+    return None
+
+
+def extract_conversation_id_from_headers(
+    references: list[str],
+    in_reply_to: str | None = None,
+) -> str | None:
+    """Extract conversation ID from email threading headers.
+
+    Looks for structured Airut Message-IDs in the References and
+    In-Reply-To headers. Airut Message-IDs follow the pattern:
+    ``<airut.{conv_id}.{timestamp}@domain>``.
+
+    This is the primary method for conversation identification,
+    with subject-line ``[ID:...]`` tags as a fallback.
+
+    Args:
+        references: List of Message-IDs from the References header.
+        in_reply_to: Message-ID from the In-Reply-To header.
+
+    Returns:
+        8-character hex conversation ID, or None if not found.
+    """
+    # Check In-Reply-To first (most recent/direct reference),
+    # then References (newest last per RFC 5322).
+    candidates = []
+    if in_reply_to:
+        candidates.append(in_reply_to)
+    candidates.extend(reversed(references))
+
+    for ref in candidates:
+        match = AIRUT_MESSAGE_ID_PATTERN.search(ref)
+        if match:
+            conversation_id = match.group(1)
+            logger.debug(
+                "Extracted conversation ID from header: %s (from %s)",
+                conversation_id,
+                ref,
+            )
+            return conversation_id
+
+    logger.debug("No Airut conversation ID found in threading headers")
     return None
 
 

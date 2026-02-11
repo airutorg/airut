@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 
 from lib.container.conversation_layout import create_conversation_layout
 from lib.gateway.parsing import collect_outbox_files, decode_subject
-from lib.gateway.responder import SMTPSendError
+from lib.gateway.responder import SMTPSendError, generate_message_id
 
 
 if TYPE_CHECKING:
@@ -71,6 +71,11 @@ def send_reply(
         else []
     )
 
+    # Generate structured Message-ID for thread resolution
+    outgoing_message_id = generate_message_id(
+        conv_id, repo_handler.config.email_from
+    )
+
     # Collect attachments from outbox directory
     conv_mgr = repo_handler.conversation_manager
     conversation_dir = conv_mgr.get_conversation_dir(conv_id)
@@ -91,6 +96,7 @@ def send_reply(
             in_reply_to=message_id,
             references=references_list,
             attachments=attachments if attachments else None,
+            message_id=outgoing_message_id,
         )
 
         _clean_outbox(attachments, outbox_path)
@@ -107,6 +113,7 @@ def send_reply(
                 in_reply_to=message_id,
                 references=references_list,
                 attachments=attachments if attachments else None,
+                message_id=outgoing_message_id,
             )
 
             _clean_outbox(attachments, outbox_path)
@@ -194,6 +201,11 @@ def send_acknowledgment(
         body = "I've started working on this and will reply shortly."
         html_body = "I've started working on this and will reply shortly."
 
+    # Generate structured Message-ID for thread resolution
+    outgoing_message_id = generate_message_id(
+        conv_id, repo_handler.config.email_from
+    )
+
     try:
         repo_handler.responder.send_reply(
             to=sender,
@@ -202,6 +214,7 @@ def send_acknowledgment(
             in_reply_to=message_id,
             references=references_list,
             html_body=html_body,
+            message_id=outgoing_message_id,
         )
         logger.info(
             "Sent acknowledgment to %s for conversation %s", sender, conv_id
@@ -311,6 +324,11 @@ def send_rejection_reply(
             f"Conversation ID: {conv_id}"
         )
 
+    # Generate structured Message-ID for thread resolution
+    outgoing_message_id = generate_message_id(
+        conv_id, repo_handler.config.email_from
+    )
+
     try:
         repo_handler.responder.send_reply(
             to=sender,
@@ -319,6 +337,7 @@ def send_rejection_reply(
             in_reply_to=message_id,
             references=references_list,
             html_body=html_body,
+            message_id=outgoing_message_id,
         )
         logger.info(
             "Sent rejection reply to %s for conversation %s",

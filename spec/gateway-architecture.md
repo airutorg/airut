@@ -30,7 +30,7 @@ conversation isolation and container-based execution for security.
 IMAP Server
   -> EmailListener (poll/IDLE)
     -> SenderAuthenticator + SenderAuthorizer
-    -> Parse subject for [ID:xyz123]
+    -> Resolve conversation: headers first, then subject [ID:xyz123]
     -> ConversationManager
       -> Initialize/resume git checkout
       -> Save attachments to inbox/
@@ -123,9 +123,25 @@ has been received and is now being processed by opus."
 
 ### Conversation Identification
 
-- **Subject format**: `[ID:xyz123] Topic goes here`
-- **New conversation**: No `[ID:...]` tag -> generate new UUID
-- **Existing conversation**: Extract UUID from subject tag
+Conversations are identified using a two-layer approach:
+
+1. **Primary — Threading headers**: Outbound emails include a structured
+   `Message-ID` of the form `<airut.{conv_id}.{timestamp}@{domain}>`. When a
+   reply arrives, the `In-Reply-To` and `References` headers are scanned for
+   Airut Message-IDs to extract the conversation ID. This is standards-compliant
+   (RFC 5322), invisible to users, and preserved by all compliant MTAs.
+
+2. **Fallback — Subject tag**: The `[ID:xyz123]` tag in the subject line is
+   still included on all outbound emails and checked when no Airut Message-ID is
+   found in headers. This covers edge cases like forwarded messages where the
+   `References` chain may break.
+
+**Resolution order** for inbound messages:
+
+- Check `In-Reply-To` header for `<airut.{conv_id}.*>` pattern
+- Check `References` header (newest first) for same pattern
+- Fall back to `[ID:xyz123]` in subject
+- None found → new conversation
 
 ### Message Parsing
 
@@ -172,6 +188,8 @@ replied to. Trailing quote blocks with no reply after them are replaced with
 
 **Headers** for threading:
 
+- `Message-ID: <airut.{conv_id}.{timestamp}@{domain}>` (structured for
+  header-based conversation resolution on future replies)
 - `In-Reply-To: {original_message_id}`
 - `References: {original_references}, {original_message_id}`
 - `Subject: Re: [ID:xyz123] {original_subject}`
