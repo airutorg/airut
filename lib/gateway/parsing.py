@@ -6,7 +6,7 @@
 """Email message parsing utilities.
 
 This module provides utilities for parsing email messages, extracting
-conversation IDs, stripping quoted text, and handling attachments.
+conversation IDs and handling attachments.
 """
 
 import logging
@@ -81,58 +81,14 @@ def extract_model_from_address(to_address: str) -> str | None:
     return None
 
 
-def strip_quoted_text(body: str) -> str:
-    """Remove quoted text and signatures from email body.
-
-    Stripping rules:
-    - Remove lines starting with '>'
-    - Remove content after "-----Original Message-----"
-    - Remove content after "On [date], [name] wrote:" pattern
-    - Remove content after signature separator "--"
-
-    Args:
-        body: Raw email body text.
-
-    Returns:
-        Body with quotes removed.
-    """
-    lines = body.split("\n")
-    result_lines = []
-    original_line_count = len(lines)
-
-    for line in lines:
-        # Stop at signature separator
-        if line.strip() == "--":
-            break
-
-        # Stop at original message divider
-        if "-----Original Message-----" in line:
-            break
-
-        # Stop at "On [date], [name] wrote:" pattern
-        if re.match(r"^On .+, .+ wrote:$", line.strip()):
-            break
-
-        # Skip quoted lines
-        if line.startswith(">"):
-            continue
-
-        result_lines.append(line)
-
-    stripped_body = "\n".join(result_lines).strip()
-    removed_lines = original_line_count - len(result_lines)
-
-    if removed_lines > 0:
-        logger.debug("Stripped %d quoted/signature lines", removed_lines)
-
-    return stripped_body
-
-
 def extract_body(message: Message) -> str:
     """Extract plain text body from email message.
 
-    Prefers text/plain parts. Falls back to converting text/html to plain
-    text when no text/plain part is available (common with Outlook).
+    Prefers text/html when available, stripping quoted replies using
+    client-specific HTML markers before converting to plain text. This is
+    more reliable than text/plain quote stripping because email clients
+    (Outlook, Gmail, etc.) use well-defined HTML structures to wrap quoted
+    content. Falls back to text/plain when no HTML part is available.
 
     Args:
         message: Parsed email message.
@@ -149,7 +105,22 @@ def extract_body(message: Message) -> str:
 
         logger.debug("Multipart message with parts: %s", ", ".join(parts))
 
-        # First pass: look for text/plain
+        # First pass: prefer text/html for reliable quote stripping
+        for part in message.walk():
+            if part.get_content_type() == "text/html":
+                payload = part.get_payload(decode=True)
+                if payload:
+                    html_body = payload.decode("utf-8", errors="replace")  # type: ignore[union-attr]
+                    body = html_to_text(html_body, strip_quotes=True)
+                    logger.debug(
+                        "Extracted body from HTML part (%d chars HTML"
+                        " -> %d chars text)",
+                        len(html_body),
+                        len(body),
+                    )
+                    return body
+
+        # Second pass: fall back to text/plain
         for part in message.walk():
             if part.get_content_type() == "text/plain":
                 payload = part.get_payload(decode=True)
@@ -157,21 +128,6 @@ def extract_body(message: Message) -> str:
                     body = payload.decode("utf-8", errors="replace")  # type: ignore[union-attr]
                     logger.debug(
                         "Extracted body from multipart message (%d chars)",
-                        len(body),
-                    )
-                    return body
-
-        # Second pass: fall back to text/html
-        for part in message.walk():
-            if part.get_content_type() == "text/html":
-                payload = part.get_payload(decode=True)
-                if payload:
-                    html_body = payload.decode("utf-8", errors="replace")  # type: ignore[union-attr]
-                    body = html_to_text(html_body)
-                    logger.debug(
-                        "Extracted body from HTML part (%d chars HTML"
-                        " -> %d chars text)",
-                        len(html_body),
                         len(body),
                     )
                     return body
@@ -183,7 +139,7 @@ def extract_body(message: Message) -> str:
         if payload:
             raw = payload.decode("utf-8", errors="replace")  # type: ignore[union-attr]
             if content_type == "text/html":
-                body = html_to_text(raw)
+                body = html_to_text(raw, strip_quotes=True)
                 logger.debug(
                     "Converted HTML body to text (%d chars HTML"
                     " -> %d chars text)",

@@ -36,7 +36,6 @@ from lib.gateway.parsing import (
     extract_body,
     extract_conversation_id,
     extract_model_from_address,
-    strip_quoted_text,
 )
 from lib.gateway.service.email_replies import (
     send_acknowledgment,
@@ -215,9 +214,8 @@ def process_message(
     conv_mgr = repo_handler.conversation_manager
     is_new = not conv_mgr.exists(conv_id) if conv_id else True
 
-    # Extract body and strip quotes
-    raw_body = extract_body(message)
-    clean_body = strip_quoted_text(raw_body)
+    # Extract body (HTML quotes stripped via strip_html_quotes in extract_body)
+    clean_body = extract_body(message)
 
     if not clean_body.strip():
         logger.warning("Repo '%s': empty message body", repo_id)

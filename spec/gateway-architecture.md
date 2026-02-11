@@ -131,19 +131,27 @@ has been received and is now being processed by opus."
 
 **Body extraction** from MIME messages:
 
-- Prefer `text/plain` parts in multipart messages
-- Fall back to `text/html` if no `text/plain` is available (common with Outlook)
+- Prefer `text/html` parts in multipart messages for reliable quote handling
+- Fall back to `text/plain` when no HTML part is available
 - HTML is converted to plain text with markdown-like formatting (bold, italic,
   links, tables, lists, headings, code blocks) via `lib/html_to_text`
 - Non-multipart messages use the content type to decide: `text/html` is
   converted, everything else is used as-is
 
-**Quote stripping** removes:
+**Quote stripping** uses client-specific HTML structural markers (more reliable
+than text-based heuristics) to identify quoted reply containers:
 
-- Lines starting with `>`
-- Quoted blocks after dividers (`-----Original Message-----`,
-  `On [Date], [User] wrote:`)
-- Standard email client signatures (`--`)
+- Outlook web/mobile: `<div id="mail-editor-reference-message-container">`
+- Outlook desktop: `<div id="divRplyFwdMsg">`
+- Gmail: `<div class="gmail_quote">`
+- Yahoo: `<div class="yahoo_quoted">`
+- Thunderbird/Apple Mail: `<blockquote type="cite">`
+- Thunderbird: `<div class="moz-cite-prefix">`
+
+Quote blocks followed by non-quote content (inline replies) are rendered as
+markdown blockquotes (`> ` prefixed lines) so the LLM sees the context the user
+replied to. Trailing quote blocks with no reply after them are replaced with
+`[quoted text removed]`.
 
 **Attachment handling**:
 
@@ -397,7 +405,8 @@ task automatically runs with those changes. Persistent mounts (`/workspace`,
 ### Why Quote Stripping?
 
 - **Token efficiency**: Prevent exponential growth of quoted history
-- **Focus**: Claude only sees new instruction, not entire thread
+- **Focus**: Claude sees new instructions prominently, with quoted context only
+  when the user replied inline to specific points
 - **Context preservation**: Email headers maintain threading for user
 
 ## Parallel Execution

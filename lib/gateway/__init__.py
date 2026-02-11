@@ -35,7 +35,6 @@ from lib.gateway.parsing import (
     extract_attachments,
     extract_body,
     extract_conversation_id,
-    strip_quoted_text,
 )
 from lib.gateway.responder import (
     EmailResponder,
@@ -68,7 +67,6 @@ __all__ = [
     "extract_attachments",
     "extract_body",
     "extract_conversation_id",
-    "strip_quoted_text",
     # responder
     "EmailResponder",
     "SMTPSendError",

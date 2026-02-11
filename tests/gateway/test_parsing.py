@@ -18,7 +18,6 @@ from lib.gateway.parsing import (
     extract_body,
     extract_conversation_id,
     extract_model_from_address,
-    strip_quoted_text,
 )
 
 
@@ -112,85 +111,6 @@ def test_extract_model_from_address_empty() -> None:
     assert model is None
 
 
-def test_strip_quoted_text_basic() -> None:
-    """Test stripping basic quoted text."""
-    body = """This is my reply.
-
-> This is quoted text.
-> More quoted text.
-"""
-    result = strip_quoted_text(body)
-    assert result == "This is my reply."
-
-
-def test_strip_quoted_text_signature() -> None:
-    """Test stripping signature separator."""
-    body = """This is my reply.
-
---
-My Name
-Company Inc.
-"""
-    result = strip_quoted_text(body)
-    assert result == "This is my reply."
-
-
-def test_strip_quoted_text_original_message() -> None:
-    """Test stripping after -----Original Message-----."""
-    body = """This is my reply.
-
------Original Message-----
-From: someone@example.com
-Sent: Yesterday
-"""
-    result = strip_quoted_text(body)
-    assert result == "This is my reply."
-
-
-def test_strip_quoted_text_on_date_wrote() -> None:
-    """Test stripping after 'On [date], [name] wrote:' pattern."""
-    body = """This is my reply.
-
-On Jan 12, 2026, John Doe wrote:
-> Previous message here.
-"""
-    result = strip_quoted_text(body)
-    assert result == "This is my reply."
-
-
-def test_strip_quoted_text_complex() -> None:
-    """Test stripping with multiple quote patterns."""
-    body = """This is my reply.
-Another line.
-
-> First quote
-> Second quote
-
-On Jan 12, 2026, Someone wrote:
-> > Nested quote
-> Reply to nested quote
-"""
-    result = strip_quoted_text(body)
-    assert result == "This is my reply.\nAnother line."
-
-
-def test_strip_quoted_text_empty() -> None:
-    """Test stripping empty body."""
-    body = ""
-    result = strip_quoted_text(body)
-    assert result == ""
-
-
-def test_strip_quoted_text_only_quotes() -> None:
-    """Test stripping body with only quotes."""
-    body = """> Quote 1
-> Quote 2
-> Quote 3
-"""
-    result = strip_quoted_text(body)
-    assert result == ""
-
-
 def test_extract_body_plain_text() -> None:
     """Test extracting body from plain text message."""
     msg = MIMEText("This is the body content.")
@@ -199,7 +119,7 @@ def test_extract_body_plain_text() -> None:
 
 
 def test_extract_body_multipart() -> None:
-    """Test extracting body from multipart message."""
+    """Test extracting body from multipart message prefers HTML."""
     msg = MIMEMultipart()
 
     text_part = MIMEText("This is the text body.")
@@ -209,10 +129,10 @@ def test_extract_body_multipart() -> None:
     msg.attach(html_part)
 
     body = extract_body(msg)
-    assert body == "This is the text body."
+    assert "This is HTML" in body
 
 
-def test_extract_body_multipart_html_fallback() -> None:
+def test_extract_body_multipart_html_only() -> None:
     """Test extracting body from multipart with only text/html."""
     msg = MIMEMultipart()
 
@@ -223,8 +143,8 @@ def test_extract_body_multipart_html_fallback() -> None:
     assert "Only **HTML** here" in body
 
 
-def test_extract_body_multipart_prefers_text_plain() -> None:
-    """Test that text/plain is preferred over text/html in multipart."""
+def test_extract_body_multipart_prefers_html() -> None:
+    """Test that text/html is preferred over text/plain in multipart."""
     msg = MIMEMultipart()
 
     text_part = MIMEText("Plain text version.")
@@ -234,7 +154,38 @@ def test_extract_body_multipart_prefers_text_plain() -> None:
     msg.attach(html_part)
 
     body = extract_body(msg)
-    assert body == "Plain text version."
+    assert "HTML version." in body
+
+
+def test_extract_body_multipart_text_plain_fallback() -> None:
+    """Test falling back to text/plain when no HTML part is available."""
+    msg = MIMEMultipart()
+
+    text_part = MIMEText("Only plain text here.")
+    msg.attach(text_part)
+
+    body = extract_body(msg)
+    assert body == "Only plain text here."
+
+
+def test_extract_body_multipart_strips_html_quotes() -> None:
+    """Test that HTML quotes are stripped from multipart HTML body."""
+    msg = MIMEMultipart()
+
+    html_part = MIMEText(
+        "<html><body>"
+        "<p>My reply</p>"
+        '<div id="mail-editor-reference-message-container">'
+        "<p>Quoted previous message</p>"
+        "</div>"
+        "</body></html>",
+        "html",
+    )
+    msg.attach(html_part)
+
+    body = extract_body(msg)
+    assert "My reply" in body
+    assert "Quoted previous message" not in body
 
 
 def test_extract_body_html_only_message() -> None:
@@ -243,6 +194,23 @@ def test_extract_body_html_only_message() -> None:
 
     body = extract_body(msg)
     assert "Hello *world*" in body
+
+
+def test_extract_body_html_only_strips_quotes() -> None:
+    """Test that quotes are stripped from non-multipart HTML message."""
+    msg = MIMEText(
+        "<html><body>"
+        "<p>Reply text</p>"
+        '<div class="gmail_quote">'
+        "<p>Original quoted message</p>"
+        "</div>"
+        "</body></html>",
+        "html",
+    )
+
+    body = extract_body(msg)
+    assert "Reply text" in body
+    assert "Original quoted message" not in body
 
 
 def test_extract_body_empty() -> None:
