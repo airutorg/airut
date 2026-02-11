@@ -11,10 +11,14 @@ via SMTP with proper threading headers.
 
 import logging
 import mimetypes
+import re
+import secrets
 import smtplib
+import time
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import parseaddr
 
 from lib.gateway.config import RepoServerConfig
 from lib.gateway.microsoft_oauth2 import (
@@ -25,6 +29,52 @@ from lib.markdown import markdown_to_html
 
 
 logger = logging.getLogger(__name__)
+
+# Pattern to extract domain from an email address.
+_EMAIL_DOMAIN_RE = re.compile(r"@([\w.-]+)")
+
+
+def _extract_domain(email_from: str) -> str:
+    """Extract domain from an email From address.
+
+    Handles both bare addresses and "Display Name <addr>" format.
+
+    Args:
+        email_from: The From address (may include display name).
+
+    Returns:
+        Domain portion of the email address, or "localhost" as fallback.
+    """
+    _, addr = parseaddr(email_from)
+    match = _EMAIL_DOMAIN_RE.search(addr)
+    return match.group(1) if match else "localhost"
+
+
+def generate_message_id(conv_id: str, email_from: str) -> str:
+    """Generate a structured Message-ID encoding the conversation ID.
+
+    Format: ``<airut.{conv_id}.{timestamp}.{nonce}@{domain}>``
+
+    The conversation ID can be extracted from this Message-ID by other
+    Airut instances or the same instance when processing reply headers
+    (In-Reply-To / References).
+
+    A 4-character random nonce ensures uniqueness when multiple emails
+    are sent for the same conversation within the same second (e.g.,
+    acknowledgment followed by an immediate rejection).
+
+    Args:
+        conv_id: 8-character hex conversation ID.
+        email_from: The From address used for outbound mail (used to
+            derive the domain portion of the Message-ID).
+
+    Returns:
+        RFC 5322 compliant Message-ID string.
+    """
+    domain = _extract_domain(email_from)
+    timestamp = int(time.time())
+    nonce = secrets.token_hex(2)
+    return f"<airut.{conv_id}.{timestamp}.{nonce}@{domain}>"
 
 
 class SMTPSendError(Exception):
@@ -71,6 +121,7 @@ class EmailResponder:
         references: list[str] | None = None,
         html_body: str | None = None,
         attachments: list[tuple[str, bytes]] | None = None,
+        message_id: str | None = None,
     ) -> None:
         """Send email reply with threading headers.
 
@@ -87,6 +138,9 @@ class EmailResponder:
             html_body: Optional pre-rendered HTML body. If not provided,
                 body is converted from markdown to HTML.
             attachments: Optional list of (filename, content) tuples to attach.
+            message_id: Explicit Message-ID for this outgoing message.
+                When set, encodes the conversation ID for header-based
+                thread resolution on future replies.
 
         Raises:
             SMTPSendError: If sending fails.
@@ -102,6 +156,10 @@ class EmailResponder:
             msg["From"] = self.config.email_from
             msg["To"] = to
             msg["Subject"] = subject
+
+            # Set explicit Message-ID if provided
+            if message_id:
+                msg["Message-ID"] = message_id
 
             # Threading headers
             if in_reply_to:

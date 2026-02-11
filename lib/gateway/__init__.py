@@ -36,10 +36,12 @@ from lib.gateway.parsing import (
     extract_attachments,
     extract_body,
     extract_conversation_id,
+    extract_conversation_id_from_headers,
 )
 from lib.gateway.responder import (
     EmailResponder,
     SMTPSendError,
+    generate_message_id,
 )
 from lib.gateway.security import (
     SecurityValidationError,
@@ -69,9 +71,11 @@ __all__ = [
     "extract_attachments",
     "extract_body",
     "extract_conversation_id",
+    "extract_conversation_id_from_headers",
     # responder
     "EmailResponder",
     "SMTPSendError",
+    "generate_message_id",
     # security
     "SecurityValidationError",
     "SenderAuthenticator",

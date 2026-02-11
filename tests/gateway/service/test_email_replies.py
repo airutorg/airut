@@ -298,3 +298,72 @@ class TestSendReply:
         send_reply(handler, msg, "conv1", "body")
         call_kwargs = handler.responder.send_reply.call_args[1]
         assert call_kwargs["attachments"] is None
+
+    def test_structured_message_id(self, email_config, tmp_path: Path) -> None:
+        svc, handler = make_service(email_config, tmp_path)
+        handler.conversation_manager.get_workspace_path.return_value = tmp_path
+        msg = make_message()
+        send_reply(handler, msg, "aabb1122", "body")
+        call_kwargs = handler.responder.send_reply.call_args[1]
+        mid = call_kwargs["message_id"]
+        assert mid.startswith("<airut.aabb1122.")
+        assert mid.endswith("@example.com>")
+
+
+class TestStructuredMessageId:
+    """Tests for structured Message-ID generation on all reply types."""
+
+    def test_acknowledgment_has_structured_id(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, dashboard_base_url=None)
+        msg = make_message()
+        send_acknowledgment(
+            handler, msg, "aabb1122", "sonnet", svc.global_config
+        )
+        call_kwargs = handler.responder.send_reply.call_args[1]
+        mid = call_kwargs["message_id"]
+        assert mid.startswith("<airut.aabb1122.")
+        assert "@example.com>" in mid
+
+    def test_rejection_has_structured_id(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, dashboard_base_url=None)
+        msg = make_message()
+        send_rejection_reply(
+            handler, msg, "aabb1122", "Busy", svc.global_config
+        )
+        call_kwargs = handler.responder.send_reply.call_args[1]
+        mid = call_kwargs["message_id"]
+        assert mid.startswith("<airut.aabb1122.")
+        assert "@example.com>" in mid
+
+    def test_retry_preserves_message_id(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """Test that SMTP retry uses the same Message-ID."""
+        from lib.gateway import SMTPSendError
+
+        svc, handler = make_service(email_config, tmp_path)
+        handler.conversation_manager.get_workspace_path.return_value = tmp_path
+
+        # First call fails, second succeeds
+        handler.responder.send_reply.side_effect = [
+            SMTPSendError("fail"),
+            None,
+        ]
+        msg = make_message()
+        send_reply(handler, msg, "aabb1122", "body")
+        assert handler.responder.send_reply.call_count == 2
+        # Both calls should use the same message_id
+        first_mid = handler.responder.send_reply.call_args_list[0][1][
+            "message_id"
+        ]
+        second_mid = handler.responder.send_reply.call_args_list[1][1][
+            "message_id"
+        ]
+        assert first_mid == second_mid
+        assert first_mid.startswith("<airut.aabb1122.")

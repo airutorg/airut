@@ -10,7 +10,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lib.gateway.responder import EmailResponder, SMTPSendError
+from lib.gateway.responder import (
+    EmailResponder,
+    SMTPSendError,
+    _extract_domain,
+    generate_message_id,
+)
 
 
 def test_responder_init(email_config):
@@ -490,3 +495,90 @@ def test_send_reply_oauth2_token_error_raises_smtp_send_error(
                 subject="Test",
                 body="OAuth2 reply.",
             )
+
+
+def test_extract_domain_bare_address() -> None:
+    """Test domain extraction from bare email address."""
+    assert _extract_domain("user@example.com") == "example.com"
+
+
+def test_extract_domain_display_name() -> None:
+    """Test domain extraction from address with display name."""
+    assert _extract_domain("Test Service <test@example.com>") == "example.com"
+
+
+def test_extract_domain_complex() -> None:
+    """Test domain extraction from multi-level domain."""
+    assert (
+        _extract_domain("Bot <bot@mail.company.co.uk>") == "mail.company.co.uk"
+    )
+
+
+def test_extract_domain_fallback() -> None:
+    """Test domain extraction falls back to localhost."""
+    assert _extract_domain("not-an-email") == "localhost"
+
+
+def test_generate_message_id_format() -> None:
+    """Test structured Message-ID follows expected format."""
+    msg_id = generate_message_id("abc12345", "bot@example.com")
+    assert msg_id.startswith("<airut.abc12345.")
+    assert msg_id.endswith("@example.com>")
+
+
+def test_generate_message_id_with_display_name() -> None:
+    """Test structured Message-ID extracts domain from display name addr."""
+    msg_id = generate_message_id("deadbeef", "Test Service <test@company.org>")
+    assert "@company.org>" in msg_id
+    assert "<airut.deadbeef." in msg_id
+
+
+def test_generate_message_id_unique_nonce() -> None:
+    """Test that nonce ensures uniqueness across rapid calls."""
+    ids = {
+        generate_message_id("abc12345", "bot@example.com") for _ in range(20)
+    }
+    # With 4-hex-char nonce (65536 values), 20 calls within the
+    # same second should produce distinct IDs.
+    assert len(ids) == 20
+
+
+def test_send_reply_with_message_id(email_config):
+    """Test that explicit Message-ID is set on outgoing email."""
+    responder = EmailResponder(email_config)
+
+    with patch("smtplib.SMTP") as mock_smtp_class:
+        mock_server = MagicMock()
+        mock_smtp_class.return_value.__enter__.return_value = mock_server
+
+        responder.send_reply(
+            to="recipient@example.com",
+            subject="Test",
+            body="Body",
+            message_id="<airut.abc12345.1700000000@example.com>",
+        )
+
+        sent_message = mock_server.send_message.call_args[0][0]
+        assert (
+            sent_message["Message-ID"]
+            == "<airut.abc12345.1700000000@example.com>"
+        )
+
+
+def test_send_reply_without_message_id(email_config):
+    """Test that no explicit Message-ID leaves it to the mail library."""
+    responder = EmailResponder(email_config)
+
+    with patch("smtplib.SMTP") as mock_smtp_class:
+        mock_server = MagicMock()
+        mock_smtp_class.return_value.__enter__.return_value = mock_server
+
+        responder.send_reply(
+            to="recipient@example.com",
+            subject="Test",
+            body="Body",
+        )
+
+        sent_message = mock_server.send_message.call_args[0][0]
+        # When no message_id is provided, we don't set one explicitly
+        assert sent_message.get("Message-ID") is None
