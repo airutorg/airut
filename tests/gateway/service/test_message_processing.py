@@ -197,10 +197,10 @@ class TestProcessMessage:
         self, email_config: Any, tmp_path: Path
     ) -> None:
         svc, handler, _ = self._setup_svc(email_config, tmp_path)
-        msg = make_message(body="> quoted only\n> more quotes")
+        msg = make_message(body="")
 
         with patch(
-            "lib.gateway.service.message_processing.strip_quoted_text",
+            "lib.gateway.service.message_processing.extract_body",
             return_value="",
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)

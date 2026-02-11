@@ -40,7 +40,6 @@ from lib.gateway.parsing import (
     extract_attachments,
     extract_body,
     extract_conversation_id,
-    strip_quoted_text,
 )
 
 
@@ -93,9 +92,8 @@ class TestEndToEndFlow:
         inbox_path.mkdir(exist_ok=True)
         filenames = extract_attachments(message, inbox_path)
 
-        # Extract and clean body
-        body = extract_body(message)
-        clean_body = strip_quoted_text(body)
+        # Extract body (HTML quotes stripped in extract_body)
+        clean_body = extract_body(message)
 
         # Build prompt
         if filenames:
@@ -345,13 +343,13 @@ class TestErrorRecovery:
                 body="Test body",
             )
 
-    def test_empty_body_handling(
+    def test_plain_text_body_passed_through(
         self, email_config: RepoServerConfig, sample_email_message
     ):
-        """Test handling of empty message body after quote stripping."""
+        """Test that plain text body passes through without stripping."""
         from email.parser import BytesParser
 
-        # Create message with only quoted text
+        # Create message with quoted text (no HTML part)
         sample_bytes = b"""From: user@example.com
 To: claude@example.com
 Subject: Re: Previous discussion
@@ -362,12 +360,9 @@ Message-ID: <empty123@example.com>
 """
         message = BytesParser().parsebytes(sample_bytes)
 
-        # Extract and strip body
-        raw_body = extract_body(message)
-        clean_body = strip_quoted_text(raw_body)
-
-        # Body should be empty after stripping
-        assert clean_body.strip() == ""
+        # Plain text body passes through as-is (LLM handles context)
+        body = extract_body(message)
+        assert "> On Jan 12, 2026, Claude wrote:" in body
 
     def test_conversation_age_calculation(
         self, email_config: RepoServerConfig, master_repo: Path
