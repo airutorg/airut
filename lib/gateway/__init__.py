@@ -32,6 +32,7 @@ from lib.gateway.listener import (
 )
 from lib.gateway.parsing import (
     ParseError,
+    decode_subject,
     extract_attachments,
     extract_body,
     extract_conversation_id,
@@ -64,6 +65,7 @@ __all__ = [
     "IMAPIdleError",
     # parsing
     "ParseError",
+    "decode_subject",
     "extract_attachments",
     "extract_body",
     "extract_conversation_id",

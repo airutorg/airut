@@ -33,7 +33,7 @@ from lib.dashboard import (
 )
 from lib.dashboard.tracker import BootPhase, BootState, RepoState, RepoStatus
 from lib.gateway.config import ServerConfig
-from lib.gateway.parsing import extract_conversation_id
+from lib.gateway.parsing import decode_subject, extract_conversation_id
 from lib.gateway.service.email_replies import send_rejection_reply
 from lib.gateway.service.message_processing import (
     process_message,
@@ -481,7 +481,7 @@ class EmailGatewayService:
             logger.error("Executor pool not initialized")
             return False
 
-        subject = message.get("Subject", "(no subject)")
+        subject = decode_subject(message) or "(no subject)"
         sender = message.get("From", "")
         conv_id = extract_conversation_id(subject)
         repo_id = repo_handler.config.repo_id
@@ -549,7 +549,7 @@ class EmailGatewayService:
         """Worker thread entry point for message processing."""
         self.tracker.start_task(task_id)
 
-        subject = message.get("Subject", "")
+        subject = decode_subject(message)
         conv_id = extract_conversation_id(subject)
 
         success = False
