@@ -14,6 +14,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from lib.claude_output import StreamEvent
+from lib.claude_output.types import EventType
 from lib.container.executor import (
     ClaudeExecutor,
     ContainerTimeoutError,
@@ -124,7 +126,6 @@ class TestClaudeExecutor:
         docker_dir: Path,
         tmp_path: Path,
         sample_streaming_output: str,
-        sample_claude_output: dict[str, Any],
     ) -> None:
         """execute() returns ExecutionResult with parsed output."""
         executor = _make_executor(mock_mirror, docker_dir)
@@ -145,7 +146,11 @@ class TestClaudeExecutor:
         )
 
         assert result.success is True
-        assert result.output == sample_claude_output
+        assert result.output is not None
+        assert len(result.output) == 3
+        assert result.output[0].event_type == EventType.SYSTEM
+        assert result.output[1].event_type == EventType.ASSISTANT
+        assert result.output[2].event_type == EventType.RESULT
         assert result.error_message == ""
         assert result.exit_code == 0
 
@@ -367,7 +372,12 @@ class TestClaudeExecutor:
 
         assert result.success is True
         assert result.output is not None
-        assert result.output["result"] == "Done"
+        # Find the result event
+        result_events = [
+            e for e in result.output if e.event_type == EventType.RESULT
+        ]
+        assert len(result_events) == 1
+        assert result_events[0].extra.get("result") == "Done"
         assert result.exit_code == 0
 
     @patch("lib.container.executor.subprocess.Popen")
@@ -432,40 +442,6 @@ class TestClaudeExecutor:
         assert result.success is False
         assert result.output is None
         assert "Failed to parse Claude JSON output" in result.error_message
-        assert result.exit_code == 0
-
-    @patch("lib.container.executor.subprocess.Popen")
-    def test_execute_parser_returns_non_dict(
-        self,
-        mock_popen: MagicMock,
-        mock_mirror: MagicMock,
-        docker_dir: Path,
-        tmp_path: Path,
-    ) -> None:
-        """Handle case where parser returns non-dict (defensive check)."""
-        executor = _make_executor(mock_mirror, docker_dir)
-
-        session_git_repo = tmp_path / "workspace"
-        session_git_repo.mkdir()
-
-        mock_process = create_mock_popen(
-            returncode=0, stdout='{"result": "something"}', stderr=""
-        )
-        mock_popen.return_value = mock_process
-
-        with patch.object(
-            executor, "_parse_claude_output", return_value="not a dict"
-        ):
-            result = executor.execute(
-                session_git_repo,
-                "Test prompt",
-                mounts=SAMPLE_MOUNTS,
-                image_tag="airut:test",
-            )
-
-        assert result.success is False
-        assert result.output is None
-        assert "Parser error: got str instead of dict" in result.error_message
         assert result.exit_code == 0
 
     @patch("lib.container.executor.subprocess.Popen")
@@ -792,54 +768,11 @@ class TestClaudeExecutor:
         ]:
             assert name not in env_names
 
-    def test_parse_claude_output_valid_json(
-        self,
-        mock_mirror: MagicMock,
-        docker_dir: Path,
-        sample_streaming_output: str,
-        sample_claude_output: dict[str, Any],
-    ) -> None:
-        """_parse_claude_output() parses valid streaming JSON."""
-        executor = _make_executor(mock_mirror, docker_dir)
-
-        result = executor._parse_claude_output(sample_streaming_output)
-
-        assert result == sample_claude_output
-
-    def test_parse_claude_output_invalid_json(
-        self, mock_mirror: MagicMock, docker_dir: Path
-    ) -> None:
-        """_parse_claude_output() returns None on invalid JSON."""
-        executor = _make_executor(mock_mirror, docker_dir)
-
-        result = executor._parse_claude_output("Not valid JSON")
-
-        assert result is None
-
-    def test_parse_claude_output_with_empty_lines(
-        self, mock_mirror: MagicMock, docker_dir: Path
-    ) -> None:
-        """_parse_claude_output() handles empty lines in streaming output."""
-        executor = _make_executor(mock_mirror, docker_dir)
-
-        streaming_with_blanks = (
-            '{"type": "system", "subtype": "init"}\n'
-            "\n"
-            '{"type": "result", "subtype": "success", "session_id": "s1"}\n'
-            "   \n"
-        )
-        result = executor._parse_claude_output(streaming_with_blanks)
-
-        assert result is not None
-        assert len(result["events"]) == 2
-        assert result["events"][0]["type"] == "system"
-        assert result["events"][1]["type"] == "result"
-
     def test_execution_result_dataclass(self) -> None:
         """Test ExecutionResult dataclass creation."""
         result = ExecutionResult(
             success=True,
-            output={"test": "data"},
+            output=[],
             error_message="",
             stdout="output",
             stderr="",
@@ -847,7 +780,7 @@ class TestClaudeExecutor:
         )
 
         assert result.success is True
-        assert result.output == {"test": "data"}
+        assert result.output == []
         assert result.error_message == ""
         assert result.stdout == "output"
         assert result.stderr == ""
@@ -1604,9 +1537,9 @@ class TestStopExecution:
         )
         mock_popen.return_value = mock_process
 
-        events_received = []
+        events_received: list[StreamEvent] = []
 
-        def callback(event: dict) -> None:
+        def callback(event: StreamEvent) -> None:
             events_received.append(event)
 
         executor.execute(
@@ -1618,6 +1551,6 @@ class TestStopExecution:
         )
 
         assert len(events_received) == 3
-        assert events_received[0]["type"] == "system"
-        assert events_received[1]["type"] == "assistant"
-        assert events_received[2]["type"] == "result"
+        assert events_received[0].event_type == EventType.SYSTEM
+        assert events_received[1].event_type == EventType.ASSISTANT
+        assert events_received[2].event_type == EventType.RESULT

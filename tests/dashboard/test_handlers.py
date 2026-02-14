@@ -11,9 +11,16 @@ from pathlib import Path
 import pytest
 from werkzeug.test import Client
 
+from lib.claude_output import StreamEvent, parse_stream_events
 from lib.container.session import SessionStore
 from lib.dashboard.server import DashboardServer
 from lib.dashboard.tracker import TaskState, TaskStatus, TaskTracker
+
+
+def _parse_events(*raw_events: dict) -> list[StreamEvent]:
+    """Parse raw event dicts into typed StreamEvents."""
+    stdout = "\n".join(json.dumps(e) for e in raw_events)
+    return parse_stream_events(stdout)
 
 
 class TestSessionDataIntegration:
@@ -62,14 +69,19 @@ class TestSessionDataIntegration:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.0123,
-                "num_turns": 3,
-                "is_error": False,
-                "usage": {"input_tokens": 100, "output_tokens": 50},
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.0123,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": {"input_tokens": 100, "output_tokens": 50},
+                    "result": "",
+                }
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -93,14 +105,19 @@ class TestSessionDataIntegration:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_xyz789abcdef1234567890",
-                "duration_ms": 12345,
-                "total_cost_usd": 0.0456,
-                "num_turns": 5,
-                "is_error": False,
-                "usage": {"input_tokens": 200, "output_tokens": 100},
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_xyz789abcdef1234567890",
+                    "duration_ms": 12345,
+                    "total_cost_usd": 0.0456,
+                    "num_turns": 5,
+                    "is_error": False,
+                    "usage": {"input_tokens": 200, "output_tokens": 100},
+                    "result": "",
+                }
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -148,14 +165,19 @@ class TestSessionDataIntegration:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.0123,
-                "num_turns": 3,
-                "is_error": False,
-                "usage": {"input_tokens": 100},
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.0123,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": {"input_tokens": 100},
+                    "result": "",
+                }
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -240,14 +262,19 @@ class TestSessionDataIntegration:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.0123,
-                "num_turns": 3,
-                "is_error": False,
-                "usage": {"input_tokens": 100, "output_tokens": 50},
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.0123,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": {"input_tokens": 100, "output_tokens": 50},
+                    "result": "",
+                }
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -306,14 +333,19 @@ class TestSessionDataIntegration:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_error",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.001,
-                "num_turns": 1,
-                "is_error": True,
-                "usage": {},
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "error",
+                    "session_id": "sess_error",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.001,
+                    "num_turns": 1,
+                    "is_error": True,
+                    "usage": {},
+                    "result": "",
+                }
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -337,25 +369,35 @@ class TestSessionDataIntegration:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_1",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.01,
-                "num_turns": 2,
-                "is_error": False,
-                "usage": {},
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_1",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 2,
+                    "is_error": False,
+                    "usage": {},
+                    "result": "",
+                }
+            ),
         )
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_2",
-                "duration_ms": 8000,
-                "total_cost_usd": 0.025,
-                "num_turns": 4,
-                "is_error": False,
-                "usage": {},
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_2",
+                    "duration_ms": 8000,
+                    "total_cost_usd": 0.025,
+                    "num_turns": 4,
+                    "is_error": False,
+                    "usage": {},
+                    "result": "",
+                }
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -390,14 +432,19 @@ class TestSessionDataIntegration:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.05,
-                "num_turns": 10,
-                "is_error": False,
-                "usage": {"input_tokens": 500},
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 10,
+                    "is_error": False,
+                    "usage": {"input_tokens": 500},
+                    "result": "",
+                }
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -431,32 +478,30 @@ class TestSessionDataIntegration:
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        # Create session with nested usage data (like real Claude responses)
+        # Create session with usage data matching real Claude responses.
+        # The Usage typed object only stores the 4 token fields; nested
+        # objects like server_tool_use and service_tier are not preserved.
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.05,
-                "num_turns": 10,
-                "is_error": False,
-                "usage": {
-                    "input_tokens": 19,
-                    "cache_creation_input_tokens": 14874,
-                    "cache_read_input_tokens": 427112,
-                    "output_tokens": 2818,
-                    "server_tool_use": {
-                        "web_search_requests": 0,
-                        "web_fetch_requests": 0,
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 10,
+                    "is_error": False,
+                    "usage": {
+                        "input_tokens": 19,
+                        "cache_creation_input_tokens": 14874,
+                        "cache_read_input_tokens": 427112,
+                        "output_tokens": 2818,
                     },
-                    "service_tier": "standard",
-                    "cache_creation": {
-                        "ephemeral_1h_input_tokens": 0,
-                        "ephemeral_5m_input_tokens": 14874,
-                    },
-                },
-            },
+                    "result": "",
+                }
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -492,14 +537,19 @@ class TestSessionDataIntegration:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.05,
-                "num_turns": 3,
-                "is_error": False,
-                "usage": {},
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": {},
+                    "result": "",
+                }
+            ),
             request_text="Please help me with this task",
             response_text="I'll help you with that task.",
         )
@@ -528,14 +578,19 @@ class TestSessionDataIntegration:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.05,
-                "num_turns": 3,
-                "is_error": False,
-                "usage": {},
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": {},
+                    "result": "",
+                }
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -558,14 +613,19 @@ class TestSessionDataIntegration:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.05,
-                "num_turns": 3,
-                "is_error": False,
-                "usage": {},
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": {},
+                    "result": "",
+                }
+            ),
             request_text="Test request",
             response_text="Test response",
         )
@@ -590,18 +650,20 @@ class TestSessionDataIntegration:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.05,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {"type": "system", "subtype": "init"},
-                    {"type": "result", "subtype": "success"},
-                ],
-            },
+            _parse_events(
+                {"type": "system", "subtype": "init", "session_id": "sess_123"},
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                    "result": "",
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -630,15 +692,19 @@ class TestSessionDataIntegration:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.05,
-                "num_turns": 10,
-                "is_error": False,
-                "usage": {},
-                "events": [],
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 10,
+                    "is_error": False,
+                    "usage": {},
+                    "result": "",
+                }
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -668,15 +734,19 @@ class TestLoadPastTasks:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.05,
-                "num_turns": 3,
-                "is_error": False,
-                "usage": {},
-                "events": [],
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": {},
+                    "result": "",
+                }
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -742,15 +812,19 @@ class TestLoadPastTasks:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_error",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": True,
-                "usage": {},
-                "events": [],
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "error",
+                    "session_id": "sess_error",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": True,
+                    "usage": {},
+                    "result": "",
+                }
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -772,15 +846,19 @@ class TestLoadPastTasks:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.05,
-                "num_turns": 3,
-                "is_error": False,
-                "usage": {"input_tokens": 100, "output_tokens": 50},
-                "events": [],
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": {"input_tokens": 100, "output_tokens": 50},
+                    "result": "",
+                }
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -806,15 +884,19 @@ class TestLoadPastTasks:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.05,
-                "num_turns": 3,
-                "is_error": False,
-                "usage": {},
-                "events": [],
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": {},
+                    "result": "",
+                }
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -840,15 +922,19 @@ class TestLoadPastTasks:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.05,
-                "num_turns": 3,
-                "is_error": False,
-                "usage": {},
-                "events": [],
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": {},
+                    "result": "",
+                }
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -873,27 +959,35 @@ class TestLoadPastTasks:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_1",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.01,
-                "num_turns": 2,
-                "is_error": False,
-                "usage": {},
-                "events": [],
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_1",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 2,
+                    "is_error": False,
+                    "usage": {},
+                    "result": "",
+                }
+            ),
         )
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_2",
-                "duration_ms": 3000,
-                "total_cost_usd": 0.02,
-                "num_turns": 3,
-                "is_error": False,
-                "usage": {},
-                "events": [],
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_2",
+                    "duration_ms": 3000,
+                    "total_cost_usd": 0.02,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": {},
+                    "result": "",
+                }
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -1032,22 +1126,25 @@ class TestLoadPastTasks:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.05,
-                "num_turns": 3,
-                "is_error": False,
-                "usage": {"input_tokens": 100, "output_tokens": 50},
-                "events": [
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [{"type": "text", "text": "Test"}]
-                        },
-                    }
-                ],
-            },
+            _parse_events(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [{"type": "text", "text": "Test"}],
+                    },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": {"input_tokens": 100, "output_tokens": 50},
+                    "result": "",
+                },
+            ),
             request_text="Help me with this task",
         )
 
@@ -1079,15 +1176,19 @@ class TestLoadPastTasks:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.05,
-                "num_turns": 3,
-                "is_error": False,
-                "usage": {},
-                "events": [],
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": {},
+                    "result": "",
+                }
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -1117,15 +1218,19 @@ class TestLoadTaskWithSession:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.05,
-                "num_turns": 3,
-                "is_error": False,
-                "usage": {},
-                "events": [],
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": {},
+                    "result": "",
+                }
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -1148,15 +1253,19 @@ class TestLoadTaskWithSession:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.05,
-                "num_turns": 3,
-                "is_error": False,
-                "usage": {},
-                "events": [],
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": {},
+                    "result": "",
+                }
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])

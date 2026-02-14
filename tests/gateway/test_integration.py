@@ -11,6 +11,7 @@ Tests the full end-to-end flow with all Phase 1 & 2 components:
 """
 
 import concurrent.futures
+import json
 import threading
 import time
 from pathlib import Path
@@ -19,6 +20,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from lib.claude_output import StreamEvent, parse_stream_events
 from lib.container.executor import (
     ClaudeExecutor,
     ContainerTimeoutError,
@@ -41,6 +43,7 @@ from lib.gateway.parsing import (
     extract_body,
     extract_conversation_id,
 )
+from lib.gateway.service.usage_stats import extract_usage_stats
 
 
 class TestEndToEndFlow:
@@ -1255,227 +1258,105 @@ Please help.
 class TestExtractUsageStats:
     """Tests for extract_usage_stats function."""
 
-    def testextract_usage_stats_empty_output(
-        self, email_config: RepoServerConfig
-    ) -> None:
-        """Test extraction with empty/None output."""
-        import sys
+    @staticmethod
+    def _make_assistant_event(*tool_uses: tuple[str, str]) -> dict:
+        """Create an assistant event dict with tool use blocks.
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import extract_usage_stats
+        Args:
+            tool_uses: Pairs of (tool_name, tool_id).
+        """
+        content = [
+            {"type": "tool_use", "name": name, "id": tid}
+            for name, tid in tool_uses
+        ]
+        return {
+            "type": "assistant",
+            "message": {"content": content},
+        }
 
-        # None output
-        stats = extract_usage_stats(None)
+    @staticmethod
+    def _make_result_event(total_cost_usd: float = 0.0) -> dict:
+        """Create a result event dict with cost."""
+        return {
+            "type": "result",
+            "subtype": "success",
+            "session_id": "sess-test",
+            "duration_ms": 1000,
+            "total_cost_usd": total_cost_usd,
+            "num_turns": 1,
+            "is_error": False,
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            },
+            "result": "Done.",
+        }
+
+    @staticmethod
+    def _parse_events(*dicts: dict) -> list[StreamEvent]:
+        """Convert dicts to typed StreamEvent list via parse_stream_events."""
+        stdout = "\n".join(json.dumps(d) for d in dicts)
+        return parse_stream_events(stdout)
+
+    def test_extract_usage_stats_empty_events(self) -> None:
+        """Test extraction with empty event list."""
+        stats = extract_usage_stats([])
         assert stats.total_cost_usd is None
         assert stats.web_search_requests == 0
         assert stats.web_fetch_requests == 0
 
-        # Empty dict
-        stats = extract_usage_stats({})
-        assert stats.total_cost_usd is None
-        assert stats.web_search_requests == 0
-
-    def testextract_usage_stats_with_cost(
-        self, email_config: RepoServerConfig
-    ) -> None:
-        """Test extraction with total_cost_usd."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import extract_usage_stats
-
-        output = {"total_cost_usd": 0.0123, "result": "test"}
-        stats = extract_usage_stats(output)
+    def test_extract_usage_stats_with_cost(self) -> None:
+        """Test extraction with total_cost_usd from result event."""
+        events = self._parse_events(self._make_result_event(0.0123))
+        stats = extract_usage_stats(events)
         assert stats.total_cost_usd == 0.0123
 
-    def testextract_usage_stats_with_web_search(
-        self, email_config: RepoServerConfig
-    ) -> None:
+    def test_extract_usage_stats_with_web_search(self) -> None:
         """Test extraction with web search tool uses from streaming events."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import extract_usage_stats
-
-        # Streaming JSON format uses events instead of messages
-        output = {
-            "events": [
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "name": "WebSearch",
-                                "id": "1",
-                            },
-                            {
-                                "type": "tool_use",
-                                "name": "WebSearch",
-                                "id": "2",
-                            },
-                        ],
-                    },
-                }
-            ]
-        }
-        stats = extract_usage_stats(output)
+        events = self._parse_events(
+            self._make_assistant_event(
+                ("WebSearch", "1"),
+                ("WebSearch", "2"),
+            ),
+        )
+        stats = extract_usage_stats(events)
         assert stats.web_search_requests == 2
 
-    def testextract_usage_stats_with_web_fetch(
-        self, email_config: RepoServerConfig
-    ) -> None:
+    def test_extract_usage_stats_with_web_fetch(self) -> None:
         """Test extraction with web fetch tool uses from streaming events."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import extract_usage_stats
-
-        # Streaming JSON format uses events instead of messages
-        output = {
-            "events": [
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {"type": "tool_use", "name": "WebFetch", "id": "1"},
-                        ],
-                    },
-                },
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {"type": "tool_use", "name": "WebFetch", "id": "2"},
-                            {"type": "tool_use", "name": "WebFetch", "id": "3"},
-                        ],
-                    },
-                },
-            ]
-        }
-        stats = extract_usage_stats(output)
+        events = self._parse_events(
+            self._make_assistant_event(("WebFetch", "1")),
+            self._make_assistant_event(
+                ("WebFetch", "2"),
+                ("WebFetch", "3"),
+            ),
+        )
+        stats = extract_usage_stats(events)
         assert stats.web_fetch_requests == 3
 
-    def testextract_usage_stats_full_output(
-        self, email_config: RepoServerConfig
-    ) -> None:
+    def test_extract_usage_stats_full_output(self) -> None:
         """Test extraction with all stats present from streaming events."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import extract_usage_stats
-
-        # Streaming JSON format uses events instead of messages
-        output = {
-            "total_cost_usd": 0.05,
-            "events": [
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "name": "WebSearch",
-                                "id": "1",
-                            },
-                            {
-                                "type": "tool_use",
-                                "name": "WebFetch",
-                                "id": "2",
-                            },
-                            {"type": "text", "text": "Result"},
-                        ],
-                    },
-                },
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {
-                                "type": "tool_use",
-                                "name": "WebSearch",
-                                "id": "3",
-                            },
-                        ],
-                    },
-                },
-            ],
-        }
-        stats = extract_usage_stats(output)
+        events = self._parse_events(
+            self._make_assistant_event(
+                ("WebSearch", "1"),
+                ("WebFetch", "2"),
+            ),
+            self._make_assistant_event(("WebSearch", "3")),
+            self._make_result_event(0.05),
+        )
+        stats = extract_usage_stats(events)
         assert stats.total_cost_usd == 0.05
         assert stats.web_search_requests == 2
         assert stats.web_fetch_requests == 1
 
-    def testextract_usage_stats_invalid_cost(
-        self, email_config: RepoServerConfig
-    ) -> None:
-        """Test extraction handles invalid cost value."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import extract_usage_stats
-
-        output = {"total_cost_usd": "not a number"}
-        stats = extract_usage_stats(output)
-        assert stats.total_cost_usd is None
-
-    def testextract_usage_stats_invalid_events_structure(
-        self, email_config: RepoServerConfig
-    ) -> None:
-        """Test extraction handles invalid events structure."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import extract_usage_stats
-
-        # Events not a list
-        output = {"events": "invalid"}
-        stats = extract_usage_stats(output)
-        assert stats.web_search_requests == 0
-
-        # Event not a dict
-        output = {"events": ["invalid"]}
-        stats = extract_usage_stats(output)
-        assert stats.web_search_requests == 0
-
-        # Message not a dict
-        output = {"events": [{"type": "assistant", "message": "invalid"}]}
-        stats = extract_usage_stats(output)
-        assert stats.web_search_requests == 0
-
-        # Content not a list
-        output = {
-            "events": [{"type": "assistant", "message": {"content": "invalid"}}]
-        }
-        stats = extract_usage_stats(output)
-        assert stats.web_search_requests == 0
-
-        # Block not a dict
-        output = {
-            "events": [
-                {"type": "assistant", "message": {"content": ["invalid"]}}
-            ]
-        }
-        stats = extract_usage_stats(output)
-        assert stats.web_search_requests == 0
-
-    def testextract_usage_stats_non_dict_output(
-        self, email_config: RepoServerConfig
-    ) -> None:
-        """Test extraction handles non-dict output."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import extract_usage_stats
-
-        # String output
-        stats = extract_usage_stats("invalid")  # type: ignore
-        assert stats.total_cost_usd is None
-        assert stats.web_search_requests == 0
-
-        # List output
-        stats = extract_usage_stats([])  # type: ignore
-        assert stats.total_cost_usd is None
+    def test_extract_usage_stats_subscription_flag(self) -> None:
+        """Test is_subscription flag is passed through."""
+        events = self._parse_events(self._make_result_event(0.05))
+        stats = extract_usage_stats(events, is_subscription=True)
+        assert stats.is_subscription is True
+        assert stats.total_cost_usd == 0.05
 
 
 class TestTaskIdTracking:

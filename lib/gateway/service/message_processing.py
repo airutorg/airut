@@ -18,6 +18,11 @@ import logging
 from email.message import Message
 from typing import TYPE_CHECKING
 
+from lib.claude_output import (
+    StreamEvent,
+    extract_error_summary,
+    extract_response_text,
+)
 from lib.container.conversation_layout import (
     create_conversation_layout,
     get_container_mounts,
@@ -26,7 +31,6 @@ from lib.container.conversation_layout import (
 from lib.container.executor import (
     ContainerTimeoutError,
     ExecutionResult,
-    extract_error_summary,
 )
 from lib.container.session import SessionStore
 from lib.gateway.config import RepoConfig
@@ -44,10 +48,7 @@ from lib.gateway.service.email_replies import (
     send_error_reply,
     send_reply,
 )
-from lib.gateway.service.usage_stats import (
-    extract_response_text,
-    extract_usage_stats,
-)
+from lib.gateway.service.usage_stats import extract_usage_stats
 
 
 if TYPE_CHECKING:
@@ -234,7 +235,7 @@ def process_message(
         return False, None
 
     session_store: SessionStore | None = None
-    events_buffer: list[dict] = []
+    events_buffer: list[StreamEvent] = []
     prompt = clean_body
 
     try:
@@ -372,28 +373,16 @@ def process_message(
         )
 
         # Streaming event callback
-        events_buffer: list[dict] = []
+        events_buffer: list[StreamEvent] = []
 
-        def on_event(event: dict) -> None:
+        def on_event(event: StreamEvent) -> None:
             """Callback invoked for each streaming JSON event."""
             events_buffer.append(event)
             if conv_id:
-                partial_output = {"events": events_buffer.copy()}
-                if event.get("type") == "result":
-                    partial_output["session_id"] = event.get("session_id", "")
-                    partial_output["duration_ms"] = event.get("duration_ms", 0)
-                    partial_output["total_cost_usd"] = event.get(
-                        "total_cost_usd", 0.0
-                    )
-                    partial_output["num_turns"] = event.get("num_turns", 0)
-                    partial_output["is_error"] = event.get("is_error", False)
-                    partial_output["usage"] = event.get("usage", {})
-                    partial_output["result"] = event.get("result", "")
-
                 try:
                     session_store.update_or_add_reply(
                         conv_id,
-                        partial_output,
+                        events_buffer.copy(),
                         request_text=prompt,
                         response_text="",
                     )
@@ -487,9 +476,10 @@ def process_message(
 
         # Extract response and usage stats
         if result.success:
-            response_body = extract_response_text(result.output)
+            output_events = result.output or []
+            response_body = extract_response_text(output_events)
             usage_stats = extract_usage_stats(
-                result.output,
+                output_events,
                 is_subscription=bool(
                     repo_config.container_env.get("CLAUDE_CODE_OAUTH_TOKEN")
                 ),
@@ -516,7 +506,8 @@ def process_message(
                 "An error occurred while processing your message. "
                 "To retry, send your message again."
             )
-            error_summary = extract_error_summary(result.stdout)
+            error_events = result.output or events_buffer.copy()
+            error_summary = extract_error_summary(error_events)
             if error_summary:
                 response_body += (
                     f"\n\nClaude output:\n```\n{error_summary}\n```"
@@ -527,17 +518,12 @@ def process_message(
                 conv_id,
                 result.error_message,
             )
-
-            error_output = result.output or {
-                "is_error": True,
-                "events": events_buffer.copy(),
-            }
-            error_output.setdefault("is_error", True)
             session_store.update_or_add_reply(
                 conv_id,
-                error_output,
+                error_events,
                 request_text=prompt,
                 response_text=response_body,
+                is_error=True,
             )
 
         # Send reply
@@ -563,9 +549,10 @@ def process_message(
         if conv_id and session_store:
             session_store.update_or_add_reply(
                 conv_id,
-                {"is_error": True, "events": events_buffer.copy()},
+                events_buffer.copy(),
                 request_text=prompt,
                 response_text=error_msg,
+                is_error=True,
             )
         return False, conv_id
     except GitCloneError as e:
@@ -598,9 +585,10 @@ def process_message(
             try:
                 session_store.update_or_add_reply(
                     conv_id,
-                    {"is_error": True, "events": events_buffer.copy()},
+                    events_buffer.copy(),
                     request_text=prompt,
                     response_text=error_msg,
+                    is_error=True,
                 )
             except Exception as persist_err:
                 logger.warning(

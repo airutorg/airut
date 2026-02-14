@@ -5,16 +5,27 @@
 
 """Tests for usage_stats module."""
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
+from lib.claude_output import (
+    StreamEvent,
+    extract_response_text,
+    parse_stream_events,
+)
 from lib.gateway.service import (
     UsageStats,
     capture_version_info,
-    extract_response_text,
     extract_usage_stats,
 )
 from lib.git_version import GitVersionInfo
+
+
+def _parse(*raw_events: dict) -> list[StreamEvent]:
+    """Parse raw event dicts into typed StreamEvents."""
+    stdout = "\n".join(json.dumps(e) for e in raw_events)
+    return parse_stream_events(stdout)
 
 
 class TestCaptureVersionInfo:
@@ -172,186 +183,206 @@ class TestUsageStats:
 
 
 class TestExtractResponseText:
-    def test_none_output(self) -> None:
-        assert extract_response_text(None) == "No output received from Claude."
-
-    def test_non_dict_output(self) -> None:
-        result = extract_response_text("not a dict")  # type: ignore[arg-type]
-        assert "Invalid output type" in result
+    def test_empty_events(self) -> None:
+        assert extract_response_text([]) == "No output received from Claude."
 
     def test_text_from_events(self) -> None:
-        output = {
-            "events": [
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [{"type": "text", "text": "Hello world"}]
-                    },
-                }
-            ]
-        }
-        assert extract_response_text(output) == "Hello world"
+        events = _parse(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": "Hello world"}]
+                },
+            }
+        )
+        assert extract_response_text(events) == "Hello world"
 
     def test_multiple_text_blocks(self) -> None:
-        output = {
-            "events": [
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {"type": "text", "text": "Part 1"},
-                            {"type": "text", "text": "Part 2"},
-                        ]
-                    },
-                }
-            ]
-        }
-        assert extract_response_text(output) == "Part 1\n\nPart 2"
+        events = _parse(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "Part 1"},
+                        {"type": "text", "text": "Part 2"},
+                    ]
+                },
+            }
+        )
+        assert extract_response_text(events) == "Part 1\n\nPart 2"
 
     def test_fallback_to_result_string(self) -> None:
-        output = {"events": [], "result": "fallback text"}
-        assert extract_response_text(output) == "fallback text"
+        events = _parse(
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "s1",
+                "total_cost_usd": 0.0,
+                "num_turns": 1,
+                "is_error": False,
+                "usage": {},
+                "result": "fallback text",
+            }
+        )
+        assert extract_response_text(events) == "fallback text"
 
     def test_fallback_to_result_dict(self) -> None:
-        output = {
-            "events": [],
-            "result": {"content": [{"type": "text", "text": "from dict"}]},
-        }
-        assert extract_response_text(output) == "from dict"
+        events = _parse(
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "s1",
+                "total_cost_usd": 0.0,
+                "num_turns": 1,
+                "is_error": False,
+                "usage": {},
+                "result": {"content": [{"type": "text", "text": "from dict"}]},
+            }
+        )
+        assert extract_response_text(events) == "from dict"
 
     def test_result_dict_no_text(self) -> None:
-        output = {"events": [], "result": {"content": []}}
-        assert extract_response_text(output) == "No text output."
+        events = _parse(
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "s1",
+                "total_cost_usd": 0.0,
+                "num_turns": 1,
+                "is_error": False,
+                "usage": {},
+                "result": {"content": []},
+            }
+        )
+        assert (
+            extract_response_text(events) == "No output received from Claude."
+        )
 
     def test_result_none(self) -> None:
-        output = {"events": []}
-        assert "No output received" in extract_response_text(output)
+        """No result event and no assistant text returns fallback."""
+        events = _parse(
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "s1",
+            }
+        )
+        assert "No output received" in extract_response_text(events)
 
-    def test_result_unexpected_type(self) -> None:
-        output = {"events": [], "result": 42}
-        assert "Unexpected result type" in extract_response_text(output)
-
-    def test_exception_handling(self) -> None:
-        """KeyError/TypeError/AttributeError -> graceful fallback."""
-        # events with bad structure that causes TypeError
-        output = {"events": [{"type": "assistant", "message": None}]}
-        assert "Could not parse" in extract_response_text(output)
+    def test_malformed_event_graceful_fallback(self) -> None:
+        """Malformed events are silently skipped by the parser."""
+        events = _parse({"type": "assistant", "message": None})
+        assert (
+            extract_response_text(events) == "No output received from Claude."
+        )
 
     def test_last_assistant_event_used(self) -> None:
-        output = {
-            "events": [
-                {
-                    "type": "assistant",
-                    "message": {"content": [{"type": "text", "text": "First"}]},
-                },
-                {
-                    "type": "assistant",
-                    "message": {"content": [{"type": "text", "text": "Last"}]},
-                },
-            ]
-        }
-        assert extract_response_text(output) == "Last"
+        events = _parse(
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "First"}]},
+            },
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "Last"}]},
+            },
+        )
+        assert extract_response_text(events) == "Last"
 
     def test_skips_non_text_blocks(self) -> None:
-        output = {
-            "events": [
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {"type": "tool_use", "name": "Bash"},
-                            {"type": "text", "text": "Done"},
-                        ]
-                    },
-                }
-            ]
-        }
-        assert extract_response_text(output) == "Done"
+        events = _parse(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "t1",
+                            "name": "Bash",
+                            "input": {},
+                        },
+                        {"type": "text", "text": "Done"},
+                    ]
+                },
+            }
+        )
+        assert extract_response_text(events) == "Done"
 
 
 class TestExtractUsageStats:
-    def test_none_output(self) -> None:
-        stats = extract_usage_stats(None)
-        assert stats.total_cost_usd is None
-
-    def test_non_dict_output(self) -> None:
-        stats = extract_usage_stats("bad")  # type: ignore[arg-type]
+    def test_empty_events(self) -> None:
+        stats = extract_usage_stats([])
         assert stats.total_cost_usd is None
 
     def test_extracts_cost(self) -> None:
-        output = {"total_cost_usd": 0.05, "events": []}
-        stats = extract_usage_stats(output)
+        events = _parse(
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "s1",
+                "total_cost_usd": 0.05,
+                "num_turns": 1,
+                "is_error": False,
+                "usage": {},
+                "result": "done",
+            }
+        )
+        stats = extract_usage_stats(events)
         assert stats.total_cost_usd == 0.05
 
-    def test_invalid_cost_value(self) -> None:
-        output = {"total_cost_usd": "not-a-number", "events": []}
-        stats = extract_usage_stats(output)
-        assert stats.total_cost_usd is None
-
     def test_counts_web_search_and_fetch(self) -> None:
-        output = {
-            "events": [
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [
-                            {"type": "tool_use", "name": "WebSearch"},
-                            {"type": "tool_use", "name": "WebFetch"},
-                            {"type": "tool_use", "name": "WebSearch"},
-                            {"type": "tool_use", "name": "Bash"},
-                        ]
-                    },
-                }
-            ]
-        }
-        stats = extract_usage_stats(output)
+        events = _parse(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "t1",
+                            "name": "WebSearch",
+                            "input": {},
+                        },
+                        {
+                            "type": "tool_use",
+                            "id": "t2",
+                            "name": "WebFetch",
+                            "input": {},
+                        },
+                        {
+                            "type": "tool_use",
+                            "id": "t3",
+                            "name": "WebSearch",
+                            "input": {},
+                        },
+                        {
+                            "type": "tool_use",
+                            "id": "t4",
+                            "name": "Bash",
+                            "input": {},
+                        },
+                    ]
+                },
+            }
+        )
+        stats = extract_usage_stats(events)
         assert stats.web_search_requests == 2
         assert stats.web_fetch_requests == 1
 
     def test_subscription_flag_from_container_env(self) -> None:
-        stats = extract_usage_stats({"events": []}, is_subscription=True)
+        stats = extract_usage_stats([], is_subscription=True)
         assert stats.is_subscription is True
 
     def test_no_subscription_without_oauth(self) -> None:
-        stats = extract_usage_stats({"events": []})
+        stats = extract_usage_stats([])
         assert stats.is_subscription is False
 
     def test_skips_non_assistant_events(self) -> None:
-        output = {
-            "events": [
-                {
-                    "type": "system",
-                    "message": {
-                        "content": [{"type": "tool_use", "name": "WebSearch"}]
-                    },
-                }
-            ]
-        }
-        stats = extract_usage_stats(output)
-        assert stats.web_search_requests == 0
-
-    def test_skips_non_dict_events(self) -> None:
-        output = {"events": ["not-a-dict", None, 42]}
-        stats = extract_usage_stats(output)
-        assert stats.web_search_requests == 0
-
-    def test_skips_non_dict_message(self) -> None:
-        output = {"events": [{"type": "assistant", "message": "bad"}]}
-        stats = extract_usage_stats(output)
-        assert stats.web_search_requests == 0
-
-    def test_skips_non_list_content(self) -> None:
-        output = {
-            "events": [{"type": "assistant", "message": {"content": "bad"}}]
-        }
-        stats = extract_usage_stats(output)
-        assert stats.web_search_requests == 0
-
-    def test_skips_non_dict_content_blocks(self) -> None:
-        output = {
-            "events": [
-                {"type": "assistant", "message": {"content": ["bad", None]}}
-            ]
-        }
-        stats = extract_usage_stats(output)
+        events = _parse(
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "s1",
+            }
+        )
+        stats = extract_usage_stats(events)
         assert stats.web_search_requests == 0

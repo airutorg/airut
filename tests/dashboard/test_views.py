@@ -5,13 +5,21 @@
 
 """Tests for dashboard views module (HTML rendering)."""
 
+import json
 from pathlib import Path
+from typing import Any
 
 from werkzeug.test import Client
 
+from lib.claude_output import StreamEvent, parse_stream_events
 from lib.container.session import SessionStore
 from lib.dashboard.server import DashboardServer
 from lib.dashboard.tracker import TaskTracker
+
+
+def _parse_events(*raw_events: dict[str, Any]) -> list[StreamEvent]:
+    """Parse raw event dicts into typed StreamEvent objects."""
+    return parse_stream_events("\n".join(json.dumps(e) for e in raw_events))
 
 
 class TestActionsPage:
@@ -29,26 +37,27 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.05,
-                "num_turns": 3,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {"type": "system", "subtype": "init", "tools": ["Bash"]},
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [
-                                {"type": "text", "text": "Hello, I'll help."}
-                            ]
-                        },
+            _parse_events(
+                {"type": "system", "subtype": "init", "tools": ["Bash"]},
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {"type": "text", "text": "Hello, I'll help."}
+                        ]
                     },
-                    {"type": "result", "subtype": "success"},
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -97,59 +106,55 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 5000,
-                "total_cost_usd": 0.05,
-                "num_turns": 2,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "system",
-                        "subtype": "init",
-                        "session_id": "sess_123",
-                        "model": "claude-opus-4",
-                        "tools": ["Bash", "Read", "Write"],
+            _parse_events(
+                {
+                    "type": "system",
+                    "subtype": "init",
+                    "session_id": "sess_123",
+                    "model": "claude-opus-4",
+                    "tools": ["Bash", "Read", "Write"],
+                },
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_1",
+                                "name": "Bash",
+                                "input": {"command": "ls -la"},
+                            }
+                        ]
                     },
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [
-                                {
-                                    "type": "tool_use",
-                                    "name": "Bash",
-                                    "input": {"command": "ls -la"},
-                                }
-                            ]
-                        },
+                },
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "tu_1",
+                                "content": "file1.txt",
+                            }
+                        ]
                     },
-                    {
-                        "type": "user",
-                        "message": {
-                            "content": [
-                                {"type": "tool_result", "content": "file1.txt"}
-                            ]
-                        },
+                },
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [{"type": "text", "text": "Found 1 file."}]
                     },
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [
-                                {"type": "text", "text": "Found 1 file."}
-                            ]
-                        },
-                    },
-                    {
-                        "type": "result",
-                        "subtype": "success",
-                        "result": "Found 1 file.",
-                        "duration_ms": 5000,
-                        "total_cost_usd": 0.05,
-                        "num_turns": 2,
-                    },
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "result": "Found 1 file.",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 2,
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -178,15 +183,18 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [{"type": "system", "subtype": "init"}],
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -209,14 +217,18 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -240,28 +252,31 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [
-                                {
-                                    "type": "tool_use",
-                                    "name": "Read",
-                                    "input": {"file_path": "/test.txt"},
-                                }
-                            ]
-                        },
+            _parse_events(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_1",
+                                "name": "Read",
+                                "input": {"file_path": "/test.txt"},
+                            }
+                        ]
                     },
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -289,27 +304,30 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "user",
-                        "message": {
-                            "content": [
-                                {
-                                    "type": "tool_result",
-                                    "content": large_content,
-                                }
-                            ]
-                        },
+            _parse_events(
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "tu_1",
+                                "content": large_content,
+                            }
+                        ]
                     },
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -331,28 +349,31 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "user",
-                        "message": {
-                            "content": [
-                                {
-                                    "type": "tool_result",
-                                    "content": "Permission denied",
-                                    "is_error": True,
-                                }
-                            ]
-                        },
+            _parse_events(
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "tu_1",
+                                "content": "Permission denied",
+                                "is_error": True,
+                            }
+                        ]
                     },
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -377,28 +398,31 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "user",
-                        "message": {
-                            "content": [
-                                {
-                                    "type": "tool_result",
-                                    "content": "Command failed",
-                                    "is_error": True,
-                                }
-                            ]
-                        },
+            _parse_events(
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "tu_1",
+                                "content": "Command failed",
+                                "is_error": True,
+                            }
+                        ]
                     },
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -425,28 +449,31 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "user",
-                        "message": {
-                            "content": [
-                                {
-                                    "type": "tool_result",
-                                    "content": "Success output",
-                                    "is_error": False,
-                                }
-                            ]
-                        },
+            _parse_events(
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "tu_1",
+                                "content": "Success output",
+                                "is_error": False,
+                            }
+                        ]
                     },
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -473,30 +500,33 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "user",
-                        "message": {
-                            "content": [
-                                {
-                                    "type": "tool_result",
-                                    "content": [
-                                        {"type": "text", "text": "First line"},
-                                        {"type": "text", "text": "Second line"},
-                                    ],
-                                }
-                            ]
-                        },
+            _parse_events(
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "tu_1",
+                                "content": [
+                                    {"type": "text", "text": "First line"},
+                                    {"type": "text", "text": "Second line"},
+                                ],
+                            }
+                        ]
                     },
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -522,30 +552,33 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "user",
-                        "message": {
-                            "content": [
-                                {
-                                    "type": "tool_result",
-                                    "content": [
-                                        "Plain string content",
-                                        "Another plain string",
-                                    ],
-                                }
-                            ]
-                        },
+            _parse_events(
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "tu_1",
+                                "content": [
+                                    "Plain string content",
+                                    "Another plain string",
+                                ],
+                            }
+                        ]
                     },
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -558,8 +591,8 @@ class TestActionsPage:
         assert "Plain string content" in html
         assert "Another plain string" in html
 
-    def test_render_event_unknown_type(self, tmp_path: Path) -> None:
-        """Test unknown event types show raw JSON."""
+    def test_render_result_event_basic(self, tmp_path: Path) -> None:
+        """Test result event renders with result type label."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
 
@@ -569,17 +602,18 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {"type": "unknown_type", "data": "test_value"},
-                ],
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -588,9 +622,45 @@ class TestActionsPage:
         response = client.get("/conversation/abc12345/actions")
         html = response.get_data(as_text=True)
 
-        # Raw JSON should be displayed for unknown types
-        assert "unknown_type" in html
-        assert "test_value" in html
+        # Result event should be rendered
+        assert "result:" in html
+
+    def test_render_unknown_event_type(self, tmp_path: Path) -> None:
+        """Test unknown event types render as collapsible raw JSON."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        store = SessionStore(conv_dir)
+        store.add_reply(
+            "abc12345",
+            _parse_events(
+                {"type": "ping", "seq": 42},
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
+        )
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345/actions")
+        html = response.get_data(as_text=True)
+
+        # Unknown event should show its original type label
+        assert "ping" in html
+        # Raw JSON should be available for expansion
+        assert "toggleEvent" in html
 
     def test_render_events_empty_list(self, tmp_path: Path) -> None:
         """Test rendering with empty events list."""
@@ -603,15 +673,7 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [],
-            },
+            [],
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -633,17 +695,19 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {"type": "assistant", "message": {"content": []}},
-                ],
-            },
+            _parse_events(
+                {"type": "assistant", "message": {"content": []}},
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -665,17 +729,19 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {"type": "user", "message": {"content": []}},
-                ],
-            },
+            _parse_events(
+                {"type": "user", "message": {"content": []}},
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -700,17 +766,19 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {"type": "system", "subtype": "init", "tools": many_tools},
-                ],
-            },
+            _parse_events(
+                {"type": "system", "subtype": "init", "tools": many_tools},
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -734,21 +802,19 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "result",
-                        "subtype": "success",
-                        "result": long_result,
-                    },
-                ],
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                    "result": long_result,
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -773,31 +839,34 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [
-                                {
-                                    "type": "tool_use",
-                                    "name": "Bash",
-                                    "input": {
-                                        "command": "ls -la",
-                                        "description": "List all files",
-                                    },
-                                }
-                            ]
-                        },
+            _parse_events(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_1",
+                                "name": "Bash",
+                                "input": {
+                                    "command": "ls -la",
+                                    "description": "List all files",
+                                },
+                            }
+                        ]
                     },
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -823,31 +892,34 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [
-                                {
-                                    "type": "tool_use",
-                                    "name": "Bash",
-                                    "input": {
-                                        "command": "sleep 60",
-                                        "timeout": 120000,
-                                    },
-                                }
-                            ]
-                        },
+            _parse_events(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_1",
+                                "name": "Bash",
+                                "input": {
+                                    "command": "sleep 60",
+                                    "timeout": 120000,
+                                },
+                            }
+                        ]
                     },
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -870,72 +942,80 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [
-                                {
-                                    "type": "tool_use",
-                                    "name": "Write",
-                                    "input": {
-                                        "file_path": "/tmp/out.txt",
-                                        "content": "line1\nline2\n",
-                                    },
+            _parse_events(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_1",
+                                "name": "Write",
+                                "input": {
+                                    "file_path": "/tmp/out.txt",
+                                    "content": "line1\nline2\n",
                                 },
-                                {
-                                    "type": "tool_use",
-                                    "name": "Edit",
-                                    "input": {
-                                        "file_path": "/tmp/ed.txt",
-                                        "old_string": "old",
-                                        "new_string": "new",
-                                    },
+                            },
+                            {
+                                "type": "tool_use",
+                                "id": "tu_2",
+                                "name": "Edit",
+                                "input": {
+                                    "file_path": "/tmp/ed.txt",
+                                    "old_string": "old",
+                                    "new_string": "new",
                                 },
-                                {
-                                    "type": "tool_use",
-                                    "name": "Grep",
-                                    "input": {
-                                        "pattern": "foo",
-                                        "path": "/src",
-                                    },
+                            },
+                            {
+                                "type": "tool_use",
+                                "id": "tu_3",
+                                "name": "Grep",
+                                "input": {
+                                    "pattern": "foo",
+                                    "path": "/src",
                                 },
-                                {
-                                    "type": "tool_use",
-                                    "name": "Glob",
-                                    "input": {"pattern": "*.py"},
+                            },
+                            {
+                                "type": "tool_use",
+                                "id": "tu_4",
+                                "name": "Glob",
+                                "input": {"pattern": "*.py"},
+                            },
+                            {
+                                "type": "tool_use",
+                                "id": "tu_5",
+                                "name": "Task",
+                                "input": {
+                                    "description": "search code",
                                 },
-                                {
-                                    "type": "tool_use",
-                                    "name": "Task",
-                                    "input": {
-                                        "description": "search code",
-                                    },
+                            },
+                            {
+                                "type": "tool_use",
+                                "id": "tu_6",
+                                "name": "TodoWrite",
+                                "input": {
+                                    "todos": [
+                                        {
+                                            "status": "in_progress",
+                                            "content": "Do stuff",
+                                        },
+                                    ]
                                 },
-                                {
-                                    "type": "tool_use",
-                                    "name": "TodoWrite",
-                                    "input": {
-                                        "todos": [
-                                            {
-                                                "status": "in_progress",
-                                                "content": "Do stuff",
-                                            },
-                                        ]
-                                    },
-                                },
-                            ]
-                        },
+                            },
+                        ]
                     },
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -976,30 +1056,33 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [
-                                {
-                                    "type": "tool_use",
-                                    "name": "CustomTool",
-                                    "input": {
-                                        "url": "https://example.com",
-                                    },
-                                }
-                            ]
-                        },
+            _parse_events(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_1",
+                                "name": "CustomTool",
+                                "input": {
+                                    "url": "https://example.com",
+                                },
+                            }
+                        ]
                     },
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -1024,33 +1107,36 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [
-                                {
-                                    "type": "tool_use",
-                                    "name": "Edit",
-                                    "input": {
-                                        "file_path": "/f.py",
-                                        "old_string": "a",
-                                        "new_string": "b",
-                                        "replace_all": True,
-                                    },
-                                }
-                            ]
-                        },
+            _parse_events(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_1",
+                                "name": "Edit",
+                                "input": {
+                                    "file_path": "/f.py",
+                                    "old_string": "a",
+                                    "new_string": "b",
+                                    "replace_all": True,
+                                },
+                            }
+                        ]
                     },
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -1079,32 +1165,35 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [
-                                {
-                                    "type": "tool_use",
-                                    "name": "Edit",
-                                    "input": {
-                                        "file_path": "/f.py",
-                                        "old_string": old_text,
-                                        "new_string": new_text,
-                                    },
-                                }
-                            ]
-                        },
+            _parse_events(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_1",
+                                "name": "Edit",
+                                "input": {
+                                    "file_path": "/f.py",
+                                    "old_string": old_text,
+                                    "new_string": new_text,
+                                },
+                            }
+                        ]
                     },
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(
@@ -1133,32 +1222,35 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [
-                                {
-                                    "type": "tool_use",
-                                    "name": "Read",
-                                    "input": {
-                                        "file_path": "/f.py",
-                                        "offset": 100,
-                                        "limit": 50,
-                                    },
-                                }
-                            ]
-                        },
+            _parse_events(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_1",
+                                "name": "Read",
+                                "input": {
+                                    "file_path": "/f.py",
+                                    "offset": 100,
+                                    "limit": 50,
+                                },
+                            }
+                        ]
                     },
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -1182,31 +1274,34 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [
-                                {
-                                    "type": "tool_use",
-                                    "name": "Grep",
-                                    "input": {
-                                        "pattern": "TODO",
-                                        "glob": "*.py",
-                                    },
-                                }
-                            ]
-                        },
+            _parse_events(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tu_1",
+                                "name": "Grep",
+                                "input": {
+                                    "pattern": "TODO",
+                                    "glob": "*.py",
+                                },
+                            }
+                        ]
                     },
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -1229,28 +1324,31 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "user",
-                        "message": {
-                            "content": [
-                                {
-                                    "type": "tool_result",
-                                    "content": "",
-                                    "is_error": False,
-                                }
-                            ]
-                        },
+            _parse_events(
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "tu_1",
+                                "content": "",
+                                "is_error": False,
+                            }
+                        ]
                     },
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -1274,24 +1372,26 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "user",
-                        "message": {
-                            "content": [
-                                {"type": "text", "text": "user text"},
-                            ]
-                        },
+            _parse_events(
+                {
+                    "type": "user",
+                    "message": {
+                        "content": [
+                            {"type": "text", "text": "user text"},
+                        ]
                     },
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -1315,24 +1415,79 @@ class TestActionsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "events": [
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [
-                                {"type": "image", "data": "base64stuff"},
-                            ]
-                        },
+            _parse_events(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {"type": "image", "data": "base64stuff"},
+                        ]
                     },
-                ],
-            },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
+        )
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345/actions")
+        html_text = response.get_data(as_text=True)
+
+        assert "No content" in html_text
+
+    def test_assistant_event_with_only_tool_result_blocks(
+        self, tmp_path: Path
+    ) -> None:
+        """Test assistant event with only ToolResultBlock hits second fallback.
+
+        When content_blocks is non-empty but contains only ToolResultBlock
+        instances (not TextBlock or ToolUseBlock), the rendering loop produces
+        no output and the second "No content" fallback is triggered.
+        """
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        store = SessionStore(conv_dir)
+        store.add_reply(
+            "abc12345",
+            _parse_events(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "tu_1",
+                                "content": "some result",
+                                "is_error": False,
+                            },
+                        ]
+                    },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -1514,14 +1669,18 @@ class TestNetworkLogsPage:
         store = SessionStore(conv_dir)
         store.add_reply(
             "abc12345",
-            {
-                "session_id": "sess_123",
-                "duration_ms": 1000,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-            },
+            _parse_events(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "sess_123",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                },
+            ),
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])

@@ -21,7 +21,6 @@ rebuilt when stale (default 24 hours) to pick up upstream tool updates.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import signal
 import subprocess
@@ -32,8 +31,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
+from lib.claude_output import (
+    StreamEvent,
+    parse_event,
+    parse_stream_events,
+)
+from lib.claude_output import (
+    extract_error_summary as _extract_error_summary,
+)
 from lib.container.network import get_network_args
 from lib.git_mirror import GitMirrorCache
 
@@ -70,7 +77,7 @@ class ExecutionResult:
 
     Attributes:
         success: True if execution succeeded (exit code 0).
-        output: Parsed JSON output from Claude (if success=True).
+        output: Parsed streaming events from Claude (if success=True).
         error_message: Human-readable error message (if success=False).
         stdout: Raw stdout from container.
         stderr: Raw stderr from container.
@@ -78,7 +85,7 @@ class ExecutionResult:
     """
 
     success: bool
-    output: dict[str, Any] | None
+    output: list[StreamEvent] | None
     error_message: str
     stdout: str
     stderr: str
@@ -418,7 +425,8 @@ class ClaudeExecutor:
                 return False
 
             logger.info(
-                "Stopping execution for conversation %s", conversation_id
+                "Stopping execution for conversation %s",
+                conversation_id,
             )
             try:
                 # Send SIGTERM to gracefully terminate container
@@ -448,7 +456,7 @@ class ClaudeExecutor:
         image_tag: str,
         session_id: str | None = None,
         model: str = "sonnet",
-        on_event: Callable[[dict[str, Any]], None] | None = None,
+        on_event: Callable[[StreamEvent], None] | None = None,
         conversation_id: str | None = None,
         task_proxy: TaskProxy | None = None,
         container_env: dict[str, str] | None = None,
@@ -469,8 +477,8 @@ class ClaudeExecutor:
                 Claude will resume the conversation context from that session.
             model: Claude model to use (e.g., "opus", "sonnet", "haiku").
                 Passed via --model CLI parameter. Defaults to "sonnet".
-            on_event: Optional callback to invoke for each streaming JSON event.
-                Called with each parsed event dict as it arrives.
+            on_event: Optional callback invoked for each parsed
+                :class:`StreamEvent` as it arrives during execution.
             conversation_id: Optional conversation ID for tracking running
                 processes (enables stop functionality).
             task_proxy: Optional TaskProxy for network allowlisting.
@@ -505,7 +513,7 @@ class ClaudeExecutor:
         image_tag: str,
         session_id: str | None,
         model: str,
-        on_event: Callable[[dict[str, Any]], None] | None = None,
+        on_event: Callable[[StreamEvent], None] | None = None,
         conversation_id: str | None = None,
         task_proxy: TaskProxy | None = None,
         container_env: dict[str, str] | None = None,
@@ -522,7 +530,13 @@ class ClaudeExecutor:
         # Add -i flag to keep stdin open for passing prompt
         # Disable Podman's journald logging since we capture
         # stdout/stderr ourselves
-        cmd = [self.container_command, "run", "--rm", "-i", "--log-driver=none"]
+        cmd = [
+            self.container_command,
+            "run",
+            "--rm",
+            "-i",
+            "--log-driver=none",
+        ]
 
         # Pass environment variables to container
         env = container_env or {}
@@ -532,7 +546,7 @@ class ClaudeExecutor:
         for mount in mounts:
             cmd.extend(["-v", mount])
 
-        # Network allowlist: restrict container to internal network with proxy
+        # Network allowlist: restrict container to internal network
         cmd.extend(get_network_args(task_proxy))
 
         cmd.append(image_tag)
@@ -597,7 +611,8 @@ class ClaudeExecutor:
                 with self._processes_lock:
                     self._running_processes[conversation_id] = process
                     logger.debug(
-                        "Tracking process for conversation %s", conversation_id
+                        "Tracking process for conversation %s",
+                        conversation_id,
                     )
 
             try:
@@ -614,15 +629,11 @@ class ClaudeExecutor:
                 if process.stdout:
                     for line in process.stdout:
                         stdout_lines.append(line)
-                        # Try to parse as JSON event and invoke callback
+                        # Parse and invoke callback
                         if on_event:
-                            try:
-                                event = json.loads(line.strip())
-                                if isinstance(event, dict):
-                                    on_event(event)
-                            except json.JSONDecodeError:
-                                # Skip non-JSON lines
-                                pass
+                            event = parse_event(line)
+                            if event is not None:
+                                on_event(event)
 
                 # Wait for process to complete with timeout
                 try:
@@ -676,31 +687,11 @@ class ClaudeExecutor:
 
             # Parse output
             if exit_code == 0:
-                parsed_output = self._parse_claude_output(stdout)
-                if parsed_output is not None:
-                    # Defensive check: ensure parsed_output is a dict
-                    if not isinstance(parsed_output, dict):
-                        logger.error(
-                            "Parser returned non-dict type %s: %s",
-                            type(parsed_output).__name__,
-                            parsed_output,
-                        )
-                        error_msg = (
-                            f"Parser error: got {type(parsed_output).__name__} "
-                            "instead of dict"
-                        )
-                        return ExecutionResult(
-                            success=False,
-                            output=None,
-                            error_message=error_msg,
-                            stdout=stdout,
-                            stderr=stderr,
-                            exit_code=exit_code,
-                        )
-
+                events = parse_stream_events(stdout)
+                if events:
                     return ExecutionResult(
                         success=True,
-                        output=parsed_output,
+                        output=events,
                         error_message="",
                         stdout=stdout,
                         stderr=stderr,
@@ -750,144 +741,21 @@ class ClaudeExecutor:
             logger.error("Unexpected container execution error: %s", e)
             raise ExecutorError(f"Container execution failed: {e}")
 
-    def _parse_claude_output(self, stdout: str) -> dict[str, Any] | None:
-        """Parse Claude's streaming JSON output.
-
-        Parses the streaming JSON format (--output-format stream-json --verbose)
-        which outputs one JSON event per line. Events include:
-        - system/init: Session initialization with tools and model
-        - assistant: Claude's responses (tool_use or text blocks)
-        - user: Tool execution results
-        - result: Final execution summary with cost and usage
-
-        Args:
-            stdout: Raw stdout from container (newline-delimited JSON).
-
-        Returns:
-            Parsed dict with 'events' list and extracted result fields,
-            or None if parsing fails completely.
-        """
-        events: list[dict[str, Any]] = []
-        result_event: dict[str, Any] | None = None
-
-        for line in stdout.strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-
-            try:
-                event = json.loads(line)
-                if isinstance(event, dict):
-                    events.append(event)
-                    if event.get("type") == "result":
-                        result_event = event
-            except json.JSONDecodeError:
-                # Skip non-JSON lines (should be rare with stream-json)
-                logger.debug("Skipping non-JSON line: %s", line[:100])
-                continue
-
-        if not events:
-            logger.warning("No valid JSON events found in streaming output")
-            return None
-
-        logger.debug(
-            "Parsed %d streaming JSON events (result=%s)",
-            len(events),
-            result_event is not None,
-        )
-
-        # Build result dict with events and extracted fields from result event
-        parsed: dict[str, Any] = {
-            "events": events,
-        }
-
-        if result_event:
-            # Extract standard fields from result event for compatibility
-            parsed["session_id"] = result_event.get("session_id", "")
-            parsed["duration_ms"] = result_event.get("duration_ms", 0)
-            parsed["total_cost_usd"] = result_event.get("total_cost_usd", 0.0)
-            parsed["num_turns"] = result_event.get("num_turns", 0)
-            parsed["is_error"] = result_event.get("is_error", False)
-            parsed["usage"] = result_event.get("usage", {})
-            parsed["result"] = result_event.get("result", "")
-        else:
-            # No result event - mark as error
-            logger.warning("No result event found in streaming output")
-            parsed["session_id"] = ""
-            parsed["duration_ms"] = 0
-            parsed["total_cost_usd"] = 0.0
-            parsed["num_turns"] = 0
-            parsed["is_error"] = True
-            parsed["usage"] = {}
-            parsed["result"] = ""
-
-        return parsed
-
 
 def extract_error_summary(stdout: str, max_lines: int = 10) -> str | None:
-    """Extract a human-readable error summary from streaming JSON output.
+    """Extract a human-readable error summary from streaming JSON.
 
-    Parses the streaming JSON output to find error information, extracting
-    text content from assistant messages to provide a more readable summary
-    than raw JSON.
+    Delegates to :func:`lib.claude_output.extract_error_summary`.
 
     Args:
-        stdout: Raw stdout containing streaming JSON (newline-delimited).
+        stdout: Raw stdout containing streaming JSON.
         max_lines: Maximum number of lines to include in the summary.
 
     Returns:
-        Formatted error summary string, or None if no useful info found.
+        Formatted error summary string, or None if no useful info.
     """
     if not stdout or not stdout.strip():
         return None
 
-    text_blocks: list[str] = []
-    result_text: str | None = None
-
-    for line in stdout.strip().split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-
-        try:
-            event = json.loads(line)
-            if not isinstance(event, dict):
-                continue
-
-            event_type = event.get("type")
-
-            # Extract text from assistant messages
-            if event_type == "assistant":
-                message = event.get("message", {})
-                content = message.get("content", [])
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        text = block.get("text", "").strip()
-                        if text:
-                            text_blocks.append(text)
-
-            # Extract result text
-            elif event_type == "result":
-                result = event.get("result", "")
-                if result:
-                    result_text = result
-
-        except json.JSONDecodeError:
-            continue
-
-    # Prefer result text if available
-    if result_text:
-        lines = result_text.strip().split("\n")
-        if len(lines) > max_lines:
-            lines = lines[-max_lines:]
-        return "\n".join(lines)
-
-    # Fall back to concatenated text blocks
-    if text_blocks:
-        combined = "\n".join(text_blocks)
-        lines = combined.strip().split("\n")
-        if len(lines) > max_lines:
-            lines = lines[-max_lines:]
-        return "\n".join(lines)
-
-    return None
+    events = parse_stream_events(stdout)
+    return _extract_error_summary(events, max_lines=max_lines)
