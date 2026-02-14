@@ -49,10 +49,10 @@ def render_actions_page(
 
     # Build actions content
     has_replies = conversation is not None and len(conversation.replies) > 0
-    if not has_replies:
+    has_events = event_groups is not None and len(event_groups) > 0
+    if not has_replies and not has_events:
         actions_content = '<div class="no-actions">No actions recorded</div>'
     else:
-        assert conversation is not None
         actions_content = render_actions_timeline(conversation, event_groups)
 
     return f"""<!DOCTYPE html>
@@ -94,10 +94,15 @@ def render_actions_page(
 
 
 def render_actions_timeline(
-    conversation: ConversationMetadata,
+    conversation: ConversationMetadata | None,
     event_groups: list[list[StreamEvent]] | None = None,
 ) -> str:
     """Render timeline of actions from conversation and events.
+
+    Renders completed replies from conversation metadata paired with
+    their events from the event log. Any event groups beyond the
+    completed replies are rendered as in-progress replies (events
+    streaming but reply not yet finished).
 
     Args:
         conversation: Conversation metadata with reply summaries.
@@ -107,8 +112,9 @@ def render_actions_timeline(
         HTML string for actions timeline.
     """
     sections: list[str] = []
+    replies = conversation.replies if conversation is not None else []
 
-    for i, reply in enumerate(conversation.replies, 1):
+    for i, reply in enumerate(replies, 1):
         error_class = "error" if reply.is_error else ""
         escaped_timestamp = html.escape(reply.timestamp)
 
@@ -135,6 +141,20 @@ def render_actions_timeline(
                 <span class="reply-timestamp">{escaped_timestamp}</span>
             </div>
             {request_html}
+            {events_html}
+        </div>""")
+
+    # Render in-progress event groups that don't have a completed reply yet
+    if event_groups is not None:
+        for j in range(len(replies), len(event_groups)):
+            events_html = render_events_list(event_groups[j])
+            reply_num = j + 1
+            sections.append(f"""
+        <div class="reply-section in-progress">
+            <div class="reply-header">
+                <span>Reply #{reply_num}</span>
+                <span class="reply-timestamp">in progress</span>
+            </div>
             {events_html}
         </div>""")
 

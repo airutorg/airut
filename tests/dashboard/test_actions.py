@@ -33,6 +33,70 @@ class TestActionsPageEndpoint:
         assert "Test Subject" in html
         assert "Reply #1" in html
 
+    def test_in_progress_shows_events_before_reply_completes(
+        self, harness: DashboardHarness
+    ) -> None:
+        """Test actions page shows events for in-progress tasks.
+
+        When a task is running, events are streamed to events.jsonl but
+        no reply has been added to conversation.json yet. The actions page
+        must still render those events instead of showing "No actions
+        recorded".
+
+        Regression test for PR #72 which split context.json into
+        conversation.json + events.jsonl.
+        """
+        # Simulate in-progress execution: events written to event log
+        # but NO reply added to conversation store yet
+        from tests.dashboard.conftest import parse_events
+
+        events = parse_events(
+            {"type": "system", "subtype": "init", "tools": ["Bash", "Read"]},
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "tu_1",
+                            "name": "Bash",
+                            "input": {"command": "ls -la"},
+                        }
+                    ]
+                },
+            },
+            {
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "tu_1",
+                            "content": "file1.txt\nfile2.txt",
+                        }
+                    ]
+                },
+            },
+        )
+
+        # Write events to event log (simulating streaming during execution)
+        harness.event_log.start_new_reply()
+        for event in events:
+            harness.event_log.append_event(event)
+
+        # Do NOT call harness.store.add_reply() — reply hasn't completed yet
+
+        html = harness.get_html("/conversation/abc12345/actions")
+
+        # Must NOT show "No actions recorded" — events are streaming
+        assert "No actions recorded" not in html
+
+        # Must show the streamed events
+        assert "system:" in html
+        assert "Bash" in html
+        assert "ls -la" in html
+        assert "file1.txt" in html
+
     def test_not_found(self) -> None:
         """Test actions page returns 404 for nonexistent task."""
         tracker = TaskTracker()
@@ -42,8 +106,12 @@ class TestActionsPageEndpoint:
         response = client.get("/conversation/nonexistent/actions")
         assert response.status_code == 404
 
-    def test_no_session(self) -> None:
-        """Test actions page shows 'no actions' without session data."""
+    def test_no_events_and_no_replies(self) -> None:
+        """Test actions page shows 'no actions' when truly empty.
+
+        When there are no events in the event log and no replies in
+        conversation.json, the page should show "No actions recorded".
+        """
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
         server = DashboardServer(tracker)
