@@ -6,19 +6,80 @@
 """Tests for dashboard request handlers module."""
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from werkzeug.test import Client
 
+from lib.claude_output.extract import extract_result_summary, extract_session_id
+from lib.claude_output.types import Usage
+from lib.conversation import (
+    CONVERSATION_FILE_NAME,
+    ConversationStore,
+    ReplySummary,
+)
 from lib.dashboard.server import DashboardServer
 from lib.dashboard.tracker import TaskState, TaskStatus, TaskTracker
-from lib.sandbox import SessionStore
+from lib.sandbox import EventLog
 from tests.dashboard.conftest import parse_events as _parse_events
 
 
-class TestSessionDataIntegration:
-    """Tests for session data display in dashboard."""
+def _add_reply(
+    conv_dir: Path,
+    conversation_id: str,
+    *raw_events: dict,
+    request_text: str | None = None,
+    response_text: str | None = None,
+) -> None:
+    """Parse raw event dicts, write to event log, and add reply summary.
+
+    A convenience helper that mirrors what DashboardHarness.add_events() does,
+    but works with an arbitrary conversation directory.
+    """
+    events = _parse_events(*raw_events)
+
+    # Write events to event log
+    event_log = EventLog(conv_dir)
+    event_log.start_new_reply()
+    for event in events:
+        event_log.append_event(event)
+
+    # Build reply summary from events
+    session_id = extract_session_id(events) or ""
+    summary = extract_result_summary(events)
+
+    if summary is not None:
+        reply = ReplySummary(
+            session_id=session_id,
+            timestamp=datetime.now(tz=UTC).isoformat(),
+            duration_ms=summary.duration_ms,
+            total_cost_usd=summary.total_cost_usd,
+            num_turns=summary.num_turns,
+            is_error=summary.is_error,
+            usage=summary.usage,
+            request_text=request_text,
+            response_text=response_text,
+        )
+    else:
+        reply = ReplySummary(
+            session_id=session_id,
+            timestamp=datetime.now(tz=UTC).isoformat(),
+            duration_ms=0,
+            total_cost_usd=0.0,
+            num_turns=0,
+            is_error=False,
+            usage=Usage(),
+            request_text=request_text,
+            response_text=response_text,
+        )
+
+    store = ConversationStore(conv_dir)
+    store.add_reply(conversation_id, reply)
+
+
+class TestConversationDataIntegration:
+    """Tests for conversation data display in dashboard."""
 
     def test_init_with_work_dirs(self, tmp_path: Path) -> None:
         """Test server initialization with work_dirs callable."""
@@ -27,91 +88,85 @@ class TestSessionDataIntegration:
 
         assert server._handlers._work_dirs() == [tmp_path]
 
-    def test_load_session_without_work_dirs(self) -> None:
-        """Test _load_session returns None when work_dirs not configured."""
+    def test_load_conversation_without_work_dirs(self) -> None:
+        """Test _load_conversation returns None when work_dirs not set."""
         tracker = TaskTracker()
         server = DashboardServer(tracker)  # No work_dirs
 
-        result = server._load_session("abc12345")
+        result = server._load_conversation("abc12345")
         assert result is None
 
-    def test_load_session_conversation_not_found(self, tmp_path: Path) -> None:
-        """Test _load_session returns None when conversation doesn't exist."""
+    def test_load_conversation_not_found(self, tmp_path: Path) -> None:
+        """Test _load_conversation returns None when conversation missing."""
         tracker = TaskTracker()
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
 
-        result = server._load_session("nonexistent")
+        result = server._load_conversation("nonexistent")
         assert result is None
 
-    def test_load_session_no_session_file(self, tmp_path: Path) -> None:
-        """Test _load_session returns None when session file doesn't exist."""
+    def test_load_conversation_no_file(self, tmp_path: Path) -> None:
+        """Test _load_conversation returns None when file doesn't exist."""
         tracker = TaskTracker()
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
-        result = server._load_session("abc12345")
+        result = server._load_conversation("abc12345")
         assert result is None
 
-    def test_load_session_success(self, tmp_path: Path) -> None:
-        """Test _load_session successfully loads session data."""
+    def test_load_conversation_success(self, tmp_path: Path) -> None:
+        """Test _load_conversation successfully loads conversation data."""
         tracker = TaskTracker()
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        # Create session file using SessionStore
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_123",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.0123,
-                    "num_turns": 3,
-                    "is_error": False,
-                    "usage": {"input_tokens": 100, "output_tokens": 50},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.0123,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
-        result = server._load_session("abc12345")
+        result = server._load_conversation("abc12345")
 
         assert result is not None
-        assert result.execution_context_id == "abc12345"
+        assert result.conversation_id == "abc12345"
         assert len(result.replies) == 1
         assert result.replies[0].session_id == "sess_123"
         assert result.total_cost_usd == 0.0123
 
-    def test_task_detail_shows_session_data(self, tmp_path: Path) -> None:
-        """Test task detail page includes session data when available."""
+    def test_task_detail_shows_conversation_data(self, tmp_path: Path) -> None:
+        """Task detail page includes conversation data when available."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        # Create session file
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_xyz789abcdef1234567890",
-                    "duration_ms": 12345,
-                    "total_cost_usd": 0.0456,
-                    "num_turns": 5,
-                    "is_error": False,
-                    "usage": {"input_tokens": 200, "output_tokens": 100},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_xyz789abcdef1234567890",
+                "duration_ms": 12345,
+                "total_cost_usd": 0.0456,
+                "num_turns": 5,
+                "is_error": False,
+                "usage": {"input_tokens": 200, "output_tokens": 100},
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -122,8 +177,8 @@ class TestSessionDataIntegration:
 
         html = response.get_data(as_text=True)
 
-        # Check session data is displayed
-        assert "Session Data" in html
+        # Check conversation data is displayed
+        assert "Conversation Data" in html
         assert "$0.0456" in html  # Cost
         assert "5" in html  # Turns
         assert "Reply #1" in html
@@ -135,8 +190,8 @@ class TestSessionDataIntegration:
         assert "200" in html  # input_tokens value
         assert "100" in html  # output_tokens value
 
-    def test_task_detail_no_session_data(self) -> None:
-        """Test task detail page shows 'no session data' when unavailable."""
+    def test_task_detail_no_conversation_data(self) -> None:
+        """Task detail page shows placeholder when no data available."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
 
@@ -147,128 +202,124 @@ class TestSessionDataIntegration:
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
-        assert "No session data available" in html
+        assert "No conversation data available" in html
 
-    def test_task_session_json_endpoint(self, tmp_path: Path) -> None:
-        """Test /conversation/<id>/session returns raw JSON."""
+    def test_task_conversation_json_endpoint(self, tmp_path: Path) -> None:
+        """Test /conversation/<id>/conversation returns raw JSON."""
         tracker = TaskTracker()
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        # Create session file
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_123",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.0123,
-                    "num_turns": 3,
-                    "is_error": False,
-                    "usage": {"input_tokens": 100},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.0123,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {"input_tokens": 100},
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345/session")
+        response = client.get("/conversation/abc12345/conversation")
         assert response.status_code == 200
         assert response.content_type == "application/json"
 
         data = json.loads(response.get_data(as_text=True))
-        assert data["execution_context_id"] == "abc12345"
+        assert data["conversation_id"] == "abc12345"
         assert len(data["replies"]) == 1
         assert data["replies"][0]["session_id"] == "sess_123"
 
-    def test_task_session_json_no_work_dirs(self) -> None:
+    def test_task_conversation_json_no_work_dirs(self) -> None:
         """Returns 404 when work_dirs not configured."""
         tracker = TaskTracker()
         server = DashboardServer(tracker)  # No work_dirs
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345/session")
+        response = client.get("/conversation/abc12345/conversation")
         assert response.status_code == 404
         assert response.content_type == "application/json"
 
         data = json.loads(response.get_data(as_text=True))
         assert "error" in data
 
-    def test_task_session_json_no_session_file(self, tmp_path: Path) -> None:
-        """Test /conversation/<id>/session returns 404 when no session file."""
+    def test_task_conversation_json_no_file(self, tmp_path: Path) -> None:
+        """Returns 404 when conversation directory does not exist."""
         tracker = TaskTracker()
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/nonexistent/session")
+        response = client.get("/conversation/nonexistent/conversation")
         assert response.status_code == 404
         assert response.content_type == "application/json"
 
-    def test_task_session_json_dir_exists_no_file(self, tmp_path: Path) -> None:
-        """Returns 404 when dir exists but context.json missing."""
+    def test_task_conversation_json_dir_exists_no_file(
+        self, tmp_path: Path
+    ) -> None:
+        """Returns 404 when dir exists but conversation.json missing."""
         tracker = TaskTracker()
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
-        # No context.json inside
+        # No conversation.json inside
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345/session")
+        response = client.get("/conversation/abc12345/conversation")
         assert response.status_code == 404
         data = response.get_json()
-        assert "No session data" in data["error"]
+        assert "No conversation data" in data["error"]
 
-    def test_task_session_json_invalid_json(self, tmp_path: Path) -> None:
-        """Test /conversation/<id>/session handles invalid JSON gracefully."""
+    def test_task_conversation_json_invalid_json(self, tmp_path: Path) -> None:
+        """Handles invalid JSON in conversation file."""
         tracker = TaskTracker()
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
         # Write invalid JSON
-        session_file = conv_dir / "context.json"
-        session_file.write_text("not valid json {{{")
+        conv_file = conv_dir / CONVERSATION_FILE_NAME
+        conv_file.write_text("not valid json {{{")
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345/session")
+        response = client.get("/conversation/abc12345/conversation")
         assert response.status_code == 500
         assert response.content_type == "application/json"
 
         data = json.loads(response.get_data(as_text=True))
         assert "error" in data
 
-    def test_api_task_includes_session_data(self, tmp_path: Path) -> None:
-        """Test /api/conversation/<id> includes session data when available."""
+    def test_api_task_includes_conversation_data(self, tmp_path: Path) -> None:
+        """Test /api/conversation/<id> includes conversation data."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        # Create session file
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_123",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.0123,
-                    "num_turns": 3,
-                    "is_error": False,
-                    "usage": {"input_tokens": 100, "output_tokens": 50},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.0123,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -278,14 +329,14 @@ class TestSessionDataIntegration:
         assert response.status_code == 200
 
         data = json.loads(response.get_data(as_text=True))
-        assert "session" in data
-        assert data["session"]["total_cost_usd"] == 0.0123
-        assert data["session"]["total_turns"] == 3
-        assert data["session"]["reply_count"] == 1
-        assert len(data["session"]["replies"]) == 1
+        assert "conversation" in data
+        assert data["conversation"]["total_cost_usd"] == 0.0123
+        assert data["conversation"]["total_turns"] == 3
+        assert data["conversation"]["reply_count"] == 1
+        assert len(data["conversation"]["replies"]) == 1
 
-    def test_api_task_no_session_data(self) -> None:
-        """Test /api/conversation/<id> has null session when unavailable."""
+    def test_api_task_no_conversation_data(self) -> None:
+        """Test /api/conversation/<id> has null when no data available."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
 
@@ -296,11 +347,11 @@ class TestSessionDataIntegration:
         assert response.status_code == 200
 
         data = json.loads(response.get_data(as_text=True))
-        assert "session" in data
-        assert data["session"] is None
+        assert "conversation" in data
+        assert data["conversation"] is None
 
-    def test_api_tasks_does_not_include_session(self) -> None:
-        """Excludes session data from list endpoint."""
+    def test_api_tasks_does_not_include_conversation(self) -> None:
+        """Excludes conversation data from list endpoint."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
 
@@ -313,33 +364,30 @@ class TestSessionDataIntegration:
         data = json.loads(response.get_data(as_text=True))
         assert len(data) == 1
         # Session should not be included in bulk listing
-        assert "session" not in data[0]
+        assert "conversation" not in data[0]
 
-    def test_render_session_error_reply(self, tmp_path: Path) -> None:
-        """Test session section shows error styling for error replies."""
+    def test_render_conversation_error_reply(self, tmp_path: Path) -> None:
+        """Conversation section shows error styling for error replies."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        # Create session file with an error reply
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "error",
-                    "session_id": "sess_error",
-                    "duration_ms": 1000,
-                    "total_cost_usd": 0.001,
-                    "num_turns": 1,
-                    "is_error": True,
-                    "usage": {},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "error",
+                "session_id": "sess_error",
+                "duration_ms": 1000,
+                "total_cost_usd": 0.001,
+                "num_turns": 1,
+                "is_error": True,
+                "usage": {},
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -351,47 +399,43 @@ class TestSessionDataIntegration:
         # Check error class is applied
         assert 'class="reply error"' in html
 
-    def test_render_session_multiple_replies(self, tmp_path: Path) -> None:
-        """Test session section displays multiple replies correctly."""
+    def test_render_conversation_multiple_replies(self, tmp_path: Path) -> None:
+        """Conversation section displays multiple replies correctly."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        # Create session file with multiple replies
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_1",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.01,
-                    "num_turns": 2,
-                    "is_error": False,
-                    "usage": {},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_1",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.01,
+                "num_turns": 2,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
         )
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_2",
-                    "duration_ms": 8000,
-                    "total_cost_usd": 0.025,
-                    "num_turns": 4,
-                    "is_error": False,
-                    "usage": {},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_2",
+                "duration_ms": 8000,
+                "total_cost_usd": 0.025,
+                "num_turns": 4,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -407,8 +451,8 @@ class TestSessionDataIntegration:
         # Check summary shows totals (6 turns total)
         assert ">6<" in html  # Total turns
 
-    def test_task_to_dict_with_session(self, tmp_path: Path) -> None:
-        """Test _task_to_dict includes session data when requested."""
+    def test_task_to_dict_with_conversation(self, tmp_path: Path) -> None:
+        """_task_to_dict includes conversation data when requested."""
         tracker = TaskTracker()
         task = TaskState(
             conversation_id="abc12345",
@@ -423,35 +467,37 @@ class TestSessionDataIntegration:
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_123",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.05,
-                    "num_turns": 10,
-                    "is_error": False,
-                    "usage": {"input_tokens": 500},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 10,
+                "is_error": False,
+                "usage": {"input_tokens": 500},
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
-        result = server._task_to_dict(task, include_session=True)
+        result = server._task_to_dict(task, include_conversation=True)
 
-        assert "session" in result
-        assert result["session"]["total_cost_usd"] == 0.05
-        assert result["session"]["total_turns"] == 10
-        assert result["session"]["reply_count"] == 1
-        assert result["session"]["replies"][0]["usage"]["input_tokens"] == 500
+        assert "conversation" in result
+        assert result["conversation"]["total_cost_usd"] == 0.05
+        assert result["conversation"]["total_turns"] == 10
+        assert result["conversation"]["reply_count"] == 1
+        assert (
+            result["conversation"]["replies"][0]["usage"]["input_tokens"] == 500
+        )
 
-    def test_task_to_dict_without_session_flag(self, tmp_path: Path) -> None:
-        """Test _task_to_dict excludes session when not requested."""
+    def test_task_to_dict_without_conversation_flag(
+        self, tmp_path: Path
+    ) -> None:
+        """_task_to_dict excludes conversation data when not requested."""
         tracker = TaskTracker()
         task = TaskState(
             conversation_id="abc12345",
@@ -460,9 +506,9 @@ class TestSessionDataIntegration:
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
-        result = server._task_to_dict(task, include_session=False)
+        result = server._task_to_dict(task, include_conversation=False)
 
-        assert "session" not in result
+        assert "conversation" not in result
 
     def test_usage_display_filters_nested_objects(self, tmp_path: Path) -> None:
         """Test usage grid only shows token counts, not nested objects."""
@@ -472,30 +518,25 @@ class TestSessionDataIntegration:
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        # Create session with usage data matching real Claude responses.
-        # The Usage typed object only stores the 4 token fields; nested
-        # objects like server_tool_use and service_tier are not preserved.
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_123",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.05,
-                    "num_turns": 10,
-                    "is_error": False,
-                    "usage": {
-                        "input_tokens": 19,
-                        "cache_creation_input_tokens": 14874,
-                        "cache_read_input_tokens": 427112,
-                        "output_tokens": 2818,
-                    },
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 10,
+                "is_error": False,
+                "usage": {
+                    "input_tokens": 19,
+                    "cache_creation_input_tokens": 14874,
+                    "cache_read_input_tokens": 427112,
+                    "output_tokens": 2818,
+                },
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -527,23 +568,20 @@ class TestSessionDataIntegration:
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        # Create session file with request/response text
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_123",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.05,
-                    "num_turns": 3,
-                    "is_error": False,
-                    "usage": {},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
             request_text="Please help me with this task",
             response_text="I'll help you with that task.",
         )
@@ -568,23 +606,20 @@ class TestSessionDataIntegration:
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        # Create session file WITHOUT request/response text
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_123",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.05,
-                    "num_turns": 3,
-                    "is_error": False,
-                    "usage": {},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -604,22 +639,20 @@ class TestSessionDataIntegration:
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_123",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.05,
-                    "num_turns": 3,
-                    "is_error": False,
-                    "usage": {},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
             request_text="Test request",
             response_text="Test response",
         )
@@ -630,34 +663,37 @@ class TestSessionDataIntegration:
         response = client.get("/api/conversation/abc12345")
         data = json.loads(response.get_data(as_text=True))
 
-        assert data["session"]["replies"][0]["request_text"] == "Test request"
-        assert data["session"]["replies"][0]["response_text"] == "Test response"
+        assert (
+            data["conversation"]["replies"][0]["request_text"] == "Test request"
+        )
+        assert (
+            data["conversation"]["replies"][0]["response_text"]
+            == "Test response"
+        )
 
     def test_api_task_includes_events(self, tmp_path: Path) -> None:
-        """Test /api/conversation/<id> includes events in session data."""
+        """Test /api/conversation/<id> includes events from EventLog."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {"type": "system", "subtype": "init", "session_id": "sess_123"},
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_123",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.05,
-                    "num_turns": 1,
-                    "is_error": False,
-                    "usage": {},
-                    "result": "",
-                },
-            ),
+            {"type": "system", "subtype": "init", "session_id": "sess_123"},
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 1,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -666,13 +702,15 @@ class TestSessionDataIntegration:
         response = client.get("/api/conversation/abc12345")
         data = json.loads(response.get_data(as_text=True))
 
-        assert "session" in data
-        assert "replies" in data["session"]
-        assert "events" in data["session"]["replies"][0]
-        assert len(data["session"]["replies"][0]["events"]) == 2
+        assert "conversation" in data
+        assert "replies" in data["conversation"]
+        assert "events" in data["conversation"]["replies"][0]
+        assert len(data["conversation"]["replies"][0]["events"]) == 2
 
-    def test_task_to_dict_with_preloaded_session(self, tmp_path: Path) -> None:
-        """Test _task_to_dict uses preloaded session when provided."""
+    def test_task_to_dict_with_preloaded_conversation(
+        self, tmp_path: Path
+    ) -> None:
+        """Test _task_to_dict uses preloaded conversation when provided."""
         tracker = TaskTracker()
         task = TaskState(
             conversation_id="abc12345",
@@ -683,36 +721,34 @@ class TestSessionDataIntegration:
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_123",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.05,
-                    "num_turns": 10,
-                    "is_error": False,
-                    "usage": {},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 10,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
 
-        # Load session manually
-        session = server._load_session("abc12345")
+        # Load conversation manually
+        conversation = server._load_conversation("abc12345")
 
-        # Pass preloaded session
+        # Pass preloaded conversation
         result = server._task_to_dict(
-            task, include_session=True, session=session
+            task, include_conversation=True, conversation=conversation
         )
 
-        assert result["session"]["total_cost_usd"] == 0.05
-        assert result["session"]["total_turns"] == 10
+        assert result["conversation"]["total_cost_usd"] == 0.05
+        assert result["conversation"]["total_turns"] == 10
 
 
 class TestLoadPastTasks:
@@ -724,36 +760,33 @@ class TestLoadPastTasks:
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        # Create session file without adding task to tracker
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_123",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.05,
-                    "num_turns": 3,
-                    "is_error": False,
-                    "usage": {},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         result = server._load_task_from_disk("abc12345")
 
         assert result is not None
-        task, session = result
+        task, conversation = result
         assert task.conversation_id == "abc12345"
         assert task.status == TaskStatus.COMPLETED
         assert task.message_count == 1
         assert task.success is True
-        assert session is not None
-        assert session.execution_context_id == "abc12345"
+        assert conversation is not None
+        assert conversation.conversation_id == "abc12345"
 
     def test_load_task_from_disk_no_work_dirs(self) -> None:
         """Test _load_task_from_disk returns None when work_dirs not set."""
@@ -787,11 +820,13 @@ class TestLoadPastTasks:
         result = server._load_task_from_disk("abc12345")
         assert result is None
 
-    def test_load_task_from_disk_no_session_file(self, tmp_path: Path) -> None:
-        """Test _load_task_from_disk returns None when no session file."""
+    def test_load_task_from_disk_no_conversation_file(
+        self, tmp_path: Path
+    ) -> None:
+        """_load_task_from_disk returns None with no conversation file."""
         tracker = TaskTracker()
         conv_dir = tmp_path / "abc12345"
-        conv_dir.mkdir()  # Directory exists but no session file
+        conv_dir.mkdir()  # Directory exists but no conversation file
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         result = server._load_task_from_disk("abc12345")
@@ -803,22 +838,20 @@ class TestLoadPastTasks:
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "error",
-                    "session_id": "sess_error",
-                    "duration_ms": 1000,
-                    "total_cost_usd": 0.01,
-                    "num_turns": 1,
-                    "is_error": True,
-                    "usage": {},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "error",
+                "session_id": "sess_error",
+                "duration_ms": 1000,
+                "total_cost_usd": 0.01,
+                "num_turns": 1,
+                "is_error": True,
+                "usage": {},
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -837,22 +870,20 @@ class TestLoadPastTasks:
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_123",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.05,
-                    "num_turns": 3,
-                    "is_error": False,
-                    "usage": {"input_tokens": 100, "output_tokens": 50},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -865,7 +896,7 @@ class TestLoadPastTasks:
         assert "Conversation: abc12345" in html
         assert "[Past conversation abc12345]" in html
         assert "COMPLETED" in html
-        # Session data should be displayed
+        # Conversation data should be displayed
         assert "$0.05" in html
         assert "3" in html  # num_turns
 
@@ -875,22 +906,20 @@ class TestLoadPastTasks:
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_123",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.05,
-                    "num_turns": 3,
-                    "is_error": False,
-                    "usage": {},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -902,8 +931,8 @@ class TestLoadPastTasks:
         data = json.loads(response.get_data(as_text=True))
         assert data["conversation_id"] == "abc12345"
         assert data["status"] == "completed"
-        assert data["session"] is not None
-        assert data["session"]["total_cost_usd"] == 0.05
+        assert data["conversation"] is not None
+        assert data["conversation"]["total_cost_usd"] == 0.05
 
     def test_task_detail_prefers_memory_over_disk(self, tmp_path: Path) -> None:
         """Test that in-memory task takes precedence over disk."""
@@ -913,22 +942,20 @@ class TestLoadPastTasks:
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_123",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.05,
-                    "num_turns": 3,
-                    "is_error": False,
-                    "usage": {},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -945,52 +972,49 @@ class TestLoadPastTasks:
         assert "[Past conversation" not in html
 
     def test_load_task_from_disk_multiple_replies(self, tmp_path: Path) -> None:
-        """Test past task with multiple replies shows correct message count."""
+        """Test past task with multiple replies shows correct count."""
         tracker = TaskTracker()
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_1",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.01,
-                    "num_turns": 2,
-                    "is_error": False,
-                    "usage": {},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_1",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.01,
+                "num_turns": 2,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
         )
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_2",
-                    "duration_ms": 3000,
-                    "total_cost_usd": 0.02,
-                    "num_turns": 3,
-                    "is_error": False,
-                    "usage": {},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_2",
+                "duration_ms": 3000,
+                "total_cost_usd": 0.02,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         result = server._load_task_from_disk("abc12345")
 
         assert result is not None
-        task, session = result
+        task, conversation = result
         assert task.message_count == 2
-        assert len(session.replies) == 2
+        assert len(conversation.replies) == 2
 
     def test_load_task_from_disk_invalid_timestamp(
         self, tmp_path: Path
@@ -1000,12 +1024,12 @@ class TestLoadPastTasks:
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        # Create session file with invalid timestamp by writing raw JSON
-        session_file = conv_dir / "context.json"
-        session_file.write_text(
+        # Create conversation file with invalid timestamp by writing raw JSON
+        conversation_file = conv_dir / CONVERSATION_FILE_NAME
+        conversation_file.write_text(
             json.dumps(
                 {
-                    "execution_context_id": "abc12345",
+                    "conversation_id": "abc12345",
                     "replies": [
                         {
                             "session_id": "sess_123",
@@ -1017,7 +1041,6 @@ class TestLoadPastTasks:
                             "usage": {},
                             "request_text": None,
                             "response_text": None,
-                            "events": [],
                         }
                     ],
                 }
@@ -1028,7 +1051,7 @@ class TestLoadPastTasks:
         result = server._load_task_from_disk("abc12345")
 
         assert result is not None
-        task, session = result
+        task, conversation = result
         # Should fall back to 0.0 for timestamps when parsing fails
         assert task.queued_at == 0.0
         assert task.started_at is None
@@ -1042,13 +1065,13 @@ class TestLoadPastTasks:
         conv_dir = tmp_path / "5287313b"
         conv_dir.mkdir()
 
-        # Use real timestamp format from production session files
+        # Use real timestamp format from production conversation files
         session_id = "ea8ac106-c5db-4367-bb4e-4461999c2b03"
-        session_file = conv_dir / "context.json"
-        session_file.write_text(
+        conversation_file = conv_dir / CONVERSATION_FILE_NAME
+        conversation_file.write_text(
             json.dumps(
                 {
-                    "execution_context_id": "5287313b",
+                    "conversation_id": "5287313b",
                     "replies": [
                         {
                             "session_id": session_id,
@@ -1063,7 +1086,6 @@ class TestLoadPastTasks:
                             },
                             "request_text": "Test request",
                             "response_text": "Test response",
-                            "events": [],
                         },
                         {
                             "session_id": session_id,
@@ -1078,7 +1100,6 @@ class TestLoadPastTasks:
                             },
                             "request_text": "Second request",
                             "response_text": "Second response",
-                            "events": [],
                         },
                     ],
                 }
@@ -1089,7 +1110,7 @@ class TestLoadPastTasks:
         result = server._load_task_from_disk("5287313b")
 
         assert result is not None
-        task, session = result
+        task, conversation = result
 
         # Should parse timestamp correctly
         assert task.completed_at is not None
@@ -1103,10 +1124,10 @@ class TestLoadPastTasks:
         assert task.message_count == 2
         assert task.success is True
 
-        # Session data
-        assert len(session.replies) == 2
+        # Conversation data
+        assert len(conversation.replies) == 2
         # Sum of all replies: 0.8891622 + 7.180404750000002
-        assert session.total_cost_usd == pytest.approx(8.069566950000002)
+        assert conversation.total_cost_usd == pytest.approx(8.069566950000002)
 
     def test_actions_page_loads_past_task_from_disk(
         self, tmp_path: Path
@@ -1117,28 +1138,26 @@ class TestLoadPastTasks:
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
 
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [{"type": "text", "text": "Test"}],
-                    },
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": "Test"}],
                 },
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_123",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.05,
-                    "num_turns": 3,
-                    "is_error": False,
-                    "usage": {"input_tokens": 100, "output_tokens": 50},
-                    "result": "",
-                },
-            ),
+            },
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {"input_tokens": 100, "output_tokens": 50},
+                "result": "",
+            },
             request_text="Help me with this task",
         )
 
@@ -1151,7 +1170,7 @@ class TestLoadPastTasks:
         html = response.get_data(as_text=True)
         assert "Actions: abc12345" in html
         assert "[Past conversation abc12345]" in html
-        # Session data should be displayed
+        # Conversation data should be displayed
         assert "Reply #1" in html
         # Request text should be rendered on actions page
         assert "Help me with this task" in html
@@ -1160,29 +1179,27 @@ class TestLoadPastTasks:
     def test_actions_page_prefers_memory_over_disk(
         self, tmp_path: Path
     ) -> None:
-        """Test that in-memory task takes precedence over disk for actions."""
+        """Test that in-memory task takes precedence for actions."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "In-Memory Subject")
         tracker.start_task("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_123",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.05,
-                    "num_turns": 3,
-                    "is_error": False,
-                    "usage": {},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -1198,10 +1215,12 @@ class TestLoadPastTasks:
         assert "[Past conversation" not in html
 
 
-class TestLoadTaskWithSession:
-    """Tests for the unified _load_task_with_session utility."""
+class TestLoadTaskWithConversation:
+    """Tests for the unified _load_task_with_conversation utility."""
 
-    def test_load_task_with_session_from_memory(self, tmp_path: Path) -> None:
+    def test_load_task_with_conversation_from_memory(
+        self, tmp_path: Path
+    ) -> None:
         """Test loading task that exists in memory."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "In-Memory Task")
@@ -1209,90 +1228,90 @@ class TestLoadTaskWithSession:
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_123",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.05,
-                    "num_turns": 3,
-                    "is_error": False,
-                    "usage": {},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
-        result = server._load_task_with_session("abc12345")
+        result = server._load_task_with_conversation("abc12345")
 
         assert result is not None
-        task, session = result
+        task, conversation = result
         assert task.subject == "In-Memory Task"
         assert task.status == TaskStatus.IN_PROGRESS
-        assert session is not None
-        assert session.execution_context_id == "abc12345"
+        assert conversation is not None
+        assert conversation.conversation_id == "abc12345"
 
-    def test_load_task_with_session_from_disk(self, tmp_path: Path) -> None:
+    def test_load_task_with_conversation_from_disk(
+        self, tmp_path: Path
+    ) -> None:
         """Test loading task that only exists on disk."""
         tracker = TaskTracker()
         # Do NOT add task to tracker
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
-        store = SessionStore(conv_dir)
-        store.add_reply(
+        _add_reply(
+            conv_dir,
             "abc12345",
-            _parse_events(
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "sess_123",
-                    "duration_ms": 5000,
-                    "total_cost_usd": 0.05,
-                    "num_turns": 3,
-                    "is_error": False,
-                    "usage": {},
-                    "result": "",
-                }
-            ),
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
         )
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
-        result = server._load_task_with_session("abc12345")
+        result = server._load_task_with_conversation("abc12345")
 
         assert result is not None
-        task, session = result
+        task, conversation = result
         assert task.subject == "[Past conversation abc12345]"
         assert task.status == TaskStatus.COMPLETED
-        assert session is not None
+        assert conversation is not None
 
-    def test_load_task_with_session_not_found(self, tmp_path: Path) -> None:
+    def test_load_task_with_conversation_not_found(
+        self, tmp_path: Path
+    ) -> None:
         """Test loading task that doesn't exist anywhere."""
         tracker = TaskTracker()
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
 
-        result = server._load_task_with_session("abc12345")
+        result = server._load_task_with_conversation("abc12345")
         assert result is None
 
-    def test_load_task_with_session_memory_no_session_file(
+    def test_load_task_with_conversation_memory_no_file(
         self, tmp_path: Path
     ) -> None:
-        """Test loading in-memory task when session file doesn't exist."""
+        """Test loading in-memory task when conversation file missing."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Memory Task")
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
-        result = server._load_task_with_session("abc12345")
+        result = server._load_task_with_conversation("abc12345")
 
         assert result is not None
-        task, session = result
+        task, conversation = result
         assert task.subject == "Memory Task"
-        assert session is None  # No session file on disk
+        assert conversation is None  # No conversation file on disk
 
 
 class TestStopEndpoint:
@@ -1407,7 +1426,7 @@ class TestStopEndpoint:
         assert "error" in data
 
     def test_task_detail_with_stop_button(self) -> None:
-        """Test task detail page includes stop button for in-progress tasks."""
+        """Test task detail page includes stop button for in-progress."""
         tracker = TaskTracker()
         task_id = "abc12345"
         tracker.add_task(task_id, "Test Task")
@@ -1428,7 +1447,7 @@ class TestStopEndpoint:
         assert 'stopTask()">Stop</button>' in html
 
     def test_task_detail_without_stop_button(self) -> None:
-        """Test task detail page excludes stop button for completed tasks."""
+        """Test task detail page excludes stop button for completed."""
         tracker = TaskTracker()
         task_id = "abc12345"
         tracker.add_task(task_id, "Test Task")

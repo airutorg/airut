@@ -6,6 +6,7 @@
 """Shared fixtures and helpers for dashboard tests."""
 
 import json
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -13,9 +14,11 @@ import pytest
 from werkzeug.test import Client
 
 from lib.claude_output import StreamEvent, parse_stream_events
+from lib.claude_output.extract import extract_result_summary, extract_session_id
+from lib.conversation import ConversationStore, ReplySummary
 from lib.dashboard.server import DashboardServer
 from lib.dashboard.tracker import TaskTracker
-from lib.sandbox import SessionStore
+from lib.sandbox import EventLog
 
 
 def parse_events(*raw_events: dict[str, Any]) -> list[StreamEvent]:
@@ -51,8 +54,8 @@ def result_event(**overrides: Any) -> dict[str, Any]:
 class DashboardHarness:
     """Encapsulates the common setup for dashboard endpoint tests.
 
-    Creates a tracker, conversation directory, session store, server,
-    and werkzeug test client — the boilerplate that every test repeats.
+    Creates a tracker, conversation directory, conversation store,
+    event log, server, and werkzeug test client.
 
     Usage::
 
@@ -79,7 +82,8 @@ class DashboardHarness:
         self.tracker = TaskTracker()
         self.conv_dir = tmp_path / self.CONV_ID
         self.conv_dir.mkdir()
-        self.store = SessionStore(self.conv_dir)
+        self.store = ConversationStore(self.conv_dir)
+        self.event_log = EventLog(self.conv_dir)
 
         if add_task:
             self.tracker.add_task(self.CONV_ID, self.SUBJECT)
@@ -109,13 +113,46 @@ class DashboardHarness:
         *raw_events: dict[str, Any],
         request_text: str | None = None,
     ) -> None:
-        """Parse raw event dicts and add them as a session reply."""
+        """Parse raw event dicts, write to event log, and add reply."""
+        from datetime import datetime
+
+        from lib.claude_output.types import Usage
+
         events = parse_events(*raw_events)
-        self.store.add_reply(
-            self.CONV_ID,
-            events,
-            request_text=request_text,
-        )
+
+        # Write events to event log
+        self.event_log.start_new_reply()
+        for event in events:
+            self.event_log.append_event(event)
+
+        # Extract summary from events and add reply
+        session_id = extract_session_id(events) or ""
+        summary = extract_result_summary(events)
+
+        if summary is not None:
+            reply = ReplySummary(
+                session_id=session_id,
+                timestamp=datetime.now(tz=UTC).isoformat(),
+                duration_ms=summary.duration_ms,
+                total_cost_usd=summary.total_cost_usd,
+                num_turns=summary.num_turns,
+                is_error=summary.is_error,
+                usage=summary.usage,
+                request_text=request_text,
+            )
+        else:
+            reply = ReplySummary(
+                session_id=session_id,
+                timestamp=datetime.now(tz=UTC).isoformat(),
+                duration_ms=0,
+                total_cost_usd=0.0,
+                num_turns=0,
+                is_error=False,
+                usage=Usage(),
+                request_text=request_text,
+            )
+
+        self.store.add_reply(self.CONV_ID, reply)
 
     def write_log(self, content: str) -> Path:
         """Write network log content to the conversation directory."""

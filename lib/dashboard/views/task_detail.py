@@ -7,26 +7,26 @@
 
 import html
 
+from lib.conversation import ConversationMetadata
 from lib.dashboard.formatters import format_duration, format_timestamp
 from lib.dashboard.tracker import TaskState, TaskStatus
 from lib.dashboard.views.components import (
     render_action_buttons,
-    render_session_section,
+    render_conversation_section,
     render_stop_script,
 )
 from lib.dashboard.views.styles import task_detail_styles
-from lib.sandbox import SessionMetadata
 
 
 def render_task_detail(
     task: TaskState,
-    session: SessionMetadata | None = None,
+    conversation: ConversationMetadata | None = None,
 ) -> str:
     """Render task detail page HTML.
 
     Args:
         task: Task to display.
-        session: Optional session metadata to display.
+        conversation: Optional conversation metadata to display.
 
     Returns:
         HTML string for task detail page.
@@ -54,14 +54,16 @@ def render_task_detail(
     exec_time = format_duration(task.execution_duration())
     total_time = format_duration(task.total_duration())
 
-    # Get model from task or session metadata
+    # Get model from task or conversation metadata
     model_display = task.model
-    if not model_display and session:
-        model_display = session.model
+    if not model_display and conversation:
+        model_display = conversation.model
     model_display = model_display or "-"
 
-    # Build session section if available
-    session_section = render_session_section(task.conversation_id, session)
+    # Build conversation data section if available
+    session_section = render_conversation_section(
+        task.conversation_id, conversation
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">

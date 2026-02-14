@@ -5,15 +5,16 @@
 
 """Sandbox library for safe containerized execution of Claude Code.
 
-The sandbox owns container lifecycle, network isolation, session
-persistence, and error detection. Protocol layers (email, Slack,
-automation) define what Claude sees (prompts, repos, files, mounts);
-the sandbox handles how it runs safely.
+The sandbox owns container lifecycle, network isolation, event logging,
+and error detection. Protocol layers (email, Slack, automation) define
+what Claude sees (prompts, repos, files, mounts); the sandbox handles
+how it runs safely.
 """
 
 from lib.sandbox._image import ImageBuildError
 from lib.sandbox._output import extract_error_summary
 from lib.sandbox._proxy import ProxyError
+from lib.sandbox.event_log import EVENTS_FILE_NAME, EventLog
 from lib.sandbox.network_log import NETWORK_LOG_FILENAME, NetworkLog
 from lib.sandbox.sandbox import Sandbox, SandboxConfig
 from lib.sandbox.secrets import (
@@ -24,12 +25,6 @@ from lib.sandbox.secrets import (
     generate_session_token_surrogate,
     generate_surrogate,
     prepare_secrets,
-)
-from lib.sandbox.session import (
-    SESSION_FILE_NAME,
-    SessionMetadata,
-    SessionReply,
-    SessionStore,
 )
 from lib.sandbox.task import (
     EventCallback,
@@ -62,11 +57,9 @@ __all__ = [
     "generate_session_token_surrogate",
     "generate_surrogate",
     "prepare_secrets",
-    # session
-    "SESSION_FILE_NAME",
-    "SessionMetadata",
-    "SessionReply",
-    "SessionStore",
+    # event_log
+    "EVENTS_FILE_NAME",
+    "EventLog",
     # network_log
     "NETWORK_LOG_FILENAME",
     "NetworkLog",

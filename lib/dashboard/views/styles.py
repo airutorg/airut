@@ -417,7 +417,7 @@ def _task_detail_specific() -> str:
         .status.in_progress { background: #d9edf7; color: #31708f; }
         .status.completed.success { background: #dff0d8; color: #3c763d; }
         .status.completed.failed { background: #f2dede; color: #a94442; }
-        .session-summary {
+        .conversation-summary {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
             gap: 16px;
@@ -573,7 +573,7 @@ def _task_detail_specific() -> str:
             background: #f2dede;
             color: #a94442;
         }
-        .no-session {
+        .no-conversation {
             color: #888;
             font-style: italic;
             padding: 20px;

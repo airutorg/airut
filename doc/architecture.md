@@ -17,8 +17,8 @@ Airut organizes work around three concepts:
   triggers one task. A conversation contains one or more tasks, executed one at
   a time in the order received.
 - **Session** — Claude Code's persistent context, identified by a `session_id`
-  stored in `context.json`. Used with `--resume` to continue Claude's context
-  across tasks within a conversation.
+  stored in `conversation.json`. Used with `--resume` to continue Claude's
+  context across tasks within a conversation.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -102,8 +102,8 @@ across all tasks in that conversation:
 
 - **Conversation directory** — Contains workspace, Claude state, inbox/outbox
 - **Git workspace** — Full clone from the git mirror
-- **Claude session state** — `context.json` and `/root/.claude` state for
-  `--resume` across tasks
+- **Claude session state** — `conversation.json` (metadata), `events.jsonl`
+  (streaming events), and `/root/.claude` state for `--resume` across tasks
 - **Conversation lock** — Serializes task execution within a conversation
 
 **Task-scoped** — created when processing an inbound email, destroyed when the
@@ -117,14 +117,14 @@ task completes:
 
 ### How It Maps to the Concepts
 
-| Concept            | Implementation                                             |
-| ------------------ | ---------------------------------------------------------- |
-| Email conversation | Conversation ID (`[ID:xyz123]`) + conversation directory   |
-| Git checkout       | `ConversationManager` clones from git mirror               |
-| Claude session     | Session ID stored in `context.json`, passed via `--resume` |
-| Container sandbox  | `Sandbox`/`Task` runs Podman with controlled mounts        |
-| Network sandbox    | `ProxyManager` (internal to sandbox) enforces allowlist    |
-| Parallel execution | `ThreadPoolExecutor` with configurable `max_concurrent`    |
+| Concept            | Implementation                                                  |
+| ------------------ | --------------------------------------------------------------- |
+| Email conversation | Conversation ID (`[ID:xyz123]`) + conversation directory        |
+| Git checkout       | `ConversationManager` clones from git mirror                    |
+| Claude session     | Session ID stored in `conversation.json`, passed via `--resume` |
+| Container sandbox  | `Sandbox`/`Task` runs Podman with controlled mounts             |
+| Network sandbox    | `ProxyManager` (internal to sandbox) enforces allowlist         |
+| Parallel execution | `ThreadPoolExecutor` with configurable `max_concurrent`         |
 
 ### Sandbox Concept Mapping
 
@@ -215,7 +215,8 @@ Each conversation maps to a directory:
 ├── git-mirror/              # Bare mirror for fast clones
 └── conversations/
     └── {conversation-id}/       # 8-char hex ID
-        ├── context.json         # Session metadata (NOT mounted to container)
+        ├── conversation.json    # Session metadata (NOT mounted to container)
+        ├── events.jsonl         # Streaming events (append-only)
         ├── network-sandbox.log  # Proxy request log (allowed/blocked)
         ├── workspace/           # Git checkout → /workspace
         ├── claude/              # Claude state → /root/.claude

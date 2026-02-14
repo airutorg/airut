@@ -172,7 +172,7 @@ class Sandbox:
         """Create a task for sandboxed execution.
 
         The sandbox owns:
-        - session_dir/context.json -- session metadata and history
+        - session_dir/events.jsonl -- append-only event log
         - session_dir/claude/ -- Claude session state directory
           (mounted at /root/.claude in the container)
         - network_log_dir/network-sandbox.log -- network activity log

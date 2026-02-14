@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lib.claude_output import StreamEvent, parse_event, parse_stream_events
+from lib.claude_output import StreamEvent, parse_stream_events
 from lib.claude_output.types import Usage
 from lib.gateway.config import RepoConfig
 from lib.gateway.service import build_recovery_prompt
@@ -158,30 +158,30 @@ class TestProcessMessage:
             "authorized@example.com"
         )
 
-        mock_session_store = MagicMock()
-        mock_session_store.get_session_id_for_resume.return_value = None
-        mock_session_store.get_model.return_value = None
+        mock_conv_store = MagicMock()
+        mock_conv_store.get_session_id_for_resume.return_value = None
+        mock_conv_store.get_model.return_value = None
 
         # Configure sandbox mock: ensure_image returns tag,
         # create_task returns a mock Task whose execute returns success
         mock_task = MagicMock()
         mock_task.execute.return_value = _make_success_result()
-        mock_task.session_store = mock_session_store
+        mock_task.event_log = MagicMock()
         svc.sandbox.ensure_image.return_value = "airut:test"
         svc.sandbox.create_task.return_value = mock_task
         svc._mock_task = mock_task  # Store for test access
 
-        return svc, handler, mock_session_store
+        return svc, handler, mock_conv_store
 
     def test_new_conversation_success(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
 
@@ -243,7 +243,7 @@ class TestProcessMessage:
         the system must treat it as a new conversation rather than
         erroring or leaking state.
         """
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
         # The conversation ID exists in the subject but NOT in this repo
         handler.conversation_manager.exists.return_value = False
         msg = make_message(
@@ -252,8 +252,8 @@ class TestProcessMessage:
         )
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
         assert success is True
@@ -275,7 +275,7 @@ class TestProcessMessage:
         assert success is False
 
     def test_execution_failure(self, email_config: Any, tmp_path: Path) -> None:
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
 
         svc._mock_task.execute.return_value = _make_failure_result(
             events=_parse_events(
@@ -295,23 +295,23 @@ class TestProcessMessage:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
         assert success is False
         assert conv_id == "conv1"
 
     def test_container_timeout(self, email_config: Any, tmp_path: Path) -> None:
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
         svc._mock_task.execute.return_value = _make_failure_result(
             outcome=Outcome.TIMEOUT,
         )
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
         assert success is False
@@ -329,13 +329,13 @@ class TestProcessMessage:
         assert conv_id is None
 
     def test_unexpected_error(self, email_config: Any, tmp_path: Path) -> None:
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
         svc._mock_task.execute.side_effect = RuntimeError("unexpected")
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
         assert success is False
@@ -343,18 +343,18 @@ class TestProcessMessage:
     def test_resume_existing_conversation(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
         repo_path = tmp_path / "repo"
         handler.conversation_manager.exists.return_value = True
         handler.conversation_manager.resume_existing.return_value = repo_path
-        mock_ss.get_model.return_value = "opus"
-        mock_ss.get_session_id_for_resume.return_value = "session-abc"
+        mock_cs.get_model.return_value = "opus"
+        mock_cs.get_session_id_for_resume.return_value = "session-abc"
 
         msg = make_message(subject="[ID:aabb1122] Test", body="Continue")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "conv1", handler)
         assert success is True
@@ -368,13 +368,13 @@ class TestProcessMessage:
     def test_model_from_address(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
         msg = make_message(to="airut+opus@example.com", body="Do stuff")
 
         with (
             patch(
-                "lib.gateway.service.message_processing.SessionStore",
-                return_value=mock_ss,
+                "lib.gateway.service.message_processing.ConversationStore",
+                return_value=mock_cs,
             ),
             patch(
                 "lib.gateway.service.message_processing.extract_model_from_address",
@@ -387,13 +387,13 @@ class TestProcessMessage:
         assert call_kwargs["model"] == "opus"
 
     def test_attachments_saved(self, email_config: Any, tmp_path: Path) -> None:
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
         msg = make_message(body="See attached")
 
         with (
             patch(
-                "lib.gateway.service.message_processing.SessionStore",
-                return_value=mock_ss,
+                "lib.gateway.service.message_processing.ConversationStore",
+                return_value=mock_cs,
             ),
             patch(
                 "lib.gateway.service.message_processing.extract_attachments",
@@ -408,12 +408,12 @@ class TestProcessMessage:
     def test_usage_stats_footer(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
         msg = make_message(body="Check")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             process_message(svc, msg, "task1", handler)
         # Reply should contain cost footer
@@ -421,117 +421,47 @@ class TestProcessMessage:
         body = reply_call[1]["body"]
         assert "Cost:" in body
 
-    def test_on_event_callback(self, email_config: Any, tmp_path: Path) -> None:
-        """Test that on_event callback is passed and works."""
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
-        msg = make_message(body="Do stuff")
-
-        # Capture the on_event callback from task.execute
-        captured_callback = None
-
-        def capture_execute(prompt, **kwargs):
-            nonlocal captured_callback
-            captured_callback = kwargs.get("on_event")
-            return _make_success_result(response_text="Ok")
-
-        svc._mock_task.execute.side_effect = capture_execute
-
-        with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
-        ):
-            process_message(svc, msg, "task1", handler)
-
-        assert captured_callback is not None
-        # Call the callback with a regular event (typed StreamEvent)
-        event = parse_event(
-            json.dumps({"type": "assistant", "message": {"content": []}})
-        )
-        assert event is not None
-        captured_callback(event)
-        mock_ss.update_or_add_reply.assert_called()
-
-    def test_on_event_callback_result_event(
+    def test_success_calls_add_reply(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        """Test on_event with a result-type event extracts fields."""
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        """Successful execution records reply via add_reply."""
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
         msg = make_message(body="Do stuff")
 
-        captured_callback = None
-
-        def capture_execute(prompt, **kwargs):
-            nonlocal captured_callback
-            captured_callback = kwargs.get("on_event")
-            return _make_success_result()
-
-        svc._mock_task.execute.side_effect = capture_execute
-
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             process_message(svc, msg, "task1", handler)
 
-        # Call with result event
-        assert captured_callback is not None
-        event = parse_event(
-            json.dumps(
-                {
-                    "type": "result",
-                    "session_id": "s1",
-                    "duration_ms": 100,
-                    "total_cost_usd": 0.01,
-                    "num_turns": 1,
-                    "is_error": False,
-                    "usage": {},
-                    "result": "done",
-                }
-            )
-        )
-        assert event is not None
-        captured_callback(event)
+        mock_cs.add_reply.assert_called_once()
+        call_args = mock_cs.add_reply.call_args
+        assert call_args[0][0] == "conv1"  # conversation_id
 
-    def test_on_event_callback_exception_handled(
+    def test_event_log_start_new_reply_called(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        """on_event should not raise if session store fails."""
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
-        mock_ss.update_or_add_reply.side_effect = RuntimeError("write fail")
+        """task.event_log.start_new_reply() is called before execution."""
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
         msg = make_message(body="Do stuff")
 
-        captured_callback = None
-
-        def capture_execute(prompt, **kwargs):
-            nonlocal captured_callback
-            captured_callback = kwargs.get("on_event")
-            return _make_success_result()
-
-        svc._mock_task.execute.side_effect = capture_execute
-
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             process_message(svc, msg, "task1", handler)
 
-        # Should not raise
-        assert captured_callback is not None
-        event = parse_event(
-            json.dumps({"type": "assistant", "message": {"content": []}})
-        )
-        assert event is not None
-        captured_callback(event)
+        svc._mock_task.event_log.start_new_reply.assert_called_once()
 
     def test_resumed_conversation_ignores_model_request(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
         repo_path = tmp_path / "repo"
         handler.conversation_manager.exists.return_value = True
         handler.conversation_manager.resume_existing.return_value = repo_path
-        mock_ss.get_model.return_value = "sonnet"
-        mock_ss.get_session_id_for_resume.return_value = None
+        mock_cs.get_model.return_value = "sonnet"
+        mock_cs.get_session_id_for_resume.return_value = None
 
         msg = make_message(
             subject="[ID:aabb1122] Test",
@@ -541,8 +471,8 @@ class TestProcessMessage:
 
         with (
             patch(
-                "lib.gateway.service.message_processing.SessionStore",
-                return_value=mock_ss,
+                "lib.gateway.service.message_processing.ConversationStore",
+                return_value=mock_cs,
             ),
             patch(
                 "lib.gateway.service.message_processing.extract_model_from_address",
@@ -557,12 +487,12 @@ class TestProcessMessage:
     def test_task_id_updated_for_new_conversation(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             process_message(svc, msg, "temp-123", handler)
         svc.tracker.update_task_id.assert_called_once_with("temp-123", "conv1")
@@ -571,13 +501,13 @@ class TestProcessMessage:
         self, email_config: Any, tmp_path: Path
     ) -> None:
         """Subjects > 50 chars are truncated in log messages."""
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
         long_subject = "A" * 60
         msg = make_message(subject=long_subject, body="Do stuff")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             process_message(svc, msg, "task1", handler)
         # Just verify it doesn't crash
@@ -585,7 +515,7 @@ class TestProcessMessage:
     def test_no_usage_stats_no_footer(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
 
         # Result with no cost event → no usage stats footer
         svc._mock_task.execute.return_value = _make_success_result(
@@ -599,8 +529,8 @@ class TestProcessMessage:
         msg = make_message(body="Do stuff")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             process_message(svc, msg, "task1", handler)
         reply_call = handler.responder.send_reply.call_args_list[-1]
@@ -610,7 +540,7 @@ class TestProcessMessage:
     def test_failure_with_stderr(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
 
         stderr_lines = "\n".join(f"line{i}" for i in range(15))
         svc._mock_task.execute.return_value = _make_failure_result(
@@ -619,8 +549,8 @@ class TestProcessMessage:
         msg = make_message(body="Do stuff")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             success, _ = process_message(svc, msg, "task1", handler)
         assert success is False
@@ -634,15 +564,15 @@ class TestProcessMessage:
     def test_failure_with_error_summary(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
 
         svc._mock_task.execute.return_value = _make_failure_result()
         msg = make_message(body="Do stuff")
 
         with (
             patch(
-                "lib.gateway.service.message_processing.SessionStore",
-                return_value=mock_ss,
+                "lib.gateway.service.message_processing.ConversationStore",
+                return_value=mock_cs,
             ),
             patch(
                 "lib.gateway.service.message_processing.extract_error_summary",
@@ -660,14 +590,13 @@ class TestProcessMessage:
     def test_execution_failure_persists_session(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        """Session must be updated even when execution fails.
+        """Conversation store must be updated even when execution fails.
 
-        Bug: when result.outcome is not SUCCESS,
-        session_store.update_or_add_reply was never called, so
-        the error execution's metadata (session_id, is_error flag)
-        was lost. The next message could not resume properly.
+        Bug: when result.outcome is not SUCCESS, the error execution's
+        metadata (session_id, is_error flag) was lost. The next message
+        could not resume properly.
         """
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
 
         svc._mock_task.execute.return_value = _make_failure_result(
             events=_parse_events(
@@ -687,80 +616,90 @@ class TestProcessMessage:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
 
         assert success is False
-        # The critical assertion: session store must be updated with the
-        # error execution's output so the session_id is available for resume.
-        # Filter out streaming on_event calls (which pass partial_output with
-        # request_text) — we want the final post-execution call.
-        final_calls = [
-            c
-            for c in mock_ss.update_or_add_reply.call_args_list
-            if c.kwargs.get("response_text", "") != ""
-            or c.kwargs.get("is_error", False)
-        ]
-        assert len(final_calls) >= 1, (
-            "session_store.update_or_add_reply must be called after failed "
-            "execution to persist error metadata"
-        )
+        # The critical assertion: conversation store must be updated with
+        # the error execution's output so the session_id is available for
+        # resume.
+        mock_cs.add_reply.assert_called_once()
+        call_args = mock_cs.add_reply.call_args
+        assert call_args[0][0] == "conv1"  # conversation_id
 
     def test_container_timeout_persists_session(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        """Session must be updated when a container timeout occurs."""
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        """Store must be updated on container timeout."""
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
         svc._mock_task.execute.return_value = _make_failure_result(
             outcome=Outcome.TIMEOUT,
         )
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
 
         assert success is False
-        # Session store must record the error so next message can resume
-        mock_ss.update_or_add_reply.assert_called()
-        last_call = mock_ss.update_or_add_reply.call_args
-        assert last_call.kwargs.get("is_error") is True
+        # Conversation store must record the error so next message can resume
+        mock_cs.add_reply.assert_called_once()
+        call_args = mock_cs.add_reply.call_args
+        assert call_args[0][0] == "conv1"  # conversation_id
 
     def test_unexpected_error_persists_session(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        """Session must be updated on unexpected exceptions."""
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        """Conversation store must be updated on unexpected exceptions."""
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
         svc._mock_task.execute.side_effect = RuntimeError("unexpected")
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
 
         assert success is False
-        mock_ss.update_or_add_reply.assert_called()
-        last_call = mock_ss.update_or_add_reply.call_args
-        assert last_call.kwargs.get("is_error") is True
+        mock_cs.add_reply.assert_called_once()
+        call_args = mock_cs.add_reply.call_args
+        assert call_args[0][0] == "conv1"  # conversation_id
+
+    def test_unexpected_error_persist_failure_handled(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        """Persist failure in catch-all handler is logged, not raised."""
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
+        svc._mock_task.execute.side_effect = RuntimeError("unexpected")
+        mock_cs.add_reply.side_effect = OSError("disk full")
+        msg = make_message(body="Do something")
+
+        with patch(
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            success, conv_id = process_message(svc, msg, "task1", handler)
+
+        assert success is False
+        assert conv_id == "conv1"
 
     def test_prompt_too_long_retries_with_new_session(
         self, email_config: Any, tmp_path: Path
     ) -> None:
         """Prompt-too-long error triggers retry with fresh session."""
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
 
         # Simulate resuming an existing conversation
         repo_path = tmp_path / "repo"
         handler.conversation_manager.exists.return_value = True
         handler.conversation_manager.resume_existing.return_value = repo_path
-        mock_ss.get_session_id_for_resume.return_value = "old-session-id"
-        mock_ss.get_last_successful_response.return_value = "I created the PR."
+        mock_cs.get_session_id_for_resume.return_value = "old-session-id"
+        mock_cs.get_last_successful_response.return_value = "I created the PR."
 
         # First call: prompt too long; second call: success
         prompt_too_long_result = _make_failure_result(
@@ -793,19 +732,19 @@ class TestProcessMessage:
         # create_task is called twice (once for first attempt, once for retry)
         mock_task1 = MagicMock()
         mock_task1.execute.return_value = prompt_too_long_result
-        mock_task1.session_store = mock_ss
+        mock_task1.event_log = MagicMock()
 
         mock_task2 = MagicMock()
         mock_task2.execute.return_value = success_result
-        mock_task2.session_store = mock_ss
+        mock_task2.event_log = MagicMock()
 
         svc.sandbox.create_task.side_effect = [mock_task1, mock_task2]
 
         msg = make_message(subject="[ID:aabb1122] Test", body="Continue please")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
 
@@ -827,8 +766,8 @@ class TestProcessMessage:
         self, email_config: Any, tmp_path: Path
     ) -> None:
         """Prompt-too-long without session_id does not retry (new conv)."""
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
-        mock_ss.get_session_id_for_resume.return_value = None
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
+        mock_cs.get_session_id_for_resume.return_value = None
 
         svc._mock_task.execute.return_value = _make_failure_result(
             outcome=Outcome.PROMPT_TOO_LONG,
@@ -838,8 +777,8 @@ class TestProcessMessage:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
 
@@ -851,14 +790,14 @@ class TestProcessMessage:
         self, email_config: Any, tmp_path: Path
     ) -> None:
         """API 4xx error triggers retry with fresh session."""
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
 
         # Simulate resuming an existing conversation
         repo_path = tmp_path / "repo"
         handler.conversation_manager.exists.return_value = True
         handler.conversation_manager.resume_existing.return_value = repo_path
-        mock_ss.get_session_id_for_resume.return_value = "old-session-id"
-        mock_ss.get_last_successful_response.return_value = "Previous work."
+        mock_cs.get_session_id_for_resume.return_value = "old-session-id"
+        mock_cs.get_last_successful_response.return_value = "Previous work."
 
         # First call: session corrupted; second call: success
         corrupted_result = _make_failure_result(
@@ -890,19 +829,19 @@ class TestProcessMessage:
 
         mock_task1 = MagicMock()
         mock_task1.execute.return_value = corrupted_result
-        mock_task1.session_store = mock_ss
+        mock_task1.event_log = MagicMock()
 
         mock_task2 = MagicMock()
         mock_task2.execute.return_value = success_result
-        mock_task2.session_store = mock_ss
+        mock_task2.event_log = MagicMock()
 
         svc.sandbox.create_task.side_effect = [mock_task1, mock_task2]
 
         msg = make_message(subject="[ID:aabb1122] Test", body="Continue please")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
 
@@ -920,8 +859,8 @@ class TestProcessMessage:
         self, email_config: Any, tmp_path: Path
     ) -> None:
         """API 4xx without session_id does not retry (new conversation)."""
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
-        mock_ss.get_session_id_for_resume.return_value = None
+        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
+        mock_cs.get_session_id_for_resume.return_value = None
 
         svc._mock_task.execute.return_value = _make_failure_result(
             outcome=Outcome.SESSION_CORRUPTED,
@@ -931,8 +870,8 @@ class TestProcessMessage:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
-            return_value=mock_ss,
+            "lib.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
 
@@ -993,18 +932,18 @@ class TestBuildImageErrors:
             "authorized@example.com"
         )
 
-        mock_session_store = MagicMock()
-        mock_session_store.get_session_id_for_resume.return_value = None
-        mock_session_store.get_model.return_value = None
+        mock_conv_store = MagicMock()
+        mock_conv_store.get_session_id_for_resume.return_value = None
+        mock_conv_store.get_model.return_value = None
 
         mock_task = MagicMock()
         mock_task.execute.return_value = _make_success_result()
-        mock_task.session_store = mock_session_store
+        mock_task.event_log = MagicMock()
         svc.sandbox.ensure_image.return_value = "airut:test"
         svc.sandbox.create_task.return_value = mock_task
         svc._mock_task = mock_task
 
-        return svc, handler, mock_session_store
+        return svc, handler, mock_conv_store
 
     def test_list_directory_error_raises_image_build_error(
         self, email_config: Any, tmp_path: Path
@@ -1017,7 +956,7 @@ class TestBuildImageErrors:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
+            "lib.gateway.service.message_processing.ConversationStore",
             return_value=mock_ss,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -1046,7 +985,7 @@ class TestBuildImageErrors:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
+            "lib.gateway.service.message_processing.ConversationStore",
             return_value=mock_ss,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -1075,7 +1014,7 @@ class TestBuildImageErrors:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
+            "lib.gateway.service.message_processing.ConversationStore",
             return_value=mock_ss,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -1140,17 +1079,17 @@ class TestAllowlistParseError:
             "authorized@example.com"
         )
 
-        mock_session_store = MagicMock()
-        mock_session_store.get_session_id_for_resume.return_value = None
-        mock_session_store.get_model.return_value = None
+        mock_conv_store = MagicMock()
+        mock_conv_store.get_session_id_for_resume.return_value = None
+        mock_conv_store.get_model.return_value = None
 
         mock_task = MagicMock()
         mock_task.execute.return_value = _make_success_result()
-        mock_task.session_store = mock_session_store
+        mock_task.event_log = MagicMock()
         svc.sandbox.ensure_image.return_value = "airut:test"
         svc.sandbox.create_task.return_value = mock_task
 
-        return svc, handler, mock_session_store
+        return svc, handler, mock_conv_store
 
     def test_allowlist_read_error_raises_proxy_error(
         self, email_config: Any, tmp_path: Path
@@ -1160,7 +1099,7 @@ class TestAllowlistParseError:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.SessionStore",
+            "lib.gateway.service.message_processing.ConversationStore",
             return_value=mock_ss,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -1212,18 +1151,18 @@ class TestConvertReplacementMap:
             "authorized@example.com"
         )
 
-        mock_session_store = MagicMock()
-        mock_session_store.get_session_id_for_resume.return_value = None
-        mock_session_store.get_model.return_value = None
+        mock_conv_store = MagicMock()
+        mock_conv_store.get_session_id_for_resume.return_value = None
+        mock_conv_store.get_model.return_value = None
 
         mock_task = MagicMock()
         mock_task.execute.return_value = _make_success_result()
-        mock_task.session_store = mock_session_store
+        mock_task.event_log = MagicMock()
         svc.sandbox.ensure_image.return_value = "airut:test"
         svc.sandbox.create_task.return_value = mock_task
         svc._mock_task = mock_task
 
-        return svc, handler, mock_session_store
+        return svc, handler, mock_conv_store
 
     def test_replacement_and_signing_entries_converted(
         self, email_config: Any, tmp_path: Path
@@ -1256,7 +1195,7 @@ class TestConvertReplacementMap:
                 return_value=(rc, replacement_map),
             ),
             patch(
-                "lib.gateway.service.message_processing.SessionStore",
+                "lib.gateway.service.message_processing.ConversationStore",
                 return_value=mock_ss,
             ),
         ):

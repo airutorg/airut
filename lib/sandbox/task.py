@@ -7,7 +7,7 @@
 
 A Task represents a single sandboxed Claude Code execution within an
 execution context. It manages the container process lifecycle, proxy
-start/stop, streaming output parsing, and session state updates.
+start/stop, streaming output parsing, and event logging.
 """
 
 from __future__ import annotations
@@ -27,9 +27,9 @@ from lib.claude_output import StreamEvent, parse_event
 from lib.sandbox._network import get_network_args
 from lib.sandbox._output import build_execution_result
 from lib.sandbox._proxy import ProxyManager, _ContextProxy
+from lib.sandbox.event_log import EventLog
 from lib.sandbox.network_log import NETWORK_LOG_FILENAME, NetworkLog
 from lib.sandbox.secrets import SecretReplacements
-from lib.sandbox.session import SessionStore
 from lib.sandbox.types import ContainerEnv, ExecutionResult, Mount
 
 
@@ -73,16 +73,10 @@ class Task:
     Lifecycle::
 
         task = sandbox.create_task(...)
-        session_id = task.session_store.get_session_id_for_resume()
         result = task.execute(prompt, session_id=session_id, model=model)
 
-        # Inspect result.outcome to decide recovery
-        match result.outcome:
-            case Outcome.SUCCESS:
-                use(result.response_text)
-            case Outcome.PROMPT_TOO_LONG | Outcome.SESSION_CORRUPTED:
-                last = task.session_store.get_last_successful_response()
-                result = task.execute(recovery, session_id=None, model=model)
+        # Events are appended to events.jsonl during execution
+        # Conversation metadata is managed by the caller (gateway)
 
         # From another thread:
         task.stop()
@@ -117,8 +111,8 @@ class Task:
         self._container_command = container_command
         self._proxy_manager = proxy_manager
 
-        # Session store
-        self._session_store = SessionStore(session_dir)
+        # Event log (append-only)
+        self._event_log = EventLog(session_dir)
 
         # Network log
         self._network_log: NetworkLog | None = None
@@ -141,9 +135,9 @@ class Task:
         return self._execution_context_id
 
     @property
-    def session_store(self) -> SessionStore:
-        """Access session state (read-only for callers)."""
-        return self._session_store
+    def event_log(self) -> EventLog:
+        """Access the append-only event log."""
+        return self._event_log
 
     @property
     def network_log(self) -> NetworkLog | None:
@@ -163,7 +157,7 @@ class Task:
         1. Start proxy (if network sandbox configured)
         2. Build podman command with mounts, env, network args
         3. Run container with prompt on stdin
-        4. Stream events, invoke callback, update session store
+        4. Stream events to event log and invoke callback
         5. Stop proxy
         6. Classify result and return
 
@@ -376,9 +370,11 @@ class Task:
                 if process.stdout:
                     for line in process.stdout:
                         stdout_lines.append(line)
-                        if on_event:
-                            event = parse_event(line)
-                            if event is not None:
+                        event = parse_event(line)
+                        if event is not None:
+                            # Append to event log (O(1) append)
+                            self._event_log.append_event(event)
+                            if on_event:
                                 on_event(event)
 
                 # Wait for process to complete with timeout

@@ -942,9 +942,7 @@ Please help.
         # Create mock task
         mock_task = MagicMock()
         mock_task.execute.side_effect = track_execute
-        mock_task.session_store = MagicMock()
-        mock_task.session_store.get_session_id_for_resume.return_value = None
-        mock_task.session_store.get_model.return_value = None
+        mock_task.event_log = MagicMock()
         service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock
         service.sandbox.create_task.return_value = mock_task  # type: ignore[invalid-assignment]  # mock
 
@@ -1030,9 +1028,7 @@ Please help.
             stderr="",
             exit_code=0,
         )
-        mock_task.session_store = MagicMock()
-        mock_task.session_store.get_session_id_for_resume.return_value = None
-        mock_task.session_store.get_model.return_value = None
+        mock_task.event_log = MagicMock()
         service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock
         service.sandbox.create_task.return_value = mock_task  # type: ignore[invalid-assignment]  # mock
 
@@ -1192,9 +1188,7 @@ Please help.
             stderr="",
             exit_code=0,
         )
-        mock_task.session_store = MagicMock()
-        mock_task.session_store.get_session_id_for_resume.return_value = None
-        mock_task.session_store.get_model.return_value = None
+        mock_task.event_log = MagicMock()
         service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock
         service.sandbox.create_task.return_value = mock_task  # type: ignore[invalid-assignment]  # mock
 

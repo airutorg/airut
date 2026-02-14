@@ -17,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
+from lib.conversation import CONVERSATION_FILE_NAME
 
 from .conftest import get_message_text
 from .environment import IntegrationEnvironment
@@ -90,30 +91,27 @@ events = [
             )
             assert response1 is not None, "Did not receive first response"
 
-            # Verify session file was created
+            # Verify conversation file was created
             session_dir = (
                 integration_env.storage_dir / "conversations" / conv_id
             )
-            session_file = session_dir / "context.json"
-            assert session_file.exists(), (
-                f"Session file not created: {session_file}"
+            conversation_file = session_dir / CONVERSATION_FILE_NAME
+            assert conversation_file.exists(), (
+                f"Conversation file not created: {conversation_file}"
             )
 
-            # Read and verify first session data
+            # Read and verify first conversation data
             import json
 
-            with session_file.open("r") as f:
-                session_data_after_first = json.load(f)
+            with conversation_file.open("r") as f:
+                conv_data_after_first = json.load(f)
 
-            assert "replies" in session_data_after_first
-            assert len(session_data_after_first["replies"]) == 1
-            first_reply = session_data_after_first["replies"][0]
-            assert "events" in first_reply
-            assert len(first_reply["events"]) > 0
+            assert "conversation_id" in conv_data_after_first
+            assert "replies" in conv_data_after_first
+            assert len(conv_data_after_first["replies"]) == 1
+            first_reply = conv_data_after_first["replies"][0]
             assert first_reply["request_text"] is not None
             assert first_reply["response_text"] is not None
-            # Save first reply events count for later verification
-            first_reply_events_count = len(first_reply["events"])
 
         finally:
             # Stop the service (simulate restart)
@@ -172,33 +170,25 @@ events = [
             service2.repo_handlers["test"].listener.interrupt()
             service_thread2.join(timeout=10.0)
 
-        # Now verify session file has BOTH replies with full history
-        with session_file.open("r") as f:
-            final_session_data = json.load(f)
+        # Now verify conversation file has BOTH replies with full history
+        with conversation_file.open("r") as f:
+            final_conv_data = json.load(f)
 
         # CRITICAL: Check that we have 2 replies
-        assert "replies" in final_session_data
-        assert len(final_session_data["replies"]) == 2, (
-            f"Expected 2 replies, got {len(final_session_data['replies'])}"
+        assert "conversation_id" in final_conv_data
+        assert "replies" in final_conv_data
+        assert len(final_conv_data["replies"]) == 2, (
+            f"Expected 2 replies, got {len(final_conv_data['replies'])}"
         )
 
-        # Verify first reply still has all its events
-        first_reply_final = final_session_data["replies"][0]
-        assert "events" in first_reply_final
-        assert len(first_reply_final["events"]) == first_reply_events_count, (
-            f"First reply lost events: expected {first_reply_events_count}, "
-            f"got {len(first_reply_final['events'])}"
-        )
+        # Verify first reply preserved its metadata
+        first_reply_final = final_conv_data["replies"][0]
         assert first_reply_final["request_text"] is not None
         assert first_reply_final["response_text"] is not None
         assert "first" in first_reply_final["response_text"].lower()
 
-        # Verify second reply has its events
-        second_reply_final = final_session_data["replies"][1]
-        assert "events" in second_reply_final
-        assert len(second_reply_final["events"]) > 0, (
-            "Second reply has no events"
-        )
+        # Verify second reply has its metadata
+        second_reply_final = final_conv_data["replies"][1]
         assert second_reply_final["request_text"] is not None
         assert second_reply_final["response_text"] is not None
         assert "second" in second_reply_final["response_text"].lower()
@@ -247,11 +237,11 @@ events = [
             session_dir = (
                 integration_env.storage_dir / "conversations" / conv_id
             )
-            session_file = session_dir / "context.json"
+            conversation_file = session_dir / CONVERSATION_FILE_NAME
 
             import json
 
-            with session_file.open("r") as f:
+            with conversation_file.open("r") as f:
                 session_data = json.load(f)
 
             first_session_id = session_data["replies"][0]["session_id"]
@@ -287,8 +277,8 @@ events = [
             service_thread.join(timeout=10.0)
 
         # Verify that the executor was called with the correct session_id
-        # by checking the session file
-        with session_file.open("r") as f:
+        # by checking the conversation file
+        with conversation_file.open("r") as f:
             final_session_data = json.load(f)
 
         assert len(final_session_data["replies"]) == 2
