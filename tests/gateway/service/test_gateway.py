@@ -41,11 +41,10 @@ class TestEmailGatewayServiceInit:
             patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
             patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
             patch("lib.gateway.service.repo_handler.ConversationManager"),
-            patch("lib.gateway.service.repo_handler.ClaudeExecutor"),
             patch("lib.gateway.service.gateway.UpdateLock") as mock_ulock,
             patch("lib.gateway.service.gateway.capture_version_info") as mv,
             patch("lib.gateway.service.gateway.TaskTracker"),
-            patch("lib.gateway.service.gateway.ProxyManager"),
+            patch("lib.gateway.service.gateway.Sandbox"),
             patch(
                 "lib.gateway.service.gateway.get_system_resolver",
                 return_value="127.0.0.53",
@@ -60,7 +59,7 @@ class TestEmailGatewayServiceInit:
     def test_init_custom_egress_network(
         self, email_config, tmp_path: Path
     ) -> None:
-        """Custom egress_network is passed to ProxyManager."""
+        """Custom egress_network is passed to Sandbox."""
         from lib.gateway.config import GlobalConfig, ServerConfig
 
         global_config = GlobalConfig(dashboard_enabled=False)
@@ -74,11 +73,10 @@ class TestEmailGatewayServiceInit:
             patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
             patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
             patch("lib.gateway.service.repo_handler.ConversationManager"),
-            patch("lib.gateway.service.repo_handler.ClaudeExecutor"),
             patch("lib.gateway.service.gateway.UpdateLock"),
             patch("lib.gateway.service.gateway.capture_version_info") as mv,
             patch("lib.gateway.service.gateway.TaskTracker"),
-            patch("lib.gateway.service.gateway.ProxyManager") as mock_pm,
+            patch("lib.gateway.service.gateway.Sandbox") as mock_sandbox,
             patch(
                 "lib.gateway.service.gateway.get_system_resolver",
                 return_value="127.0.0.53",
@@ -90,9 +88,11 @@ class TestEmailGatewayServiceInit:
                 repo_root=tmp_path,
                 egress_network="custom-egress-net",
             )
-            # ProxyManager should receive custom egress_network
-            call_kwargs = mock_pm.call_args.kwargs
-            assert call_kwargs.get("egress_network") == "custom-egress-net"
+            # Sandbox should receive custom egress_network
+            assert (
+                mock_sandbox.call_args.kwargs["egress_network"]
+                == "custom-egress-net"
+            )
 
 
 class TestSubmitMessage:
@@ -389,11 +389,10 @@ class TestRepoHandlerInitError:
                 "lib.gateway.service.repo_handler.ConversationManager",
                 side_effect=RuntimeError("Git clone failed"),
             ),
-            patch("lib.gateway.service.repo_handler.ClaudeExecutor"),
             patch("lib.gateway.service.gateway.UpdateLock"),
             patch("lib.gateway.service.gateway.capture_version_info") as mv,
             patch("lib.gateway.service.gateway.TaskTracker"),
-            patch("lib.gateway.service.gateway.ProxyManager"),
+            patch("lib.gateway.service.gateway.Sandbox"),
             patch(
                 "lib.gateway.service.gateway.get_system_resolver",
                 return_value="127.0.0.53",
@@ -431,11 +430,10 @@ class TestRepoHandlerInitError:
                 "lib.gateway.service.repo_handler.ConversationManager",
                 side_effect=RuntimeError("Git clone failed"),
             ),
-            patch("lib.gateway.service.repo_handler.ClaudeExecutor"),
             patch("lib.gateway.service.gateway.UpdateLock"),
             patch("lib.gateway.service.gateway.capture_version_info") as mv,
             patch("lib.gateway.service.gateway.TaskTracker"),
-            patch("lib.gateway.service.gateway.ProxyManager"),
+            patch("lib.gateway.service.gateway.Sandbox"),
             patch(
                 "lib.gateway.service.gateway.get_system_resolver",
                 return_value="127.0.0.53",
@@ -700,23 +698,16 @@ class TestStateProviders:
 
 
 class TestStopExecution:
-    def test_found_in_handler(self, email_config, tmp_path: Path) -> None:
+    def test_found_active_task(self, email_config, tmp_path: Path) -> None:
         svc, handler = make_service(email_config, tmp_path)
-        handler.executor.stop_execution.return_value = True
+        mock_task = MagicMock()
+        mock_task.stop.return_value = True
+        svc._active_tasks["conv1"] = mock_task
         assert svc._stop_execution("conv1") is True
-
-    def test_found_via_conv_repo_map(
-        self, email_config, tmp_path: Path
-    ) -> None:
-        svc, handler = make_service(email_config, tmp_path)
-        svc._conv_repo_map["conv1"] = "test"
-        handler.executor.stop_execution.return_value = True
-        assert svc._stop_execution("conv1") is True
-        handler.executor.stop_execution.assert_called_once_with("conv1")
+        mock_task.stop.assert_called_once()
 
     def test_not_found(self, email_config, tmp_path: Path) -> None:
         svc, handler = make_service(email_config, tmp_path)
-        handler.executor.stop_execution.return_value = False
         assert svc._stop_execution("conv1") is False
 
 
@@ -1050,11 +1041,10 @@ class TestUpstreamDnsResolution:
             patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
             patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
             patch("lib.gateway.service.repo_handler.ConversationManager"),
-            patch("lib.gateway.service.repo_handler.ClaudeExecutor"),
             patch("lib.gateway.service.gateway.UpdateLock"),
             patch("lib.gateway.service.gateway.capture_version_info") as mv,
             patch("lib.gateway.service.gateway.TaskTracker"),
-            patch("lib.gateway.service.gateway.ProxyManager") as mock_pm,
+            patch("lib.gateway.service.gateway.Sandbox") as mock_sandbox,
             patch(
                 "lib.gateway.service.gateway.get_system_resolver",
                 return_value="192.168.1.1",
@@ -1063,9 +1053,8 @@ class TestUpstreamDnsResolution:
             mv.return_value = MagicMock(git_sha="x", worktree_clean=True)
             EmailGatewayService(server_config, repo_root=tmp_path)
             mock_resolver.assert_called_once()
-            # ProxyManager should receive the auto-detected DNS
-            call_kwargs = mock_pm.call_args.kwargs
-            assert call_kwargs["upstream_dns"] == "192.168.1.1"
+            # Sandbox should receive the auto-detected DNS via SandboxConfig
+            assert mock_sandbox.call_args[0][0].upstream_dns == "192.168.1.1"
 
     def test_uses_explicit_upstream_dns(
         self, email_config, tmp_path: Path
@@ -1086,11 +1075,10 @@ class TestUpstreamDnsResolution:
             patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
             patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
             patch("lib.gateway.service.repo_handler.ConversationManager"),
-            patch("lib.gateway.service.repo_handler.ClaudeExecutor"),
             patch("lib.gateway.service.gateway.UpdateLock"),
             patch("lib.gateway.service.gateway.capture_version_info") as mv,
             patch("lib.gateway.service.gateway.TaskTracker"),
-            patch("lib.gateway.service.gateway.ProxyManager") as mock_pm,
+            patch("lib.gateway.service.gateway.Sandbox") as mock_sandbox,
             patch(
                 "lib.gateway.service.gateway.get_system_resolver",
             ) as mock_resolver,
@@ -1098,15 +1086,14 @@ class TestUpstreamDnsResolution:
             mv.return_value = MagicMock(git_sha="x", worktree_clean=True)
             EmailGatewayService(server_config, repo_root=tmp_path)
             mock_resolver.assert_not_called()
-            # ProxyManager should receive the explicit DNS
-            call_kwargs = mock_pm.call_args.kwargs
-            assert call_kwargs["upstream_dns"] == "8.8.8.8"
+            # Sandbox should receive the explicit DNS via SandboxConfig
+            assert mock_sandbox.call_args[0][0].upstream_dns == "8.8.8.8"
 
     def test_system_resolver_error_propagates(
         self, email_config, tmp_path: Path
     ) -> None:
         """SystemResolverError propagates to caller."""
-        from lib.container.dns import SystemResolverError
+        from lib.container import SystemResolverError
         from lib.gateway.config import GlobalConfig, ServerConfig
 
         global_config = GlobalConfig(dashboard_enabled=False)
@@ -1120,11 +1107,10 @@ class TestUpstreamDnsResolution:
             patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
             patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
             patch("lib.gateway.service.repo_handler.ConversationManager"),
-            patch("lib.gateway.service.repo_handler.ClaudeExecutor"),
             patch("lib.gateway.service.gateway.UpdateLock"),
             patch("lib.gateway.service.gateway.capture_version_info") as mv,
             patch("lib.gateway.service.gateway.TaskTracker"),
-            patch("lib.gateway.service.gateway.ProxyManager"),
+            patch("lib.gateway.service.gateway.Sandbox"),
             patch(
                 "lib.gateway.service.gateway.get_system_resolver",
                 side_effect=SystemResolverError("No nameserver entries found"),

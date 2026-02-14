@@ -103,17 +103,13 @@ Generation uses `secrets.choice()` (cryptographically secure).
 
 ## Replacement Map
 
-The replacement map is passed from config resolution to the proxy:
+The replacement map is built by `prepare_secrets()` in `lib/sandbox/secrets.py`
+and passed to the proxy via `SecretReplacements` (an opaque container). The
+internal representation maps surrogate tokens to replacement entries:
 
-```python
-ReplacementMap = dict[str, ReplacementEntry]
-
-
-@dataclass
-class ReplacementEntry:
-    real_value: str
-    scopes: tuple[str, ...]
-    headers: tuple[str, ...]  # fnmatch patterns
+```
+# Internal structure (not part of public API)
+surrogate -> ReplacementEntry(real_value, scopes, headers)
 ```
 
 ### JSON Format (proxy mount)
@@ -168,18 +164,25 @@ Body and query parameter tokens are **not** replaced.
 ## Data Flow
 
 ```
-RepoConfig.from_mirror()
+Gateway config resolution
     │
     ├─ Parse .airut/airut.yaml
     ├─ Resolve !secret references against masked_secrets + secrets
-    ├─ Generate surrogates for masked secrets
     │
-    └─ Returns (RepoConfig, ReplacementMap)
+    └─ Provide MaskedSecret / SigningCredential to sandbox
            │
            ▼
-ProxyManager.start_task_proxy(replacement_map)
+prepare_secrets() (lib/sandbox/secrets.py)
     │
-    ├─ Write replacement_map to temp JSON
+    ├─ Generate surrogates for masked secrets
+    ├─ Return PreparedSecrets (env_vars + SecretReplacements)
+    │
+    └─ SecretReplacements passed to NetworkSandboxConfig
+           │
+           ▼
+Task.execute() -> ProxyManager.start_task_proxy()
+    │
+    ├─ Serialize SecretReplacements to JSON temp file
     ├─ Mount at /replacements.json
     │
     └─ Proxy container starts with filter addon
@@ -187,7 +190,7 @@ ProxyManager.start_task_proxy(replacement_map)
            ▼
 proxy_filter.py request()
     │
-    ├─ Allowlist check (existing)
+    ├─ Allowlist check
     ├─ Token replacement (if host matches scopes)
     │
     └─ Forward request with real credentials

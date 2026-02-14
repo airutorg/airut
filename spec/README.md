@@ -16,6 +16,11 @@ For high-level documentation, see [doc/](../doc/).
 - [multi-repo.md](multi-repo.md) — Multi-repository support design
 - [integration-tests.md](integration-tests.md) — End-to-end test specification
 
+## Sandbox
+
+- [sandbox.md](sandbox.md) — Sandbox library for safe containerized Claude Code
+  execution
+
 ## Container
 
 - [image.md](image.md) — Two-layer container image build strategy

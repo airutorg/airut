@@ -14,7 +14,7 @@ import pytest
 
 from lib.claude_output import StreamEvent, parse_stream_events
 from lib.claude_output.types import Usage
-from lib.container.session import (
+from lib.sandbox.session import (
     SESSION_FILE_NAME,
     SessionMetadata,
     SessionReply,
@@ -186,22 +186,24 @@ class TestSessionMetadata:
 
     def test_create_metadata_empty(self) -> None:
         """Create SessionMetadata with no replies."""
-        metadata = SessionMetadata(conversation_id="abc12345")
+        metadata = SessionMetadata(execution_context_id="abc12345")
 
-        assert metadata.conversation_id == "abc12345"
+        assert metadata.execution_context_id == "abc12345"
         assert metadata.replies == []
         assert metadata.model is None
 
     def test_create_metadata_with_model(self) -> None:
         """Create SessionMetadata with model specified."""
-        metadata = SessionMetadata(conversation_id="abc12345", model="opus")
+        metadata = SessionMetadata(
+            execution_context_id="abc12345", model="opus"
+        )
 
-        assert metadata.conversation_id == "abc12345"
+        assert metadata.execution_context_id == "abc12345"
         assert metadata.model == "opus"
 
     def test_latest_session_id_empty(self) -> None:
         """latest_session_id returns None when no replies."""
-        metadata = SessionMetadata(conversation_id="abc12345")
+        metadata = SessionMetadata(execution_context_id="abc12345")
 
         assert metadata.latest_session_id is None
 
@@ -216,7 +218,7 @@ class TestSessionMetadata:
             is_error=False,
         )
         metadata = SessionMetadata(
-            conversation_id="abc12345",
+            execution_context_id="abc12345",
             replies=[reply],
         )
 
@@ -241,7 +243,7 @@ class TestSessionMetadata:
             is_error=False,
         )
         metadata = SessionMetadata(
-            conversation_id="abc12345",
+            execution_context_id="abc12345",
             replies=[reply1, reply2],
         )
 
@@ -271,7 +273,7 @@ class TestSessionMetadata:
             is_error=False,
         )
         metadata = SessionMetadata(
-            conversation_id="abc12345",
+            execution_context_id="abc12345",
             replies=[successful_reply, interrupted_reply],
         )
 
@@ -288,7 +290,7 @@ class TestSessionMetadata:
             is_error=False,
         )
         metadata = SessionMetadata(
-            conversation_id="abc12345",
+            execution_context_id="abc12345",
             replies=[reply],
         )
 
@@ -296,7 +298,7 @@ class TestSessionMetadata:
 
     def test_total_cost_usd_empty(self) -> None:
         """total_cost_usd returns 0.0 when no replies."""
-        metadata = SessionMetadata(conversation_id="abc12345")
+        metadata = SessionMetadata(execution_context_id="abc12345")
 
         assert metadata.total_cost_usd == 0.0
 
@@ -319,7 +321,7 @@ class TestSessionMetadata:
             is_error=False,
         )
         metadata = SessionMetadata(
-            conversation_id="abc12345",
+            execution_context_id="abc12345",
             replies=[reply1, reply2],
         )
 
@@ -328,7 +330,7 @@ class TestSessionMetadata:
 
     def test_total_turns_empty(self) -> None:
         """total_turns returns 0 when no replies."""
-        metadata = SessionMetadata(conversation_id="abc12345")
+        metadata = SessionMetadata(execution_context_id="abc12345")
 
         assert metadata.total_turns == 0
 
@@ -351,7 +353,7 @@ class TestSessionMetadata:
             is_error=False,
         )
         metadata = SessionMetadata(
-            conversation_id="abc12345",
+            execution_context_id="abc12345",
             replies=[reply1, reply2],
         )
 
@@ -377,7 +379,7 @@ class TestSessionStore:
     def test_load_valid_file(self, tmp_path: Path) -> None:
         """load() parses valid session file."""
         session_data = {
-            "conversation_id": "abc12345",
+            "execution_context_id": "abc12345",
             "replies": [
                 {
                     "session_id": "session-1",
@@ -396,7 +398,7 @@ class TestSessionStore:
         metadata = store.load()
 
         assert metadata is not None
-        assert metadata.conversation_id == "abc12345"
+        assert metadata.execution_context_id == "abc12345"
         assert len(metadata.replies) == 1
         assert metadata.replies[0].session_id == "session-1"
         assert metadata.replies[0].usage == Usage(input_tokens=100)
@@ -404,7 +406,7 @@ class TestSessionStore:
     def test_load_file_without_usage(self, tmp_path: Path) -> None:
         """load() handles reply without usage field."""
         session_data = {
-            "conversation_id": "abc12345",
+            "execution_context_id": "abc12345",
             "replies": [
                 {
                     "session_id": "session-1",
@@ -428,7 +430,7 @@ class TestSessionStore:
     def test_load_events_skips_non_dict_items(self, tmp_path: Path) -> None:
         """load() skips non-dict items in events list."""
         session_data = {
-            "conversation_id": "abc12345",
+            "execution_context_id": "abc12345",
             "replies": [
                 {
                     "session_id": "session-1",
@@ -468,7 +470,7 @@ class TestSessionStore:
     def test_load_non_dict_usage_returns_default(self, tmp_path: Path) -> None:
         """load() returns default Usage for non-dict usage values."""
         session_data = {
-            "conversation_id": "abc12345",
+            "execution_context_id": "abc12345",
             "replies": [
                 {
                     "session_id": "session-1",
@@ -492,7 +494,7 @@ class TestSessionStore:
     def test_usage_extra_fields_round_trip(self, tmp_path: Path) -> None:
         """Extra usage fields survive save/load round-trip."""
         session_data = {
-            "conversation_id": "abc12345",
+            "execution_context_id": "abc12345",
             "replies": [
                 {
                     "session_id": "session-1",
@@ -536,7 +538,7 @@ class TestSessionStore:
     def test_load_missing_required_fields(self, tmp_path: Path) -> None:
         """load() returns None when required fields missing."""
         session_data = {
-            "conversation_id": "abc12345",
+            "execution_context_id": "abc12345",
             "replies": [
                 {
                     "session_id": "session-1",
@@ -549,27 +551,29 @@ class TestSessionStore:
         store = SessionStore(tmp_path)
         assert store.load() is None
 
-    def test_load_missing_conversation_id(self, tmp_path: Path) -> None:
-        """load() returns None when conversation_id missing."""
+    def test_load_missing_execution_context_id(self, tmp_path: Path) -> None:
+        """load() returns metadata with empty ID when key missing."""
         session_data = {
-            # Missing conversation_id
+            # Missing execution_context_id
             "replies": [],
         }
         (tmp_path / SESSION_FILE_NAME).write_text(json.dumps(session_data))
 
         store = SessionStore(tmp_path)
-        assert store.load() is None
+        metadata = store.load()
+        assert metadata is not None
+        assert metadata.execution_context_id == ""
 
     def test_save_creates_file(self, tmp_path: Path) -> None:
         """save() creates session file."""
         store = SessionStore(tmp_path)
-        metadata = SessionMetadata(conversation_id="abc12345")
+        metadata = SessionMetadata(execution_context_id="abc12345")
 
         store.save(metadata)
 
         assert (tmp_path / SESSION_FILE_NAME).exists()
         data = json.loads((tmp_path / SESSION_FILE_NAME).read_text())
-        assert data["conversation_id"] == "abc12345"
+        assert data["execution_context_id"] == "abc12345"
         assert data["replies"] == []
 
     def test_save_with_replies(self, tmp_path: Path) -> None:
@@ -585,7 +589,7 @@ class TestSessionStore:
             usage=Usage(input_tokens=100),
         )
         metadata = SessionMetadata(
-            conversation_id="abc12345",
+            execution_context_id="abc12345",
             replies=[reply],
         )
 
@@ -601,7 +605,7 @@ class TestSessionStore:
         store = SessionStore(tmp_path)
 
         # Save initial
-        metadata1 = SessionMetadata(conversation_id="abc12345")
+        metadata1 = SessionMetadata(execution_context_id="abc12345")
         store.save(metadata1)
 
         # Save updated
@@ -614,7 +618,7 @@ class TestSessionStore:
             is_error=False,
         )
         metadata2 = SessionMetadata(
-            conversation_id="abc12345",
+            execution_context_id="abc12345",
             replies=[reply],
         )
         store.save(metadata2)
@@ -640,14 +644,14 @@ class TestSessionStore:
             }
         )
 
-        with patch("lib.container.session.datetime") as mock_datetime:
+        with patch("lib.sandbox.session.datetime") as mock_datetime:
             mock_datetime.now.return_value = datetime(
                 2026, 1, 15, 12, 0, 0, tzinfo=UTC
             )
 
             metadata = store.add_reply("abc12345", events)
 
-        assert metadata.conversation_id == "abc12345"
+        assert metadata.execution_context_id == "abc12345"
         assert len(metadata.replies) == 1
         assert metadata.replies[0].session_id == "new-session-id"
         assert metadata.replies[0].total_cost_usd == 0.05
@@ -655,7 +659,7 @@ class TestSessionStore:
 
         # Verify persisted
         data = json.loads((tmp_path / SESSION_FILE_NAME).read_text())
-        assert data["conversation_id"] == "abc12345"
+        assert data["execution_context_id"] == "abc12345"
 
     def test_add_reply_appends_to_existing(self, tmp_path: Path) -> None:
         """add_reply() appends to existing metadata."""
@@ -904,7 +908,7 @@ class TestSessionStore:
     ) -> None:
         """get_session_id_for_resume() returns None for empty replies."""
         session_data = {
-            "conversation_id": "abc12345",
+            "execution_context_id": "abc12345",
             "replies": [],
         }
         (tmp_path / SESSION_FILE_NAME).write_text(json.dumps(session_data))
@@ -918,7 +922,7 @@ class TestSessionStore:
     ) -> None:
         """get_session_id_for_resume() returns latest session_id."""
         session_data = {
-            "conversation_id": "abc12345",
+            "execution_context_id": "abc12345",
             "replies": [
                 {
                     "session_id": "session-1",
@@ -954,7 +958,7 @@ class TestSessionStore:
         return the valid session_id from the earlier reply.
         """
         session_data = {
-            "conversation_id": "abc12345",
+            "execution_context_id": "abc12345",
             "replies": [
                 {
                     "session_id": "session-good",
@@ -989,7 +993,7 @@ class TestSessionStore:
     def test_get_model_no_model_in_file(self, tmp_path: Path) -> None:
         """get_model() returns None when model not set in file."""
         session_data = {
-            "conversation_id": "abc12345",
+            "execution_context_id": "abc12345",
             "replies": [],
         }
         (tmp_path / SESSION_FILE_NAME).write_text(json.dumps(session_data))
@@ -1001,7 +1005,7 @@ class TestSessionStore:
     def test_get_model_returns_model(self, tmp_path: Path) -> None:
         """get_model() returns the stored model."""
         session_data = {
-            "conversation_id": "abc12345",
+            "execution_context_id": "abc12345",
             "model": "opus",
             "replies": [],
         }
@@ -1019,13 +1023,13 @@ class TestSessionStore:
 
         assert (tmp_path / SESSION_FILE_NAME).exists()
         data = json.loads((tmp_path / SESSION_FILE_NAME).read_text())
-        assert data["conversation_id"] == "abc12345"
+        assert data.get("execution_context_id") == "abc12345"
         assert data["model"] == "haiku"
 
     def test_set_model_updates_existing(self, tmp_path: Path) -> None:
         """set_model() updates model in existing file."""
         session_data = {
-            "conversation_id": "abc12345",
+            "execution_context_id": "abc12345",
             "model": "sonnet",
             "replies": [
                 {
@@ -1098,7 +1102,7 @@ class TestSessionFileIntegration:
         metadata = fresh_store.load()
 
         assert metadata is not None
-        assert metadata.conversation_id == "abc12345"
+        assert metadata.execution_context_id == "abc12345"
         assert len(metadata.replies) == 2
         assert (
             metadata.latest_session_id == "c7886694-f2cb-4861-ad3c-fbe0964eb4df"
@@ -1144,7 +1148,7 @@ class TestSessionFileIntegration:
     def test_load_without_text_fields(self, tmp_path: Path) -> None:
         """Load session file without text fields (backwards compat)."""
         session_data = {
-            "conversation_id": "abc12345",
+            "execution_context_id": "abc12345",
             "replies": [
                 {
                     "session_id": "sess-123",
@@ -1174,7 +1178,7 @@ class TestSessionFileIntegration:
         the events field. New servers should load them with empty events list.
         """
         session_data = {
-            "conversation_id": "abc12345",
+            "execution_context_id": "abc12345",
             "replies": [
                 {
                     "session_id": "sess-123",
@@ -1223,9 +1227,9 @@ class TestSessionResumeAfterApiError:
         - But init event in events array HAS the session_id
         - latest_session_id should extract it from init event
         """
-        # Simulate session.json after 529 error (no result event)
+        # Simulate context.json after 529 error (no result event)
         session_data = {
-            "conversation_id": "3b8952f8",
+            "execution_context_id": "3b8952f8",
             "replies": [
                 {
                     "session_id": "",  # Empty because no result event
@@ -1280,7 +1284,7 @@ class TestSessionResumeAfterApiError:
         be preferred over extracting from init event.
         """
         session_data = {
-            "conversation_id": "abc12345",
+            "execution_context_id": "abc12345",
             "replies": [
                 {
                     "session_id": "result-session-id",  # From result event
@@ -1324,7 +1328,7 @@ class TestSessionResumeAfterApiError:
         """
         # First reply: failed with 529, has init event with session_id
         session_data = {
-            "conversation_id": "3b8952f8",
+            "execution_context_id": "3b8952f8",
             "model": "opus",
             "replies": [
                 {
@@ -1366,7 +1370,7 @@ class TestSessionResumeAfterApiError:
         init session_id. Should use the most recent valid session_id.
         """
         session_data = {
-            "conversation_id": "abc12345",
+            "execution_context_id": "abc12345",
             "replies": [
                 # First reply: success
                 {
@@ -1433,7 +1437,7 @@ class TestGetLastSuccessfulResponse:
     def test_returns_none_when_all_errors(self, tmp_path: Path) -> None:
         """Returns None when all replies are errors."""
         session_data = {
-            "conversation_id": "abc123",
+            "execution_context_id": "abc123",
             "replies": [
                 {
                     "session_id": "s1",
@@ -1453,7 +1457,7 @@ class TestGetLastSuccessfulResponse:
     def test_returns_last_successful_response(self, tmp_path: Path) -> None:
         """Returns response text from the last non-error reply."""
         session_data = {
-            "conversation_id": "abc123",
+            "execution_context_id": "abc123",
             "replies": [
                 {
                     "session_id": "s1",
@@ -1491,7 +1495,7 @@ class TestGetLastSuccessfulResponse:
     def test_skips_replies_with_no_response_text(self, tmp_path: Path) -> None:
         """Skips successful replies that have no response text."""
         session_data = {
-            "conversation_id": "abc123",
+            "execution_context_id": "abc123",
             "replies": [
                 {
                     "session_id": "s1",

@@ -17,7 +17,7 @@ Airut organizes work around three concepts:
   triggers one task. A conversation contains one or more tasks, executed one at
   a time in the order received.
 - **Session** — Claude Code's persistent context, identified by a `session_id`
-  stored in `session.json`. Used with `--resume` to continue Claude's context
+  stored in `context.json`. Used with `--resume` to continue Claude's context
   across tasks within a conversation.
 
 ```
@@ -57,10 +57,10 @@ This section describes how the implementation realizes the concepts above.
 │  │       │                                   │                      │   │
 │  │       │           ConversationManager ◀───┘                      │   │
 │  │       │                   │                                      │   │
-│  │       │           ClaudeExecutor ◀────────────────────┐          │   │
+│  │       │           Sandbox (lib/sandbox/) ◀────────────┐          │   │
 │  │       │                   │                           │          │   │
 │  │       ▼                   ▼                           │          │   │
-│  │  EmailResponder ◀─── Container execution ◀─── ProxyManager       │   │
+│  │  EmailResponder ◀─── Task execution ◀─── ProxyManager (internal) │   │
 │  └──────────────────────────────────────────────────────────────────┘   │
 │                                                                         │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌────────────────────────┐   │
@@ -77,8 +77,8 @@ each component's lifetime and what resources it can access.
 
 - **EmailGatewayService** — Top-level orchestrator that manages repo handlers,
   shared thread pool, dashboard, and graceful shutdown
-- **ProxyManager** — Manages proxy infrastructure (shared egress network, CA
-  certificate, container image) and creates per-task proxy containers
+- **Sandbox** (`lib/sandbox/`) — Manages container execution, proxy
+  infrastructure, session persistence, and image builds
 - **ThreadPool** — Limits concurrent task execution across repositories
 - **TaskTracker** — Tracks task status for dashboard and monitoring
 - **Dashboard** — Optional web UI for viewing conversations and network logs
@@ -92,8 +92,8 @@ each component's lifetime and what resources it can access.
 - **SenderAuthorizer** — Checks sender against repository allowlist
 - **ConversationManager** — Creates/resumes conversations, manages git mirror
   and workspaces
-- **ClaudeExecutor** — Builds container images and runs Claude Code in
-  containers
+- **Sandbox Task** — Per-execution task created by the Sandbox; runs Claude Code
+  in a container with proxy, mounts, and session management
 - **EmailResponder** — Sends replies via SMTP with proper threading headers
 - **GitMirrorCache** — Bare mirror repository for fast local clones
 
@@ -102,7 +102,7 @@ across all tasks in that conversation:
 
 - **Conversation directory** — Contains workspace, Claude state, inbox/outbox
 - **Git workspace** — Full clone from the git mirror
-- **Claude session state** — `session.json` and `/root/.claude` state for
+- **Claude session state** — `context.json` and `/root/.claude` state for
   `--resume` across tasks
 - **Conversation lock** — Serializes task execution within a conversation
 
@@ -121,10 +121,27 @@ task completes:
 | ------------------ | ---------------------------------------------------------- |
 | Email conversation | Conversation ID (`[ID:xyz123]`) + conversation directory   |
 | Git checkout       | `ConversationManager` clones from git mirror               |
-| Claude session     | Session ID stored in `session.json`, passed via `--resume` |
-| Container sandbox  | `ClaudeExecutor` runs Podman with controlled mounts        |
-| Network sandbox    | `ProxyManager` runs mitmproxy enforcing allowlist          |
+| Claude session     | Session ID stored in `context.json`, passed via `--resume` |
+| Container sandbox  | `Sandbox`/`Task` runs Podman with controlled mounts        |
+| Network sandbox    | `ProxyManager` (internal to sandbox) enforces allowlist    |
 | Parallel execution | `ThreadPoolExecutor` with configurable `max_concurrent`    |
+
+### Sandbox Concept Mapping
+
+The sandbox library (`lib/sandbox/`) is protocol-agnostic — it knows nothing
+about email, conversations, or gateway-specific layouts. The gateway bridges its
+own concepts to the sandbox's neutral interface:
+
+| Gateway concept  | Sandbox concept        | Mapping                                 |
+| ---------------- | ---------------------- | --------------------------------------- |
+| Conversation ID  | `execution_context_id` | Passed to `create_task()`               |
+| Conversation dir | `session_dir`, mounts  | Gateway builds paths, sandbox uses them |
+| Email task       | `Task.execute()` call  | One email → one `execute()` invocation  |
+
+The `execution_context_id` is an opaque string to the sandbox — it scopes
+session state and network resources without knowing that it represents a
+conversation. See [spec/sandbox.md](../spec/sandbox.md) for the sandbox's own
+API documentation.
 
 ### Request Flow
 
@@ -148,22 +165,23 @@ ConversationManager
     ├──▶ Clone workspace from git mirror (new) or reuse (resume)
     │
     ▼
-ClaudeExecutor
+Sandbox (lib/sandbox/)
     │
     ├──▶ Build container image (cached by content hash)
     │
-    ├──▶ Start proxy container (network sandbox)
+    ├──▶ Create Task with mounts, env, session dir
     │
-    ├──▶ Prepend email prelude to prompt (notes email interface,
-    │    mentions /inbox attachments and /outbox for replies)
+    ├──▶ Prepend email prelude to prompt (gateway layer)
     │
-    ├──▶ Run Claude Code container with mounts:
-    │        /workspace  ← conversation workspace
-    │        /inbox      ← email attachments
-    │        /outbox     ← files to attach to reply
-    │    For existing conversations, pass --resume {session_id}
-    │
-    ├──▶ Capture output, store session metadata for resume
+    ├──▶ Task.execute():
+    │        Start proxy (network sandbox)
+    │        Run Claude Code container with mounts:
+    │            /workspace  ← conversation workspace
+    │            /inbox      ← email attachments
+    │            /outbox     ← files to attach to reply
+    │        For existing sessions, pass --resume {session_id}
+    │        Capture output, classify outcome
+    │        Stop proxy
     │
     ▼
 EmailResponder
@@ -197,7 +215,7 @@ Each conversation maps to a directory:
 ├── git-mirror/              # Bare mirror for fast clones
 └── conversations/
     └── {conversation-id}/       # 8-char hex ID
-        ├── session.json         # Session metadata (NOT mounted to container)
+        ├── context.json         # Session metadata (NOT mounted to container)
         ├── network-sandbox.log  # Proxy request log (allowed/blocked)
         ├── workspace/           # Git checkout → /workspace
         ├── claude/              # Claude state → /root/.claude

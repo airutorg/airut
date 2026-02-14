@@ -55,7 +55,7 @@ Each conversation is an isolated session with git workspace and metadata:
 │   └── (bare git repository)
 ├── conversations/                    # All conversations
 │   ├── abc12345/                # Session ID (8-char hex)
-│   │   ├── session.json         # Session metadata (NOT mounted to container)
+│   │   ├── context.json         # Session metadata (NOT mounted to container)
 │   │   ├── workspace/           # Git workspace (mounted at /workspace)
 │   │   │   ├── .git/            # Git repository
 │   │   │   └── ...              # Full project structure
@@ -64,13 +64,13 @@ Each conversation is an isolated session with git workspace and metadata:
 │   │   ├── outbox/              # Files to attach to reply (mounted at /outbox)
 │   │   └── storage/             # Conversation-scoped persistent data (mounted at /storage)
 │   └── def67890/                # Another session
-│       ├── session.json
+│       ├── context.json
 │       └── workspace/
 ```
 
 **Key Points:**
 
-- `session.json` stores Claude session IDs and metadata **outside the
+- `context.json` stores Claude session IDs and metadata **outside the
   workspace**
 - Session directories (claude, inbox, outbox, storage) are mounted separately
   from the workspace to keep the git repo clean
@@ -90,7 +90,7 @@ Each conversation is an isolated session with git workspace and metadata:
 | Event                    | Action                                                                                                             |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------ |
 | **New conversation**     | Generate 8-char ID, create `conversations/{id}/`, clone from mirror to `workspace/`                                |
-| **Resume conversation**  | Verify workspace exists, load session from `session.json`, preserve local state                                    |
+| **Resume conversation**  | Verify workspace exists, load session from `context.json`, preserve local state                                    |
 | **User requests sync**   | Claude runs `git fetch origin && git rebase origin/main` manually in workspace                                     |
 | **Conversation timeout** | Garbage collect conversations with no activity for 7 days (configurable via `execution.conversation_max_age_days`) |
 
@@ -249,8 +249,8 @@ Only entries with non-empty resolved values are passed.
 
 See [repo-config.md](repo-config.md) for the full schema and examples.
 
-**Note:** `session.json` is stored in
-`{STORAGE}/conversations/{ID}/session.json` and is **NOT** mounted to the
+**Note:** `context.json` is stored in
+`{STORAGE}/conversations/{ID}/context.json` and is **NOT** mounted to the
 container, ensuring session metadata cannot be modified by Claude.
 
 ### Security Isolation
@@ -278,14 +278,14 @@ effect after merging to main without a server restart.
 
 ### Session Resumption
 
-The service stores Claude's session metadata in `session.json` within each
-conversation directory (`{STORAGE}/conversations/{ID}/session.json`), outside
+The service stores Claude's session metadata in `context.json` within each
+conversation directory (`{STORAGE}/conversations/{ID}/context.json`), outside
 the container workspace. This enables conversation continuity via Claude's
 `--resume` flag.
 
 **Resumption flow**:
 
-1. Before execution, load session metadata from `session.json`
+1. Before execution, load session metadata from `context.json`
 2. If a previous session_id exists, pass `--resume {session_id}` to Claude
 3. After execution, record the new session metadata for future resumption
 4. Claude maintains conversation context across email messages
@@ -302,7 +302,7 @@ about the context loss. Two classes of errors trigger this recovery:
   from mismatched `tool_use_id`/`tool_result` pairs) indicating the session
   state is invalid and cannot be resumed
 
-See `lib/container/session.py` for the `SessionStore` and `SessionMetadata` data
+See `lib/sandbox/session.py` for the `SessionStore` and `SessionMetadata` data
 model.
 
 ### Actions History

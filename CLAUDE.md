@@ -24,6 +24,7 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
 
 - `spec/gateway-architecture.md` — email protocol, conversation state, container
   execution
+- `spec/sandbox.md` — sandbox library for safe containerized execution
 - `spec/authentication.md` — DMARC verification and sender authorization
 - `spec/repo-config.md` — repo config schema and YAML tags
 - `spec/image.md` — two-layer container image build
@@ -225,11 +226,11 @@ is created AND GitHub CI passes (step 3).
 ```
 .airut/                     - Repo-specific Airut configuration
 config/                     - Server configuration templates
-docker/                     - Container entrypoint (airut-entrypoint.sh)
 proxy/                      - Network sandbox (proxy filter, DNS, AWS signing)
 lib/                        - Library code
   claude_output/            - Typed Claude streaming JSON output parser
-  container/                - Container execution (executor, proxy, session)
+  container/                - Conversation layout and DNS utilities
+  sandbox/                  - Sandboxed execution (container, proxy, session, image)
   dashboard/                - Web dashboard server
   gateway/                  - Email gateway service
   gh/                       - GitHub API wrappers
@@ -247,7 +248,8 @@ scripts/                    - CLI tools
 spec/                       - Design specifications (see spec/README.md)
 tests/                      - Unit tests (100% coverage required)
   claude_output/            - Claude output parser tests
-  container/                - Container execution tests
+  container/                - Container layout tests
+  sandbox/                  - Sandbox execution tests
   dashboard/                - Dashboard tests
   gateway/                  - Email gateway tests
 workflows/                  - Step-by-step operational guides

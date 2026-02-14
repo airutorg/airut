@@ -11,9 +11,9 @@ from pathlib import Path
 import pytest
 from werkzeug.test import Client
 
-from lib.container.session import SessionStore
 from lib.dashboard.server import DashboardServer
 from lib.dashboard.tracker import TaskState, TaskStatus, TaskTracker
+from lib.sandbox import SessionStore
 from tests.dashboard.conftest import parse_events as _parse_events
 
 
@@ -82,7 +82,7 @@ class TestSessionDataIntegration:
         result = server._load_session("abc12345")
 
         assert result is not None
-        assert result.conversation_id == "abc12345"
+        assert result.execution_context_id == "abc12345"
         assert len(result.replies) == 1
         assert result.replies[0].session_id == "sess_123"
         assert result.total_cost_usd == 0.0123
@@ -182,7 +182,7 @@ class TestSessionDataIntegration:
         assert response.content_type == "application/json"
 
         data = json.loads(response.get_data(as_text=True))
-        assert data["conversation_id"] == "abc12345"
+        assert data["execution_context_id"] == "abc12345"
         assert len(data["replies"]) == 1
         assert data["replies"][0]["session_id"] == "sess_123"
 
@@ -210,11 +210,11 @@ class TestSessionDataIntegration:
         assert response.content_type == "application/json"
 
     def test_task_session_json_dir_exists_no_file(self, tmp_path: Path) -> None:
-        """Returns 404 when dir exists but session.json missing."""
+        """Returns 404 when dir exists but context.json missing."""
         tracker = TaskTracker()
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
-        # No session.json inside
+        # No context.json inside
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
@@ -231,7 +231,7 @@ class TestSessionDataIntegration:
         conv_dir.mkdir()
 
         # Write invalid JSON
-        session_file = conv_dir / "session.json"
+        session_file = conv_dir / "context.json"
         session_file.write_text("not valid json {{{")
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
@@ -753,7 +753,7 @@ class TestLoadPastTasks:
         assert task.message_count == 1
         assert task.success is True
         assert session is not None
-        assert session.conversation_id == "abc12345"
+        assert session.execution_context_id == "abc12345"
 
     def test_load_task_from_disk_no_work_dirs(self) -> None:
         """Test _load_task_from_disk returns None when work_dirs not set."""
@@ -1001,11 +1001,11 @@ class TestLoadPastTasks:
         conv_dir.mkdir()
 
         # Create session file with invalid timestamp by writing raw JSON
-        session_file = conv_dir / "session.json"
+        session_file = conv_dir / "context.json"
         session_file.write_text(
             json.dumps(
                 {
-                    "conversation_id": "abc12345",
+                    "execution_context_id": "abc12345",
                     "replies": [
                         {
                             "session_id": "sess_123",
@@ -1044,11 +1044,11 @@ class TestLoadPastTasks:
 
         # Use real timestamp format from production session files
         session_id = "ea8ac106-c5db-4367-bb4e-4461999c2b03"
-        session_file = conv_dir / "session.json"
+        session_file = conv_dir / "context.json"
         session_file.write_text(
             json.dumps(
                 {
-                    "conversation_id": "5287313b",
+                    "execution_context_id": "5287313b",
                     "replies": [
                         {
                             "session_id": session_id,
@@ -1235,7 +1235,7 @@ class TestLoadTaskWithSession:
         assert task.subject == "In-Memory Task"
         assert task.status == TaskStatus.IN_PROGRESS
         assert session is not None
-        assert session.conversation_id == "abc12345"
+        assert session.execution_context_id == "abc12345"
 
     def test_load_task_with_session_from_disk(self, tmp_path: Path) -> None:
         """Test loading task that only exists on disk."""

@@ -3,11 +3,11 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Claude session metadata storage for email conversations.
+"""Claude session metadata storage.
 
-This module provides persistent storage of Claude session metadata (session_id,
-usage stats, cost tracking) for email conversations. Each conversation stores
-its session history in session.json file outside the workspace.
+Provides persistent storage of Claude session metadata (session_id,
+usage stats, cost tracking). Each execution context stores its session
+history in context.json inside the session directory.
 """
 
 import json
@@ -23,13 +23,13 @@ from lib.claude_output import (
     extract_session_id,
     parse_event_dict,
 )
-from lib.claude_output.types import Usage
+from lib.claude_output.types import _KNOWN_USAGE_KEYS, Usage
 
 
 logger = logging.getLogger(__name__)
 
 
-SESSION_FILE_NAME = "session.json"
+SESSION_FILE_NAME = "context.json"
 
 
 @dataclass
@@ -78,19 +78,18 @@ class SessionReply:
 
 @dataclass
 class SessionMetadata:
-    """Session metadata for an email conversation.
+    """Session metadata for an execution context.
 
-    Stores the full history of Claude replies for a conversation,
+    Stores the full history of Claude replies for an execution context,
     enabling session resumption and usage tracking.
 
     Attributes:
-        conversation_id: 8-character hex conversation ID.
+        execution_context_id: Execution context identifier.
         replies: List of replies in chronological order.
-        model: Claude model to use for this conversation
-            (e.g., "opus", "sonnet"). Set via email subaddressing.
+        model: Claude model to use for this execution context.
     """
 
-    conversation_id: str
+    execution_context_id: str
     replies: list[SessionReply] = field(default_factory=list)
     model: str | None = None
 
@@ -102,11 +101,6 @@ class SessionMetadata:
         with a valid session_id. For each reply, first checks the
         top-level session_id (from result event), then falls back to
         extracting from init event in the events array.
-
-        This handles the case where execution was interrupted by API
-        errors (e.g., 529 overloaded): the result event is never emitted
-        so top-level session_id is empty, but the init event still has
-        the session_id needed for resumption.
 
         Returns:
             Latest valid session_id, or None if unavailable.
@@ -137,22 +131,21 @@ class SessionMetadata:
 
 
 class SessionStore:
-    """Manages session metadata storage for a conversation.
+    """Manages session metadata storage for an execution context.
 
-    Reads and writes session.json files outside the workspace directory,
-    tracking Claude session IDs for conversation resumption.
+    Reads and writes context.json files in the session directory,
+    tracking Claude session IDs for session resumption.
 
     Attributes:
-        session_dir: Path to the session directory (contains session.json).
+        session_dir: Path to the session directory (contains context.json).
     """
 
     def __init__(self, session_dir: Path) -> None:
-        """Initialize session store for a conversation.
+        """Initialize session store for an execution context.
 
         Args:
-            session_dir: Path to conversation directory (parent of
-                workspace/). Session file stored as session.json
-                alongside the workspace subdirectory.
+            session_dir: Path to session directory. Session file stored
+                as context.json in this directory.
         """
         self.session_dir = session_dir
         self._file_path = session_dir / SESSION_FILE_NAME
@@ -187,8 +180,10 @@ class SessionStore:
                 for r in data.get("replies", [])
             ]
 
+            ctx_id = data.get("execution_context_id", "")
+
             metadata = SessionMetadata(
-                conversation_id=data["conversation_id"],
+                execution_context_id=ctx_id,
                 replies=replies,
                 model=data.get("model"),
             )
@@ -217,7 +212,7 @@ class SessionStore:
             metadata: Session metadata to persist.
         """
         data: dict[str, Any] = {
-            "conversation_id": metadata.conversation_id,
+            "execution_context_id": metadata.execution_context_id,
             "replies": [_serialize_reply(reply) for reply in metadata.replies],
         }
         if metadata.model:
@@ -234,7 +229,7 @@ class SessionStore:
 
     def update_or_add_reply(
         self,
-        conversation_id: str,
+        execution_context_id: str,
         events: list[StreamEvent],
         *,
         request_text: str | None = None,
@@ -246,12 +241,13 @@ class SessionStore:
         Used for streaming updates: updates the current reply in-place
         rather than creating multiple replies for the same execution.
 
-        When resuming a conversation, this method detects whether we're:
-        - Starting a new execution (different request_text) → ADD
-        - Continuing to stream the current execution (same) → UPDATE
+        When resuming an execution context, this method detects whether
+        we're:
+        - Starting a new execution (different request_text) -> ADD
+        - Continuing to stream the current execution (same) -> UPDATE
 
         Args:
-            conversation_id: 8-character hex conversation ID.
+            execution_context_id: Execution context identifier.
             events: Typed streaming events from Claude execution.
             request_text: The prompt text sent to Claude.
             response_text: Claude's response text.
@@ -263,7 +259,9 @@ class SessionStore:
         # Load or create metadata
         metadata = self.load()
         if metadata is None:
-            metadata = SessionMetadata(conversation_id=conversation_id)
+            metadata = SessionMetadata(
+                execution_context_id=execution_context_id
+            )
 
         reply = _build_reply(
             events,
@@ -284,15 +282,15 @@ class SessionStore:
         if should_add:
             metadata.replies.append(reply)
             logger.info(
-                "Added new session reply for conversation %s (%d total)",
-                conversation_id,
+                "Added new session reply for context %s (%d total)",
+                execution_context_id,
                 len(metadata.replies),
             )
         else:
             metadata.replies[-1] = reply
             logger.debug(
-                "Updated session reply for conversation %s: %d events",
-                conversation_id,
+                "Updated session reply for context %s: %d events",
+                execution_context_id,
                 len(reply.events),
             )
 
@@ -301,7 +299,7 @@ class SessionStore:
 
     def add_reply(
         self,
-        conversation_id: str,
+        execution_context_id: str,
         events: list[StreamEvent],
         *,
         request_text: str | None = None,
@@ -314,7 +312,7 @@ class SessionStore:
         and saves to file.
 
         Args:
-            conversation_id: 8-character hex conversation ID.
+            execution_context_id: Execution context identifier.
             events: Typed streaming events from Claude execution.
             request_text: The prompt text sent to Claude.
             response_text: Claude's response text.
@@ -326,7 +324,9 @@ class SessionStore:
         # Load or create metadata
         metadata = self.load()
         if metadata is None:
-            metadata = SessionMetadata(conversation_id=conversation_id)
+            metadata = SessionMetadata(
+                execution_context_id=execution_context_id
+            )
 
         reply = _build_reply(
             events,
@@ -339,9 +339,8 @@ class SessionStore:
         self.save(metadata)
 
         logger.info(
-            "Recorded session reply for conversation %s: "
-            "session_id=%s, cost=$%.4f",
-            conversation_id,
+            "Recorded session reply for context %s: session_id=%s, cost=$%.4f",
+            execution_context_id,
             reply.session_id,
             reply.total_cost_usd,
         )
@@ -380,7 +379,7 @@ class SessionStore:
         return None
 
     def get_model(self) -> str | None:
-        """Get the model configured for this conversation.
+        """Get the model configured for this execution context.
 
         Returns:
             Model name string, or None if not set.
@@ -390,21 +389,23 @@ class SessionStore:
             return None
         return metadata.model
 
-    def set_model(self, conversation_id: str, model: str) -> None:
-        """Set the model for this conversation.
+    def set_model(self, execution_context_id: str, model: str) -> None:
+        """Set the model for this execution context.
 
         Creates metadata if it doesn't exist, or updates existing.
 
         Args:
-            conversation_id: 8-character hex conversation ID.
+            execution_context_id: Execution context identifier.
             model: Model name (e.g., "opus", "sonnet").
         """
         metadata = self.load()
         if metadata is None:
-            metadata = SessionMetadata(conversation_id=conversation_id)
+            metadata = SessionMetadata(
+                execution_context_id=execution_context_id
+            )
         metadata.model = model
         self.save(metadata)
-        logger.info("Set model=%s for conversation %s", model, conversation_id)
+        logger.info("Set model=%s for context %s", model, execution_context_id)
 
 
 def _build_reply(
@@ -443,7 +444,7 @@ def _build_reply(
             events=events,
         )
 
-    # No result event — use session_id from init if available
+    # No result event -- use session_id from init if available
     session_id = extract_session_id(events) or ""
     return SessionReply(
         session_id=session_id,
@@ -460,17 +461,7 @@ def _build_reply(
 
 
 def _serialize_reply(reply: SessionReply) -> dict[str, Any]:
-    """Serialize a SessionReply to a JSON-compatible dict.
-
-    Events are serialized via ``json.loads(event.raw)`` to preserve the
-    original JSON structure for session file persistence.
-
-    Args:
-        reply: Reply to serialize.
-
-    Returns:
-        JSON-serializable dict.
-    """
+    """Serialize a SessionReply to a JSON-compatible dict."""
     return {
         "session_id": reply.session_id,
         "timestamp": reply.timestamp,
@@ -494,14 +485,7 @@ def _serialize_reply(reply: SessionReply) -> dict[str, Any]:
 
 
 def _deserialize_events(raw_events: list[Any]) -> list[StreamEvent]:
-    """Deserialize a list of raw event dicts into typed StreamEvents.
-
-    Args:
-        raw_events: List of event dicts from session JSON.
-
-    Returns:
-        List of typed StreamEvents. Unrecognized events are skipped.
-    """
+    """Deserialize a list of raw event dicts into typed StreamEvents."""
     events: list[StreamEvent] = []
     for raw in raw_events:
         if not isinstance(raw, dict):
@@ -513,18 +497,9 @@ def _deserialize_events(raw_events: list[Any]) -> list[StreamEvent]:
 
 
 def _deserialize_usage(raw_usage: Any) -> Usage:
-    """Deserialize a usage dict into a typed Usage.
-
-    Args:
-        raw_usage: Usage dict from session JSON.
-
-    Returns:
-        Typed Usage instance.
-    """
+    """Deserialize a usage dict into a typed Usage."""
     if not isinstance(raw_usage, dict):
         return Usage()
-    from lib.claude_output.types import _KNOWN_USAGE_KEYS
-
     return Usage(
         input_tokens=raw_usage.get("input_tokens", 0),
         output_tokens=raw_usage.get("output_tokens", 0),

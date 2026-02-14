@@ -36,12 +36,12 @@ class ConversationManager:
     """Manages isolated git checkouts for email conversations.
 
     Each conversation is identified by an 8-character hex UUID and gets:
-    - A conversation directory with metadata (session.json)
+    - A conversation directory with metadata (context.json)
     - A workspace subdirectory with git repo and Claude state
     - An inbox/ directory for email attachments
 
     Storage structure:
-        {storage_dir}/conversations/{id}/session.json - Session metadata
+        {storage_dir}/conversations/{id}/context.json - Session metadata
         {storage_dir}/conversations/{id}/workspace/ - Git repo & workspace
 
     Uses a local git mirror cache for fast clones and disk space savings.
@@ -184,7 +184,7 @@ class ConversationManager:
             conversation_id: 8-character hex conversation ID.
 
         Returns:
-            Path to conversation directory (contains session.json).
+            Path to conversation directory (contains context.json).
             Example: /storage/conversations/abc12345/
         """
         return self.conversations_dir / conversation_id
@@ -215,7 +215,7 @@ class ConversationManager:
     def delete(self, conversation_id: str) -> bool:
         """Delete a conversation and all its files.
 
-        Deletes the entire conversation directory (session.json + workspace/).
+        Deletes the entire conversation directory (context.json + workspace/).
 
         Args:
             conversation_id: 8-character hex conversation ID.

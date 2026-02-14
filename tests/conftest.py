@@ -61,6 +61,14 @@ def master_repo(tmp_path: Path) -> Path:
         "default_model: sonnet\n"
         "timeout: 300\n"
     )
+    (airut_dir / "network-allowlist.yaml").write_text(
+        "domains: []\nurl_prefixes: []\n"
+    )
+    container_dir = airut_dir / "container"
+    container_dir.mkdir()
+    (container_dir / "Dockerfile").write_text(
+        "FROM python:3.13-slim\nRUN pip install claude-code\n"
+    )
 
     subprocess.run(
         ["git", "add", "."],

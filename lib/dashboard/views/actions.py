@@ -21,9 +21,9 @@ from lib.claude_output.types import (
     ToolResultBlock,
     ToolUseBlock,
 )
-from lib.container.session import SessionMetadata
 from lib.dashboard.tracker import TaskState
 from lib.dashboard.views.styles import actions_styles
+from lib.sandbox import SessionMetadata
 
 
 # Maximum lines shown for edit diffs and tool results before truncation.

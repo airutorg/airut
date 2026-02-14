@@ -12,20 +12,16 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _mock_network_sandbox():
-    """Disable network sandbox for email gateway tests.
+def _mock_sandbox():
+    """Mock Sandbox for email gateway tests.
 
-    The network module calls podman which isn't available in test
-    environments. Return empty args so executor tests run without it.
+    The sandbox calls podman which isn't available in test
+    environments. Provide a mock that returns sensible defaults.
     """
-    mock_pm_class = MagicMock()
-    mock_pm_instance = MagicMock()
-    mock_pm_instance.start_task_proxy.return_value = None
-    mock_pm_class.return_value = mock_pm_instance
-    with (
-        patch("lib.container.executor.get_network_args", return_value=[]),
-        patch("lib.gateway.service.gateway.ProxyManager", mock_pm_class),
-    ):
+    mock_sandbox_class = MagicMock()
+    mock_sandbox_instance = MagicMock()
+    mock_sandbox_class.return_value = mock_sandbox_instance
+    with patch("lib.gateway.service.gateway.Sandbox", mock_sandbox_class):
         yield
 
 

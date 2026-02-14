@@ -21,7 +21,6 @@ import time
 from email.message import Message
 from typing import TYPE_CHECKING
 
-from lib.container.executor import ClaudeExecutor
 from lib.gateway.config import RepoServerConfig
 from lib.gateway.conversation import ConversationManager
 from lib.gateway.listener import (
@@ -82,13 +81,6 @@ class RepoHandler:
         self.conversation_manager = ConversationManager(
             repo_url=config.git_repo_url,
             storage_dir=config.storage_dir,
-        )
-        self.executor = ClaudeExecutor(
-            mirror=self.conversation_manager.mirror,
-            entrypoint_path=service.repo_root
-            / "docker"
-            / "airut-entrypoint.sh",
-            container_command=service.global_config.container_command,
         )
 
         self._listener_thread: threading.Thread | None = None

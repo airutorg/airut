@@ -94,7 +94,7 @@ events = [
             session_dir = (
                 integration_env.storage_dir / "conversations" / conv_id
             )
-            session_file = session_dir / "session.json"
+            session_file = session_dir / "context.json"
             assert session_file.exists(), (
                 f"Session file not created: {session_file}"
             )
@@ -247,7 +247,7 @@ events = [
             session_dir = (
                 integration_env.storage_dir / "conversations" / conv_id
             )
-            session_file = session_dir / "session.json"
+            session_file = session_dir / "context.json"
 
             import json
 
