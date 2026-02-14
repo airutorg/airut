@@ -12,41 +12,24 @@ its session history in session.json file outside the workspace.
 
 import json
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from lib.claude_output import (
+    StreamEvent,
+    extract_result_summary,
+    extract_session_id,
+    parse_event_dict,
+)
+from lib.claude_output.types import Usage
 
 
 logger = logging.getLogger(__name__)
 
 
 SESSION_FILE_NAME = "session.json"
-
-
-def _extract_session_id_from_events(events: list[dict[str, Any]]) -> str | None:
-    """Extract session_id from init event in events list.
-
-    When Claude execution is interrupted (e.g., by API error 529), the result
-    event is never emitted and session_id in the output is empty. However, the
-    session_id IS present in the init event. This function extracts it.
-
-    Args:
-        events: List of streaming JSON events from Claude execution.
-
-    Returns:
-        session_id from init event, or None if not found.
-    """
-    for event in events:
-        if (
-            isinstance(event, dict)
-            and event.get("type") == "system"
-            and event.get("subtype") == "init"
-        ):
-            session_id = event.get("session_id")
-            if session_id and isinstance(session_id, str):
-                return session_id
-    return None
 
 
 @dataclass
@@ -63,9 +46,7 @@ class SessionReply:
         usage: Token usage breakdown.
         request_text: The prompt text sent to Claude (optional).
         response_text: Claude's response text (optional).
-        events: Full streaming JSON events from Claude execution (optional).
-            Each event is a dict with 'type' field (system, assistant, user,
-            result).
+        events: Typed streaming events from Claude execution.
     """
 
     session_id: str
@@ -74,10 +55,10 @@ class SessionReply:
     total_cost_usd: float
     num_turns: int
     is_error: bool
-    usage: dict[str, Any] = field(default_factory=dict)
+    usage: Usage = field(default_factory=Usage)
     request_text: str | None = None
     response_text: str | None = None
-    events: list[dict[str, Any]] = field(default_factory=list)
+    events: list[StreamEvent] = field(default_factory=list)
 
     def get_session_id(self) -> str | None:
         """Get session_id, falling back to init event if top-level is empty.
@@ -92,7 +73,7 @@ class SessionReply:
         """
         if self.session_id:
             return self.session_id
-        return _extract_session_id_from_events(self.events)
+        return extract_session_id(self.events)
 
 
 @dataclass
@@ -198,10 +179,10 @@ class SessionStore:
                     total_cost_usd=r["total_cost_usd"],
                     num_turns=r["num_turns"],
                     is_error=r["is_error"],
-                    usage=r.get("usage", {}),
+                    usage=_deserialize_usage(r.get("usage", {})),
                     request_text=r.get("request_text"),
                     response_text=r.get("response_text"),
-                    events=r.get("events", []),
+                    events=_deserialize_events(r.get("events", [])),
                 )
                 for r in data.get("replies", [])
             ]
@@ -237,7 +218,7 @@ class SessionStore:
         """
         data: dict[str, Any] = {
             "conversation_id": metadata.conversation_id,
-            "replies": [asdict(reply) for reply in metadata.replies],
+            "replies": [_serialize_reply(reply) for reply in metadata.replies],
         }
         if metadata.model:
             data["model"] = metadata.model
@@ -254,9 +235,11 @@ class SessionStore:
     def update_or_add_reply(
         self,
         conversation_id: str,
-        claude_output: dict[str, Any],
+        events: list[StreamEvent],
+        *,
         request_text: str | None = None,
         response_text: str | None = None,
+        is_error: bool | None = None,
     ) -> SessionMetadata:
         """Update the last reply or add a new one if none exists.
 
@@ -269,9 +252,10 @@ class SessionStore:
 
         Args:
             conversation_id: 8-character hex conversation ID.
-            claude_output: Parsed JSON output from claude --output-format json.
+            events: Typed streaming events from Claude execution.
             request_text: The prompt text sent to Claude.
             response_text: Claude's response text.
+            is_error: Override error flag (used when no result event).
 
         Returns:
             Updated SessionMetadata.
@@ -281,18 +265,11 @@ class SessionStore:
         if metadata is None:
             metadata = SessionMetadata(conversation_id=conversation_id)
 
-        # Extract reply data from Claude output
-        reply = SessionReply(
-            session_id=claude_output.get("session_id", ""),
-            timestamp=datetime.now(UTC).isoformat(),
-            duration_ms=claude_output.get("duration_ms", 0),
-            total_cost_usd=claude_output.get("total_cost_usd", 0.0),
-            num_turns=claude_output.get("num_turns", 0),
-            is_error=claude_output.get("is_error", False),
-            usage=claude_output.get("usage", {}),
+        reply = _build_reply(
+            events,
             request_text=request_text,
             response_text=response_text,
-            events=claude_output.get("events", []),
+            is_error=is_error,
         )
 
         # Determine whether to update or add:
@@ -325,9 +302,11 @@ class SessionStore:
     def add_reply(
         self,
         conversation_id: str,
-        claude_output: dict[str, Any],
+        events: list[StreamEvent],
+        *,
         request_text: str | None = None,
         response_text: str | None = None,
+        is_error: bool | None = None,
     ) -> SessionMetadata:
         """Record a Claude reply and return updated metadata.
 
@@ -336,9 +315,10 @@ class SessionStore:
 
         Args:
             conversation_id: 8-character hex conversation ID.
-            claude_output: Parsed JSON output from claude --output-format json.
+            events: Typed streaming events from Claude execution.
             request_text: The prompt text sent to Claude.
             response_text: Claude's response text.
+            is_error: Override error flag (used when no result event).
 
         Returns:
             Updated SessionMetadata.
@@ -348,18 +328,11 @@ class SessionStore:
         if metadata is None:
             metadata = SessionMetadata(conversation_id=conversation_id)
 
-        # Extract reply data from Claude output
-        reply = SessionReply(
-            session_id=claude_output.get("session_id", ""),
-            timestamp=datetime.now(UTC).isoformat(),
-            duration_ms=claude_output.get("duration_ms", 0),
-            total_cost_usd=claude_output.get("total_cost_usd", 0.0),
-            num_turns=claude_output.get("num_turns", 0),
-            is_error=claude_output.get("is_error", False),
-            usage=claude_output.get("usage", {}),
+        reply = _build_reply(
+            events,
             request_text=request_text,
             response_text=response_text,
-            events=claude_output.get("events", []),
+            is_error=is_error,
         )
 
         metadata.replies.append(reply)
@@ -432,3 +405,134 @@ class SessionStore:
         metadata.model = model
         self.save(metadata)
         logger.info("Set model=%s for conversation %s", model, conversation_id)
+
+
+def _build_reply(
+    events: list[StreamEvent],
+    *,
+    request_text: str | None = None,
+    response_text: str | None = None,
+    is_error: bool | None = None,
+) -> SessionReply:
+    """Build a SessionReply from typed events.
+
+    Extracts metadata from the result event if present, otherwise uses
+    defaults.
+
+    Args:
+        events: Typed streaming events from Claude execution.
+        request_text: The prompt text sent to Claude.
+        response_text: Claude's response text.
+        is_error: Override error flag (used when no result event).
+
+    Returns:
+        Populated SessionReply.
+    """
+    summary = extract_result_summary(events)
+    if summary is not None:
+        return SessionReply(
+            session_id=summary.session_id,
+            timestamp=datetime.now(UTC).isoformat(),
+            duration_ms=summary.duration_ms,
+            total_cost_usd=summary.total_cost_usd,
+            num_turns=summary.num_turns,
+            is_error=is_error if is_error is not None else summary.is_error,
+            usage=summary.usage,
+            request_text=request_text,
+            response_text=response_text,
+            events=events,
+        )
+
+    # No result event — use session_id from init if available
+    session_id = extract_session_id(events) or ""
+    return SessionReply(
+        session_id=session_id,
+        timestamp=datetime.now(UTC).isoformat(),
+        duration_ms=0,
+        total_cost_usd=0.0,
+        num_turns=0,
+        is_error=is_error if is_error is not None else True,
+        usage=Usage(),
+        request_text=request_text,
+        response_text=response_text,
+        events=events,
+    )
+
+
+def _serialize_reply(reply: SessionReply) -> dict[str, Any]:
+    """Serialize a SessionReply to a JSON-compatible dict.
+
+    Events are serialized via ``json.loads(event.raw)`` to preserve the
+    original JSON structure for session file persistence.
+
+    Args:
+        reply: Reply to serialize.
+
+    Returns:
+        JSON-serializable dict.
+    """
+    return {
+        "session_id": reply.session_id,
+        "timestamp": reply.timestamp,
+        "duration_ms": reply.duration_ms,
+        "total_cost_usd": reply.total_cost_usd,
+        "num_turns": reply.num_turns,
+        "is_error": reply.is_error,
+        "usage": {
+            "input_tokens": reply.usage.input_tokens,
+            "output_tokens": reply.usage.output_tokens,
+            "cache_creation_input_tokens": (
+                reply.usage.cache_creation_input_tokens
+            ),
+            "cache_read_input_tokens": reply.usage.cache_read_input_tokens,
+            **reply.usage.extra,
+        },
+        "request_text": reply.request_text,
+        "response_text": reply.response_text,
+        "events": [json.loads(e.raw) for e in reply.events],
+    }
+
+
+def _deserialize_events(raw_events: list[Any]) -> list[StreamEvent]:
+    """Deserialize a list of raw event dicts into typed StreamEvents.
+
+    Args:
+        raw_events: List of event dicts from session JSON.
+
+    Returns:
+        List of typed StreamEvents. Unrecognized events are skipped.
+    """
+    events: list[StreamEvent] = []
+    for raw in raw_events:
+        if not isinstance(raw, dict):
+            continue
+        event = parse_event_dict(raw)
+        if event is not None:
+            events.append(event)
+    return events
+
+
+def _deserialize_usage(raw_usage: Any) -> Usage:
+    """Deserialize a usage dict into a typed Usage.
+
+    Args:
+        raw_usage: Usage dict from session JSON.
+
+    Returns:
+        Typed Usage instance.
+    """
+    if not isinstance(raw_usage, dict):
+        return Usage()
+    from lib.claude_output.types import _KNOWN_USAGE_KEYS
+
+    return Usage(
+        input_tokens=raw_usage.get("input_tokens", 0),
+        output_tokens=raw_usage.get("output_tokens", 0),
+        cache_creation_input_tokens=raw_usage.get(
+            "cache_creation_input_tokens", 0
+        ),
+        cache_read_input_tokens=raw_usage.get("cache_read_input_tokens", 0),
+        extra={
+            k: v for k, v in raw_usage.items() if k not in _KNOWN_USAGE_KEYS
+        },
+    )

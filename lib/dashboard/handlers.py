@@ -638,10 +638,19 @@ class RequestHandlers:
                             "total_cost_usd": r.total_cost_usd,
                             "num_turns": r.num_turns,
                             "is_error": r.is_error,
-                            "usage": r.usage,
+                            "usage": {
+                                "input_tokens": r.usage.input_tokens,
+                                "output_tokens": r.usage.output_tokens,
+                                "cache_creation_input_tokens": (
+                                    r.usage.cache_creation_input_tokens
+                                ),
+                                "cache_read_input_tokens": (
+                                    r.usage.cache_read_input_tokens
+                                ),
+                            },
                             "request_text": r.request_text,
                             "response_text": r.response_text,
-                            "events": r.events,
+                            "events": [json.loads(e.raw) for e in r.events],
                         }
                         for r in session.replies
                     ],

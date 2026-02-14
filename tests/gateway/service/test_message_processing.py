@@ -5,12 +5,14 @@
 
 """Tests for message_processing module."""
 
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from lib.claude_output import StreamEvent, parse_event, parse_stream_events
 from lib.container.executor import ExecutionResult
 from lib.gateway.config import RepoConfig
 from lib.gateway.service import (
@@ -21,6 +23,12 @@ from lib.gateway.service import (
 from lib.gateway.service.message_processing import process_message
 
 from .conftest import make_message, make_service, update_global
+
+
+def _parse_events(*raw_events: dict) -> list[StreamEvent]:
+    """Parse raw event dicts into typed StreamEvents."""
+    stdout = "\n".join(json.dumps(e) for e in raw_events)
+    return parse_stream_events(stdout)
 
 
 def _make_repo_config(
@@ -85,17 +93,23 @@ class TestProcessMessage:
 
         handler.executor.execute.return_value = ExecutionResult(
             success=True,
-            output={
-                "events": [
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [{"type": "text", "text": "Done!"}]
-                        },
-                    }
-                ],
-                "total_cost_usd": 0.01,
-            },
+            output=_parse_events(
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "Done!"}]},
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "test-session",
+                    "duration_ms": 100,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                    "result": "Done!",
+                },
+            ),
             error_message="",
             stdout="",
             stderr="",
@@ -360,16 +374,14 @@ class TestProcessMessage:
 
             return ExecutionResult(
                 success=True,
-                output={
-                    "events": [
-                        {
-                            "type": "assistant",
-                            "message": {
-                                "content": [{"type": "text", "text": "Ok"}]
-                            },
-                        }
-                    ]
-                },
+                output=_parse_events(
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "content": [{"type": "text", "text": "Ok"}]
+                        },
+                    },
+                ),
                 error_message="",
                 stdout="",
                 stderr="",
@@ -385,8 +397,12 @@ class TestProcessMessage:
             process_message(svc, msg, "task1", handler)
 
         assert captured_callback is not None
-        # Call the callback with a regular event
-        captured_callback({"type": "assistant", "message": {"content": []}})
+        # Call the callback with a regular event (typed StreamEvent)
+        event = parse_event(
+            json.dumps({"type": "assistant", "message": {"content": []}})
+        )
+        assert event is not None
+        captured_callback(event)
         mock_ss.update_or_add_reply.assert_called()
 
     def test_on_event_callback_result_event(
@@ -404,7 +420,19 @@ class TestProcessMessage:
 
             return ExecutionResult(
                 success=True,
-                output={"events": [], "result": "ok"},
+                output=_parse_events(
+                    {
+                        "type": "result",
+                        "subtype": "success",
+                        "session_id": "s1",
+                        "duration_ms": 100,
+                        "total_cost_usd": 0.01,
+                        "num_turns": 1,
+                        "is_error": False,
+                        "usage": {},
+                        "result": "ok",
+                    },
+                ),
                 error_message="",
                 stdout="",
                 stderr="",
@@ -421,18 +449,22 @@ class TestProcessMessage:
 
         # Call with result event
         assert captured_callback is not None
-        captured_callback(
-            {
-                "type": "result",
-                "session_id": "s1",
-                "duration_ms": 100,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "result": "done",
-            }
+        event = parse_event(
+            json.dumps(
+                {
+                    "type": "result",
+                    "session_id": "s1",
+                    "duration_ms": 100,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                    "result": "done",
+                }
+            )
         )
+        assert event is not None
+        captured_callback(event)
 
     def test_on_event_callback_exception_handled(
         self, email_config: Any, tmp_path: Path
@@ -450,7 +482,19 @@ class TestProcessMessage:
 
             return ExecutionResult(
                 success=True,
-                output={"events": [], "result": "ok"},
+                output=_parse_events(
+                    {
+                        "type": "result",
+                        "subtype": "success",
+                        "session_id": "s1",
+                        "duration_ms": 100,
+                        "total_cost_usd": 0.01,
+                        "num_turns": 1,
+                        "is_error": False,
+                        "usage": {},
+                        "result": "ok",
+                    },
+                ),
                 error_message="",
                 stdout="",
                 stderr="",
@@ -467,7 +511,11 @@ class TestProcessMessage:
 
         # Should not raise
         assert captured_callback is not None
-        captured_callback({"type": "assistant", "message": {"content": []}})
+        event = parse_event(
+            json.dumps({"type": "assistant", "message": {"content": []}})
+        )
+        assert event is not None
+        captured_callback(event)
 
     def test_resumed_conversation_ignores_model_request(
         self, email_config: Any, tmp_path: Path
@@ -535,16 +583,12 @@ class TestProcessMessage:
 
         handler.executor.execute.return_value = ExecutionResult(
             success=True,
-            output={
-                "events": [
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [{"type": "text", "text": "Done"}]
-                        },
-                    }
-                ]
-            },
+            output=_parse_events(
+                {
+                    "type": "assistant",
+                    "message": {"content": [{"type": "text", "text": "Done"}]},
+                },
+            ),
             error_message="",
             stdout="",
             stderr="",
@@ -636,15 +680,18 @@ class TestProcessMessage:
 
         handler.executor.execute.return_value = ExecutionResult(
             success=False,
-            output={
-                "session_id": "err-session-1",
-                "is_error": True,
-                "events": [{"type": "result", "is_error": True}],
-                "duration_ms": 500,
-                "total_cost_usd": 0.005,
-                "num_turns": 1,
-                "usage": {"input_tokens": 50, "output_tokens": 10},
-            },
+            output=_parse_events(
+                {
+                    "type": "result",
+                    "subtype": "error",
+                    "session_id": "err-session-1",
+                    "is_error": True,
+                    "duration_ms": 500,
+                    "total_cost_usd": 0.005,
+                    "num_turns": 1,
+                    "usage": {"input_tokens": 50, "output_tokens": 10},
+                },
+            ),
             error_message="Container crashed",
             stdout="",
             stderr="FATAL: OOM",
@@ -666,8 +713,8 @@ class TestProcessMessage:
         final_calls = [
             c
             for c in mock_ss.update_or_add_reply.call_args_list
-            if c[1].get("response_text", "") != ""
-            or c[0][1].get("is_error", False)
+            if c.kwargs.get("response_text", "") != ""
+            or c.kwargs.get("is_error", False)
         ]
         assert len(final_calls) >= 1, (
             "session_store.update_or_add_reply must be called after failed "
@@ -694,7 +741,7 @@ class TestProcessMessage:
         # Session store must record the error so next message can resume
         mock_ss.update_or_add_reply.assert_called()
         last_call = mock_ss.update_or_add_reply.call_args
-        assert last_call[0][1].get("is_error") is True
+        assert last_call.kwargs.get("is_error") is True
 
     def test_unexpected_error_persists_session(
         self, email_config: Any, tmp_path: Path
@@ -713,7 +760,7 @@ class TestProcessMessage:
         assert success is False
         mock_ss.update_or_add_reply.assert_called()
         last_call = mock_ss.update_or_add_reply.call_args
-        assert last_call[0][1].get("is_error") is True
+        assert last_call.kwargs.get("is_error") is True
 
     def test_prompt_too_long_retries_with_new_session(
         self, email_config: Any, tmp_path: Path
@@ -739,17 +786,25 @@ class TestProcessMessage:
         )
         success_result = ExecutionResult(
             success=True,
-            output={
-                "events": [
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [{"type": "text", "text": "Recovered!"}]
-                        },
-                    }
-                ],
-                "total_cost_usd": 0.02,
-            },
+            output=_parse_events(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [{"type": "text", "text": "Recovered!"}]
+                    },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "new-session",
+                    "duration_ms": 200,
+                    "total_cost_usd": 0.02,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                    "result": "Recovered!",
+                },
+            ),
             error_message="",
             stdout="",
             stderr="",
@@ -836,17 +891,25 @@ class TestProcessMessage:
         )
         success_result = ExecutionResult(
             success=True,
-            output={
-                "events": [
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [{"type": "text", "text": "Recovered!"}]
-                        },
-                    }
-                ],
-                "total_cost_usd": 0.02,
-            },
+            output=_parse_events(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "content": [{"type": "text", "text": "Recovered!"}]
+                    },
+                },
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "session_id": "new-session",
+                    "duration_ms": 200,
+                    "total_cost_usd": 0.02,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                    "result": "Recovered!",
+                },
+            ),
             error_message="",
             stdout="",
             stderr="",
@@ -921,7 +984,7 @@ class TestIsPromptTooLongError:
     def test_ignores_successful_result(self) -> None:
         result = ExecutionResult(
             success=True,
-            output={"events": []},
+            output=[],
             error_message="",
             stdout="Prompt is too long",
             stderr="",
@@ -1006,7 +1069,7 @@ class TestIsSessionCorruptedError:
     def test_ignores_successful_result(self) -> None:
         result = ExecutionResult(
             success=True,
-            output={"events": []},
+            output=[],
             error_message="",
             stdout="API Error: 400",
             stderr="",

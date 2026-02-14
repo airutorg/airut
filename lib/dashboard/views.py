@@ -15,6 +15,13 @@ import re
 from pathlib import Path
 from typing import Any
 
+from lib.claude_output.types import (
+    EventType,
+    StreamEvent,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+)
 from lib.container.session import SessionMetadata
 from lib.dashboard.formatters import (
     VersionInfo,
@@ -1352,29 +1359,26 @@ def render_session_section(
         cost_display = f"${reply.total_cost_usd:.4f}"
         session_id_full = html.escape(reply.session_id)
 
-        # Build usage grid if usage data exists (only show token counts)
+        # Build usage grid from typed Usage fields
         usage_html = ""
-        if reply.usage:
-            usage_items = []
-            # Only display numeric token fields, skip nested objects
-            token_fields = [
-                ("input_tokens", "Input"),
-                ("output_tokens", "Output"),
-                ("cache_read_input_tokens", "Cache Read"),
-                ("cache_creation_input_tokens", "Cache Write"),
-            ]
-            for field_key, label in token_fields:
-                if field_key in reply.usage:
-                    value = reply.usage[field_key]
-                    if isinstance(value, (int, float)):
-                        formatted = f"{value:,}"
-                        usage_items.append(f"""
+        usage = reply.usage
+        usage_items = []
+        token_fields = [
+            (usage.input_tokens, "Input"),
+            (usage.output_tokens, "Output"),
+            (usage.cache_read_input_tokens, "Cache Read"),
+            (usage.cache_creation_input_tokens, "Cache Write"),
+        ]
+        for value, label in token_fields:
+            if value:
+                formatted = f"{value:,}"
+                usage_items.append(f"""
                     <div class="usage-item">
                         <div class="usage-label">{label}</div>
                         <div class="usage-value">{formatted}</div>
                     </div>""")
-            if usage_items:
-                usage_html = f"""
+        if usage_items:
+            usage_html = f"""
                 <div class="usage-grid">
                     {"".join(usage_items)}
                 </div>"""
@@ -1938,11 +1942,11 @@ def render_actions_timeline(session: SessionMetadata) -> str:
     return "".join(sections)
 
 
-def render_events_list(events: list[dict[str, Any]]) -> str:
+def render_events_list(events: list[StreamEvent]) -> str:
     """Render list of events as collapsible sections.
 
     Args:
-        events: List of event dicts from streaming JSON.
+        events: Typed streaming events.
 
     Returns:
         HTML string for events list.
@@ -1953,90 +1957,83 @@ def render_events_list(events: list[dict[str, Any]]) -> str:
     items: list[str] = []
 
     for event in events:
-        event_type = event.get("type", "unknown")
-        event_html = render_single_event(event, event_type)
+        event_html = render_single_event(event)
         items.append(event_html)
 
     return "".join(items)
 
 
-def render_single_event(event: dict[str, Any], event_type: str) -> str:
+def render_single_event(event: StreamEvent) -> str:
     """Render a single event in CLI-style streaming format.
 
-    Recognized event types are pretty-printed inline. Unrecognized
-    types fall back to collapsible raw JSON.
+    Recognized event types are pretty-printed inline.
 
     Args:
-        event: Event dict from streaming JSON.
-        event_type: Type of event (system, assistant, user, result).
+        event: Typed streaming event.
 
     Returns:
         HTML string for event.
     """
-    if event_type == "system":
+    if event.event_type == EventType.SYSTEM:
         return _render_system_event(event)
-    elif event_type == "assistant":
+    elif event.event_type == EventType.ASSISTANT:
         return _render_assistant_event(event)
-    elif event_type == "user":
+    elif event.event_type == EventType.USER:
         return _render_user_event(event)
-    elif event_type == "result":
+    elif event.event_type == EventType.RESULT:
         return _render_result_event(event)
     else:
-        return _render_unknown_event(event, event_type)
+        return _render_unknown_event(event)
 
 
-def _render_system_event(event: dict[str, Any]) -> str:
+def _render_system_event(event: StreamEvent) -> str:
     """Render system event as a dim info line.
 
     Args:
-        event: System event dict.
+        event: Typed system event.
 
     Returns:
         HTML string.
     """
     parts: list[str] = []
-    subtype = event.get("subtype", "")
-    if subtype:
-        parts.append(html.escape(subtype))
-    if "model" in event:
-        parts.append(f"model={html.escape(event['model'])}")
-    tools = event.get("tools", [])
+    if event.subtype:
+        parts.append(html.escape(event.subtype))
+    model = event.extra.get("model")
+    if model:
+        parts.append(f"model={html.escape(str(model))}")
+    tools = event.extra.get("tools", [])
     if tools:
-        tools_str = ", ".join(html.escape(t) for t in tools[:20])
+        tools_str = ", ".join(html.escape(str(t)) for t in tools[:20])
         if len(tools) > 20:
             tools_str += f"... (+{len(tools) - 20} more)"
         parts.append(f"tools=[{tools_str}]")
-    if "session_id" in event:
-        parts.append(f"session={html.escape(event['session_id'])}")
+    if event.session_id:
+        parts.append(f"session={html.escape(event.session_id)}")
 
     info = " ".join(parts)
     cls = "ev-system"
     return f'<div class="event"><div class="{cls}">system: {info}</div></div>'
 
 
-def _render_assistant_event(event: dict[str, Any]) -> str:
+def _render_assistant_event(event: StreamEvent) -> str:
     """Render assistant event: text blocks and tool calls.
 
     Args:
-        event: Assistant event dict.
+        event: Typed assistant event.
 
     Returns:
         HTML string.
     """
-    message = event.get("message", {})
-    content = message.get("content", [])
-
-    if not content:
+    if not event.content_blocks:
         return '<div class="event"><em>No content</em></div>'
 
     blocks: list[str] = []
-    for block in content:
-        block_type = block.get("type")
-        if block_type == "text":
-            text = html.escape(block.get("text", ""))
+    for block in event.content_blocks:
+        if isinstance(block, TextBlock):
+            text = html.escape(block.text)
             blocks.append(f'<div class="ev-text">{text}</div>')
-        elif block_type == "tool_use":
-            blocks.append(_render_tool_use_block(block))
+        elif isinstance(block, ToolUseBlock):
+            blocks.append(_render_tool_use_block_typed(block))
 
     if not blocks:
         return '<div class="event"><em>No content</em></div>'
@@ -2044,27 +2041,25 @@ def _render_assistant_event(event: dict[str, Any]) -> str:
     return '<div class="event">' + "".join(blocks) + "</div>"
 
 
-def _render_tool_use_block(block: dict[str, Any]) -> str:
-    """Render a tool_use block with specialized formatting.
+def _render_tool_use_block_typed(block: ToolUseBlock) -> str:
+    """Render a typed ToolUseBlock with specialized formatting.
 
     Known tools get purpose-built rendering. Unknown tools fall
     back to the tool name plus raw JSON input.
 
     Args:
-        block: Tool use content block.
+        block: Typed tool use content block.
 
     Returns:
         HTML string.
     """
-    name = block.get("name", "unknown")
-    tool_input = block.get("input", {})
-    escaped_name = html.escape(name)
+    escaped_name = html.escape(block.tool_name)
 
-    renderer = _TOOL_RENDERERS.get(name)
+    renderer = _TOOL_RENDERERS.get(block.tool_name)
     if renderer:
-        detail = renderer(tool_input)
+        detail = renderer(block.tool_input)
     else:
-        detail = _render_tool_generic(tool_input)
+        detail = _render_tool_generic(block.tool_input)
 
     return (
         f'<div class="ev-tool-use">'
@@ -2301,55 +2296,50 @@ _TOOL_RENDERERS: dict[str, Any] = {
 }
 
 
-def _render_user_event(event: dict[str, Any]) -> str:
+def _render_user_event(event: StreamEvent) -> str:
     """Render user event (tool results).
 
     Args:
-        event: User event dict.
+        event: Typed user event.
 
     Returns:
         HTML string.
     """
-    message = event.get("message", {})
-    content = message.get("content", [])
-
-    if not content:
+    if not event.content_blocks:
         return '<div class="event"><em>No content</em></div>'
 
     blocks: list[str] = []
-    for block in content:
-        if block.get("type") == "tool_result":
-            blocks.append(_render_tool_result_block(block))
+    has_error = False
+    for block in event.content_blocks:
+        if isinstance(block, ToolResultBlock):
+            blocks.append(_render_tool_result_block_typed(block))
+            if block.is_error:
+                has_error = True
 
     if not blocks:
         return '<div class="event"><em>No content</em></div>'
 
-    has_error = any(
-        b.get("type") == "tool_result" and b.get("is_error") for b in content
-    )
     error_class = " error" if has_error else ""
 
     return f'<div class="event{error_class}">' + "".join(blocks) + "</div>"
 
 
-def _render_tool_result_block(block: dict[str, Any]) -> str:
-    """Render a single tool result block.
+def _render_tool_result_block_typed(block: ToolResultBlock) -> str:
+    """Render a single typed tool result block.
 
     Args:
-        block: Tool result content block.
+        block: Typed tool result content block.
 
     Returns:
         HTML string.
     """
-    result_content = block.get("content", "")
+    result_content = block.content
     # Content can be a list of content blocks or a string
     if isinstance(result_content, list):
         text_parts = []
         for part in result_content:
-            is_text_block = (
-                isinstance(part, dict) and part.get("type") == "text"
-            )
-            if is_text_block:
+            is_text = isinstance(part, dict) and part.get("type") == "text"
+            if is_text:
                 text_parts.append(part.get("text", ""))
             elif isinstance(part, str):
                 text_parts.append(part)
@@ -2364,9 +2354,8 @@ def _render_tool_result_block(block: dict[str, Any]) -> str:
         )
 
     escaped = html.escape(result_content)
-    is_error = block.get("is_error", False)
-    error_class = " error" if is_error else ""
-    error_note = " (error)" if is_error else ""
+    error_class = " error" if block.is_error else ""
+    error_note = " (error)" if block.is_error else ""
     label = f'<div class="ev-tool-result-label">Tool Result{error_note}:</div>'
 
     if not escaped.strip():
@@ -2376,29 +2365,31 @@ def _render_tool_result_block(block: dict[str, Any]) -> str:
     return f'{label}<div class="{cls}">{escaped}</div>'
 
 
-def _render_result_event(event: dict[str, Any]) -> str:
+def _render_result_event(event: StreamEvent) -> str:
     """Render result summary event.
 
     Args:
-        event: Result event dict.
+        event: Typed result event.
 
     Returns:
         HTML string.
     """
     meta: list[str] = []
-    subtype = event.get("subtype", "")
-    if subtype:
-        meta.append(html.escape(subtype))
-    if "duration_ms" in event:
-        meta.append(f"{event['duration_ms']}ms")
-    if "total_cost_usd" in event:
-        meta.append(f"${event['total_cost_usd']:.4f}")
-    if "num_turns" in event:
-        meta.append(f"{event['num_turns']} turns")
+    if event.subtype:
+        meta.append(html.escape(event.subtype))
+    duration_ms = event.extra.get("duration_ms")
+    if duration_ms is not None:
+        meta.append(f"{duration_ms}ms")
+    total_cost = event.extra.get("total_cost_usd")
+    if total_cost is not None:
+        meta.append(f"${total_cost:.4f}")
+    num_turns = event.extra.get("num_turns")
+    if num_turns is not None:
+        meta.append(f"{num_turns} turns")
 
     header = "result: " + " | ".join(meta)
 
-    result_text = event.get("result", "")
+    result_text = event.extra.get("result", "")
     if isinstance(result_text, str) and result_text:
         preview = result_text[:500]
         if len(result_text) > 500:
@@ -2409,21 +2400,24 @@ def _render_result_event(event: dict[str, Any]) -> str:
     return f'<div class="event"><div class="{cls}">{header}</div></div>'
 
 
-def _render_unknown_event(event: dict[str, Any], event_type: str) -> str:
+def _render_unknown_event(event: StreamEvent) -> str:
     """Render unrecognized event as collapsible raw JSON.
 
+    Used for forward compatibility when the API introduces new event
+    types not yet handled by the parser.
+
     Args:
-        event: Event dict.
-        event_type: Type string.
+        event: Event with ``EventType.UNKNOWN``.
 
     Returns:
         HTML string.
     """
-    raw = html.escape(json.dumps(event, indent=2, ensure_ascii=False))
-    escaped_type = html.escape(event_type)
+    raw = html.escape(event.raw)
+    raw_obj = json.loads(event.raw)
+    type_label = html.escape(str(raw_obj.get("type", "unknown")))
     return f"""<div class="event">
             <div class="event-header" onclick="toggleEvent(this)">
-                <span class="event-type">{escaped_type}</span>
+                <span class="event-type">{type_label}</span>
                 <span class="event-meta"></span>
                 <span class="toggle-icon">+</span>
             </div>

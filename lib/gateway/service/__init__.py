@@ -30,7 +30,6 @@ from lib.gateway.service.message_processing import (
 from lib.gateway.service.repo_handler import RepoHandler
 from lib.gateway.service.usage_stats import (
     UsageStats,
-    extract_response_text,
     extract_usage_stats,
 )
 
@@ -49,6 +48,5 @@ __all__ = [
     "process_message",
     # usage_stats
     "UsageStats",
-    "extract_response_text",
     "extract_usage_stats",
 ]

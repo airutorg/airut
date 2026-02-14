@@ -8,7 +8,6 @@
 import json
 import subprocess
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -142,51 +141,6 @@ def sample_streaming_output() -> str:
         },
     ]
     return "\n".join(json.dumps(e) for e in events)
-
-
-@pytest.fixture
-def sample_claude_output() -> dict[str, Any]:
-    """Sample parsed streaming JSON output from Claude."""
-    return {
-        "events": [
-            {
-                "type": "system",
-                "subtype": "init",
-                "session_id": "test-session-123",
-                "tools": ["Bash", "Read", "Write"],
-                "model": "claude-opus-4-5-20251101",
-            },
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "I've completed the task.",
-                        }
-                    ]
-                },
-            },
-            {
-                "type": "result",
-                "subtype": "success",
-                "session_id": "test-session-123",
-                "duration_ms": 1500,
-                "total_cost_usd": 0.025,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {"input_tokens": 100, "output_tokens": 50},
-                "result": "I've completed the task.",
-            },
-        ],
-        "session_id": "test-session-123",
-        "duration_ms": 1500,
-        "total_cost_usd": 0.025,
-        "num_turns": 1,
-        "is_error": False,
-        "usage": {"input_tokens": 100, "output_tokens": 50},
-        "result": "I've completed the task.",
-    }
 
 
 @pytest.fixture

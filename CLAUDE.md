@@ -228,6 +228,7 @@ config/                     - Server configuration templates
 docker/                     - Container entrypoint (airut-entrypoint.sh)
 proxy/                      - Network sandbox (proxy filter, DNS, AWS signing)
 lib/                        - Library code
+  claude_output/            - Typed Claude streaming JSON output parser
   container/                - Container execution (executor, proxy, session)
   dashboard/                - Web dashboard server
   gateway/                  - Email gateway service
@@ -245,6 +246,7 @@ scripts/                    - CLI tools
   check_markdown.py         - Markdown validation
 spec/                       - Design specifications (see spec/README.md)
 tests/                      - Unit tests (100% coverage required)
+  claude_output/            - Claude output parser tests
   container/                - Container execution tests
   dashboard/                - Dashboard tests
   gateway/                  - Email gateway tests

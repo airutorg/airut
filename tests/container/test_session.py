@@ -8,86 +8,24 @@
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 from unittest.mock import patch
 
 import pytest
 
+from lib.claude_output import StreamEvent, parse_stream_events
+from lib.claude_output.types import Usage
 from lib.container.session import (
     SESSION_FILE_NAME,
     SessionMetadata,
     SessionReply,
     SessionStore,
-    _extract_session_id_from_events,
 )
 
 
-class TestExtractSessionIdFromEvents:
-    """Tests for _extract_session_id_from_events helper function."""
-
-    def test_extracts_from_init_event(self) -> None:
-        """Extracts session_id from init event."""
-        events = [
-            {
-                "type": "system",
-                "subtype": "init",
-                "session_id": "abc-123",
-            }
-        ]
-        assert _extract_session_id_from_events(events) == "abc-123"
-
-    def test_returns_none_for_empty_events(self) -> None:
-        """Returns None when events list is empty."""
-        assert _extract_session_id_from_events([]) is None
-
-    def test_returns_none_when_no_init_event(self) -> None:
-        """Returns None when there's no init event."""
-        events = [
-            {"type": "assistant", "message": {}},
-            {"type": "result", "session_id": "result-id"},
-        ]
-        assert _extract_session_id_from_events(events) is None
-
-    def test_returns_none_when_init_has_no_session_id(self) -> None:
-        """Returns None when init event has no session_id."""
-        events = [
-            {
-                "type": "system",
-                "subtype": "init",
-                # No session_id
-            }
-        ]
-        assert _extract_session_id_from_events(events) is None
-
-    def test_returns_none_when_session_id_is_empty(self) -> None:
-        """Returns None when session_id is empty string."""
-        events = [
-            {
-                "type": "system",
-                "subtype": "init",
-                "session_id": "",
-            }
-        ]
-        assert _extract_session_id_from_events(events) is None
-
-    def test_skips_non_dict_events(self) -> None:
-        """Skips events that are not dicts."""
-        events: list[dict[str, Any]] = [
-            {"invalid": "not an init event"},
-            {"type": "system", "subtype": "init", "session_id": "valid-id"},
-        ]
-        assert _extract_session_id_from_events(events) == "valid-id"
-
-    def test_skips_non_string_session_id(self) -> None:
-        """Skips session_id that is not a string."""
-        events = [
-            {
-                "type": "system",
-                "subtype": "init",
-                "session_id": 12345,  # Not a string
-            }
-        ]
-        assert _extract_session_id_from_events(events) is None
+def _parse_events(*raw_events: dict) -> list[StreamEvent]:
+    """Parse raw event dicts into typed StreamEvents."""
+    stdout = "\n".join(json.dumps(e) for e in raw_events)
+    return parse_stream_events(stdout)
 
 
 class TestSessionReply:
@@ -102,7 +40,7 @@ class TestSessionReply:
             total_cost_usd=0.05,
             num_turns=3,
             is_error=False,
-            usage={"input_tokens": 100, "output_tokens": 50},
+            usage=Usage(input_tokens=100, output_tokens=50),
         )
 
         assert reply.session_id == "abc123"
@@ -111,7 +49,7 @@ class TestSessionReply:
         assert reply.total_cost_usd == 0.05
         assert reply.num_turns == 3
         assert reply.is_error is False
-        assert reply.usage == {"input_tokens": 100, "output_tokens": 50}
+        assert reply.usage == Usage(input_tokens=100, output_tokens=50)
 
     def test_create_reply_default_usage(self) -> None:
         """Create SessionReply with default empty usage."""
@@ -124,7 +62,7 @@ class TestSessionReply:
             is_error=False,
         )
 
-        assert reply.usage == {}
+        assert reply.usage == Usage()
 
     def test_create_reply_with_text(self) -> None:
         """Create SessionReply with request/response text."""
@@ -158,11 +96,14 @@ class TestSessionReply:
 
     def test_create_reply_with_events(self) -> None:
         """Create SessionReply with events."""
-        events = [
+        events = _parse_events(
             {"type": "system", "subtype": "init"},
-            {"type": "assistant", "message": {"content": []}},
+            {
+                "type": "assistant",
+                "message": {"role": "assistant", "content": []},
+            },
             {"type": "result", "subtype": "success"},
-        ]
+        )
         reply = SessionReply(
             session_id="abc123",
             timestamp="2026-01-15T12:00:00+00:00",
@@ -191,6 +132,9 @@ class TestSessionReply:
 
     def test_get_session_id_returns_top_level(self) -> None:
         """get_session_id returns top-level session_id when available."""
+        events = _parse_events(
+            {"type": "system", "subtype": "init", "session_id": "init-id"},
+        )
         reply = SessionReply(
             session_id="top-level-id",
             timestamp="2026-01-15T12:00:00+00:00",
@@ -198,9 +142,7 @@ class TestSessionReply:
             total_cost_usd=0.05,
             num_turns=3,
             is_error=False,
-            events=[
-                {"type": "system", "subtype": "init", "session_id": "init-id"},
-            ],
+            events=events,
         )
 
         # Should prefer top-level session_id
@@ -208,6 +150,9 @@ class TestSessionReply:
 
     def test_get_session_id_falls_back_to_init_event(self) -> None:
         """get_session_id falls back to init event when top-level is empty."""
+        events = _parse_events(
+            {"type": "system", "subtype": "init", "session_id": "init-id"},
+        )
         reply = SessionReply(
             session_id="",  # Empty
             timestamp="2026-01-15T12:00:00+00:00",
@@ -215,9 +160,7 @@ class TestSessionReply:
             total_cost_usd=0.0,
             num_turns=0,
             is_error=True,
-            events=[
-                {"type": "system", "subtype": "init", "session_id": "init-id"},
-            ],
+            events=events,
         )
 
         # Should fall back to init event
@@ -456,7 +399,7 @@ class TestSessionStore:
         assert metadata.conversation_id == "abc12345"
         assert len(metadata.replies) == 1
         assert metadata.replies[0].session_id == "session-1"
-        assert metadata.replies[0].usage == {"input_tokens": 100}
+        assert metadata.replies[0].usage == Usage(input_tokens=100)
 
     def test_load_file_without_usage(self, tmp_path: Path) -> None:
         """load() handles reply without usage field."""
@@ -480,7 +423,108 @@ class TestSessionStore:
         metadata = store.load()
 
         assert metadata is not None
-        assert metadata.replies[0].usage == {}
+        assert metadata.replies[0].usage == Usage()
+
+    def test_load_events_skips_non_dict_items(self, tmp_path: Path) -> None:
+        """load() skips non-dict items in events list."""
+        session_data = {
+            "conversation_id": "abc12345",
+            "replies": [
+                {
+                    "session_id": "session-1",
+                    "timestamp": "2026-01-15T12:00:00+00:00",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": {},
+                    "events": [
+                        "not a dict",
+                        42,
+                        None,
+                        {
+                            "type": "result",
+                            "subtype": "success",
+                            "session_id": "sess_1",
+                            "duration_ms": 1000,
+                            "total_cost_usd": 0.01,
+                            "num_turns": 1,
+                            "is_error": False,
+                            "usage": {},
+                        },
+                    ],
+                }
+            ],
+        }
+        (tmp_path / SESSION_FILE_NAME).write_text(json.dumps(session_data))
+
+        store = SessionStore(tmp_path)
+        metadata = store.load()
+
+        assert metadata is not None
+        # Only the valid dict event should be parsed
+        assert len(metadata.replies[0].events) == 1
+
+    def test_load_non_dict_usage_returns_default(self, tmp_path: Path) -> None:
+        """load() returns default Usage for non-dict usage values."""
+        session_data = {
+            "conversation_id": "abc12345",
+            "replies": [
+                {
+                    "session_id": "session-1",
+                    "timestamp": "2026-01-15T12:00:00+00:00",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": "not a dict",
+                }
+            ],
+        }
+        (tmp_path / SESSION_FILE_NAME).write_text(json.dumps(session_data))
+
+        store = SessionStore(tmp_path)
+        metadata = store.load()
+
+        assert metadata is not None
+        assert metadata.replies[0].usage == Usage()
+
+    def test_usage_extra_fields_round_trip(self, tmp_path: Path) -> None:
+        """Extra usage fields survive save/load round-trip."""
+        session_data = {
+            "conversation_id": "abc12345",
+            "replies": [
+                {
+                    "session_id": "session-1",
+                    "timestamp": "2026-01-15T12:00:00+00:00",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": {
+                        "input_tokens": 100,
+                        "output_tokens": 50,
+                        "server_tool_use": {"web_search_requests": 2},
+                    },
+                }
+            ],
+        }
+        (tmp_path / SESSION_FILE_NAME).write_text(json.dumps(session_data))
+
+        store = SessionStore(tmp_path)
+        metadata = store.load()
+
+        assert metadata is not None
+        usage = metadata.replies[0].usage
+        assert usage.input_tokens == 100
+        assert usage.extra == {"server_tool_use": {"web_search_requests": 2}}
+
+        # Save and reload to verify round-trip
+        store.save(metadata)
+        reloaded = store.load()
+        assert reloaded is not None
+        usage2 = reloaded.replies[0].usage
+        assert usage2.extra == {"server_tool_use": {"web_search_requests": 2}}
 
     def test_load_invalid_json(self, tmp_path: Path) -> None:
         """load() returns None for invalid JSON."""
@@ -538,7 +582,7 @@ class TestSessionStore:
             total_cost_usd=0.05,
             num_turns=3,
             is_error=False,
-            usage={"input_tokens": 100},
+            usage=Usage(input_tokens=100),
         )
         metadata = SessionMetadata(
             conversation_id="abc12345",
@@ -550,7 +594,7 @@ class TestSessionStore:
         data = json.loads((tmp_path / SESSION_FILE_NAME).read_text())
         assert len(data["replies"]) == 1
         assert data["replies"][0]["session_id"] == "session-1"
-        assert data["replies"][0]["usage"] == {"input_tokens": 100}
+        assert data["replies"][0]["usage"]["input_tokens"] == 100
 
     def test_save_overwrites_existing(self, tmp_path: Path) -> None:
         """save() overwrites existing file."""
@@ -582,27 +626,32 @@ class TestSessionStore:
     def test_add_reply_creates_new_metadata(self, tmp_path: Path) -> None:
         """add_reply() creates metadata when none exists."""
         store = SessionStore(tmp_path)
-        claude_output = {
-            "session_id": "new-session-id",
-            "duration_ms": 5000,
-            "total_cost_usd": 0.05,
-            "num_turns": 3,
-            "is_error": False,
-            "usage": {"input_tokens": 100},
-        }
+        events = _parse_events(
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "new-session-id",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {"input_tokens": 100},
+                "result": "done",
+            }
+        )
 
         with patch("lib.container.session.datetime") as mock_datetime:
             mock_datetime.now.return_value = datetime(
                 2026, 1, 15, 12, 0, 0, tzinfo=UTC
             )
 
-            metadata = store.add_reply("abc12345", claude_output)
+            metadata = store.add_reply("abc12345", events)
 
         assert metadata.conversation_id == "abc12345"
         assert len(metadata.replies) == 1
         assert metadata.replies[0].session_id == "new-session-id"
         assert metadata.replies[0].total_cost_usd == 0.05
-        assert metadata.replies[0].usage == {"input_tokens": 100}
+        assert metadata.replies[0].usage == Usage(input_tokens=100)
 
         # Verify persisted
         data = json.loads((tmp_path / SESSION_FILE_NAME).read_text())
@@ -613,111 +662,122 @@ class TestSessionStore:
         store = SessionStore(tmp_path)
 
         # Create initial reply
-        claude_output1 = {
-            "session_id": "session-1",
-            "duration_ms": 5000,
-            "total_cost_usd": 0.05,
-            "num_turns": 3,
-            "is_error": False,
-        }
-        store.add_reply("abc12345", claude_output1)
+        events1 = _parse_events(
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "session-1",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "result": "done",
+            }
+        )
+        store.add_reply("abc12345", events1)
 
         # Add second reply
-        claude_output2 = {
-            "session_id": "session-2",
-            "duration_ms": 3000,
-            "total_cost_usd": 0.08,
-            "num_turns": 2,
-            "is_error": False,
-        }
-        metadata = store.add_reply("abc12345", claude_output2)
+        events2 = _parse_events(
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "session-2",
+                "duration_ms": 3000,
+                "total_cost_usd": 0.08,
+                "num_turns": 2,
+                "is_error": False,
+                "result": "done",
+            }
+        )
+        metadata = store.add_reply("abc12345", events2)
 
         assert len(metadata.replies) == 2
         assert metadata.replies[0].session_id == "session-1"
         assert metadata.replies[1].session_id == "session-2"
 
-    def test_add_reply_handles_missing_fields(self, tmp_path: Path) -> None:
-        """add_reply() handles Claude output with missing optional fields."""
+    def test_add_reply_handles_empty_events(self, tmp_path: Path) -> None:
+        """add_reply() handles empty event list with defaults."""
         store = SessionStore(tmp_path)
-        claude_output = {
-            # Minimal output - missing most fields
-        }
 
-        metadata = store.add_reply("abc12345", claude_output)
+        metadata = store.add_reply("abc12345", [])
 
         assert metadata.replies[0].session_id == ""
         assert metadata.replies[0].duration_ms == 0
         assert metadata.replies[0].total_cost_usd == 0.0
         assert metadata.replies[0].num_turns == 0
-        assert metadata.replies[0].is_error is False
-        assert metadata.replies[0].usage == {}
+        assert metadata.replies[0].is_error is True  # default when no result
+        assert metadata.replies[0].usage == Usage()
 
     def test_update_or_add_reply_creates_first_reply(
         self, tmp_path: Path
     ) -> None:
         """update_or_add_reply() creates first reply when none exists."""
         store = SessionStore(tmp_path)
-        claude_output = {
-            "session_id": "session-1",
-            "duration_ms": 5000,
-            "total_cost_usd": 0.05,
-            "num_turns": 3,
-            "is_error": False,
-            "events": [{"type": "system"}],
-        }
+        events = _parse_events(
+            {"type": "system", "subtype": "init", "session_id": "session-1"},
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "session-1",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "result": "done",
+            },
+        )
 
-        metadata = store.update_or_add_reply("abc12345", claude_output)
+        metadata = store.update_or_add_reply("abc12345", events)
 
         assert len(metadata.replies) == 1
         assert metadata.replies[0].session_id == "session-1"
-        assert len(metadata.replies[0].events) == 1
+        assert len(metadata.replies[0].events) == 2
 
     def test_update_or_add_reply_updates_existing(self, tmp_path: Path) -> None:
         """update_or_add_reply() updates last reply instead of appending."""
         store = SessionStore(tmp_path)
 
         # Create initial reply with 1 event
-        claude_output1 = {
-            "session_id": "",
-            "duration_ms": 0,
-            "total_cost_usd": 0.0,
-            "num_turns": 0,
-            "is_error": False,
-            "events": [{"type": "system"}],
-        }
-        store.update_or_add_reply("abc12345", claude_output1)
+        events1 = _parse_events(
+            {"type": "system", "subtype": "init"},
+        )
+        store.update_or_add_reply("abc12345", events1)
 
         # Update with 2 events
-        claude_output2 = {
-            "session_id": "",
-            "duration_ms": 0,
-            "total_cost_usd": 0.0,
-            "num_turns": 0,
-            "is_error": False,
-            "events": [{"type": "system"}, {"type": "assistant"}],
-        }
-        metadata = store.update_or_add_reply("abc12345", claude_output2)
+        events2 = _parse_events(
+            {"type": "system", "subtype": "init"},
+            {
+                "type": "assistant",
+                "message": {"role": "assistant", "content": []},
+            },
+        )
+        metadata = store.update_or_add_reply("abc12345", events2)
 
         # Should still have only 1 reply, but with updated events
         assert len(metadata.replies) == 1
         assert len(metadata.replies[0].events) == 2
 
         # Update with final data (3 events + metadata)
-        claude_output3 = {
-            "session_id": "session-final",
-            "duration_ms": 5000,
-            "total_cost_usd": 0.05,
-            "num_turns": 3,
-            "is_error": False,
-            "events": [
-                {"type": "system"},
-                {"type": "assistant"},
-                {"type": "result"},
-            ],
-        }
+        events3 = _parse_events(
+            {"type": "system", "subtype": "init"},
+            {
+                "type": "assistant",
+                "message": {"role": "assistant", "content": []},
+            },
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "session-final",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "result": "done",
+            },
+        )
         metadata = store.update_or_add_reply(
             "abc12345",
-            claude_output3,
+            events3,
             response_text="Final response",
         )
 
@@ -734,17 +794,22 @@ class TestSessionStore:
         store = SessionStore(tmp_path)
 
         # Create first reply with request_text "First task"
-        claude_output1 = {
-            "session_id": "session-1",
-            "duration_ms": 1000,
-            "total_cost_usd": 0.01,
-            "num_turns": 1,
-            "is_error": False,
-            "events": [{"type": "system"}, {"type": "result"}],
-        }
+        events1 = _parse_events(
+            {"type": "system", "subtype": "init"},
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "session-1",
+                "duration_ms": 1000,
+                "total_cost_usd": 0.01,
+                "num_turns": 1,
+                "is_error": False,
+                "result": "done",
+            },
+        )
         store.update_or_add_reply(
             "abc12345",
-            claude_output1,
+            events1,
             request_text="First task",
             response_text="First response",
         )
@@ -757,17 +822,22 @@ class TestSessionStore:
         assert metadata.replies[0].response_text == "First response"
 
         # Add second reply with different request_text
-        claude_output2 = {
-            "session_id": "session-2",
-            "duration_ms": 2000,
-            "total_cost_usd": 0.02,
-            "num_turns": 2,
-            "is_error": False,
-            "events": [{"type": "system"}, {"type": "result"}],
-        }
+        events2 = _parse_events(
+            {"type": "system", "subtype": "init"},
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "session-2",
+                "duration_ms": 2000,
+                "total_cost_usd": 0.02,
+                "num_turns": 2,
+                "is_error": False,
+                "result": "done",
+            },
+        )
         metadata = store.update_or_add_reply(
             "abc12345",
-            claude_output2,
+            events2,
             request_text="Second task",
             response_text="Second response",
         )
@@ -786,33 +856,33 @@ class TestSessionStore:
         store = SessionStore(tmp_path)
 
         # Create first reply
-        claude_output1 = {
-            "session_id": "session-1",
-            "duration_ms": 1000,
-            "total_cost_usd": 0.01,
-            "num_turns": 1,
-            "is_error": False,
-            "events": [{"type": "system"}],
-        }
+        events1 = _parse_events(
+            {"type": "system", "subtype": "init"},
+        )
         store.update_or_add_reply(
             "abc12345",
-            claude_output1,
+            events1,
             request_text="Same task",
             response_text="Partial response",
         )
 
         # Update with same request_text (streaming update)
-        claude_output2 = {
-            "session_id": "session-1",
-            "duration_ms": 2000,
-            "total_cost_usd": 0.02,
-            "num_turns": 2,
-            "is_error": False,
-            "events": [{"type": "system"}, {"type": "result"}],
-        }
+        events2 = _parse_events(
+            {"type": "system", "subtype": "init"},
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "session-1",
+                "duration_ms": 2000,
+                "total_cost_usd": 0.02,
+                "num_turns": 2,
+                "is_error": False,
+                "result": "done",
+            },
+        )
         metadata = store.update_or_add_reply(
             "abc12345",
-            claude_output2,
+            events2,
             request_text="Same task",
             response_text="Complete response",
         )
@@ -987,31 +1057,41 @@ class TestSessionFileIntegration:
         store = SessionStore(tmp_path)
 
         # Build up session through multiple replies
-        claude_output1 = {
-            "session_id": "c7886694-f2cb-4861-ad3c-fbe0964eb4df",
-            "duration_ms": 2900,
-            "total_cost_usd": 0.0313825,
-            "num_turns": 1,
-            "is_error": False,
-            "usage": {
-                "input_tokens": 3,
-                "output_tokens": 31,
-            },
-        }
-        store.add_reply("abc12345", claude_output1)
+        events1 = _parse_events(
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "c7886694-f2cb-4861-ad3c-fbe0964eb4df",
+                "duration_ms": 2900,
+                "total_cost_usd": 0.0313825,
+                "num_turns": 1,
+                "is_error": False,
+                "usage": {
+                    "input_tokens": 3,
+                    "output_tokens": 31,
+                },
+                "result": "done",
+            }
+        )
+        store.add_reply("abc12345", events1)
 
-        claude_output2 = {
-            "session_id": "c7886694-f2cb-4861-ad3c-fbe0964eb4df",
-            "duration_ms": 2657,
-            "total_cost_usd": 0.04216375,
-            "num_turns": 1,
-            "is_error": False,
-            "usage": {
-                "input_tokens": 3,
-                "output_tokens": 9,
-            },
-        }
-        store.add_reply("abc12345", claude_output2)
+        events2 = _parse_events(
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "c7886694-f2cb-4861-ad3c-fbe0964eb4df",
+                "duration_ms": 2657,
+                "total_cost_usd": 0.04216375,
+                "num_turns": 1,
+                "is_error": False,
+                "usage": {
+                    "input_tokens": 3,
+                    "output_tokens": 9,
+                },
+                "result": "done",
+            }
+        )
+        store.add_reply("abc12345", events2)
 
         # Load from fresh store
         fresh_store = SessionStore(tmp_path)
@@ -1031,17 +1111,22 @@ class TestSessionFileIntegration:
         """Save and load session data with request/response text."""
         store = SessionStore(tmp_path)
 
-        claude_output = {
-            "session_id": "sess-123",
-            "duration_ms": 5000,
-            "total_cost_usd": 0.05,
-            "num_turns": 3,
-            "is_error": False,
-            "usage": {},
-        }
+        events = _parse_events(
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess-123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {},
+                "result": "done",
+            }
+        )
         store.add_reply(
             "abc12345",
-            claude_output,
+            events,
             request_text="Please help me with this task",
             response_text="I'll help you with that.",
         )
