@@ -94,8 +94,8 @@ class DashboardServer:
                     endpoint="task_detail",
                 ),
                 Rule(
-                    "/conversation/<conversation_id>/session",
-                    endpoint="task_session_json",
+                    "/conversation/<conversation_id>/conversation",
+                    endpoint="task_conversation_json",
                 ),
                 Rule(
                     "/conversation/<conversation_id>/actions",
@@ -127,7 +127,9 @@ class DashboardServer:
             "version": self._handlers.handle_version,
             "repo_detail": self._handlers.handle_repo_detail,
             "task_detail": self._handlers.handle_task_detail,
-            "task_session_json": self._handlers.handle_task_session_json,
+            "task_conversation_json": (
+                self._handlers.handle_task_conversation_json
+            ),
             "task_actions": self._handlers.handle_task_actions,
             "task_network": self._handlers.handle_task_network,
             "api_tasks": self._handlers.handle_api_tasks,
@@ -205,31 +207,35 @@ class DashboardServer:
     def _task_to_dict(
         self,
         task: Any,
-        include_session: bool = False,
-        session: Any = None,
+        include_conversation: bool = False,
+        conversation: Any = None,
+        event_groups: list[list[Any]] | None = None,
     ) -> dict[str, Any]:
         """Convert TaskState to JSON-serializable dict.
 
         Args:
             task: Task to convert.
-            include_session: If True, include session metadata.
-            session: Pre-loaded session metadata.
+            include_conversation: If True, include conversation metadata.
+            conversation: Pre-loaded conversation metadata.
+            event_groups: Pre-loaded event groups from EventLog.
 
         Returns:
             Dict representation of task.
         """
-        return self._handlers._task_to_dict(task, include_session, session)
+        return self._handlers._task_to_dict(
+            task, include_conversation, conversation, event_groups
+        )
 
-    def _load_session(self, conversation_id: str) -> Any:
-        """Load session metadata for a conversation.
+    def _load_conversation(self, conversation_id: str) -> Any:
+        """Load conversation metadata.
 
         Args:
-            conversation_id: Conversation ID to load session for.
+            conversation_id: Conversation ID to load.
 
         Returns:
-            SessionMetadata if available, None otherwise.
+            ConversationMetadata if available, None otherwise.
         """
-        return self._handlers._load_session(conversation_id)
+        return self._handlers._load_conversation(conversation_id)
 
     def _load_task_from_disk(
         self, conversation_id: str
@@ -240,20 +246,21 @@ class DashboardServer:
             conversation_id: Conversation ID to load.
 
         Returns:
-            Tuple of (TaskState, SessionMetadata) if found, None otherwise.
+            Tuple of (TaskState, ConversationMetadata) if found,
+            None otherwise.
         """
         return self._handlers._load_task_from_disk(conversation_id)
 
-    def _load_task_with_session(
+    def _load_task_with_conversation(
         self, conversation_id: str
     ) -> tuple[Any, Any | None] | None:
-        """Load task and session from memory or disk.
+        """Load task and conversation from memory or disk.
 
         Args:
             conversation_id: Conversation ID to load.
 
         Returns:
-            Tuple of (TaskState, SessionMetadata or None) if found,
+            Tuple of (TaskState, ConversationMetadata or None) if found,
             None if not found.
         """
-        return self._handlers._load_task_with_session(conversation_id)
+        return self._handlers._load_task_with_conversation(conversation_id)

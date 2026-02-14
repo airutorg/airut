@@ -6,17 +6,21 @@
 """Integration tests for the typed Claude output pipeline.
 
 Tests that typed events survive the full pipeline:
-  parse_stream_events → SessionStore save → SessionStore load → dashboard render
+  parse → EventLog/ConversationStore save → load → render
 
-These tests exercise the real data flow without the email server, focusing on
-the typed parsing library, session persistence, and dashboard rendering.
+These tests exercise the real data flow without the email server,
+focusing on typed parsing, event/conversation persistence, and
+dashboard rendering.
 """
 
 import json
 import time
+from datetime import UTC, datetime
+from pathlib import Path
 
 from lib.claude_output import (
     EventType,
+    StreamEvent,
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
@@ -26,12 +30,17 @@ from lib.claude_output import (
     extract_session_id,
     parse_stream_events,
 )
+from lib.claude_output.types import Usage
+from lib.conversation import (
+    ConversationStore,
+    ReplySummary,
+)
 from lib.dashboard.views.actions import (
     render_actions_timeline,
     render_events_list,
     render_single_event,
 )
-from lib.sandbox import SessionStore
+from lib.sandbox import EventLog
 
 
 def _build_stdout(*event_dicts: dict) -> str:
@@ -121,6 +130,59 @@ def _result_event(
     }
 
 
+def _save_reply(
+    session_dir: Path,
+    conversation_id: str,
+    events: list[StreamEvent],
+    request_text: str,
+    response_text: str,
+) -> tuple[ConversationStore, EventLog]:
+    """Save events and metadata using the new split storage.
+
+    Writes events to EventLog and builds a ReplySummary for
+    ConversationStore, mirroring the real pipeline.
+
+    Returns:
+        Tuple of (conversation_store, event_log) for further assertions.
+    """
+    event_log = EventLog(session_dir)
+    event_log.start_new_reply()
+    for e in events:
+        event_log.append_event(e)
+
+    session_id = extract_session_id(events) or ""
+    summary = extract_result_summary(events)
+    if summary:
+        reply = ReplySummary(
+            session_id=session_id,
+            timestamp=datetime.now(tz=UTC).isoformat(),
+            duration_ms=summary.duration_ms,
+            total_cost_usd=summary.total_cost_usd,
+            num_turns=summary.num_turns,
+            is_error=summary.is_error,
+            usage=summary.usage,
+            request_text=request_text,
+            response_text=response_text,
+        )
+    else:
+        reply = ReplySummary(
+            session_id=session_id,
+            timestamp=datetime.now(tz=UTC).isoformat(),
+            duration_ms=0,
+            total_cost_usd=0.0,
+            num_turns=0,
+            is_error=False,
+            usage=Usage(),
+            request_text=request_text,
+            response_text=response_text,
+        )
+
+    conv_store = ConversationStore(session_dir)
+    conv_store.add_reply(conversation_id, reply)
+
+    return conv_store, event_log
+
+
 class TestDashboardRendersTypedEvents:
     """Test that dashboard correctly renders typed events from parsed output."""
 
@@ -194,25 +256,28 @@ class TestDashboardRendersTypedEvents:
         events = parse_stream_events(stdout)
         assert len(events) == 6
 
-        # Save to session store
+        # Save using split storage
         session_dir = tmp_path / "conversations" / "test1234"
         session_dir.mkdir(parents=True)
-        store = SessionStore(session_dir)
-        store.update_or_add_reply(
-            execution_context_id="test1234",
+        conv_store, event_log = _save_reply(
+            session_dir,
+            conversation_id="test1234",
             events=events,
             request_text="List the files",
             response_text="Found file.txt.",
         )
 
         # Load back
-        loaded = store.load()
+        loaded = conv_store.load()
         assert loaded is not None
         assert len(loaded.replies) == 1
-        assert len(loaded.replies[0].events) == 6
+
+        event_groups = event_log.read_all()
+        assert len(event_groups) == 1
+        assert len(event_groups[0]) == 6
 
         # Verify event types survived round-trip
-        loaded_events = loaded.replies[0].events
+        loaded_events = event_groups[0]
         assert loaded_events[0].event_type == EventType.SYSTEM
         assert loaded_events[1].event_type == EventType.ASSISTANT
         assert loaded_events[2].event_type == EventType.ASSISTANT
@@ -229,7 +294,7 @@ class TestDashboardRendersTypedEvents:
         assert loaded_events[3].content_blocks[0].content == "file.txt"
 
         # Render timeline from loaded data
-        timeline_html = render_actions_timeline(loaded)
+        timeline_html = render_actions_timeline(loaded, event_groups)
         assert "Reply #1" in timeline_html
         assert "List the files" in timeline_html
         assert "system:" in timeline_html
@@ -311,18 +376,19 @@ class TestErrorSummaryFromParsedEvents:
         # Save and load
         session_dir = tmp_path / "conversations" / "err12345"
         session_dir.mkdir(parents=True)
-        store = SessionStore(session_dir)
-        store.update_or_add_reply(
-            execution_context_id="err12345",
+        _, event_log = _save_reply(
+            session_dir,
+            conversation_id="err12345",
             events=events,
             request_text="Do the thing",
             response_text="Working on it...",
         )
-        loaded = store.load()
-        assert loaded is not None
+
+        event_groups = event_log.read_all()
+        assert len(event_groups) == 1
 
         # Extract error summary from loaded events
-        summary = extract_error_summary(loaded.replies[0].events)
+        summary = extract_error_summary(event_groups[0])
         assert summary is not None
         assert "connection refused" in summary
 
@@ -345,7 +411,7 @@ class TestUnknownEventsThroughPipeline:
         assert events[0].extra["seq"] == 42
 
     def test_unknown_event_save_load_round_trip(self, tmp_path) -> None:
-        """Unknown events survive SessionStore save/load."""
+        """Unknown events survive EventLog save/load."""
         stdout = _build_stdout(
             _system_event(),
             {"type": "progress", "percent": 50, "message": "halfway"},
@@ -359,17 +425,18 @@ class TestUnknownEventsThroughPipeline:
         # Save and load
         session_dir = tmp_path / "conversations" / "unk12345"
         session_dir.mkdir(parents=True)
-        store = SessionStore(session_dir)
-        store.update_or_add_reply(
-            execution_context_id="unk12345",
+        _, event_log = _save_reply(
+            session_dir,
+            conversation_id="unk12345",
             events=events,
             request_text="Test unknown events",
             response_text="Done.",
         )
-        loaded = store.load()
-        assert loaded is not None
 
-        loaded_events = loaded.replies[0].events
+        event_groups = event_log.read_all()
+        assert len(event_groups) == 1
+
+        loaded_events = event_groups[0]
         assert len(loaded_events) == 4
         assert loaded_events[1].event_type == EventType.UNKNOWN
         # Extra fields preserved
@@ -401,18 +468,20 @@ class TestUnknownEventsThroughPipeline:
         # Save and load
         session_dir = tmp_path / "conversations" / "unkfull1"
         session_dir.mkdir(parents=True)
-        store = SessionStore(session_dir)
-        store.update_or_add_reply(
-            execution_context_id="unkfull1",
+        conv_store, event_log = _save_reply(
+            session_dir,
+            conversation_id="unkfull1",
             events=events,
             request_text="Think about this",
             response_text="Here's my answer.",
         )
-        loaded = store.load()
+        loaded = conv_store.load()
         assert loaded is not None
 
+        event_groups = event_log.read_all()
+
         # Render timeline
-        timeline_html = render_actions_timeline(loaded)
+        timeline_html = render_actions_timeline(loaded, event_groups)
         assert "thinking" in timeline_html
         assert "system:" in timeline_html
         assert (
@@ -452,7 +521,7 @@ class TestUsageExtraFieldsThroughPipeline:
         assert summary.usage.extra["service_tier"] == "standard"
 
     def test_usage_extra_save_load_round_trip(self, tmp_path) -> None:
-        """Extra usage fields survive SessionStore save/load."""
+        """Extra usage fields survive ConversationStore save/load."""
         usage_dict = {
             "input_tokens": 400,
             "output_tokens": 150,
@@ -469,16 +538,16 @@ class TestUsageExtraFieldsThroughPipeline:
         # Save
         session_dir = tmp_path / "conversations" / "usage123"
         session_dir.mkdir(parents=True)
-        store = SessionStore(session_dir)
-        store.update_or_add_reply(
-            execution_context_id="usage123",
+        conv_store, _ = _save_reply(
+            session_dir,
+            conversation_id="usage123",
             events=events,
             request_text="Search for stuff",
             response_text="Results found.",
         )
 
         # Load
-        loaded = store.load()
+        loaded = conv_store.load()
         assert loaded is not None
         reply = loaded.replies[0]
 
@@ -490,8 +559,8 @@ class TestUsageExtraFieldsThroughPipeline:
         }
         assert reply.usage.extra["custom_metric"] == 99
 
-    def test_usage_extra_in_raw_session_json(self, tmp_path) -> None:
-        """Extra usage fields appear in context.json wire format."""
+    def test_usage_extra_in_raw_conversation_json(self, tmp_path) -> None:
+        """Extra usage fields appear in conversation.json wire format."""
         usage_dict = {
             "input_tokens": 100,
             "output_tokens": 50,
@@ -505,16 +574,16 @@ class TestUsageExtraFieldsThroughPipeline:
 
         session_dir = tmp_path / "conversations" / "usagejson"
         session_dir.mkdir(parents=True)
-        store = SessionStore(session_dir)
-        store.update_or_add_reply(
-            execution_context_id="usagejson",
+        _save_reply(
+            session_dir,
+            conversation_id="usagejson",
             events=events,
             request_text="Test",
             response_text="Done.",
         )
 
         # Read raw JSON to verify wire format
-        session_file = session_dir / "context.json"
+        session_file = session_dir / "conversation.json"
         with session_file.open("r") as f:
             raw = json.load(f)
 
@@ -615,16 +684,17 @@ class TestToolUseEventsThroughPipeline:
         # Save and load
         session_dir = tmp_path / "conversations" / "tool1234"
         session_dir.mkdir(parents=True)
-        store = SessionStore(session_dir)
-        store.update_or_add_reply(
-            execution_context_id="tool1234",
+        _, event_log = _save_reply(
+            session_dir,
+            conversation_id="tool1234",
             events=events,
             request_text="Edit the file",
             response_text="Done editing.",
         )
-        loaded = store.load()
-        assert loaded is not None
-        loaded_events = loaded.replies[0].events
+
+        event_groups = event_log.read_all()
+        assert len(event_groups) == 1
+        loaded_events = event_groups[0]
         assert len(loaded_events) == 8
 
         # Verify tool use blocks survived
@@ -653,7 +723,7 @@ class TestExtractionAfterRoundTrip:
     """Test extraction functions work on events after save/load round-trip."""
 
     def test_extract_response_text_after_round_trip(self, tmp_path) -> None:
-        """extract_response_text works on loaded session events."""
+        """extract_response_text works on loaded events."""
         stdout = _build_stdout(
             _system_event(),
             _assistant_text_event("Here is the answer."),
@@ -663,21 +733,22 @@ class TestExtractionAfterRoundTrip:
 
         session_dir = tmp_path / "conversations" / "resp1234"
         session_dir.mkdir(parents=True)
-        store = SessionStore(session_dir)
-        store.update_or_add_reply(
-            execution_context_id="resp1234",
+        _, event_log = _save_reply(
+            session_dir,
+            conversation_id="resp1234",
             events=events,
             request_text="What's the answer?",
             response_text="Here is the answer.",
         )
-        loaded = store.load()
-        assert loaded is not None
 
-        text = extract_response_text(loaded.replies[0].events)
+        event_groups = event_log.read_all()
+        assert len(event_groups) == 1
+
+        text = extract_response_text(event_groups[0])
         assert text == "Here is the answer."
 
     def test_extract_session_id_after_round_trip(self, tmp_path) -> None:
-        """extract_session_id works on loaded session events."""
+        """extract_session_id works on loaded events."""
         stdout = _build_stdout(
             _system_event(session_id="sess-abc-xyz"),
             _assistant_text_event("Hello."),
@@ -687,21 +758,22 @@ class TestExtractionAfterRoundTrip:
 
         session_dir = tmp_path / "conversations" / "sid12345"
         session_dir.mkdir(parents=True)
-        store = SessionStore(session_dir)
-        store.update_or_add_reply(
-            execution_context_id="sid12345",
+        _, event_log = _save_reply(
+            session_dir,
+            conversation_id="sid12345",
             events=events,
             request_text="Hi",
             response_text="Hello.",
         )
-        loaded = store.load()
-        assert loaded is not None
 
-        sid = extract_session_id(loaded.replies[0].events)
+        event_groups = event_log.read_all()
+        assert len(event_groups) == 1
+
+        sid = extract_session_id(event_groups[0])
         assert sid == "sess-abc-xyz"
 
     def test_extract_result_summary_after_round_trip(self, tmp_path) -> None:
-        """extract_result_summary works on loaded session events."""
+        """extract_result_summary works on loaded events."""
         usage = {
             "input_tokens": 300,
             "output_tokens": 150,
@@ -720,17 +792,18 @@ class TestExtractionAfterRoundTrip:
 
         session_dir = tmp_path / "conversations" / "sum12345"
         session_dir.mkdir(parents=True)
-        store = SessionStore(session_dir)
-        store.update_or_add_reply(
-            execution_context_id="sum12345",
+        _, event_log = _save_reply(
+            session_dir,
+            conversation_id="sum12345",
             events=events,
             request_text="Do stuff",
             response_text="Done.",
         )
-        loaded = store.load()
-        assert loaded is not None
 
-        summary = extract_result_summary(loaded.replies[0].events)
+        event_groups = event_log.read_all()
+        assert len(event_groups) == 1
+
+        summary = extract_result_summary(event_groups[0])
         assert summary is not None
         assert summary.duration_ms == 2000
         assert summary.total_cost_usd == 0.035

@@ -3,10 +3,13 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Conversation directory layout and preparation.
+"""Conversation directory layout, preparation, and metadata storage.
 
 Manages the per-conversation directory structure (workspace, inbox, outbox,
 storage, Claude session state) and generates container mount configuration.
+
+Also provides ConversationStore for conversation metadata persistence
+(model, reply summaries, session IDs for resumption).
 """
 
 from lib.conversation.conversation_layout import (
@@ -15,6 +18,12 @@ from lib.conversation.conversation_layout import (
     get_container_mounts,
     prepare_conversation,
 )
+from lib.conversation.conversation_store import (
+    CONVERSATION_FILE_NAME,
+    ConversationMetadata,
+    ConversationStore,
+    ReplySummary,
+)
 
 
 __all__ = [
@@ -22,4 +31,8 @@ __all__ = [
     "create_conversation_layout",
     "get_container_mounts",
     "prepare_conversation",
+    "CONVERSATION_FILE_NAME",
+    "ConversationMetadata",
+    "ConversationStore",
+    "ReplySummary",
 ]

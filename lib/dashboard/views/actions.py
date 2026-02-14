@@ -21,9 +21,9 @@ from lib.claude_output.types import (
     ToolResultBlock,
     ToolUseBlock,
 )
+from lib.conversation import ConversationMetadata
 from lib.dashboard.tracker import TaskState
 from lib.dashboard.views.styles import actions_styles
-from lib.sandbox import SessionMetadata
 
 
 # Maximum lines shown for edit diffs and tool results before truncation.
@@ -31,13 +31,16 @@ _EDIT_MAX_LINES = 20
 
 
 def render_actions_page(
-    task: TaskState, session: SessionMetadata | None
+    task: TaskState,
+    conversation: ConversationMetadata | None,
+    event_groups: list[list[StreamEvent]] | None = None,
 ) -> str:
     """Render actions viewer page HTML.
 
     Args:
         task: Task to display.
-        session: Session metadata with events.
+        conversation: Conversation metadata with reply summaries.
+        event_groups: Events grouped by reply from EventLog.
 
     Returns:
         HTML string for actions page.
@@ -45,10 +48,12 @@ def render_actions_page(
     escaped_subject = html.escape(task.subject)
 
     # Build actions content
-    if session is None or not session.replies:
+    has_replies = conversation is not None and len(conversation.replies) > 0
+    if not has_replies:
         actions_content = '<div class="no-actions">No actions recorded</div>'
     else:
-        actions_content = render_actions_timeline(session)
+        assert conversation is not None
+        actions_content = render_actions_timeline(conversation, event_groups)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -88,18 +93,22 @@ def render_actions_page(
 </html>"""
 
 
-def render_actions_timeline(session: SessionMetadata) -> str:
-    """Render timeline of actions from session events.
+def render_actions_timeline(
+    conversation: ConversationMetadata,
+    event_groups: list[list[StreamEvent]] | None = None,
+) -> str:
+    """Render timeline of actions from conversation and events.
 
     Args:
-        session: Session metadata with events.
+        conversation: Conversation metadata with reply summaries.
+        event_groups: Events grouped by reply from EventLog.
 
     Returns:
         HTML string for actions timeline.
     """
     sections: list[str] = []
 
-    for i, reply in enumerate(session.replies, 1):
+    for i, reply in enumerate(conversation.replies, 1):
         error_class = "error" if reply.is_error else ""
         escaped_timestamp = html.escape(reply.timestamp)
 
@@ -112,7 +121,12 @@ def render_actions_timeline(session: SessionMetadata) -> str:
                 <div class="ev-request">{escaped_request}</div>
             </div>"""
 
-        events_html = render_events_list(reply.events)
+        # Events come from the event log, indexed by reply position
+        reply_events: list[StreamEvent] = []
+        if event_groups is not None and (i - 1) < len(event_groups):
+            reply_events = event_groups[i - 1]
+
+        events_html = render_events_list(reply_events)
 
         sections.append(f"""
         <div class="reply-section {error_class}">

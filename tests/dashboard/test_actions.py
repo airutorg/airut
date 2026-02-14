@@ -144,8 +144,22 @@ class TestEventRendering:
         assert "toggleEvent" in html
 
     def test_empty_events_list(self, harness: DashboardHarness) -> None:
-        """Test rendering with empty events list."""
-        harness.store.add_reply(harness.CONV_ID, [])
+        """Test rendering with reply but no events in event log."""
+        from datetime import UTC, datetime
+
+        from lib.claude_output.types import Usage
+        from lib.conversation import ReplySummary
+
+        reply = ReplySummary(
+            session_id="",
+            timestamp=datetime.now(tz=UTC).isoformat(),
+            duration_ms=0,
+            total_cost_usd=0.0,
+            num_turns=0,
+            is_error=False,
+            usage=Usage(),
+        )
+        harness.store.add_reply(harness.CONV_ID, reply)
 
         html = harness.get_html("/conversation/abc12345/actions")
         assert "No events recorded" in html

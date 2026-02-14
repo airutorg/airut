@@ -138,7 +138,8 @@ Each repo gets fully isolated storage. No files are shared between repos.
 │   ├── git-mirror/               # Shared across conversations for this repo
 │   └── conversations/
 │       ├── abc12345/
-│       │   ├── context.json
+│       │   ├── conversation.json
+│       │   ├── events.jsonl
 │       │   ├── workspace/
 │       │   ├── claude/
 │       │   ├── gitconfig

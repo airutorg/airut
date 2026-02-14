@@ -21,7 +21,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
-from lib.sandbox import SessionStore
+from lib.conversation import ConversationStore
+from lib.sandbox.event_log import EventLog
 
 from .conftest import get_message_text
 from .environment import IntegrationEnvironment
@@ -81,32 +82,31 @@ events = [
             session_dir = (
                 integration_env.storage_dir / "conversations" / conv_id
             )
-            session_store = SessionStore(session_dir)
+            event_log = EventLog(session_dir)
 
-            # Poll for session file updates during execution
+            # Poll for event log updates during execution
             # The mock Claude will generate multiple events
             updates_seen = 0
             max_wait = 10.0
             start_time = time.time()
 
             while time.time() - start_time < max_wait:
-                session_data = session_store.load()
-                if session_data and session_data.replies:
-                    # Check if we have events
-                    latest_reply = session_data.replies[-1]
-                    if latest_reply.events:
-                        event_count = len(latest_reply.events)
-                        if event_count > updates_seen:
-                            updates_seen = event_count
-                            # If we see multiple events, streaming is working
-                            if updates_seen >= 2:
-                                break
+                all_replies = event_log.read_all()
+                if all_replies:
+                    # Check if we have events in the latest reply
+                    latest_events = all_replies[-1]
+                    event_count = len(latest_events)
+                    if event_count > updates_seen:
+                        updates_seen = event_count
+                        # If we see multiple events, streaming is working
+                        if updates_seen >= 2:
+                            break
                 time.sleep(0.1)
 
             # Verify we saw progressive updates (at least 2 events)
             assert updates_seen >= 2, (
                 f"Expected at least 2 events, got {updates_seen}. "
-                "Session file may not be updating progressively."
+                "Event log may not be updating progressively."
             )
 
             # Wait for final response email
@@ -116,25 +116,29 @@ events = [
             )
             assert response is not None, "Did not receive response email"
 
-            # Verify final session file has all events
-            final_session = session_store.load()
-            assert final_session is not None
-            assert len(final_session.replies) > 0
+            # Verify final conversation metadata
+            conv_store = ConversationStore(session_dir)
+            final_conv = conv_store.load()
+            assert final_conv is not None
+            assert len(final_conv.replies) > 0
 
             # CRITICAL: Should only have ONE reply, not multiple
             # Bug: streaming was creating a new reply on each event
-            assert len(final_session.replies) == 1, (
+            assert len(final_conv.replies) == 1, (
                 f"Expected exactly 1 reply, but found "
-                f"{len(final_session.replies)}. "
+                f"{len(final_conv.replies)}. "
                 "Streaming updates should modify the same reply, "
                 "not create new ones."
             )
 
-            final_reply = final_session.replies[-1]
+            # Verify final event log has all events
+            final_replies = event_log.read_all()
+            assert len(final_replies) == 1
+            final_events = final_replies[0]
             # Mock Claude generates: system, assistant, result (min 3)
-            assert len(final_reply.events) >= 3, (
-                f"Expected at least 3 events in final session, "
-                f"got {len(final_reply.events)}"
+            assert len(final_events) >= 3, (
+                f"Expected at least 3 events in final event log, "
+                f"got {len(final_events)}"
             )
 
         finally:

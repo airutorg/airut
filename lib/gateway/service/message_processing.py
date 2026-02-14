@@ -15,15 +15,19 @@ This module handles:
 from __future__ import annotations
 
 import logging
+from datetime import UTC
 from email.message import Message
 from typing import TYPE_CHECKING
 
 from lib.allowlist import parse_allowlist_yaml
 from lib.claude_output import (
-    StreamEvent,
     extract_error_summary,
+    extract_result_summary,
+    extract_session_id,
 )
 from lib.conversation import (
+    ConversationStore,
+    ReplySummary,
     create_conversation_layout,
     prepare_conversation,
 )
@@ -48,7 +52,6 @@ from lib.sandbox import (
     Mount,
     NetworkSandboxConfig,
     Outcome,
-    SessionStore,
 )
 
 
@@ -162,6 +165,64 @@ def _build_image(
     return service.sandbox.ensure_image(dockerfile_content, context_files)
 
 
+def _build_reply_summary(
+    result: object,
+    *,
+    request_text: str,
+    response_text: str,
+    is_error: bool = False,
+) -> ReplySummary:
+    """Build a ReplySummary from an ExecutionResult.
+
+    Extracts session_id, cost, usage, and timing from the result's events
+    and packages them into a ReplySummary for conversation.json.
+
+    Args:
+        result: ExecutionResult from sandbox execution.
+        request_text: The prompt text sent to Claude.
+        response_text: Claude's response text (or error message).
+        is_error: Whether this reply represents an error.
+
+    Returns:
+        ReplySummary ready for ConversationStore.
+    """
+    from datetime import datetime
+
+    from lib.claude_output.types import Usage
+    from lib.sandbox.types import ExecutionResult
+
+    assert isinstance(result, ExecutionResult)
+
+    session_id = extract_session_id(result.events) or ""
+    summary = extract_result_summary(result.events)
+
+    if summary is not None:
+        return ReplySummary(
+            session_id=session_id,
+            timestamp=datetime.now(tz=UTC).isoformat(),
+            duration_ms=summary.duration_ms,
+            total_cost_usd=summary.total_cost_usd,
+            num_turns=summary.num_turns,
+            is_error=is_error or summary.is_error,
+            usage=summary.usage,
+            request_text=request_text,
+            response_text=response_text,
+        )
+    else:
+        # No result event (e.g., timeout, crash) — use fallback values
+        return ReplySummary(
+            session_id=session_id,
+            timestamp=datetime.now(tz=UTC).isoformat(),
+            duration_ms=result.duration_ms,
+            total_cost_usd=0.0,
+            num_turns=0,
+            is_error=is_error,
+            usage=Usage(),
+            request_text=request_text,
+            response_text=response_text,
+        )
+
+
 def process_message(
     service: EmailGatewayService,
     message: Message,
@@ -240,8 +301,7 @@ def process_message(
         )
         return False, None
 
-    session_store: SessionStore | None = None
-    events_buffer: list[StreamEvent] = []
+    conversation_store: ConversationStore | None = None
     prompt = clean_body
 
     try:
@@ -295,13 +355,13 @@ def process_message(
             )
 
             conversation_dir = conv_mgr.get_conversation_dir(conv_id)
-            session_store = SessionStore(conversation_dir)
-            session_store.set_model(conv_id, model)
+            conversation_store = ConversationStore(conversation_dir)
+            conversation_store.set_model(conv_id, model)
             service.tracker.set_task_model(conv_id, model)
         else:
             conversation_dir = conv_mgr.get_conversation_dir(conv_id)
-            session_store = SessionStore(conversation_dir)
-            model = session_store.get_model() or repo_config.default_model
+            conversation_store = ConversationStore(conversation_dir)
+            model = conversation_store.get_model() or repo_config.default_model
             if requested_model and requested_model != model:
                 logger.warning(
                     "Repo '%s': ignoring model=%s in resumed "
@@ -409,22 +469,8 @@ def process_message(
         # Register task for stop functionality
         service.register_active_task(conv_id, task)
 
-        # Streaming event callback
-        events_buffer: list[StreamEvent] = []
-
-        def on_event(event: StreamEvent) -> None:
-            """Callback invoked for each streaming JSON event."""
-            events_buffer.append(event)
-            if conv_id:
-                try:
-                    task.session_store.update_or_add_reply(
-                        conv_id,
-                        events_buffer.copy(),
-                        request_text=prompt,
-                        response_text="",
-                    )
-                except Exception as e:
-                    logger.warning("Failed to update session file: %s", e)
+        # Start new reply delimiter in event log
+        task.event_log.start_new_reply()
 
         logger.info(
             "Repo '%s': executing Claude Code (model=%s) for conversation %s",
@@ -434,7 +480,7 @@ def process_message(
         )
 
         # Get session ID for resumption
-        session_id = task.session_store.get_session_id_for_resume()
+        session_id = conversation_store.get_session_id_for_resume()
         if session_id:
             logger.info(
                 "Repo '%s': resuming Claude session %s for conversation %s",
@@ -448,7 +494,6 @@ def process_message(
                 prompt,
                 session_id=session_id,
                 model=model,
-                on_event=on_event,
             )
         finally:
             service.unregister_active_task(conv_id)
@@ -472,13 +517,10 @@ def process_message(
                 conv_id,
             )
 
-            last_response = task.session_store.get_last_successful_response()
+            last_response = conversation_store.get_last_successful_response()
             recovery_prompt = build_recovery_prompt(
                 last_response, email_context, clean_body
             )
-
-            # Reset events buffer for the retry
-            events_buffer.clear()
 
             # Create new task for retry
             task = service.sandbox.create_task(
@@ -494,20 +536,22 @@ def process_message(
                 timeout_seconds=repo_config.timeout,
             )
 
+            # Start new reply delimiter for recovery attempt
+            task.event_log.start_new_reply()
+
             service.register_active_task(conv_id, task)
             try:
                 result = task.execute(
                     recovery_prompt,
                     session_id=None,
                     model=model,
-                    on_event=on_event,
                 )
-                # Update prompt so session stores the recovery prompt
+                # Update prompt so conversation stores the recovery prompt
                 prompt = recovery_prompt
             finally:
                 service.unregister_active_task(conv_id)
 
-        # Extract response and usage stats
+        # Extract response and usage stats, record reply summary
         if result.outcome == Outcome.SUCCESS:
             response_body = result.response_text
             usage_stats = extract_usage_stats(
@@ -522,12 +566,12 @@ def process_message(
                 conv_id,
             )
 
-            task.session_store.update_or_add_reply(
-                conv_id,
-                result.events,
+            reply = _build_reply_summary(
+                result,
                 request_text=prompt,
                 response_text=response_body,
             )
+            conversation_store.add_reply(conv_id, reply)
 
             if usage_stats.has_any():
                 stats_footer = usage_stats.format_summary()
@@ -541,13 +585,13 @@ def process_message(
                 "request next steps."
             )
             send_error_reply(repo_handler, message, error_msg)
-            task.session_store.update_or_add_reply(
-                conv_id,
-                events_buffer.copy(),
+            reply = _build_reply_summary(
+                result,
                 request_text=prompt,
                 response_text=error_msg,
                 is_error=True,
             )
+            conversation_store.add_reply(conv_id, reply)
             return False, conv_id
         else:
             response_body = (
@@ -565,13 +609,13 @@ def process_message(
                 conv_id,
                 result.outcome.value,
             )
-            task.session_store.update_or_add_reply(
-                conv_id,
-                result.events,
+            reply = _build_reply_summary(
+                result,
                 request_text=prompt,
                 response_text=response_body,
                 is_error=True,
             )
+            conversation_store.add_reply(conv_id, reply)
 
         # Send reply
         assert conv_id is not None
@@ -610,18 +654,28 @@ def process_message(
             f"`{type(e).__name__}: {e}`"
         )
         send_error_reply(repo_handler, message, error_msg)
-        if conv_id and session_store:
+        if conv_id and conversation_store:
             try:
-                session_store.update_or_add_reply(
-                    conv_id,
-                    events_buffer.copy(),
+                from datetime import datetime
+
+                from lib.claude_output.types import Usage
+
+                reply = ReplySummary(
+                    session_id="",
+                    timestamp=datetime.now(tz=UTC).isoformat(),
+                    duration_ms=0,
+                    total_cost_usd=0.0,
+                    num_turns=0,
+                    is_error=True,
+                    usage=Usage(),
                     request_text=prompt,
                     response_text=error_msg,
-                    is_error=True,
                 )
+                conversation_store.add_reply(conv_id, reply)
             except Exception as persist_err:
                 logger.warning(
-                    "Failed to persist error session: %s", persist_err
+                    "Failed to persist error to conversation: %s",
+                    persist_err,
                 )
         return False, conv_id
 

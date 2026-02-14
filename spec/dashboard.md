@@ -99,19 +99,19 @@ credential problems) while others continue processing emails.
 
 ### HTTP Endpoints
 
-| Route                             | Method | Description                            |
-| --------------------------------- | ------ | -------------------------------------- |
-| `/`                               | GET    | Main dashboard with task lists         |
-| `/.version`                       | GET    | Full git version info (plain text)     |
-| `/repo/{repo_id}`                 | GET    | Repository detail view                 |
-| `/conversation/{conv_id}`         | GET    | Task detail view                       |
-| `/conversation/{conv_id}/session` | GET    | Raw session JSON                       |
-| `/conversation/{conv_id}/actions` | GET    | Actions timeline viewer                |
-| `/api/repos`                      | GET    | JSON API for repository status         |
-| `/api/conversations`              | GET    | JSON API for task list                 |
-| `/api/conversation/{id}`          | GET    | JSON API for single task               |
-| `/api/conversation/{id}/stop`     | POST   | Stop a running task                    |
-| `/health`                         | GET    | Health check endpoint (includes repos) |
+| Route                                  | Method | Description                            |
+| -------------------------------------- | ------ | -------------------------------------- |
+| `/`                                    | GET    | Main dashboard with task lists         |
+| `/.version`                            | GET    | Full git version info (plain text)     |
+| `/repo/{repo_id}`                      | GET    | Repository detail view                 |
+| `/conversation/{conv_id}`              | GET    | Task detail view                       |
+| `/conversation/{conv_id}/conversation` | GET    | Raw conversation JSON                  |
+| `/conversation/{conv_id}/actions`      | GET    | Actions timeline viewer                |
+| `/api/repos`                           | GET    | JSON API for repository status         |
+| `/api/conversations`                   | GET    | JSON API for task list                 |
+| `/api/conversation/{id}`               | GET    | JSON API for single task               |
+| `/api/conversation/{id}/stop`          | POST   | Stop a running task                    |
+| `/health`                              | GET    | Health check endpoint (includes repos) |
 
 ## Configuration
 
@@ -192,13 +192,13 @@ Per-repository view showing:
 
 When a task detail URL is accessed but the task is not in the in-memory tracker
 (e.g., after a service restart), the dashboard attempts to load the task from
-disk by reading the session file from the conversation directory.
+disk by reading the conversation file from the conversation directory.
 
 This enables:
 
 - Following links in acknowledgment emails after service restarts
 - Viewing historical task details without keeping all tasks in memory
-- API access to past task data including session statistics
+- API access to past task data including conversation statistics
 
 Past tasks loaded from disk are marked as COMPLETED with a placeholder subject
 (`[Past conversation {id}]`). The main dashboard completed tasks column is NOT

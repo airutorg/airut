@@ -573,4 +573,4 @@ Check:
 
 - Conversation ID in subject (`[ID:xyz123]`)
 - Session directory exists in storage
-- `context.json` has valid session ID
+- `conversation.json` has valid session ID

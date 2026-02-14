@@ -84,8 +84,9 @@ avoiding SSH key exposure.
 
 ### Session Metadata
 
-Session metadata (`context.json`) is stored outside the container mount. This
-prevents the agent from tampering with session tracking or conversation IDs.
+Session metadata (`conversation.json`) is stored outside the container mount.
+This prevents the agent from tampering with session tracking or conversation
+IDs.
 
 ## Network Isolation
 

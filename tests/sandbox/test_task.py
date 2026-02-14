@@ -15,8 +15,8 @@ import pytest
 from lib.claude_output import StreamEvent
 from lib.claude_output.types import EventType
 from lib.sandbox._proxy import ProxyManager
+from lib.sandbox.event_log import EventLog
 from lib.sandbox.network_log import NetworkLog
-from lib.sandbox.session import SessionStore
 from lib.sandbox.task import NetworkSandboxConfig, SandboxError, Task
 from lib.sandbox.types import ContainerEnv, Mount, Outcome
 from tests.sandbox.conftest import create_mock_popen
@@ -61,10 +61,10 @@ class TestTaskInit:
         claude_dir = tmp_path / "session" / "claude"
         assert claude_dir.exists()
 
-    def test_session_store_property(self, tmp_path: Path) -> None:
-        """session_store property returns SessionStore."""
+    def test_event_log_property(self, tmp_path: Path) -> None:
+        """event_log property returns EventLog."""
         task = _make_task(tmp_path)
-        assert isinstance(task.session_store, SessionStore)
+        assert isinstance(task.event_log, EventLog)
 
     def test_network_log_none_when_no_dir(self, tmp_path: Path) -> None:
         """network_log is None when network_log_dir not provided."""

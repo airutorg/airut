@@ -7,12 +7,13 @@
 
 Reusable fragments used across multiple pages: logo, version info,
 boot state banner, repository section, task list, action buttons,
-session section, and the local-time JavaScript snippet.
+conversation data section, and the local-time JavaScript snippet.
 """
 
 import html
 from pathlib import Path
 
+from lib.conversation import ConversationMetadata
 from lib.dashboard.formatters import (
     VersionInfo,
     format_duration,
@@ -25,7 +26,6 @@ from lib.dashboard.tracker import (
     TaskState,
     TaskStatus,
 )
-from lib.sandbox import SessionMetadata
 
 
 # Load logo SVG at module import time. The assets folder is at repo root.
@@ -305,14 +305,14 @@ def render_action_buttons(task: TaskState) -> str:
 
     actions = f"/conversation/{cid}/actions"
     network = f"/conversation/{cid}/network"
-    session = f"/conversation/{cid}/session"
+    conversation_json = f"/conversation/{cid}/conversation"
     return f"""
         <div class="action-buttons">
             <a href="{actions}" class="action-btn primary"
                 >View Actions</a>
             <a href="{network}" class="action-btn primary"
                 >View Network Logs</a>
-            <a href="{session}" class="action-btn primary"
+            <a href="{conversation_json}" class="action-btn primary"
                 >View Raw JSON</a>
             {stop_html}
         </div>
@@ -379,42 +379,43 @@ def render_stop_script(task: TaskState) -> str:
     </script>"""
 
 
-def render_session_section(
+def render_conversation_section(
     conversation_id: str,
-    session: SessionMetadata | None,
+    conversation: ConversationMetadata | None,
 ) -> str:
-    """Render session data section HTML.
+    """Render conversation data section HTML.
 
     Args:
         conversation_id: Conversation ID for JSON link.
-        session: Session metadata to display, or None.
+        conversation: Conversation metadata to display, or None.
 
     Returns:
-        HTML string for session section.
+        HTML string for conversation data section.
     """
-    if session is None:
+    if conversation is None:
         return """
     <div class="card">
-        <h2>Session Data</h2>
-        <div class="no-session">No session data available</div>
+        <h2>Conversation Data</h2>
+        <div class="no-conversation">No conversation data available</div>
     </div>"""
 
     # Build summary section
-    total_duration_ms = sum(r.duration_ms for r in session.replies)
+    total_duration_ms = sum(r.duration_ms for r in conversation.replies)
     duration_str = format_duration(total_duration_ms / 1000)
 
     summary_html = f"""
-        <div class="session-summary">
+        <div class="conversation-summary">
             <div class="summary-item">
-                <div class="summary-value">${session.total_cost_usd:.4f}</div>
+                <div class="summary-value">\
+${conversation.total_cost_usd:.4f}</div>
                 <div class="summary-label">Total Cost</div>
             </div>
             <div class="summary-item">
-                <div class="summary-value">{session.total_turns}</div>
+                <div class="summary-value">{conversation.total_turns}</div>
                 <div class="summary-label">Total Turns</div>
             </div>
             <div class="summary-item">
-                <div class="summary-value">{len(session.replies)}</div>
+                <div class="summary-value">{len(conversation.replies)}</div>
                 <div class="summary-label">Replies</div>
             </div>
             <div class="summary-item">
@@ -425,7 +426,7 @@ def render_session_section(
 
     # Build replies list
     replies_html = ""
-    for i, reply in enumerate(session.replies, 1):
+    for i, reply in enumerate(conversation.replies, 1):
         error_class = "error" if reply.is_error else ""
         reply_duration = format_duration(reply.duration_ms / 1000)
         escaped_timestamp = html.escape(reply.timestamp)
@@ -505,7 +506,7 @@ def render_session_section(
 
     return f"""
     <div class="card">
-        <h2>Session Data</h2>
+        <h2>Conversation Data</h2>
         {summary_html}
         <div class="reply-list">
             <h3 style="font-size: 14px; margin-bottom: 12px; color: #555;">

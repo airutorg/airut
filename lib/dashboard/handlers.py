@@ -17,6 +17,11 @@ from typing import Any
 
 from werkzeug.wrappers import Request, Response
 
+from lib.conversation import (
+    CONVERSATION_FILE_NAME,
+    ConversationMetadata,
+    ConversationStore,
+)
 from lib.dashboard import views
 from lib.dashboard.formatters import VersionInfo
 from lib.dashboard.tracker import (
@@ -28,12 +33,7 @@ from lib.dashboard.tracker import (
 )
 from lib.dashboard.views import get_favicon_svg
 from lib.gateway.conversation import CONVERSATION_ID_PATTERN
-from lib.sandbox import (
-    NETWORK_LOG_FILENAME,
-    SESSION_FILE_NAME,
-    SessionMetadata,
-    SessionStore,
-)
+from lib.sandbox import NETWORK_LOG_FILENAME, EventLog
 
 
 logger = logging.getLogger(__name__)
@@ -158,46 +158,46 @@ class RequestHandlers:
         Returns:
             HTML response with conversation details.
         """
-        result = self._load_task_with_session(conversation_id)
+        result = self._load_task_with_conversation(conversation_id)
         if result is None:
             return Response("Conversation not found", status=404)
-        task, session = result
+        task, conversation = result
 
         return Response(
-            views.render_task_detail(task, session),
+            views.render_task_detail(task, conversation),
             content_type="text/html; charset=utf-8",
         )
 
-    def handle_task_session_json(
+    def handle_task_conversation_json(
         self, request: Request, conversation_id: str
     ) -> Response:
-        """Handle raw session JSON endpoint.
+        """Handle raw conversation JSON endpoint.
 
         Args:
             request: Incoming request.
-            conversation_id: Conversation ID to get session for.
+            conversation_id: Conversation ID to get data for.
 
         Returns:
-            JSON response with raw session file contents.
+            JSON response with raw conversation file contents.
         """
         conversation_dir = self._find_conversation_dir(conversation_id)
         if conversation_dir is None:
             return Response(
-                json.dumps({"error": "Session data not available"}),
+                json.dumps({"error": "Conversation data not available"}),
                 status=404,
                 content_type="application/json",
             )
 
-        session_path = conversation_dir / SESSION_FILE_NAME
-        if not session_path.exists():
+        conversation_path = conversation_dir / CONVERSATION_FILE_NAME
+        if not conversation_path.exists():
             return Response(
-                json.dumps({"error": "No session data for conversation"}),
+                json.dumps({"error": "No conversation data found"}),
                 status=404,
                 content_type="application/json",
             )
 
         try:
-            with session_path.open("r") as f:
+            with conversation_path.open("r") as f:
                 raw_data = json.load(f)
             return Response(
                 json.dumps(raw_data, indent=2),
@@ -205,10 +205,12 @@ class RequestHandlers:
             )
         except (json.JSONDecodeError, OSError) as e:
             logger.warning(
-                "Failed to read session file %s: %s", session_path, e
+                "Failed to read conversation file %s: %s",
+                conversation_path,
+                e,
             )
             return Response(
-                json.dumps({"error": "Failed to read session data"}),
+                json.dumps({"error": "Failed to read conversation data"}),
                 status=500,
                 content_type="application/json",
             )
@@ -225,13 +227,20 @@ class RequestHandlers:
         Returns:
             HTML response with actions viewer.
         """
-        result = self._load_task_with_session(conversation_id)
+        result = self._load_task_with_conversation(conversation_id)
         if result is None:
             return Response("Conversation not found", status=404)
-        task, session = result
+        task, conversation = result
+
+        # Load events from event log for the actions view
+        conversation_dir = self._find_conversation_dir(conversation_id)
+        event_groups = None
+        if conversation_dir is not None:
+            event_log = EventLog(conversation_dir)
+            event_groups = event_log.read_all()
 
         return Response(
-            views.render_actions_page(task, session),
+            views.render_actions_page(task, conversation, event_groups),
             content_type="text/html; charset=utf-8",
         )
 
@@ -247,12 +256,12 @@ class RequestHandlers:
         Returns:
             HTML response with network logs viewer.
         """
-        result = self._load_task_with_session(conversation_id)
+        result = self._load_task_with_conversation(conversation_id)
         if result is None:
             return Response("Conversation not found", status=404)
         task, _ = result
 
-        # Load network logs from session directory
+        # Load network logs from conversation directory
         conversation_dir = self._find_conversation_dir(conversation_id)
         log_content: str | None = None
         if conversation_dir is not None:
@@ -295,20 +304,32 @@ class RequestHandlers:
             conversation_id: Conversation ID to return.
 
         Returns:
-            JSON response with conversation details, including session data.
+            JSON response with conversation details.
         """
-        result = self._load_task_with_session(conversation_id)
+        result = self._load_task_with_conversation(conversation_id)
         if result is None:
             return Response(
                 json.dumps({"error": "Conversation not found"}),
                 status=404,
                 content_type="application/json",
             )
-        task, session = result
+        task, conversation = result
+
+        # Load events for the API response
+        conversation_dir = self._find_conversation_dir(conversation_id)
+        event_groups = None
+        if conversation_dir is not None:
+            event_log = EventLog(conversation_dir)
+            event_groups = event_log.read_all()
 
         return Response(
             json.dumps(
-                self._task_to_dict(task, include_session=True, session=session)
+                self._task_to_dict(
+                    task,
+                    include_conversation=True,
+                    conversation=conversation,
+                    event_groups=event_groups,
+                )
             ),
             content_type="application/json",
         )
@@ -487,36 +508,39 @@ class RequestHandlers:
                 return candidate
         return None
 
-    def _load_session(self, conversation_id: str) -> SessionMetadata | None:
-        """Load session metadata for a conversation.
+    def _load_conversation(
+        self, conversation_id: str
+    ) -> ConversationMetadata | None:
+        """Load conversation metadata.
 
         Args:
-            conversation_id: Conversation ID to load session for.
+            conversation_id: Conversation ID to load.
 
         Returns:
-            SessionMetadata if available, None otherwise.
+            ConversationMetadata if available, None otherwise.
         """
         conversation_dir = self._find_conversation_dir(conversation_id)
         if conversation_dir is None:
             return None
 
-        store = SessionStore(conversation_dir)
+        store = ConversationStore(conversation_dir)
         return store.load()
 
     def _load_task_from_disk(
         self, conversation_id: str
-    ) -> tuple[TaskState, SessionMetadata] | None:
+    ) -> tuple[TaskState, ConversationMetadata] | None:
         """Load a task from disk when not in memory.
 
-        Constructs a minimal TaskState from session metadata stored on disk.
-        This enables viewing past tasks that were active before the current
-        process started.
+        Constructs a minimal TaskState from conversation metadata stored on
+        disk. This enables viewing past tasks that were active before the
+        current process started.
 
         Args:
             conversation_id: 8-character hex conversation ID.
 
         Returns:
-            Tuple of (TaskState, SessionMetadata) if found, None otherwise.
+            Tuple of (TaskState, ConversationMetadata) if found,
+            None otherwise.
         """
         # Validate conversation ID format
         if not CONVERSATION_ID_PATTERN.match(conversation_id):
@@ -526,20 +550,20 @@ class RequestHandlers:
         if conversation_path is None or not conversation_path.exists():
             return None
 
-        # Load session metadata
-        store = SessionStore(conversation_path)
-        session = store.load()
-        if session is None:
+        # Load conversation metadata
+        store = ConversationStore(conversation_path)
+        conversation = store.load()
+        if conversation is None:
             return None
 
-        # Construct TaskState from session data
+        # Construct TaskState from conversation data
         # We mark it as COMPLETED since it's a past task not currently active
         # Use the last reply's timestamp to estimate completion time
         completed_at: float | None = None
-        if session.replies:
+        if conversation.replies:
             try:
                 # Parse ISO 8601 timestamp from last reply
-                last_timestamp = session.replies[-1].timestamp
+                last_timestamp = conversation.replies[-1].timestamp
                 # Handle both timezone-aware and naive timestamps
                 normalized = last_timestamp.replace("Z", "+00:00")
                 dt = datetime.fromisoformat(normalized)
@@ -554,35 +578,35 @@ class RequestHandlers:
             queued_at=completed_at or 0.0,
             started_at=completed_at,
             completed_at=completed_at,
-            success=not any(r.is_error for r in session.replies),
-            message_count=len(session.replies),
-            model=session.model,
+            success=not any(r.is_error for r in conversation.replies),
+            message_count=len(conversation.replies),
+            model=conversation.model,
         )
 
-        return task, session
+        return task, conversation
 
-    def _load_task_with_session(
+    def _load_task_with_conversation(
         self, conversation_id: str
-    ) -> tuple[TaskState, SessionMetadata | None] | None:
-        """Load task and session from memory or disk.
+    ) -> tuple[TaskState, ConversationMetadata | None] | None:
+        """Load task and conversation metadata from memory or disk.
 
         Tries to load from in-memory tracker first, then falls back to disk
         for past tasks. This is the unified entry point for all handlers that
-        need both task state and session data.
+        need both task state and conversation data.
 
         Args:
             conversation_id: Conversation ID to load.
 
         Returns:
-            Tuple of (TaskState, SessionMetadata or None) if found,
+            Tuple of (TaskState, ConversationMetadata or None) if found,
             None if task not found in memory or on disk.
         """
         task = self.tracker.get_task(conversation_id)
 
         if task is not None:
-            # Task found in memory, load session separately
-            session = self._load_session(conversation_id)
-            return task, session
+            # Task found in memory, load conversation separately
+            conversation = self._load_conversation(conversation_id)
+            return task, conversation
 
         # Try loading from disk for past tasks
         disk_result = self._load_task_from_disk(conversation_id)
@@ -594,15 +618,17 @@ class RequestHandlers:
     def _task_to_dict(
         self,
         task: TaskState,
-        include_session: bool = False,
-        session: SessionMetadata | None = None,
+        include_conversation: bool = False,
+        conversation: ConversationMetadata | None = None,
+        event_groups: list[list[Any]] | None = None,
     ) -> dict[str, Any]:
         """Convert TaskState to JSON-serializable dict.
 
         Args:
             task: Task to convert.
-            include_session: If True, include session metadata.
-            session: Pre-loaded session metadata (avoids re-loading from disk).
+            include_conversation: If True, include conversation metadata.
+            conversation: Pre-loaded conversation metadata.
+            event_groups: Pre-loaded event groups from EventLog.
 
         Returns:
             Dict representation of task.
@@ -622,40 +648,50 @@ class RequestHandlers:
             "total_duration": task.total_duration(),
         }
 
-        if include_session:
-            if session is None:
-                session = self._load_session(task.conversation_id)
-            if session:
-                result["session"] = {
-                    "total_cost_usd": session.total_cost_usd,
-                    "total_turns": session.total_turns,
-                    "reply_count": len(session.replies),
-                    "replies": [
-                        {
-                            "session_id": r.session_id,
-                            "timestamp": r.timestamp,
-                            "duration_ms": r.duration_ms,
-                            "total_cost_usd": r.total_cost_usd,
-                            "num_turns": r.num_turns,
-                            "is_error": r.is_error,
-                            "usage": {
-                                "input_tokens": r.usage.input_tokens,
-                                "output_tokens": r.usage.output_tokens,
-                                "cache_creation_input_tokens": (
-                                    r.usage.cache_creation_input_tokens
-                                ),
-                                "cache_read_input_tokens": (
-                                    r.usage.cache_read_input_tokens
-                                ),
-                            },
-                            "request_text": r.request_text,
-                            "response_text": r.response_text,
-                            "events": [json.loads(e.raw) for e in r.events],
-                        }
-                        for r in session.replies
-                    ],
+        if include_conversation:
+            if conversation is None:
+                conversation = self._load_conversation(task.conversation_id)
+            if conversation:
+                replies_data = []
+                for i, r in enumerate(conversation.replies):
+                    reply_dict: dict[str, Any] = {
+                        "session_id": r.session_id,
+                        "timestamp": r.timestamp,
+                        "duration_ms": r.duration_ms,
+                        "total_cost_usd": r.total_cost_usd,
+                        "num_turns": r.num_turns,
+                        "is_error": r.is_error,
+                        "usage": {
+                            "input_tokens": r.usage.input_tokens,
+                            "output_tokens": r.usage.output_tokens,
+                            "cache_creation_input_tokens": (
+                                r.usage.cache_creation_input_tokens
+                            ),
+                            "cache_read_input_tokens": (
+                                r.usage.cache_read_input_tokens
+                            ),
+                        },
+                        "request_text": r.request_text,
+                        "response_text": r.response_text,
+                    }
+
+                    # Include events from event log if available
+                    if event_groups is not None and i < len(event_groups):
+                        reply_dict["events"] = [
+                            json.loads(e.raw) for e in event_groups[i]
+                        ]
+                    else:
+                        reply_dict["events"] = []
+
+                    replies_data.append(reply_dict)
+
+                result["conversation"] = {
+                    "total_cost_usd": conversation.total_cost_usd,
+                    "total_turns": conversation.total_turns,
+                    "reply_count": len(conversation.replies),
+                    "replies": replies_data,
                 }
             else:
-                result["session"] = None
+                result["conversation"] = None
 
         return result
