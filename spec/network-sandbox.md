@@ -9,7 +9,7 @@ high-level documentation (threat model, security properties, configuration), see
 | Component                       | Purpose                                               |
 | ------------------------------- | ----------------------------------------------------- |
 | `.airut/network-allowlist.yaml` | Allowlist configuration (domains + URLs + methods)    |
-| `proxy/proxy.dockerfile`        | Proxy container image (slim + mitmproxy + pyyaml)     |
+| `proxy/proxy.dockerfile`        | Proxy container image (slim + mitmproxy)              |
 | `proxy/proxy-entrypoint.sh`     | Starts DNS responder + mitmproxy in regular mode      |
 | `proxy/dns_responder.py`        | DNS server: returns proxy IP for all A queries        |
 | `proxy/proxy_filter.py`         | mitmproxy addon: allowlist, token masking, re-signing |
