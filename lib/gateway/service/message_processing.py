@@ -23,7 +23,7 @@ from lib.claude_output import (
     StreamEvent,
     extract_error_summary,
 )
-from lib.container.conversation_layout import (
+from lib.conversation import (
     create_conversation_layout,
     prepare_conversation,
 )

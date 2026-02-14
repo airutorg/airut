@@ -197,7 +197,7 @@ airut/
 ├── proxy/                 # Network sandbox (proxy filter, DNS, AWS signing)
 ├── lib/                   # Library code
 │   ├── sandbox/           # Sandboxed execution (container, proxy, session, image)
-│   ├── container/         # Conversation layout and DNS utilities
+│   ├── conversation/      # Conversation directory layout and preparation
 │   ├── dashboard/         # Web dashboard server
 │   ├── gateway/           # Email gateway service
 │   └── gh/                # GitHub API wrappers

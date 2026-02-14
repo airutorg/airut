@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from lib.container.dns import SystemResolverError, get_system_resolver
+from lib.dns import SystemResolverError, get_system_resolver
 
 
 class TestGetSystemResolver:
