@@ -62,28 +62,40 @@ container_env:
 Create `.airut/network-allowlist.yaml`:
 
 ```yaml
-# Domains: all paths allowed
+# Domains: all paths and methods allowed
 domains:
-  # Claude API
   - api.anthropic.com
-  - statsig.anthropic.com
-  - sentry.io
 
-  # Python packages (if using Python)
-  - pypi.org
-  - files.pythonhosted.org
-
-# URL patterns: specific paths only
+# URL patterns: domain + path + optional method filter
 url_prefixes:
-  # GitHub - restrict to your repository
+  # Claude telemetry and error reporting (POST-only)
+  - host: statsig.anthropic.com
+    path: ""
+    methods: [POST]
+  - host: sentry.io
+    path: ""
+    methods: [POST]
+
+  # Python packages — read-only (if using Python)
+  - host: pypi.org
+    path: ""
+    methods: [GET, HEAD]
+  - host: files.pythonhosted.org
+    path: ""
+    methods: [GET, HEAD]
+
+  # GitHub — restrict to your repository
   - host: github.com
     path: /your-org/your-repo*
+    methods: [GET, HEAD, POST]
   - host: api.github.com
     path: /repos/your-org/your-repo*
   - host: api.github.com
     path: /graphql
+    methods: [POST]
   - host: uploads.github.com
     path: /repos/your-org/your-repo*
+    methods: [POST]
 ```
 
 Start restrictive and add hosts as needed. The agent will tell you when it
@@ -329,13 +341,21 @@ Add your Gerrit server to `.airut/network-allowlist.yaml`:
 
 ```yaml
 domains:
-  # Claude API
   - api.anthropic.com
-  - statsig.anthropic.com
-  - sentry.io
 
-  # Gerrit
-  - gerrit.example.com
+url_prefixes:
+  # Claude telemetry and error reporting (POST-only)
+  - host: statsig.anthropic.com
+    path: ""
+    methods: [POST]
+  - host: sentry.io
+    path: ""
+    methods: [POST]
+
+  # Gerrit (git smart HTTP uses GET, HEAD, and POST)
+  - host: gerrit.example.com
+    path: ""
+    methods: [GET, HEAD, POST]
 ```
 
 ### Container Setup
@@ -499,12 +519,13 @@ On Gerrit, configure submit rules to require code review:
 
 ```yaml
 domains:
-  - exact.domain.com
-  - "*.wildcard.com"    # Matches subdomains, not bare domain
+  - exact.domain.com           # All paths, all methods
+  - "*.wildcard.com"           # Matches subdomains, not bare domain
 
 url_prefixes:
   - host: api.example.com
     path: /allowed/path*
+    methods: [GET, POST]       # Optional: restrict HTTP methods
 ```
 
 ### `.airut/container/Dockerfile`
