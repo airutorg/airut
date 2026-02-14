@@ -35,15 +35,15 @@ def _make_task(
     proxy_manager: ProxyManager | None = None,
 ) -> Task:
     """Create a Task with standard test params."""
-    session_dir = tmp_path / "session"
-    session_dir.mkdir(parents=True, exist_ok=True)
+    context_dir = tmp_path / "context"
+    context_dir.mkdir(parents=True, exist_ok=True)
 
     return Task(
         "test-task-id",
         image_tag=image_tag,
         mounts=mounts or [],
         env=env or ContainerEnv(),
-        session_dir=session_dir,
+        execution_context_dir=context_dir,
         network_log_dir=network_log_dir,
         network_sandbox=network_sandbox,
         timeout_seconds=timeout_seconds,
@@ -56,9 +56,9 @@ class TestTaskInit:
     """Tests for Task initialization."""
 
     def test_creates_claude_dir(self, tmp_path: Path) -> None:
-        """Init creates claude/ subdirectory in session_dir."""
+        """Init creates claude/ subdirectory in execution_context_dir."""
         _make_task(tmp_path)
-        claude_dir = tmp_path / "session" / "claude"
+        claude_dir = tmp_path / "context" / "claude"
         assert claude_dir.exists()
 
     def test_event_log_property(self, tmp_path: Path) -> None:

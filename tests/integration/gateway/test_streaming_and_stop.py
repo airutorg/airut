@@ -78,11 +78,11 @@ events = [
             assert conv_id is not None
             assert len(conv_id) == 8
 
-            # Get session directory
-            session_dir = (
+            # Get conversation directory
+            conversation_dir = (
                 integration_env.storage_dir / "conversations" / conv_id
             )
-            event_log = EventLog(session_dir)
+            event_log = EventLog(conversation_dir)
 
             # Poll for event log updates during execution
             # The mock Claude will generate multiple events
@@ -117,7 +117,7 @@ events = [
             assert response is not None, "Did not receive response email"
 
             # Verify final conversation metadata
-            conv_store = ConversationStore(session_dir)
+            conv_store = ConversationStore(conversation_dir)
             final_conv = conv_store.load()
             assert final_conv is not None
             assert len(final_conv.replies) > 0

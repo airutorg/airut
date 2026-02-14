@@ -194,15 +194,15 @@ class TestSandboxCreateTask:
         config = SandboxConfig()
         sandbox = Sandbox(config)
 
-        session_dir = tmp_path / "session"
-        session_dir.mkdir()
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
 
         task = sandbox.create_task(
             "task-123",
             image_tag="airut:test",
             mounts=[],
             env=ContainerEnv(),
-            session_dir=session_dir,
+            execution_context_dir=context_dir,
         )
 
         assert isinstance(task, Task)
@@ -216,8 +216,8 @@ class TestSandboxCreateTask:
         config = SandboxConfig()
         sandbox = Sandbox(config)
 
-        session_dir = tmp_path / "session"
-        session_dir.mkdir()
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
 
         mounts = [
             Mount(
@@ -232,7 +232,7 @@ class TestSandboxCreateTask:
             image_tag="airut:test",
             mounts=mounts,
             env=env,
-            session_dir=session_dir,
+            execution_context_dir=context_dir,
         )
 
         assert task._mounts == mounts
@@ -246,15 +246,15 @@ class TestSandboxCreateTask:
         config = SandboxConfig()
         sandbox = Sandbox(config)
 
-        session_dir = tmp_path / "session"
-        session_dir.mkdir()
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
 
         task = sandbox.create_task(
             "task-123",
             image_tag="airut:test",
             mounts=[],
             env=ContainerEnv(),
-            session_dir=session_dir,
+            execution_context_dir=context_dir,
         )
 
         assert task._proxy_manager is None
@@ -271,8 +271,8 @@ class TestSandboxCreateTask:
         config = SandboxConfig()
         sandbox = Sandbox(config)
 
-        session_dir = tmp_path / "session"
-        session_dir.mkdir()
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
 
         allowlist = Allowlist(domains=(), url_patterns=())
         replacements = SecretReplacements()
@@ -283,7 +283,7 @@ class TestSandboxCreateTask:
             image_tag="airut:test",
             mounts=[],
             env=ContainerEnv(),
-            session_dir=session_dir,
+            execution_context_dir=context_dir,
             network_sandbox=sandbox_config,
         )
 
@@ -297,15 +297,15 @@ class TestSandboxCreateTask:
         config = SandboxConfig()
         sandbox = Sandbox(config)
 
-        session_dir = tmp_path / "session"
-        session_dir.mkdir()
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
 
         task = sandbox.create_task(
             "task-123",
             image_tag="airut:test",
             mounts=[],
             env=ContainerEnv(),
-            session_dir=session_dir,
+            execution_context_dir=context_dir,
             timeout_seconds=600,
         )
 
@@ -319,8 +319,8 @@ class TestSandboxCreateTask:
         config = SandboxConfig()
         sandbox = Sandbox(config)
 
-        session_dir = tmp_path / "session"
-        session_dir.mkdir()
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
         log_dir = tmp_path / "logs"
         log_dir.mkdir()
 
@@ -329,7 +329,7 @@ class TestSandboxCreateTask:
             image_tag="airut:test",
             mounts=[],
             env=ContainerEnv(),
-            session_dir=session_dir,
+            execution_context_dir=context_dir,
             network_log_dir=log_dir,
         )
 

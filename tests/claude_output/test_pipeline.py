@@ -131,7 +131,7 @@ def _result_event(
 
 
 def _save_reply(
-    session_dir: Path,
+    conversation_dir: Path,
     conversation_id: str,
     events: list[StreamEvent],
     request_text: str,
@@ -145,7 +145,7 @@ def _save_reply(
     Returns:
         Tuple of (conversation_store, event_log) for further assertions.
     """
-    event_log = EventLog(session_dir)
+    event_log = EventLog(conversation_dir)
     event_log.start_new_reply()
     for e in events:
         event_log.append_event(e)
@@ -177,7 +177,7 @@ def _save_reply(
             response_text=response_text,
         )
 
-    conv_store = ConversationStore(session_dir)
+    conv_store = ConversationStore(conversation_dir)
     conv_store.add_reply(conversation_id, reply)
 
     return conv_store, event_log
@@ -257,10 +257,10 @@ class TestDashboardRendersTypedEvents:
         assert len(events) == 6
 
         # Save using split storage
-        session_dir = tmp_path / "conversations" / "test1234"
-        session_dir.mkdir(parents=True)
+        conversation_dir = tmp_path / "conversations" / "test1234"
+        conversation_dir.mkdir(parents=True)
         conv_store, event_log = _save_reply(
-            session_dir,
+            conversation_dir,
             conversation_id="test1234",
             events=events,
             request_text="List the files",
@@ -374,10 +374,10 @@ class TestErrorSummaryFromParsedEvents:
         events = parse_stream_events(stdout)
 
         # Save and load
-        session_dir = tmp_path / "conversations" / "err12345"
-        session_dir.mkdir(parents=True)
+        conversation_dir = tmp_path / "conversations" / "err12345"
+        conversation_dir.mkdir(parents=True)
         _, event_log = _save_reply(
-            session_dir,
+            conversation_dir,
             conversation_id="err12345",
             events=events,
             request_text="Do the thing",
@@ -423,10 +423,10 @@ class TestUnknownEventsThroughPipeline:
         assert events[1].event_type == EventType.UNKNOWN
 
         # Save and load
-        session_dir = tmp_path / "conversations" / "unk12345"
-        session_dir.mkdir(parents=True)
+        conversation_dir = tmp_path / "conversations" / "unk12345"
+        conversation_dir.mkdir(parents=True)
         _, event_log = _save_reply(
-            session_dir,
+            conversation_dir,
             conversation_id="unk12345",
             events=events,
             request_text="Test unknown events",
@@ -466,10 +466,10 @@ class TestUnknownEventsThroughPipeline:
         events = parse_stream_events(stdout)
 
         # Save and load
-        session_dir = tmp_path / "conversations" / "unkfull1"
-        session_dir.mkdir(parents=True)
+        conversation_dir = tmp_path / "conversations" / "unkfull1"
+        conversation_dir.mkdir(parents=True)
         conv_store, event_log = _save_reply(
-            session_dir,
+            conversation_dir,
             conversation_id="unkfull1",
             events=events,
             request_text="Think about this",
@@ -536,10 +536,10 @@ class TestUsageExtraFieldsThroughPipeline:
         events = parse_stream_events(stdout)
 
         # Save
-        session_dir = tmp_path / "conversations" / "usage123"
-        session_dir.mkdir(parents=True)
+        conversation_dir = tmp_path / "conversations" / "usage123"
+        conversation_dir.mkdir(parents=True)
         conv_store, _ = _save_reply(
-            session_dir,
+            conversation_dir,
             conversation_id="usage123",
             events=events,
             request_text="Search for stuff",
@@ -572,10 +572,10 @@ class TestUsageExtraFieldsThroughPipeline:
         )
         events = parse_stream_events(stdout)
 
-        session_dir = tmp_path / "conversations" / "usagejson"
-        session_dir.mkdir(parents=True)
+        conversation_dir = tmp_path / "conversations" / "usagejson"
+        conversation_dir.mkdir(parents=True)
         _save_reply(
-            session_dir,
+            conversation_dir,
             conversation_id="usagejson",
             events=events,
             request_text="Test",
@@ -583,8 +583,8 @@ class TestUsageExtraFieldsThroughPipeline:
         )
 
         # Read raw JSON to verify wire format
-        session_file = session_dir / "conversation.json"
-        with session_file.open("r") as f:
+        conversation_file = conversation_dir / "conversation.json"
+        with conversation_file.open("r") as f:
             raw = json.load(f)
 
         reply_usage = raw["replies"][0]["usage"]
@@ -682,10 +682,10 @@ class TestToolUseEventsThroughPipeline:
         assert len(events) == 8
 
         # Save and load
-        session_dir = tmp_path / "conversations" / "tool1234"
-        session_dir.mkdir(parents=True)
+        conversation_dir = tmp_path / "conversations" / "tool1234"
+        conversation_dir.mkdir(parents=True)
         _, event_log = _save_reply(
-            session_dir,
+            conversation_dir,
             conversation_id="tool1234",
             events=events,
             request_text="Edit the file",
@@ -731,10 +731,10 @@ class TestExtractionAfterRoundTrip:
         )
         events = parse_stream_events(stdout)
 
-        session_dir = tmp_path / "conversations" / "resp1234"
-        session_dir.mkdir(parents=True)
+        conversation_dir = tmp_path / "conversations" / "resp1234"
+        conversation_dir.mkdir(parents=True)
         _, event_log = _save_reply(
-            session_dir,
+            conversation_dir,
             conversation_id="resp1234",
             events=events,
             request_text="What's the answer?",
@@ -756,10 +756,10 @@ class TestExtractionAfterRoundTrip:
         )
         events = parse_stream_events(stdout)
 
-        session_dir = tmp_path / "conversations" / "sid12345"
-        session_dir.mkdir(parents=True)
+        conversation_dir = tmp_path / "conversations" / "sid12345"
+        conversation_dir.mkdir(parents=True)
         _, event_log = _save_reply(
-            session_dir,
+            conversation_dir,
             conversation_id="sid12345",
             events=events,
             request_text="Hi",
@@ -790,10 +790,10 @@ class TestExtractionAfterRoundTrip:
         )
         events = parse_stream_events(stdout)
 
-        session_dir = tmp_path / "conversations" / "sum12345"
-        session_dir.mkdir(parents=True)
+        conversation_dir = tmp_path / "conversations" / "sum12345"
+        conversation_dir.mkdir(parents=True)
         _, event_log = _save_reply(
-            session_dir,
+            conversation_dir,
             conversation_id="sum12345",
             events=events,
             request_text="Do stuff",

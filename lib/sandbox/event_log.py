@@ -40,13 +40,14 @@ class EventLog:
         file_path: Path to the events.jsonl file.
     """
 
-    def __init__(self, session_dir: Path) -> None:
+    def __init__(self, execution_context_dir: Path) -> None:
         """Initialize event log.
 
         Args:
-            session_dir: Directory where events.jsonl will be stored.
+            execution_context_dir: Directory where events.jsonl will be
+                stored.
         """
-        self.file_path = session_dir / EVENTS_FILE_NAME
+        self.file_path = execution_context_dir / EVENTS_FILE_NAME
 
     def append_event(self, event: StreamEvent) -> None:
         """Append a single event to the log.

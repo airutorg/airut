@@ -232,14 +232,14 @@ events = [
                     "Bob should not receive any reply from private repo"
                 )
 
-                # Verify no new sessions were created in private repo
-                private_sessions = env.storage_dir / "private" / "conversations"
-                session_dirs = [
+                # Verify no new conversations were created in private repo
+                private_convs = env.storage_dir / "private" / "conversations"
+                conv_dirs = [
                     d
-                    for d in private_sessions.iterdir()
+                    for d in private_convs.iterdir()
                     if d.is_dir() and len(d.name) == 8
                 ]
-                assert len(session_dirs) == 1, (
+                assert len(conv_dirs) == 1, (
                     "Only Alice's conversation should exist"
                 )
 

@@ -39,8 +39,8 @@ class TestNetworkLogsEndpoint:
         response = client.get("/conversation/nonexistent/network")
         assert response.status_code == 404
 
-    def test_no_session_dir(self) -> None:
-        """Test message when session dir not found."""
+    def test_no_conversation_dir(self) -> None:
+        """Test message when conversation dir not found."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
         server = DashboardServer(tracker)
