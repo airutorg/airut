@@ -11,16 +11,10 @@ from pathlib import Path
 import pytest
 from werkzeug.test import Client
 
-from lib.claude_output import StreamEvent, parse_stream_events
 from lib.container.session import SessionStore
 from lib.dashboard.server import DashboardServer
 from lib.dashboard.tracker import TaskState, TaskStatus, TaskTracker
-
-
-def _parse_events(*raw_events: dict) -> list[StreamEvent]:
-    """Parse raw event dicts into typed StreamEvents."""
-    stdout = "\n".join(json.dumps(e) for e in raw_events)
-    return parse_stream_events(stdout)
+from tests.dashboard.conftest import parse_events as _parse_events
 
 
 class TestSessionDataIntegration:
