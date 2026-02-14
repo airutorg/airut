@@ -27,7 +27,7 @@ from lib.claude_output import (
     parse_stream_events,
 )
 from lib.container.session import SessionStore
-from lib.dashboard.views import (
+from lib.dashboard.views.actions import (
     render_actions_timeline,
     render_events_list,
     render_single_event,
