@@ -14,31 +14,46 @@
 #   - "/api/*" matches "/api/foo" but NOT "/api"
 #   - "/api" matches only "/api" exactly (no implicit prefix matching)
 
-# Domains: all paths allowed (exact match unless wildcards used)
+# Domains: all paths and methods allowed (exact match unless wildcards used)
 domains:
-  # Claude API
   - api.anthropic.com
-  - statsig.anthropic.com
-  - sentry.io
-
-  # Python packages (uv sync in entrypoint)
-  - pypi.org
-  - files.pythonhosted.org
 
 # URL patterns: domain + path pattern required (fnmatch wildcards supported)
 url_prefixes:
-  # GitHub - restricted to airut repositories
+  # Claude telemetry and error reporting (POST-only)
+  - host: statsig.anthropic.com
+    path: ""
+    methods: [POST]
+  - host: sentry.io
+    path: ""
+    methods: [POST]
+
+  # Python packages — read-only (uv sync in entrypoint)
+  - host: pypi.org
+    path: ""
+    methods: [GET, HEAD]
+  - host: files.pythonhosted.org
+    path: ""
+    methods: [GET, HEAD]
+
+  # GitHub — restricted to airut repositories
   - host: github.com
     path: /airutorg/airut*
+    methods: [GET, HEAD, POST]
   - host: api.github.com
     path: /repos/airutorg/airut*
   - host: api.github.com
     path: /graphql
+    methods: [POST]
   - host: uploads.github.com
     path: /repos/airutorg/airut*
+    methods: [POST]
   - host: raw.githubusercontent.com
     path: /airutorg/airut*
+    methods: [GET, HEAD]
   - host: objects.githubusercontent.com
     path: /airutorg/airut*
+    methods: [GET, HEAD]
   - host: results-receiver.actions.githubusercontent.com
     path: /rest/runs*
+    methods: [POST]
