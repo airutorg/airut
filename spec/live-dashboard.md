@@ -69,8 +69,19 @@ class VersionClock:
 
     def wait(self, known: int, timeout: float = 30.0) -> int | None:
         """Block until version > known, or timeout. Returns new version
-        or None on timeout."""
+        or None on timeout.
+
+        Handles server restart: if known > current version, the client
+        has a version from a previous server lifetime. Return immediately
+        so the client resets to current state.
+        """
         with self._condition:
+            # Restart detection: client has a version from a previous
+            # server lifetime. Return current version immediately so
+            # the client gets a full state reset.
+            if known > self._version:
+                return self._version
+
             deadline = time.monotonic() + timeout
             while self._version <= known:
                 remaining = deadline - time.monotonic()
@@ -79,6 +90,12 @@ class VersionClock:
                 self._condition.wait(timeout=remaining)
             return self._version
 ```
+
+**Server restart handling**: The version counter resets to 0 on restart. If a
+client reconnects with a version from a previous server lifetime (e.g.,
+`Last-Event-ID: 100` when the server is at version 0), `wait()` detects that
+`known > self._version` and returns immediately. The client receives a full
+state snapshot at version 0 and resets its local state. No 30-second hang.
 
 ### VersionedStore
 
@@ -299,12 +316,114 @@ def tail(self, offset: int = 0) -> tuple[list[str], int]:
 ### WSGI Compatibility
 
 The dashboard uses werkzeug's `make_server` with `threaded=True` (one thread per
-request). SSE connections hold a thread open for the duration. This is
-acceptable for the expected number of concurrent dashboard viewers (1–5).
+request). SSE connections hold a thread open for the duration. This requires
+connection limits to prevent thread exhaustion.
 
 SSE responses use werkzeug's `Response` with a generator body and
 `Content-Type: text/event-stream`. The generator yields SSE-formatted strings
 and blocks (via `VersionClock.wait()` or `time.sleep()`) between sends.
+
+### Connection Limits
+
+Each SSE connection holds a WSGI thread for its entire lifetime. Unbounded SSE
+connections could exhaust the thread pool and prevent regular HTTP requests from
+being served.
+
+**Server-side limit**: A global `SSEConnectionManager` tracks active SSE
+connections with a configurable maximum (default: 8). When a new SSE connection
+arrives and the limit is reached, the server responds with
+`429 Too Many Requests` and a `Retry-After: 5` header. The client falls back to
+polling.
+
+```python
+# lib/dashboard/sse.py
+
+
+class SSEConnectionManager:
+    """Tracks active SSE connections to enforce limits."""
+
+    def __init__(self, max_connections: int = 8) -> None:
+        self._lock = threading.Lock()
+        self._active: int = 0
+        self._max: int = max_connections
+
+    def try_acquire(self) -> bool:
+        """Try to acquire an SSE slot. Returns False if at limit."""
+        with self._lock:
+            if self._active >= self._max:
+                return False
+            self._active += 1
+            return True
+
+    def release(self) -> None:
+        """Release an SSE slot."""
+        with self._lock:
+            self._active = max(0, self._active - 1)
+
+    @property
+    def active(self) -> int:
+        with self._lock:
+            return self._active
+```
+
+SSE handlers acquire a slot at connection start and release it in a `finally`
+block when the generator exits (client disconnect or error).
+
+### Polling Fallback with ETag
+
+When SSE is unavailable (connection limit reached, JS disabled, or SSE
+connection fails), the existing JSON API endpoints serve as a polling fallback.
+To make polling efficient, they support conditional requests via `ETag`.
+
+**ETag = version number**: The `/api/conversations`, `/api/repos`, and `/health`
+endpoints include an `ETag` header with the current clock version:
+
+```
+HTTP/1.1 200 OK
+ETag: "v42"
+Cache-Control: no-cache
+```
+
+Clients poll with `If-None-Match`:
+
+```
+GET /api/conversations
+If-None-Match: "v42"
+```
+
+If the version hasn't changed, the server returns `304 Not Modified` with no
+body. This avoids re-serializing and re-transmitting unchanged state.
+
+**Frontend fallback logic**:
+
+```javascript
+function connectLive(version) {
+    const source = new EventSource(`/api/events/stream?version=${version}`);
+    source.addEventListener('state', onState);
+    source.onerror = () => {
+        source.close();
+        // Fall back to polling with ETag
+        startPolling(version);
+    };
+}
+
+function startPolling(version) {
+    setInterval(async () => {
+        const resp = await fetch('/api/conversations', {
+            headers: { 'If-None-Match': `"v${version}"` }
+        });
+        if (resp.status === 200) {
+            const data = await resp.json();
+            updateDashboard(data);
+            version = resp.headers.get('ETag');
+        }
+        // 304 = no change, skip update
+    }, 5000);
+}
+```
+
+This provides a clean degradation path: SSE for real-time when possible, ETag
+polling (5s interval) as fallback, identical state format in both paths.
 
 ### Endpoints
 
@@ -345,14 +464,20 @@ application bugs, and ordering issues. A full snapshot is typically \<10 KB.
 
 ### Connection Lifecycle
 
+- **Admission**: SSE handler calls `connection_manager.try_acquire()`. If it
+  returns `False`, respond with `429 Too Many Requests` and `Retry-After: 5`.
+  Client falls back to polling.
 - **Heartbeat**: Server sends a comment line (`: heartbeat`) every 15 seconds to
   detect dead connections.
 - **Reconnection**: Standard SSE `retry:` field set to 1000ms. Browser
   reconnects automatically on disconnect.
 - **Client `Last-Event-ID`**: Set to the last version/offset. Server uses this
-  for catch-up on reconnect.
+  for catch-up on reconnect. If the version is from a previous server lifetime
+  (greater than current), the server returns current state immediately (see
+  restart handling above).
 - **Cleanup**: When the generator detects a closed connection (write raises
-  exception), it exits cleanly.
+  exception), it calls `connection_manager.release()` and exits cleanly. The
+  `release()` call is in a `finally` block to guarantee execution.
 
 ## Dashboard Frontend Changes
 
@@ -423,25 +548,30 @@ and RepoState are fixed.
 
 ### Phase 2: SSE State Stream
 
-**Goal**: Add the `/api/events/stream` SSE endpoint. Replace meta-refresh on the
-main dashboard with EventSource.
+**Goal**: Add the `/api/events/stream` SSE endpoint with connection limits and
+polling fallback. Replace meta-refresh on the main dashboard with EventSource.
 
 **Scope**:
 
 - New module: `lib/dashboard/sse.py` — SSE response helpers (format SSE
-  messages, generator for state stream)
+  messages, generator for state stream), `SSEConnectionManager`
 - Modify `lib/dashboard/server.py` — add `/api/events/stream` route
 - Modify `lib/dashboard/handlers.py` — add `handle_events_stream()` handler that
-  uses `VersionClock.wait()`
-- New frontend JS: `EventSource` connection, `updateDashboard()` DOM updater
+  uses `VersionClock.wait()` and `SSEConnectionManager`; add `ETag` headers to
+  existing JSON API endpoints (`/api/conversations`, `/api/repos`, `/health`)
+  for polling fallback
+- New frontend JS: `EventSource` connection with fallback to ETag polling,
+  `updateDashboard()` DOM updater
 - Remove meta-refresh from main dashboard template
 - Modify `lib/dashboard/views/` — add JS to dashboard template, structure HTML
   for dynamic updates (add IDs/classes for update targets)
-- Tests: SSE handler tests, integration tests for state→SSE→DOM flow
+- Tests: SSE handler tests, connection limit tests, ETag/304 tests, frontend
+  fallback behavior
 
 **Observable result**: Main dashboard updates in real time when tasks are
-queued, start, or complete. No more page refreshes. Task detail and other pages
-still use meta-refresh.
+queued, start, or complete. No more page refreshes. Falls back gracefully to
+5-second ETag polling when SSE connections are exhausted. Task detail and other
+pages still use meta-refresh.
 
 ### Phase 3: Log Stream Endpoints
 
@@ -489,7 +619,11 @@ verifies state transitions arrive in order.
 
 - **No breaking API changes.** Existing JSON API endpoints continue to work. SSE
   endpoints are additive.
-- **Graceful degradation.** If JavaScript is disabled or SSE connection fails,
-  pages fall back to showing the server-rendered content (static but complete).
-  The meta-refresh removal means no auto-update without JS, which is acceptable
-  for this use case.
+- **Graceful degradation.** Three levels of fallback:
+  1. **SSE available**: Real-time push updates, sub-second latency.
+  2. **SSE unavailable** (connection limit, network issue): Automatic fallback
+     to ETag polling (5-second interval). Same data format, slightly higher
+     latency.
+  3. **JavaScript disabled**: Server-rendered HTML shows current state at page
+     load time. No auto-update — user refreshes manually. Acceptable for this
+     use case.
