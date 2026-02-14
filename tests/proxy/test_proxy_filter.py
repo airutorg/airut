@@ -211,11 +211,17 @@ class TestProxyFilterLoad:
         assert pf._log_file is None
 
     def test_load_allowlist_from_file(self, tmp_path: Path) -> None:
-        """Loads domains and url_prefixes from YAML."""
-        config_path = tmp_path / "network-allowlist.yaml"
+        """Loads domains and url_prefixes from JSON."""
+        config_path = tmp_path / "network-allowlist.json"
         config_path.write_text(
-            "domains:\n  - api.github.com\nurl_prefixes:\n"
-            "  - host: pypi.org\n    path: /simple*\n"
+            json.dumps(
+                {
+                    "domains": ["api.github.com"],
+                    "url_prefixes": [
+                        {"host": "pypi.org", "path": "/simple*", "methods": []}
+                    ],
+                }
+            )
         )
         pf = ProxyFilter()
         with patch("proxy.proxy_filter.Path", return_value=config_path):
@@ -229,6 +235,16 @@ class TestProxyFilterLoad:
         with patch.object(Path, "exists", return_value=False):
             pf._load_allowlist()
         assert pf.domains == []
+
+    def test_load_allowlist_invalid_json(self, tmp_path: Path) -> None:
+        """Invalid JSON leaves empty lists."""
+        config_path = tmp_path / "network-allowlist.json"
+        config_path.write_text("not valid json{{{")
+        pf = ProxyFilter()
+        with patch("proxy.proxy_filter.Path", return_value=config_path):
+            pf._load_allowlist()
+        assert pf.domains == []
+        assert pf.url_prefixes == []
 
     def test_load_replacements_from_file(self, tmp_path: Path) -> None:
         """Loads replacement map from JSON."""

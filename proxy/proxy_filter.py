@@ -36,7 +36,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO, TypedDict
 
-import yaml
 from aws_signing import (
     SIGNING_TYPE_AWS_SIGV4,
     ChunkedResigner,
@@ -176,8 +175,8 @@ class ProxyFilter:
                 ctx.log.warn(f"Could not open log file {NETWORK_LOG_PATH}: {e}")
 
     def _load_allowlist(self) -> None:
-        """Load allowlist from configuration file."""
-        config_path = Path("/network-allowlist.yaml")
+        """Load allowlist from JSON configuration file."""
+        config_path = Path("/network-allowlist.json")
         if not config_path.exists():
             ctx.log.error(
                 f"Allowlist config not found: {config_path}. "
@@ -185,8 +184,12 @@ class ProxyFilter:
             )
             return
 
-        with open(config_path) as f:
-            config = yaml.safe_load(f)
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            ctx.log.error(f"Failed to load allowlist: {e}")
+            return
 
         self.domains = list(config.get("domains", []))
         self.url_prefixes = config.get("url_prefixes", [])

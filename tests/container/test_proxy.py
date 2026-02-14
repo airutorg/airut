@@ -5,6 +5,7 @@
 
 """Tests for per-task proxy lifecycle management."""
 
+import json
 import subprocess
 import threading
 from pathlib import Path
@@ -335,7 +336,7 @@ class TestStopTaskProxy:
             proxy_ip="10.199.1.100",
         )
         # Simulate a temp file
-        tmp = Path("/tmp/fake-allowlist.yaml")
+        tmp = Path("/tmp/fake-allowlist.json")
         pm._allowlist_tmpfiles["abc"] = tmp
         # Simulate a network log file (tracking only, file stays)
         pm._network_log_files["abc"] = Path("/tmp/fake-network.log")
@@ -466,8 +467,8 @@ class TestRunProxyContainer:
     @patch("lib.container.proxy.subprocess.run")
     def test_correct_command(self, mock_run: MagicMock, tmp_path: Path) -> None:
         """Runs proxy with correct podman arguments."""
-        allowlist = tmp_path / "allowlist.yaml"
-        allowlist.write_text("domains: []\n")
+        allowlist = tmp_path / "allowlist.json"
+        allowlist.write_text("{}")
 
         pm = _make_pm(proxy_dir=tmp_path)
         pm._run_proxy_container(
@@ -497,7 +498,7 @@ class TestRunProxyContainer:
         volume_indices = [i for i, v in enumerate(cmd) if v == "-v"]
         volumes = [cmd[i + 1] for i in volume_indices]
         assert any(
-            "allowlist.yaml:/network-allowlist.yaml:ro" in v for v in volumes
+            "allowlist.json:/network-allowlist.json:ro" in v for v in volumes
         )
         # proxy_filter.py is COPY'd into the image, not mounted
         assert not any("proxy_filter.py" in v for v in volumes)
@@ -507,8 +508,8 @@ class TestRunProxyContainer:
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
         """Mounts network log file when path is provided."""
-        allowlist = tmp_path / "allowlist.yaml"
-        allowlist.write_text("domains: []\n")
+        allowlist = tmp_path / "allowlist.json"
+        allowlist.write_text("{}")
 
         log_path = tmp_path / "network-sandbox.log"
         log_path.touch()
@@ -537,22 +538,42 @@ class TestRunProxyContainer:
         pm = _make_pm()
         with pytest.raises(ProxyError, match="Failed to start proxy"):
             pm._run_proxy_container(
-                "c", "n", "10.199.1.100", Path("/tmp/fake.yaml")
+                "c", "n", "10.199.1.100", Path("/tmp/fake.json")
             )
 
 
 class TestExtractAllowlist:
     """Tests for ProxyManager._extract_allowlist()."""
 
-    def test_extracts_to_tmpfile(self, mock_mirror: MagicMock) -> None:
-        """Extracts allowlist from mirror to a temp file."""
+    def test_extracts_to_json_tmpfile(self, mock_mirror: MagicMock) -> None:
+        """Parses YAML from mirror and writes JSON to temp file."""
         pm = _make_pm()
         path = pm._extract_allowlist("task1", mirror=mock_mirror)
         try:
             assert path.exists()
-            assert path.read_bytes() == b"domains: []\nurl_prefixes: []\n"
+            data = json.loads(path.read_bytes())
+            assert data == {"domains": [], "url_prefixes": []}
             assert "task1" in pm._allowlist_tmpfiles
             assert pm._allowlist_tmpfiles["task1"] == path
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_preserves_allowlist_content(self, mock_mirror: MagicMock) -> None:
+        """Allowlist content round-trips through YAML->JSON correctly."""
+        mock_mirror.read_file.return_value = (
+            b"domains:\n  - api.anthropic.com\n"
+            b"url_prefixes:\n  - host: pypi.org\n    path: /simple*\n"
+            b"    methods: [GET, HEAD]\n"
+        )
+        pm = _make_pm()
+        path = pm._extract_allowlist("task1", mirror=mock_mirror)
+        try:
+            data = json.loads(path.read_bytes())
+            assert data["domains"] == ["api.anthropic.com"]
+            assert len(data["url_prefixes"]) == 1
+            assert data["url_prefixes"][0]["host"] == "pypi.org"
+            assert data["url_prefixes"][0]["path"] == "/simple*"
+            assert data["url_prefixes"][0]["methods"] == ["GET", "HEAD"]
         finally:
             path.unlink(missing_ok=True)
 
@@ -563,13 +584,20 @@ class TestExtractAllowlist:
         with pytest.raises(ProxyError, match="Failed to read allowlist"):
             pm._extract_allowlist("task1", mirror=mock_mirror)
 
+    def test_raises_on_invalid_yaml(self, mock_mirror: MagicMock) -> None:
+        """Raises ProxyError if YAML parsing fails."""
+        mock_mirror.read_file.return_value = b"[invalid: yaml: {"
+        pm = _make_pm()
+        with pytest.raises(ProxyError, match="Failed to parse allowlist"):
+            pm._extract_allowlist("task1", mirror=mock_mirror)
+
 
 class TestCleanupAllowlist:
     """Tests for ProxyManager._cleanup_allowlist()."""
 
     def test_removes_tmpfile(self, tmp_path: Path) -> None:
         """Removes the temp file and tracking entry."""
-        tmpfile = tmp_path / "allowlist.yaml"
+        tmpfile = tmp_path / "allowlist.json"
         tmpfile.write_text("test")
         pm = _make_pm()
         pm._allowlist_tmpfiles["task1"] = tmpfile
@@ -638,8 +666,6 @@ class TestReplacementMapOperations:
         path = pm._write_replacement_map("task1", replacement_map)
         try:
             assert path.exists()
-            import json
-
             data = json.loads(path.read_text())
             assert "ghp_surrogate123" in data
             assert data["ghp_surrogate123"]["value"] == "ghp_real456"
@@ -669,8 +695,6 @@ class TestReplacementMapOperations:
         }
         path = pm._write_replacement_map("task2", replacement_map)
         try:
-            import json
-
             data = json.loads(path.read_text())
             entry = data["AKIA_SURROGATE1234567"]
             assert entry["type"] == SIGNING_TYPE_AWS_SIGV4
@@ -691,8 +715,6 @@ class TestReplacementMapOperations:
         path = pm._write_replacement_map("task1", {})
         try:
             assert path.exists()
-            import json
-
             data = json.loads(path.read_text())
             assert data == {}
         finally:
@@ -722,8 +744,8 @@ class TestRunProxyContainerWithReplacement:
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
         """Mounts replacement map file when path is provided."""
-        allowlist = tmp_path / "allowlist.yaml"
-        allowlist.write_text("domains: []\n")
+        allowlist = tmp_path / "allowlist.json"
+        allowlist.write_text("{}")
 
         replacement_path = tmp_path / "replacements.json"
         replacement_path.write_text("{}")

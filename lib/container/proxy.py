@@ -41,6 +41,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from lib.allowlist import parse_allowlist_yaml, serialize_allowlist_json
+
 
 if TYPE_CHECKING:
     from lib.gateway.config import ReplacementMap
@@ -426,15 +428,18 @@ class ProxyManager:
     ) -> Path:
         """Extract the network allowlist from the git mirror to a temp file.
 
+        Reads YAML from the mirror, parses into typed ``Allowlist``, and
+        serializes to JSON for the proxy container.
+
         Args:
             task_id: Task identifier (for tracking cleanup).
             mirror: Git mirror to read the allowlist from.
 
         Returns:
-            Path to the temporary allowlist file.
+            Path to the temporary JSON allowlist file.
 
         Raises:
-            ProxyError: If the allowlist cannot be read from the mirror.
+            ProxyError: If the allowlist cannot be read or parsed.
         """
         try:
             data = mirror.read_file(self.ALLOWLIST_PATH)
@@ -443,9 +448,16 @@ class ProxyManager:
                 f"Failed to read allowlist from mirror: {e}"
             ) from e
 
-        fd, path = tempfile.mkstemp(suffix=".yaml", prefix="airut-allowlist-")
+        try:
+            allowlist = parse_allowlist_yaml(data)
+        except ValueError as e:
+            raise ProxyError(f"Failed to parse allowlist YAML: {e}") from e
+
+        json_data = serialize_allowlist_json(allowlist)
+
+        fd, path = tempfile.mkstemp(suffix=".json", prefix="airut-allowlist-")
         with open(fd, "wb") as f:
-            f.write(data)
+            f.write(json_data)
 
         tmppath = Path(path)
         self._allowlist_tmpfiles[task_id] = tmppath
@@ -546,7 +558,7 @@ class ProxyManager:
             container_name: Name for the container.
             internal_network: Per-task internal network name.
             proxy_ip: Static IP address on the internal network.
-            allowlist_path: Path to the allowlist YAML file to mount.
+            allowlist_path: Path to the allowlist JSON file to mount.
             network_log_path: Optional path to network log file to mount.
             replacement_path: Optional path to replacement map JSON file.
 
@@ -574,7 +586,7 @@ class ProxyManager:
             "-v",
             f"{MITMPROXY_CONFDIR}:/mitmproxy-confdir:rw",
             "-v",
-            f"{allowlist_path}:/network-allowlist.yaml:ro",
+            f"{allowlist_path}:/network-allowlist.json:ro",
         ]
 
         # Mount replacement map if provided
