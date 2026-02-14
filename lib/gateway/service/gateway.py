@@ -25,7 +25,6 @@ from email.message import Message
 from pathlib import Path
 
 from lib.container.dns import get_system_resolver
-from lib.container.proxy import ProxyManager
 from lib.dashboard import (
     DashboardServer,
     TaskTracker,
@@ -41,6 +40,7 @@ from lib.gateway.service.message_processing import (
 from lib.gateway.service.repo_handler import RepoHandler
 from lib.git_version import get_git_version_info
 from lib.logging import configure_logging
+from lib.sandbox import Sandbox, SandboxConfig, Task
 from lib.update_lock import UpdateLock
 
 
@@ -114,6 +114,10 @@ class EmailGatewayService:
         # Conversation-to-repo mapping for O(1) stop-execution lookup
         self._conv_repo_map: dict[str, str] = {}
 
+        # Active tasks for stop functionality
+        self._active_tasks: dict[str, object] = {}
+        self._active_tasks_lock = threading.Lock()
+
         # Update lock for coordinating with auto-updater
         self._update_lock = UpdateLock(repo_root / ".update.lock")
 
@@ -132,15 +136,16 @@ class EmailGatewayService:
         if upstream_dns is None:
             upstream_dns = get_system_resolver()
 
-        # Proxy manager (shared gateway, per-task proxying)
-        proxy_kwargs: dict[str, object] = {
-            "container_command": self.global_config.container_command,
-            "proxy_dir": self.repo_root / "proxy",
-            "upstream_dns": upstream_dns,
-        }
-        if self._egress_network is not None:
-            proxy_kwargs["egress_network"] = self._egress_network
-        self.proxy_manager = ProxyManager(**proxy_kwargs)  # type: ignore[arg-type]
+        # Sandbox (shared infrastructure, per-task execution)
+        sandbox_config = SandboxConfig(
+            container_command=self.global_config.container_command,
+            proxy_dir=self.repo_root / "proxy",
+            upstream_dns=upstream_dns,
+        )
+        self.sandbox = Sandbox(
+            sandbox_config,
+            egress_network=self._egress_network,
+        )
 
         # Initialize per-repo handlers (failures are recorded, not raised)
         self.repo_handlers: dict[str, RepoHandler] = {}
@@ -283,7 +288,7 @@ class EmailGatewayService:
         # Phase: proxy
         self.boot_state.phase = BootPhase.PROXY
         self.boot_state.message = "Building proxy image and creating network..."
-        self.proxy_manager.startup()
+        self.sandbox.startup()
 
         # Initialize shared thread pool
         self._executor_pool = ThreadPoolExecutor(
@@ -398,8 +403,8 @@ class EmailGatewayService:
         self.running = False
         self._shutdown_event.set()
 
-        # Shutdown proxy manager
-        self.proxy_manager.shutdown()
+        # Shutdown sandbox
+        self.sandbox.shutdown()
 
         # Interrupt all listeners
         for repo_handler in self.repo_handlers.values():
@@ -440,11 +445,27 @@ class EmailGatewayService:
 
         logger.info("Service stopped")
 
+    def register_active_task(self, task_id: str, task: Task) -> None:
+        """Register an active task for stop functionality.
+
+        Args:
+            task_id: Task/conversation ID.
+            task: Active sandbox Task.
+        """
+        with self._active_tasks_lock:
+            self._active_tasks[task_id] = task
+
+    def unregister_active_task(self, task_id: str) -> None:
+        """Unregister a completed task.
+
+        Args:
+            task_id: Task/conversation ID.
+        """
+        with self._active_tasks_lock:
+            self._active_tasks.pop(task_id, None)
+
     def _stop_execution(self, conversation_id: str) -> bool:
         """Stop a running execution by conversation ID.
-
-        Uses the conversation-to-repo mapping for O(1) lookup when
-        available, falling back to iterating all handlers.
 
         Args:
             conversation_id: Conversation ID to stop.
@@ -452,15 +473,13 @@ class EmailGatewayService:
         Returns:
             True if stopped, False if not found.
         """
-        repo_id = self._conv_repo_map.get(conversation_id)
-        if repo_id and repo_id in self.repo_handlers:
-            return self.repo_handlers[repo_id].executor.stop_execution(
-                conversation_id
-            )
-        # Fallback: try all handlers (e.g. mapping not yet registered)
-        for handler in self.repo_handlers.values():
-            if handler.executor.stop_execution(conversation_id):
-                return True
+        with self._active_tasks_lock:
+            task = self._active_tasks.get(conversation_id)
+        if task is not None:
+            return task.stop()  # type: ignore[union-attr]
+        logger.warning(
+            "No active task found for conversation %s", conversation_id
+        )
         return False
 
     def submit_message(

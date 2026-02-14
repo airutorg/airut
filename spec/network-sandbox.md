@@ -14,12 +14,12 @@ high-level documentation (threat model, security properties, configuration), see
 | `proxy/dns_responder.py`        | DNS server: returns proxy IP for all A queries        |
 | `proxy/proxy_filter.py`         | mitmproxy addon: allowlist, token masking, re-signing |
 | `proxy/aws_signing.py`          | AWS SigV4/SigV4A request re-signing                   |
-| `lib/container/network.py`      | Podman args for sandbox integration (--dns, CA cert)  |
-| `lib/container/proxy.py`        | Per-conversation proxy lifecycle management           |
+| `lib/sandbox/_network.py`       | Podman args for sandbox integration (--dns, CA cert)  |
+| `lib/sandbox/_proxy.py`         | Per-task proxy lifecycle management                   |
 
 ## Proxy Lifecycle
 
-The proxy is managed by `ProxyManager` in `lib/container/proxy.py`:
+The proxy is managed by `ProxyManager` in `lib/sandbox/_proxy.py`:
 
 **Gateway lifecycle** (shared resources):
 

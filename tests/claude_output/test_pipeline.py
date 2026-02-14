@@ -26,12 +26,12 @@ from lib.claude_output import (
     extract_session_id,
     parse_stream_events,
 )
-from lib.container.session import SessionStore
 from lib.dashboard.views.actions import (
     render_actions_timeline,
     render_events_list,
     render_single_event,
 )
+from lib.sandbox import SessionStore
 
 
 def _build_stdout(*event_dicts: dict) -> str:
@@ -199,7 +199,7 @@ class TestDashboardRendersTypedEvents:
         session_dir.mkdir(parents=True)
         store = SessionStore(session_dir)
         store.update_or_add_reply(
-            conversation_id="test1234",
+            execution_context_id="test1234",
             events=events,
             request_text="List the files",
             response_text="Found file.txt.",
@@ -313,7 +313,7 @@ class TestErrorSummaryFromParsedEvents:
         session_dir.mkdir(parents=True)
         store = SessionStore(session_dir)
         store.update_or_add_reply(
-            conversation_id="err12345",
+            execution_context_id="err12345",
             events=events,
             request_text="Do the thing",
             response_text="Working on it...",
@@ -361,7 +361,7 @@ class TestUnknownEventsThroughPipeline:
         session_dir.mkdir(parents=True)
         store = SessionStore(session_dir)
         store.update_or_add_reply(
-            conversation_id="unk12345",
+            execution_context_id="unk12345",
             events=events,
             request_text="Test unknown events",
             response_text="Done.",
@@ -403,7 +403,7 @@ class TestUnknownEventsThroughPipeline:
         session_dir.mkdir(parents=True)
         store = SessionStore(session_dir)
         store.update_or_add_reply(
-            conversation_id="unkfull1",
+            execution_context_id="unkfull1",
             events=events,
             request_text="Think about this",
             response_text="Here's my answer.",
@@ -471,7 +471,7 @@ class TestUsageExtraFieldsThroughPipeline:
         session_dir.mkdir(parents=True)
         store = SessionStore(session_dir)
         store.update_or_add_reply(
-            conversation_id="usage123",
+            execution_context_id="usage123",
             events=events,
             request_text="Search for stuff",
             response_text="Results found.",
@@ -491,7 +491,7 @@ class TestUsageExtraFieldsThroughPipeline:
         assert reply.usage.extra["custom_metric"] == 99
 
     def test_usage_extra_in_raw_session_json(self, tmp_path) -> None:
-        """Extra usage fields appear in session.json wire format."""
+        """Extra usage fields appear in context.json wire format."""
         usage_dict = {
             "input_tokens": 100,
             "output_tokens": 50,
@@ -507,14 +507,14 @@ class TestUsageExtraFieldsThroughPipeline:
         session_dir.mkdir(parents=True)
         store = SessionStore(session_dir)
         store.update_or_add_reply(
-            conversation_id="usagejson",
+            execution_context_id="usagejson",
             events=events,
             request_text="Test",
             response_text="Done.",
         )
 
         # Read raw JSON to verify wire format
-        session_file = session_dir / "session.json"
+        session_file = session_dir / "context.json"
         with session_file.open("r") as f:
             raw = json.load(f)
 
@@ -617,7 +617,7 @@ class TestToolUseEventsThroughPipeline:
         session_dir.mkdir(parents=True)
         store = SessionStore(session_dir)
         store.update_or_add_reply(
-            conversation_id="tool1234",
+            execution_context_id="tool1234",
             events=events,
             request_text="Edit the file",
             response_text="Done editing.",
@@ -665,7 +665,7 @@ class TestExtractionAfterRoundTrip:
         session_dir.mkdir(parents=True)
         store = SessionStore(session_dir)
         store.update_or_add_reply(
-            conversation_id="resp1234",
+            execution_context_id="resp1234",
             events=events,
             request_text="What's the answer?",
             response_text="Here is the answer.",
@@ -689,7 +689,7 @@ class TestExtractionAfterRoundTrip:
         session_dir.mkdir(parents=True)
         store = SessionStore(session_dir)
         store.update_or_add_reply(
-            conversation_id="sid12345",
+            execution_context_id="sid12345",
             events=events,
             request_text="Hi",
             response_text="Hello.",
@@ -722,7 +722,7 @@ class TestExtractionAfterRoundTrip:
         session_dir.mkdir(parents=True)
         store = SessionStore(session_dir)
         store.update_or_add_reply(
-            conversation_id="sum12345",
+            execution_context_id="sum12345",
             events=events,
             request_text="Do stuff",
             response_text="Done.",

@@ -84,7 +84,7 @@ avoiding SSH key exposure.
 
 ### Session Metadata
 
-Session metadata (`session.json`) is stored outside the container mount. This
+Session metadata (`context.json`) is stored outside the container mount. This
 prevents the agent from tampering with session tracking or conversation IDs.
 
 ## Network Isolation
@@ -122,6 +122,7 @@ build details.
 
 - [network-sandbox.md](network-sandbox.md) — Network allowlist enforcement
 - [security.md](security.md) — Overall security model
+- [spec/sandbox.md](../spec/sandbox.md) — Sandbox library specification
 - [spec/image.md](../spec/image.md) — Container image build details
 - [spec/gateway-architecture.md](../spec/gateway-architecture.md) — Full
   execution flow

@@ -5,7 +5,7 @@
 
 """Integration tests for email gateway service.
 
-Tests the full end-to-end flow with all Phase 1 & 2 components:
+Tests the full end-to-end flow with all components:
 - Email received → parsed → authorized → conversation managed →
   Claude executed → reply sent
 """
@@ -15,16 +15,11 @@ import json
 import threading
 import time
 from pathlib import Path
-from subprocess import TimeoutExpired
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from lib.claude_output import StreamEvent, parse_stream_events
-from lib.container.executor import (
-    ClaudeExecutor,
-    ContainerTimeoutError,
-)
 from lib.gateway import (
     ConversationManager,
     EmailListener,
@@ -53,18 +48,13 @@ class TestEndToEndFlow:
         self,
         email_config: RepoServerConfig,
         master_repo: Path,
-        docker_dir: Path,
         sample_email_message,
     ):
         """Test processing new conversation from start to finish."""
-        # Initialize all components
+        # Initialize components
         conversation_manager = ConversationManager(
             repo_url=str(master_repo),
             storage_dir=email_config.storage_dir,
-        )
-        executor = ClaudeExecutor(
-            mirror=conversation_manager.mirror,
-            entrypoint_path=docker_dir / "airut-entrypoint.sh",
         )
         authenticator = SenderAuthenticator(email_config.trusted_authserv_id)
         authorizer = SenderAuthorizer(email_config.authorized_senders)
@@ -104,19 +94,8 @@ class TestEndToEndFlow:
         else:
             prompt = clean_body
 
-        # Mock executor execution
-        with patch.object(executor, "execute") as mock_execute:
-            mock_execute.return_value = MagicMock(
-                success=True,
-                output={
-                    "result": {"content": [{"type": "text", "text": "Done!"}]}
-                },
-            )
-
-            result = executor.execute(
-                repo_path, prompt, mounts=[], image_tag="airut:test"
-            )
-            assert result.success is True
+        # Verify we can use the prompt (mock the execution part)
+        assert len(prompt) > 0
 
         # Mock responder send
         with patch.object(responder, "send_reply") as mock_send:
@@ -259,48 +238,6 @@ class TestEndToEndFlow:
 class TestErrorRecovery:
     """Test error handling and recovery."""
 
-    def test_container_timeout_handling(
-        self,
-        email_config: RepoServerConfig,
-        master_repo: Path,
-        docker_dir: Path,
-    ):
-        """Test handling of container timeouts."""
-        mock_mirror = MagicMock()
-        mock_mirror.read_file.return_value = b"FROM python:3.13-slim\n"
-        executor = ClaudeExecutor(
-            mirror=mock_mirror,
-            entrypoint_path=docker_dir / "airut-entrypoint.sh",
-        )
-
-        conversation_manager = ConversationManager(
-            repo_url=str(master_repo),
-            storage_dir=email_config.storage_dir,
-        )
-        conv_id, repo_path = conversation_manager.initialize_new()
-
-        # Mock execution to timeout
-        mock_process = MagicMock()
-        mock_process.stdout = iter([])
-        mock_process.stderr = MagicMock()
-        mock_process.stderr.readlines.return_value = []
-        mock_process.stdin = MagicMock()
-        mock_process.wait.side_effect = [TimeoutExpired("cmd", 1), None]
-        mock_process.kill.return_value = None
-
-        with patch(
-            "lib.container.executor.subprocess.Popen",
-            return_value=mock_process,
-        ):
-            with pytest.raises(ContainerTimeoutError):
-                executor.execute(
-                    repo_path,
-                    "long running task",
-                    mounts=[],
-                    image_tag="airut:test",
-                    timeout_seconds=1,
-                )
-
     def test_git_clone_failure_handling(self, email_config: RepoServerConfig):
         """Test handling of git clone failures."""
         # Use empty repo URL
@@ -407,7 +344,6 @@ class TestComponentIntegration:
         self,
         email_config: RepoServerConfig,
         master_repo: Path,
-        docker_dir: Path,
     ):
         """Test that config properly initializes all components."""
         # Create all components from config
@@ -419,10 +355,6 @@ class TestComponentIntegration:
             repo_url=email_config.git_repo_url,
             storage_dir=email_config.storage_dir,
         )
-        executor = ClaudeExecutor(
-            mirror=conversation_manager.mirror,
-            entrypoint_path=docker_dir / "airut-entrypoint.sh",
-        )
 
         # Verify components initialized
         assert listener.config == email_config
@@ -431,7 +363,6 @@ class TestComponentIntegration:
         # Verify authorizer patterns match config
         assert authorizer.is_authorized("authorized@example.com") is True
         assert conversation_manager.repo_url == email_config.git_repo_url
-        assert executor.entrypoint_path == docker_dir / "airut-entrypoint.sh"
 
     def test_conversation_id_roundtrip(
         self, email_config: RepoServerConfig, master_repo: Path
@@ -986,29 +917,40 @@ Please help.
         def track_ack(*args, **kwargs):
             call_order.append("acknowledgment")
 
-        def track_execute(*args, **kwargs):
+        def track_execute(prompt, **kwargs):
             call_order.append("execute")
-            return MagicMock(
-                success=True,
-                output={
-                    "result": {"content": [{"type": "text", "text": "Done"}]}
-                },
+            from lib.claude_output.types import Usage
+            from lib.sandbox import ExecutionResult, Outcome
+
+            return ExecutionResult(
+                outcome=Outcome.SUCCESS,
+                session_id="test-session",
+                response_text="Done",
+                events=[],
+                duration_ms=100,
+                total_cost_usd=0.01,
+                num_turns=1,
+                usage=Usage(),
+                stdout="",
+                stderr="",
+                exit_code=0,
             )
 
         def track_send_reply(*args, **kwargs):
             call_order.append("final_reply")
 
+        # Create mock task
+        mock_task = MagicMock()
+        mock_task.execute.side_effect = track_execute
+        mock_task.session_store = MagicMock()
+        mock_task.session_store.get_session_id_for_resume.return_value = None
+        mock_task.session_store.get_model.return_value = None
+        service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock
+        service.sandbox.create_task.return_value = mock_task  # type: ignore[invalid-assignment]  # mock
+
         with (
             patch.object(
                 handler.responder, "send_reply", side_effect=track_send_reply
-            ),
-            patch.object(
-                handler.executor, "execute", side_effect=track_execute
-            ),
-            patch.object(
-                handler.executor,
-                "ensure_image",
-                return_value="airut:test",
             ),
             # Patch the module-level function that process_message calls
             patch(
@@ -1070,27 +1012,34 @@ Please help.
                 task_id_at_ack_time = conv_id
             # Don't actually send
 
+        # Create mock task
+        from lib.claude_output.types import Usage
+        from lib.sandbox import ExecutionResult, Outcome
+
+        mock_task = MagicMock()
+        mock_task.execute.return_value = ExecutionResult(
+            outcome=Outcome.SUCCESS,
+            session_id="test-session",
+            response_text="Done",
+            events=[],
+            duration_ms=100,
+            total_cost_usd=0.01,
+            num_turns=1,
+            usage=Usage(),
+            stdout="",
+            stderr="",
+            exit_code=0,
+        )
+        mock_task.session_store = MagicMock()
+        mock_task.session_store.get_session_id_for_resume.return_value = None
+        mock_task.session_store.get_model.return_value = None
+        service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock
+        service.sandbox.create_task.return_value = mock_task  # type: ignore[invalid-assignment]  # mock
+
         with (
             patch(
                 "lib.gateway.service.message_processing.send_acknowledgment",
                 side_effect=track_task_id_at_ack,
-            ),
-            patch.object(
-                handler.executor,
-                "ensure_image",
-                return_value="airut:test",
-            ),
-            patch.object(
-                handler.executor,
-                "execute",
-                return_value=MagicMock(
-                    success=True,
-                    output={
-                        "result": {
-                            "content": [{"type": "text", "text": "Done"}]
-                        }
-                    },
-                ),
             ),
             patch.object(handler.responder, "send_reply"),
         ):
@@ -1224,29 +1173,35 @@ Please help.
         message.replace_header("Subject", f"Re: [ID:{conv_id}] Follow-up")
         message.replace_header("From", email_config.authorized_senders[0])
 
+        # Create mock task
+        from lib.claude_output.types import Usage
         from lib.gateway.service.message_processing import process_message
+        from lib.sandbox import ExecutionResult, Outcome
+
+        mock_task = MagicMock()
+        mock_task.execute.return_value = ExecutionResult(
+            outcome=Outcome.SUCCESS,
+            session_id="test-session",
+            response_text="Done",
+            events=[],
+            duration_ms=100,
+            total_cost_usd=0.01,
+            num_turns=1,
+            usage=Usage(),
+            stdout="",
+            stderr="",
+            exit_code=0,
+        )
+        mock_task.session_store = MagicMock()
+        mock_task.session_store.get_session_id_for_resume.return_value = None
+        mock_task.session_store.get_model.return_value = None
+        service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock
+        service.sandbox.create_task.return_value = mock_task  # type: ignore[invalid-assignment]  # mock
 
         with (
             patch(
                 "lib.gateway.service.message_processing.send_acknowledgment"
             ) as mock_ack,
-            patch.object(
-                handler.executor,
-                "ensure_image",
-                return_value="airut:test",
-            ),
-            patch.object(
-                handler.executor,
-                "execute",
-                return_value=MagicMock(
-                    success=True,
-                    output={
-                        "result": {
-                            "content": [{"type": "text", "text": "Done"}]
-                        }
-                    },
-                ),
-            ),
             patch.object(handler.responder, "send_reply"),
         ):
             process_message(service, message, "test-task-id", handler)

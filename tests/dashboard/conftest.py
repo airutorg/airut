@@ -13,9 +13,9 @@ import pytest
 from werkzeug.test import Client
 
 from lib.claude_output import StreamEvent, parse_stream_events
-from lib.container.session import SessionStore
 from lib.dashboard.server import DashboardServer
 from lib.dashboard.tracker import TaskTracker
+from lib.sandbox import SessionStore
 
 
 def parse_events(*raw_events: dict[str, Any]) -> list[StreamEvent]:

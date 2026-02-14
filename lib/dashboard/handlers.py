@@ -17,12 +17,6 @@ from typing import Any
 
 from werkzeug.wrappers import Request, Response
 
-from lib.container.proxy import NETWORK_LOG_FILENAME
-from lib.container.session import (
-    SESSION_FILE_NAME,
-    SessionMetadata,
-    SessionStore,
-)
 from lib.dashboard import views
 from lib.dashboard.formatters import VersionInfo
 from lib.dashboard.tracker import (
@@ -34,6 +28,12 @@ from lib.dashboard.tracker import (
 )
 from lib.dashboard.views import get_favicon_svg
 from lib.gateway.conversation import CONVERSATION_ID_PATTERN
+from lib.sandbox import (
+    NETWORK_LOG_FILENAME,
+    SESSION_FILE_NAME,
+    SessionMetadata,
+    SessionStore,
+)
 
 
 logger = logging.getLogger(__name__)

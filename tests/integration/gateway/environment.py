@@ -65,7 +65,7 @@ def create_test_repo(path: Path) -> Path:
     readme = path / "README.md"
     readme.write_text("# Test Repository\n\nCreated for integration testing.\n")
 
-    # Add network sandbox config (read from git mirror by ProxyManager)
+    # Add network sandbox config (read from git mirror by Sandbox)
     airut_dir = path / ".airut"
     airut_dir.mkdir()
     (airut_dir / "network-allowlist.yaml").write_text(
@@ -79,7 +79,7 @@ def create_test_repo(path: Path) -> Path:
         "timeout: 30\n"
     )
 
-    # Add container Dockerfile (read from git mirror by ClaudeExecutor)
+    # Add container Dockerfile (read from git mirror by Sandbox)
     container_dir = airut_dir / "container"
     container_dir.mkdir()
     (container_dir / "Dockerfile").write_text(

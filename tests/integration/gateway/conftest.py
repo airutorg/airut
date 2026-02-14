@@ -41,7 +41,8 @@ def _mock_proxy_infra(tmp_path: Path):
     state_dir = tmp_path / "mock_podman_state"
     state_dir.mkdir(exist_ok=True)
     with (
-        patch("lib.container.proxy.MITMPROXY_CONFDIR", confdir),
+        patch("lib.sandbox._proxy.MITMPROXY_CONFDIR", confdir),
+        patch("lib.sandbox._network.MITMPROXY_CONFDIR", confdir),
         patch.dict(os.environ, {"MOCK_PODMAN_STATE_DIR": str(state_dir)}),
     ):
         yield

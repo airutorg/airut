@@ -3,11 +3,11 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Per-conversation proxy lifecycle management for Airut email gateway.
+"""Per-context proxy lifecycle management for the sandbox.
 
 Manages mitmproxy containers that enforce the network sandbox. Each
-conversation gets its own proxy container and internal network, providing
-complete network isolation between concurrent conversations.
+execution context gets its own proxy container and internal network,
+providing complete network isolation between concurrent contexts.
 
 Architecture (transparent DNS-spoofing proxy):
 
@@ -17,21 +17,18 @@ Architecture (transparent DNS-spoofing proxy):
   Podman's ``--route`` flag on the internal network.
 - mitmproxy in ``regular`` mode uses SNI (HTTPS) and Host header (HTTP)
   to determine the real upstream destination.
-- No ``HTTP_PROXY`` / ``HTTPS_PROXY`` env vars needed — transparent to
+- No ``HTTP_PROXY`` / ``HTTPS_PROXY`` env vars needed -- transparent to
   all tools (Node.js, Go, curl, etc.).
 - No ``CAP_NET_ADMIN``, no iptables, no ip_forward.
 
 Lifecycle layers:
 
-- **Gateway**: Egress network, proxy image, CA certificate (shared)
-- **Conversation**: Internal network + proxy container (per-conversation)
-
-See ``doc/network-sandbox.md`` for the full design.
+- **Sandbox**: Egress network, proxy image, CA certificate (shared)
+- **Context**: Internal network + proxy container (per-context)
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import subprocess
 import tempfile
@@ -39,14 +36,8 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-from lib.allowlist import parse_allowlist_yaml, serialize_allowlist_json
-
-
-if TYPE_CHECKING:
-    from lib.gateway.config import ReplacementMap
-    from lib.git_mirror import GitMirrorCache
+from lib.sandbox.network_log import NETWORK_LOG_FILENAME
 
 
 logger = logging.getLogger(__name__)
@@ -56,22 +47,18 @@ PROXY_IMAGE_NAME = "airut-proxy"
 MITMPROXY_CONFDIR = Path.home() / ".airut-mitmproxy"
 CA_CERT_FILENAME = "mitmproxy-ca-cert.pem"
 
-# Prefixes for per-conversation resources.  Orphan cleanup uses prefix-based
+# Prefixes for per-context resources. Orphan cleanup uses prefix-based
 # matching via ``podman ps --filter name=`` / ``podman network ls
-# --filter name=``.  This is safe in our controlled environment where
-# only this code creates resources with these prefixes.
-CONV_NETWORK_PREFIX = "airut-conv-"
-CONV_PROXY_PREFIX = "airut-proxy-"
+# --filter name=``.
+CONTEXT_NETWORK_PREFIX = "airut-conv-"
+CONTEXT_PROXY_PREFIX = "airut-proxy-"
 
 # Maximum time to wait for the proxy to start accepting connections.
 HEALTH_CHECK_TIMEOUT = 5.0
 HEALTH_CHECK_INTERVAL = 0.2
 
-# Network sandbox log file name (created in conversation directory)
-NETWORK_LOG_FILENAME = "network-sandbox.log"
-
-# Subnet allocation for per-conversation internal networks.
-# Each conversation gets a /24 subnet from 10.199.{N}.0/24.
+# Subnet allocation for per-context internal networks.
+# Each context gets a /24 subnet from 10.199.{N}.0/24.
 # Proxy IP is always .100 on the subnet.
 _SUBNET_PREFIX = "10.199"
 _PROXY_HOST_OCTET = "100"
@@ -84,12 +71,12 @@ _INTERNAL_ROUTE_METRIC = 10
 
 
 @dataclass(frozen=True)
-class TaskProxy:
-    """Running proxy for a single task.
+class _ContextProxy:
+    """Running proxy for a single execution context.
 
     Attributes:
-        network_name: Per-task internal network name.
-        proxy_container_name: Per-task proxy container name.
+        network_name: Per-context internal network name.
+        proxy_container_name: Per-context proxy container name.
         proxy_ip: Static IP of the proxy on the internal network.
     """
 
@@ -105,23 +92,16 @@ class ProxyError(Exception):
 class ProxyManager:
     """Manages proxy infrastructure lifecycle.
 
-    Gateway-scoped resources (egress network, image, CA cert) are set up
+    Sandbox-scoped resources (egress network, image, CA cert) are set up
     once in ``startup()`` and torn down in ``shutdown()``.
-    Conversation-scoped resources (internal network, proxy container) are
-    created per-conversation via ``start_task_proxy()`` and destroyed via
-    ``stop_task_proxy()``.
+    Context-scoped resources (internal network, proxy container) are
+    created per-context via ``start_proxy()`` and destroyed via
+    ``stop_proxy()``.
 
     Thread Safety:
-        ``_active_proxies`` is protected by ``_lock``.  Multiple threads
-        may call ``start_task_proxy`` / ``stop_task_proxy`` concurrently.
-
-    Attributes:
-        container_command: Container runtime (podman or docker).
-        proxy_dir: Path to directory containing proxy.dockerfile.
+        ``_active_proxies`` is protected by ``_lock``. Multiple threads
+        may call ``start_proxy`` / ``stop_proxy`` concurrently.
     """
-
-    #: Path to the network allowlist inside the repo.
-    ALLOWLIST_PATH = ".airut/network-allowlist.yaml"
 
     def __init__(
         self,
@@ -136,7 +116,7 @@ class ProxyManager:
         self._egress_network = egress_network
         self._upstream_dns = upstream_dns
         self._lock = threading.Lock()
-        self._active_proxies: dict[str, TaskProxy] = {}
+        self._active_proxies: dict[str, _ContextProxy] = {}
         self._allowlist_tmpfiles: dict[str, Path] = {}
         self._replacement_tmpfiles: dict[str, Path] = {}
         self._network_log_files: dict[str, Path] = {}
@@ -144,7 +124,7 @@ class ProxyManager:
         self._next_subnet_octet = 1
 
     # ------------------------------------------------------------------
-    # Gateway lifecycle
+    # Sandbox lifecycle
     # ------------------------------------------------------------------
 
     def startup(self) -> None:
@@ -168,65 +148,63 @@ class ProxyManager:
     def shutdown(self) -> None:
         """Tear down all proxy resources.
 
-        Stops any remaining task proxies, then removes the egress network.
+        Stops any remaining context proxies, then removes the egress
+        network.
         """
         logger.info("ProxyManager shutting down")
-        # Stop any remaining task proxies
+        # Stop any remaining context proxies
         with self._lock:
             remaining = list(self._active_proxies)
-        for task_id in remaining:
+        for context_id in remaining:
             try:
-                self.stop_task_proxy(task_id)
+                self.stop_proxy(context_id)
             except Exception:
                 logger.warning(
-                    "Failed to stop proxy for task %s during shutdown",
-                    task_id,
+                    "Failed to stop proxy for context %s during shutdown",
+                    context_id,
                     exc_info=True,
                 )
         self._remove_network(self._egress_network)
         logger.info("ProxyManager shutdown complete")
 
     # ------------------------------------------------------------------
-    # Task lifecycle
+    # Context lifecycle
     # ------------------------------------------------------------------
 
-    def start_task_proxy(
+    def start_proxy(
         self,
-        task_id: str,
+        context_id: str,
         *,
-        mirror: GitMirrorCache,
-        conversation_dir: Path | None = None,
-        replacement_map: ReplacementMap | None = None,
-    ) -> TaskProxy:
-        """Create internal network and start proxy container for a task.
+        allowlist_json: bytes,
+        replacements_json: bytes,
+        network_log_dir: Path | None = None,
+    ) -> _ContextProxy:
+        """Create internal network and start proxy container for a context.
 
-        Idempotent: if a proxy already exists for *task_id* (e.g. from a
-        failed previous attempt), it is torn down first.
+        Idempotent: if a proxy already exists for *context_id* (e.g.
+        from a failed previous attempt), it is torn down first.
 
         Args:
-            task_id: Unique task/conversation identifier.
-            mirror: Git mirror to read the network allowlist from.
-            conversation_dir: Optional conversation directory for network
-                activity log. If provided, network requests are logged to
-                ``conversation_dir/network-sandbox.log``.
-            replacement_map: Optional mapping of surrogate tokens to real
-                values with scope restrictions. Used for masked secrets.
+            context_id: Execution context identifier.
+            allowlist_json: JSON-encoded network allowlist.
+            replacements_json: JSON-encoded replacement map for secrets.
+            network_log_dir: Optional directory for network activity log.
 
         Returns:
-            TaskProxy with connection details.
+            _ContextProxy with connection details.
 
         Raises:
             ProxyError: If network/container creation or health check fails.
         """
         # Tear down stale resources from a previous attempt (idempotent).
-        self.stop_task_proxy(task_id)
+        self.stop_proxy(context_id)
 
-        network_name = f"{CONV_NETWORK_PREFIX}{task_id}"
-        container_name = f"{CONV_PROXY_PREFIX}{task_id}"
+        network_name = f"{CONTEXT_NETWORK_PREFIX}{context_id}"
+        container_name = f"{CONTEXT_PROXY_PREFIX}{context_id}"
 
         logger.info(
-            "Starting proxy for task %s (network=%s, container=%s)",
-            task_id,
+            "Starting proxy for context %s (network=%s, container=%s)",
+            context_id,
             network_name,
             container_name,
         )
@@ -237,19 +215,27 @@ class ProxyManager:
             network_name, subnet=subnet, proxy_ip=proxy_ip
         )
 
-        # Create network log file if conversation_dir provided
+        # Create network log file if network_log_dir provided
         network_log_path: Path | None = None
-        if conversation_dir is not None:
+        if network_log_dir is not None:
             network_log_path = self._create_network_log(
-                task_id, conversation_dir
+                context_id, network_log_dir
             )
 
         try:
-            # Extract allowlist from git mirror
-            allowlist_path = self._extract_allowlist(task_id, mirror=mirror)
-            # Write replacement map for masked secrets
-            replacement_path = self._write_replacement_map(
-                task_id, replacement_map or {}
+            # Write allowlist to temp file
+            allowlist_path = self._write_temp_file(
+                context_id,
+                allowlist_json,
+                "allowlist",
+                self._allowlist_tmpfiles,
+            )
+            # Write replacement map to temp file
+            replacement_path = self._write_temp_file(
+                context_id,
+                replacements_json,
+                "replacements",
+                self._replacement_tmpfiles,
             )
             # Start proxy container on both networks
             self._run_proxy_container(
@@ -266,56 +252,52 @@ class ProxyManager:
             # Clean up network, container, and temp files on any failure
             self._remove_container(container_name)
             self._remove_network(network_name)
-            self._cleanup_allowlist(task_id)
-            self._cleanup_replacement_map(task_id)
-            self._cleanup_network_log(task_id)
+            self._cleanup_temp_file(context_id, self._allowlist_tmpfiles)
+            self._cleanup_temp_file(context_id, self._replacement_tmpfiles)
+            self._cleanup_network_log(context_id)
             raise
 
-        proxy = TaskProxy(
+        proxy = _ContextProxy(
             network_name=network_name,
             proxy_container_name=container_name,
             proxy_ip=proxy_ip,
         )
         with self._lock:
-            self._active_proxies[task_id] = proxy
-        logger.info("Proxy started for task %s", task_id)
+            self._active_proxies[context_id] = proxy
+        logger.info("Proxy started for context %s", context_id)
         return proxy
 
-    def stop_task_proxy(self, task_id: str) -> None:
-        """Stop proxy container and remove internal network for a task.
+    def stop_proxy(self, context_id: str) -> None:
+        """Stop proxy container and remove internal network for a context.
 
-        Safe to call even if the proxy was never started or already stopped.
+        Safe to call even if the proxy was never started or already
+        stopped.
 
         Args:
-            task_id: Task identifier.
+            context_id: Execution context identifier.
         """
         with self._lock:
-            proxy = self._active_proxies.pop(task_id, None)
+            proxy = self._active_proxies.pop(context_id, None)
         if proxy is None:
-            logger.debug("No active proxy for task %s", task_id)
+            logger.debug("No active proxy for context %s", context_id)
             return
 
-        logger.info("Stopping proxy for task %s", task_id)
+        logger.info("Stopping proxy for context %s", context_id)
         self._remove_container(proxy.proxy_container_name)
         self._remove_network(proxy.network_name)
-        self._cleanup_allowlist(task_id)
-        self._cleanup_replacement_map(task_id)
-        # Note: we don't delete the network log file - it stays in
-        # conversation_dir for later inspection and is cleaned up with
-        # conversation pruning
-        self._network_log_files.pop(task_id, None)
-        logger.info("Proxy stopped for task %s", task_id)
+        self._cleanup_temp_file(context_id, self._allowlist_tmpfiles)
+        self._cleanup_temp_file(context_id, self._replacement_tmpfiles)
+        # Note: we don't delete the network log file - it stays for
+        # later inspection and is cleaned up with conversation pruning
+        self._network_log_files.pop(context_id, None)
+        logger.info("Proxy stopped for context %s", context_id)
 
     # ------------------------------------------------------------------
     # Subnet allocation
     # ------------------------------------------------------------------
 
     def _allocate_subnet(self) -> tuple[str, str]:
-        """Allocate a /24 subnet and proxy IP for a new task network.
-
-        Uses a simple incrementing counter for the third octet. Podman
-        will reject the network creation if the subnet collides with an
-        existing one, which is handled by the caller.
+        """Allocate a /24 subnet and proxy IP for a new context network.
 
         Returns:
             Tuple of (subnet_cidr, proxy_ip).
@@ -366,10 +348,6 @@ class ProxyManager:
     def _ensure_ca_cert(self) -> Path:
         """Ensure mitmproxy CA certificate exists.
 
-        Generates a new certificate by briefly running mitmdump if one does
-        not exist.  The image entrypoint is overridden since the production
-        image uses ``proxy-entrypoint.sh``.
-
         Returns:
             Path to the CA certificate PEM file.
 
@@ -403,13 +381,18 @@ class ProxyManager:
             stderr=subprocess.PIPE,
         )
 
-        for _ in range(20):
-            if ca_cert_path.exists():
-                break
-            time.sleep(0.5)
-
-        proc.terminate()
-        proc.wait(timeout=10)
+        try:
+            for _ in range(20):
+                if ca_cert_path.exists():
+                    break
+                time.sleep(0.5)
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
 
         if not ca_cert_path.exists():
             raise ProxyError(
@@ -420,124 +403,73 @@ class ProxyManager:
         return ca_cert_path
 
     # ------------------------------------------------------------------
-    # Container operations
+    # Temp file operations
     # ------------------------------------------------------------------
 
-    def _extract_allowlist(
-        self, task_id: str, *, mirror: GitMirrorCache
-    ) -> Path:
-        """Extract the network allowlist from the git mirror to a temp file.
-
-        Reads YAML from the mirror, parses into typed ``Allowlist``, and
-        serializes to JSON for the proxy container.
-
-        Args:
-            task_id: Task identifier (for tracking cleanup).
-            mirror: Git mirror to read the allowlist from.
-
-        Returns:
-            Path to the temporary JSON allowlist file.
-
-        Raises:
-            ProxyError: If the allowlist cannot be read or parsed.
-        """
-        try:
-            data = mirror.read_file(self.ALLOWLIST_PATH)
-        except Exception as e:
-            raise ProxyError(
-                f"Failed to read allowlist from mirror: {e}"
-            ) from e
-
-        try:
-            allowlist = parse_allowlist_yaml(data)
-        except ValueError as e:
-            raise ProxyError(f"Failed to parse allowlist YAML: {e}") from e
-
-        json_data = serialize_allowlist_json(allowlist)
-
-        fd, path = tempfile.mkstemp(suffix=".json", prefix="airut-allowlist-")
-        with open(fd, "wb") as f:
-            f.write(json_data)
-
-        tmppath = Path(path)
-        self._allowlist_tmpfiles[task_id] = tmppath
-        logger.debug("Extracted allowlist for task %s: %s", task_id, tmppath)
-        return tmppath
-
-    def _cleanup_allowlist(self, task_id: str) -> None:
-        """Remove the temporary allowlist file for a task."""
-        tmppath = self._allowlist_tmpfiles.pop(task_id, None)
-        if tmppath is not None:
-            tmppath.unlink(missing_ok=True)
-            logger.debug(
-                "Cleaned up allowlist for task %s: %s", task_id, tmppath
-            )
-
-    def _write_replacement_map(
+    def _write_temp_file(
         self,
-        task_id: str,
-        replacement_map: ReplacementMap,
+        context_id: str,
+        data: bytes,
+        label: str,
+        tracking_dict: dict[str, Path],
     ) -> Path:
-        """Write replacement map to temp file for proxy mounting.
+        """Write data to a temp file and track it for cleanup.
 
         Args:
-            task_id: Task identifier (for tracking cleanup).
-            replacement_map: Mapping of surrogate tokens to replacement config.
+            context_id: Execution context identifier.
+            data: File contents.
+            label: Label for the temp file prefix.
+            tracking_dict: Dict to track the file path for cleanup.
 
         Returns:
-            Path to the temporary JSON file.
+            Path to the temporary file.
         """
-        # Serialize to JSON format expected by proxy addon
-        data = {
-            surrogate: entry.to_dict()
-            for surrogate, entry in replacement_map.items()
-        }
-
-        fd, path = tempfile.mkstemp(
-            suffix=".json", prefix="airut-replacements-"
-        )
-        with open(fd, "w") as f:
-            json.dump(data, f)
+        fd, path = tempfile.mkstemp(suffix=".json", prefix=f"airut-{label}-")
+        with open(fd, "wb") as f:
+            f.write(data)
 
         tmppath = Path(path)
-        self._replacement_tmpfiles[task_id] = tmppath
-        logger.debug(
-            "Wrote replacement map for task %s: %s (%d entries)",
-            task_id,
-            tmppath,
-            len(replacement_map),
-        )
+        tracking_dict[context_id] = tmppath
+        logger.debug("Wrote %s for context %s: %s", label, context_id, tmppath)
         return tmppath
 
-    def _cleanup_replacement_map(self, task_id: str) -> None:
-        """Remove the temporary replacement map file for a task."""
-        tmppath = self._replacement_tmpfiles.pop(task_id, None)
+    @staticmethod
+    def _cleanup_temp_file(
+        context_id: str, tracking_dict: dict[str, Path]
+    ) -> None:
+        """Remove a tracked temp file."""
+        tmppath = tracking_dict.pop(context_id, None)
         if tmppath is not None:
             tmppath.unlink(missing_ok=True)
-            logger.debug(
-                "Cleaned up replacement map for task %s: %s", task_id, tmppath
-            )
 
-    def _create_network_log(self, task_id: str, conversation_dir: Path) -> Path:
-        """Create the network log file in the conversation directory.
+    def _create_network_log(
+        self, context_id: str, network_log_dir: Path
+    ) -> Path:
+        """Create the network log file in the given directory.
 
         Args:
-            task_id: Task identifier (for tracking).
-            conversation_dir: Conversation directory to create log file in.
+            context_id: Execution context identifier (for tracking).
+            network_log_dir: Directory to create log file in.
 
         Returns:
             Path to the created log file.
         """
-        log_path = conversation_dir / NETWORK_LOG_FILENAME
+        log_path = network_log_dir / NETWORK_LOG_FILENAME
         # Create empty file (proxy addon will append to it)
         log_path.touch(exist_ok=True)
-        self._network_log_files[task_id] = log_path
-        logger.debug("Created network log for task %s: %s", task_id, log_path)
+        self._network_log_files[context_id] = log_path
+        logger.debug(
+            "Created network log for context %s: %s", context_id, log_path
+        )
         return log_path
 
-    def _cleanup_network_log(self, task_id: str) -> None:
-        """Remove tracking for network log file (but keep the file itself)."""
-        self._network_log_files.pop(task_id, None)
+    def _cleanup_network_log(self, context_id: str) -> None:
+        """Remove tracking for network log file (but keep the file)."""
+        self._network_log_files.pop(context_id, None)
+
+    # ------------------------------------------------------------------
+    # Container operations
+    # ------------------------------------------------------------------
 
     def _run_proxy_container(
         self,
@@ -550,17 +482,6 @@ class ProxyManager:
         replacement_path: Path | None = None,
     ) -> None:
         """Start a proxy container in detached mode.
-
-        The proxy is dual-homed: connected to the internal network (with a
-        static IP) and the egress network (for internet access).
-
-        Args:
-            container_name: Name for the container.
-            internal_network: Per-task internal network name.
-            proxy_ip: Static IP address on the internal network.
-            allowlist_path: Path to the allowlist JSON file to mount.
-            network_log_path: Optional path to network log file to mount.
-            replacement_path: Optional path to replacement map JSON file.
 
         Raises:
             ProxyError: If container start fails.
@@ -616,14 +537,6 @@ class ProxyManager:
     ) -> None:
         """Poll until mitmproxy is listening on ports 80 and 443.
 
-        Uses ``podman exec`` to make TCP connections from inside the
-        container.  The proxy image is ``python:3.13-slim``, so Python
-        stdlib is available for the probe.
-
-        Args:
-            container_name: Running proxy container to check.
-            timeout: Maximum seconds to wait.
-
         Raises:
             ProxyError: If the proxy is not ready within *timeout*.
         """
@@ -660,11 +573,7 @@ class ProxyManager:
         raise ProxyError(f"Proxy {container_name} not ready after {timeout}s")
 
     def _remove_container(self, name: str) -> None:
-        """Force-remove a container (idempotent).
-
-        Args:
-            name: Container name.
-        """
+        """Force-remove a container (idempotent)."""
         try:
             subprocess.run(
                 [self._cmd, "rm", "-f", name],
@@ -687,17 +596,7 @@ class ProxyManager:
         subnet: str,
         proxy_ip: str,
     ) -> None:
-        """Create a per-task internal network with route to proxy.
-
-        Creates an ``--internal`` network with ``--disable-dns`` and a
-        default route pointing to the proxy IP. The ``--disable-dns``
-        flag prevents aardvark-dns from overriding the client's
-        ``--dns`` setting.
-
-        Args:
-            name: Network name.
-            subnet: CIDR subnet (e.g., "10.199.1.0/24").
-            proxy_ip: Proxy IP on this subnet (route target).
+        """Create a per-context internal network with route to proxy.
 
         Raises:
             ProxyError: If creation fails.
@@ -731,11 +630,6 @@ class ProxyManager:
     def _create_egress_network(self) -> None:
         """Create the shared egress network with a low route metric.
 
-        The egress network uses ``metric={_EGRESS_METRIC}`` so its
-        default route wins over the internal network's route
-        (``metric={_INTERNAL_ROUTE_METRIC}``) inside dual-homed proxy
-        containers.
-
         Raises:
             ProxyError: If creation fails.
         """
@@ -766,11 +660,7 @@ class ProxyManager:
         self._create_egress_network()
 
     def _remove_network(self, name: str) -> None:
-        """Force-remove a network (idempotent).
-
-        Args:
-            name: Network name.
-        """
+        """Force-remove a network (idempotent)."""
         try:
             subprocess.run(
                 [self._cmd, "network", "rm", "-f", name],
@@ -787,12 +677,7 @@ class ProxyManager:
     # ------------------------------------------------------------------
 
     def _cleanup_orphans(self) -> None:
-        """Remove orphaned proxy containers and conversation networks.
-
-        Finds resources matching the ``airut-proxy-*`` and
-        ``airut-conv-*`` naming patterns from previous unclean shutdowns
-        and removes them.
-        """
+        """Remove orphaned proxy containers and context networks."""
         # Clean orphaned containers
         try:
             result = subprocess.run(
@@ -801,7 +686,7 @@ class ProxyManager:
                     "ps",
                     "-a",
                     "--filter",
-                    f"name={CONV_PROXY_PREFIX}",
+                    f"name={CONTEXT_PROXY_PREFIX}",
                     "--format",
                     "{{.Names}}",
                 ],
@@ -825,7 +710,7 @@ class ProxyManager:
                     "network",
                     "ls",
                     "--filter",
-                    f"name={CONV_NETWORK_PREFIX}",
+                    f"name={CONTEXT_NETWORK_PREFIX}",
                     "--format",
                     "{{.Name}}",
                 ],
@@ -836,25 +721,7 @@ class ProxyManager:
             for name in result.stdout.strip().splitlines():
                 name = name.strip()
                 if name:
-                    logger.info("Removing orphaned task network: %s", name)
+                    logger.info("Removing orphaned context network: %s", name)
                     self._remove_network(name)
         except subprocess.CalledProcessError:
             logger.debug("Failed to list orphaned networks")
-
-
-def get_ca_cert_path() -> Path:
-    """Get path to the mitmproxy CA certificate.
-
-    Returns:
-        Path to CA certificate PEM file.
-
-    Raises:
-        RuntimeError: If certificate doesn't exist.
-    """
-    path = MITMPROXY_CONFDIR / CA_CERT_FILENAME
-    if not path.exists():
-        raise RuntimeError(
-            f"CA certificate not found: {path}. "
-            "ProxyManager.startup() must be called first."
-        )
-    return path

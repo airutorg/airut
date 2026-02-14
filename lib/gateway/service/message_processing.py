@@ -8,7 +8,7 @@
 This module handles:
 - Processing individual email messages
 - Managing conversation state and session resumption
-- Executing Claude Code in containers
+- Executing Claude Code in containers via the sandbox
 - Handling prompt-too-long recovery
 """
 
@@ -18,22 +18,16 @@ import logging
 from email.message import Message
 from typing import TYPE_CHECKING
 
+from lib.allowlist import parse_allowlist_yaml
 from lib.claude_output import (
     StreamEvent,
     extract_error_summary,
-    extract_response_text,
 )
 from lib.container.conversation_layout import (
     create_conversation_layout,
-    get_container_mounts,
     prepare_conversation,
 )
-from lib.container.executor import (
-    ContainerTimeoutError,
-    ExecutionResult,
-)
-from lib.container.session import SessionStore
-from lib.gateway.config import RepoConfig
+from lib.gateway.config import ReplacementMap, RepoConfig
 from lib.gateway.conversation import GitCloneError
 from lib.gateway.parsing import (
     decode_subject,
@@ -49,63 +43,25 @@ from lib.gateway.service.email_replies import (
     send_reply,
 )
 from lib.gateway.service.usage_stats import extract_usage_stats
+from lib.sandbox import (
+    ContainerEnv,
+    Mount,
+    NetworkSandboxConfig,
+    Outcome,
+    SessionStore,
+)
 
 
 if TYPE_CHECKING:
-    from lib.container.proxy import TaskProxy
     from lib.gateway.service.gateway import EmailGatewayService
     from lib.gateway.service.repo_handler import RepoHandler
+    from lib.sandbox.secrets import SecretReplacements
 
 logger = logging.getLogger(__name__)
 
 
-def is_prompt_too_long_error(result: ExecutionResult) -> bool:
-    """Check if an execution failure is a 'Prompt is too long' error.
-
-    This error occurs when Claude's context window is exceeded after
-    context compaction, making the session unresumable.
-
-    Args:
-        result: Execution result from Claude.
-
-    Returns:
-        True if the error is a prompt-too-long failure.
-    """
-    if result.success:
-        return False
-    # Claude outputs "Prompt is too long" to stdout when context is exceeded
-    return "Prompt is too long" in result.stdout
-
-
-def is_session_corrupted_error(result: ExecutionResult) -> bool:
-    """Check if an execution failure is due to a corrupted/unresumable session.
-
-    Detects API 4xx errors that indicate the session state is invalid and
-    cannot be resumed. These include:
-    - 400: invalid_request_error (e.g., mismatched tool_use_id/tool_result)
-    - Other 4xx client errors from the Claude API
-
-    When this occurs, the session_id must be cleared so the next attempt
-    starts a fresh session rather than repeatedly hitting the same error.
-
-    Args:
-        result: Execution result from Claude.
-
-    Returns:
-        True if the error indicates a corrupted session.
-    """
-    if result.success:
-        return False
-
-    # Check both stdout and stderr for API error patterns.
-    # Claude Code outputs "API Error: <status>" when an API call fails.
-    combined = f"{result.stdout}\n{result.stderr}"
-    if "API Error: 4" not in combined:
-        return False
-
-    # Only treat as corrupted session if this was a resumed session.
-    # The error text alone is sufficient — we check session_id in the caller.
-    return True
+_REPO_DOCKERFILE_PATH = ".airut/container/Dockerfile"
+_REPO_CONTAINER_DIR = ".airut/container"
 
 
 def build_recovery_prompt(
@@ -154,6 +110,56 @@ def build_recovery_prompt(
     parts.append(f"\nThe user's message:\n{user_message}")
 
     return "\n".join(parts)
+
+
+def _build_image(
+    service: EmailGatewayService,
+    mirror: object,
+) -> str:
+    """Build or reuse container image from git mirror.
+
+    Args:
+        service: Parent service with sandbox.
+        mirror: Git mirror cache.
+
+    Returns:
+        Image tag for container execution.
+    """
+    # Read all files from .airut/container/ directory
+    try:
+        filenames = mirror.list_directory(_REPO_CONTAINER_DIR)  # type: ignore[union-attr]
+    except Exception as e:
+        from lib.sandbox import ImageBuildError
+
+        raise ImageBuildError(
+            f"Failed to list {_REPO_CONTAINER_DIR} from mirror: {e}"
+        )
+
+    dockerfile_content: bytes | None = None
+    context_files: dict[str, bytes] = {}
+
+    for filename in filenames:
+        file_path = f"{_REPO_CONTAINER_DIR}/{filename}"
+        try:
+            content = mirror.read_file(file_path)  # type: ignore[union-attr]
+        except Exception as e:
+            from lib.sandbox import ImageBuildError
+
+            raise ImageBuildError(
+                f"Failed to read {file_path} from mirror: {e}"
+            )
+
+        if filename == "Dockerfile":
+            dockerfile_content = content
+        else:
+            context_files[filename] = content
+
+    if dockerfile_content is None:
+        from lib.sandbox import ImageBuildError
+
+        raise ImageBuildError(f"No Dockerfile found in {_REPO_CONTAINER_DIR}")
+
+    return service.sandbox.ensure_image(dockerfile_content, context_files)
 
 
 def process_message(
@@ -261,7 +267,7 @@ def process_message(
                 repo_id,
             )
             conv_mgr.mirror.update_mirror()
-            repo_path = conv_mgr.resume_existing(conv_id)
+            conv_mgr.resume_existing(conv_id)
 
         # Register conversation-to-repo mapping
         assert conv_id is not None
@@ -353,24 +359,55 @@ def process_message(
         prompt = f"{email_context}\n\n{clean_body}"
 
         # Build or reuse container image
-        image_tag = repo_handler.executor.ensure_image()
+        image_tag = _build_image(service, conv_mgr.mirror)
 
-        # Get session ID for resumption
-        session_id = session_store.get_session_id_for_resume()
-        if session_id:
-            logger.info(
-                "Repo '%s': resuming Claude session %s for conversation %s",
-                repo_id,
-                session_id,
-                conv_id,
+        # Build mounts (sandbox manages claude/ internally)
+        mounts = [
+            Mount(layout.workspace, "/workspace"),
+            Mount(layout.inbox, "/inbox"),
+            Mount(layout.outbox, "/outbox"),
+            Mount(layout.storage, "/storage"),
+        ]
+
+        # Build container environment
+        env = ContainerEnv(variables=repo_config.container_env)
+
+        # Build network sandbox config if enabled
+        network_sandbox: NetworkSandboxConfig | None = None
+        if repo_config.network_sandbox_enabled:
+            try:
+                allowlist_data = conv_mgr.mirror.read_file(
+                    ".airut/network-allowlist.yaml"
+                )
+                allowlist = parse_allowlist_yaml(allowlist_data)
+            except Exception as e:
+                from lib.sandbox import ProxyError
+
+                raise ProxyError(f"Failed to read/parse allowlist: {e}") from e
+
+            # Convert gateway ReplacementMap to sandbox SecretReplacements
+            replacements = _convert_replacement_map(replacement_map)
+            network_sandbox = NetworkSandboxConfig(
+                allowlist=allowlist,
+                replacements=replacements,
             )
 
-        logger.info(
-            "Repo '%s': executing Claude Code (model=%s) for conversation %s",
-            repo_id,
-            model,
-            conv_id,
+        # Create sandbox task
+        task = service.sandbox.create_task(
+            execution_context_id=conv_id,
+            image_tag=image_tag,
+            mounts=mounts,
+            env=env,
+            session_dir=conversation_dir,
+            network_log_dir=(
+                conversation_dir if network_sandbox is not None else None
+            ),
+            network_sandbox=network_sandbox,
+            timeout_seconds=repo_config.timeout,
         )
+
+        # Register task for stop functionality
+        service.register_active_task(conv_id, task)
 
         # Streaming event callback
         events_buffer: list[StreamEvent] = []
@@ -380,7 +417,7 @@ def process_message(
             events_buffer.append(event)
             if conv_id:
                 try:
-                    session_store.update_or_add_reply(
+                    task.session_store.update_or_add_reply(
                         conv_id,
                         events_buffer.copy(),
                         request_text=prompt,
@@ -389,44 +426,42 @@ def process_message(
                 except Exception as e:
                     logger.warning("Failed to update session file: %s", e)
 
-        task_proxy: TaskProxy | None = None
-        if repo_config.network_sandbox_enabled and conv_id:
-            task_proxy = service.proxy_manager.start_task_proxy(
+        logger.info(
+            "Repo '%s': executing Claude Code (model=%s) for conversation %s",
+            repo_id,
+            model,
+            conv_id,
+        )
+
+        # Get session ID for resumption
+        session_id = task.session_store.get_session_id_for_resume()
+        if session_id:
+            logger.info(
+                "Repo '%s': resuming Claude session %s for conversation %s",
+                repo_id,
+                session_id,
                 conv_id,
-                mirror=conv_mgr.mirror,
-                conversation_dir=layout.conversation_dir,
-                replacement_map=replacement_map,
             )
 
         try:
-            result = repo_handler.executor.execute(
-                session_git_repo=repo_path,
-                prompt=prompt,
-                mounts=get_container_mounts(layout),
-                image_tag=image_tag,
+            result = task.execute(
+                prompt,
                 session_id=session_id,
                 model=model,
                 on_event=on_event,
-                conversation_id=conv_id,
-                task_proxy=task_proxy,
-                container_env=repo_config.container_env,
-                timeout_seconds=repo_config.timeout,
             )
         finally:
-            if repo_config.network_sandbox_enabled and conv_id:
-                service.proxy_manager.stop_task_proxy(conv_id)
+            service.unregister_active_task(conv_id)
 
-        # Handle unresumable session errors by retrying with a new session.
-        # This covers both "Prompt is too long" (context compaction boundary)
-        # and API 4xx errors (corrupted session state, e.g., mismatched
-        # tool_use_id/tool_result pairs).
-        is_unresumable = is_prompt_too_long_error(
-            result
-        ) or is_session_corrupted_error(result)
+        # Handle unresumable session errors by retrying with a new session
+        is_unresumable = result.outcome in (
+            Outcome.PROMPT_TOO_LONG,
+            Outcome.SESSION_CORRUPTED,
+        )
         if is_unresumable and session_id is not None:
             reason = (
                 "prompt too long"
-                if is_prompt_too_long_error(result)
+                if result.outcome == Outcome.PROMPT_TOO_LONG
                 else "session corrupted (API 4xx)"
             )
             logger.warning(
@@ -437,7 +472,7 @@ def process_message(
                 conv_id,
             )
 
-            last_response = session_store.get_last_successful_response()
+            last_response = task.session_store.get_last_successful_response()
             recovery_prompt = build_recovery_prompt(
                 last_response, email_context, clean_body
             )
@@ -445,41 +480,38 @@ def process_message(
             # Reset events buffer for the retry
             events_buffer.clear()
 
-            task_proxy = None
-            if repo_config.network_sandbox_enabled and conv_id:
-                task_proxy = service.proxy_manager.start_task_proxy(
-                    conv_id,
-                    mirror=conv_mgr.mirror,
-                    conversation_dir=layout.conversation_dir,
-                    replacement_map=replacement_map,
-                )
+            # Create new task for retry
+            task = service.sandbox.create_task(
+                execution_context_id=conv_id,
+                image_tag=image_tag,
+                mounts=mounts,
+                env=env,
+                session_dir=conversation_dir,
+                network_log_dir=(
+                    conversation_dir if network_sandbox is not None else None
+                ),
+                network_sandbox=network_sandbox,
+                timeout_seconds=repo_config.timeout,
+            )
 
+            service.register_active_task(conv_id, task)
             try:
-                result = repo_handler.executor.execute(
-                    session_git_repo=repo_path,
-                    prompt=recovery_prompt,
-                    mounts=get_container_mounts(layout),
-                    image_tag=image_tag,
+                result = task.execute(
+                    recovery_prompt,
                     session_id=None,
                     model=model,
                     on_event=on_event,
-                    conversation_id=conv_id,
-                    task_proxy=task_proxy,
-                    container_env=repo_config.container_env,
-                    timeout_seconds=repo_config.timeout,
                 )
                 # Update prompt so session stores the recovery prompt
                 prompt = recovery_prompt
             finally:
-                if repo_config.network_sandbox_enabled and conv_id:
-                    service.proxy_manager.stop_task_proxy(conv_id)
+                service.unregister_active_task(conv_id)
 
         # Extract response and usage stats
-        if result.success:
-            output_events = result.output or []
-            response_body = extract_response_text(output_events)
+        if result.outcome == Outcome.SUCCESS:
+            response_body = result.response_text
             usage_stats = extract_usage_stats(
-                output_events,
+                result.events,
                 is_subscription=bool(
                     repo_config.container_env.get("CLAUDE_CODE_OAUTH_TOKEN")
                 ),
@@ -490,24 +522,39 @@ def process_message(
                 conv_id,
             )
 
-            if result.output:
-                session_store.update_or_add_reply(
-                    conv_id,
-                    result.output,
-                    request_text=prompt,
-                    response_text=response_body,
-                )
+            task.session_store.update_or_add_reply(
+                conv_id,
+                result.events,
+                request_text=prompt,
+                response_text=response_body,
+            )
 
             if usage_stats.has_any():
                 stats_footer = usage_stats.format_summary()
                 response_body = f"{response_body}\n\n*{stats_footer}*"
+        elif result.outcome == Outcome.TIMEOUT:
+            error_msg = (
+                f"The task was interrupted after "
+                f"{repo_config.timeout} seconds. "
+                "Work done so far has been saved.\n\n"
+                "Reply to resume \u2014 you can ask about progress or "
+                "request next steps."
+            )
+            send_error_reply(repo_handler, message, error_msg)
+            task.session_store.update_or_add_reply(
+                conv_id,
+                events_buffer.copy(),
+                request_text=prompt,
+                response_text=error_msg,
+                is_error=True,
+            )
+            return False, conv_id
         else:
             response_body = (
                 "An error occurred while processing your message. "
                 "To retry, send your message again."
             )
-            error_events = result.output or events_buffer.copy()
-            error_summary = extract_error_summary(error_events)
+            error_summary = extract_error_summary(result.events)
             if error_summary:
                 response_body += (
                     f"\n\nClaude output:\n```\n{error_summary}\n```"
@@ -516,11 +563,11 @@ def process_message(
                 "Repo '%s': execution failed for conversation %s: %s",
                 repo_id,
                 conv_id,
-                result.error_message,
+                result.outcome.value,
             )
-            session_store.update_or_add_reply(
+            task.session_store.update_or_add_reply(
                 conv_id,
-                error_events,
+                result.events,
                 request_text=prompt,
                 response_text=response_body,
                 is_error=True,
@@ -535,26 +582,8 @@ def process_message(
             sender,
             conv_id,
         )
-        return result.success, conv_id
+        return result.outcome == Outcome.SUCCESS, conv_id
 
-    except ContainerTimeoutError as e:
-        logger.error("Repo '%s': container execution timed out: %s", repo_id, e)
-        error_msg = (
-            f"The task was interrupted after {repo_config.timeout} seconds. "
-            "Work done so far has been saved.\n\n"
-            "Reply to resume — you can ask about progress or "
-            "request next steps."
-        )
-        send_error_reply(repo_handler, message, error_msg)
-        if conv_id and session_store:
-            session_store.update_or_add_reply(
-                conv_id,
-                events_buffer.copy(),
-                request_text=prompt,
-                response_text=error_msg,
-                is_error=True,
-            )
-        return False, conv_id
     except GitCloneError as e:
         logger.exception(
             "Repo '%s': failed to initialize conversation: %s",
@@ -595,3 +624,49 @@ def process_message(
                     "Failed to persist error session: %s", persist_err
                 )
         return False, conv_id
+
+
+def _convert_replacement_map(
+    replacement_map: ReplacementMap,
+) -> SecretReplacements:
+    """Convert a gateway ReplacementMap to sandbox SecretReplacements.
+
+    The gateway config module produces ReplacementMap with ReplacementEntry
+    and SigningCredentialEntry objects. The sandbox needs SecretReplacements
+    with its own internal types.
+
+    Args:
+        replacement_map: Gateway-produced replacement map.
+
+    Returns:
+        SecretReplacements for the sandbox.
+    """
+    from lib.gateway.config import (
+        ReplacementEntry,
+        SigningCredentialEntry,
+    )
+    from lib.sandbox.secrets import (
+        SecretReplacements,
+        _ReplacementEntry,
+        _SigningCredentialEntry,
+    )
+
+    internal_map: dict[str, _ReplacementEntry | _SigningCredentialEntry] = {}
+
+    for surrogate, entry in replacement_map.items():
+        if isinstance(entry, ReplacementEntry):
+            internal_map[surrogate] = _ReplacementEntry(
+                real_value=entry.real_value,
+                scopes=entry.scopes,
+                headers=entry.headers,
+            )
+        elif isinstance(entry, SigningCredentialEntry):
+            internal_map[surrogate] = _SigningCredentialEntry(
+                access_key_id=entry.access_key_id,
+                secret_access_key=entry.secret_access_key,
+                session_token=entry.session_token,
+                surrogate_session_token=entry.surrogate_session_token,
+                scopes=entry.scopes,
+            )
+
+    return SecretReplacements(_map=internal_map)

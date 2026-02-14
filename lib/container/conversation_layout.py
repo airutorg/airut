@@ -13,7 +13,7 @@ keep it clean.
 Layout::
 
     conversations/{id}/         # conversation_dir
-      session.json              # host-only metadata (not mounted)
+      context.json              # host-only metadata (not mounted)
       workspace/                # git clone
       claude/                   # claude session state
       inbox/                    # email attachments

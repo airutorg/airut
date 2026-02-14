@@ -21,7 +21,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
-from lib.container.session import SessionStore
+from lib.sandbox import SessionStore
 
 from .conftest import get_message_text
 from .environment import IntegrationEnvironment
@@ -239,22 +239,19 @@ def sync_between_events(event_num):
             assert task.status.value == "in_progress"
 
             # Stop the task
-            stop_success = service.repo_handlers[
-                "test"
-            ].executor.stop_execution(conv_id)
+            stop_success = service._stop_execution(conv_id)
             assert stop_success, "Failed to stop task"
 
-            # Verify process is no longer tracked
-            assert (
-                conv_id
-                not in service.repo_handlers["test"].executor._running_processes
-            ), "Process still tracked after stop"
-
             # Task should eventually be marked as completed
-            # (The executor will return an error due to SIGTERM)
+            # (process_message unregisters the task in its finally block)
             task = service.tracker.wait_for_completion(conv_id, timeout=5.0)
             if not task or task.status.value != "completed":
                 pytest.fail("Task did not complete after stop")
+
+            # After completion, task should be unregistered
+            assert conv_id not in service._active_tasks, (
+                "Task still tracked after completion"
+            )
 
         finally:
             # Stop the service gracefully
@@ -274,9 +271,7 @@ def sync_between_events(event_num):
         service = integration_env.create_service()
 
         # Try to stop a nonexistent task
-        result = service.repo_handlers["test"].executor.stop_execution(
-            "nonexistent-id"
-        )
+        result = service._stop_execution("nonexistent-id")
         assert result is False, "Should return False for nonexistent task"
 
     def test_dashboard_stop_endpoint(

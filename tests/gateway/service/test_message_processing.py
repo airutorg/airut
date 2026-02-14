@@ -13,14 +13,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from lib.claude_output import StreamEvent, parse_event, parse_stream_events
-from lib.container.executor import ExecutionResult
+from lib.claude_output.types import Usage
 from lib.gateway.config import RepoConfig
-from lib.gateway.service import (
-    build_recovery_prompt,
-    is_prompt_too_long_error,
-    is_session_corrupted_error,
-)
+from lib.gateway.service import build_recovery_prompt
 from lib.gateway.service.message_processing import process_message
+from lib.sandbox import ExecutionResult, Outcome
 
 from .conftest import make_message, make_service, update_global
 
@@ -44,6 +41,69 @@ def _make_repo_config(
         timeout=timeout,
         network_sandbox_enabled=network_sandbox_enabled,
         container_env=container_env or {},
+    )
+
+
+def _make_success_result(
+    events: list[StreamEvent] | None = None,
+    response_text: str = "Done!",
+) -> ExecutionResult:
+    """Create a successful ExecutionResult for testing."""
+    if events is None:
+        events = _parse_events(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": response_text}]
+                },
+            },
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "test-session",
+                "duration_ms": 100,
+                "total_cost_usd": 0.01,
+                "num_turns": 1,
+                "is_error": False,
+                "usage": {},
+                "result": response_text,
+            },
+        )
+    return ExecutionResult(
+        outcome=Outcome.SUCCESS,
+        session_id="test-session",
+        response_text=response_text,
+        events=events,
+        duration_ms=100,
+        total_cost_usd=0.01,
+        num_turns=1,
+        usage=Usage(),
+        stdout="",
+        stderr="",
+        exit_code=0,
+    )
+
+
+def _make_failure_result(
+    outcome: Outcome = Outcome.CONTAINER_FAILED,
+    events: list[StreamEvent] | None = None,
+    stdout: str = "",
+    stderr: str = "",
+    exit_code: int = 1,
+) -> ExecutionResult:
+    """Create a failed ExecutionResult for testing."""
+    return ExecutionResult(
+        outcome=outcome,
+        session_id="",
+        response_text="",
+        events=events or [],
+        duration_ms=100,
+        total_cost_usd=0.0,
+        num_turns=0,
+        usage=Usage(),
+        stdout=stdout,
+        stderr=stderr,
+        exit_code=exit_code,
     )
 
 
@@ -81,7 +141,18 @@ class TestProcessMessage:
             tmp_path / "conversations"
         )
         handler.conversation_manager.get_workspace_path.return_value = repo_path
-        handler.conversation_manager.mirror = MagicMock()
+        mock_mirror = MagicMock()
+        mock_mirror.list_directory.return_value = ["Dockerfile"]
+
+        def _read_file(path: str) -> bytes:
+            if "Dockerfile" in path:
+                return b"FROM python:3.13-slim\n"
+            if "network-allowlist" in path:
+                return b"domains: []\nurl_prefixes: []\n"
+            return b""
+
+        mock_mirror.read_file.side_effect = _read_file
+        handler.conversation_manager.mirror = mock_mirror
 
         handler.authenticator.authenticate.return_value = (
             "authorized@example.com"
@@ -91,31 +162,14 @@ class TestProcessMessage:
         mock_session_store.get_session_id_for_resume.return_value = None
         mock_session_store.get_model.return_value = None
 
-        handler.executor.execute.return_value = ExecutionResult(
-            success=True,
-            output=_parse_events(
-                {
-                    "type": "assistant",
-                    "message": {"content": [{"type": "text", "text": "Done!"}]},
-                },
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "test-session",
-                    "duration_ms": 100,
-                    "total_cost_usd": 0.01,
-                    "num_turns": 1,
-                    "is_error": False,
-                    "usage": {},
-                    "result": "Done!",
-                },
-            ),
-            error_message="",
-            stdout="",
-            stderr="",
-            exit_code=0,
-        )
-        handler.executor.ensure_image = MagicMock(return_value="airut:test")
+        # Configure sandbox mock: ensure_image returns tag,
+        # create_task returns a mock Task whose execute returns success
+        mock_task = MagicMock()
+        mock_task.execute.return_value = _make_success_result()
+        mock_task.session_store = mock_session_store
+        svc.sandbox.ensure_image.return_value = "airut:test"
+        svc.sandbox.create_task.return_value = mock_task
+        svc._mock_task = mock_task  # Store for test access
 
         return svc, handler, mock_session_store
 
@@ -223,13 +277,20 @@ class TestProcessMessage:
     def test_execution_failure(self, email_config: Any, tmp_path: Path) -> None:
         svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
 
-        handler.executor.execute.return_value = ExecutionResult(
-            success=False,
-            output=None,
-            error_message="Container crashed",
-            stdout='{"type":"result","is_error":true}',
+        svc._mock_task.execute.return_value = _make_failure_result(
+            events=_parse_events(
+                {
+                    "type": "result",
+                    "subtype": "error",
+                    "session_id": "err-session",
+                    "is_error": True,
+                    "duration_ms": 100,
+                    "total_cost_usd": 0.0,
+                    "num_turns": 0,
+                    "usage": {},
+                },
+            ),
             stderr="FATAL: OOM\nline2\nline3",
-            exit_code=1,
         )
         msg = make_message(body="Do something")
 
@@ -242,10 +303,10 @@ class TestProcessMessage:
         assert conv_id == "conv1"
 
     def test_container_timeout(self, email_config: Any, tmp_path: Path) -> None:
-        from lib.container.executor import ContainerTimeoutError
-
         svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
-        handler.executor.execute.side_effect = ContainerTimeoutError("timeout")
+        svc._mock_task.execute.return_value = _make_failure_result(
+            outcome=Outcome.TIMEOUT,
+        )
         msg = make_message(body="Do something")
 
         with patch(
@@ -269,7 +330,7 @@ class TestProcessMessage:
 
     def test_unexpected_error(self, email_config: Any, tmp_path: Path) -> None:
         svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
-        handler.executor.execute.side_effect = RuntimeError("unexpected")
+        svc._mock_task.execute.side_effect = RuntimeError("unexpected")
         msg = make_message(body="Do something")
 
         with patch(
@@ -321,8 +382,8 @@ class TestProcessMessage:
             ),
         ):
             process_message(svc, msg, "task1", handler)
-        # executor should be called with opus model
-        call_kwargs = handler.executor.execute.call_args[1]
+        # task.execute should be called with opus model
+        call_kwargs = svc._mock_task.execute.call_args[1]
         assert call_kwargs["model"] == "opus"
 
     def test_attachments_saved(self, email_config: Any, tmp_path: Path) -> None:
@@ -341,8 +402,8 @@ class TestProcessMessage:
         ):
             process_message(svc, msg, "task1", handler)
         # Prompt should mention inbox
-        call_kwargs = handler.executor.execute.call_args[1]
-        assert "report.pdf" in call_kwargs["prompt"]
+        call_args = svc._mock_task.execute.call_args
+        assert "report.pdf" in call_args[0][0]  # positional prompt arg
 
     def test_usage_stats_footer(
         self, email_config: Any, tmp_path: Path
@@ -365,30 +426,15 @@ class TestProcessMessage:
         svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
         msg = make_message(body="Do stuff")
 
-        # Capture the on_event callback
+        # Capture the on_event callback from task.execute
         captured_callback = None
 
-        def capture_execute(**kwargs):
+        def capture_execute(prompt, **kwargs):
             nonlocal captured_callback
             captured_callback = kwargs.get("on_event")
+            return _make_success_result(response_text="Ok")
 
-            return ExecutionResult(
-                success=True,
-                output=_parse_events(
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [{"type": "text", "text": "Ok"}]
-                        },
-                    },
-                ),
-                error_message="",
-                stdout="",
-                stderr="",
-                exit_code=0,
-            )
-
-        handler.executor.execute.side_effect = capture_execute
+        svc._mock_task.execute.side_effect = capture_execute
 
         with patch(
             "lib.gateway.service.message_processing.SessionStore",
@@ -414,32 +460,12 @@ class TestProcessMessage:
 
         captured_callback = None
 
-        def capture_execute(**kwargs):
+        def capture_execute(prompt, **kwargs):
             nonlocal captured_callback
             captured_callback = kwargs.get("on_event")
+            return _make_success_result()
 
-            return ExecutionResult(
-                success=True,
-                output=_parse_events(
-                    {
-                        "type": "result",
-                        "subtype": "success",
-                        "session_id": "s1",
-                        "duration_ms": 100,
-                        "total_cost_usd": 0.01,
-                        "num_turns": 1,
-                        "is_error": False,
-                        "usage": {},
-                        "result": "ok",
-                    },
-                ),
-                error_message="",
-                stdout="",
-                stderr="",
-                exit_code=0,
-            )
-
-        handler.executor.execute.side_effect = capture_execute
+        svc._mock_task.execute.side_effect = capture_execute
 
         with patch(
             "lib.gateway.service.message_processing.SessionStore",
@@ -476,32 +502,12 @@ class TestProcessMessage:
 
         captured_callback = None
 
-        def capture_execute(**kwargs):
+        def capture_execute(prompt, **kwargs):
             nonlocal captured_callback
             captured_callback = kwargs.get("on_event")
+            return _make_success_result()
 
-            return ExecutionResult(
-                success=True,
-                output=_parse_events(
-                    {
-                        "type": "result",
-                        "subtype": "success",
-                        "session_id": "s1",
-                        "duration_ms": 100,
-                        "total_cost_usd": 0.01,
-                        "num_turns": 1,
-                        "is_error": False,
-                        "usage": {},
-                        "result": "ok",
-                    },
-                ),
-                error_message="",
-                stdout="",
-                stderr="",
-                exit_code=0,
-            )
-
-        handler.executor.execute.side_effect = capture_execute
+        svc._mock_task.execute.side_effect = capture_execute
 
         with patch(
             "lib.gateway.service.message_processing.SessionStore",
@@ -545,7 +551,7 @@ class TestProcessMessage:
         ):
             process_message(svc, msg, "conv1", handler)
         # Should use stored model, not requested
-        call_kwargs = handler.executor.execute.call_args[1]
+        call_kwargs = svc._mock_task.execute.call_args[1]
         assert call_kwargs["model"] == "sonnet"
 
     def test_task_id_updated_for_new_conversation(
@@ -581,18 +587,14 @@ class TestProcessMessage:
     ) -> None:
         svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
 
-        handler.executor.execute.return_value = ExecutionResult(
-            success=True,
-            output=_parse_events(
+        # Result with no cost event → no usage stats footer
+        svc._mock_task.execute.return_value = _make_success_result(
+            events=_parse_events(
                 {
                     "type": "assistant",
                     "message": {"content": [{"type": "text", "text": "Done"}]},
                 },
             ),
-            error_message="",
-            stdout="",
-            stderr="",
-            exit_code=0,
         )
         msg = make_message(body="Do stuff")
 
@@ -611,13 +613,8 @@ class TestProcessMessage:
         svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
 
         stderr_lines = "\n".join(f"line{i}" for i in range(15))
-        handler.executor.execute.return_value = ExecutionResult(
-            success=False,
-            output=None,
-            error_message="Crashed",
-            stdout="",
+        svc._mock_task.execute.return_value = _make_failure_result(
             stderr=stderr_lines,
-            exit_code=1,
         )
         msg = make_message(body="Do stuff")
 
@@ -639,14 +636,7 @@ class TestProcessMessage:
     ) -> None:
         svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
 
-        handler.executor.execute.return_value = ExecutionResult(
-            success=False,
-            output=None,
-            error_message="Crashed",
-            stdout='{"type":"result","is_error":true,"result":"Bad"}',
-            stderr="",
-            exit_code=1,
-        )
+        svc._mock_task.execute.return_value = _make_failure_result()
         msg = make_message(body="Do stuff")
 
         with (
@@ -672,15 +662,15 @@ class TestProcessMessage:
     ) -> None:
         """Session must be updated even when execution fails.
 
-        Bug: when result.success is False, session_store.update_or_add_reply
-        was never called, so the error execution's metadata (session_id,
-        is_error flag) was lost.  The next message could not resume properly.
+        Bug: when result.outcome is not SUCCESS,
+        session_store.update_or_add_reply was never called, so
+        the error execution's metadata (session_id, is_error flag)
+        was lost. The next message could not resume properly.
         """
         svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
 
-        handler.executor.execute.return_value = ExecutionResult(
-            success=False,
-            output=_parse_events(
+        svc._mock_task.execute.return_value = _make_failure_result(
+            events=_parse_events(
                 {
                     "type": "result",
                     "subtype": "error",
@@ -692,10 +682,7 @@ class TestProcessMessage:
                     "usage": {"input_tokens": 50, "output_tokens": 10},
                 },
             ),
-            error_message="Container crashed",
-            stdout="",
             stderr="FATAL: OOM",
-            exit_code=1,
         )
         msg = make_message(body="Do something")
 
@@ -725,10 +712,10 @@ class TestProcessMessage:
         self, email_config: Any, tmp_path: Path
     ) -> None:
         """Session must be updated when a container timeout occurs."""
-        from lib.container.executor import ContainerTimeoutError
-
         svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
-        handler.executor.execute.side_effect = ContainerTimeoutError("timeout")
+        svc._mock_task.execute.return_value = _make_failure_result(
+            outcome=Outcome.TIMEOUT,
+        )
         msg = make_message(body="Do something")
 
         with patch(
@@ -748,7 +735,7 @@ class TestProcessMessage:
     ) -> None:
         """Session must be updated on unexpected exceptions."""
         svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
-        handler.executor.execute.side_effect = RuntimeError("unexpected")
+        svc._mock_task.execute.side_effect = RuntimeError("unexpected")
         msg = make_message(body="Do something")
 
         with patch(
@@ -776,17 +763,13 @@ class TestProcessMessage:
         mock_ss.get_last_successful_response.return_value = "I created the PR."
 
         # First call: prompt too long; second call: success
-        prompt_too_long_result = ExecutionResult(
-            success=False,
-            output=None,
-            error_message="Container execution failed (exit code 1).",
+        prompt_too_long_result = _make_failure_result(
+            outcome=Outcome.PROMPT_TOO_LONG,
             stdout="Prompt is too long",
-            stderr="",
-            exit_code=1,
         )
-        success_result = ExecutionResult(
-            success=True,
-            output=_parse_events(
+        success_result = _make_success_result(
+            response_text="Recovered!",
+            events=_parse_events(
                 {
                     "type": "assistant",
                     "message": {
@@ -805,15 +788,18 @@ class TestProcessMessage:
                     "result": "Recovered!",
                 },
             ),
-            error_message="",
-            stdout="",
-            stderr="",
-            exit_code=0,
         )
-        handler.executor.execute.side_effect = [
-            prompt_too_long_result,
-            success_result,
-        ]
+
+        # create_task is called twice (once for first attempt, once for retry)
+        mock_task1 = MagicMock()
+        mock_task1.execute.return_value = prompt_too_long_result
+        mock_task1.session_store = mock_ss
+
+        mock_task2 = MagicMock()
+        mock_task2.execute.return_value = success_result
+        mock_task2.session_store = mock_ss
+
+        svc.sandbox.create_task.side_effect = [mock_task1, mock_task2]
 
         msg = make_message(subject="[ID:aabb1122] Test", body="Continue please")
 
@@ -824,16 +810,18 @@ class TestProcessMessage:
             success, conv_id = process_message(svc, msg, "task1", handler)
 
         assert success is True
-        # Should have been called twice: first with session_id, then without
-        assert handler.executor.execute.call_count == 2
-        first_call = handler.executor.execute.call_args_list[0]
-        second_call = handler.executor.execute.call_args_list[1]
-        assert first_call.kwargs["session_id"] == "old-session-id"
-        assert second_call.kwargs["session_id"] is None
+        # Should have created two tasks: first attempt + retry
+        assert svc.sandbox.create_task.call_count == 2
+        # First task: called with session_id
+        first_call = mock_task1.execute.call_args
+        assert first_call[1]["session_id"] == "old-session-id"
+        # Second task: called without session_id
+        second_call = mock_task2.execute.call_args
+        assert second_call[1]["session_id"] is None
         # Recovery prompt should mention context loss
-        assert "context length limits" in second_call.kwargs["prompt"]
+        assert "context length limits" in second_call[0][0]
         # Should include last response
-        assert "I created the PR." in second_call.kwargs["prompt"]
+        assert "I created the PR." in second_call[0][0]
 
     def test_prompt_too_long_no_retry_without_session_id(
         self, email_config: Any, tmp_path: Path
@@ -842,13 +830,9 @@ class TestProcessMessage:
         svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
         mock_ss.get_session_id_for_resume.return_value = None
 
-        handler.executor.execute.return_value = ExecutionResult(
-            success=False,
-            output=None,
-            error_message="Container execution failed (exit code 1).",
+        svc._mock_task.execute.return_value = _make_failure_result(
+            outcome=Outcome.PROMPT_TOO_LONG,
             stdout="Prompt is too long",
-            stderr="",
-            exit_code=1,
         )
 
         msg = make_message(body="Do something")
@@ -860,8 +844,8 @@ class TestProcessMessage:
             success, conv_id = process_message(svc, msg, "task1", handler)
 
         assert success is False
-        # Should only be called once (no retry)
-        assert handler.executor.execute.call_count == 1
+        # Should only create one task (no retry)
+        assert svc.sandbox.create_task.call_count == 1
 
     def test_session_corrupted_retries_with_new_session(
         self, email_config: Any, tmp_path: Path
@@ -876,22 +860,14 @@ class TestProcessMessage:
         mock_ss.get_session_id_for_resume.return_value = "old-session-id"
         mock_ss.get_last_successful_response.return_value = "Previous work."
 
-        # First call: API 400 (corrupted session); second call: success
-        corrupted_result = ExecutionResult(
-            success=False,
-            output=None,
-            error_message="Container execution failed (exit code 1).",
-            stdout="",
-            stderr=(
-                "API Error: 400\n"
-                '{"type":"error","error":{"type":"invalid_request_error",'
-                '"message":"unexpected tool_use_id"}}'
-            ),
-            exit_code=1,
+        # First call: session corrupted; second call: success
+        corrupted_result = _make_failure_result(
+            outcome=Outcome.SESSION_CORRUPTED,
+            stderr="API Error: 400\ninvalid_request_error",
         )
-        success_result = ExecutionResult(
-            success=True,
-            output=_parse_events(
+        success_result = _make_success_result(
+            response_text="Recovered!",
+            events=_parse_events(
                 {
                     "type": "assistant",
                     "message": {
@@ -910,15 +886,17 @@ class TestProcessMessage:
                     "result": "Recovered!",
                 },
             ),
-            error_message="",
-            stdout="",
-            stderr="",
-            exit_code=0,
         )
-        handler.executor.execute.side_effect = [
-            corrupted_result,
-            success_result,
-        ]
+
+        mock_task1 = MagicMock()
+        mock_task1.execute.return_value = corrupted_result
+        mock_task1.session_store = mock_ss
+
+        mock_task2 = MagicMock()
+        mock_task2.execute.return_value = success_result
+        mock_task2.session_store = mock_ss
+
+        svc.sandbox.create_task.side_effect = [mock_task1, mock_task2]
 
         msg = make_message(subject="[ID:aabb1122] Test", body="Continue please")
 
@@ -929,14 +907,14 @@ class TestProcessMessage:
             success, conv_id = process_message(svc, msg, "task1", handler)
 
         assert success is True
-        # Should have been called twice: first with session_id, then without
-        assert handler.executor.execute.call_count == 2
-        first_call = handler.executor.execute.call_args_list[0]
-        second_call = handler.executor.execute.call_args_list[1]
-        assert first_call.kwargs["session_id"] == "old-session-id"
-        assert second_call.kwargs["session_id"] is None
+        # Should have created two tasks: first attempt + retry
+        assert svc.sandbox.create_task.call_count == 2
+        first_call = mock_task1.execute.call_args
+        assert first_call[1]["session_id"] == "old-session-id"
+        second_call = mock_task2.execute.call_args
+        assert second_call[1]["session_id"] is None
         # Recovery prompt should mention context loss
-        assert "context length limits" in second_call.kwargs["prompt"]
+        assert "context length limits" in second_call[0][0]
 
     def test_session_corrupted_no_retry_without_session_id(
         self, email_config: Any, tmp_path: Path
@@ -945,13 +923,9 @@ class TestProcessMessage:
         svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
         mock_ss.get_session_id_for_resume.return_value = None
 
-        handler.executor.execute.return_value = ExecutionResult(
-            success=False,
-            output=None,
-            error_message="Container execution failed (exit code 1).",
-            stdout="",
+        svc._mock_task.execute.return_value = _make_failure_result(
+            outcome=Outcome.SESSION_CORRUPTED,
             stderr="API Error: 400\ninvalid_request_error",
-            exit_code=1,
         )
 
         msg = make_message(body="Do something")
@@ -963,141 +937,353 @@ class TestProcessMessage:
             success, conv_id = process_message(svc, msg, "task1", handler)
 
         assert success is False
-        # Should only be called once (no retry)
-        assert handler.executor.execute.call_count == 1
+        # Should only create one task (no retry)
+        assert svc.sandbox.create_task.call_count == 1
 
 
-class TestIsPromptTooLongError:
-    """Tests for is_prompt_too_long_error."""
+class TestBuildImageErrors:
+    """Tests for _build_image error paths exercised through process_message."""
 
-    def test_detects_prompt_too_long(self) -> None:
-        result = ExecutionResult(
-            success=False,
-            output=None,
-            error_message="Container execution failed (exit code 1).",
-            stdout="Prompt is too long",
-            stderr="",
-            exit_code=1,
+    @pytest.fixture(autouse=True)
+    def _patch_repo_config(self):
+        """Patch RepoConfig.from_mirror for all build image error tests."""
+        rc = _make_repo_config()
+        with patch(
+            "lib.gateway.service.message_processing.RepoConfig.from_mirror",
+            return_value=(rc, {}),
+        ) as mock_rc:
+            self._mock_repo_config = mock_rc
+            self._repo_config = rc
+            yield
+
+    def _setup_svc(
+        self, email_config: Any, tmp_path: Path
+    ) -> tuple[Any, Any, Any]:
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, dashboard_base_url=None)
+
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        (repo_path / "inbox").mkdir()
+        (repo_path / "outbox").mkdir()
+
+        handler.conversation_manager.exists.return_value = False
+        handler.conversation_manager.initialize_new.return_value = (
+            "conv1",
+            repo_path,
         )
-        assert is_prompt_too_long_error(result) is True
-
-    def test_ignores_successful_result(self) -> None:
-        result = ExecutionResult(
-            success=True,
-            output=[],
-            error_message="",
-            stdout="Prompt is too long",
-            stderr="",
-            exit_code=0,
+        handler.conversation_manager.get_conversation_dir.return_value = (
+            tmp_path / "conversations"
         )
-        assert is_prompt_too_long_error(result) is False
+        handler.conversation_manager.get_workspace_path.return_value = repo_path
+        mock_mirror = MagicMock()
+        mock_mirror.list_directory.return_value = ["Dockerfile"]
 
-    def test_ignores_other_errors(self) -> None:
-        result = ExecutionResult(
-            success=False,
-            output=None,
-            error_message="Some other error",
-            stdout="Something went wrong",
-            stderr="",
-            exit_code=1,
+        def _read_file(path: str) -> bytes:
+            if "Dockerfile" in path:
+                return b"FROM python:3.13-slim\n"
+            if "network-allowlist" in path:
+                return b"domains: []\nurl_prefixes: []\n"
+            return b""
+
+        mock_mirror.read_file.side_effect = _read_file
+        handler.conversation_manager.mirror = mock_mirror
+
+        handler.authenticator.authenticate.return_value = (
+            "authorized@example.com"
         )
-        assert is_prompt_too_long_error(result) is False
 
-    def test_detects_in_longer_output(self) -> None:
-        result = ExecutionResult(
-            success=False,
-            output=None,
-            error_message="error",
-            stdout="Some preamble\nPrompt is too long\nMore text",
-            stderr="",
-            exit_code=1,
+        mock_session_store = MagicMock()
+        mock_session_store.get_session_id_for_resume.return_value = None
+        mock_session_store.get_model.return_value = None
+
+        mock_task = MagicMock()
+        mock_task.execute.return_value = _make_success_result()
+        mock_task.session_store = mock_session_store
+        svc.sandbox.ensure_image.return_value = "airut:test"
+        svc.sandbox.create_task.return_value = mock_task
+        svc._mock_task = mock_task
+
+        return svc, handler, mock_session_store
+
+    def test_list_directory_error_raises_image_build_error(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        """mirror.list_directory failure is caught and sent as error reply."""
+        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        handler.conversation_manager.mirror.list_directory.side_effect = (
+            RuntimeError("mirror error")
         )
-        assert is_prompt_too_long_error(result) is True
+        msg = make_message(body="Do something")
+
+        with patch(
+            "lib.gateway.service.message_processing.SessionStore",
+            return_value=mock_ss,
+        ):
+            success, conv_id = process_message(svc, msg, "task1", handler)
+
+        assert success is False
+        # ImageBuildError is caught by the generic Exception handler
+        assert conv_id == "conv1"
+        # Error reply should be sent
+        reply_call = handler.responder.send_reply.call_args_list[-1]
+        body = reply_call[1]["body"]
+        assert "ImageBuildError" in body
+
+    def test_read_file_error_raises_image_build_error(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        """mirror.read_file failure is caught and sent as error reply."""
+        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+
+        # list_directory succeeds but read_file fails
+        handler.conversation_manager.mirror.list_directory.return_value = [
+            "Dockerfile"
+        ]
+        handler.conversation_manager.mirror.read_file.side_effect = (
+            RuntimeError("read error")
+        )
+        msg = make_message(body="Do something")
+
+        with patch(
+            "lib.gateway.service.message_processing.SessionStore",
+            return_value=mock_ss,
+        ):
+            success, conv_id = process_message(svc, msg, "task1", handler)
+
+        assert success is False
+        assert conv_id == "conv1"
+        reply_call = handler.responder.send_reply.call_args_list[-1]
+        body = reply_call[1]["body"]
+        assert "ImageBuildError" in body
+
+    def test_no_dockerfile_raises_image_build_error(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        """Missing Dockerfile in directory listing raises ImageBuildError."""
+        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+
+        # Return files but no Dockerfile
+        handler.conversation_manager.mirror.list_directory.return_value = [
+            "requirements.txt",
+            "setup.py",
+        ]
+        # read_file succeeds for non-Dockerfile files
+        handler.conversation_manager.mirror.read_file.side_effect = (
+            lambda path: b"content"
+        )
+        msg = make_message(body="Do something")
+
+        with patch(
+            "lib.gateway.service.message_processing.SessionStore",
+            return_value=mock_ss,
+        ):
+            success, conv_id = process_message(svc, msg, "task1", handler)
+
+        assert success is False
+        assert conv_id == "conv1"
+        reply_call = handler.responder.send_reply.call_args_list[-1]
+        body = reply_call[1]["body"]
+        assert "ImageBuildError" in body
+        assert "No Dockerfile" in body
 
 
-class TestIsSessionCorruptedError:
-    """Tests for is_session_corrupted_error."""
+class TestAllowlistParseError:
+    """Tests for network allowlist read/parse failure path."""
 
-    def test_detects_400_in_stderr(self) -> None:
-        result = ExecutionResult(
-            success=False,
-            output=None,
-            error_message="Container execution failed (exit code 1).",
-            stdout="",
-            stderr=(
-                "API Error: 400\n"
-                '{"type":"error","error":{"type":"invalid_request_error",'
-                '"message":"messages.0.content.0: unexpected tool_use_id"}}'
+    @pytest.fixture(autouse=True)
+    def _patch_repo_config(self):
+        """Patch RepoConfig.from_mirror with network sandbox enabled."""
+        rc = _make_repo_config(network_sandbox_enabled=True)
+        with patch(
+            "lib.gateway.service.message_processing.RepoConfig.from_mirror",
+            return_value=(rc, {}),
+        ) as mock_rc:
+            self._mock_repo_config = mock_rc
+            self._repo_config = rc
+            yield
+
+    def _setup_svc(
+        self, email_config: Any, tmp_path: Path
+    ) -> tuple[Any, Any, Any]:
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, dashboard_base_url=None)
+
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        (repo_path / "inbox").mkdir()
+        (repo_path / "outbox").mkdir()
+
+        handler.conversation_manager.exists.return_value = False
+        handler.conversation_manager.initialize_new.return_value = (
+            "conv1",
+            repo_path,
+        )
+        handler.conversation_manager.get_conversation_dir.return_value = (
+            tmp_path / "conversations"
+        )
+        handler.conversation_manager.get_workspace_path.return_value = repo_path
+        mock_mirror = MagicMock()
+        mock_mirror.list_directory.return_value = ["Dockerfile"]
+
+        def _read_file(path: str) -> bytes:
+            if "Dockerfile" in path:
+                return b"FROM python:3.13-slim\n"
+            if "network-allowlist" in path:
+                raise RuntimeError("allowlist read error")
+            return b""
+
+        mock_mirror.read_file.side_effect = _read_file
+        handler.conversation_manager.mirror = mock_mirror
+
+        handler.authenticator.authenticate.return_value = (
+            "authorized@example.com"
+        )
+
+        mock_session_store = MagicMock()
+        mock_session_store.get_session_id_for_resume.return_value = None
+        mock_session_store.get_model.return_value = None
+
+        mock_task = MagicMock()
+        mock_task.execute.return_value = _make_success_result()
+        mock_task.session_store = mock_session_store
+        svc.sandbox.ensure_image.return_value = "airut:test"
+        svc.sandbox.create_task.return_value = mock_task
+
+        return svc, handler, mock_session_store
+
+    def test_allowlist_read_error_raises_proxy_error(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        """Failure reading/parsing allowlist raises ProxyError."""
+        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        msg = make_message(body="Do something")
+
+        with patch(
+            "lib.gateway.service.message_processing.SessionStore",
+            return_value=mock_ss,
+        ):
+            success, conv_id = process_message(svc, msg, "task1", handler)
+
+        assert success is False
+        assert conv_id == "conv1"
+        reply_call = handler.responder.send_reply.call_args_list[-1]
+        body = reply_call[1]["body"]
+        assert "ProxyError" in body
+
+
+class TestConvertReplacementMap:
+    """Tests for _convert_replacement_map exercised through process_message."""
+
+    def _setup_svc(
+        self, email_config: Any, tmp_path: Path
+    ) -> tuple[Any, Any, Any]:
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, dashboard_base_url=None)
+
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        (repo_path / "inbox").mkdir()
+        (repo_path / "outbox").mkdir()
+
+        handler.conversation_manager.exists.return_value = False
+        handler.conversation_manager.initialize_new.return_value = (
+            "conv1",
+            repo_path,
+        )
+        handler.conversation_manager.get_conversation_dir.return_value = (
+            tmp_path / "conversations"
+        )
+        handler.conversation_manager.get_workspace_path.return_value = repo_path
+        mock_mirror = MagicMock()
+        mock_mirror.list_directory.return_value = ["Dockerfile"]
+
+        def _read_file(path: str) -> bytes:
+            if "Dockerfile" in path:
+                return b"FROM python:3.13-slim\n"
+            if "network-allowlist" in path:
+                return b"domains: []\nurl_prefixes: []\n"
+            return b""
+
+        mock_mirror.read_file.side_effect = _read_file
+        handler.conversation_manager.mirror = mock_mirror
+
+        handler.authenticator.authenticate.return_value = (
+            "authorized@example.com"
+        )
+
+        mock_session_store = MagicMock()
+        mock_session_store.get_session_id_for_resume.return_value = None
+        mock_session_store.get_model.return_value = None
+
+        mock_task = MagicMock()
+        mock_task.execute.return_value = _make_success_result()
+        mock_task.session_store = mock_session_store
+        svc.sandbox.ensure_image.return_value = "airut:test"
+        svc.sandbox.create_task.return_value = mock_task
+        svc._mock_task = mock_task
+
+        return svc, handler, mock_session_store
+
+    def test_replacement_and_signing_entries_converted(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        """ReplacementEntry and SigningCredentialEntry objects are converted."""
+        from lib.gateway.config import ReplacementEntry, SigningCredentialEntry
+
+        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+
+        replacement_map = {
+            "surrogate-token-1": ReplacementEntry(
+                real_value="real-secret-value",
+                scopes=("api.github.com",),
+                headers=("Authorization",),
             ),
-            exit_code=1,
-        )
-        assert is_session_corrupted_error(result) is True
+            "surrogate-key-id": SigningCredentialEntry(
+                access_key_id="AKIAIOSFODNN7EXAMPLE",
+                secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                session_token="FwoGZXIvYXdzEBY",
+                surrogate_session_token="surr-session-token",
+                scopes=("bedrock.us-east-1.amazonaws.com",),
+            ),
+        }
 
-    def test_detects_400_in_stdout(self) -> None:
-        result = ExecutionResult(
-            success=False,
-            output=None,
-            error_message="Container execution failed (exit code 1).",
-            stdout="API Error: 400\nsome details",
-            stderr="",
-            exit_code=1,
-        )
-        assert is_session_corrupted_error(result) is True
+        rc = _make_repo_config(network_sandbox_enabled=True)
 
-    def test_detects_401(self) -> None:
-        result = ExecutionResult(
-            success=False,
-            output=None,
-            error_message="Container execution failed (exit code 1).",
-            stdout="",
-            stderr="API Error: 401\nUnauthorized",
-            exit_code=1,
-        )
-        assert is_session_corrupted_error(result) is True
+        with (
+            patch(
+                "lib.gateway.service.message_processing.RepoConfig.from_mirror",
+                return_value=(rc, replacement_map),
+            ),
+            patch(
+                "lib.gateway.service.message_processing.SessionStore",
+                return_value=mock_ss,
+            ),
+        ):
+            success, conv_id = process_message(
+                svc, make_message(body="Do something"), "task1", handler
+            )
 
-    def test_detects_403(self) -> None:
-        result = ExecutionResult(
-            success=False,
-            output=None,
-            error_message="Container execution failed (exit code 1).",
-            stdout="",
-            stderr="API Error: 403\nForbidden",
-            exit_code=1,
-        )
-        assert is_session_corrupted_error(result) is True
+        assert success is True
+        assert conv_id == "conv1"
 
-    def test_ignores_successful_result(self) -> None:
-        result = ExecutionResult(
-            success=True,
-            output=[],
-            error_message="",
-            stdout="API Error: 400",
-            stderr="",
-            exit_code=0,
-        )
-        assert is_session_corrupted_error(result) is False
+        # Verify NetworkSandboxConfig was passed to create_task
+        create_task_call = svc.sandbox.create_task.call_args
+        network_sandbox = create_task_call[1]["network_sandbox"]
+        assert network_sandbox is not None
+        assert network_sandbox.replacements is not None
 
-    def test_ignores_5xx_errors(self) -> None:
-        result = ExecutionResult(
-            success=False,
-            output=None,
-            error_message="Container execution failed (exit code 1).",
-            stdout="",
-            stderr="API Error: 529\nOverloaded",
-            exit_code=1,
+        # Verify the replacement map was properly converted
+        replacements_dict = network_sandbox.replacements.to_dict()
+        assert "surrogate-token-1" in replacements_dict
+        assert replacements_dict["surrogate-token-1"]["value"] == (
+            "real-secret-value"
         )
-        assert is_session_corrupted_error(result) is False
-
-    def test_ignores_non_api_errors(self) -> None:
-        result = ExecutionResult(
-            success=False,
-            output=None,
-            error_message="Some other error",
-            stdout="Something went wrong",
-            stderr="FATAL: OOM",
-            exit_code=1,
+        assert "surrogate-key-id" in replacements_dict
+        assert replacements_dict["surrogate-key-id"]["access_key_id"] == (
+            "AKIAIOSFODNN7EXAMPLE"
         )
-        assert is_session_corrupted_error(result) is False
+        assert replacements_dict["surrogate-key-id"]["type"] == "aws-sigv4"
 
 
 class TestBuildRecoveryPrompt:

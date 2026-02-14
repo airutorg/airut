@@ -13,7 +13,6 @@ session section, and the local-time JavaScript snippet.
 import html
 from pathlib import Path
 
-from lib.container.session import SessionMetadata
 from lib.dashboard.formatters import (
     VersionInfo,
     format_duration,
@@ -26,6 +25,7 @@ from lib.dashboard.tracker import (
     TaskState,
     TaskStatus,
 )
+from lib.sandbox import SessionMetadata
 
 
 # Load logo SVG at module import time. The assets folder is at repo root.

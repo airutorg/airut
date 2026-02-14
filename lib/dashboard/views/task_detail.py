@@ -7,7 +7,6 @@
 
 import html
 
-from lib.container.session import SessionMetadata
 from lib.dashboard.formatters import format_duration, format_timestamp
 from lib.dashboard.tracker import TaskState, TaskStatus
 from lib.dashboard.views.components import (
@@ -16,6 +15,7 @@ from lib.dashboard.views.components import (
     render_stop_script,
 )
 from lib.dashboard.views.styles import task_detail_styles
+from lib.sandbox import SessionMetadata
 
 
 def render_task_detail(
