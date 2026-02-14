@@ -19,9 +19,6 @@ from proxy.dns_responder import (
     _open_network_log,
     build_a_response,
     build_not_implemented,
-    build_nxdomain,
-    is_allowed,
-    load_allowed_domains,
     main,
     parse_query,
     qtype_name,
@@ -124,25 +121,6 @@ class TestBuildAResponse:
         assert ttl_bytes in response
 
 
-class TestBuildNxdomain:
-    """Tests for build_nxdomain."""
-
-    def test_nxdomain_format(self) -> None:
-        """Builds a valid NXDOMAIN response."""
-        query = _build_query("blocked.example.com")
-        _, _, _, qend = parse_query(query)
-        response = build_nxdomain(query, qend)
-
-        # Transaction ID preserved
-        assert response[:2] == query[:2]
-        # Flags: QR=1, RD=1, RA=1, RCODE=3 (NXDOMAIN)
-        flags = struct.unpack("!H", response[2:4])[0]
-        assert flags == 0x8183
-        # No answer records
-        counts = struct.unpack("!HHHH", response[4:12])
-        assert counts == (1, 0, 0, 0)
-
-
 class TestBuildNotImplemented:
     """Tests for build_not_implemented."""
 
@@ -157,78 +135,6 @@ class TestBuildNotImplemented:
         # Flags: QR=1, RD=1, RA=1, RCODE=4 (NOTIMP)
         flags = struct.unpack("!H", response[2:4])[0]
         assert flags == 0x8184
-
-
-class TestIsAllowed:
-    """Tests for is_allowed."""
-
-    def test_exact_match(self) -> None:
-        """Exact domain match."""
-        assert is_allowed("example.com", ["example.com"])
-        assert not is_allowed("other.com", ["example.com"])
-
-    def test_wildcard_match(self) -> None:
-        """Fnmatch wildcard patterns."""
-        assert is_allowed("api.github.com", ["*.github.com"])
-        assert not is_allowed("github.com", ["*.github.com"])
-
-    def test_multiple_patterns(self) -> None:
-        """Matches against any pattern in the list."""
-        patterns = ["example.com", "*.github.com", "pypi.org"]
-        assert is_allowed("example.com", patterns)
-        assert is_allowed("api.github.com", patterns)
-        assert is_allowed("pypi.org", patterns)
-        assert not is_allowed("evil.com", patterns)
-
-    def test_empty_patterns(self) -> None:
-        """No patterns means nothing is allowed."""
-        assert not is_allowed("anything.com", [])
-
-
-class TestLoadAllowedDomains:
-    """Tests for load_allowed_domains."""
-
-    def test_loads_domains(self, tmp_path: Path) -> None:
-        """Loads domain patterns from allowlist YAML."""
-        allowlist = tmp_path / "allowlist.yaml"
-        allowlist.write_text("domains:\n  - example.com\n  - '*.github.com'\n")
-        patterns = load_allowed_domains(allowlist)
-        assert "example.com" in patterns
-        assert "*.github.com" in patterns
-
-    def test_loads_url_prefix_hosts(self, tmp_path: Path) -> None:
-        """Extracts hosts from url_prefixes entries."""
-        allowlist = tmp_path / "allowlist.yaml"
-        allowlist.write_text(
-            "url_prefixes:\n  - host: api.github.com\n    path: /repos\n"
-        )
-        patterns = load_allowed_domains(allowlist)
-        assert "api.github.com" in patterns
-
-    def test_deduplicates(self, tmp_path: Path) -> None:
-        """Domains appearing in both sections are not duplicated."""
-        allowlist = tmp_path / "allowlist.yaml"
-        allowlist.write_text(
-            "domains:\n"
-            "  - api.github.com\n"
-            "url_prefixes:\n"
-            "  - host: api.github.com\n"
-            "    path: /repos\n"
-        )
-        patterns = load_allowed_domains(allowlist)
-        assert patterns.count("api.github.com") == 1
-
-    def test_missing_file(self, tmp_path: Path) -> None:
-        """Returns empty list for missing file."""
-        patterns = load_allowed_domains(tmp_path / "nonexistent.yaml")
-        assert patterns == []
-
-    def test_empty_file(self, tmp_path: Path) -> None:
-        """Returns empty list for empty YAML."""
-        allowlist = tmp_path / "allowlist.yaml"
-        allowlist.write_text("")
-        patterns = load_allowed_domains(allowlist)
-        assert patterns == []
 
 
 class TestQtypeName:
@@ -279,8 +185,8 @@ class TestLogToFile:
     def test_writes_line_with_newline(self) -> None:
         """Appends message with trailing newline."""
         buf = io.StringIO()
-        _log_to_file(buf, "BLOCKED DNS A evil.com -> NXDOMAIN")
-        assert buf.getvalue() == "BLOCKED DNS A evil.com -> NXDOMAIN\n"
+        _log_to_file(buf, "DNS A evil.com -> 10.0.0.1")
+        assert buf.getvalue() == "DNS A evil.com -> 10.0.0.1\n"
 
     def test_none_file_is_noop(self) -> None:
         """Does nothing when log_file is None."""
@@ -340,14 +246,14 @@ class TestRunDnsServer:
         return mock_sock
 
     @patch("proxy.dns_responder.socket.socket")
-    def test_allowed_a_query(self, mock_socket_cls: MagicMock) -> None:
-        """Allowed A query returns proxy IP response."""
+    def test_a_query_returns_proxy_ip(self, mock_socket_cls: MagicMock) -> None:
+        """Any A query returns proxy IP response."""
         query_data = _build_query("api.github.com")
         mock_sock = self._make_mock_socket([(query_data, ("10.0.0.2", 12345))])
         mock_socket_cls.return_value = mock_sock
 
         with pytest.raises(_StopServer):
-            run_dns_server("10.0.0.1", ["*.github.com"])
+            run_dns_server("10.0.0.1")
 
         mock_sock.sendto.assert_called_once()
         sent_data = mock_sock.sendto.call_args[0][0]
@@ -355,20 +261,29 @@ class TestRunDnsServer:
         assert b"\x0a\x00\x00\x01" in sent_data  # 10.0.0.1
 
     @patch("proxy.dns_responder.socket.socket")
-    def test_blocked_a_query(self, mock_socket_cls: MagicMock) -> None:
-        """Blocked A query returns NXDOMAIN."""
+    def test_unknown_domain_also_returns_proxy_ip(
+        self, mock_socket_cls: MagicMock
+    ) -> None:
+        """Domains not in any allowlist still resolve to proxy IP.
+
+        The DNS responder does not filter — the proxy handles allowlist
+        enforcement via HTTP 403. This prevents DNS-based information
+        leakage about domain existence.
+        """
         query_data = _build_query("evil.com")
         mock_sock = self._make_mock_socket([(query_data, ("10.0.0.2", 12345))])
         mock_socket_cls.return_value = mock_sock
 
         with pytest.raises(_StopServer):
-            run_dns_server("10.0.0.1", ["*.github.com"])
+            run_dns_server("10.0.0.1")
 
         mock_sock.sendto.assert_called_once()
         sent_data = mock_sock.sendto.call_args[0][0]
-        # NXDOMAIN: RCODE=3 in flags (byte 3, low nibble = 3)
+        # Should get proxy IP, not NXDOMAIN
+        assert b"\x0a\x00\x00\x01" in sent_data  # 10.0.0.1
+        # Verify it's a successful response (RCODE=0), not NXDOMAIN (RCODE=3)
         flags = struct.unpack("!H", sent_data[2:4])[0]
-        assert flags & 0x000F == 3  # RCODE NXDOMAIN
+        assert flags & 0x000F == 0  # RCODE 0 (no error)
 
     @patch("proxy.dns_responder.socket.socket")
     def test_non_a_query_returns_notimp(
@@ -380,7 +295,7 @@ class TestRunDnsServer:
         mock_socket_cls.return_value = mock_sock
 
         with pytest.raises(_StopServer):
-            run_dns_server("10.0.0.1", ["*.github.com"])
+            run_dns_server("10.0.0.1")
 
         mock_sock.sendto.assert_called_once()
         sent_data = mock_sock.sendto.call_args[0][0]
@@ -390,24 +305,39 @@ class TestRunDnsServer:
 
     @patch("proxy.dns_responder.socket.socket")
     def test_with_log_file(self, mock_socket_cls: MagicMock) -> None:
-        """Log file receives messages for allowed and blocked queries."""
-        allowed = _build_query("api.github.com")
-        blocked = _build_query("evil.com")
+        """Log file receives messages for all resolved queries."""
+        q1 = _build_query("api.github.com")
+        q2 = _build_query("evil.com")
         mock_sock = self._make_mock_socket(
             [
-                (allowed, ("10.0.0.2", 1)),
-                (blocked, ("10.0.0.2", 2)),
+                (q1, ("10.0.0.2", 1)),
+                (q2, ("10.0.0.2", 2)),
             ]
         )
         mock_socket_cls.return_value = mock_sock
 
         log_buf = io.StringIO()
         with pytest.raises(_StopServer):
-            run_dns_server("10.0.0.1", ["*.github.com"], log_file=log_buf)
+            run_dns_server("10.0.0.1", log_file=log_buf)
 
         log_content = log_buf.getvalue()
-        assert "allowed DNS A api.github.com" in log_content
-        assert "BLOCKED DNS A evil.com" in log_content
+        # Both domains resolve — no BLOCKED entries
+        assert "DNS A api.github.com -> 10.0.0.1" in log_content
+        assert "DNS A evil.com -> 10.0.0.1" in log_content
+
+    @patch("proxy.dns_responder.socket.socket")
+    def test_notimp_logged(self, mock_socket_cls: MagicMock) -> None:
+        """NOTIMP responses are logged."""
+        query_data = _build_query("example.com", qtype=28)  # AAAA
+        mock_sock = self._make_mock_socket([(query_data, ("10.0.0.2", 12345))])
+        mock_socket_cls.return_value = mock_sock
+
+        log_buf = io.StringIO()
+        with pytest.raises(_StopServer):
+            run_dns_server("10.0.0.1", log_file=log_buf)
+
+        log_content = log_buf.getvalue()
+        assert "DNS AAAA example.com -> NOTIMP" in log_content
 
     @patch("proxy.dns_responder.socket.socket")
     def test_exception_in_loop_continues(
@@ -423,7 +353,7 @@ class TestRunDnsServer:
         mock_socket_cls.return_value = mock_sock
 
         with pytest.raises(_StopServer):
-            run_dns_server("10.0.0.1", [])
+            run_dns_server("10.0.0.1")
 
     @patch("proxy.dns_responder.socket.socket")
     def test_multiple_queries(self, mock_socket_cls: MagicMock) -> None:
@@ -439,9 +369,36 @@ class TestRunDnsServer:
         mock_socket_cls.return_value = mock_sock
 
         with pytest.raises(_StopServer):
-            run_dns_server("10.0.0.1", ["allowed.com", "also-allowed.com"])
+            run_dns_server("10.0.0.1")
 
         assert mock_sock.sendto.call_count == 2
+
+    @patch("proxy.dns_responder.socket.socket")
+    def test_no_upstream_dns_resolution(
+        self, mock_socket_cls: MagicMock
+    ) -> None:
+        """Verify no upstream DNS resolution occurs for any domain.
+
+        The DNS responder must never make real DNS queries (e.g., via
+        socket.getaddrinfo or similar) to determine if a domain exists.
+        This prevents DNS exfiltration attacks where data is encoded
+        in domain names queried against attacker-controlled nameservers.
+        """
+        query_data = _build_query("attacker-controlled.exfiltrate.example")
+        mock_sock = self._make_mock_socket([(query_data, ("10.0.0.2", 12345))])
+        mock_socket_cls.return_value = mock_sock
+
+        with (
+            patch("proxy.dns_responder.socket.getaddrinfo") as mock_getaddrinfo,
+            pytest.raises(_StopServer),
+        ):
+            run_dns_server("10.0.0.1")
+
+        # getaddrinfo should never be called during query handling
+        mock_getaddrinfo.assert_not_called()
+        # Still resolves to proxy IP
+        sent_data = mock_sock.sendto.call_args[0][0]
+        assert b"\x0a\x00\x00\x01" in sent_data
 
 
 # ---------------------------------------------------------------------------
@@ -453,10 +410,8 @@ class TestMain:
     """Tests for main() CLI entry point."""
 
     @patch("proxy.dns_responder.run_dns_server")
-    @patch("proxy.dns_responder.load_allowed_domains", return_value=["*.com"])
     def test_with_explicit_ip(
         self,
-        mock_load: MagicMock,
         mock_run: MagicMock,
     ) -> None:
         """Explicit proxy IP from sys.argv."""
@@ -466,7 +421,6 @@ class TestMain:
         assert mock_run.call_args[0][0] == "10.0.0.1"
 
     @patch("proxy.dns_responder.run_dns_server")
-    @patch("proxy.dns_responder.load_allowed_domains", return_value=[])
     @patch(
         "proxy.dns_responder.socket.gethostbyname",
         return_value="172.17.0.2",
@@ -479,7 +433,6 @@ class TestMain:
         self,
         mock_hostname: MagicMock,
         mock_resolve: MagicMock,
-        mock_load: MagicMock,
         mock_run: MagicMock,
     ) -> None:
         """Auto-detects proxy IP when not provided."""
@@ -489,12 +442,10 @@ class TestMain:
         assert mock_run.call_args[0][0] == "172.17.0.2"
 
     @patch("proxy.dns_responder.run_dns_server")
-    @patch("proxy.dns_responder.load_allowed_domains", return_value=["a.com"])
     @patch("proxy.dns_responder._open_network_log", return_value=None)
     def test_no_log_file(
         self,
         mock_open_log: MagicMock,
-        mock_load: MagicMock,
         mock_run: MagicMock,
     ) -> None:
         """No log file when _open_network_log returns None."""
@@ -504,12 +455,10 @@ class TestMain:
         assert mock_run.call_args.kwargs.get("log_file") is None
 
     @patch("proxy.dns_responder.run_dns_server")
-    @patch("proxy.dns_responder.load_allowed_domains", return_value=["a.com"])
     @patch("proxy.dns_responder._open_network_log")
     def test_with_log_file(
         self,
         mock_open_log: MagicMock,
-        mock_load: MagicMock,
         mock_run: MagicMock,
     ) -> None:
         """Log file passed through when available."""

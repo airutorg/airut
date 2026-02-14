@@ -74,12 +74,13 @@ The following attack vectors have been analyzed and verified as mitigated:
 **DNS exfiltration**: Podman's default DNS (aardvark-dns) forwards queries to
 host resolvers, which would allow encoding stolen data in DNS queries to
 attacker-controlled domains. The sandbox replaces this with a custom DNS
-responder inside the proxy container that checks each query against the
-allowlist: allowed domains resolve to the proxy IP, blocked domains get
-NXDOMAIN. No queries are ever forwarded upstream — the DNS responder is
-authoritative for all domains. Podman's `--disable-dns` flag prevents
-aardvark-dns from running, and `--dns <proxy_ip>` points all container queries
-to the custom responder.
+responder inside the proxy container that returns the proxy IP for all A queries
+unconditionally. No queries are ever forwarded upstream, and no upstream DNS
+resolution is performed to determine domain existence — the DNS responder never
+contacts external nameservers. Allowlist enforcement happens at the proxy layer
+(HTTP 403 for blocked requests), not at DNS. Podman's `--disable-dns` flag
+prevents aardvark-dns from running, and `--dns <proxy_ip>` points all container
+queries to the custom responder.
 
 **Non-HTTP traffic**: The client container's only network route points to the
 proxy IP. The proxy only listens on ports 80 and 443. Any attempt to connect on
@@ -159,14 +160,18 @@ isolation between concurrent tasks:
 
 1. Container makes a DNS query (e.g., `api.github.com`)
 2. The query goes to the proxy IP (set via `--dns` on the container)
-3. `dns_responder.py` checks the domain against the allowlist:
-   - **Allowed**: Returns the proxy IP as the A record
-   - **Blocked**: Returns NXDOMAIN
+3. `dns_responder.py` returns the proxy IP for all A queries (no allowlist
+   check, no upstream DNS resolution)
 4. Container connects to the proxy IP on port 80/443
 5. mitmproxy in `regular` mode reads SNI (HTTPS) or Host header (HTTP)
 6. `proxy_filter.py` checks host + path against the allowlist:
    - **Allowed**: mitmproxy connects upstream and forwards the request
    - **Blocked**: HTTP 403 returned with instructions
+
+Note: Non-existent domains will appear to resolve from within the container.
+This is by design — the DNS responder intentionally avoids upstream DNS
+resolution to prevent DNS exfiltration (encoding stolen data in queries to
+attacker-controlled nameservers). The proxy handles all access control.
 
 ### CA Certificate Trust
 

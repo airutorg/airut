@@ -11,7 +11,7 @@ high-level documentation (threat model, security properties, configuration), see
 | `.airut/network-allowlist.yaml` | Allowlist configuration (domains + URLs + methods)    |
 | `proxy/proxy.dockerfile`        | Proxy container image (slim + mitmproxy + pyyaml)     |
 | `proxy/proxy-entrypoint.sh`     | Starts DNS responder + mitmproxy in regular mode      |
-| `proxy/dns_responder.py`        | DNS server: returns proxy IP or NXDOMAIN              |
+| `proxy/dns_responder.py`        | DNS server: returns proxy IP for all A queries        |
 | `proxy/proxy_filter.py`         | mitmproxy addon: allowlist, token masking, re-signing |
 | `proxy/aws_signing.py`          | AWS SigV4/SigV4A request re-signing                   |
 | `lib/container/network.py`      | Podman args for sandbox integration (--dns, CA cert)  |
@@ -64,9 +64,9 @@ file, providing a complete audit trail from DNS resolution through HTTP request:
 
 ```
 === TASK START 2026-02-03T12:34:56Z ===
-allowed DNS A api.github.com -> 10.199.1.100
-BLOCKED DNS A evil.com -> NXDOMAIN
-BLOCKED DNS AAAA evil.com -> NOTIMP
+DNS A api.github.com -> 10.199.1.100
+DNS A evil.com -> 10.199.1.100
+DNS AAAA evil.com -> NOTIMP
 allowed GET https://api.github.com/repos/your-org/your-repo/pulls -> 200 [masked: 1]
 BLOCKED GET https://evil.com/exfiltrate -> 403
 allowed POST https://api.anthropic.com/v1/messages -> 200 [masked: 1]
@@ -75,10 +75,10 @@ ERROR GET https://down.example.com/api -> Connection failed: Name or service not
 
 ### Log Format
 
-DNS log lines use the format `{BLOCKED|allowed} DNS {type} {domain} -> {result}`
-where type is the query type (A, AAAA, MX, etc.) and result is the DNS response
-(proxy IP for allowed, NXDOMAIN for blocked A queries, NOTIMP for non-A
-queries).
+DNS log lines use the format `DNS {type} {domain} -> {result}` where type is the
+query type (A, AAAA, MX, etc.) and result is the proxy IP (for A queries) or
+NOTIMP (for non-A queries). All A queries resolve to the proxy IP — the DNS
+responder does not perform allowlist checking or upstream DNS resolution.
 
 HTTP log lines use the format
 `{BLOCKED|allowed} {METHOD} {URL} -> {status} [masked: N]` where `[masked: N]`
