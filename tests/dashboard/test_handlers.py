@@ -1215,6 +1215,187 @@ class TestLoadPastTasks:
         assert "[Past conversation" not in html
 
 
+class TestContextJsonBackwardCompatibility:
+    """Tests that the dashboard works with pre-PR-72 context.json files."""
+
+    def _write_context_json(self, conv_dir: Path, data: dict) -> None:
+        """Write a context.json file in the old format."""
+        import json as json_mod
+
+        path = conv_dir / "context.json"
+        with path.open("w") as f:
+            json_mod.dump(data, f, indent=2)
+
+    def test_actions_page_with_old_context_json(self, tmp_path: Path) -> None:
+        """Actions page renders events from pre-PR-72 context.json."""
+        tracker = TaskTracker()
+        # Task not in memory — simulates a past conversation
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        self._write_context_json(
+            conv_dir,
+            {
+                "execution_context_id": "abc12345",
+                "model": "opus",
+                "replies": [
+                    {
+                        "session_id": "sess_old",
+                        "timestamp": "2026-02-10T12:00:00+00:00",
+                        "duration_ms": 8000,
+                        "total_cost_usd": 0.12,
+                        "num_turns": 5,
+                        "is_error": False,
+                        "usage": {
+                            "input_tokens": 500,
+                            "output_tokens": 200,
+                        },
+                        "request_text": "Fix the login bug",
+                        "response_text": "I fixed it.",
+                        "events": [
+                            {
+                                "type": "system",
+                                "subtype": "init",
+                                "session_id": "sess_old",
+                                "model": "opus",
+                                "tools": ["Bash", "Read"],
+                            },
+                            {
+                                "type": "assistant",
+                                "message": {
+                                    "content": [
+                                        {
+                                            "type": "text",
+                                            "text": "I fixed the login bug.",
+                                        }
+                                    ]
+                                },
+                            },
+                            {
+                                "type": "result",
+                                "subtype": "success",
+                                "session_id": "sess_old",
+                                "duration_ms": 8000,
+                                "total_cost_usd": 0.12,
+                                "num_turns": 5,
+                                "is_error": False,
+                                "usage": {
+                                    "input_tokens": 500,
+                                    "output_tokens": 200,
+                                },
+                                "result": "I fixed the login bug.",
+                            },
+                        ],
+                    },
+                ],
+            },
+        )
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345/actions")
+        assert response.status_code == 200
+
+        html = response.get_data(as_text=True)
+        assert "Actions: abc12345" in html
+        assert "Reply #1" in html
+        # Events from context.json should be rendered
+        assert "system:" in html
+        assert "I fixed the login bug." in html
+        assert "result:" in html
+        # Request text should be shown
+        assert "Fix the login bug" in html
+
+    def test_detail_page_with_old_context_json(self, tmp_path: Path) -> None:
+        """Task detail page loads from pre-PR-72 context.json."""
+        tracker = TaskTracker()
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        self._write_context_json(
+            conv_dir,
+            {
+                "execution_context_id": "abc12345",
+                "replies": [
+                    {
+                        "session_id": "sess_old",
+                        "timestamp": "2026-02-10T12:00:00+00:00",
+                        "duration_ms": 3000,
+                        "total_cost_usd": 0.05,
+                        "num_turns": 2,
+                        "is_error": False,
+                        "usage": {},
+                        "events": [],
+                    },
+                ],
+            },
+        )
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345")
+        assert response.status_code == 200
+
+        html = response.get_data(as_text=True)
+        assert "Conversation: abc12345" in html
+        assert "Reply #1" in html
+
+    def test_api_endpoint_with_old_context_json(self, tmp_path: Path) -> None:
+        """JSON API returns data from pre-PR-72 context.json."""
+        tracker = TaskTracker()
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        self._write_context_json(
+            conv_dir,
+            {
+                "execution_context_id": "abc12345",
+                "model": "sonnet",
+                "replies": [
+                    {
+                        "session_id": "sess_old",
+                        "timestamp": "2026-02-10T12:00:00+00:00",
+                        "duration_ms": 3000,
+                        "total_cost_usd": 0.05,
+                        "num_turns": 2,
+                        "is_error": False,
+                        "usage": {},
+                        "events": [
+                            {"type": "system", "subtype": "init"},
+                            {
+                                "type": "result",
+                                "subtype": "success",
+                                "session_id": "sess_old",
+                                "duration_ms": 3000,
+                                "total_cost_usd": 0.05,
+                                "num_turns": 2,
+                                "is_error": False,
+                                "usage": {},
+                            },
+                        ],
+                    },
+                ],
+            },
+        )
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/conversation/abc12345")
+        assert response.status_code == 200
+
+        data = json.loads(response.get_data(as_text=True))
+        assert data["conversation_id"] == "abc12345"
+        assert data["model"] == "sonnet"
+        assert data["conversation"] is not None
+        assert len(data["conversation"]["replies"]) == 1
+
+
 class TestLoadTaskWithConversation:
     """Tests for the unified _load_task_with_conversation utility."""
 

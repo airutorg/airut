@@ -135,12 +135,20 @@ class ConversationStore:
     def load(self) -> ConversationMetadata | None:
         """Load conversation metadata from file.
 
+        If conversation.json does not exist but a pre-PR-72 context.json
+        does, migrates the data automatically: writes conversation.json
+        and events.jsonl, then removes context.json.
+
         Returns:
             ConversationMetadata if file exists and is valid, None otherwise.
         """
         if not self._file_path.exists():
-            logger.debug("No conversation file found at %s", self._file_path)
-            return None
+            migrated = _migrate_context_json(self.conversation_dir)
+            if not migrated:
+                logger.debug(
+                    "No conversation file found at %s", self._file_path
+                )
+                return None
 
         try:
             with self._file_path.open("r") as f:
@@ -371,3 +379,108 @@ def _deserialize_usage(raw_usage: Any) -> Usage:
             k: v for k, v in raw_usage.items() if k not in _KNOWN_USAGE_KEYS
         },
     )
+
+
+# ── Pre-PR-72 context.json migration ─────────────────────────────────
+
+_CONTEXT_FILE_NAME = "context.json"
+
+
+def _migrate_context_json(conversation_dir: Path) -> bool:
+    """Migrate a pre-PR-72 context.json to conversation.json + events.jsonl.
+
+    Before PR 72, conversation data was stored in a monolithic context.json
+    that included both reply metadata and raw streaming events. This function
+    converts that format into the current split format:
+
+    - conversation.json: reply summaries (no events)
+    - events.jsonl: raw streaming events, grouped by reply
+
+    After successful migration, context.json is deleted.
+
+    Args:
+        conversation_dir: Directory that may contain a context.json file.
+
+    Returns:
+        True if migration was performed, False if no context.json found.
+    """
+    context_path = conversation_dir / _CONTEXT_FILE_NAME
+    if not context_path.exists():
+        return False
+
+    try:
+        with context_path.open("r") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("Failed to read context.json for migration: %s", e)
+        return False
+
+    # The old format uses "execution_context_id" instead of "conversation_id"
+    conv_id = data.get("execution_context_id", "")
+    model = data.get("model")
+    raw_replies = data.get("replies", [])
+
+    # Build conversation.json data (replies without events)
+    replies: list[ReplySummary] = []
+    all_reply_events: list[list[dict[str, Any]]] = []
+
+    for r in raw_replies:
+        try:
+            reply = ReplySummary(
+                session_id=r["session_id"],
+                timestamp=r["timestamp"],
+                duration_ms=r["duration_ms"],
+                total_cost_usd=r["total_cost_usd"],
+                num_turns=r["num_turns"],
+                is_error=r["is_error"],
+                usage=_deserialize_usage(r.get("usage", {})),
+                request_text=r.get("request_text"),
+                response_text=r.get("response_text"),
+            )
+            replies.append(reply)
+            all_reply_events.append(r.get("events", []))
+        except (KeyError, TypeError) as e:
+            logger.warning("Skipping malformed reply during migration: %s", e)
+            continue
+
+    metadata = ConversationMetadata(
+        conversation_id=conv_id,
+        replies=replies,
+        model=model,
+    )
+
+    # Write conversation.json
+    conv_path = conversation_dir / CONVERSATION_FILE_NAME
+    conv_data: dict[str, Any] = {
+        "conversation_id": metadata.conversation_id,
+        "replies": [_serialize_reply(reply) for reply in metadata.replies],
+    }
+    if metadata.model:
+        conv_data["model"] = metadata.model
+
+    with conv_path.open("w") as f:
+        json.dump(conv_data, f, indent=2)
+
+    # Write events.jsonl
+    from lib.sandbox.event_log import EVENTS_FILE_NAME
+
+    events_path = conversation_dir / EVENTS_FILE_NAME
+    with events_path.open("w") as f:
+        for i, reply_events in enumerate(all_reply_events):
+            if i > 0:
+                f.write("\n")  # Blank line delimiter between replies
+            for event in reply_events:
+                f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+    # Remove old file
+    context_path.unlink()
+
+    logger.info(
+        "Migrated context.json to conversation.json + events.jsonl "
+        "for conversation %s (%d replies, %d total events)",
+        conv_id,
+        len(replies),
+        sum(len(events) for events in all_reply_events),
+    )
+
+    return True

@@ -491,3 +491,340 @@ class TestRoundTrip:
         loaded_usage = loaded.replies[0].usage
         assert loaded_usage.extra["new_api_field"] == 42
         assert loaded_usage.extra["another_field"] == "value"
+
+
+class TestContextJsonMigration:
+    """Tests for automatic migration from context.json to conversation.json."""
+
+    def _write_context_json(
+        self, conv_dir: Path, data: dict[str, object]
+    ) -> Path:
+        """Write a context.json file in the old format."""
+        path = conv_dir / "context.json"
+        with path.open("w") as f:
+            json.dump(data, f, indent=2)
+        return path
+
+    def _old_format_data(self) -> dict[str, object]:
+        """Return a realistic context.json in the pre-PR-72 format."""
+        return {
+            "execution_context_id": "abc12345",
+            "model": "opus",
+            "replies": [
+                {
+                    "session_id": "sess_old",
+                    "timestamp": "2026-02-10T12:00:00+00:00",
+                    "duration_ms": 8000,
+                    "total_cost_usd": 0.12,
+                    "num_turns": 5,
+                    "is_error": False,
+                    "usage": {
+                        "input_tokens": 500,
+                        "output_tokens": 200,
+                        "cache_read_input_tokens": 100,
+                    },
+                    "request_text": "Help me fix this bug",
+                    "response_text": "I fixed the bug.",
+                    "events": [
+                        {
+                            "type": "system",
+                            "subtype": "init",
+                            "session_id": "sess_old",
+                            "model": "opus",
+                            "tools": ["Bash", "Read"],
+                        },
+                        {
+                            "type": "assistant",
+                            "message": {
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": "I fixed the bug.",
+                                    }
+                                ]
+                            },
+                        },
+                        {
+                            "type": "result",
+                            "subtype": "success",
+                            "session_id": "sess_old",
+                            "duration_ms": 8000,
+                            "total_cost_usd": 0.12,
+                            "num_turns": 5,
+                            "is_error": False,
+                            "usage": {
+                                "input_tokens": 500,
+                                "output_tokens": 200,
+                            },
+                            "result": "I fixed the bug.",
+                        },
+                    ],
+                },
+            ],
+        }
+
+    def test_load_migrates_context_json(self, tmp_path: Path) -> None:
+        """ConversationStore.load() migrates context.json transparently."""
+        self._write_context_json(tmp_path, self._old_format_data())
+
+        store = ConversationStore(tmp_path)
+        metadata = store.load()
+
+        assert metadata is not None
+        assert metadata.conversation_id == "abc12345"
+        assert metadata.model == "opus"
+        assert len(metadata.replies) == 1
+
+        reply = metadata.replies[0]
+        assert reply.session_id == "sess_old"
+        assert reply.duration_ms == 8000
+        assert reply.total_cost_usd == 0.12
+        assert reply.num_turns == 5
+        assert reply.is_error is False
+        assert reply.request_text == "Help me fix this bug"
+        assert reply.response_text == "I fixed the bug."
+        assert reply.usage.input_tokens == 500
+        assert reply.usage.output_tokens == 200
+
+    def test_migration_creates_conversation_json(self, tmp_path: Path) -> None:
+        """Migration writes conversation.json so future loads are fast."""
+        self._write_context_json(tmp_path, self._old_format_data())
+
+        store = ConversationStore(tmp_path)
+        store.load()
+
+        conv_path = tmp_path / CONVERSATION_FILE_NAME
+        assert conv_path.exists()
+
+    def test_migration_creates_events_jsonl(self, tmp_path: Path) -> None:
+        """Migration extracts events into events.jsonl."""
+        from lib.sandbox.event_log import EVENTS_FILE_NAME, EventLog
+
+        self._write_context_json(tmp_path, self._old_format_data())
+
+        store = ConversationStore(tmp_path)
+        store.load()
+
+        events_path = tmp_path / EVENTS_FILE_NAME
+        assert events_path.exists()
+
+        # Verify events can be loaded back
+        event_log = EventLog(tmp_path)
+        groups = event_log.read_all()
+        assert len(groups) == 1
+        assert len(groups[0]) == 3  # system, assistant, result
+
+    def test_migration_removes_context_json(self, tmp_path: Path) -> None:
+        """Migration deletes context.json after successful migration."""
+        context_path = self._write_context_json(
+            tmp_path, self._old_format_data()
+        )
+
+        store = ConversationStore(tmp_path)
+        store.load()
+
+        assert not context_path.exists()
+
+    def test_migration_multiple_replies(self, tmp_path: Path) -> None:
+        """Migration handles context.json with multiple replies."""
+        from lib.sandbox.event_log import EventLog
+
+        data = {
+            "execution_context_id": "def67890",
+            "model": "sonnet",
+            "replies": [
+                {
+                    "session_id": "sess_1",
+                    "timestamp": "2026-02-10T10:00:00+00:00",
+                    "duration_ms": 3000,
+                    "total_cost_usd": 0.05,
+                    "num_turns": 2,
+                    "is_error": False,
+                    "usage": {},
+                    "events": [
+                        {"type": "system", "subtype": "init"},
+                        {
+                            "type": "result",
+                            "subtype": "success",
+                            "session_id": "sess_1",
+                            "duration_ms": 3000,
+                            "total_cost_usd": 0.05,
+                            "num_turns": 2,
+                            "is_error": False,
+                            "usage": {},
+                        },
+                    ],
+                },
+                {
+                    "session_id": "sess_2",
+                    "timestamp": "2026-02-10T11:00:00+00:00",
+                    "duration_ms": 5000,
+                    "total_cost_usd": 0.08,
+                    "num_turns": 3,
+                    "is_error": False,
+                    "usage": {},
+                    "request_text": "Second message",
+                    "events": [
+                        {"type": "system", "subtype": "init"},
+                        {
+                            "type": "assistant",
+                            "message": {
+                                "content": [{"type": "text", "text": "Reply 2"}]
+                            },
+                        },
+                        {
+                            "type": "result",
+                            "subtype": "success",
+                            "session_id": "sess_2",
+                            "duration_ms": 5000,
+                            "total_cost_usd": 0.08,
+                            "num_turns": 3,
+                            "is_error": False,
+                            "usage": {},
+                        },
+                    ],
+                },
+            ],
+        }
+        self._write_context_json(tmp_path, data)
+
+        store = ConversationStore(tmp_path)
+        metadata = store.load()
+
+        assert metadata is not None
+        assert len(metadata.replies) == 2
+        assert metadata.replies[0].session_id == "sess_1"
+        assert metadata.replies[1].session_id == "sess_2"
+        assert metadata.replies[1].request_text == "Second message"
+
+        # Events should be grouped by reply with blank line separators
+        event_log = EventLog(tmp_path)
+        groups = event_log.read_all()
+        assert len(groups) == 2
+        assert len(groups[0]) == 2  # system, result
+        assert len(groups[1]) == 3  # system, assistant, result
+
+    def test_migration_skipped_when_conversation_json_exists(
+        self, tmp_path: Path
+    ) -> None:
+        """Migration does not run if conversation.json already exists."""
+        # First create conversation.json via the normal path
+        store = ConversationStore(tmp_path)
+        store.add_reply("abc12345", _make_reply(session_id="new_session"))
+
+        # Now place a stale context.json alongside it
+        self._write_context_json(tmp_path, self._old_format_data())
+
+        # context.json should still exist (migration skipped)
+        context_path = tmp_path / "context.json"
+        assert context_path.exists()
+
+        # Load should return the conversation.json data, not context.json
+        metadata = store.load()
+        assert metadata is not None
+        assert len(metadata.replies) == 1
+        assert metadata.replies[0].session_id == "new_session"
+
+    def test_migration_no_model_field(self, tmp_path: Path) -> None:
+        """Migration handles context.json without model field."""
+        data = {
+            "execution_context_id": "abc12345",
+            "replies": [
+                {
+                    "session_id": "sess_1",
+                    "timestamp": "2026-02-10T12:00:00+00:00",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                    "events": [],
+                },
+            ],
+        }
+        self._write_context_json(tmp_path, data)
+
+        store = ConversationStore(tmp_path)
+        metadata = store.load()
+
+        assert metadata is not None
+        assert metadata.model is None
+
+    def test_migration_empty_events(self, tmp_path: Path) -> None:
+        """Migration handles replies with empty events lists."""
+        from lib.sandbox.event_log import EventLog
+
+        data = {
+            "execution_context_id": "abc12345",
+            "replies": [
+                {
+                    "session_id": "sess_1",
+                    "timestamp": "2026-02-10T12:00:00+00:00",
+                    "duration_ms": 0,
+                    "total_cost_usd": 0.0,
+                    "num_turns": 0,
+                    "is_error": True,
+                    "usage": {},
+                    "events": [],
+                },
+            ],
+        }
+        self._write_context_json(tmp_path, data)
+
+        store = ConversationStore(tmp_path)
+        metadata = store.load()
+
+        assert metadata is not None
+        assert len(metadata.replies) == 1
+        assert metadata.replies[0].is_error is True
+
+        # EventLog should have one empty group (or be effectively empty)
+        event_log = EventLog(tmp_path)
+        groups = event_log.read_all()
+        # Empty events produce no parseable events
+        assert len(groups) == 0
+
+    def test_migration_corrupt_context_json(self, tmp_path: Path) -> None:
+        """Migration returns None for corrupt context.json."""
+        context_path = tmp_path / "context.json"
+        context_path.write_text("not valid json{{{")
+
+        store = ConversationStore(tmp_path)
+        metadata = store.load()
+
+        assert metadata is None
+        # context.json should NOT be deleted on failure
+        assert context_path.exists()
+
+    def test_migration_malformed_reply_skipped(self, tmp_path: Path) -> None:
+        """Migration skips replies with missing required fields."""
+        data = {
+            "execution_context_id": "abc12345",
+            "replies": [
+                # Valid reply
+                {
+                    "session_id": "sess_1",
+                    "timestamp": "2026-02-10T12:00:00+00:00",
+                    "duration_ms": 1000,
+                    "total_cost_usd": 0.01,
+                    "num_turns": 1,
+                    "is_error": False,
+                    "usage": {},
+                    "events": [],
+                },
+                # Malformed reply — missing session_id
+                {
+                    "timestamp": "2026-02-10T13:00:00+00:00",
+                    "duration_ms": 2000,
+                },
+            ],
+        }
+        self._write_context_json(tmp_path, data)
+
+        store = ConversationStore(tmp_path)
+        metadata = store.load()
+
+        assert metadata is not None
+        # Only the valid reply should be present
+        assert len(metadata.replies) == 1
+        assert metadata.replies[0].session_id == "sess_1"
