@@ -92,10 +92,10 @@ events = [
             assert response1 is not None, "Did not receive first response"
 
             # Verify conversation file was created
-            session_dir = (
+            conversation_dir = (
                 integration_env.storage_dir / "conversations" / conv_id
             )
-            conversation_file = session_dir / CONVERSATION_FILE_NAME
+            conversation_file = conversation_dir / CONVERSATION_FILE_NAME
             assert conversation_file.exists(), (
                 f"Conversation file not created: {conversation_file}"
             )
@@ -233,11 +233,11 @@ events = [
             )
             assert response1 is not None
 
-            # Get session file and extract first session_id
-            session_dir = (
+            # Get conversation file and extract first session_id
+            conversation_dir = (
                 integration_env.storage_dir / "conversations" / conv_id
             )
-            conversation_file = session_dir / CONVERSATION_FILE_NAME
+            conversation_file = conversation_dir / CONVERSATION_FILE_NAME
 
             import json
 

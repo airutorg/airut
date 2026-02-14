@@ -78,7 +78,7 @@ each component's lifetime and what resources it can access.
 - **EmailGatewayService** — Top-level orchestrator that manages repo handlers,
   shared thread pool, dashboard, and graceful shutdown
 - **Sandbox** (`lib/sandbox/`) — Manages container execution, proxy
-  infrastructure, session persistence, and image builds
+  infrastructure, execution context state, and image builds
 - **ThreadPool** — Limits concurrent task execution across repositories
 - **TaskTracker** — Tracks task status for dashboard and monitoring
 - **Dashboard** — Optional web UI for viewing conversations and network logs
@@ -93,7 +93,7 @@ each component's lifetime and what resources it can access.
 - **ConversationManager** — Creates/resumes conversations, manages git mirror
   and workspaces
 - **Sandbox Task** — Per-execution task created by the Sandbox; runs Claude Code
-  in a container with proxy, mounts, and session management
+  in a container with proxy, mounts, and execution context management
 - **EmailResponder** — Sends replies via SMTP with proper threading headers
 - **GitMirrorCache** — Bare mirror repository for fast local clones
 
@@ -132,15 +132,15 @@ The sandbox library (`lib/sandbox/`) is protocol-agnostic — it knows nothing
 about email, conversations, or gateway-specific layouts. The gateway bridges its
 own concepts to the sandbox's neutral interface:
 
-| Gateway concept  | Sandbox concept        | Mapping                                 |
-| ---------------- | ---------------------- | --------------------------------------- |
-| Conversation ID  | `execution_context_id` | Passed to `create_task()`               |
-| Conversation dir | `session_dir`, mounts  | Gateway builds paths, sandbox uses them |
-| Email task       | `Task.execute()` call  | One email → one `execute()` invocation  |
+| Gateway concept  | Sandbox concept         | Mapping                                 |
+| ---------------- | ----------------------- | --------------------------------------- |
+| Conversation ID  | `execution_context_id`  | Passed to `create_task()`               |
+| Conversation dir | `execution_context_dir` | Gateway builds paths, sandbox uses them |
+| Email task       | `Task.execute()` call   | One email → one `execute()` invocation  |
 
 The `execution_context_id` is an opaque string to the sandbox — it scopes
-session state and network resources without knowing that it represents a
-conversation. See [spec/sandbox.md](../spec/sandbox.md) for the sandbox's own
+execution context state and network resources without knowing that it represents
+a conversation. See [spec/sandbox.md](../spec/sandbox.md) for the sandbox's own
 API documentation.
 
 ### Request Flow

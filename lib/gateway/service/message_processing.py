@@ -458,7 +458,7 @@ def process_message(
             image_tag=image_tag,
             mounts=mounts,
             env=env,
-            session_dir=conversation_dir,
+            execution_context_dir=conversation_dir,
             network_log_dir=(
                 conversation_dir if network_sandbox is not None else None
             ),
@@ -528,7 +528,7 @@ def process_message(
                 image_tag=image_tag,
                 mounts=mounts,
                 env=env,
-                session_dir=conversation_dir,
+                execution_context_dir=conversation_dir,
                 network_log_dir=(
                     conversation_dir if network_sandbox is not None else None
                 ),

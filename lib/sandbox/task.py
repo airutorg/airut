@@ -93,7 +93,7 @@ class Task:
         image_tag: str,
         mounts: list[Mount],
         env: ContainerEnv,
-        session_dir: Path,
+        execution_context_dir: Path,
         network_log_dir: Path | None,
         network_sandbox: NetworkSandboxConfig | None,
         timeout_seconds: int,
@@ -104,7 +104,7 @@ class Task:
         self._image_tag = image_tag
         self._mounts = mounts
         self._env = env
-        self._session_dir = session_dir
+        self._execution_context_dir = execution_context_dir
         self._network_log_dir = network_log_dir
         self._network_sandbox = network_sandbox
         self._timeout_seconds = timeout_seconds
@@ -112,7 +112,7 @@ class Task:
         self._proxy_manager = proxy_manager
 
         # Event log (append-only)
-        self._event_log = EventLog(session_dir)
+        self._event_log = EventLog(execution_context_dir)
 
         # Network log
         self._network_log: NetworkLog | None = None
@@ -122,7 +122,7 @@ class Task:
             )
 
         # Claude session state directory
-        self._claude_dir = session_dir / "claude"
+        self._claude_dir = execution_context_dir / "claude"
         self._claude_dir.mkdir(parents=True, exist_ok=True)
 
         # Process tracking for stop()
@@ -291,7 +291,7 @@ class Task:
             ro = ":ro" if mount.read_only else ":rw"
             cmd.extend(["-v", f"{mount.host_path}:{mount.container_path}{ro}"])
 
-        # Add claude session state mount (sandbox-managed)
+        # Add Claude session state mount (sandbox-managed)
         cmd.extend(["-v", f"{self._claude_dir}:/root/.claude:rw"])
 
         # Network sandbox args
@@ -306,7 +306,7 @@ class Task:
         claude_cmd = ["claude"]
         if session_id:
             claude_cmd.extend(["--resume", session_id])
-            logger.info("Resuming session: %s", session_id)
+            logger.info("Resuming Claude session: %s", session_id)
         claude_cmd.extend(["--model", model])
         claude_cmd.extend(
             [

@@ -164,7 +164,7 @@ class Sandbox:
         image_tag: str,
         mounts: list[Mount],
         env: ContainerEnv,
-        session_dir: Path,
+        execution_context_dir: Path,
         network_log_dir: Path | None = None,
         network_sandbox: NetworkSandboxConfig | None = None,
         timeout_seconds: int = 300,
@@ -172,8 +172,8 @@ class Sandbox:
         """Create a task for sandboxed execution.
 
         The sandbox owns:
-        - session_dir/events.jsonl -- append-only event log
-        - session_dir/claude/ -- Claude session state directory
+        - execution_context_dir/events.jsonl -- append-only event log
+        - execution_context_dir/claude/ -- Claude session state directory
           (mounted at /root/.claude in the container)
         - network_log_dir/network-sandbox.log -- network activity log
           (if network_log_dir provided)
@@ -185,12 +185,12 @@ class Sandbox:
 
         Args:
             execution_context_id: Execution context identifier — an
-                opaque string used to scope session state, network
-                resources, and container naming.
+                opaque string used to scope execution context state,
+                network resources, and container naming.
             image_tag: Container image tag (from ensure_image()).
             mounts: Volume mounts for the container.
             env: Container environment variables.
-            session_dir: Directory for session state.
+            execution_context_dir: Directory for execution context state.
             network_log_dir: Directory for network activity log.
             network_sandbox: Network sandbox configuration.
             timeout_seconds: Maximum execution time.
@@ -203,7 +203,7 @@ class Sandbox:
             image_tag=image_tag,
             mounts=mounts,
             env=env,
-            session_dir=session_dir,
+            execution_context_dir=execution_context_dir,
             network_log_dir=network_log_dir,
             network_sandbox=network_sandbox,
             timeout_seconds=timeout_seconds,

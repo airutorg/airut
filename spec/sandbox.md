@@ -101,12 +101,12 @@ Caller (gateway, CLI, automation)
 
 - Internal network (`airut-conv-{id}`) routing container traffic through proxy
 - Proxy container enforcing allowlist
-- Claude Code container with mounts, env, and session state
+- Claude Code container with mounts, env, and Claude session state
 
 ### Owned State
 
 The sandbox creates and manages these files. Callers specify where to place them
-via `session_dir` and `network_log_dir` in `create_task()`:
+via `execution_context_dir` and `network_log_dir` in `create_task()`:
 
 | File                  | Purpose                                                     |
 | --------------------- | ----------------------------------------------------------- |
@@ -114,8 +114,9 @@ via `session_dir` and `network_log_dir` in `create_task()`:
 | `claude/`             | Claude Code session state (mounted at `/root/.claude`)      |
 | `network-sandbox.log` | Proxy request log (allowed/blocked requests)                |
 
-The `claude/` subdirectory is created automatically inside `session_dir` and
-mounted by the sandbox. It must **not** appear in the caller's mounts list.
+The `claude/` subdirectory is created automatically inside
+`execution_context_dir` and mounted by the sandbox. It must **not** appear in
+the caller's mounts list.
 
 Conversation metadata (`conversation.json`) is **not** owned by the sandbox. It
 is managed by `lib/conversation/ConversationStore`, which the protocol layer
@@ -162,7 +163,7 @@ infrastructure failures.
 
 ## Event Log
 
-The sandbox owns `events.jsonl` in the `session_dir` provided to
+The sandbox owns `events.jsonl` in the `execution_context_dir` provided to
 `create_task()`. The `EventLog` class provides an append-only log of raw Claude
 streaming JSON events, stored as newline-delimited JSON (one event per line).
 
