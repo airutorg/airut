@@ -21,6 +21,7 @@ from lib.dashboard.tracker import (
     TaskStatus,
     TaskTracker,
 )
+from lib.dashboard.versioned import VersionClock, VersionedStore
 
 
 class TestDashboardServer:
@@ -104,7 +105,9 @@ class TestDashboardServer:
             ),
         ]
 
-        server = DashboardServer(tracker, repo_states=lambda: repo_states)
+        clock = VersionClock()
+        repos_store = VersionedStore(tuple(repo_states), clock)
+        server = DashboardServer(tracker, repos_store=repos_store)
         client = Client(server._wsgi_app)
 
         response = client.get("/health")
@@ -228,7 +231,9 @@ class TestDashboardServer:
             ),
         ]
 
-        server = DashboardServer(tracker, repo_states=lambda: repo_states)
+        clock = VersionClock()
+        repos_store = VersionedStore(tuple(repo_states), clock)
+        server = DashboardServer(tracker, repos_store=repos_store)
         client = Client(server._wsgi_app)
 
         response = client.get("/api/repos")
@@ -263,7 +268,9 @@ class TestDashboardServer:
             ),
         ]
 
-        server = DashboardServer(tracker, repo_states=lambda: repo_states)
+        clock = VersionClock()
+        repos_store = VersionedStore(tuple(repo_states), clock)
+        server = DashboardServer(tracker, repos_store=repos_store)
         client = Client(server._wsgi_app)
 
         response = client.get("/repo/test-repo")
@@ -291,7 +298,9 @@ class TestDashboardServer:
             ),
         ]
 
-        server = DashboardServer(tracker, repo_states=lambda: repo_states)
+        clock = VersionClock()
+        repos_store = VersionedStore(tuple(repo_states), clock)
+        server = DashboardServer(tracker, repos_store=repos_store)
         client = Client(server._wsgi_app)
 
         response = client.get("/repo/failed-repo")
@@ -334,7 +343,9 @@ class TestDashboardServer:
             ),
         ]
 
-        server = DashboardServer(tracker, repo_states=lambda: repo_states)
+        clock = VersionClock()
+        repos_store = VersionedStore(tuple(repo_states), clock)
+        server = DashboardServer(tracker, repos_store=repos_store)
         client = Client(server._wsgi_app)
 
         response = client.get("/")
@@ -689,7 +700,9 @@ class TestDashboardServer:
             phase=BootPhase.PROXY,
             message="Building proxy image...",
         )
-        server = DashboardServer(tracker, boot_state=boot_state)
+        clock = VersionClock()
+        boot_store = VersionedStore(boot_state, clock)
+        server = DashboardServer(tracker, boot_store=boot_store)
         client = Client(server._wsgi_app)
 
         response = client.get("/health")
@@ -708,7 +721,9 @@ class TestDashboardServer:
             error_message="Connection refused",
             error_type="RuntimeError",
         )
-        server = DashboardServer(tracker, boot_state=boot_state)
+        clock = VersionClock()
+        boot_store = VersionedStore(boot_state, clock)
+        server = DashboardServer(tracker, boot_store=boot_store)
         client = Client(server._wsgi_app)
 
         response = client.get("/health")
@@ -730,8 +745,11 @@ class TestDashboardServer:
                 storage_dir="/s/r1",
             ),
         ]
+        clock = VersionClock()
+        boot_store = VersionedStore(boot_state, clock)
+        repos_store = VersionedStore(tuple(repo_states), clock)
         server = DashboardServer(
-            tracker, boot_state=boot_state, repo_states=lambda: repo_states
+            tracker, boot_store=boot_store, repos_store=repos_store
         )
         client = Client(server._wsgi_app)
 
@@ -746,7 +764,9 @@ class TestDashboardServer:
             phase=BootPhase.REPOS,
             message="Starting repository 'my-repo'...",
         )
-        server = DashboardServer(tracker, boot_state=boot_state)
+        clock = VersionClock()
+        boot_store = VersionedStore(boot_state, clock)
+        server = DashboardServer(tracker, boot_store=boot_store)
         client = Client(server._wsgi_app)
 
         response = client.get("/")
@@ -769,7 +789,9 @@ class TestDashboardServer:
             error_type="RuntimeError",
             error_traceback="Traceback:\n  File test.py\nRuntimeError: fail",
         )
-        server = DashboardServer(tracker, boot_state=boot_state)
+        clock = VersionClock()
+        boot_store = VersionedStore(boot_state, clock)
+        server = DashboardServer(tracker, boot_store=boot_store)
         client = Client(server._wsgi_app)
 
         response = client.get("/")
@@ -791,7 +813,9 @@ class TestDashboardServer:
             phase=BootPhase.READY,
             message="Service ready",
         )
-        server = DashboardServer(tracker, boot_state=boot_state)
+        clock = VersionClock()
+        boot_store = VersionedStore(boot_state, clock)
+        server = DashboardServer(tracker, boot_store=boot_store)
         client = Client(server._wsgi_app)
 
         response = client.get("/")
@@ -816,9 +840,13 @@ class TestDashboardServer:
         """Test server initialization with boot state."""
         tracker = TaskTracker()
         boot_state = BootState()
-        server = DashboardServer(tracker, boot_state=boot_state)
-        assert server.boot_state is boot_state
-        assert server._handlers.boot_state is boot_state
+        clock = VersionClock()
+        boot_store = VersionedStore(boot_state, clock)
+        server = DashboardServer(tracker, boot_store=boot_store)
+        assert server._handlers._boot_store is not None
+        assert (
+            server._handlers._boot_store.get().value.phase == BootPhase.STARTING
+        )
 
     def test_boot_error_banner_without_traceback(self) -> None:
         """Test boot error banner without traceback."""
@@ -829,7 +857,9 @@ class TestDashboardServer:
             error_message="Config error",
             error_type="ValueError",
         )
-        server = DashboardServer(tracker, boot_state=boot_state)
+        clock = VersionClock()
+        boot_store = VersionedStore(boot_state, clock)
+        server = DashboardServer(tracker, boot_store=boot_store)
         client = Client(server._wsgi_app)
 
         response = client.get("/")
@@ -847,7 +877,9 @@ class TestDashboardServer:
             phase=BootPhase.STARTING,
             message="Initializing...",
         )
-        server = DashboardServer(tracker, boot_state=boot_state)
+        clock = VersionClock()
+        boot_store = VersionedStore(boot_state, clock)
+        server = DashboardServer(tracker, boot_store=boot_store)
         client = Client(server._wsgi_app)
 
         response = client.get("/")

@@ -576,6 +576,30 @@ class TestTaskTracker:
         task = tracker.wait_for_completion("nonexistent", timeout=0.1)
         assert task is None
 
+    def test_get_snapshot(self) -> None:
+        """Test get_snapshot returns versioned copy of all tasks."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.add_task("t2", "Task 2")
+        tracker.start_task("t2")
+
+        snap = tracker.get_snapshot()
+        assert snap.version > 0
+        assert len(snap.value) == 2
+        # Sorted newest first
+        assert snap.value[0].conversation_id == "t2"
+        assert snap.value[1].conversation_id == "t1"
+        # Copies are independent of tracker state
+        tracker.complete_task("t2", success=True)
+        assert snap.value[0].status == TaskStatus.IN_PROGRESS
+
+    def test_get_snapshot_empty(self) -> None:
+        """Test get_snapshot with no tasks."""
+        tracker = TaskTracker()
+        snap = tracker.get_snapshot()
+        assert snap.version == 0
+        assert snap.value == ()
+
 
 class TestTaskStatus:
     """Tests for TaskStatus enum."""

@@ -9,11 +9,14 @@ Provides thread-safe in-memory storage of task states for the dashboard
 to display queued, in-progress, and completed tasks.
 """
 
+import copy
 import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
+
+from lib.dashboard.versioned import VersionClock, Versioned
 
 
 class TaskStatus(Enum):
@@ -45,9 +48,11 @@ class BootPhase(Enum):
     FAILED = "failed"
 
 
-@dataclass
+@dataclass(frozen=True)
 class BootState:
     """Current boot state of the service.
+
+    Immutable snapshot — mutations use ``dataclasses.replace()``.
 
     Attributes:
         phase: Current boot phase.
@@ -68,9 +73,11 @@ class BootState:
     completed_at: float | None = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class RepoState:
     """State of a repository in the gateway.
+
+    Immutable snapshot — mutations use ``dataclasses.replace()``.
 
     Attributes:
         repo_id: Unique repository identifier.
@@ -159,19 +166,27 @@ class TaskTracker:
     Tracks tasks through their lifecycle from queued to completed,
     maintaining a bounded history of completed tasks.
 
+    Integrates with a shared ``VersionClock`` so SSE endpoints wake
+    on every mutation.
+
     Attributes:
         max_completed: Maximum number of completed tasks to retain.
     """
 
-    def __init__(self, max_completed: int = 100) -> None:
+    def __init__(
+        self,
+        max_completed: int = 100,
+        clock: VersionClock | None = None,
+    ) -> None:
         """Initialize tracker.
 
         Args:
             max_completed: Maximum completed tasks to keep in memory.
+            clock: Shared version clock. If None, a private clock is created.
         """
         self.max_completed = max_completed
+        self._clock = clock or VersionClock()
         self._lock = threading.RLock()
-        self._condition = threading.Condition(self._lock)
         # OrderedDict maintains insertion order for FIFO eviction
         self._tasks: OrderedDict[str, TaskState] = OrderedDict()
 
@@ -222,6 +237,7 @@ class TaskTracker:
                     model=model,
                 )
             self._evict_old_completed()
+            self._clock.tick()
 
     def start_task(self, conversation_id: str) -> None:
         """Mark a task as in-progress.
@@ -234,6 +250,7 @@ class TaskTracker:
                 task = self._tasks[conversation_id]
                 task.status = TaskStatus.IN_PROGRESS
                 task.started_at = time.time()
+                self._clock.tick()
 
     def complete_task(
         self,
@@ -257,7 +274,7 @@ class TaskTracker:
                 if message_count is not None:
                     task.message_count = message_count
                 self._evict_old_completed()
-                self._condition.notify_all()
+                self._clock.tick()
 
     def update_task_id(self, old_id: str, new_id: str) -> bool:
         """Update a task's conversation ID.
@@ -282,6 +299,7 @@ class TaskTracker:
             task = self._tasks.pop(old_id)
             task.conversation_id = new_id
             self._tasks[new_id] = task
+            self._clock.tick()
             return True
 
     def set_task_model(self, conversation_id: str, model: str) -> bool:
@@ -298,6 +316,7 @@ class TaskTracker:
             if conversation_id not in self._tasks:
                 return False
             self._tasks[conversation_id].model = model
+            self._clock.tick()
             return True
 
     def is_task_active(self, conversation_id: str) -> bool:
@@ -363,6 +382,29 @@ class TaskTracker:
                 counts[task.status.value] += 1
             return counts
 
+    def get_snapshot(self) -> Versioned[tuple[TaskState, ...]]:
+        """Get an atomic snapshot of all tasks with the current version.
+
+        Returns shallow copies of tasks to ensure the snapshot is stable.
+        This is safe because ``TaskState`` fields are all primitives
+        (str, float, int, bool, None, Enum) — no mutable containers.
+        If mutable fields are added to ``TaskState``, switch to
+        ``copy.deepcopy``.
+
+        Returns:
+            Versioned tuple of TaskState copies, sorted newest first.
+        """
+        with self._lock:
+            tasks = sorted(
+                self._tasks.values(),
+                key=lambda t: t.queued_at,
+                reverse=True,
+            )
+            return Versioned(
+                version=self._clock.version,
+                value=tuple(copy.copy(t) for t in tasks),
+            )
+
     def wait_for_completion(
         self,
         conversation_id: str,
@@ -377,16 +419,18 @@ class TaskTracker:
         Returns:
             The completed TaskState, or None if timeout or task not found.
         """
-        with self._condition:
-            deadline = time.monotonic() + timeout
-            while True:
+        deadline = time.monotonic() + timeout
+        while True:
+            with self._lock:
                 task = self._tasks.get(conversation_id)
                 if task and task.status == TaskStatus.COMPLETED:
                     return task
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return task
-                self._condition.wait(timeout=remaining)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                with self._lock:
+                    return self._tasks.get(conversation_id)
+            # Wait on the shared clock for any state change
+            self._clock.wait(self._clock.version, timeout=remaining)
 
     def _evict_old_completed(self) -> None:
         """Remove oldest completed tasks if over limit.

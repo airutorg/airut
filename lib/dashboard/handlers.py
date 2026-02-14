@@ -31,6 +31,7 @@ from lib.dashboard.tracker import (
     TaskStatus,
     TaskTracker,
 )
+from lib.dashboard.versioned import VersionedStore
 from lib.dashboard.views import get_favicon_svg
 from lib.gateway.conversation import CONVERSATION_ID_PATTERN
 from lib.sandbox import NETWORK_LOG_FILENAME, EventLog
@@ -52,8 +53,8 @@ class RequestHandlers:
         version_info: VersionInfo | None = None,
         work_dirs: Callable[[], list[Path]] | None = None,
         stop_callback: Any = None,
-        repo_states: Callable[[], list[RepoState]] | None = None,
-        boot_state: BootState | None = None,
+        boot_store: VersionedStore[BootState] | None = None,
+        repos_store: VersionedStore[tuple[RepoState, ...]] | None = None,
     ) -> None:
         """Initialize request handlers.
 
@@ -63,16 +64,27 @@ class RequestHandlers:
             work_dirs: Callable returning directories where conversation data
                 is stored.  Called on each request to get current state.
             stop_callback: Optional callable to stop an execution.
-            repo_states: Callable returning list of repository states.
-                Called on each request to get current state.
-            boot_state: Shared boot state object for progress reporting.
+            boot_store: Versioned boot state store.
+            repos_store: Versioned repo states store.
         """
         self.tracker = tracker
         self.version_info = version_info
         self._work_dirs = work_dirs or (lambda: [])
         self.stop_callback = stop_callback
-        self._repo_states = repo_states or (lambda: [])
-        self.boot_state = boot_state
+        self._boot_store = boot_store
+        self._repos_store = repos_store
+
+    def _get_boot_state(self) -> BootState | None:
+        """Read current boot state from versioned store."""
+        if self._boot_store is None:
+            return None
+        return self._boot_store.get().value
+
+    def _get_repo_states(self) -> list[RepoState]:
+        """Read current repo states from versioned store."""
+        if self._repos_store is None:
+            return []
+        return list(self._repos_store.get().value)
 
     def handle_favicon(self, request: Request) -> Response:
         """Handle favicon request.
@@ -106,6 +118,7 @@ class RequestHandlers:
         queued = self.tracker.get_tasks_by_status(TaskStatus.QUEUED)
         in_progress = self.tracker.get_tasks_by_status(TaskStatus.IN_PROGRESS)
         completed = self.tracker.get_tasks_by_status(TaskStatus.COMPLETED)
+        boot_state = self._get_boot_state()
 
         return Response(
             views.render_dashboard(
@@ -114,8 +127,8 @@ class RequestHandlers:
                 in_progress,
                 completed,
                 self.version_info,
-                self._repo_states(),
-                boot_state=self.boot_state,
+                self._get_repo_states(),
+                boot_state=boot_state,
             ),
             content_type="text/html; charset=utf-8",
         )
@@ -345,7 +358,7 @@ class RequestHandlers:
             HTML response with repository details.
         """
         repo_state = next(
-            (r for r in self._repo_states() if r.repo_id == repo_id), None
+            (r for r in self._get_repo_states() if r.repo_id == repo_id), None
         )
         if repo_state is None:
             return Response("Repository not found", status=404)
@@ -375,7 +388,7 @@ class RequestHandlers:
                 "storage_dir": r.storage_dir,
                 "initialized_at": r.initialized_at,
             }
-            for r in self._repo_states()
+            for r in self._get_repo_states()
         ]
         return Response(
             json.dumps(repos),
@@ -394,15 +407,17 @@ class RequestHandlers:
         from lib.dashboard.tracker import BootPhase
 
         counts = self.tracker.get_counts()
+        boot_state = self._get_boot_state()
+
         # Include repo status in health check
-        repo_states = self._repo_states()
+        repo_states = self._get_repo_states()
         live_repos = sum(1 for r in repo_states if r.status.value == "live")
         failed_repos = sum(1 for r in repo_states if r.status.value == "failed")
 
         # Determine overall status based on boot state
-        if self.boot_state and self.boot_state.phase == BootPhase.FAILED:
+        if boot_state and boot_state.phase == BootPhase.FAILED:
             status = "error"
-        elif self.boot_state and self.boot_state.phase != BootPhase.READY:
+        elif boot_state and boot_state.phase != BootPhase.READY:
             status = "booting"
         elif live_repos > 0:
             status = "ok"
@@ -419,13 +434,13 @@ class RequestHandlers:
             },
         }
 
-        if self.boot_state:
+        if boot_state:
             result["boot"] = {
-                "phase": self.boot_state.phase.value,
-                "message": self.boot_state.message,
+                "phase": boot_state.phase.value,
+                "message": boot_state.message,
             }
-            if self.boot_state.error_message:
-                result["boot"]["error"] = self.boot_state.error_message
+            if boot_state.error_message:
+                result["boot"]["error"] = boot_state.error_message
 
         return Response(
             json.dumps(result),

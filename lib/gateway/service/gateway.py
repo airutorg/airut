@@ -21,6 +21,7 @@ import threading
 import time
 import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import replace
 from email.message import Message
 from pathlib import Path
 
@@ -30,6 +31,7 @@ from lib.dashboard import (
     VersionInfo,
 )
 from lib.dashboard.tracker import BootPhase, BootState, RepoState, RepoStatus
+from lib.dashboard.versioned import VersionClock, VersionedStore
 from lib.dns import get_system_resolver
 from lib.gateway.config import ServerConfig
 from lib.gateway.parsing import decode_subject, extract_conversation_id
@@ -121,14 +123,15 @@ class EmailGatewayService:
         # Update lock for coordinating with auto-updater
         self._update_lock = UpdateLock(repo_root / ".update.lock")
 
-        # Dashboard components
-        self.tracker = TaskTracker()
+        # Dashboard components — versioned state
+        self._clock = VersionClock()
+        self.tracker = TaskTracker(clock=self._clock)
         self.dashboard: DashboardServer | None = None
         self._version_info = capture_version_info(repo_root)
-        self.boot_state = BootState()
-
-        # Repo status tracking (populated during start())
-        self.repo_states: dict[str, RepoState] = {}
+        self._boot_store = VersionedStore(BootState(), self._clock)
+        self._repos_store = VersionedStore(
+            tuple[RepoState, ...](()), self._clock
+        )
 
         # Resolve upstream DNS: explicit config value or auto-detect from
         # /etc/resolv.conf.  SystemResolverError propagates to fail startup.
@@ -202,12 +205,18 @@ class EmailGatewayService:
             error_type = type(e).__name__
             error_msg = str(e)
             error_tb = traceback.format_exc()
-            self.boot_state.phase = BootPhase.FAILED
-            self.boot_state.message = error_msg
-            self.boot_state.error_message = error_msg
-            self.boot_state.error_type = error_type
-            self.boot_state.error_traceback = error_tb
-            self.boot_state.completed_at = time.time()
+            boot = self._boot_store.get().value
+            self._boot_store.update(
+                replace(
+                    boot,
+                    phase=BootPhase.FAILED,
+                    message=error_msg,
+                    error_message=error_msg,
+                    error_type=error_type,
+                    error_traceback=error_tb,
+                    completed_at=time.time(),
+                )
+            )
             logger.error("Boot failed: %s: %s", error_type, error_msg)
 
             if not resilient:
@@ -226,40 +235,11 @@ class EmailGatewayService:
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
 
-    def _get_repo_states(self) -> list[RepoState]:
-        """Return current repo states for the dashboard.
-
-        Called by the dashboard on each request to get fresh state.
-
-        Returns:
-            List of current repo states.
-        """
-        return list(self.repo_states.values())
-
-    def _get_work_dirs(self) -> list[Path]:
-        """Return current work dirs for the dashboard.
-
-        Called by the dashboard on each request to get fresh state.
-        Only includes directories for repos that started successfully.
-
-        Returns:
-            List of work directories for live repos.
-        """
-        return [
-            repo.conversation_manager.conversations_dir
-            for repo_id, repo in self.repo_handlers.items()
-            if self.repo_states.get(
-                repo_id, RepoState("", RepoStatus.FAILED)
-            ).status
-            == RepoStatus.LIVE
-        ]
-
     def _start_dashboard_early(self) -> None:
         """Start the dashboard server before boot completes.
 
-        The dashboard receives callable providers for repo_states and
-        work_dirs, so it always reflects the latest state without
-        manual updates.
+        The dashboard receives the versioned stores so it always
+        reflects the latest state without manual updates.
         """
         if not self.global_config.dashboard_enabled:
             return
@@ -271,23 +251,29 @@ class EmailGatewayService:
             version_info=self._version_info,
             work_dirs=self._get_work_dirs,
             stop_callback=self._stop_execution,
-            repo_states=self._get_repo_states,
-            boot_state=self.boot_state,
+            boot_store=self._boot_store,
+            repos_store=self._repos_store,
         )
         self.dashboard.start()
 
     def _boot(self) -> None:
         """Execute the boot sequence.
 
-        Updates boot_state as each phase completes. On failure, the caller
-        is responsible for recording the error in boot_state.
+        Updates boot state via VersionedStore as each phase completes. On
+        failure, the caller is responsible for recording the error.
 
         Raises:
             RuntimeError: If all repos fail to initialize.
         """
         # Phase: proxy
-        self.boot_state.phase = BootPhase.PROXY
-        self.boot_state.message = "Building proxy image and creating network..."
+        boot = self._boot_store.get().value
+        self._boot_store.update(
+            replace(
+                boot,
+                phase=BootPhase.PROXY,
+                message="Building proxy image and creating network...",
+            )
+        )
         self.sandbox.startup()
 
         # Initialize shared thread pool
@@ -309,13 +295,20 @@ class EmailGatewayService:
         gc_thread.start()
 
         # Phase: repos
-        self.boot_state.phase = BootPhase.REPOS
-        self.boot_state.message = "Starting repository listeners..."
+        boot = self._boot_store.get().value
+        self._boot_store.update(
+            replace(
+                boot,
+                phase=BootPhase.REPOS,
+                message="Starting repository listeners...",
+            )
+        )
 
         # Record repos that failed during __init__ (git mirror, etc.)
+        repo_states: dict[str, RepoState] = {}
         for repo_id, (error_type, error_msg) in self._init_errors.items():
             repo_config = self.config.repos[repo_id]
-            self.repo_states[repo_id] = RepoState(
+            repo_states[repo_id] = RepoState(
                 repo_id=repo_id,
                 status=RepoStatus.FAILED,
                 error_message=error_msg,
@@ -329,11 +322,17 @@ class EmailGatewayService:
         listener_threads = []
         for repo_id, repo_handler in self.repo_handlers.items():
             config = repo_handler.config
-            self.boot_state.message = f"Starting repository '{repo_id}'..."
+            boot = self._boot_store.get().value
+            self._boot_store.update(
+                replace(
+                    boot,
+                    message=f"Starting repository '{repo_id}'...",
+                )
+            )
             try:
                 thread = repo_handler.start_listener()
                 listener_threads.append(thread)
-                self.repo_states[repo_id] = RepoState(
+                repo_states[repo_id] = RepoState(
                     repo_id=repo_id,
                     status=RepoStatus.LIVE,
                     git_repo_url=config.git_repo_url,
@@ -344,7 +343,7 @@ class EmailGatewayService:
             except Exception as e:
                 error_type = type(e).__name__
                 error_msg = str(e)
-                self.repo_states[repo_id] = RepoState(
+                repo_states[repo_id] = RepoState(
                     repo_id=repo_id,
                     status=RepoStatus.FAILED,
                     error_message=error_msg,
@@ -360,14 +359,15 @@ class EmailGatewayService:
                     error_msg,
                 )
 
+        # Publish all repo states atomically
+        self._repos_store.update(tuple(repo_states.values()))
+
         # Check if any repos started successfully
         live_repos = [
-            r for r in self.repo_states.values() if r.status == RepoStatus.LIVE
+            r for r in repo_states.values() if r.status == RepoStatus.LIVE
         ]
         failed_repos = [
-            r
-            for r in self.repo_states.values()
-            if r.status == RepoStatus.FAILED
+            r for r in repo_states.values() if r.status == RepoStatus.FAILED
         ]
 
         if not live_repos:
@@ -380,18 +380,43 @@ class EmailGatewayService:
             logger.warning(
                 "Service started with %d of %d repo(s) failed: %s",
                 len(failed_repos),
-                len(self.repo_states),
+                len(repo_states),
                 ", ".join(r.repo_id for r in failed_repos),
             )
 
         # Phase: ready
-        self.boot_state.phase = BootPhase.READY
-        self.boot_state.message = "Service ready"
-        self.boot_state.completed_at = time.time()
+        boot = self._boot_store.get().value
+        self._boot_store.update(
+            replace(
+                boot,
+                phase=BootPhase.READY,
+                message="Service ready",
+                completed_at=time.time(),
+            )
+        )
         logger.info(
             "Service ready. %d repo listener(s) running.",
             len(listener_threads),
         )
+
+    def _get_work_dirs(self) -> list[Path]:
+        """Return current work dirs for the dashboard.
+
+        Called by the dashboard on each request to get fresh state.
+        Only includes directories for repos that started successfully.
+
+        Returns:
+            List of work directories for live repos.
+        """
+        repo_states = self._repos_store.get().value
+        live_repo_ids = {
+            r.repo_id for r in repo_states if r.status == RepoStatus.LIVE
+        }
+        return [
+            repo.conversation_manager.conversations_dir
+            for repo_id, repo in self.repo_handlers.items()
+            if repo_id in live_repo_ids
+        ]
 
     def stop(self) -> None:
         """Stop the service gracefully."""

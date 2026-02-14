@@ -24,6 +24,11 @@ from lib.dashboard.tracker import (
     TaskStatus,
     TaskTracker,
 )
+from lib.dashboard.versioned import (
+    VersionClock,
+    Versioned,
+    VersionedStore,
+)
 
 
 __all__ = [
@@ -35,7 +40,10 @@ __all__ = [
     "TaskState",
     "TaskStatus",
     "TaskTracker",
+    "Versioned",
+    "VersionClock",
     "VersionInfo",
+    "VersionedStore",
     "format_duration",
     "format_timestamp",
 ]
