@@ -20,7 +20,7 @@ from email.message import Message
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from lib.container.conversation_layout import create_conversation_layout
+from lib.conversation import create_conversation_layout
 from lib.gateway.parsing import collect_outbox_files, decode_subject
 from lib.gateway.responder import SMTPSendError, generate_message_id
 

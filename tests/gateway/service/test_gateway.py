@@ -1093,7 +1093,7 @@ class TestUpstreamDnsResolution:
         self, email_config, tmp_path: Path
     ) -> None:
         """SystemResolverError propagates to caller."""
-        from lib.container import SystemResolverError
+        from lib.dns import SystemResolverError
         from lib.gateway.config import GlobalConfig, ServerConfig
 
         global_config = GlobalConfig(dashboard_enabled=False)

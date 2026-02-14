@@ -229,7 +229,7 @@ config/                     - Server configuration templates
 proxy/                      - Network sandbox (proxy filter, DNS, AWS signing)
 lib/                        - Library code
   claude_output/            - Typed Claude streaming JSON output parser
-  container/                - Conversation layout and DNS utilities
+  conversation/             - Conversation directory layout and preparation
   sandbox/                  - Sandboxed execution (container, proxy, session, image)
   dashboard/                - Web dashboard server
   gateway/                  - Email gateway service
@@ -248,7 +248,8 @@ scripts/                    - CLI tools
 spec/                       - Design specifications (see spec/README.md)
 tests/                      - Unit tests (100% coverage required)
   claude_output/            - Claude output parser tests
-  container/                - Container layout tests
+  conversation/             - Conversation layout tests
+  test_dns.py               - DNS resolver tests
   sandbox/                  - Sandbox execution tests
   dashboard/                - Dashboard tests
   gateway/                  - Email gateway tests

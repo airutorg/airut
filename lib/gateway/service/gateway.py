@@ -24,13 +24,13 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from email.message import Message
 from pathlib import Path
 
-from lib.container.dns import get_system_resolver
 from lib.dashboard import (
     DashboardServer,
     TaskTracker,
     VersionInfo,
 )
 from lib.dashboard.tracker import BootPhase, BootState, RepoState, RepoStatus
+from lib.dns import get_system_resolver
 from lib.gateway.config import ServerConfig
 from lib.gateway.parsing import decode_subject, extract_conversation_id
 from lib.gateway.service.email_replies import send_rejection_reply
