@@ -1,4 +1,4 @@
-# Network allowlist for Claude Code containers.
+# Network allowlist for Claude Code containers. (test: verify method filtering)
 #
 # Only hosts listed here are reachable from inside the container.
 # All other traffic is blocked by the mitmproxy-based network proxy.
