@@ -41,7 +41,6 @@ For high-level documentation, see [doc/](../doc/).
 
 ## Infrastructure
 
-- [auto-updater.md](auto-updater.md) — Automatic service updates
 - [pr-workflow-tool.md](pr-workflow-tool.md) — PR workflow automation (ci.py,
   pr.py)
 - [local-ci-runner.md](local-ci-runner.md) — Local CI runner for pre-push

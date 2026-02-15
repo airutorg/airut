@@ -39,13 +39,15 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 source ~/.bashrc  # or restart shell
 ```
 
-### 3. Clone Airut
+### 3. Install Airut
 
 ```bash
-cd ~
-git clone https://github.com/airutorg/airut.git
-cd airut
+uv tool install airut --from git+https://github.com/airutorg/airut.git
 ```
+
+This installs the `airut` command to `~/.local/bin/airut`.
+
+For development, you can also run from a local clone using `uv run airut`.
 
 ### 4. Configure Git Credentials
 
@@ -104,12 +106,14 @@ sudo loginctl enable-linger $USER
 
 ### 6. Configure Airut
 
-Create configuration from the example:
+Create an initial configuration using the `init` command:
 
 ```bash
-mkdir -p ~/.config/airut
-cp config/airut.example.yaml ~/.config/airut/airut.yaml
+airut init
 ```
+
+This creates a stub config at `~/.config/airut/airut.yaml`. You can also check
+`config/airut.example.yaml` (in the repository) for a fully documented example.
 
 Edit `~/.config/airut/airut.yaml` with your settings. Secrets can be specified
 inline or loaded from environment variables. The inline approach keeps
@@ -159,26 +163,24 @@ See [Configuration](#configuration) for full details.
 [repo-onboarding.md](repo-onboarding.md) for setting up the `.airut/` directory,
 container Dockerfile, network allowlist, and `CLAUDE.md` in the target repo.
 
-### 7. Install Services
+### 7. Validate Configuration
 
 ```bash
-uv run scripts/install_services.py
+airut check
 ```
 
-This installs and starts:
+This verifies the config file can be parsed and that required system
+dependencies (git, podman) are installed and meet minimum version requirements.
 
-- `airut.service` — Email gateway service
-- `airut-updater.timer` — Auto-updater (default: checks for new tagged releases
-  every 6 hours). Use `--channel dev` to track `origin/main` instead. See
-  [Auto-Updater](#auto-updater) for details.
-
-Use `--skip-updater` to install without automatic updates:
+### 8. Install Services
 
 ```bash
-uv run scripts/install_services.py --skip-updater
+airut install-service
 ```
 
-### 8. Verify Installation
+This installs and starts `airut.service` — the email gateway service.
+
+### 9. Verify Installation
 
 ```bash
 # Check service status
@@ -409,43 +411,31 @@ systemctl --user restart airut
 systemctl --user stop airut
 
 # Uninstall all services
-uv run scripts/install_services.py --uninstall
+airut uninstall-service
 ```
 
-### Auto-Updater
+### Updating
 
-The updater supports two channels, selected at install time:
-
-| Channel         | Target          | Default Interval | Description          |
-| --------------- | --------------- | ---------------- | -------------------- |
-| `rel` (default) | Latest `v*` tag | 6 hours          | Stable releases only |
-| `dev`           | `origin/main`   | 30 minutes       | Tracks main branch   |
+Airut is installed via `uv tool install` and updated manually with
+`uv tool upgrade`. There is no automatic updater — run the upgrade command when
+you want to pull in new changes:
 
 ```bash
-# Install with default rel channel
-uv run scripts/install_services.py
-
-# Install with dev channel
-uv run scripts/install_services.py --channel dev
-
-# Custom polling interval (in minutes)
-uv run scripts/install_services.py --channel dev --interval 15
+uv tool upgrade airut
 ```
 
-The chosen channel and interval are persisted in the generated systemd unit
-files and survive self-updates. The service and updater coordinate via
-`.update.lock` — updates are skipped while the email service is processing
-messages.
+The update channel is determined by how the tool was originally installed:
 
-See [spec/auto-updater.md](../spec/auto-updater.md) for the full update flow,
-lock coordination, and design rationale.
+- **Dev channel**:
+  `uv tool install airut --from git+https://github.com/airutorg/airut.git` —
+  tracks the main branch.
+- **Release channel** (future): `uv tool install airut` — installs from PyPI
+  (tagged releases only).
+
+After upgrading, restart the service to pick up the new version:
 
 ```bash
-# View updater logs
-journalctl --user -u airut-updater -f
-
-# Check timer status
-systemctl --user list-timers
+systemctl --user restart airut
 ```
 
 ## Dashboard
@@ -621,16 +611,15 @@ du -sh ~/airut-storage/*/conversations/
 podman image prune -a
 ```
 
-## Upgrading Manually
-
-To trigger an update without waiting for the auto-updater:
+## Upgrading
 
 ```bash
-uv run scripts/install_services.py --update
+uv tool upgrade airut
+systemctl --user restart airut
 ```
 
-To switch update channels, reinstall services:
+To switch from dev to release channel (or vice versa), reinstall the tool:
 
 ```bash
-uv run scripts/install_services.py --channel dev
+uv tool install airut --force --from git+https://github.com/airutorg/airut.git
 ```

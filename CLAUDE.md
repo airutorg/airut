@@ -242,12 +242,11 @@ lib/                        - Library code
   markdown.py               - Markdown-to-HTML conversion
   logging.py                - Logging utilities
   git_version.py            - Git version management
-  install_services.py       - Service installation and auto-update logic
-  update_lock.py            - Advisory file lock
+  install_services.py       - Service installation logic
 scripts/                    - CLI tools
   airut.py                  - Email gateway entry point (uv run airut)
   ci.py, pr.py              - CI/PR tools
-  install_services.py       - Thin CLI entry point for service management
+  install_services.py       - Migration stub for legacy updater
   check_markdown.py         - Markdown validation
 spec/                       - Design specifications (see spec/README.md)
 tests/                      - Unit tests (100% coverage required)
@@ -265,7 +264,7 @@ workflows/                  - Step-by-step operational guides
 - `scripts/ci.py` — local CI runner (runs all checks)
 - `scripts/pr.py` — PR workflow (CI status and review comments)
 - `scripts/airut.py` — email gateway entry point (`uv run airut`)
-- `scripts/install_services.py` — systemd service installation
+- `scripts/install_services.py` — migration stub for legacy updater
 
 ## Standards
 
