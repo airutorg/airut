@@ -175,8 +175,9 @@ See the Airut repository's `.airut/container/` directory for a working example.
 ### 5. Write CLAUDE.md
 
 Create a `CLAUDE.md` in your repository root with operating instructions for the
-agent. The key goal is to instruct the agent to autonomously create PRs after
-completing work, enabling the email-to-PR workflow.
+agent. A well-crafted `CLAUDE.md` enables the email-to-PR workflow — the agent
+autonomously creates PRs, follows your project's conventions, and iterates on
+review feedback.
 
 See [agentic-operation.md](agentic-operation.md) for detailed guidance on
 writing effective agent instructions, including:
