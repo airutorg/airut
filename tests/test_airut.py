@@ -479,7 +479,6 @@ class _FakeVersionInfo:
     version: str = "v0.8.0"
     sha_short: str = "abc1234"
     sha_full: str = "abc1234" * 5
-    worktree_clean: bool = True
     full_status: str = ""
 
 

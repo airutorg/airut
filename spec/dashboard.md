@@ -120,6 +120,7 @@ credential problems) while others continue processing emails.
 | --------------------------------------- | ------ | ------------------------------------- |
 | `/`                                     | GET    | Main dashboard with task lists        |
 | `/version`                              | GET    | Structured version info (JSON)        |
+| `/update`                               | GET    | Upstream update check (JSON)          |
 | `/repo/{repo_id}`                       | GET    | Repository detail view                |
 | `/conversation/{conv_id}`               | GET    | Task detail view                      |
 | `/conversation/{conv_id}/actions`       | GET    | Actions timeline viewer               |
@@ -168,8 +169,10 @@ Three-column layout showing queued, in-progress, and completed tasks.
 
 **Header** displays version information:
 
-- Git commit SHA (short 7-8 character form, monospace)
-- Worktree status badge: green "clean" or red "modified"
+- Git commit SHA or version tag (monospace, links to `/version` JSON)
+- Update status badge: green "up to date" or yellow "update available" (fetched
+  asynchronously from `/update` to avoid blocking page load). Hover shows
+  current and latest version.
 - Service start timestamp
 
 **Repository status section** (below header):

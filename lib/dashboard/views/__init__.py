@@ -36,6 +36,7 @@ from lib.dashboard.views.components import (
     render_stop_script,
     render_task_list,
     render_version_info,
+    update_check_script,
 )
 from lib.dashboard.views.dashboard import render_dashboard
 from lib.dashboard.views.network import (
@@ -67,4 +68,5 @@ __all__ = [
     "render_task_detail",
     "render_task_list",
     "render_version_info",
+    "update_check_script",
 ]

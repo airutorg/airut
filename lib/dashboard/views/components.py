@@ -70,14 +70,6 @@ def render_version_info(version_info: VersionInfo | None) -> str:
     if not version_info:
         return ""
 
-    # Format worktree status
-    if version_info.worktree_clean:
-        status_text = "clean"
-        status_class = "clean"
-    else:
-        status_text = "modified"
-        status_class = "modified"
-
     # Pass raw timestamp for JavaScript to format in local timezone
     started_ts = version_info.started_at
     git_sha = version_info.git_sha
@@ -86,7 +78,8 @@ def render_version_info(version_info: VersionInfo | None) -> str:
     return f"""
         <div class="version-info">
             <a href="/version" class="version-sha">{version_label}</a>
-            <span class="version-status {status_class}">{status_text}</span>
+            <span id="update-status" class="version-status checking"
+            >checking...</span>
             <span class="version-started">Started: <span
                 class="local-time"
                 data-timestamp="{started_ts}"
@@ -510,6 +503,43 @@ ${conversation.total_cost_usd:.4f}</div>
             {pending_html}
         </div>
     </div>"""
+
+
+def update_check_script() -> str:
+    """JavaScript snippet that fetches /update and shows version status.
+
+    Returns:
+        HTML <script> tag with update check logic.
+    """
+    return """
+    <script>
+        (function() {
+            var el = document.getElementById('update-status');
+            if (!el) return;
+            fetch('/update')
+                .then(function(resp) {
+                    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                    return resp.json();
+                })
+                .then(function(data) {
+                    if (data.update_available) {
+                        el.textContent = 'update available';
+                        el.className = 'version-status update-available';
+                        el.title = data.current + ' \\u2192 ' + data.latest;
+                    } else {
+                        el.textContent = 'up to date';
+                        el.className = 'version-status up-to-date';
+                        if (data.latest) {
+                            el.title = data.current;
+                        }
+                    }
+                })
+                .catch(function() {
+                    el.textContent = '';
+                    el.className = 'version-status check-failed';
+                });
+        })();
+    </script>"""
 
 
 def local_time_script() -> str:

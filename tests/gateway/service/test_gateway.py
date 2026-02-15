@@ -49,7 +49,7 @@ class TestEmailGatewayServiceInit:
                 return_value="127.0.0.53",
             ),
         ):
-            mv.return_value = MagicMock(git_sha="x", worktree_clean=True)
+            mv.return_value = (MagicMock(git_sha="x"), MagicMock())
             svc = EmailGatewayService(server_config, repo_root=None)
             # repo_root should be auto-detected
             assert svc.repo_root is not None
@@ -79,7 +79,7 @@ class TestEmailGatewayServiceInit:
                 return_value="127.0.0.53",
             ),
         ):
-            mv.return_value = MagicMock(git_sha="x", worktree_clean=True)
+            mv.return_value = (MagicMock(git_sha="x"), MagicMock())
             EmailGatewayService(
                 server_config,
                 repo_root=tmp_path,
@@ -377,7 +377,7 @@ class TestRepoHandlerInitError:
                 return_value="127.0.0.53",
             ),
         ):
-            mv.return_value = MagicMock(git_sha="x", worktree_clean=True)
+            mv.return_value = (MagicMock(git_sha="x"), MagicMock())
             svc = EmailGatewayService(server_config, repo_root=tmp_path)
 
         # Handler was not created, but error was recorded
@@ -417,7 +417,7 @@ class TestRepoHandlerInitError:
                 return_value="127.0.0.53",
             ),
         ):
-            mv.return_value = MagicMock(git_sha="x", worktree_clean=True)
+            mv.return_value = (MagicMock(git_sha="x"), MagicMock())
             svc = EmailGatewayService(server_config, repo_root=tmp_path)
 
         # start() should fail since all repos failed during init
@@ -1043,7 +1043,7 @@ class TestUpstreamDnsResolution:
                 return_value="192.168.1.1",
             ) as mock_resolver,
         ):
-            mv.return_value = MagicMock(git_sha="x", worktree_clean=True)
+            mv.return_value = (MagicMock(git_sha="x"), MagicMock())
             EmailGatewayService(server_config, repo_root=tmp_path)
             mock_resolver.assert_called_once()
             # Sandbox should receive the auto-detected DNS via SandboxConfig
@@ -1075,7 +1075,7 @@ class TestUpstreamDnsResolution:
                 "lib.gateway.service.gateway.get_system_resolver",
             ) as mock_resolver,
         ):
-            mv.return_value = MagicMock(git_sha="x", worktree_clean=True)
+            mv.return_value = (MagicMock(git_sha="x"), MagicMock())
             EmailGatewayService(server_config, repo_root=tmp_path)
             mock_resolver.assert_not_called()
             # Sandbox should receive the explicit DNS via SandboxConfig
@@ -1107,7 +1107,7 @@ class TestUpstreamDnsResolution:
                 side_effect=SystemResolverError("No nameserver entries found"),
             ),
         ):
-            mv.return_value = MagicMock(git_sha="x", worktree_clean=True)
+            mv.return_value = (MagicMock(git_sha="x"), MagicMock())
             import pytest
 
             with pytest.raises(

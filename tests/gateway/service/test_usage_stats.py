@@ -30,12 +30,11 @@ def _parse(*raw_events: dict) -> list[StreamEvent]:
 class TestCaptureVersionInfo:
     """Tests for capture_version_info function."""
 
-    def test_capture_clean_worktree(self) -> None:
+    def test_capture_with_version(self) -> None:
         mock_git_version = GitVersionInfo(
             version="v0.7.0",
             sha_short="abc1234",
             sha_full="abc1234567890abcdef1234567890abcdef123456",
-            worktree_clean=True,
             full_status="=== HEAD COMMIT ===\ncommit abc1234",
         )
 
@@ -46,23 +45,21 @@ class TestCaptureVersionInfo:
             patch("time.time", return_value=1000.0),
         ):
             mock_get_version.return_value = mock_git_version
-            result = capture_version_info()
+            result, git_info = capture_version_info()
 
         assert result.version == "v0.7.0"
         assert result.git_sha == "abc1234"
         assert (
             result.git_sha_full == "abc1234567890abcdef1234567890abcdef123456"
         )
-        assert result.worktree_clean is True
         assert result.full_status == "=== HEAD COMMIT ===\ncommit abc1234"
         assert result.started_at == 1000.0
 
-    def test_capture_dirty_worktree(self) -> None:
+    def test_capture_without_version(self) -> None:
         mock_git_version = GitVersionInfo(
             version="",
             sha_short="def5678",
             sha_full="def5678901234567890abcdef1234567890abcdef",
-            worktree_clean=False,
             full_status="=== HEAD COMMIT ===\ncommit def5678",
         )
 
@@ -73,10 +70,9 @@ class TestCaptureVersionInfo:
             patch("time.time", return_value=2000.0),
         ):
             mock_get_version.return_value = mock_git_version
-            result = capture_version_info()
+            result, git_info = capture_version_info()
 
         assert result.git_sha == "def5678"
-        assert result.worktree_clean is False
         assert result.started_at == 2000.0
 
 

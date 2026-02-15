@@ -50,14 +50,12 @@ class GitVersionInfo:
             is available.
         sha_short: Short git commit SHA (7-8 characters).
         sha_full: Full 40-character git commit SHA.
-        worktree_clean: True if working tree has no uncommitted changes.
         full_status: Full git status output (HEAD info + worktree status).
     """
 
     version: str
     sha_short: str
     sha_full: str
-    worktree_clean: bool
     full_status: str
 
 
@@ -284,7 +282,6 @@ def _try_embedded() -> GitVersionInfo | None:
         version=VERSION,
         sha_short=GIT_SHA_SHORT,
         sha_full=GIT_SHA_FULL,
-        worktree_clean=True,
         full_status=full_status,
     )
 
@@ -352,19 +349,6 @@ def _get_git_version_info_live() -> GitVersionInfo:
     except subprocess.CalledProcessError:
         sha_full = "unknown"
 
-    # Check if worktree is clean
-    try:
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=repo_path,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        worktree_clean = len(result.stdout.strip()) == 0
-    except subprocess.CalledProcessError:
-        worktree_clean = False
-
     # Get HEAD commit info (git show HEAD --no-patch)
     try:
         result = subprocess.run(
@@ -405,6 +389,5 @@ def _get_git_version_info_live() -> GitVersionInfo:
         version=version,
         sha_short=sha_short,
         sha_full=sha_full,
-        worktree_clean=worktree_clean,
         full_status=full_status,
     )

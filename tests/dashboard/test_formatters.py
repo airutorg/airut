@@ -68,7 +68,6 @@ class TestVersionInfo:
             version="v0.7.0",
             git_sha="abc1234",
             git_sha_full="abc1234567890abcdef1234567890abcdef123456",
-            worktree_clean=True,
             full_status="=== HEAD COMMIT ===\ncommit abc1234",
             started_at=946684800.0,
         )
@@ -76,20 +75,17 @@ class TestVersionInfo:
         assert info.version == "v0.7.0"
         assert info.git_sha == "abc1234"
         assert info.git_sha_full == "abc1234567890abcdef1234567890abcdef123456"
-        assert info.worktree_clean is True
         assert info.full_status == "=== HEAD COMMIT ===\ncommit abc1234"
         assert info.started_at == 946684800.0
 
-    def test_create_dirty(self) -> None:
-        """Test creating VersionInfo with dirty worktree."""
+    def test_create_without_version(self) -> None:
+        """Test creating VersionInfo without a version tag."""
         info = VersionInfo(
             version="",
             git_sha="def5678",
             git_sha_full="def5678901234567890abcdef1234567890abcdef",
-            worktree_clean=False,
             full_status="=== HEAD COMMIT ===\ncommit def5678",
             started_at=1000000000.0,
         )
 
         assert info.git_sha == "def5678"
-        assert info.worktree_clean is False

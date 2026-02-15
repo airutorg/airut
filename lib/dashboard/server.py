@@ -29,6 +29,7 @@ from lib.dashboard.handlers import RequestHandlers
 from lib.dashboard.sse import SSEConnectionManager
 from lib.dashboard.tracker import BootState, RepoState, TaskTracker
 from lib.dashboard.versioned import VersionClock, VersionedStore
+from lib.git_version import GitVersionInfo
 
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,7 @@ class DashboardServer:
         boot_store: VersionedStore[BootState] | None = None,
         repos_store: VersionedStore[tuple[RepoState, ...]] | None = None,
         clock: VersionClock | None = None,
+        git_version_info: GitVersionInfo | None = None,
     ) -> None:
         """Initialize dashboard server.
 
@@ -66,6 +68,7 @@ class DashboardServer:
             boot_store: Versioned boot state store.
             repos_store: Versioned repo states store.
             clock: Shared version clock for SSE streaming.
+            git_version_info: Git version info for upstream update checks.
         """
         self.tracker = tracker
         self.host = host
@@ -86,6 +89,7 @@ class DashboardServer:
             repos_store=repos_store,
             clock=clock,
             sse_manager=self._sse_manager,
+            git_version_info=git_version_info,
         )
 
         self._url_map = Map(
@@ -93,6 +97,7 @@ class DashboardServer:
                 Rule("/", endpoint="index"),
                 Rule("/favicon.svg", endpoint="favicon"),
                 Rule("/version", endpoint="version"),
+                Rule("/update", endpoint="update"),
                 Rule("/repo/<repo_id>", endpoint="repo_detail"),
                 Rule(
                     "/conversation/<conversation_id>",
@@ -135,6 +140,7 @@ class DashboardServer:
             "index": self._handlers.handle_index,
             "favicon": self._handlers.handle_favicon,
             "version": self._handlers.handle_version,
+            "update": self._handlers.handle_update,
             "repo_detail": self._handlers.handle_repo_detail,
             "task_detail": self._handlers.handle_task_detail,
             "task_actions": self._handlers.handle_task_actions,
