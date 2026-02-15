@@ -267,7 +267,7 @@ def render_task_list(tasks: list[TaskState], status_class: str) -> str:
 def render_action_buttons(task: TaskState) -> str:
     """Render action buttons for task detail page.
 
-    Shows View Actions, View Network Logs and View Raw JSON buttons always,
+    Shows View Actions and View Network Logs buttons always,
     plus Stop button for in-progress tasks.
 
     Args:
@@ -286,15 +286,12 @@ def render_action_buttons(task: TaskState) -> str:
 
     actions = f"/conversation/{cid}/actions"
     network = f"/conversation/{cid}/network"
-    conversation_json = f"/conversation/{cid}/conversation"
     return f"""
         <div class="action-buttons">
             <a href="{actions}" class="action-btn primary"
                 >View Actions</a>
             <a href="{network}" class="action-btn primary"
                 >View Network Logs</a>
-            <a href="{conversation_json}" class="action-btn primary"
-                >View Raw JSON</a>
             {stop_html}
         </div>
         <div id="stop-result" class="stop-result"></div>"""

@@ -122,7 +122,6 @@ credential problems) while others continue processing emails.
 | `/.version`                             | GET    | Full git version info (plain text)    |
 | `/repo/{repo_id}`                       | GET    | Repository detail view                |
 | `/conversation/{conv_id}`               | GET    | Task detail view                      |
-| `/conversation/{conv_id}/conversation`  | GET    | Raw conversation JSON                 |
 | `/conversation/{conv_id}/actions`       | GET    | Actions timeline viewer               |
 | `/conversation/{conv_id}/network`       | GET    | Network logs viewer                   |
 | `/api/repos`                            | GET    | JSON API for repository status (ETag) |

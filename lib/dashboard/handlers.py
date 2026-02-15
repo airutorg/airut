@@ -18,7 +18,6 @@ from typing import Any
 from werkzeug.wrappers import Request, Response
 
 from lib.conversation import (
-    CONVERSATION_FILE_NAME,
     ConversationMetadata,
     ConversationStore,
 )
@@ -192,53 +191,6 @@ class RequestHandlers:
             views.render_task_detail(task, conversation),
             content_type="text/html; charset=utf-8",
         )
-
-    def handle_task_conversation_json(
-        self, request: Request, conversation_id: str
-    ) -> Response:
-        """Handle raw conversation JSON endpoint.
-
-        Args:
-            request: Incoming request.
-            conversation_id: Conversation ID to get data for.
-
-        Returns:
-            JSON response with raw conversation file contents.
-        """
-        conversation_dir = self._find_conversation_dir(conversation_id)
-        if conversation_dir is None:
-            return Response(
-                json.dumps({"error": "Conversation data not available"}),
-                status=404,
-                content_type="application/json",
-            )
-
-        conversation_path = conversation_dir / CONVERSATION_FILE_NAME
-        if not conversation_path.exists():
-            return Response(
-                json.dumps({"error": "No conversation data found"}),
-                status=404,
-                content_type="application/json",
-            )
-
-        try:
-            with conversation_path.open("r") as f:
-                raw_data = json.load(f)
-            return Response(
-                json.dumps(raw_data, indent=2),
-                content_type="application/json",
-            )
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning(
-                "Failed to read conversation file %s: %s",
-                conversation_path,
-                e,
-            )
-            return Response(
-                json.dumps({"error": "Failed to read conversation data"}),
-                status=500,
-                content_type="application/json",
-            )
 
     def handle_task_actions(
         self, request: Request, conversation_id: str
