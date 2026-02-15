@@ -7,7 +7,7 @@ name = "airut"
 dynamic = ["version"]
 description = "Headless Claude Code interaction via email"
 license = "MIT"
-readme = "README.md"
+readme = "PYPI_README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "aiosmtpd>=1.4.6",
