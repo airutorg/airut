@@ -108,8 +108,9 @@ Create an initial configuration using the `init` command:
 airut init
 ```
 
-This creates a stub config at `~/.config/airut/airut.yaml`. You can also check
-`config/airut.example.yaml` (in the repository) for a fully documented example.
+This creates a stub config at `~/.config/airut/airut.yaml`. For all available
+options, see the
+[documented example](https://github.com/airutorg/airut/blob/main/config/airut.example.yaml).
 
 Edit `~/.config/airut/airut.yaml` with your settings. Secrets can be specified
 inline or loaded from environment variables. The inline approach keeps
@@ -538,7 +539,7 @@ that prevents GitHub access:
 ssh your-server
 
 # Navigate to the git mirror for the affected repo
-cd ~/airut-storage/my-project/git-mirror
+cd ~/.local/state/airut/my-project/git-mirror
 
 # Reset to a known-good state (find the commit hash)
 git fetch origin
@@ -567,13 +568,13 @@ podman kill <container-id>
 
 ```bash
 # List conversations for a repo
-ls ~/airut-storage/my-project/conversations/
+ls ~/.local/state/airut/my-project/conversations/
 
 # Remove a specific corrupted session
-rm -rf ~/airut-storage/my-project/conversations/<session-id>
+rm -rf ~/.local/state/airut/my-project/conversations/<session-id>
 
 # Or remove all conversations (forces fresh starts)
-rm -rf ~/airut-storage/my-project/conversations/
+rm -rf ~/.local/state/airut/my-project/conversations/
 ```
 
 **Token expired or credentials invalid:**
@@ -602,7 +603,7 @@ Sessions are garbage-collected automatically, but you can clean up manually:
 
 ```bash
 # View storage usage
-du -sh ~/airut-storage/*/conversations/
+du -sh ~/.local/state/airut/*/conversations/
 
 # Prune old Podman images
 podman image prune -a

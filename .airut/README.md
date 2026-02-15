@@ -66,8 +66,10 @@ doesn't need to define `ENTRYPOINT`.
 
 ## Server Config
 
-Server-side configuration lives in `config/airut.yaml` (not in this directory).
-It handles:
+Server-side configuration lives in `~/.config/airut/airut.yaml` (not in this
+directory). Run `airut init` to create a stub, or see
+`config/airut.example.yaml` in the repository for a documented example. It
+handles:
 
 - Mail server credentials (IMAP/SMTP) — **each repo needs a dedicated inbox**
 - Authorized senders and trusted authserv_id

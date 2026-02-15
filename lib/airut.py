@@ -529,9 +529,12 @@ _WAIT_POLL_SECONDS = 10
 def cmd_update(argv: list[str]) -> int:
     """Update airut to the latest version.
 
-    If the systemd service is installed, stops and uninstalls it before
-    upgrading, then reinstalls the service (which also starts it) using
-    the newly installed ``airut`` binary.
+    Runs ``uv tool upgrade airut``.  If the upgrade is a no-op (already
+    up to date), returns immediately without touching the service.
+
+    When the binary was actually updated and the systemd service is
+    installed, stops and uninstalls the service, then reinstalls it
+    using the new binary.
 
     Refuses to proceed when the running gateway has queued or in-progress
     tasks.  Use ``--force`` to override, or ``--wait`` to poll until the
@@ -594,17 +597,6 @@ def cmd_update(argv: list[str]) -> int:
                 )
                 return 1
 
-    # ── Stop and uninstall service if installed ────────────────
-    if service_was_installed:
-        print(f"  {s.dim('Stopping and uninstalling service...')}")
-        from lib.install_services import uninstall_services
-
-        try:
-            uninstall_services()
-        except RuntimeError as e:
-            print(f"  {s.red('Error uninstalling service:')} {e}")
-            return 1
-
     # ── Run uv tool upgrade ───────────────────────────────────
     print(f"  {s.dim('Upgrading airut...')}")
     try:
@@ -632,8 +624,25 @@ def cmd_update(argv: list[str]) -> int:
     if upgrade_output:
         print(f"  {upgrade_output}")
 
-    # ── Reinstall service using the updated binary ────────────
+    # Detect no-op upgrades to avoid unnecessary service restart.
+    # uv outputs "Nothing to upgrade" when the installed version is current.
+    nothing_changed = "nothing to upgrade" in (upgrade_output or "").lower()
+
+    if nothing_changed:
+        print(f"  {s.green('Already up to date.')}")
+        return 0
+
+    # ── Restart service with the updated binary ───────────────
     if service_was_installed:
+        print(f"  {s.dim('Stopping and uninstalling service...')}")
+        from lib.install_services import uninstall_services
+
+        try:
+            uninstall_services()
+        except RuntimeError as e:
+            print(f"  {s.red('Error uninstalling service:')} {e}")
+            return 1
+
         print(f"  {s.dim('Reinstalling service...')}")
         from lib.install_services import get_airut_path
 
@@ -744,6 +753,39 @@ _DISPATCH: dict[str, str] = {
     "uninstall-service": "cmd_uninstall_service",
 }
 
+_SUBCOMMAND_HELP: dict[str, str] = {
+    "init": (
+        "usage: airut init\n\n"
+        "Create a stub server config at ~/.config/airut/airut.yaml.\n"
+        "Does nothing if the config already exists."
+    ),
+    "check": (
+        "usage: airut check\n\n"
+        "Verify config, system dependencies, and service status.\n"
+        "Exit code 0 if all checks pass, 1 otherwise."
+    ),
+    "update": (
+        "usage: airut update [--wait] [--force]\n\n"
+        "Update airut to the latest version via uv tool upgrade.\n"
+        "If already up to date, exits without restarting the service.\n\n"
+        "options:\n"
+        "  --wait   Wait for running tasks to complete before updating\n"
+        "  --force  Update even if tasks are in flight"
+    ),
+    "install-service": (
+        "usage: airut install-service\n\n"
+        "Install and start the airut systemd user service."
+    ),
+    "uninstall-service": (
+        "usage: airut uninstall-service\n\n"
+        "Stop and remove the airut systemd user service."
+    ),
+    "run-gateway": (
+        "usage: airut run-gateway [--resilient] [--debug]\n\n"
+        "Start the email gateway service (normally managed by systemd)."
+    ),
+}
+
 
 def _print_info() -> None:
     """Print version information and available commands."""
@@ -777,6 +819,10 @@ def cli() -> None:
     command = argv[0]
     rest = argv[1:]
 
+    if "--help" in rest and command in _SUBCOMMAND_HELP:
+        print(_SUBCOMMAND_HELP[command])
+        sys.exit(0)
+
     # Look up handler by name so tests can mock individual commands.
     import lib.airut as _self
 
@@ -788,7 +834,8 @@ def cli() -> None:
 _STUB_CONFIG = """\
 # Airut Server Configuration
 #
-# See config/airut.example.yaml for a fully documented example.
+# For all available options, see the documented example:
+# https://github.com/airutorg/airut/blob/main/config/airut.example.yaml
 
 # execution:
 #   max_concurrent: 3

@@ -54,15 +54,38 @@ def get_airut_path() -> str:
     return str(Path.home() / ".local" / "bin" / "airut")
 
 
+def _get_username() -> str:
+    """Return the current username from environment or OS.
+
+    Tries ``$USER`` first, then falls back to ``os.getlogin()``.
+
+    Raises:
+        RuntimeError: If neither ``$USER`` nor ``os.getlogin()`` is
+            available (e.g. headless systemd environments without a TTY).
+    """
+    name = os.environ.get("USER")
+    if name:
+        return name
+    try:
+        return os.getlogin()
+    except OSError:
+        raise RuntimeError(
+            "Cannot determine username: $USER is not set and "
+            "os.getlogin() failed.  Set the USER environment variable "
+            "and retry."
+        ) from None
+
+
 def check_linger() -> None:
     """Check that loginctl linger is enabled for the current user.
 
     Linger is required for user services to run without an active login session.
 
     Raises:
-        RuntimeError: If linger is not enabled.
+        RuntimeError: If linger is not enabled or username cannot be
+            determined.
     """
-    username = os.environ.get("USER") or os.getlogin()
+    username = _get_username()
     linger_file = Path(f"/var/lib/systemd/linger/{username}")
     if not linger_file.exists():
         raise RuntimeError(
