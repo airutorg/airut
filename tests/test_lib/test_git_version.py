@@ -6,7 +6,6 @@
 """Tests for lib/git_version.py."""
 
 import subprocess
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from lib.git_version import (
@@ -116,14 +115,6 @@ class TestGetGitVersionInfo:
             result = get_git_version_info()
         assert result is embedded
 
-    def test_skips_embedded_with_repo_path(self) -> None:
-        """Should skip embedded and use git when repo_path is given."""
-        repo_path = Path(__file__).parent.parent.parent
-        info = get_git_version_info(repo_path)
-        assert isinstance(info, GitVersionInfo)
-        # Should have real git info, not embedded
-        assert "=== HEAD COMMIT ===" in info.full_status
-
     def test_falls_back_to_git_when_no_embedded(self) -> None:
         """Should use git when embedded module is not available."""
         with patch("lib.git_version._try_embedded", return_value=None):
@@ -168,12 +159,6 @@ class TestGetGitVersionInfoLive:
         """Version should be a string (possibly empty)."""
         info = _get_git_version_info_live()
         assert isinstance(info.version, str)
-
-    def test_accepts_custom_repo_path(self) -> None:
-        """_get_git_version_info_live should accept a custom repo path."""
-        repo_path = Path(__file__).parent.parent.parent
-        info = _get_git_version_info_live(repo_path)
-        assert isinstance(info, GitVersionInfo)
 
     def test_handles_git_command_failure_for_short_sha(self) -> None:
         """Should return 'unknown' for sha_short when git command fails."""

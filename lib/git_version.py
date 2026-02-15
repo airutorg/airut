@@ -75,44 +75,29 @@ def _try_embedded() -> GitVersionInfo | None:
     )
 
 
-def get_git_version_info(repo_path: Path | None = None) -> GitVersionInfo:
+def get_git_version_info() -> GitVersionInfo:
     """Read git repository version information.
 
-    First attempts to load embedded version info (from a built wheel).
-    If that fails, captures the current HEAD commit SHA (short and full),
-    worktree clean status, and full status output suitable for displaying
-    in a ``/.version`` endpoint.
-
-    Args:
-        repo_path: Path to git repository root. If None, uses parent of
-            this file.
+    Always attempts to load embedded version info first (from a built
+    wheel).  If that fails, falls back to live git commands.
 
     Returns:
         GitVersionInfo with all version details.
     """
-    # When no explicit repo_path is given, try embedded first.
-    if repo_path is None:
-        embedded = _try_embedded()
-        if embedded is not None:
-            return embedded
+    embedded = _try_embedded()
+    if embedded is not None:
+        return embedded
 
-    return _get_git_version_info_live(repo_path)
+    return _get_git_version_info_live()
 
 
-def _get_git_version_info_live(
-    repo_path: Path | None = None,
-) -> GitVersionInfo:
+def _get_git_version_info_live() -> GitVersionInfo:
     """Read version info from git commands (live fallback).
-
-    Args:
-        repo_path: Path to git repository root. If None, uses parent of
-            this file.
 
     Returns:
         GitVersionInfo with all version details from git.
     """
-    if repo_path is None:
-        repo_path = Path(__file__).parent.parent
+    repo_path = Path(__file__).parent.parent
 
     # Get version from git describe
     try:
