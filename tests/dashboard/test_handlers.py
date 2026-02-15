@@ -1402,9 +1402,9 @@ class TestEventsLogStreamEndpoint:
         assert response.status_code == 200
         assert response.content_type == "text/event-stream"
 
-        # Should contain initial event and done event (task is completed)
+        # Should contain initial HTML event and done event (task completed)
         data = response.get_data(as_text=True)
-        assert "event: events\n" in data
+        assert "event: html\n" in data
         assert "event: done\n" in data
 
     def test_events_log_stream_connection_limit(self, tmp_path: Path) -> None:
@@ -1493,7 +1493,7 @@ class TestNetworkLogStreamEndpoint:
         assert response.content_type == "text/event-stream"
 
         data = response.get_data(as_text=True)
-        assert "event: lines\n" in data
+        assert "event: html\n" in data
         assert "event: done\n" in data
 
     def test_network_log_stream_connection_limit(self, tmp_path: Path) -> None:
@@ -1643,10 +1643,10 @@ class TestSSELivePages:
         client = Client(server._wsgi_app)
 
         response = client.get("/conversation/abc12345/actions")
-        html = response.get_data(as_text=True)
+        html_text = response.get_data(as_text=True)
 
-        assert "connectEventsSSE" in html
-        assert "/events/stream" in html
+        assert "connectEventsSSE" in html_text
+        assert "/events/stream" in html_text
 
     def test_actions_page_no_sse_for_completed(self, tmp_path: Path) -> None:
         """Actions page has no SSE script for completed tasks."""

@@ -107,14 +107,14 @@ def _highlight_error_prefix(escaped_line: str) -> str:
     )
 
 
-def render_network_log_lines(log_content: str) -> str:
-    """Render network log lines with appropriate styling.
+def render_network_log_line(line: str) -> str:
+    """Render a single network log line with appropriate styling.
 
     Args:
-        log_content: Raw log file content.
+        line: Raw log line (must not be empty).
 
     Returns:
-        HTML string with styled log lines.
+        HTML string for the styled log line.
 
     Line types and their styling:
         - Task start headers (=== TASK START ...): blue
@@ -125,38 +125,41 @@ def render_network_log_lines(log_content: str) -> str:
           background, status code in bold
         - Allowed requests with success status (2xx/3xx): green
     """
+    escaped = html.escape(line)
+
+    if line.startswith("=== TASK START"):
+        return f'<div class="log-line task-start">{escaped}</div>'
+    elif line.startswith("BLOCKED"):
+        highlighted = _highlight_blocked(escaped)
+        return f'<div class="log-line blocked">{highlighted}</div>'
+    elif line.startswith("ERROR"):
+        highlighted = _highlight_error_prefix(escaped)
+        return f'<div class="log-line conn-error">{highlighted}</div>'
+    elif line.startswith("allowed"):
+        status_code = _extract_status_code(line)
+        if status_code is not None and _is_error_status(status_code):
+            highlighted = _highlight_status_code(escaped, status_code)
+            return f'<div class="log-line error">{highlighted}</div>'
+        else:
+            return f'<div class="log-line allowed">{escaped}</div>'
+    else:
+        return f'<div class="log-line">{escaped}</div>'
+
+
+def render_network_log_lines(log_content: str) -> str:
+    """Render network log lines with appropriate styling.
+
+    Args:
+        log_content: Raw log file content.
+
+    Returns:
+        HTML string with styled log lines.
+    """
     lines: list[str] = []
     for line in log_content.splitlines():
         if not line:
             continue
-
-        escaped = html.escape(line)
-
-        # Determine line type and apply appropriate styling
-        if line.startswith("=== TASK START"):
-            lines.append(f'<div class="log-line task-start">{escaped}</div>')
-        elif line.startswith("BLOCKED"):
-            # Make BLOCKED bold
-            highlighted = _highlight_blocked(escaped)
-            lines.append(f'<div class="log-line blocked">{highlighted}</div>')
-        elif line.startswith("ERROR"):
-            # Upstream connection error - make ERROR bold
-            highlighted = _highlight_error_prefix(escaped)
-            lines.append(
-                f'<div class="log-line conn-error">{highlighted}</div>'
-            )
-        elif line.startswith("allowed"):
-            # Check if this is an error response
-            status_code = _extract_status_code(line)
-            if status_code is not None and _is_error_status(status_code):
-                # Error response - highlight status code in bold
-                highlighted = _highlight_status_code(escaped, status_code)
-                lines.append(f'<div class="log-line error">{highlighted}</div>')
-            else:
-                lines.append(f'<div class="log-line allowed">{escaped}</div>')
-        else:
-            # Unknown format, render as plain text
-            lines.append(f'<div class="log-line">{escaped}</div>')
+        lines.append(render_network_log_line(line))
 
     return "\n".join(lines)
 
@@ -186,82 +189,25 @@ def _sse_network_script(conversation_id: str) -> str:
             autoScroll = nearBottom;
         }});
 
-        function escapeHtml(text) {{
-            var div = document.createElement('div');
-            div.appendChild(document.createTextNode(text));
-            return div.innerHTML;
-        }}
-
-        function classifyLine(line) {{
-            if (line.indexOf('=== TASK START') === 0) return 'task-start';
-            if (line.indexOf('BLOCKED') === 0) return 'blocked';
-            if (line.indexOf('ERROR') === 0) return 'conn-error';
-            if (line.indexOf('allowed') === 0) {{
-                // Check for error status codes (4xx, 5xx)
-                var m = line.match(/-> (\\d{{3}})(?:\\s|$)/);
-                if (m) {{
-                    var code = parseInt(m[1], 10);
-                    if (code < 200 || code >= 400) return 'error';
-                }}
-                return 'allowed';
-            }}
-            return '';
-        }}
-
-        function highlightLine(escaped, cls) {{
-            if (cls === 'blocked') {{
-                return escaped.replace(
-                    'BLOCKED',
-                    '<span class="highlight">BLOCKED</span>'
-                );
-            }}
-            if (cls === 'conn-error') {{
-                return escaped.replace(
-                    'ERROR',
-                    '<span class="highlight">ERROR</span>'
-                );
-            }}
-            if (cls === 'error') {{
-                var m = escaped.match(/-&gt; (\\d{{3}})/);
-                if (m) {{
-                    return escaped.replace(
-                        '-&gt; ' + m[1],
-                        '-&gt; <span class="highlight">' + m[1] + '</span>'
-                    );
-                }}
-            }}
-            return escaped;
-        }}
-
-        function renderLogLine(line) {{
-            var escaped = escapeHtml(line);
-            var cls = classifyLine(line);
-            var content = highlightLine(escaped, cls);
-            var clsAttr = cls ? ' ' + cls : '';
-            return '<div class="log-line' + clsAttr + '">'
-                + content + '</div>';
-        }}
-
         function connectNetworkSSE() {{
             var url = '/api/conversation/{conversation_id}/network/stream'
                 + '?offset=' + currentOffset;
             var source = new EventSource(url);
             var status = document.getElementById('stream-status');
 
-            source.addEventListener('lines', function(e) {{
+            source.addEventListener('html', function(e) {{
                 try {{
                     var data = JSON.parse(e.data);
                     currentOffset = data.offset || currentOffset;
                     var container = document.getElementById(
                         'logs-container'
                     );
-                    var lines = data.lines || [];
-                    for (var i = 0; i < lines.length; i++) {{
+                    if (data.html) {{
                         container.insertAdjacentHTML(
-                            'beforeend', renderLogLine(lines[i])
+                            'beforeend', data.html
                         );
                     }}
-                    if (lines.length > 0 && autoScroll) {{
+                    if (data.html && autoScroll) {{
                         window.scrollTo(0, document.body.scrollHeight);
                     }}
                     if (status) status.textContent = 'Live';

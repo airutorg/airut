@@ -120,24 +120,31 @@ delta application complexity.
 **SSE event format**:
 
 ```
-event: events
-data: {"offset": 1234, "events": [<raw JSON objects>]}
+event: html
+data: {"offset": 1234, "html": "<div class=\"event\">...rendered HTML...</div>"}
 
 event: done
 data: {"offset": 1234}
 ```
+
+Events are rendered server-side as HTML fragments using the same rendering
+functions as the initial page load, ensuring consistent output between static
+and streaming views.
 
 ### Network Log Stream (`/api/conversation/{id}/network/stream`)
 
 **SSE event format**:
 
 ```
-event: lines
-data: {"offset": 5678, "lines": ["allowed GET https://... -> 200", ...]}
+event: html
+data: {"offset": 5678, "html": "<div class=\"log-line allowed\">...</div>"}
 
 event: done
 data: {"offset": 5678}
 ```
+
+Network log lines are rendered server-side as HTML fragments using the same
+rendering functions as the initial page load.
 
 ### Connection Lifecycle
 
