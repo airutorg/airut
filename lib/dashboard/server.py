@@ -27,6 +27,7 @@ from werkzeug.wrappers import Request, Response
 from lib.dashboard.formatters import VersionInfo
 from lib.dashboard.handlers import RequestHandlers
 from lib.dashboard.tracker import BootState, RepoState, TaskTracker
+from lib.dashboard.versioned import VersionedStore
 
 
 logger = logging.getLogger(__name__)
@@ -46,8 +47,8 @@ class DashboardServer:
         version_info: VersionInfo | None = None,
         work_dirs: Callable[[], list[Path]] | None = None,
         stop_callback: Any = None,
-        repo_states: Callable[[], list[RepoState]] | None = None,
-        boot_state: BootState | None = None,
+        boot_store: VersionedStore[BootState] | None = None,
+        repos_store: VersionedStore[tuple[RepoState, ...]] | None = None,
     ) -> None:
         """Initialize dashboard server.
 
@@ -60,16 +61,14 @@ class DashboardServer:
                 data is stored (one per repo).  Called on each request.
             stop_callback: Optional callable to stop an execution.
                 Should accept conversation_id and return bool.
-            repo_states: Callable returning list of repository states.
-                Called on each request to get current state.
-            boot_state: Shared boot state object for progress reporting.
+            boot_store: Versioned boot state store.
+            repos_store: Versioned repo states store.
         """
         self.tracker = tracker
         self.host = host
         self.port = port
         self.version_info = version_info
         self.stop_callback = stop_callback
-        self.boot_state = boot_state
         self._server: Any = None
         self._thread: threading.Thread | None = None
 
@@ -79,8 +78,8 @@ class DashboardServer:
             version_info=version_info,
             work_dirs=work_dirs,
             stop_callback=stop_callback,
-            repo_states=repo_states,
-            boot_state=boot_state,
+            boot_store=boot_store,
+            repos_store=repos_store,
         )
 
         self._url_map = Map(

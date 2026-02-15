@@ -30,23 +30,38 @@ tasks).
 
 - Authentication (reverse proxy handles this)
 - Populating completed tasks list from disk on restart
-- Real-time streaming of task output
-
-### Future Considerations
-
-- Server-Sent Events (SSE) for live task updates
-- View streaming output from Claude execution
 
 ## Architecture
 
 ### Components
 
-The dashboard consists of two main components in `lib/dashboard/`:
+The dashboard consists of these components in `lib/dashboard/`:
 
-- **TaskTracker**: Thread-safe in-memory task state management with bounded
-  history (default 100 completed tasks)
-- **DashboardServer**: WSGI application using Werkzeug, runs in background
-  thread
+- **VersionClock + VersionedStore** (`versioned.py`): Global monotonic version
+  counter and thread-safe versioned state containers. Every state mutation ticks
+  the clock. SSE endpoints (future) will wait on it and wake on any change.
+- **TaskTracker** (`tracker.py`): Thread-safe in-memory task state management
+  with bounded history (default 100 completed tasks). Integrates with the shared
+  `VersionClock`.
+- **DashboardServer** (`server.py`): WSGI application using Werkzeug, runs in
+  background thread.
+
+### State Management
+
+All dashboard-visible state flows through versioned interfaces:
+
+- **BootState**: Frozen dataclass wrapped in `VersionedStore[BootState]`.
+  Mutations use `dataclasses.replace()` and `store.update()`.
+- **RepoStates**: Frozen dataclass collection wrapped in
+  `VersionedStore[tuple[RepoState, ...]]`. Updated atomically.
+- **TaskTracker**: Uses internal locking and calls `VersionClock.tick()` on
+  every mutation. Provides `get_snapshot()` for atomic reads.
+
+This guarantees:
+
+- **Atomicity**: Readers always see consistent snapshots (no torn reads)
+- **Versioning**: Every change has a monotonic version number
+- **Notification**: Future SSE waiters will wake on every change
 
 ### Data Flow
 
@@ -224,6 +239,7 @@ Acceptable for a single-user system behind authentication.
 
 ## Future Enhancements
 
-- **SSE streaming**: Real-time updates without polling
+- **SSE streaming**: Real-time updates via Server-Sent Events (see
+  `spec/live-dashboard.md` phases 2–3)
 - **Output preview**: Show last N lines of Claude output
 - **Conversation browser**: View full conversation history

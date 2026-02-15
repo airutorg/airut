@@ -88,11 +88,12 @@ class TestImapConnectionFailures:
             service.start()
 
         # Repo should be marked as failed with error details
-        assert len(service.repo_states) == 1
-        assert service.repo_states["test"].status == RepoStatus.FAILED
-        assert service.repo_states["test"].error_message is not None
+        repo_states = {r.repo_id: r for r in service._repos_store.get().value}
+        assert len(repo_states) == 1
+        assert repo_states["test"].status == RepoStatus.FAILED
+        assert repo_states["test"].error_message is not None
         # Should mention connection or socket error
-        error_msg = service.repo_states["test"].error_message.lower()
+        error_msg = repo_states["test"].error_message.lower()
         assert (
             "connect" in error_msg
             or "refused" in error_msg
@@ -151,7 +152,8 @@ class TestImapConnectionFailures:
         with pytest.raises(RuntimeError, match="All 1 repo"):
             service.start()
 
-        assert service.repo_states["unreachable"].status == RepoStatus.FAILED
+        repo_states = {r.repo_id: r for r in service._repos_store.get().value}
+        assert repo_states["unreachable"].status == RepoStatus.FAILED
 
 
 class TestGitCloneFailures:
@@ -207,9 +209,10 @@ class TestGitCloneFailures:
         with pytest.raises(RuntimeError, match="All 1 repo"):
             service.start()
 
-        assert service.repo_states["bad-git"].status == RepoStatus.FAILED
+        repo_states = {r.repo_id: r for r in service._repos_store.get().value}
+        assert repo_states["bad-git"].status == RepoStatus.FAILED
         # Error should mention git or mirror
-        error_msg = service.repo_states["bad-git"].error_message or ""
+        error_msg = repo_states["bad-git"].error_message or ""
         assert "mirror" in error_msg.lower() or "git" in error_msg.lower()
 
 
@@ -251,14 +254,17 @@ class TestPartialFailures:
 
             try:
                 # Check repo states
-                assert len(service.repo_states) == 2
+                repo_states = {
+                    r.repo_id: r for r in service._repos_store.get().value
+                }
+                assert len(repo_states) == 2
 
                 # Working repo should be live
-                assert service.repo_states["working"].status == RepoStatus.LIVE
+                assert repo_states["working"].status == RepoStatus.LIVE
 
                 # Broken repo should be failed
-                assert service.repo_states["broken"].status == RepoStatus.FAILED
-                assert service.repo_states["broken"].error_message is not None
+                assert repo_states["broken"].status == RepoStatus.FAILED
+                assert repo_states["broken"].error_message is not None
 
                 # Service should still process emails for working repo
                 mock_code = """
@@ -334,7 +340,7 @@ class TestDashboardRepoStatus:
             try:
                 # Check dashboard is running and service has repo states
                 assert service.dashboard is not None
-                repo_states = service._get_repo_states()
+                repo_states = list(service._repos_store.get().value)
                 assert len(repo_states) == 2
 
                 # Verify health endpoint would show correct status

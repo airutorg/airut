@@ -447,11 +447,10 @@ class TestRepoHandlerInitError:
             svc.start()
 
         # Error should be in repo_states
-        assert len(svc.repo_states) == 1
-        assert svc.repo_states["test"].status == RepoStatus.FAILED
-        assert "Git clone failed" in (
-            svc.repo_states["test"].error_message or ""
-        )
+        repo_states = {r.repo_id: r for r in svc._repos_store.get().value}
+        assert len(repo_states) == 1
+        assert repo_states["test"].status == RepoStatus.FAILED
+        assert "Git clone failed" in (repo_states["test"].error_message or "")
 
 
 class TestStartRepoInitFailure:
@@ -476,11 +475,12 @@ class TestStartRepoInitFailure:
             svc.start()
 
         # Check that error was recorded
-        assert len(svc.repo_states) == 1
-        assert svc.repo_states["test"].status == RepoStatus.FAILED
-        err_msg = svc.repo_states["test"].error_message or ""
+        repo_states = {r.repo_id: r for r in svc._repos_store.get().value}
+        assert len(repo_states) == 1
+        assert repo_states["test"].status == RepoStatus.FAILED
+        err_msg = repo_states["test"].error_message or ""
         assert "IMAP auth failed" in err_msg
-        assert svc.repo_states["test"].error_type == "RuntimeError"
+        assert repo_states["test"].error_type == "RuntimeError"
 
     def test_all_repos_fail_raises(self, email_config, tmp_path: Path) -> None:
         """When all repos fail, service should raise RuntimeError."""
@@ -526,11 +526,12 @@ class TestStartRepoInitFailure:
         svc.start()
 
         # Service should start with partial failure
-        assert len(svc.repo_states) == 2
+        repo_states = {r.repo_id: r for r in svc._repos_store.get().value}
+        assert len(repo_states) == 2
         from lib.dashboard.tracker import RepoStatus
 
-        assert svc.repo_states["test"].status == RepoStatus.LIVE
-        assert svc.repo_states["repo2"].status == RepoStatus.FAILED
+        assert repo_states["test"].status == RepoStatus.LIVE
+        assert repo_states["repo2"].status == RepoStatus.FAILED
 
 
 class TestBootState:
@@ -549,8 +550,9 @@ class TestBootState:
         with patch.object(handler, "_listener_loop", side_effect=fake_loop):
             svc.start()
 
-        assert svc.boot_state.phase == BootPhase.READY
-        assert svc.boot_state.completed_at is not None
+        boot = svc._boot_store.get().value
+        assert boot.phase == BootPhase.READY
+        assert boot.completed_at is not None
 
     def test_boot_state_failed_on_error(
         self, email_config, tmp_path: Path
@@ -570,11 +572,12 @@ class TestBootState:
         with pytest.raises(RuntimeError, match="All 1 repo"):
             svc.start()
 
-        assert svc.boot_state.phase == BootPhase.FAILED
-        assert svc.boot_state.error_message is not None
-        assert "All 1 repo" in svc.boot_state.error_message
-        assert svc.boot_state.error_type == "RuntimeError"
-        assert svc.boot_state.error_traceback is not None
+        boot = svc._boot_store.get().value
+        assert boot.phase == BootPhase.FAILED
+        assert boot.error_message is not None
+        assert "All 1 repo" in boot.error_message
+        assert boot.error_type == "RuntimeError"
+        assert boot.error_traceback is not None
 
     def test_resilient_mode_stays_alive(
         self, email_config, tmp_path: Path
@@ -593,8 +596,9 @@ class TestBootState:
         with patch("time.sleep", side_effect=KeyboardInterrupt):
             svc.start(resilient=True)
 
-        assert svc.boot_state.phase == BootPhase.FAILED
-        assert svc.boot_state.error_message is not None
+        boot = svc._boot_store.get().value
+        assert boot.phase == BootPhase.FAILED
+        assert boot.error_message is not None
 
     def test_dashboard_stopped_on_boot_failure(
         self, email_config, tmp_path: Path
@@ -648,18 +652,22 @@ class TestBootState:
 
 class TestStateProviders:
     def test_get_repo_states(self, email_config, tmp_path: Path) -> None:
-        """_get_repo_states returns list of current repo states."""
+        """_get_repo_states returns dirs based on repos_store."""
         from lib.dashboard.tracker import RepoState, RepoStatus
 
         svc, _ = make_service(email_config, tmp_path)
-        svc.repo_states["r1"] = RepoState(
-            repo_id="r1",
-            status=RepoStatus.LIVE,
-            git_repo_url="https://example.com/r1",
-            imap_server="imap.example.com",
-            storage_dir="/s/r1",
+        svc._repos_store.update(
+            (
+                RepoState(
+                    repo_id="r1",
+                    status=RepoStatus.LIVE,
+                    git_repo_url="https://example.com/r1",
+                    imap_server="imap.example.com",
+                    storage_dir="/s/r1",
+                ),
+            )
         )
-        result = svc._get_repo_states()
+        result = svc._repos_store.get().value
         assert len(result) == 1
         assert result[0].repo_id == "r1"
 
@@ -668,12 +676,16 @@ class TestStateProviders:
         from lib.dashboard.tracker import RepoState, RepoStatus
 
         svc, handler = make_service(email_config, tmp_path)
-        svc.repo_states["test"] = RepoState(
-            repo_id="test",
-            status=RepoStatus.LIVE,
-            git_repo_url="https://example.com/r1",
-            imap_server="imap.example.com",
-            storage_dir="/s/test",
+        svc._repos_store.update(
+            (
+                RepoState(
+                    repo_id="test",
+                    status=RepoStatus.LIVE,
+                    git_repo_url="https://example.com/r1",
+                    imap_server="imap.example.com",
+                    storage_dir="/s/test",
+                ),
+            )
         )
         result = svc._get_work_dirs()
         assert len(result) == 1
@@ -686,12 +698,16 @@ class TestStateProviders:
         from lib.dashboard.tracker import RepoState, RepoStatus
 
         svc, _ = make_service(email_config, tmp_path)
-        svc.repo_states["test"] = RepoState(
-            repo_id="test",
-            status=RepoStatus.FAILED,
-            git_repo_url="https://example.com/r1",
-            imap_server="imap.example.com",
-            storage_dir="/s/test",
+        svc._repos_store.update(
+            (
+                RepoState(
+                    repo_id="test",
+                    status=RepoStatus.FAILED,
+                    git_repo_url="https://example.com/r1",
+                    imap_server="imap.example.com",
+                    storage_dir="/s/test",
+                ),
+            )
         )
         result = svc._get_work_dirs()
         assert len(result) == 0
