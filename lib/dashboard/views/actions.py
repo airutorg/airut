@@ -139,6 +139,27 @@ def _sse_events_script(conversation_id: str) -> str:
             return div.innerHTML;
         }}
 
+        function formatDiffBlock(text, prefix, className, maxLines) {{
+            if (!text) return '';
+            var lines = text.split('\\n');
+            // Remove trailing empty element from split if text ends with \\n
+            if (lines.length > 0 && lines[lines.length - 1] === '') {{
+                lines.pop();
+            }}
+            var shown = lines.slice(0, maxLines);
+            var parts = [];
+            for (var i = 0; i < shown.length; i++) {{
+                parts.push(prefix + ' ' + escapeHtml(shown[i]));
+            }}
+            if (lines.length > maxLines) {{
+                parts.push(
+                    '... (' + (lines.length - maxLines) + ' more lines)'
+                );
+            }}
+            return '<div class="' + className + '">'
+                + parts.join('\\n') + '</div>';
+        }}
+
         function renderStreamEvent(evt) {{
             var type = evt.type || 'unknown';
             if (type === 'system') {{
@@ -182,6 +203,19 @@ def _sse_events_script(conversation_id: str) -> str:
                             detail = '<span class="tool-desc">'
                                 + escapeHtml(inp.file_path || '')
                                 + '</span>';
+                            if (inp.replace_all) {{
+                                detail += '<span class="tool-desc">'
+                                    + '(replace_all)</span>';
+                            }}
+                            var oldStr = inp.old_string || '';
+                            var newStr = inp.new_string || '';
+                            var maxLines = {_EDIT_MAX_LINES};
+                            detail += formatDiffBlock(
+                                oldStr, '-', 'diff-removed', maxLines
+                            );
+                            detail += formatDiffBlock(
+                                newStr, '+', 'diff-added', maxLines
+                            );
                         }} else if (name === 'Grep') {{
                             detail = '<span class="tool-desc">/'
                                 + escapeHtml(inp.pattern || '')
