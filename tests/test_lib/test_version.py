@@ -26,6 +26,7 @@ from lib.version import (
     get_install_source,
     github_commit_url,
     github_release_url,
+    is_exact_version_tag,
 )
 
 
@@ -738,6 +739,34 @@ class TestIsOlder:
 
 
 # ── URL helpers ───────────────────────────────────────────────────
+
+
+class TestIsExactVersionTag:
+    """Tests for is_exact_version_tag helper."""
+
+    def test_exact_tag_with_v(self) -> None:
+        """Exact tag like v0.9.0 returns True."""
+        assert is_exact_version_tag("v0.9.0") is True
+
+    def test_exact_tag_without_v(self) -> None:
+        """Exact tag like 0.9.0 returns True."""
+        assert is_exact_version_tag("0.9.0") is True
+
+    def test_git_describe_with_commits(self) -> None:
+        """Git describe output with commits after tag returns False."""
+        assert is_exact_version_tag("v0.9.0-4-gecb890e") is False
+
+    def test_pre_release(self) -> None:
+        """Pre-release version like v0.9.0a1 returns True."""
+        assert is_exact_version_tag("v0.9.0a1") is True
+
+    def test_empty_string(self) -> None:
+        """Empty string returns False."""
+        assert is_exact_version_tag("") is False
+
+    def test_garbage(self) -> None:
+        """Non-version string returns False."""
+        assert is_exact_version_tag("not-a-version") is False
 
 
 class TestGitHubReleaseUrl:

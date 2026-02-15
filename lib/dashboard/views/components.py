@@ -26,7 +26,11 @@ from lib.dashboard.tracker import (
     TaskState,
     TaskStatus,
 )
-from lib.version import github_commit_url, github_release_url
+from lib.version import (
+    github_commit_url,
+    github_release_url,
+    is_exact_version_tag,
+)
 
 
 # Load logo SVG at module import time from embedded package data.
@@ -76,8 +80,8 @@ def render_version_info(version_info: VersionInfo | None) -> str:
     git_sha = version_info.git_sha
     version_label = version_info.version or git_sha
 
-    # Link to GitHub release page (tagged version) or commit page (dev).
-    if version_info.version:
+    # Link to GitHub release page (exact tag) or commit page (dev/post-tag).
+    if is_exact_version_tag(version_info.version):
         version_url = github_release_url(version_info.version)
     else:
         version_url = github_commit_url(version_info.git_sha_full)
