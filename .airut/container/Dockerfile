@@ -32,6 +32,12 @@ ENV PATH="/root/.local/bin:$PATH"
 # Install uv (to ~/.local/bin)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
+# /workspace is a host mount (ext4) while the uv cache lives on the container
+# overlay filesystem.  Hardlinks cannot cross filesystem boundaries, so uv
+# falls back to copies and prints a noisy warning on every invocation.
+# Setting COPY mode up-front silences the warning.
+ENV UV_LINK_MODE=copy
+
 # Install Python 3.13 via uv
 RUN uv python install 3.13
 
