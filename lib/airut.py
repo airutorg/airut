@@ -217,11 +217,16 @@ def _check_dependency(
 # ── init subcommand ─────────────────────────────────────────────────
 
 
+_DOCS_BASE = "https://github.com/airutorg/airut/blob/main"
+
+
 def cmd_init(argv: list[str]) -> int:
     """Create a stub server configuration file.
 
     Creates ``~/.config/airut/airut.yaml`` with a minimal commented
-    template if the file does not already exist.
+    template if the file does not already exist.  When a new file is
+    created, prints links to the deployment and repo-onboarding guides
+    to help the user complete configuration.
 
     Args:
         argv: Extra arguments (currently unused).
@@ -238,6 +243,10 @@ def cmd_init(argv: list[str]) -> int:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(_STUB_CONFIG)
     print(f"Created stub config: {config_path}")
+    print()
+    print("Next steps — complete your configuration:")
+    print(f"  Deployment guide:      {_DOCS_BASE}/doc/deployment.md")
+    print(f"  Repo onboarding guide: {_DOCS_BASE}/doc/repo-onboarding.md")
     return 0
 
 

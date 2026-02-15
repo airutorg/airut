@@ -216,6 +216,32 @@ class TestCmdInit:
         assert "Created stub config:" in captured.out
         assert str(config_path) in captured.out
 
+    def test_prints_doc_links_on_create(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Prints doc links when config is created."""
+        config_path = tmp_path / "airut.yaml"
+        with patch("lib.airut.get_config_path", return_value=config_path):
+            cmd_init([])
+
+        captured = capsys.readouterr()
+        assert "doc/deployment.md" in captured.out
+        assert "doc/repo-onboarding.md" in captured.out
+
+    def test_no_doc_links_when_config_exists(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Does not print doc links when config already exists."""
+        config_path = tmp_path / "airut.yaml"
+        config_path.write_text("existing: config\n")
+
+        with patch("lib.airut.get_config_path", return_value=config_path):
+            cmd_init([])
+
+        captured = capsys.readouterr()
+        assert "doc/deployment.md" not in captured.out
+        assert "doc/repo-onboarding.md" not in captured.out
+
     def test_prints_exists_message(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
