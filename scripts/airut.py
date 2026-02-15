@@ -4,9 +4,9 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Airut Email Gateway Service entry point.
+"""Airut Email Gateway Service — script entry point.
 
-See lib/gateway/service/ for the implementation.
+Delegates to :func:`lib.airut.cli`.  Equivalent to ``uv run airut``.
 """
 
 import sys
@@ -14,10 +14,10 @@ from pathlib import Path
 
 
 # Add project root to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from lib.gateway.service import main
+from lib.airut import cli
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    cli()

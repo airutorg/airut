@@ -241,7 +241,7 @@ lib/                        - Library code
   install_services.py       - Service installation and auto-update logic
   update_lock.py            - Advisory file lock
 scripts/                    - CLI tools
-  gateway/                  - Email gateway CLI
+  airut.py                  - Email gateway entry point (uv run airut)
   ci.py, pr.py              - CI/PR tools
   install_services.py       - Thin CLI entry point for service management
   check_markdown.py         - Markdown validation
@@ -260,7 +260,7 @@ workflows/                  - Step-by-step operational guides
 
 - `scripts/ci.py` — local CI runner (runs all checks)
 - `scripts/pr.py` — PR workflow (CI status and review comments)
-- `scripts/gateway/main.py` — email gateway entry point
+- `scripts/airut.py` — email gateway entry point (`uv run airut`)
 - `scripts/install_services.py` — systemd service installation
 
 ## Standards
