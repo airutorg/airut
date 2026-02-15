@@ -22,7 +22,7 @@ from lib.claude_output.types import (
     ToolUseBlock,
 )
 from lib.conversation import ConversationMetadata
-from lib.dashboard.tracker import TaskState
+from lib.dashboard.tracker import TaskState, TaskStatus
 from lib.dashboard.views.styles import actions_styles
 
 
@@ -59,6 +59,14 @@ def render_actions_page(
     else:
         actions_content = render_actions_timeline(conversation, event_groups)
 
+    is_active = task.status in (TaskStatus.QUEUED, TaskStatus.IN_PROGRESS)
+    sse_script = _sse_events_script(task.conversation_id) if is_active else ""
+    status_notice = (
+        '<div id="stream-status" class="stream-status">Connecting...</div>'
+        if is_active
+        else ""
+    )
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -89,12 +97,223 @@ def render_actions_page(
         <h1>Actions: {task.conversation_id}</h1>
         <span class="subtitle">{escaped_subject}</span>
     </div>
-    <div class="terminal">
+    <div class="terminal" id="events-container">
         {actions_content}
     </div>
+    {status_notice}
     <script>window.scrollTo(0, document.body.scrollHeight);</script>
+    {sse_script}
 </body>
 </html>"""
+
+
+def _sse_events_script(conversation_id: str) -> str:
+    """JavaScript for SSE-based live event streaming.
+
+    Connects to the per-conversation events stream endpoint and
+    appends new events to the timeline DOM as they arrive.
+
+    Args:
+        conversation_id: Conversation ID to stream events for.
+
+    Returns:
+        HTML <script> tag with SSE event streaming logic.
+    """
+    return f"""
+    <script>
+        var currentOffset = 0;
+        var autoScroll = true;
+
+        // Track if user has scrolled up (disable auto-scroll)
+        window.addEventListener('scroll', function() {{
+            var nearBottom = (
+                window.innerHeight + window.scrollY
+                >= document.body.offsetHeight - 100
+            );
+            autoScroll = nearBottom;
+        }});
+
+        function escapeHtml(text) {{
+            var div = document.createElement('div');
+            div.appendChild(document.createTextNode(text));
+            return div.innerHTML;
+        }}
+
+        function renderStreamEvent(evt) {{
+            var type = evt.type || 'unknown';
+            if (type === 'system') {{
+                var parts = [];
+                if (evt.subtype) parts.push(escapeHtml(evt.subtype));
+                if (evt.model) parts.push('model=' + escapeHtml(evt.model));
+                if (evt.session_id) {{
+                    parts.push('session=' + escapeHtml(evt.session_id));
+                }}
+                return '<div class="event"><div class="ev-system">'
+                    + 'system: ' + parts.join(' ') + '</div></div>';
+            }}
+            if (type === 'assistant') {{
+                var blocks = [];
+                var msg = evt.message || {{}};
+                var content = msg.content || [];
+                for (var i = 0; i < content.length; i++) {{
+                    var b = content[i];
+                    if (b.type === 'text') {{
+                        blocks.push(
+                            '<div class="ev-text">'
+                            + escapeHtml(b.text || '') + '</div>'
+                        );
+                    }} else if (b.type === 'tool_use') {{
+                        var name = escapeHtml(b.name || '');
+                        var inp = b.input || {{}};
+                        var detail = '';
+                        if (name === 'Bash') {{
+                            var cmd = escapeHtml(inp.command || '');
+                            detail = '<div class="bash-cmd">'
+                                + cmd + '</div>';
+                        }} else if (name === 'Read') {{
+                            detail = '<span class="tool-desc">'
+                                + escapeHtml(inp.file_path || '')
+                                + '</span>';
+                        }} else if (name === 'Write') {{
+                            detail = '<span class="tool-desc">'
+                                + escapeHtml(inp.file_path || '')
+                                + '</span>';
+                        }} else if (name === 'Edit') {{
+                            detail = '<span class="tool-desc">'
+                                + escapeHtml(inp.file_path || '')
+                                + '</span>';
+                        }} else if (name === 'Grep') {{
+                            detail = '<span class="tool-desc">/'
+                                + escapeHtml(inp.pattern || '')
+                                + '/</span>';
+                        }} else if (name === 'Glob') {{
+                            detail = '<span class="tool-desc">'
+                                + escapeHtml(inp.pattern || '')
+                                + '</span>';
+                        }} else if (name === 'Task') {{
+                            detail = '<span class="tool-desc">'
+                                + escapeHtml(inp.description || '')
+                                + '</span>';
+                        }} else {{
+                            detail = '<span class="tool-desc">'
+                                + escapeHtml(
+                                    JSON.stringify(inp).substring(0, 200)
+                                )
+                                + '</span>';
+                        }}
+                        blocks.push(
+                            '<div class="ev-tool-use">'
+                            + '<span class="tool-name">' + name + '</span>'
+                            + detail + '</div>'
+                        );
+                    }}
+                }}
+                if (blocks.length === 0) return '';
+                return '<div class="event">' + blocks.join('') + '</div>';
+            }}
+            if (type === 'user') {{
+                var uBlocks = [];
+                var uContent = evt.message
+                    ? (evt.message.content || []) : [];
+                for (var j = 0; j < uContent.length; j++) {{
+                    var ub = uContent[j];
+                    if (ub.type === 'tool_result') {{
+                        var isErr = ub.is_error || false;
+                        var rc = ub.content || '';
+                        if (Array.isArray(rc)) {{
+                            var texts = [];
+                            for (var k = 0; k < rc.length; k++) {{
+                                if (rc[k].type === 'text') {{
+                                    texts.push(rc[k].text || '');
+                                }}
+                            }}
+                            rc = texts.join('\\n');
+                        }}
+                        var lines = rc.split('\\n');
+                        if (lines.length > 20) {{
+                            rc = lines.slice(0, 20).join('\\n')
+                                + '\\n\\n... ('
+                                + (lines.length - 20) + ' more lines)';
+                        }}
+                        var errCls = isErr ? ' error' : '';
+                        var errNote = isErr ? ' (error)' : '';
+                        var label = '<div class="ev-tool-result-label">'
+                            + 'Tool Result' + errNote + ':</div>';
+                        var body = escapeHtml(rc).trim()
+                            ? escapeHtml(rc)
+                            : '(empty)';
+                        uBlocks.push(
+                            label
+                            + '<div class="ev-tool-result' + errCls + '">'
+                            + body + '</div>'
+                        );
+                    }}
+                }}
+                if (uBlocks.length === 0) return '';
+                return '<div class="event">'
+                    + uBlocks.join('') + '</div>';
+            }}
+            if (type === 'result') {{
+                var meta = [];
+                if (evt.subtype) meta.push(escapeHtml(evt.subtype));
+                if (evt.duration_ms != null) {{
+                    meta.push(evt.duration_ms + 'ms');
+                }}
+                if (evt.total_cost_usd != null) {{
+                    meta.push('$' + evt.total_cost_usd.toFixed(4));
+                }}
+                if (evt.num_turns != null) {{
+                    meta.push(evt.num_turns + ' turns');
+                }}
+                return '<div class="event"><div class="ev-result">'
+                    + 'result: ' + meta.join(' | ')
+                    + '</div></div>';
+            }}
+            return '';
+        }}
+
+        function connectEventsSSE() {{
+            var url = '/api/conversation/{conversation_id}/events/stream'
+                + '?offset=' + currentOffset;
+            var source = new EventSource(url);
+            var status = document.getElementById('stream-status');
+
+            source.addEventListener('events', function(e) {{
+                try {{
+                    var data = JSON.parse(e.data);
+                    currentOffset = data.offset || currentOffset;
+                    var container = document.getElementById(
+                        'events-container'
+                    );
+                    var events = data.events || [];
+                    for (var i = 0; i < events.length; i++) {{
+                        var html = renderStreamEvent(events[i]);
+                        if (html) {{
+                            container.insertAdjacentHTML('beforeend', html);
+                        }}
+                    }}
+                    if (events.length > 0 && autoScroll) {{
+                        window.scrollTo(0, document.body.scrollHeight);
+                    }}
+                    if (status) status.textContent = 'Live';
+                }} catch (err) {{ /* ignore parse errors */ }}
+            }});
+
+            source.addEventListener('done', function(e) {{
+                source.close();
+                if (status) status.textContent = 'Complete';
+            }});
+
+            source.onerror = function() {{
+                source.close();
+                if (status) status.textContent = 'Disconnected';
+            }};
+
+            if (status) status.textContent = 'Live';
+        }}
+
+        connectEventsSSE();
+    </script>"""
 
 
 def render_actions_timeline(

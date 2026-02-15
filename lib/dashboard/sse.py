@@ -13,6 +13,7 @@ state updates to connected browsers.
 import json
 import logging
 import threading
+import time
 from collections.abc import Generator
 from typing import Any
 
@@ -20,6 +21,7 @@ from lib.dashboard.tracker import (
     BootState,
     RepoState,
     TaskState,
+    TaskStatus,
     TaskTracker,
 )
 from lib.dashboard.versioned import VersionClock, VersionedStore
@@ -271,3 +273,150 @@ def sse_state_stream(
             build_state_snapshot(tracker, boot_store, repos_store, new_version),
             event_id=str(new_version),
         )
+
+
+def sse_events_log_stream(
+    event_log: Any,
+    tracker: TaskTracker,
+    conversation_id: str,
+    client_offset: int,
+    poll_interval: float = 0.5,
+    heartbeat_interval: float = 15.0,
+) -> Generator[str]:
+    """Generate SSE events for a conversation's event log stream.
+
+    Polls ``EventLog.tail()`` for new events and yields them as SSE
+    messages. Sends a terminal ``done`` event when the task completes.
+
+    Args:
+        event_log: EventLog instance for the conversation.
+        tracker: Task tracker to check task status.
+        conversation_id: Conversation ID to monitor.
+        client_offset: Client's last known byte offset.
+        poll_interval: Seconds between tail() polls.
+        heartbeat_interval: Seconds between heartbeat comments.
+
+    Yields:
+        SSE-formatted event strings.
+    """
+    offset = client_offset
+    last_heartbeat = time.monotonic()
+
+    # Send initial catch-up with retry interval
+    events, offset = event_log.tail(offset)
+    if events:
+        data = json.dumps(
+            {
+                "offset": offset,
+                "events": [json.loads(e.raw) for e in events],
+            }
+        )
+        yield format_sse_event("events", data, retry=1000)
+    else:
+        yield format_sse_event(
+            "events",
+            json.dumps({"offset": offset, "events": []}),
+            retry=1000,
+        )
+
+    while True:
+        time.sleep(poll_interval)
+
+        events, new_offset = event_log.tail(offset)
+        if events:
+            offset = new_offset
+            last_heartbeat = time.monotonic()
+            data = json.dumps(
+                {
+                    "offset": offset,
+                    "events": [json.loads(e.raw) for e in events],
+                }
+            )
+            yield format_sse_event("events", data)
+
+        # Check if task is done
+        task = tracker.get_task(conversation_id)
+        if task is None or task.status == TaskStatus.COMPLETED:
+            # Drain any remaining events
+            events, offset = event_log.tail(offset)
+            if events:
+                data = json.dumps(
+                    {
+                        "offset": offset,
+                        "events": [json.loads(e.raw) for e in events],
+                    }
+                )
+                yield format_sse_event("events", data)
+            yield format_sse_event("done", json.dumps({"offset": offset}))
+            return
+
+        # Send heartbeat if idle
+        if time.monotonic() - last_heartbeat >= heartbeat_interval:
+            yield format_sse_comment("heartbeat")
+            last_heartbeat = time.monotonic()
+
+
+def sse_network_log_stream(
+    network_log: Any,
+    tracker: TaskTracker,
+    conversation_id: str,
+    client_offset: int,
+    poll_interval: float = 0.5,
+    heartbeat_interval: float = 15.0,
+) -> Generator[str]:
+    """Generate SSE events for a conversation's network log stream.
+
+    Polls ``NetworkLog.tail()`` for new lines and yields them as SSE
+    messages. Sends a terminal ``done`` event when the task completes.
+
+    Args:
+        network_log: NetworkLog instance for the conversation.
+        tracker: Task tracker to check task status.
+        conversation_id: Conversation ID to monitor.
+        client_offset: Client's last known byte offset.
+        poll_interval: Seconds between tail() polls.
+        heartbeat_interval: Seconds between heartbeat comments.
+
+    Yields:
+        SSE-formatted event strings.
+    """
+    offset = client_offset
+    last_heartbeat = time.monotonic()
+
+    # Send initial catch-up with retry interval
+    lines, offset = network_log.tail(offset)
+    if lines:
+        data = json.dumps({"offset": offset, "lines": lines})
+        yield format_sse_event("lines", data, retry=1000)
+    else:
+        yield format_sse_event(
+            "lines",
+            json.dumps({"offset": offset, "lines": []}),
+            retry=1000,
+        )
+
+    while True:
+        time.sleep(poll_interval)
+
+        lines, new_offset = network_log.tail(offset)
+        if lines:
+            offset = new_offset
+            last_heartbeat = time.monotonic()
+            data = json.dumps({"offset": offset, "lines": lines})
+            yield format_sse_event("lines", data)
+
+        # Check if task is done
+        task = tracker.get_task(conversation_id)
+        if task is None or task.status == TaskStatus.COMPLETED:
+            # Drain any remaining lines
+            lines, offset = network_log.tail(offset)
+            if lines:
+                data = json.dumps({"offset": offset, "lines": lines})
+                yield format_sse_event("lines", data)
+            yield format_sse_event("done", json.dumps({"offset": offset}))
+            return
+
+        # Send heartbeat if idle
+        if time.monotonic() - last_heartbeat >= heartbeat_interval:
+            yield format_sse_comment("heartbeat")
+            last_heartbeat = time.monotonic()

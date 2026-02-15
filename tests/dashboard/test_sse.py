@@ -7,6 +7,7 @@
 
 import json
 import threading
+from pathlib import Path
 
 from lib.dashboard.sse import (
     SSEConnectionManager,
@@ -16,6 +17,8 @@ from lib.dashboard.sse import (
     build_state_snapshot,
     format_sse_comment,
     format_sse_event,
+    sse_events_log_stream,
+    sse_network_log_stream,
     sse_state_stream,
 )
 from lib.dashboard.tracker import (
@@ -28,6 +31,7 @@ from lib.dashboard.tracker import (
     TaskTracker,
 )
 from lib.dashboard.versioned import VersionClock, VersionedStore
+from lib.sandbox import EventLog, NetworkLog
 
 
 class TestFormatSSEEvent:
@@ -420,3 +424,514 @@ class TestSSEStateStream:
         data = json.loads("".join(data_lines))
         assert len(data["tasks"]) == 1
         assert data["tasks"][0]["conversation_id"] == "t1"
+
+
+def _parse_sse_data(sse_text: str) -> dict:
+    """Extract and parse JSON from an SSE event string."""
+    data_lines = [
+        line[6:] for line in sse_text.split("\n") if line.startswith("data: ")
+    ]
+    return json.loads("".join(data_lines))
+
+
+class TestSSEEventsLogStream:
+    """Tests for the events log SSE stream generator."""
+
+    def test_initial_event_empty(self, tmp_path: Path) -> None:
+        """Stream yields initial event with empty events list."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.start_task("t1")
+        event_log = EventLog(tmp_path / "t1")
+        (tmp_path / "t1").mkdir()
+
+        gen = sse_events_log_stream(
+            event_log, tracker, "t1", 0, poll_interval=0.01
+        )
+        first = next(gen)
+
+        assert "event: events\n" in first
+        assert "retry: 1000\n" in first
+        data = _parse_sse_data(first)
+        assert data["events"] == []
+        assert "offset" in data
+
+    def test_done_event_on_completed_task(self, tmp_path: Path) -> None:
+        """Stream sends done event when task is completed."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.start_task("t1")
+        conv_dir = tmp_path / "t1"
+        conv_dir.mkdir()
+        event_log = EventLog(conv_dir)
+
+        gen = sse_events_log_stream(
+            event_log, tracker, "t1", 0, poll_interval=0.01
+        )
+        # Consume initial event
+        next(gen)
+
+        # Complete the task
+        tracker.complete_task("t1", success=True)
+
+        # Next should be done event
+        event = next(gen)
+        assert "event: done\n" in event
+
+    def test_done_event_on_missing_task(self, tmp_path: Path) -> None:
+        """Stream sends done event when task not found in tracker."""
+        tracker = TaskTracker()
+        conv_dir = tmp_path / "t1"
+        conv_dir.mkdir()
+        event_log = EventLog(conv_dir)
+
+        gen = sse_events_log_stream(
+            event_log, tracker, "t1", 0, poll_interval=0.01
+        )
+        # Consume initial event
+        next(gen)
+
+        # Task doesn't exist in tracker -> done
+        event = next(gen)
+        assert "event: done\n" in event
+
+    def test_streams_new_events(self, tmp_path: Path) -> None:
+        """Stream yields new events as they are appended."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.start_task("t1")
+        conv_dir = tmp_path / "t1"
+        conv_dir.mkdir()
+        event_log = EventLog(conv_dir)
+
+        # Write some events before starting stream
+        event_log.start_new_reply()
+        from lib.claude_output import parse_stream_events
+
+        events = parse_stream_events(
+            '{"type": "system", "subtype": "init", "session_id": "s1"}'
+        )
+        for e in events:
+            event_log.append_event(e)
+
+        gen = sse_events_log_stream(
+            event_log, tracker, "t1", 0, poll_interval=0.01
+        )
+        first = next(gen)
+
+        data = _parse_sse_data(first)
+        assert len(data["events"]) == 1
+        assert data["events"][0]["type"] == "system"
+
+    def test_heartbeat_on_idle(self, tmp_path: Path) -> None:
+        """Stream sends heartbeat when idle."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.start_task("t1")
+        conv_dir = tmp_path / "t1"
+        conv_dir.mkdir()
+        event_log = EventLog(conv_dir)
+
+        gen = sse_events_log_stream(
+            event_log,
+            tracker,
+            "t1",
+            0,
+            poll_interval=0.01,
+            heartbeat_interval=0.02,
+        )
+        # Consume initial event
+        next(gen)
+
+        # Next should be heartbeat (task is still active, no new events)
+        heartbeat = next(gen)
+        assert heartbeat == ": heartbeat\n\n"
+
+    def test_incremental_events_mid_stream(self, tmp_path: Path) -> None:
+        """Stream yields events that arrive after initial snapshot."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.start_task("t1")
+        conv_dir = tmp_path / "t1"
+        conv_dir.mkdir()
+        event_log = EventLog(conv_dir)
+
+        gen = sse_events_log_stream(
+            event_log, tracker, "t1", 0, poll_interval=0.01
+        )
+        # Consume initial (empty)
+        next(gen)
+
+        # Write events while stream is running
+        from lib.claude_output import parse_stream_events
+
+        events = parse_stream_events(
+            '{"type": "system", "subtype": "init", "session_id": "s1"}'
+        )
+        event_log.start_new_reply()
+        for e in events:
+            event_log.append_event(e)
+
+        # Next poll should pick up the new events
+        event = next(gen)
+        assert "event: events\n" in event
+        data = _parse_sse_data(event)
+        assert len(data["events"]) == 1
+
+        # Now complete the task
+        tracker.complete_task("t1", success=True)
+        done = next(gen)
+        assert "event: done\n" in done
+
+    def test_drain_events_on_completion(self, tmp_path: Path) -> None:
+        """Stream drains remaining events when task completes."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.start_task("t1")
+        conv_dir = tmp_path / "t1"
+        conv_dir.mkdir()
+        event_log = EventLog(conv_dir)
+
+        from lib.claude_output import parse_stream_events
+
+        # Write events before starting the stream
+        events = parse_stream_events(
+            '{"type": "system", "subtype": "init", "session_id": "s1"}'
+        )
+        event_log.start_new_reply()
+        for e in events:
+            event_log.append_event(e)
+
+        gen = sse_events_log_stream(
+            event_log, tracker, "t1", 0, poll_interval=0.01
+        )
+        # Initial snapshot includes the existing events
+        first = next(gen)
+        data = _parse_sse_data(first)
+        assert len(data["events"]) == 1
+
+        # Write more events and complete the task simultaneously
+        events2 = parse_stream_events(
+            '{"type": "system", "subtype": "done", "session_id": "s1"}'
+        )
+        for e in events2:
+            event_log.append_event(e)
+        tracker.complete_task("t1", success=True)
+
+        # Collect remaining events (drain + done)
+        remaining = []
+        for event in gen:
+            remaining.append(event)
+            if "event: done\n" in event:
+                break
+
+        # Should have gotten the drained events and a done
+        has_events = any("event: events\n" in e for e in remaining)
+        has_done = any("event: done\n" in e for e in remaining)
+        assert has_events or has_done  # at minimum done event
+        assert has_done
+
+    def test_drain_has_remaining_events(self, tmp_path: Path) -> None:
+        """Drain emits events written between poll and done check.
+
+        Uses a mock to simulate events arriving after the regular
+        tail() returns empty but before the drain tail() runs.
+        """
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.start_task("t1")
+        conv_dir = tmp_path / "t1"
+        conv_dir.mkdir()
+        event_log = EventLog(conv_dir)
+
+        from lib.claude_output import parse_stream_events
+
+        gen = sse_events_log_stream(
+            event_log, tracker, "t1", 0, poll_interval=0.01
+        )
+        # Initial: empty
+        next(gen)
+
+        # Write events and complete the task
+        events = parse_stream_events(
+            '{"type": "system", "subtype": "init", "session_id": "s1"}'
+        )
+        event_log.start_new_reply()
+        for e in events:
+            event_log.append_event(e)
+        tracker.complete_task("t1", success=True)
+
+        # Make the regular poll return empty by patching tail to return
+        # empty first time, then real data on drain
+        real_tail = event_log.tail
+        call_count = 0
+
+        def fake_tail(offset: int = 0) -> tuple:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # Regular poll: return empty
+                return [], offset
+            # Drain: return actual data
+            return real_tail(offset)
+
+        event_log.tail = fake_tail  # type: ignore[assignment]
+
+        # Collect remaining
+        remaining = []
+        for event in gen:
+            remaining.append(event)
+            if "event: done\n" in event:
+                break
+
+        # Drain should have emitted events
+        events_msgs = [e for e in remaining if "event: events\n" in e]
+        assert len(events_msgs) >= 1
+        drain_data = _parse_sse_data(events_msgs[-1])
+        assert len(drain_data["events"]) > 0
+        assert any("event: done\n" in e for e in remaining)
+
+    def test_heartbeat_resets_timestamp(self, tmp_path: Path) -> None:
+        """Heartbeat resets the last_heartbeat timer."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.start_task("t1")
+        conv_dir = tmp_path / "t1"
+        conv_dir.mkdir()
+        event_log = EventLog(conv_dir)
+
+        gen = sse_events_log_stream(
+            event_log,
+            tracker,
+            "t1",
+            0,
+            poll_interval=0.01,
+            heartbeat_interval=0.02,
+        )
+        # Initial
+        next(gen)
+
+        # First heartbeat
+        hb1 = next(gen)
+        assert hb1 == ": heartbeat\n\n"
+
+        # Second heartbeat (tests that timestamp was reset)
+        hb2 = next(gen)
+        assert hb2 == ": heartbeat\n\n"
+
+
+class TestSSENetworkLogStream:
+    """Tests for the network log SSE stream generator."""
+
+    def test_initial_event_empty(self, tmp_path: Path) -> None:
+        """Stream yields initial event with empty lines list."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.start_task("t1")
+        log_path = tmp_path / "network-sandbox.log"
+        network_log = NetworkLog(log_path)
+
+        gen = sse_network_log_stream(
+            network_log, tracker, "t1", 0, poll_interval=0.01
+        )
+        first = next(gen)
+
+        assert "event: lines\n" in first
+        assert "retry: 1000\n" in first
+        data = _parse_sse_data(first)
+        assert data["lines"] == []
+
+    def test_streams_new_lines(self, tmp_path: Path) -> None:
+        """Stream yields new lines as they are appended."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.start_task("t1")
+        log_path = tmp_path / "network-sandbox.log"
+        log_path.write_text("allowed GET https://api.github.com -> 200\n")
+        network_log = NetworkLog(log_path)
+
+        gen = sse_network_log_stream(
+            network_log, tracker, "t1", 0, poll_interval=0.01
+        )
+        first = next(gen)
+
+        data = _parse_sse_data(first)
+        assert len(data["lines"]) == 1
+        assert "github.com" in data["lines"][0]
+
+    def test_done_event_on_completed_task(self, tmp_path: Path) -> None:
+        """Stream sends done event when task is completed."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.start_task("t1")
+        log_path = tmp_path / "network-sandbox.log"
+        network_log = NetworkLog(log_path)
+
+        gen = sse_network_log_stream(
+            network_log, tracker, "t1", 0, poll_interval=0.01
+        )
+        # Consume initial event
+        next(gen)
+
+        # Complete the task
+        tracker.complete_task("t1", success=True)
+
+        event = next(gen)
+        assert "event: done\n" in event
+
+    def test_heartbeat_on_idle(self, tmp_path: Path) -> None:
+        """Stream sends heartbeat when idle."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.start_task("t1")
+        log_path = tmp_path / "network-sandbox.log"
+        network_log = NetworkLog(log_path)
+
+        gen = sse_network_log_stream(
+            network_log,
+            tracker,
+            "t1",
+            0,
+            poll_interval=0.01,
+            heartbeat_interval=0.02,
+        )
+        # Consume initial event
+        next(gen)
+
+        heartbeat = next(gen)
+        assert heartbeat == ": heartbeat\n\n"
+
+    def test_incremental_lines_mid_stream(self, tmp_path: Path) -> None:
+        """Stream yields lines that arrive after initial snapshot."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.start_task("t1")
+        log_path = tmp_path / "network-sandbox.log"
+        network_log = NetworkLog(log_path)
+
+        gen = sse_network_log_stream(
+            network_log, tracker, "t1", 0, poll_interval=0.01
+        )
+        # Consume initial (empty, file doesn't exist yet)
+        next(gen)
+
+        # Write log content while stream is running
+        log_path.write_text("allowed GET https://api.github.com -> 200\n")
+
+        # Next poll should pick up the new lines
+        event = next(gen)
+        assert "event: lines\n" in event
+        data = _parse_sse_data(event)
+        assert len(data["lines"]) == 1
+        assert "github.com" in data["lines"][0]
+
+        # Now complete the task
+        tracker.complete_task("t1", success=True)
+        done = next(gen)
+        assert "event: done\n" in done
+
+    def test_drain_lines_on_completion(self, tmp_path: Path) -> None:
+        """Stream drains remaining lines when task completes."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.start_task("t1")
+        log_path = tmp_path / "network-sandbox.log"
+        log_path.write_text("line1\n")
+        network_log = NetworkLog(log_path)
+
+        gen = sse_network_log_stream(
+            network_log, tracker, "t1", 0, poll_interval=0.01
+        )
+        # Consume initial snapshot
+        first = next(gen)
+        data = _parse_sse_data(first)
+        assert len(data["lines"]) == 1
+
+        # Append more and complete
+        with log_path.open("a") as f:
+            f.write("line2\n")
+        tracker.complete_task("t1", success=True)
+
+        # Collect remaining
+        remaining = []
+        for event in gen:
+            remaining.append(event)
+            if "event: done\n" in event:
+                break
+
+        has_done = any("event: done\n" in e for e in remaining)
+        assert has_done
+
+    def test_drain_has_remaining_lines(self, tmp_path: Path) -> None:
+        """Drain emits lines written between poll and done check.
+
+        Uses a mock to simulate lines arriving after the regular
+        tail() returns empty but before the drain tail() runs.
+        """
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.start_task("t1")
+        log_path = tmp_path / "network-sandbox.log"
+        network_log = NetworkLog(log_path)
+
+        gen = sse_network_log_stream(
+            network_log, tracker, "t1", 0, poll_interval=0.01
+        )
+        # Initial: empty
+        next(gen)
+
+        # Write lines and complete the task
+        log_path.write_text("late line\n")
+        tracker.complete_task("t1", success=True)
+
+        # Make the regular poll return empty but drain finds data
+        real_tail = network_log.tail
+        call_count = 0
+
+        def fake_tail(offset: int = 0) -> tuple:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [], offset
+            return real_tail(offset)
+
+        network_log.tail = fake_tail  # type: ignore[assignment]
+
+        remaining = []
+        for event in gen:
+            remaining.append(event)
+            if "event: done\n" in event:
+                break
+
+        lines_msgs = [e for e in remaining if "event: lines\n" in e]
+        assert len(lines_msgs) >= 1
+        drain_data = _parse_sse_data(lines_msgs[-1])
+        assert len(drain_data["lines"]) > 0
+        assert any("event: done\n" in e for e in remaining)
+
+    def test_heartbeat_resets_timestamp(self, tmp_path: Path) -> None:
+        """Heartbeat resets the last_heartbeat timer."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.start_task("t1")
+        log_path = tmp_path / "network-sandbox.log"
+        network_log = NetworkLog(log_path)
+
+        gen = sse_network_log_stream(
+            network_log,
+            tracker,
+            "t1",
+            0,
+            poll_interval=0.01,
+            heartbeat_interval=0.02,
+        )
+        # Initial
+        next(gen)
+
+        # First heartbeat
+        hb1 = next(gen)
+        assert hb1 == ": heartbeat\n\n"
+
+        # Second heartbeat (tests timestamp was reset)
+        hb2 = next(gen)
+        assert hb2 == ": heartbeat\n\n"

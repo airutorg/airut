@@ -170,7 +170,16 @@ class TestNetworkLogLineStyling:
         html = harness.get_html("/conversation/abc12345/network")
         assert "api.github.com" in html
         assert "api.example.com" in html
-        assert html.count('class="log-line') == 2
+        # Count rendered log divs within the terminal container
+        # (excluding JS template strings in SSE script)
+        from lib.dashboard.views.network import render_network_log_lines
+
+        rendered = render_network_log_lines(
+            "allowed GET https://api.github.com -> 200\n"
+            "\n"
+            "allowed GET https://api.example.com -> 200\n"
+        )
+        assert rendered.count('<div class="log-line') == 2
 
     def test_conn_error_lines(self, harness: DashboardHarness) -> None:
         """Test ERROR lines (upstream failures) get conn-error styling."""

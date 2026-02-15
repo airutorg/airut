@@ -122,6 +122,14 @@ class DashboardServer:
                 ),
                 Rule("/api/repos", endpoint="api_repos"),
                 Rule("/api/events/stream", endpoint="events_stream"),
+                Rule(
+                    "/api/conversation/<conversation_id>/events/stream",
+                    endpoint="events_log_stream",
+                ),
+                Rule(
+                    "/api/conversation/<conversation_id>/network/stream",
+                    endpoint="network_log_stream",
+                ),
                 Rule("/health", endpoint="health"),
             ]
         )
@@ -143,6 +151,8 @@ class DashboardServer:
             "api_task_stop": self._handlers.handle_api_task_stop,
             "api_repos": self._handlers.handle_api_repos,
             "events_stream": self._handlers.handle_events_stream,
+            "events_log_stream": (self._handlers.handle_events_log_stream),
+            "network_log_stream": (self._handlers.handle_network_log_stream),
             "health": self._handlers.handle_health,
         }
 
