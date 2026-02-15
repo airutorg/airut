@@ -49,16 +49,13 @@ from lib.sandbox import Sandbox, SandboxConfig, Task
 logger = logging.getLogger(__name__)
 
 
-def capture_version_info(repo_root: Path | None = None) -> VersionInfo:
+def capture_version_info() -> VersionInfo:
     """Capture git version information at startup.
-
-    Args:
-        repo_root: Path to the repository root. If None, auto-detected.
 
     Returns:
         VersionInfo with git SHA and worktree status.
     """
-    git_version = get_git_version_info(repo_root)
+    git_version = get_git_version_info()
 
     return VersionInfo(
         version=git_version.version,
@@ -125,7 +122,7 @@ class EmailGatewayService:
         self._clock = VersionClock()
         self.tracker = TaskTracker(clock=self._clock)
         self.dashboard: DashboardServer | None = None
-        self._version_info = capture_version_info(repo_root)
+        self._version_info = capture_version_info()
         self._boot_store = VersionedStore(BootState(), self._clock)
         self._repos_store = VersionedStore(
             tuple[RepoState, ...](()), self._clock

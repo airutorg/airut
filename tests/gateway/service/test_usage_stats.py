@@ -6,7 +6,6 @@
 """Tests for usage_stats module."""
 
 import json
-from pathlib import Path
 from unittest.mock import patch
 
 from lib.claude_output import (
@@ -79,27 +78,6 @@ class TestCaptureVersionInfo:
         assert result.git_sha == "def5678"
         assert result.worktree_clean is False
         assert result.started_at == 2000.0
-
-    def test_capture_passes_repo_root(self) -> None:
-        mock_git_version = GitVersionInfo(
-            version="",
-            sha_short="abc1234",
-            sha_full="abc1234567890abcdef1234567890abcdef123456",
-            worktree_clean=True,
-            full_status="status",
-        )
-        repo_root = Path("/custom/repo")
-
-        with (
-            patch(
-                "lib.gateway.service.gateway.get_git_version_info"
-            ) as mock_get_version,
-            patch("time.time", return_value=3000.0),
-        ):
-            mock_get_version.return_value = mock_git_version
-            capture_version_info(repo_root)
-
-        mock_get_version.assert_called_once_with(repo_root)
 
 
 class TestUsageStats:
