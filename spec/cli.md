@@ -74,11 +74,11 @@ all critical checks pass, 1 otherwise.
 | Dependencies  | git (>= 2.25), podman (>= 4.0) installed and version met | Yes               |
 | Service       | Unit file exists, service running, version mismatch      | No                |
 
-**Version checking** uses `check_upstream_version()` from `lib/git_version.py`.
-For PyPI installs, it queries the PyPI JSON API. For VCS (GitHub) installs, it
+**Version checking** uses `check_upstream_version()` from `lib/version.py`. For
+PyPI installs, it queries the PyPI JSON API. For VCS (GitHub) installs, it
 queries the GitHub API for the latest commit. Editable and local-dir installs
-skip the check. See `lib/git_version.py` for the `InstallSource` detection via
-PEP 610 `direct_url.json`.
+skip the check. See `lib/version.py` for the `InstallSource` detection via PEP
+610 `direct_url.json`.
 
 **Dependency checking** uses `shutil.which()` to locate binaries and runs their
 version commands with a 10-second timeout. Version strings are parsed tolerantly
@@ -213,7 +213,7 @@ gateway design.
 lib/
 ├── airut.py              # CLI entry point, subcommand dispatch, check/update
 ├── install_services.py   # Systemd user service management
-└── git_version.py        # Version detection (embedded + git fallback)
+└── version.py            # Version detection (embedded + git fallback)
 
 scripts/
 └── airut.py              # Wrapper for uv run (adds project root to sys.path)

@@ -242,7 +242,7 @@ lib/                        - Library code
   git_mirror.py             - Git mirror cache
   markdown.py               - Markdown-to-HTML conversion
   logging.py                - Logging utilities
-  git_version.py            - Git version management
+  version.py                - Version info, install source, upstream updates
   install_services.py       - Service installation logic
 scripts/                    - CLI tools
   airut.py                  - Email gateway entry point (uv run airut)

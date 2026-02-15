@@ -374,7 +374,7 @@ def cmd_check(argv: list[str]) -> int:
     all_ok = True
 
     # ── Version ─────────────────────────────────────────────────
-    from lib.git_version import check_upstream_version, get_git_version_info
+    from lib.version import check_upstream_version, get_git_version_info
 
     vi = get_git_version_info()
     version_label = vi.version or vi.sha_short
@@ -789,7 +789,7 @@ _SUBCOMMAND_HELP: dict[str, str] = {
 
 def _print_info() -> None:
     """Print version information and available commands."""
-    from lib.git_version import get_git_version_info
+    from lib.version import get_git_version_info
 
     s = _Style(_use_color())
     vi = get_git_version_info()

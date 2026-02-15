@@ -29,7 +29,7 @@ from lib.dashboard.handlers import RequestHandlers
 from lib.dashboard.sse import SSEConnectionManager
 from lib.dashboard.tracker import BootState, RepoState, TaskTracker
 from lib.dashboard.versioned import VersionClock, VersionedStore
-from lib.git_version import GitVersionInfo
+from lib.version import GitVersionInfo
 
 
 logger = logging.getLogger(__name__)
