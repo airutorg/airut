@@ -495,7 +495,7 @@ active processing. See [auto-updater.md](auto-updater.md) for full details.
 
 ### Lock File Mechanism
 
-Both services use an advisory file lock (`.update.lock` in repo root):
+Both services use an advisory file lock (`$XDG_RUNTIME_DIR/airut/update.lock`):
 
 - **Email service acquires lock** when it becomes busy (message processing or
   Claude execution begins)

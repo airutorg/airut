@@ -42,6 +42,7 @@ from lib.gateway.service.message_processing import (
 )
 from lib.gateway.service.repo_handler import RepoHandler
 from lib.git_version import get_git_version_info
+from lib.install_services import get_update_lock_path
 from lib.logging import configure_logging
 from lib.sandbox import Sandbox, SandboxConfig, Task
 from lib.update_lock import UpdateLock
@@ -123,7 +124,7 @@ class EmailGatewayService:
         self._active_tasks_lock = threading.Lock()
 
         # Update lock for coordinating with auto-updater
-        self._update_lock = UpdateLock(repo_root / ".update.lock")
+        self._update_lock = UpdateLock(get_update_lock_path())
 
         # Dashboard components — versioned state
         self._clock = VersionClock()

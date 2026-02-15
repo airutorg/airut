@@ -5,16 +5,18 @@
 
 """Airut CLI — multi-command entry point.
 
-Provides ``uv run airut <command>`` with subcommands for running the gateway,
-initializing configuration, and checking system readiness.  When no subcommand
-is given, ``run-gateway`` is the default, preserving existing behavior
-(including bare flags like ``uv run airut --resilient``).
+Provides ``airut <command>`` with subcommands for running the gateway,
+initializing configuration, checking system readiness, managing systemd
+services, and updating the tool.
 
 Subcommands:
 
-* ``run-gateway`` — start the email gateway service (default)
-* ``init``        — create a stub server config file
-* ``check``       — verify config and system dependencies
+* ``run-gateway``       — start the email gateway service (default)
+* ``init``              — create a stub server config file
+* ``check``             — verify config and system dependencies
+* ``install-service``   — install systemd user services
+* ``uninstall-service`` — uninstall systemd user services
+* ``update``            — upgrade Airut via ``uv tool upgrade``
 """
 
 from __future__ import annotations
@@ -30,7 +32,16 @@ from lib.gateway.config import ConfigError, ServerConfig, get_config_path
 logger = logging.getLogger(__name__)
 
 # Known subcommand names.
-_SUBCOMMANDS = frozenset({"run-gateway", "init", "check"})
+_SUBCOMMANDS = frozenset(
+    {
+        "run-gateway",
+        "init",
+        "check",
+        "install-service",
+        "uninstall-service",
+        "update",
+    }
+)
 
 # Minimum required versions for system dependencies.
 # Podman 4.x introduced the netavark backend with --route and --disable-dns
@@ -47,6 +58,9 @@ commands:
   run-gateway       Start the email gateway service (default)
   init              Create a stub server config file
   check             Verify config and system dependencies
+  install-service   Install systemd user services
+  uninstall-service Uninstall systemd user services
+  update            Upgrade Airut via uv tool upgrade
 
 Run 'airut <command> --help' for command-specific help.\
 """
@@ -274,6 +288,121 @@ def cmd_run_gateway(argv: list[str]) -> int:
     return gateway_main(argv)
 
 
+# ── install-service subcommand ──────────────────────────────────────
+
+
+def cmd_install_service(argv: list[str]) -> int:
+    """Install systemd user services for Airut.
+
+    Installs ``airut.service`` (email gateway) and optionally
+    ``airut-updater.timer`` + ``airut-updater.service`` (auto-updater).
+
+    Args:
+        argv: Extra arguments (--skip-updater, --interval).
+
+    Returns:
+        Exit code (0 on success, 1 on error).
+    """
+    import argparse
+
+    from lib.install_services import install_services
+
+    parser = argparse.ArgumentParser(
+        prog="airut install-service",
+        description="Install systemd user services for Airut",
+    )
+    parser.add_argument(
+        "--skip-updater",
+        action="store_true",
+        help="Skip installing auto-updater services",
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=None,
+        metavar="MINUTES",
+        help="Override auto-updater polling interval (default: 30 min)",
+    )
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    try:
+        install_services(
+            with_updater=not args.skip_updater,
+            interval=args.interval,
+        )
+        return 0
+    except RuntimeError as e:
+        logger.error("%s", e)
+        return 1
+
+
+# ── uninstall-service subcommand ────────────────────────────────────
+
+
+def cmd_uninstall_service(argv: list[str]) -> int:
+    """Uninstall systemd user services for Airut.
+
+    Args:
+        argv: Extra arguments (currently unused).
+
+    Returns:
+        Exit code (0 on success, 1 on error).
+    """
+    from lib.install_services import uninstall_services
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    try:
+        uninstall_services()
+        return 0
+    except RuntimeError as e:
+        logger.error("%s", e)
+        return 1
+
+
+# ── update subcommand ───────────────────────────────────────────────
+
+
+def cmd_update(argv: list[str]) -> int:
+    """Upgrade Airut via ``uv tool upgrade``.
+
+    Coordinates with the running gateway via an advisory update lock so
+    that upgrades never interrupt active message processing.
+
+    Args:
+        argv: Extra arguments (currently unused).
+
+    Returns:
+        Exit code (0 on success, 1 on error).
+    """
+    from lib.install_services import apply_update
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    try:
+        applied = apply_update()
+        if not applied:
+            logger.info("Update skipped (email service busy)")
+        return 0
+    except RuntimeError as e:
+        logger.error("%s", e)
+        return 1
+
+
 # ── CLI plumbing ────────────────────────────────────────────────────
 
 
@@ -281,15 +410,18 @@ _DISPATCH: dict[str, str] = {
     "run-gateway": "cmd_run_gateway",
     "init": "cmd_init",
     "check": "cmd_check",
+    "install-service": "cmd_install_service",
+    "uninstall-service": "cmd_uninstall_service",
+    "update": "cmd_update",
 }
 
 
 def cli() -> None:
-    """Entry point for ``uv run airut`` and ``uv tool install``.
+    """Entry point for ``airut`` (via ``uv tool install`` or ``uv run``).
 
     When no subcommand is given (or the first argument is a flag),
     all arguments are forwarded to ``run-gateway``, preserving backward
-    compatibility with ``uv run airut --resilient``.
+    compatibility with ``airut --resilient``.
     """
     argv = sys.argv[1:]
 
