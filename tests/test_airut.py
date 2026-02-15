@@ -5,6 +5,7 @@
 
 """Tests for lib/airut.py — multi-command CLI."""
 
+from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -13,8 +14,14 @@ import pytest
 from lib.airut import (
     _STUB_CONFIG,
     _check_dependency,
+    _dashboard_url,
+    _fetch_running_version,
     _fmt_version,
+    _is_service_installed,
+    _is_service_running,
     _parse_version,
+    _Style,
+    _use_color,
     cli,
     cmd_check,
     cmd_init,
@@ -82,7 +89,9 @@ class TestCheckDependency:
         mock_run.return_value = MagicMock(
             stdout="git version 2.43.0", stderr=""
         )
-        assert _check_dependency("git", ["git", "--version"], (2, 25))
+        ok, detail = _check_dependency("git", ["git", "--version"], (2, 25))
+        assert ok
+        assert "2.43.0" in detail
 
     @patch("lib.airut.subprocess.run")
     @patch("lib.airut.shutil.which", return_value="/usr/bin/podman")
@@ -92,11 +101,17 @@ class TestCheckDependency:
         mock_run.return_value = MagicMock(
             stdout="podman version 3.4.0", stderr=""
         )
-        assert not _check_dependency("podman", ["podman", "--version"], (4, 0))
+        ok, detail = _check_dependency(
+            "podman", ["podman", "--version"], (4, 0)
+        )
+        assert not ok
+        assert "need >=" in detail
 
     @patch("lib.airut.shutil.which", return_value=None)
     def test_not_found(self, _which: MagicMock) -> None:
-        assert not _check_dependency("missing", ["missing", "--version"])
+        ok, detail = _check_dependency("missing", ["missing", "--version"])
+        assert not ok
+        assert "not found" in detail
 
     @patch("lib.airut.subprocess.run")
     @patch("lib.airut.shutil.which", return_value="/usr/bin/gh")
@@ -106,12 +121,16 @@ class TestCheckDependency:
         mock_run.return_value = MagicMock(
             stdout="gh version 2.62.0 (2024-11-14)", stderr=""
         )
-        assert _check_dependency("gh", ["gh", "--version"])
+        ok, detail = _check_dependency("gh", ["gh", "--version"])
+        assert ok
+        assert "2.62.0" in detail
 
     @patch("lib.airut.subprocess.run", side_effect=FileNotFoundError)
     @patch("lib.airut.shutil.which", return_value="/usr/bin/broken")
     def test_command_fails(self, _which: MagicMock, _run: MagicMock) -> None:
-        assert not _check_dependency("broken", ["broken", "--version"])
+        ok, detail = _check_dependency("broken", ["broken", "--version"])
+        assert not ok
+        assert "failed to get version" in detail
 
     @patch("lib.airut.subprocess.run")
     @patch("lib.airut.shutil.which", return_value="/usr/bin/weird")
@@ -119,7 +138,9 @@ class TestCheckDependency:
         self, _which: MagicMock, mock_run: MagicMock
     ) -> None:
         mock_run.return_value = MagicMock(stdout="no version info", stderr="")
-        assert not _check_dependency("weird", ["weird", "--version"])
+        ok, detail = _check_dependency("weird", ["weird", "--version"])
+        assert not ok
+        assert "cannot parse version" in detail
 
     @patch("lib.airut.subprocess.run")
     @patch("lib.airut.shutil.which", return_value="/usr/bin/git")
@@ -129,7 +150,8 @@ class TestCheckDependency:
         mock_run.return_value = MagicMock(
             stdout="git version 2.25.0", stderr=""
         )
-        assert _check_dependency("git", ["git", "--version"], (2, 25))
+        ok, _detail = _check_dependency("git", ["git", "--version"], (2, 25))
+        assert ok
 
     @patch("lib.airut.subprocess.run")
     @patch("lib.airut.shutil.which", return_value="/usr/bin/tool")
@@ -139,7 +161,8 @@ class TestCheckDependency:
         mock_run.return_value = MagicMock(
             stdout="", stderr="tool version 1.0.0"
         )
-        assert _check_dependency("tool", ["tool", "--version"])
+        ok, _detail = _check_dependency("tool", ["tool", "--version"])
+        assert ok
 
 
 # ── cmd_init ────────────────────────────────────────────────────────
@@ -203,18 +226,176 @@ class TestCmdInit:
         assert str(config_path) in captured.out
 
 
+# ── _use_color ─────────────────────────────────────────────────────
+
+
+class TestUseColor:
+    def test_no_color_env(self) -> None:
+        """NO_COLOR env var disables color."""
+        with patch.dict("os.environ", {"NO_COLOR": "1"}, clear=False):
+            assert not _use_color()
+
+    def test_dumb_terminal(self) -> None:
+        """TERM=dumb disables color."""
+        env = {"TERM": "dumb"}
+        with patch.dict("os.environ", env, clear=False):
+            assert not _use_color()
+
+    def test_non_tty(self) -> None:
+        """Non-TTY stdout disables color."""
+        with patch("lib.airut.sys.stdout") as mock_stdout:
+            mock_stdout.isatty.return_value = False
+            assert not _use_color()
+
+    def test_tty_with_no_overrides(self) -> None:
+        """TTY stdout with no env overrides enables color."""
+        env: dict[str, str] = {}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("lib.airut.sys.stdout") as mock_stdout,
+        ):
+            mock_stdout.isatty.return_value = True
+            assert _use_color()
+
+
+# ── _Style ─────────────────────────────────────────────────────────
+
+
+class TestStyle:
+    def test_color_on(self) -> None:
+        """Wraps text with ANSI codes when color is enabled."""
+        s = _Style(True)
+        assert s.green("ok") == "\033[32mok\033[0m"
+        assert s.red("fail") == "\033[31mfail\033[0m"
+        assert s.bold("title") == "\033[1mtitle\033[0m"
+        assert s.yellow("warn") == "\033[33mwarn\033[0m"
+        assert s.dim("path") == "\033[2mpath\033[0m"
+        assert s.cyan("cmd") == "\033[36mcmd\033[0m"
+
+    def test_color_off(self) -> None:
+        """Returns plain text when color is disabled."""
+        s = _Style(False)
+        assert s.green("ok") == "ok"
+        assert s.red("fail") == "fail"
+        assert s.bold("title") == "title"
+        assert s.yellow("warn") == "warn"
+        assert s.dim("path") == "path"
+        assert s.cyan("cmd") == "cmd"
+
+
+# ── _is_service_installed / _is_service_running ───────────────────
+
+
+class TestServiceStatus:
+    def test_installed_when_unit_exists(self, tmp_path: Path) -> None:
+        """Returns True when unit file exists."""
+        unit = tmp_path / "airut.service"
+        unit.write_text("[Unit]\n")
+        with patch(
+            "lib.install_services.get_systemd_user_dir",
+            return_value=tmp_path,
+        ):
+            assert _is_service_installed()
+
+    def test_not_installed(self, tmp_path: Path) -> None:
+        """Returns False when unit file is absent."""
+        with patch(
+            "lib.install_services.get_systemd_user_dir",
+            return_value=tmp_path,
+        ):
+            assert not _is_service_installed()
+
+    @patch("lib.airut.subprocess.run")
+    def test_running(self, mock_run: MagicMock) -> None:
+        """Returns True when systemctl reports active."""
+        mock_run.return_value = MagicMock(stdout="active\n")
+        assert _is_service_running()
+
+    @patch("lib.airut.subprocess.run")
+    def test_not_running(self, mock_run: MagicMock) -> None:
+        """Returns False when systemctl reports inactive."""
+        mock_run.return_value = MagicMock(stdout="inactive\n")
+        assert not _is_service_running()
+
+    @patch("lib.airut.subprocess.run", side_effect=FileNotFoundError)
+    def test_running_no_systemctl(self, _run: MagicMock) -> None:
+        """Returns False when systemctl is not available."""
+        assert not _is_service_running()
+
+
+# ── _dashboard_url ─────────────────────────────────────────────────
+
+
+class TestDashboardUrl:
+    def test_base_url_configured(self) -> None:
+        """Uses dashboard_base_url when set."""
+
+        @dataclass
+        class FakeGlobal:
+            dashboard_base_url: str | None = "https://dash.example.com"
+            dashboard_host: str = "127.0.0.1"
+            dashboard_port: int = 5200
+
+        config = MagicMock()
+        config.global_config = FakeGlobal()
+        assert _dashboard_url(config) == "https://dash.example.com"
+
+    def test_fallback_to_host_port(self) -> None:
+        """Falls back to host:port when base_url is None."""
+
+        @dataclass
+        class FakeGlobal:
+            dashboard_base_url: str | None = None
+            dashboard_host: str = "0.0.0.0"
+            dashboard_port: int = 8080
+
+        config = MagicMock()
+        config.global_config = FakeGlobal()
+        assert _dashboard_url(config) == "http://0.0.0.0:8080"
+
+
+# ── _fetch_running_version ─────────────────────────────────────────
+
+
+class TestFetchRunningVersion:
+    @patch("lib.airut.urllib.request.urlopen")
+    def test_success(self, mock_urlopen: MagicMock) -> None:
+        """Returns parsed JSON on success."""
+        body = b'{"version":"v0.8.0","sha_short":"abc1234","sha_full":"abc"}'
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = body
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        result = _fetch_running_version("http://127.0.0.1:5200")
+        assert result is not None
+        assert result["sha_short"] == "abc1234"
+
+    @patch(
+        "lib.airut.urllib.request.urlopen",
+        side_effect=OSError("refused"),
+    )
+    def test_connection_refused(self, _m: MagicMock) -> None:
+        """Returns None on connection error."""
+        assert _fetch_running_version("http://127.0.0.1:5200") is None
+
+    @patch("lib.airut.urllib.request.urlopen")
+    def test_bad_json(self, mock_urlopen: MagicMock) -> None:
+        """Returns None on malformed JSON."""
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"not json"
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        assert _fetch_running_version("http://127.0.0.1:5200") is None
+
+
 # ── cmd_check ───────────────────────────────────────────────────────
 
-
-class TestCmdCheck:
-    @patch("lib.airut._check_dependency", return_value=True)
-    def test_valid_config_and_deps(
-        self, _dep: MagicMock, tmp_path: Path
-    ) -> None:
-        """Returns 0 when config is valid and dependencies pass."""
-        config_path = tmp_path / "airut.yaml"
-        config_path.write_text(
-            """\
+# Shared valid config YAML used by multiple tests.
+_VALID_CONFIG = """\
 repos:
   test:
     email:
@@ -229,71 +410,146 @@ repos:
     git:
       repo_url: https://example.com/repo.git
 """
+
+
+@dataclass
+class _FakeVersionInfo:
+    version: str = "v0.8.0"
+    sha_short: str = "abc1234"
+    sha_full: str = "abc1234" * 5
+    worktree_clean: bool = True
+    full_status: str = ""
+
+
+def _check_patches(
+    tmp_path: Path,
+    *,
+    config_text: str | None = _VALID_CONFIG,
+    dep_ok: bool = True,
+    service_installed: bool = False,
+    service_running: bool = False,
+    dotenv: bool = False,
+    running_version: dict[str, str] | None = None,
+):
+    """Build a ``contextmanager`` that patches everything cmd_check needs.
+
+    Returns (config_path, context_manager).
+    """
+    config_path = tmp_path / "airut.yaml"
+    if config_text is not None:
+        config_path.write_text(config_text)
+
+    dotenv_path = tmp_path / ".env"
+    if dotenv:
+        dotenv_path.write_text("SOME_VAR=1\n")
+
+    from contextlib import ExitStack
+
+    stack = ExitStack()
+    stack.enter_context(
+        patch("lib.airut.get_config_path", return_value=config_path)
+    )
+    stack.enter_context(
+        patch("lib.airut.get_dotenv_path", return_value=dotenv_path)
+    )
+    stack.enter_context(
+        patch(
+            "lib.airut._check_dependency",
+            return_value=(dep_ok, "git: 2.43.0 (>= 2.25)"),
         )
+    )
+    stack.enter_context(
+        patch(
+            "lib.git_version.get_git_version_info",
+            return_value=_FakeVersionInfo(),
+        )
+    )
+    stack.enter_context(
+        patch(
+            "lib.airut._is_service_installed",
+            return_value=service_installed,
+        )
+    )
+    stack.enter_context(
+        patch(
+            "lib.airut._is_service_running",
+            return_value=service_running,
+        )
+    )
+    stack.enter_context(
+        patch(
+            "lib.airut._fetch_running_version",
+            return_value=running_version,
+        )
+    )
+    stack.enter_context(patch("lib.airut._use_color", return_value=False))
+    return config_path, stack
 
-        with patch("lib.airut.get_config_path", return_value=config_path):
+
+class TestCmdCheck:
+    def test_valid_config_and_deps(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Returns 0 when config is valid and dependencies pass."""
+        _path, ctx = _check_patches(tmp_path)
+        with ctx:
             result = cmd_check([])
-
         assert result == 0
-        assert _dep.call_count == 2
+        out = capsys.readouterr().out
+        assert "All checks passed." in out
+        assert "Airut v0.8.0" in out
 
-    @patch("lib.airut._check_dependency", return_value=True)
-    def test_missing_config(self, _dep: MagicMock, tmp_path: Path) -> None:
+    def test_missing_config(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """Returns 1 when config file is missing."""
-        config_path = tmp_path / "nonexistent.yaml"
-        with patch("lib.airut.get_config_path", return_value=config_path):
+        _path, ctx = _check_patches(tmp_path, config_text=None)
+        with ctx:
             result = cmd_check([])
-
         assert result == 1
+        out = capsys.readouterr().out
+        assert "not found" in out
+        assert "airut init" in out
 
-    @patch("lib.airut._check_dependency", return_value=True)
-    def test_invalid_yaml(self, _dep: MagicMock, tmp_path: Path) -> None:
+    def test_invalid_yaml(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """Returns 1 for invalid YAML."""
-        config_path = tmp_path / "airut.yaml"
-        config_path.write_text("not: [valid: yaml: {{")
-
-        with patch("lib.airut.get_config_path", return_value=config_path):
+        _path, ctx = _check_patches(
+            tmp_path, config_text="not: [valid: yaml: {{"
+        )
+        with ctx:
             result = cmd_check([])
-
         assert result == 1
+        out = capsys.readouterr().out
+        assert "error" in out
 
-    @patch("lib.airut._check_dependency", return_value=True)
     def test_missing_required_field(
-        self, _dep: MagicMock, tmp_path: Path
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """Returns 1 when a required field is missing."""
-        config_path = tmp_path / "airut.yaml"
-        config_path.write_text(
-            """\
-repos:
-  test:
-    email:
-      imap_server: imap.test.com
-"""
+        _path, ctx = _check_patches(
+            tmp_path,
+            config_text="repos:\n  test:\n    email:\n      imap_server: x\n",
         )
-
-        with patch("lib.airut.get_config_path", return_value=config_path):
+        with ctx:
             result = cmd_check([])
-
         assert result == 1
 
-    @patch("lib.airut._check_dependency", return_value=True)
-    def test_empty_config_file(self, _dep: MagicMock, tmp_path: Path) -> None:
+    def test_empty_config_file(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """Returns 1 for an empty config file."""
-        config_path = tmp_path / "airut.yaml"
-        config_path.write_text("")
-
-        with patch("lib.airut.get_config_path", return_value=config_path):
+        _path, ctx = _check_patches(tmp_path, config_text="")
+        with ctx:
             result = cmd_check([])
-
         assert result == 1
 
-    @patch("lib.airut._check_dependency", return_value=True)
-    def test_multiple_repos(self, _dep: MagicMock, tmp_path: Path) -> None:
+    def test_multiple_repos(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """Succeeds with multiple repos configured."""
-        config_path = tmp_path / "airut.yaml"
-        config_path.write_text(
-            """\
+        multi = """\
 repos:
   alpha:
     email:
@@ -320,39 +576,159 @@ repos:
     git:
       repo_url: https://example.com/beta.git
 """
-        )
-
-        with patch("lib.airut.get_config_path", return_value=config_path):
+        _path, ctx = _check_patches(tmp_path, config_text=multi)
+        with ctx:
             result = cmd_check([])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "2 repo(s)" in out
 
+    def test_dependency_failure(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Returns 1 when dependencies fail even if config is valid."""
+        _path, ctx = _check_patches(tmp_path, dep_ok=False)
+        with ctx:
+            result = cmd_check([])
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "Some checks failed." in out
+
+    def test_shows_config_path(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Always prints the config file path."""
+        config_path, ctx = _check_patches(tmp_path)
+        with ctx:
+            cmd_check([])
+        out = capsys.readouterr().out
+        assert str(config_path) in out
+
+    def test_shows_dotenv_when_exists(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Shows .env path when the file exists."""
+        _path, ctx = _check_patches(tmp_path, dotenv=True)
+        with ctx:
+            cmd_check([])
+        out = capsys.readouterr().out
+        assert ".env" in out
+        assert "Env file:" in out
+
+    def test_hides_dotenv_when_absent(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Does not mention .env when the file is absent."""
+        _path, ctx = _check_patches(tmp_path, dotenv=False)
+        with ctx:
+            cmd_check([])
+        out = capsys.readouterr().out
+        assert "Env file:" not in out
+
+    def test_service_not_installed(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Shows 'not installed' and suggests install-service."""
+        _path, ctx = _check_patches(tmp_path, service_installed=False)
+        with ctx:
+            cmd_check([])
+        out = capsys.readouterr().out
+        assert "not installed" in out
+        assert "airut install-service" in out
+
+    def test_service_installed_stopped(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Shows 'stopped' when installed but not running."""
+        _path, ctx = _check_patches(
+            tmp_path, service_installed=True, service_running=False
+        )
+        with ctx:
+            cmd_check([])
+        out = capsys.readouterr().out
+        assert "stopped" in out
+
+    def test_service_running_shows_url(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Shows dashboard URL when service is running and config loaded."""
+        _path, ctx = _check_patches(
+            tmp_path,
+            service_installed=True,
+            service_running=True,
+            running_version={
+                "version": "v0.8.0",
+                "sha_short": "abc1234",
+                "sha_full": "abc",
+            },
+        )
+        with ctx:
+            cmd_check([])
+        out = capsys.readouterr().out
+        assert "running" in out
+        assert "http://" in out
+
+    def test_service_does_not_affect_exit_code(self, tmp_path: Path) -> None:
+        """Service not installed does not cause exit code 1."""
+        _path, ctx = _check_patches(tmp_path, service_installed=False)
+        with ctx:
+            result = cmd_check([])
         assert result == 0
 
-    @patch("lib.airut._check_dependency", return_value=False)
-    def test_dependency_failure(self, _dep: MagicMock, tmp_path: Path) -> None:
-        """Returns 1 when dependencies fail even if config is valid."""
-        config_path = tmp_path / "airut.yaml"
-        config_path.write_text(
-            """\
-repos:
-  test:
-    email:
-      imap_server: imap.test.com
-      smtp_server: smtp.test.com
-      username: user@test.com
-      password: secret
-      from: "Test <test@example.com>"
-    authorized_senders:
-      - auth@test.com
-    trusted_authserv_id: mx.test.com
-    git:
-      repo_url: https://example.com/repo.git
-"""
+    def test_version_mismatch_warning(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Warns when running server version differs from installed."""
+        _path, ctx = _check_patches(
+            tmp_path,
+            service_installed=True,
+            service_running=True,
+            running_version={
+                "version": "v0.7.0",
+                "sha_short": "old5678",
+                "sha_full": "old5678" * 5,
+            },
         )
+        with ctx:
+            cmd_check([])
+        out = capsys.readouterr().out
+        assert "Version mismatch" in out
+        assert "v0.7.0" in out
+        assert "systemctl --user restart airut" in out
 
-        with patch("lib.airut.get_config_path", return_value=config_path):
-            result = cmd_check([])
+    def test_no_mismatch_when_versions_match(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """No warning when running version matches installed."""
+        _path, ctx = _check_patches(
+            tmp_path,
+            service_installed=True,
+            service_running=True,
+            running_version={
+                "version": "v0.8.0",
+                "sha_short": "abc1234",
+                "sha_full": "abc",
+            },
+        )
+        with ctx:
+            cmd_check([])
+        out = capsys.readouterr().out
+        assert "Version mismatch" not in out
 
-        assert result == 1
+    def test_no_mismatch_when_fetch_fails(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """No warning when version fetch fails (returns None)."""
+        _path, ctx = _check_patches(
+            tmp_path,
+            service_installed=True,
+            service_running=True,
+            running_version=None,
+        )
+        with ctx:
+            cmd_check([])
+        out = capsys.readouterr().out
+        assert "Version mismatch" not in out
 
 
 # ── cmd_run_gateway ─────────────────────────────────────────────────

@@ -121,30 +121,27 @@ class TestDashboardServer:
         assert data["repos"]["total"] == 2
 
     def test_version_endpoint(self) -> None:
-        """Test /.version endpoint returns full git status."""
+        """Test /version endpoint returns structured JSON."""
         tracker = TaskTracker()
         version_info = VersionInfo(
-            version="",
+            version="v0.8.0",
             git_sha="abc1234",
             git_sha_full="abc1234567890abcdef1234567890abcdef123456",
             worktree_clean=True,
-            full_status=(
-                "=== HEAD COMMIT ===\ncommit abc1234\n\n"
-                "=== WORKING TREE STATUS ===\nclean"
-            ),
+            full_status="...",
             started_at=946684800.0,
         )
         server = DashboardServer(tracker, version_info=version_info)
         client = Client(server._wsgi_app)
 
-        response = client.get("/.version")
+        response = client.get("/version")
         assert response.status_code == 200
-        assert response.content_type == "text/plain; charset=utf-8"
+        assert response.content_type == "application/json"
 
-        text = response.get_data(as_text=True)
-        assert "=== HEAD COMMIT ===" in text
-        assert "=== WORKING TREE STATUS ===" in text
-        assert "commit abc1234" in text
+        data = json.loads(response.get_data(as_text=True))
+        assert data["version"] == "v0.8.0"
+        assert data["sha_short"] == "abc1234"
+        assert data["sha_full"] == "abc1234567890abcdef1234567890abcdef123456"
 
         # Check cache headers
         assert (
@@ -155,14 +152,15 @@ class TestDashboardServer:
         assert response.headers.get("Expires") == "0"
 
     def test_version_endpoint_no_version_info(self) -> None:
-        """Test /.version endpoint returns 404 when no version info."""
+        """Test /version endpoint returns 404 when no version info."""
         tracker = TaskTracker()
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/.version")
+        response = client.get("/version")
         assert response.status_code == 404
-        assert "not available" in response.get_data(as_text=True)
+        data = json.loads(response.get_data(as_text=True))
+        assert "error" in data
 
     def test_api_tasks_endpoint(self) -> None:
         """Test /api/conversations endpoint."""
@@ -437,7 +435,7 @@ class TestDashboardServer:
         # Check version info is displayed with link to /.version
         assert "abc1234" in html
         assert "clean" in html
-        assert 'href="/.version"' in html  # SHA links to version endpoint
+        assert 'href="/version"' in html  # SHA links to version endpoint
         # Startup time uses JavaScript for local timezone formatting
         assert 'data-timestamp="946684800.0"' in html
         assert 'class="local-time"' in html
@@ -491,7 +489,7 @@ class TestDashboardServer:
 
         # Version tag should be displayed as the link text
         assert "v0.7.0" in html
-        assert 'href="/.version"' in html
+        assert 'href="/version"' in html
         assert 'class="version-sha"' in html
 
     def test_index_without_version_info(self) -> None:

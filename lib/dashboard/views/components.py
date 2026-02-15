@@ -85,7 +85,7 @@ def render_version_info(version_info: VersionInfo | None) -> str:
 
     return f"""
         <div class="version-info">
-            <a href="/.version" class="version-sha">{version_label}</a>
+            <a href="/version" class="version-sha">{version_label}</a>
             <span class="version-status {status_class}">{status_text}</span>
             <span class="version-started">Started: <span
                 class="local-time"
