@@ -93,13 +93,21 @@ class GitVersionBuildHook(_Base):
         build_data: dict[str, Any],
     ) -> None:
         """Generate lib/_version.py with embedded version info."""
+        version_file = Path(self.root) / "lib" / "_version.py"
+
         try:
             ver, sha_short, sha_full = _get_build_version()
         except (subprocess.CalledProcessError, FileNotFoundError):
-            # Not a git repo or git not installed — skip generation
+            # Not a git repo or git not installed.  If the file already
+            # exists (e.g. building a wheel from an sdist that baked it
+            # in), force-include it so hatchling doesn't exclude it via
+            # .gitignore patterns.
+            if version_file.exists():
+                build_data.setdefault("force_include", {})[
+                    str(version_file)
+                ] = "lib/_version.py"
             return
 
-        version_file = Path(self.root) / "lib" / "_version.py"
         version_file.write_text(
             _VERSION_TEMPLATE.format(
                 version=ver,
