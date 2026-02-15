@@ -31,11 +31,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from typing import TYPE_CHECKING, Any
-
-
-if TYPE_CHECKING:
-    from lib.version import GitVersionInfo
+from typing import Any
 
 from lib.gateway.config import (
     ConfigError,
@@ -362,32 +358,6 @@ def _fetch_health(
 _RESTART_CMD = "systemctl --user restart airut"
 
 
-def _running_is_newer(
-    running: dict[str, str],
-    installed: GitVersionInfo,
-) -> bool:
-    """Return True if the running server version is newer than installed.
-
-    Compares via PEP 440 version strings when available, ignoring
-    unparseable or missing versions.
-
-    Args:
-        running: Version dict from the ``/version`` endpoint (has
-            ``version``, ``sha_short``, ``sha_full`` keys).
-        installed: Locally installed version info.
-
-    Returns:
-        True if the running version is strictly newer.
-    """
-    from lib.version import _is_older
-
-    rv = running.get("version", "").lstrip("v")
-    iv = installed.version.lstrip("v")
-    if rv and iv:
-        return _is_older(iv, rv)
-    return False
-
-
 # ── check subcommand ────────────────────────────────────────────────
 
 
@@ -497,17 +467,7 @@ def cmd_check(argv: list[str]) -> int:
                             f"running {rl}, "
                             f"installed {version_label}"
                         )
-                        # If the running server has a newer version
-                        # than what is installed, the binary just
-                        # needs a restart — no upgrade required.
-                        if _running_is_newer(rv, vi):
-                            print(f"  Run {s.cyan(_RESTART_CMD)} to apply.")
-                        else:
-                            print(
-                                "  Run "
-                                f"{s.cyan('airut update')}"
-                                " to apply the update."
-                            )
+                        print(f"  Run {s.cyan(_RESTART_CMD)} to apply.")
         else:
             print(f"  airut.service: {s.yellow('stopped')}")
     else:
@@ -563,18 +523,51 @@ def _get_active_task_counts() -> tuple[int, int] | None:
     return in_progress, queued
 
 
+def _has_version_mismatch() -> bool:
+    """Check if the running service version differs from the installed one.
+
+    Loads the server config, fetches the running version from the
+    dashboard ``/version`` endpoint, and compares SHA hashes.
+
+    Returns:
+        True if the running service has a different SHA than the
+        installed binary, False otherwise (including when the check
+        cannot be performed).
+    """
+    from lib.version import get_git_version_info
+
+    config_path = get_config_path()
+    if not config_path.exists():
+        return False
+
+    try:
+        config = ServerConfig.from_yaml(config_path)
+    except (ConfigError, ValueError, Exception):
+        return False
+
+    local_url = _local_dashboard_url(config)
+    rv = _fetch_running_version(local_url)
+    if rv is None:
+        return False
+
+    vi = get_git_version_info()
+    running_sha = rv.get("sha_short", "")
+    return bool(running_sha and running_sha != vi.sha_short)
+
+
 _WAIT_POLL_SECONDS = 10
 
 
 def cmd_update(argv: list[str]) -> int:
     """Update airut to the latest version.
 
-    Runs ``uv tool upgrade airut``.  If the upgrade is a no-op (already
-    up to date), returns immediately without touching the service.
+    Runs ``uv tool upgrade airut``.  When the binary was actually
+    updated and the systemd service is installed, stops and uninstalls
+    the service, then reinstalls it using the new binary.
 
-    When the binary was actually updated and the systemd service is
-    installed, stops and uninstalls the service, then reinstalls it
-    using the new binary.
+    If the upgrade is a no-op (already up to date) but the running
+    service has a different version than the installed binary, restarts
+    the service to apply the change.
 
     Refuses to proceed when the running gateway has queued or in-progress
     tasks.  Use ``--force`` to override, or ``--wait`` to poll until the
@@ -669,8 +662,23 @@ def cmd_update(argv: list[str]) -> int:
     nothing_changed = "nothing to upgrade" in (upgrade_output or "").lower()
 
     if nothing_changed:
-        print(f"  {s.green('Already up to date.')}")
-        return 0
+        # Binary is current, but the running service may still be stale.
+        if service_was_installed and _is_service_running():
+            if _has_version_mismatch():
+                print(
+                    f"  {
+                        s.dim(
+                            'Binary is current, '
+                            'but running service needs a restart.'
+                        )
+                    }"
+                )
+            else:
+                print(f"  {s.green('Already up to date.')}")
+                return 0
+        else:
+            print(f"  {s.green('Already up to date.')}")
+            return 0
 
     # ── Restart service with the updated binary ───────────────
     if service_was_installed:
