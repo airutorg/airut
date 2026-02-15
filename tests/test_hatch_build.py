@@ -11,18 +11,23 @@ from unittest.mock import MagicMock, patch
 
 from scripts.hatch_build import (
     GitVersionBuildHook,
+    GitVersionMetadataHook,
     _get_build_version,
+    _read_version_from_file,
     _run_git,
+    _tag_to_pep440,
+    get_build_hook,
+    get_metadata_hook,
 )
 
 
-def _make_hook(root: str) -> GitVersionBuildHook:
+def _make_build_hook(root: str) -> GitVersionBuildHook:
     """Create a GitVersionBuildHook with mocked build config and metadata.
 
     Works whether or not hatchling is installed in the runtime
     environment: when hatchling is available, passes real constructor
     args; otherwise, falls back to simple attribute injection (since
-    _Base = object in that case).
+    _BuildBase = object in that case).
     """
     try:
         import hatchling.builders.hooks.plugin.interface as _iface  # ty: ignore[unresolved-import]
@@ -43,8 +48,32 @@ def _make_hook(root: str) -> GitVersionBuildHook:
             None,
         )
     else:
-        # hatchling not installed — _Base is object
+        # hatchling not installed — _BuildBase is object
         hook = GitVersionBuildHook()
+        hook.root = root
+    return hook
+
+
+def _make_metadata_hook(root: str) -> GitVersionMetadataHook:
+    """Create a GitVersionMetadataHook with mocked config.
+
+    Works whether or not hatchling is installed in the runtime
+    environment.
+    """
+    try:
+        import hatchling.metadata.plugin.interface as _iface  # ty: ignore[unresolved-import]
+
+        _has_hatchling = hasattr(_iface, "MetadataHookInterface")
+    except ImportError:
+        _has_hatchling = False
+
+    if _has_hatchling:
+        hook = GitVersionMetadataHook(
+            root,
+            {},
+        )
+    else:
+        hook = GitVersionMetadataHook()
         hook.root = root
     return hook
 
@@ -65,6 +94,70 @@ class TestRunGit:
             assert False, "Should have raised"
         except subprocess.CalledProcessError:
             pass
+
+
+class TestTagToPep440:
+    """Tests for _tag_to_pep440 conversion."""
+
+    def test_clean_release(self) -> None:
+        """Exact tag should produce clean version."""
+        assert _tag_to_pep440("v0.9.0") == "0.9.0"
+
+    def test_distance_from_tag(self) -> None:
+        """Commits past tag should produce dev version with local hash."""
+        assert _tag_to_pep440("v0.9.0-3-gabc1234") == "0.9.0.dev3+gabc1234"
+
+    def test_dirty(self) -> None:
+        """Dirty tag should produce local +dirty."""
+        assert _tag_to_pep440("v0.9.0-dirty") == "0.9.0+dirty"
+
+    def test_distance_and_dirty(self) -> None:
+        """Distance + dirty should produce dev with compound local."""
+        assert (
+            _tag_to_pep440("v0.9.0-3-gabc1234-dirty")
+            == "0.9.0.dev3+gabc1234.dirty"
+        )
+
+    def test_no_v_prefix(self) -> None:
+        """Tags without v prefix should still parse."""
+        assert _tag_to_pep440("1.0.0") == "1.0.0"
+
+    def test_pre_release_tag(self) -> None:
+        """Pre-release tags should pass through base."""
+        assert _tag_to_pep440("v1.0.0rc1") == "1.0.0rc1"
+
+
+class TestReadVersionFromFile:
+    """Tests for _read_version_from_file."""
+
+    def test_reads_version(self, tmp_path: Path) -> None:
+        """Should read and convert VERSION from _version.py."""
+        lib_dir = tmp_path / "lib"
+        lib_dir.mkdir()
+        (lib_dir / "_version.py").write_text("VERSION = 'v0.8.0'\n")
+        result = _read_version_from_file(tmp_path)
+        assert result == "0.8.0"
+
+    def test_returns_none_when_missing(self, tmp_path: Path) -> None:
+        """Should return None if file doesn't exist."""
+        result = _read_version_from_file(tmp_path)
+        assert result is None
+
+    def test_returns_none_when_no_version(self, tmp_path: Path) -> None:
+        """Should return None if VERSION line not found."""
+        lib_dir = tmp_path / "lib"
+        lib_dir.mkdir()
+        (lib_dir / "_version.py").write_text("# empty\n")
+        result = _read_version_from_file(tmp_path)
+        assert result is None
+
+    def test_handles_dev_version(self, tmp_path: Path) -> None:
+        """Should convert dev version tags correctly."""
+        lib_dir = tmp_path / "lib"
+        lib_dir.mkdir()
+        (lib_dir / "_version.py").write_text("VERSION = 'v0.8.0-3-gabc1234'\n")
+        result = _read_version_from_file(tmp_path)
+        assert result == "0.8.0.dev3+gabc1234"
 
 
 class TestGetBuildVersion:
@@ -108,7 +201,59 @@ class TestGetBuildVersion:
         with patch("scripts.hatch_build._run_git", side_effect=mock_run_git):
             version, sha_short, sha_full = _get_build_version()
         assert sha_short == "abc1234"
-        assert "+abc1234" in version
+        assert version == "v0.0.0-0-gabc1234"
+
+
+class TestGitVersionMetadataHook:
+    """Tests for GitVersionMetadataHook."""
+
+    def test_sets_version_from_git(self, tmp_path: Path) -> None:
+        """Should set version from git describe tag."""
+        hook = _make_metadata_hook(str(tmp_path))
+        metadata: dict[str, str] = {}
+        with patch(
+            "scripts.hatch_build._git_version_tag",
+            return_value="v1.2.3",
+        ):
+            hook.update(metadata)
+        assert metadata["version"] == "1.2.3"
+
+    def test_sets_dev_version_from_git(self, tmp_path: Path) -> None:
+        """Should convert git describe with distance to PEP 440 dev."""
+        hook = _make_metadata_hook(str(tmp_path))
+        metadata: dict[str, str] = {}
+        with patch(
+            "scripts.hatch_build._git_version_tag",
+            return_value="v1.2.3-5-gabc1234",
+        ):
+            hook.update(metadata)
+        assert metadata["version"] == "1.2.3.dev5+gabc1234"
+
+    def test_fallback_to_version_file(self, tmp_path: Path) -> None:
+        """Should read version from _version.py when git unavailable."""
+        lib_dir = tmp_path / "lib"
+        lib_dir.mkdir()
+        (lib_dir / "_version.py").write_text("VERSION = 'v0.8.0'\n")
+
+        hook = _make_metadata_hook(str(tmp_path))
+        metadata: dict[str, str] = {}
+        with patch(
+            "scripts.hatch_build._git_version_tag",
+            side_effect=FileNotFoundError("git not found"),
+        ):
+            hook.update(metadata)
+        assert metadata["version"] == "0.8.0"
+
+    def test_last_resort_version(self, tmp_path: Path) -> None:
+        """Should use 0.0.0 when no git and no _version.py."""
+        hook = _make_metadata_hook(str(tmp_path))
+        metadata: dict[str, str] = {}
+        with patch(
+            "scripts.hatch_build._git_version_tag",
+            side_effect=FileNotFoundError("git not found"),
+        ):
+            hook.update(metadata)
+        assert metadata["version"] == "0.0.0"
 
 
 class TestGitVersionBuildHook:
@@ -119,7 +264,7 @@ class TestGitVersionBuildHook:
         lib_dir = tmp_path / "lib"
         lib_dir.mkdir()
 
-        hook = _make_hook(str(tmp_path))
+        hook = _make_build_hook(str(tmp_path))
 
         build_data: dict = {}
         with patch(
@@ -143,7 +288,7 @@ class TestGitVersionBuildHook:
         lib_dir = tmp_path / "lib"
         lib_dir.mkdir()
 
-        hook = _make_hook(str(tmp_path))
+        hook = _make_build_hook(str(tmp_path))
 
         build_data: dict = {}
         with patch(
@@ -178,7 +323,7 @@ class TestGitVersionBuildHook:
             f"GIT_SHA_FULL = '{'a' * 40}'\n"
         )
 
-        hook = _make_hook(str(tmp_path))
+        hook = _make_build_hook(str(tmp_path))
 
         build_data: dict = {}
         with patch(
@@ -198,7 +343,7 @@ class TestGitVersionBuildHook:
         lib_dir = tmp_path / "lib"
         lib_dir.mkdir()
 
-        hook = _make_hook(str(tmp_path))
+        hook = _make_build_hook(str(tmp_path))
 
         build_data: dict = {}
         with patch(
@@ -209,3 +354,15 @@ class TestGitVersionBuildHook:
 
         assert "force_include" in build_data
         assert "lib/_version.py" in build_data["force_include"].values()
+
+
+class TestDisambiguators:
+    """Tests for get_build_hook and get_metadata_hook."""
+
+    def test_get_build_hook(self) -> None:
+        """get_build_hook should return GitVersionBuildHook class."""
+        assert get_build_hook() is GitVersionBuildHook
+
+    def test_get_metadata_hook(self) -> None:
+        """get_metadata_hook should return GitVersionMetadataHook class."""
+        assert get_metadata_hook() is GitVersionMetadataHook

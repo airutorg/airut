@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "airut"
-version = "0.8.0"
+dynamic = ["version"]
 description = "Headless Claude Code interaction via email"
 license = "MIT"
 readme = "README.md"
@@ -38,6 +38,9 @@ airut = "lib.airut:cli"
 Homepage = "https://github.com/airutorg/airut"
 Repository = "https://github.com/airutorg/airut"
 Documentation = "https://github.com/airutorg/airut/tree/main/doc"
+
+[tool.hatch.metadata.hooks.custom]
+path = "scripts/hatch_build.py"
 
 [tool.hatch.build.hooks.custom]
 path = "scripts/hatch_build.py"
