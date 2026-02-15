@@ -83,42 +83,18 @@ The following diagram shows the security controls at each layer:
 Airut verifies sender identity via DMARC before processing any message. This
 prevents spoofed emails from triggering code execution.
 
-### DMARC Verification
-
-The `SenderAuthenticator` validates emails using `Authentication-Results`
-headers:
-
-1. **Reject ambiguous sender**: Multiple or missing `From` headers rejected
-   (prevents confusion attacks)
-2. **Parse From header**: Strict extraction, not permissive `parseaddr()`
-3. **Find trusted header**: Match `Authentication-Results` by `authserv-id`
-4. **Require `dmarc=pass`**: Header must contain passing DMARC result
-
-Only headers from the configured `trusted_authserv_id` (your mail server) are
-trusted. This prevents attackers from injecting fake `Authentication-Results`
-headers.
-
-### Why DMARC, Not SPF Alone
-
-SPF validates the envelope sender (`Return-Path`), not the visible `From`
-header. An attacker can send from `attacker@evil.com` (passing SPF for
-`evil.com`) while setting `From: ceo@company.com`. DMARC enforces alignment
-between SPF/DKIM identities and the `From` domain.
-
-### Sender Authorization
-
-After authentication, the `SenderAuthorizer` checks the sender against the
-allowlist:
-
-```yaml
-# In config/airut.yaml (per-repo)
-authorized_senders:
-  - admin@company.com        # Exact match
-  - *@trusted-partner.com    # Any user from domain
-```
+The authentication flow validates the `From` header against
+`Authentication-Results` headers from the configured `trusted_authserv_id` (your
+mail server). Only the first (topmost) header is examined — lower headers may be
+attacker-injected. After authentication, the sender is checked against the
+per-repo allowlist.
 
 Both layers must pass. A valid DMARC pass from an unauthorized sender is
 rejected.
+
+See [spec/authentication.md](../spec/authentication.md) for the full
+verification flow, From header parsing, Microsoft 365 quirks, and authorization
+details.
 
 ## Execution Isolation
 
@@ -204,7 +180,8 @@ cannot extract the real credentials for use outside the container. The ability
 to act is bound to the container's lifetime and the proxy's scope.
 
 See [network-sandbox.md](network-sandbox.md#masked-secrets-token-replacement)
-for full details on configuration, security properties, and limitations.
+for an overview and [spec/masked-secrets.md](../spec/masked-secrets.md) for the
+full specification.
 
 ### Signing Credentials (AWS SigV4 Re-signing)
 
@@ -232,7 +209,8 @@ just `*.amazonaws.com`.
 
 See
 [network-sandbox.md](network-sandbox.md#signing-credentials-aws-sigv4-re-signing)
-for configuration details, and `spec/aws-sigv4-resigning.md` for the full
+for an overview and
+[spec/aws-sigv4-resigning.md](../spec/aws-sigv4-resigning.md) for the full
 specification.
 
 ## Dashboard Security

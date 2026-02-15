@@ -220,7 +220,9 @@ emails (sent when a task is queued) include a link to track progress:
 
 ### Volume Mount Strategy
 
-All conversations are fully isolated with per-conversation configuration:
+All conversations are fully isolated with per-conversation configuration (see
+also [doc/execution-sandbox.md](../doc/execution-sandbox.md) for the security
+perspective):
 
 | Mount                                               | Purpose                             | Mode       |
 | --------------------------------------------------- | ----------------------------------- | ---------- |

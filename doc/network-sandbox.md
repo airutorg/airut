@@ -22,7 +22,7 @@ The network sandbox breaks this exfiltration path: even if the agent is tricked
 into making a request, it can only reach pre-approved hosts.
 
 **Combined with masked secrets and signing credentials** (see
-[below](#masked-secrets-token-replacement) and
+[Masked Secrets](#masked-secrets-token-replacement) and
 [Signing Credentials](#signing-credentials-aws-sigv4-re-signing)), real
 credentials never enter the container — they stay with the proxy and are only
 inserted into upstream requests to scoped hosts. A compromised container can
@@ -71,16 +71,11 @@ The system fails secure at multiple levels:
 
 The following attack vectors have been analyzed and verified as mitigated:
 
-**DNS exfiltration**: Podman's default DNS (aardvark-dns) forwards queries to
-host resolvers, which would allow encoding stolen data in DNS queries to
-attacker-controlled domains. The sandbox replaces this with a custom DNS
-responder inside the proxy container that returns the proxy IP for all A queries
-unconditionally. No queries are ever forwarded upstream, and no upstream DNS
-resolution is performed to determine domain existence — the DNS responder never
-contacts external nameservers. Allowlist enforcement happens at the proxy layer
-(HTTP 403 for blocked requests), not at DNS. Podman's `--disable-dns` flag
-prevents aardvark-dns from running, and `--dns <proxy_ip>` points all container
-queries to the custom responder.
+**DNS exfiltration**: The sandbox uses a custom DNS responder inside the proxy
+container that returns the proxy IP for all A queries unconditionally. No
+queries are ever forwarded upstream — the DNS responder never contacts external
+nameservers. Allowlist enforcement happens at the proxy layer (HTTP 403 for
+blocked requests), not at DNS.
 
 **Non-HTTP traffic**: The client container's only network route points to the
 proxy IP. The proxy only listens on ports 80 and 443. Any attempt to connect on
@@ -117,80 +112,14 @@ setup required. On startup, it creates networks, builds the proxy image, and
 generates the CA certificate. The implementation uses rootless Podman, so no
 root privileges are needed.
 
-### Requirements
-
-- **Podman 4.x+** with **netavark** backend (provides `--route` and
-  `--disable-dns` flags for `podman network create`)
-- Rootless mode — no root privileges required
-- No `CAP_NET_ADMIN` needed on any container
-
-### Network Topology
-
-```
-┌───────────────────────────────────────────────────────────┐
-│  Podman network: airut-conv-{id}                          │
-│  (--internal, --disable-dns, --route → proxy IP)          │
-│                                                           │
-│  ┌────────────────┐    DNS    ┌──────────────────────┐    │
-│  │  Claude Code   │──────────▶│  airut-proxy-{id}    │─┐  │
-│  │  container     │  :80/:443 │  (mitmdump)          │ │  │
-│  │  (--dns proxy) │──────────▶│  + dns_responder.py  │ │  │
-│  └────────────────┘           └──────────────────────┘ │  │
-└────────────────────────────────────────────────────────┼──┘
-                              ┌──────────────────────────┼──┐
-                              │  Podman network:            │
-                              │  airut-egress (internet)    │
-                              │  (metric=5, wins over       │
-                              │   internal metric=10)       │
-                              └─────────────────────────────┘
-```
+**Requirements**: Podman 4.x+ with netavark backend, rootless mode. No
+`CAP_NET_ADMIN` needed on any container.
 
 Each task gets its own internal network and proxy container, providing complete
-isolation between concurrent tasks:
-
-- **Internal network** (`--internal --disable-dns`): Per-conversation network
-  with a `--route` that sends all client traffic to the proxy. The `--internal`
-  flag blocks direct internet access. `--disable-dns` prevents aardvark-dns from
-  overriding the client's `--dns` setting.
-- **Egress network**: Shared network with internet access. Only proxy containers
-  connect here. A lower route metric ensures the egress default route wins over
-  the internal route inside the dual-homed proxy.
-
-### Request Flow (Transparent DNS-Spoofing)
-
-1. Container makes a DNS query (e.g., `api.github.com`)
-2. The query goes to the proxy IP (set via `--dns` on the container)
-3. `dns_responder.py` returns the proxy IP for all A queries (no allowlist
-   check, no upstream DNS resolution)
-4. Container connects to the proxy IP on port 80/443
-5. mitmproxy in `regular` mode reads SNI (HTTPS) or Host header (HTTP)
-6. `proxy_filter.py` checks host + path against the allowlist:
-   - **Allowed**: mitmproxy connects upstream and forwards the request
-   - **Blocked**: HTTP 403 returned with instructions
-
-Note: Non-existent domains will appear to resolve from within the container.
-This is by design — the DNS responder intentionally avoids upstream DNS
-resolution to prevent DNS exfiltration (encoding stolen data in queries to
-attacker-controlled nameservers). The proxy handles all access control.
-
-### CA Certificate Trust
-
-mitmproxy intercepts HTTPS by terminating TLS with its own CA. The CA
-certificate is generated once at gateway startup and mounted into every
-container. All tools must trust it — the container entrypoint runs
-`update-ca-certificates`, and per-tool env vars (`NODE_EXTRA_CA_CERTS`,
-`REQUESTS_CA_BUNDLE`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`) are set to cover tools
-that don't use the system store.
-
-### Network Logging
-
-Network activity is logged to `conversation_dir/network-sandbox.log` for each
-task, providing a complete audit trail from DNS resolution through HTTP request.
-Allowed and blocked requests are both logged. The `[masked: N]` suffix on HTTP
-lines indicates masked secret token replacements (see
-[Masked Secrets](#masked-secrets-token-replacement) below). Upstream connection
-errors are also logged. The log persists with the session and is visible in the
-dashboard.
+isolation between concurrent tasks. See
+[spec/network-sandbox.md](../spec/network-sandbox.md) for the network topology,
+proxy lifecycle, resource scoping, CA certificate trust, log format, and crash
+recovery details.
 
 ## Configuration
 
@@ -247,7 +176,8 @@ If auto-detection fails (e.g., `/etc/resolv.conf` is missing or contains no
 message asking you to set `network.upstream_dns` explicitly.
 
 This only affects the proxy container's resolution of real hostnames. Client
-containers never contact this DNS server — they only talk to `dns_responder.py`.
+containers never contact this DNS server — they only talk to the custom DNS
+responder.
 
 ### Network Allowlist
 
@@ -377,10 +307,6 @@ repos:
    headers
 5. Requests to other hosts see only the useless surrogate
 
-The proxy also handles **Base64-encoded Basic Auth** (used by git operations):
-it decodes the `Authorization: Basic` header, replaces the surrogate, and
-re-encodes.
-
 ### Security Properties
 
 | Property                | Mechanism                                       |
@@ -396,33 +322,18 @@ re-encodes.
 
 1. **Header-only replacement**: Tokens in request body or query parameters are
    not replaced. Use plain `secrets` if body tokens are required.
+2. **Requires sandbox**: When the sandbox is disabled, surrogates are still
+   injected but never swapped — API calls using masked secrets will fail.
 
-2. **No response masking**: Real tokens are never sent to the container. If a
-   service echoes tokens in responses, they would be visible (but still redacted
-   in logs).
+### When to Use
 
-3. **Requires sandbox**: Masked secrets depend on the proxy. When the sandbox is
-   disabled, surrogates are still injected but never swapped — API calls using
-   masked secrets will fail. Move credentials to plain `secrets` if the sandbox
-   must be temporarily disabled.
+Use `masked_secrets` for credentials that are used via `Authorization`,
+`X-Api-Key`, or `X-Auth-Token` headers and should only be usable with specific
+hosts. Use plain `secrets` for credentials passed in request bodies or that need
+to work with arbitrary hosts.
 
-### When to Use Masked Secrets
-
-Use `masked_secrets` for credentials that:
-
-- Are used via `Authorization`, `X-Api-Key`, or `X-Auth-Token` headers
-- Should only be usable with specific hosts (e.g., GitHub tokens for GitHub
-  APIs)
-- Carry high exfiltration risk if exposed
-
-Use plain `secrets` for credentials that:
-
-- Are passed in request bodies (not headers)
-- Need to work with arbitrary hosts
-- Are low-sensitivity (e.g., public API keys)
-
-See `spec/masked-secrets.md` for the full specification (surrogate format,
-replacement map, proxy addon details).
+See [spec/masked-secrets.md](../spec/masked-secrets.md) for the full
+specification (surrogate format, replacement map, proxy addon details).
 
 ## Signing Credentials (AWS SigV4 Re-signing)
 
@@ -484,7 +395,7 @@ container_env:
   AWS_SESSION_TOKEN: !secret? AWS_SESSION_TOKEN
 ```
 
-### What gets re-signed
+### What Gets Re-signed
 
 | Authentication method | Where credentials appear        | Re-signed |
 | --------------------- | ------------------------------- | --------- |
@@ -493,45 +404,7 @@ container_env:
 | Chunked upload        | Per-chunk signatures in body    | Yes       |
 | SigV4A (multi-region) | `AWS4-ECDSA-P256-SHA256` header | Yes       |
 
-### Surrogate format
-
-Surrogates are format-preserving:
-
-- **Access key ID**: Same length (20 chars), preserves `AKIA`/`ASIA` prefix
-- **Secret access key**: Same length (40 chars), same charset
-- **Session token**: Fixed 512 characters (avoids leaking real token length)
-
-### Transparent upgrade path
-
-The server admin can switch between plain secrets and signing credentials
-without any repo config changes:
-
-**Plain secrets** (no masking — container gets real values):
-
-```yaml
-secrets:
-  AWS_ACCESS_KEY_ID: !env AWS_ACCESS_KEY_ID
-  AWS_SECRET_ACCESS_KEY: !env AWS_SECRET_ACCESS_KEY
-```
-
-**Signing credentials** (proxy re-signs — container gets surrogates):
-
-```yaml
-signing_credentials:
-  AWS_PROD:
-    type: aws-sigv4
-    access_key_id:
-      name: AWS_ACCESS_KEY_ID
-      value: !env AWS_ACCESS_KEY_ID
-    secret_access_key:
-      name: AWS_SECRET_ACCESS_KEY
-      value: !env AWS_SECRET_ACCESS_KEY
-    scopes: ["*.amazonaws.com"]
-```
-
-In both cases, the repo config uses `!secret AWS_ACCESS_KEY_ID`.
-
-### Security properties
+### Security Properties
 
 | Property                | Mechanism                                                          |
 | ----------------------- | ------------------------------------------------------------------ |
@@ -547,16 +420,19 @@ In both cases, the repo config uses `!secret AWS_ACCESS_KEY_ID`.
 
 1. **SigV4/SigV4A only**: Only AWS-style HMAC-SHA256 and ECDSA-P256 signing is
    supported. Other signing protocols (e.g., GCP, Azure) are not covered.
-
 2. **Requires sandbox**: Like masked secrets, signing credentials depend on the
    proxy. When the sandbox is disabled, the container has surrogate credentials
    that fail to authenticate.
 
-3. **Single signing credential per host**: If multiple signing credential sets
-   have overlapping scopes, the proxy matches the first one found.
+### Transparent Upgrade Path
 
-See `spec/aws-sigv4-resigning.md` for the full specification (surrogate
-generation, re-signing algorithm, chunked transfer encoding, data flow).
+The server admin can switch between plain secrets and signing credentials
+without any repo config changes — the repo config uses `!secret` references
+either way.
+
+See [spec/aws-sigv4-resigning.md](../spec/aws-sigv4-resigning.md) for the full
+specification (surrogate generation, re-signing algorithm, chunked transfer
+encoding, data flow).
 
 ## Troubleshooting
 
@@ -610,7 +486,8 @@ When investigating connectivity problems from inside a container:
 ## Further Reading
 
 - [spec/network-sandbox.md](../spec/network-sandbox.md) — Implementation details
-  (proxy lifecycle, resource scoping, log format, crash recovery)
+  (network topology, proxy lifecycle, resource scoping, log format, crash
+  recovery)
 - [spec/masked-secrets.md](../spec/masked-secrets.md) — Full masked secrets
   specification
 - [spec/aws-sigv4-resigning.md](../spec/aws-sigv4-resigning.md) — AWS
