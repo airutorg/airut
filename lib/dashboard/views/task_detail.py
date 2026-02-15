@@ -299,10 +299,34 @@ def _sse_task_detail_script(conversation_id: str) -> str:
 
             source.onerror = function() {{
                 source.close();
-                if (status) status.textContent = 'Disconnected';
+                if (status) status.textContent = 'Polling (5s)';
+                startTaskPolling();
             }};
 
             if (status) status.textContent = 'Live';
+        }}
+
+        function startTaskPolling() {{
+            var status = document.getElementById('stream-status');
+            setInterval(function() {{
+                fetch('/api/conversations').then(function(resp) {{
+                    if (resp.status === 200) return resp.json();
+                    return null;
+                }}).then(function(tasks) {{
+                    if (!tasks) return;
+                    var task = null;
+                    for (var i = 0; i < tasks.length; i++) {{
+                        if (tasks[i].conversation_id === '{conversation_id}') {{
+                            task = tasks[i];
+                            break;
+                        }}
+                    }}
+                    if (task && task.status === 'completed') {{
+                        if (status) status.textContent = 'Complete';
+                        window.location.reload();
+                    }}
+                }}).catch(function() {{ /* ignore fetch errors */ }});
+            }}, 5000);
         }}
 
         connectTaskSSE();

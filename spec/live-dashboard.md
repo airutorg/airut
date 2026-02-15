@@ -96,11 +96,13 @@ connections. When the limit is reached, the server responds with
 
 ### Endpoints
 
-| Endpoint                                | Purpose                  | Cursor         |
-| --------------------------------------- | ------------------------ | -------------- |
-| `/api/events/stream`                    | Task + boot + repo state | Version number |
-| `/api/conversation/{id}/events/stream`  | Claude streaming events  | Byte offset    |
-| `/api/conversation/{id}/network/stream` | Network log lines        | Byte offset    |
+| Endpoint                                | Purpose                      | Cursor         |
+| --------------------------------------- | ---------------------------- | -------------- |
+| `/api/events/stream`                    | Task + boot + repo state     | Version number |
+| `/api/conversation/{id}/events/stream`  | Claude streaming events      | Byte offset    |
+| `/api/conversation/{id}/events/poll`    | Events polling fallback      | Byte offset    |
+| `/api/conversation/{id}/network/stream` | Network log lines            | Byte offset    |
+| `/api/conversation/{id}/network/poll`   | Network log polling fallback | Byte offset    |
 
 ### State Stream (`/api/events/stream`)
 
@@ -161,19 +163,32 @@ rendering functions as the initial page load.
 
 ### Polling Fallback
 
-When SSE is unavailable, JSON API endpoints support conditional requests via
-`ETag` (version number). Clients poll with `If-None-Match` for
-`304 Not Modified` responses.
+When SSE is unavailable, all pages fall back to polling automatically.
+
+**State-based pages** (main dashboard, task detail, repo detail) poll JSON API
+endpoints with `ETag` / `If-None-Match` for `304 Not Modified` responses. On
+change, they reload the page to get a fresh server render.
+
+**Append-only log pages** (actions viewer, network viewer) poll dedicated
+endpoints that return new content since the last offset:
+
+- `GET /api/conversation/{id}/events/poll?offset=N`
+- `GET /api/conversation/{id}/network/poll?offset=N`
+
+These return `{offset, html, done}` JSON. The `offset` is used as the ETag (via
+`If-None-Match` with format `"o<offset>"`). When no new content is available and
+the ETag matches, the server returns `304`. The `done` field indicates whether
+the task has completed, allowing the client to stop polling.
 
 ## Page Update Strategy
 
-| Page           | SSE Source                              | Behavior                                      |
-| -------------- | --------------------------------------- | --------------------------------------------- |
-| Main dashboard | `/api/events/stream`                    | Updates task lists, boot, repos               |
-| Task detail    | `/api/events/stream`                    | Updates status, timing; reloads on completion |
-| Actions viewer | `/api/conversation/{id}/events/stream`  | Appends events to timeline                    |
-| Network viewer | `/api/conversation/{id}/network/stream` | Appends log lines                             |
-| Repo detail    | `/api/events/stream`                    | Updates status badge, error section           |
+| Page           | SSE Source                              | Polling Fallback                               | Behavior                                      |
+| -------------- | --------------------------------------- | ---------------------------------------------- | --------------------------------------------- |
+| Main dashboard | `/api/events/stream`                    | `/api/conversations` (ETag, reload)            | Updates task lists, boot, repos               |
+| Task detail    | `/api/events/stream`                    | `/api/conversations` (reload on completion)    | Updates status, timing; reloads on completion |
+| Actions viewer | `/api/conversation/{id}/events/stream`  | `/api/conversation/{id}/events/poll` (append)  | Appends events to timeline                    |
+| Network viewer | `/api/conversation/{id}/network/stream` | `/api/conversation/{id}/network/poll` (append) | Appends log lines                             |
+| Repo detail    | `/api/events/stream`                    | `/api/repos` (ETag, reload)                    | Updates status badge, error section           |
 
 Active tasks (QUEUED, IN_PROGRESS) connect to SSE. Completed tasks render static
 content.
@@ -183,6 +198,8 @@ content.
 Three levels of fallback:
 
 1. **SSE available**: real-time push, sub-second latency
-2. **SSE unavailable** (connection limit, network issue): ETag polling (5-second
-   interval), same data format
+2. **SSE unavailable** (connection limit, network issue): automatic polling
+   fallback. State-based pages poll with ETag (5s interval) and reload on
+   change. Append-only log pages poll dedicated endpoints (3s interval) and
+   incrementally append new content, preserving scroll position.
 3. **JavaScript disabled**: server-rendered HTML at page load, manual refresh

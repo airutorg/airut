@@ -152,10 +152,27 @@ def _sse_repo_detail_script(repo_id: str) -> str:
 
             source.onerror = function() {{
                 source.close();
-                if (status) status.textContent = 'Disconnected';
+                if (status) status.textContent = 'Polling (5s)';
+                startRepoPolling();
             }};
 
             if (status) status.textContent = 'Live';
+        }}
+
+        function startRepoPolling() {{
+            var etag = '';
+            setInterval(function() {{
+                var headers = {{}};
+                if (etag) headers['If-None-Match'] = etag;
+                fetch('/api/repos', {{
+                    headers: headers
+                }}).then(function(resp) {{
+                    if (resp.status === 200) {{
+                        etag = resp.headers.get('ETag') || etag;
+                        window.location.reload();
+                    }}
+                }}).catch(function() {{ /* ignore fetch errors */ }});
+            }}, 5000);
         }}
 
         connectRepoSSE();

@@ -145,6 +145,16 @@ def _sse_events_script(conversation_id: str, initial_offset: int = 0) -> str:
             autoScroll = nearBottom;
         }});
 
+        function appendHtml(html) {{
+            var container = document.getElementById('events-container');
+            if (html) {{
+                container.insertAdjacentHTML('beforeend', html);
+            }}
+            if (html && autoScroll) {{
+                window.scrollTo(0, document.body.scrollHeight);
+            }}
+        }}
+
         function connectEventsSSE() {{
             var url = '/api/conversation/{conversation_id}/events/stream'
                 + '?offset=' + currentOffset;
@@ -155,17 +165,7 @@ def _sse_events_script(conversation_id: str, initial_offset: int = 0) -> str:
                 try {{
                     var data = JSON.parse(e.data);
                     currentOffset = data.offset || currentOffset;
-                    var container = document.getElementById(
-                        'events-container'
-                    );
-                    if (data.html) {{
-                        container.insertAdjacentHTML(
-                            'beforeend', data.html
-                        );
-                    }}
-                    if (data.html && autoScroll) {{
-                        window.scrollTo(0, document.body.scrollHeight);
-                    }}
+                    appendHtml(data.html);
                     if (status) status.textContent = 'Live';
                 }} catch (err) {{ /* ignore parse errors */ }}
             }});
@@ -177,10 +177,32 @@ def _sse_events_script(conversation_id: str, initial_offset: int = 0) -> str:
 
             source.onerror = function() {{
                 source.close();
-                if (status) status.textContent = 'Disconnected';
+                if (status) status.textContent = 'Polling (3s)';
+                startEventsPolling();
             }};
 
             if (status) status.textContent = 'Live';
+        }}
+
+        function startEventsPolling() {{
+            var status = document.getElementById('stream-status');
+            var timer = setInterval(function() {{
+                var url = '/api/conversation/{conversation_id}/events/poll'
+                    + '?offset=' + currentOffset;
+                fetch(url).then(function(resp) {{
+                    if (resp.status === 304) return null;
+                    if (resp.status === 200) return resp.json();
+                    return null;
+                }}).then(function(data) {{
+                    if (!data) return;
+                    currentOffset = data.offset || currentOffset;
+                    appendHtml(data.html);
+                    if (data.done) {{
+                        clearInterval(timer);
+                        if (status) status.textContent = 'Complete';
+                    }}
+                }}).catch(function() {{ /* ignore fetch errors */ }});
+            }}, 3000);
         }}
 
         connectEventsSSE();

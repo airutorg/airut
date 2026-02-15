@@ -275,7 +275,7 @@ def sse_state_stream(
         )
 
 
-def _render_events_html(events: list[Any]) -> str:
+def render_events_html(events: list[Any]) -> str:
     """Render stream events to HTML fragments.
 
     Args:
@@ -322,7 +322,7 @@ def sse_events_log_stream(
 
     # Send initial catch-up with retry interval
     events, offset = event_log.tail(offset)
-    html = _render_events_html(events) if events else ""
+    html = render_events_html(events) if events else ""
     data = json.dumps({"offset": offset, "html": html})
     yield format_sse_event("html", data, retry=1000)
 
@@ -333,7 +333,7 @@ def sse_events_log_stream(
         if events:
             offset = new_offset
             last_heartbeat = time.monotonic()
-            html = _render_events_html(events)
+            html = render_events_html(events)
             data = json.dumps({"offset": offset, "html": html})
             yield format_sse_event("html", data)
 
@@ -343,7 +343,7 @@ def sse_events_log_stream(
             # Drain any remaining events
             events, offset = event_log.tail(offset)
             if events:
-                html = _render_events_html(events)
+                html = render_events_html(events)
                 data = json.dumps({"offset": offset, "html": html})
                 yield format_sse_event("html", data)
             yield format_sse_event("done", json.dumps({"offset": offset}))
@@ -355,7 +355,7 @@ def sse_events_log_stream(
             last_heartbeat = time.monotonic()
 
 
-def _render_network_lines_html(lines: list[str]) -> str:
+def render_network_lines_html(lines: list[str]) -> str:
     """Render network log lines to HTML fragments.
 
     Args:
@@ -403,7 +403,7 @@ def sse_network_log_stream(
 
     # Send initial catch-up with retry interval
     lines, offset = network_log.tail(offset)
-    html = _render_network_lines_html(lines) if lines else ""
+    html = render_network_lines_html(lines) if lines else ""
     data = json.dumps({"offset": offset, "html": html})
     yield format_sse_event("html", data, retry=1000)
 
@@ -414,7 +414,7 @@ def sse_network_log_stream(
         if lines:
             offset = new_offset
             last_heartbeat = time.monotonic()
-            html = _render_network_lines_html(lines)
+            html = render_network_lines_html(lines)
             data = json.dumps({"offset": offset, "html": html})
             yield format_sse_event("html", data)
 
@@ -424,7 +424,7 @@ def sse_network_log_stream(
             # Drain any remaining lines
             lines, offset = network_log.tail(offset)
             if lines:
-                html = _render_network_lines_html(lines)
+                html = render_network_lines_html(lines)
                 data = json.dumps({"offset": offset, "html": html})
                 yield format_sse_event("html", data)
             yield format_sse_event("done", json.dumps({"offset": offset}))
