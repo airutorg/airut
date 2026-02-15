@@ -136,8 +136,10 @@ class TestGitVersionBuildHook:
         assert "GIT_SHA_SHORT = 'abc1234'" in content
         assert f"GIT_SHA_FULL = '{'a' * 40}'" in content
 
-    def test_skips_when_not_git_repo(self, tmp_path: Path) -> None:
-        """Should skip generation when git is not available."""
+    def test_skips_when_not_git_repo_and_no_existing_file(
+        self, tmp_path: Path
+    ) -> None:
+        """Should skip generation when git unavailable and no _version.py."""
         lib_dir = tmp_path / "lib"
         lib_dir.mkdir()
 
@@ -152,6 +154,44 @@ class TestGitVersionBuildHook:
 
         version_file = lib_dir / "_version.py"
         assert not version_file.exists()
+        assert "force_include" not in build_data
+
+    def test_preserves_existing_version_file_when_no_git(
+        self, tmp_path: Path
+    ) -> None:
+        """Should force-include existing _version.py when git unavailable.
+
+        Reproduces the PyPI install bug: when building a wheel from an
+        sdist, _version.py exists (baked into the sdist) but git is not
+        available.  The hook must still add it to force_include so
+        hatchling doesn't exclude it via .gitignore patterns.
+        """
+        lib_dir = tmp_path / "lib"
+        lib_dir.mkdir()
+
+        # Simulate _version.py already existing (e.g. from sdist)
+        version_file = lib_dir / "_version.py"
+        version_file.write_text(
+            '"""Auto-generated."""\n'
+            "VERSION = 'v0.8.0'\n"
+            "GIT_SHA_SHORT = 'abc1234'\n"
+            f"GIT_SHA_FULL = '{'a' * 40}'\n"
+        )
+
+        hook = _make_hook(str(tmp_path))
+
+        build_data: dict = {}
+        with patch(
+            "scripts.hatch_build._get_build_version",
+            side_effect=FileNotFoundError("git not found"),
+        ):
+            hook.initialize("0.0.0", build_data)
+
+        # The file should still exist (not deleted)
+        assert version_file.exists()
+        # And it must be in force_include so hatch doesn't skip it
+        assert "force_include" in build_data
+        assert "lib/_version.py" in build_data["force_include"].values()
 
     def test_force_include_in_build_data(self, tmp_path: Path) -> None:
         """Should add version file to force_include in build_data."""
