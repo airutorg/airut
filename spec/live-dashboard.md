@@ -1,6 +1,8 @@
 # Live Dashboard
 
-Real-time dashboard updates via Server-Sent Events (SSE).
+Real-time dashboard updates via Server-Sent Events (SSE). This is the companion
+spec to [dashboard.md](dashboard.md), which covers the overall dashboard
+architecture, endpoints, UI, and configuration.
 
 ## Overview
 
