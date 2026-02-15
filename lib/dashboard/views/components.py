@@ -482,6 +482,22 @@ ${conversation.total_cost_usd:.4f}</div>
                 {text_sections_html}
             </div>"""
 
+    # Show pending request text for in-progress execution
+    pending_html = ""
+    if conversation.pending_request_text:
+        escaped_pending = html.escape(conversation.pending_request_text)
+        pending_html = f"""
+            <div class="reply in-progress">
+                <div class="reply-header">
+                    <span class="reply-number">Pending Request</span>
+                    <span class="reply-timestamp">in progress</span>
+                </div>
+                <div class="text-section">
+                    <div class="text-section-header">Request</div>
+                    <div class="text-content request">{escaped_pending}</div>
+                </div>
+            </div>"""
+
     return f"""
     <div class="card">
         <h2>Conversation Data</h2>
@@ -491,6 +507,7 @@ ${conversation.total_cost_usd:.4f}</div>
                 Reply History
             </h3>
             {replies_html}
+            {pending_html}
         </div>
     </div>"""
 

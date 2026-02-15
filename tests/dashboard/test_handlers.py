@@ -504,6 +504,115 @@ class TestConversationDataIntegration:
         assert "Please help me with this task" in html
         assert "I&#x27;ll help you with that task." in html  # HTML escaped
 
+    def test_task_detail_shows_pending_request_text(
+        self, tmp_path: Path
+    ) -> None:
+        """Task detail page shows pending request text for in-progress tasks.
+
+        When a task is running, the conversation section should display the
+        pending_request_text from conversation.json so the user can see
+        what prompt triggered the execution.
+
+        Regression test: pending_request_text was only shown on the actions
+        page, not on the task detail page's conversation section.
+        """
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        # Set pending request (simulates what gateway does before execution)
+        store = ConversationStore(conv_dir)
+        store.set_pending_request("abc12345", "Fix the authentication bug")
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345")
+        html = response.get_data(as_text=True)
+
+        # Must show the pending request text
+        assert "Fix the authentication bug" in html
+        # Should show it in the conversation section, not just metadata
+        assert "Pending Request" in html
+
+    def test_task_detail_pending_request_with_completed_replies(
+        self, tmp_path: Path
+    ) -> None:
+        """Task detail shows pending request alongside completed replies.
+
+        When a conversation has completed replies and a new request is
+        in-progress, both should be visible.
+        """
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        # Add a completed reply first
+        _add_reply(
+            conv_dir,
+            "abc12345",
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
+            request_text="First request",
+            response_text="First response",
+        )
+
+        # Set pending request for a follow-up
+        store = ConversationStore(conv_dir)
+        store.set_pending_request("abc12345", "Follow-up request")
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345")
+        html = response.get_data(as_text=True)
+
+        # Completed reply should show
+        assert "Reply #1" in html
+        assert "First request" in html
+        # Pending request should also show
+        assert "Follow-up request" in html
+        assert "Pending Request" in html
+
+    def test_task_detail_pending_request_html_escaped(
+        self, tmp_path: Path
+    ) -> None:
+        """Task detail page escapes pending request text to prevent XSS."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        store = ConversationStore(conv_dir)
+        store.set_pending_request("abc12345", '<script>alert("xss")</script>')
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345")
+        html = response.get_data(as_text=True)
+
+        # Must be escaped, not raw
+        assert '<script>alert("xss")</script>' not in html
+        assert "&lt;script&gt;" in html
+
     def test_task_detail_no_request_response_text(self, tmp_path: Path) -> None:
         """Test task detail page handles missing request/response text."""
         tracker = TaskTracker()
