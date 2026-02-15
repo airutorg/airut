@@ -50,7 +50,11 @@ def render_actions_page(
     # Build actions content
     has_replies = conversation is not None and len(conversation.replies) > 0
     has_events = event_groups is not None and len(event_groups) > 0
-    if not has_replies and not has_events:
+    has_pending = (
+        conversation is not None
+        and conversation.pending_request_text is not None
+    )
+    if not has_replies and not has_events and not has_pending:
         actions_content = '<div class="no-actions">No actions recorded</div>'
     else:
         actions_content = render_actions_timeline(conversation, event_groups)
@@ -145,17 +149,51 @@ def render_actions_timeline(
         </div>""")
 
     # Render in-progress event groups that don't have a completed reply yet
-    if event_groups is not None:
-        for j in range(len(replies), len(event_groups)):
-            events_html = render_events_list(event_groups[j])
-            reply_num = j + 1
+    pending_request = (
+        conversation.pending_request_text if conversation is not None else None
+    )
+    in_progress_groups = (
+        event_groups[len(replies) :] if event_groups is not None else []
+    )
+
+    if in_progress_groups:
+        for k, group in enumerate(in_progress_groups):
+            events_html = render_events_list(group)
+            reply_num = len(replies) + k + 1
+
+            # Only show the prompt on the first in-progress group
+            request_html = ""
+            if k == 0 and pending_request:
+                escaped_request = html.escape(pending_request)
+                request_html = f"""
+            <div class="event">
+                <div class="ev-request-label">prompt</div>
+                <div class="ev-request">{escaped_request}</div>
+            </div>"""
+
             sections.append(f"""
         <div class="reply-section in-progress">
             <div class="reply-header">
                 <span>Reply #{reply_num}</span>
                 <span class="reply-timestamp">in progress</span>
             </div>
+            {request_html}
             {events_html}
+        </div>""")
+    elif pending_request:
+        # Prompt persisted but no events have arrived yet
+        reply_num = len(replies) + 1
+        escaped_request = html.escape(pending_request)
+        sections.append(f"""
+        <div class="reply-section in-progress">
+            <div class="reply-header">
+                <span>Reply #{reply_num}</span>
+                <span class="reply-timestamp">in progress</span>
+            </div>
+            <div class="event">
+                <div class="ev-request-label">prompt</div>
+                <div class="ev-request">{escaped_request}</div>
+            </div>
         </div>""")
 
     return "".join(sections)

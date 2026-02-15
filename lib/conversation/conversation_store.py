@@ -69,11 +69,15 @@ class ConversationMetadata:
         conversation_id: Conversation identifier.
         replies: List of reply summaries in chronological order.
         model: Claude model to use for this conversation.
+        pending_request_text: Prompt text for a reply that is currently
+            being executed. Set before execution starts so the dashboard
+            can display it; cleared when the reply completes.
     """
 
     conversation_id: str
     replies: list[ReplySummary] = field(default_factory=list)
     model: str | None = None
+    pending_request_text: str | None = None
 
     @property
     def latest_session_id(self) -> str | None:
@@ -167,6 +171,7 @@ class ConversationStore:
                 conversation_id=conv_id,
                 replies=replies,
                 model=data.get("model"),
+                pending_request_text=data.get("pending_request_text"),
             )
 
             logger.debug(
@@ -198,6 +203,8 @@ class ConversationStore:
         }
         if metadata.model:
             data["model"] = metadata.model
+        if metadata.pending_request_text is not None:
+            data["pending_request_text"] = metadata.pending_request_text
 
         with self._file_path.open("w") as f:
             json.dump(data, f, indent=2)
@@ -208,6 +215,28 @@ class ConversationStore:
             self._file_path,
         )
 
+    def set_pending_request(
+        self,
+        conversation_id: str,
+        request_text: str,
+    ) -> None:
+        """Record the prompt for a reply that is about to start.
+
+        Persists the request text to conversation.json so the dashboard
+        can display it while execution is in progress. Cleared
+        automatically when the reply completes via ``add_reply``.
+
+        Args:
+            conversation_id: Conversation identifier.
+            request_text: The prompt text being sent to Claude.
+        """
+        metadata = self.load()
+        if metadata is None:
+            metadata = ConversationMetadata(conversation_id=conversation_id)
+
+        metadata.pending_request_text = request_text
+        self.save(metadata)
+
     def add_reply(
         self,
         conversation_id: str,
@@ -216,7 +245,8 @@ class ConversationStore:
         """Append a reply summary and save.
 
         Loads existing metadata (or creates new), appends the reply,
-        and saves to file.
+        and saves to file. Clears ``pending_request_text`` since the
+        reply is now complete.
 
         Args:
             conversation_id: Conversation identifier.
@@ -230,6 +260,7 @@ class ConversationStore:
             metadata = ConversationMetadata(conversation_id=conversation_id)
 
         metadata.replies.append(reply)
+        metadata.pending_request_text = None
         self.save(metadata)
 
         logger.info(
