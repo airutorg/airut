@@ -84,6 +84,18 @@ gh release view vX.Y.Z
 
 Send the release URL to the user. They will review and publish it.
 
+### 4. PyPI Publishing (Automatic)
+
+When the user publishes the GitHub release, the `publish.yml` workflow
+automatically builds and uploads the package to PyPI via Trusted Publisher. No
+manual intervention is needed.
+
+Verify the package is available:
+
+```bash
+uv pip show airut --index-url https://pypi.org/simple/
+```
+
 ## How the Release is Consumed
 
 Airut is installed via `uv tool install` and updated manually:
@@ -95,11 +107,11 @@ systemctl --user restart airut
 
 The update channel depends on how the tool was installed:
 
+- **Release**: `uv tool install airut` — installs from PyPI (tagged releases
+  only).
 - **Dev**:
   `uv tool install airut --from git+https://github.com/airutorg/airut.git` —
   tracks main branch.
-- **Release** (future): `uv tool install airut` — installs from PyPI (tagged
-  releases only).
 
-After the release is published, users can pull the new version with
-`uv tool upgrade airut`.
+After the release is published, the package is automatically uploaded to PyPI.
+Users can pull the new version with `uv tool upgrade airut`.

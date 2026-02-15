@@ -323,9 +323,9 @@ def test_check_linger_enabled(tmp_path: Path) -> None:
         patch.dict("os.environ", {"USER": "testuser"}),
         patch(
             "lib.install_services.Path",
-            side_effect=lambda p: tmp_path / "testuser"
-            if "linger" in str(p)
-            else Path(p),
+            side_effect=lambda p: (
+                tmp_path / "testuser" if "linger" in str(p) else Path(p)
+            ),
         ),
     ):
         # Directly test the linger file check logic

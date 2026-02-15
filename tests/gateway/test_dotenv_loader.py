@@ -51,8 +51,8 @@ class TestLoadDotenvOnce:
             # CWD .env does not exist
             mock_cwd_env = MagicMock()
             mock_cwd_env.exists.return_value = False
-            mock_path_cls.cwd.return_value.__truediv__ = (
-                lambda self, x: mock_cwd_env
+            mock_path_cls.cwd.return_value.__truediv__ = lambda self, x: (
+                mock_cwd_env
             )
             load_dotenv_once()
         mock_ld.assert_called_once_with(xdg_env)

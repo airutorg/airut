@@ -7,6 +7,7 @@ name = "airut"
 version = "0.7.0"
 description = "Headless Claude Code interaction via email"
 license = "MIT"
+readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "aiosmtpd>=1.4.6",
@@ -32,6 +33,11 @@ dependencies = [
 
 [project.scripts]
 airut = "lib.airut:cli"
+
+[project.urls]
+Homepage = "https://github.com/airutorg/airut"
+Repository = "https://github.com/airutorg/airut"
+Documentation = "https://github.com/airutorg/airut/tree/main/doc"
 
 [tool.hatch.build.hooks.custom]
 path = "scripts/hatch_build.py"
@@ -95,7 +101,9 @@ addopts = "--disable-socket --ignore=tests/integration"
 allow-only = """
 Apache;
 BSD;
+GNU Lesser General Public License;
 ISC;
+LGPL;
 MIT;
 MPL;
 Mozilla Public License;

@@ -227,8 +227,9 @@ events = [
             assert conv_id is not None
 
             response1 = integration_env.email_server.wait_for_sent(
-                lambda m: "complete" in get_message_text(m).lower()
-                and m != ack1,
+                lambda m: (
+                    "complete" in get_message_text(m).lower() and m != ack1
+                ),
                 timeout=30.0,
             )
             assert response1 is not None

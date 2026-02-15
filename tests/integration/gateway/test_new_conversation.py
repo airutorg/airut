@@ -91,8 +91,9 @@ events = [
 
             # Wait for response email (with Claude's output)
             response = integration_env.email_server.wait_for_sent(
-                lambda m: "completed" in get_message_text(m).lower()
-                and m != ack,  # Not the acknowledgment
+                lambda m: (
+                    "completed" in get_message_text(m).lower() and m != ack
+                ),  # Not the acknowledgment
                 timeout=30.0,
             )
             assert response is not None, "Did not receive response email"

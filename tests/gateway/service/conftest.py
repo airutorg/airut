@@ -77,7 +77,7 @@ def make_service(
     # Build GlobalConfig with overrides
     global_kwargs: dict[str, Any] = {"dashboard_enabled": False}
     global_kwargs.update(global_overrides)
-    global_config = GlobalConfig(**global_kwargs)  # type: ignore[arg-type]
+    global_config = GlobalConfig(**global_kwargs)
 
     # Build ServerConfig
     server_config = ServerConfig(
