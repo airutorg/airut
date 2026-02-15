@@ -328,11 +328,39 @@ def _check_github(
     )
 
 
+def is_exact_version_tag(version: str) -> bool:
+    """Check if a version string is an exact tag (not a git describe suffix).
+
+    ``git describe`` outputs ``v0.9.0`` for exact matches and
+    ``v0.9.0-4-gecb890e`` for 4 commits after the tag.  Only the exact
+    form corresponds to a GitHub release.
+
+    Args:
+        version: Version string from ``git describe``.
+
+    Returns:
+        True if this looks like an exact version tag (e.g. ``v0.9.0``),
+        False if it has a ``-N-gSHA`` suffix or is empty.
+    """
+    if not version:
+        return False
+    # git describe format: vX.Y.Z-N-gSHA — the -N-g suffix means
+    # commits after the tag.
+    v = version.lstrip("v")
+    try:
+        Version(v)
+        return True
+    except InvalidVersion:
+        return False
+
+
 def github_release_url(version: str) -> str:
     """Construct a GitHub releases page URL for a version tag.
 
     Args:
-        version: Version string (e.g. "v0.7.0" or "0.7.0").
+        version: Clean version string (e.g. "v0.7.0" or "0.7.0").
+            Must be an exact tag — do not pass git describe output
+            with ``-N-gSHA`` suffix.
 
     Returns:
         URL to the GitHub releases page for this tag.

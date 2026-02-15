@@ -491,6 +491,31 @@ class TestDashboardServer:
         assert f'href="{expected_url}"' in html
         assert 'class="version-sha"' in html
 
+    def test_index_with_non_exact_version_tag(self) -> None:
+        """Test version links to commit for git describe suffix."""
+        tracker = TaskTracker()
+        version_info = VersionInfo(
+            version="v0.9.0-4-gecb890e",
+            git_sha="ecb890e",
+            git_sha_full="ecb890e1234567890abcdef1234567890abcdef12",
+            full_status="=== VERSION ===\nv0.9.0-4-gecb890e (ecb890e)",
+            started_at=946684800.0,
+        )
+        server = DashboardServer(tracker, version_info=version_info)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/")
+        html = response.get_data(as_text=True)
+
+        # Non-exact tag should link to commit, not release
+        sha_full = "ecb890e1234567890abcdef1234567890abcdef12"
+        expected_url = f"https://github.com/airutorg/airut/commit/{sha_full}"
+        assert f'href="{expected_url}"' in html
+        # Version label still shown
+        assert "v0.9.0-4-gecb890e" in html
+        # Should NOT link to release page
+        assert "/releases/tag/" not in html
+
     def test_index_without_version_info(self) -> None:
         """Test dashboard works without version info."""
         tracker = TaskTracker()
