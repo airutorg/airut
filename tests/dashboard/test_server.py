@@ -504,8 +504,8 @@ class TestDashboardServer:
         # Check HTML escaping (XSS prevention)
         # The user-provided subject should be escaped
         assert "&lt;script&gt;" in html
-        # No stop button for QUEUED task, so no script tag
-        assert "<script>" not in html
+        # alert(1) from the subject must not appear unescaped
+        assert "alert(1)</script>" not in html
 
     def test_task_detail_not_found(self) -> None:
         """Test /conversation/<id> returns 404 for unknown task."""

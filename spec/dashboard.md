@@ -118,20 +118,23 @@ credential problems) while others continue processing emails.
 
 ### HTTP Endpoints
 
-| Route                                  | Method | Description                           |
-| -------------------------------------- | ------ | ------------------------------------- |
-| `/`                                    | GET    | Main dashboard with task lists        |
-| `/.version`                            | GET    | Full git version info (plain text)    |
-| `/repo/{repo_id}`                      | GET    | Repository detail view                |
-| `/conversation/{conv_id}`              | GET    | Task detail view                      |
-| `/conversation/{conv_id}/conversation` | GET    | Raw conversation JSON                 |
-| `/conversation/{conv_id}/actions`      | GET    | Actions timeline viewer               |
-| `/api/repos`                           | GET    | JSON API for repository status (ETag) |
-| `/api/conversations`                   | GET    | JSON API for task list (ETag)         |
-| `/api/conversation/{id}`               | GET    | JSON API for single task              |
-| `/api/conversation/{id}/stop`          | POST   | Stop a running task                   |
-| `/api/events/stream`                   | GET    | SSE state stream (real-time updates)  |
-| `/health`                              | GET    | Health check endpoint (ETag)          |
+| Route                                   | Method | Description                           |
+| --------------------------------------- | ------ | ------------------------------------- |
+| `/`                                     | GET    | Main dashboard with task lists        |
+| `/.version`                             | GET    | Full git version info (plain text)    |
+| `/repo/{repo_id}`                       | GET    | Repository detail view                |
+| `/conversation/{conv_id}`               | GET    | Task detail view                      |
+| `/conversation/{conv_id}/conversation`  | GET    | Raw conversation JSON                 |
+| `/conversation/{conv_id}/actions`       | GET    | Actions timeline viewer               |
+| `/conversation/{conv_id}/network`       | GET    | Network logs viewer                   |
+| `/api/repos`                            | GET    | JSON API for repository status (ETag) |
+| `/api/conversations`                    | GET    | JSON API for task list (ETag)         |
+| `/api/conversation/{id}`                | GET    | JSON API for single task              |
+| `/api/conversation/{id}/stop`           | POST   | Stop a running task                   |
+| `/api/events/stream`                    | GET    | SSE state stream (real-time updates)  |
+| `/api/conversation/{id}/events/stream`  | GET    | SSE event log stream (per-task)       |
+| `/api/conversation/{id}/network/stream` | GET    | SSE network log stream (per-task)     |
+| `/health`                               | GET    | Health check endpoint (ETag)          |
 
 ## Configuration
 
@@ -226,8 +229,7 @@ populated from disk—only direct URL access triggers disk loading.
 
 ### Styling
 
-- Auto-refresh: 30 seconds (dashboard), 10 seconds (task detail), 5 seconds
-  (during boot)
+- Real-time updates via SSE on all pages (no polling or meta-refresh)
 - Responsive layout (single column on mobile)
 - Color coding: yellow (queued), blue (in-progress), green (success), red
   (failed)
@@ -244,7 +246,5 @@ Acceptable for a single-user system behind authentication.
 
 ## Future Enhancements
 
-- **SSE streaming**: Real-time updates via Server-Sent Events (see
-  `spec/live-dashboard.md` phases 2–3)
 - **Output preview**: Show last N lines of Claude output
 - **Conversation browser**: View full conversation history

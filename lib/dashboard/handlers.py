@@ -26,6 +26,8 @@ from lib.dashboard import views
 from lib.dashboard.formatters import VersionInfo
 from lib.dashboard.sse import (
     SSEConnectionManager,
+    sse_events_log_stream,
+    sse_network_log_stream,
     sse_state_stream,
 )
 from lib.dashboard.tracker import (
@@ -38,7 +40,7 @@ from lib.dashboard.tracker import (
 from lib.dashboard.versioned import VersionClock, VersionedStore
 from lib.dashboard.views import get_favicon_svg
 from lib.gateway.conversation import CONVERSATION_ID_PATTERN
-from lib.sandbox import NETWORK_LOG_FILENAME, EventLog
+from lib.sandbox import NETWORK_LOG_FILENAME, EventLog, NetworkLog
 
 
 logger = logging.getLogger(__name__)
@@ -601,6 +603,131 @@ class RequestHandlers:
                     self._boot_store,
                     self._repos_store,
                     client_version,
+                )
+            finally:
+                self._sse_manager.release()
+
+        return Response(
+            generate(),
+            content_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    def handle_events_log_stream(
+        self, request: Request, conversation_id: str
+    ) -> Response:
+        """Handle SSE stream for a conversation's event log.
+
+        Streams new events from ``events.jsonl`` as they are appended.
+        Sends a terminal ``done`` event when the task completes.
+
+        Args:
+            request: Incoming request.
+            conversation_id: Conversation to stream events for.
+
+        Returns:
+            SSE streaming response, or error response.
+        """
+        conversation_dir = self._find_conversation_dir(conversation_id)
+        if conversation_dir is None:
+            return Response(
+                json.dumps({"error": "Conversation not found"}),
+                status=404,
+                content_type="application/json",
+            )
+
+        if not self._sse_manager.try_acquire():
+            return Response(
+                json.dumps({"error": "Too many SSE connections"}),
+                status=429,
+                content_type="application/json",
+                headers={"Retry-After": "5"},
+            )
+
+        client_offset = 0
+        offset_param = request.args.get("offset")
+        if offset_param is not None:
+            try:
+                client_offset = int(offset_param)
+            except ValueError:
+                pass
+
+        event_log = EventLog(conversation_dir)
+
+        def generate() -> Iterable[str]:
+            try:
+                yield from sse_events_log_stream(
+                    event_log,
+                    self.tracker,
+                    conversation_id,
+                    client_offset,
+                )
+            finally:
+                self._sse_manager.release()
+
+        return Response(
+            generate(),
+            content_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    def handle_network_log_stream(
+        self, request: Request, conversation_id: str
+    ) -> Response:
+        """Handle SSE stream for a conversation's network log.
+
+        Streams new lines from ``network-sandbox.log`` as they are
+        appended. Sends a terminal ``done`` event when the task
+        completes.
+
+        Args:
+            request: Incoming request.
+            conversation_id: Conversation to stream network logs for.
+
+        Returns:
+            SSE streaming response, or error response.
+        """
+        conversation_dir = self._find_conversation_dir(conversation_id)
+        if conversation_dir is None:
+            return Response(
+                json.dumps({"error": "Conversation not found"}),
+                status=404,
+                content_type="application/json",
+            )
+
+        if not self._sse_manager.try_acquire():
+            return Response(
+                json.dumps({"error": "Too many SSE connections"}),
+                status=429,
+                content_type="application/json",
+                headers={"Retry-After": "5"},
+            )
+
+        client_offset = 0
+        offset_param = request.args.get("offset")
+        if offset_param is not None:
+            try:
+                client_offset = int(offset_param)
+            except ValueError:
+                pass
+
+        network_log = NetworkLog(conversation_dir / NETWORK_LOG_FILENAME)
+
+        def generate() -> Iterable[str]:
+            try:
+                yield from sse_network_log_stream(
+                    network_log,
+                    self.tracker,
+                    conversation_id,
+                    client_offset,
                 )
             finally:
                 self._sse_manager.release()

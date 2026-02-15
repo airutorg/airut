@@ -61,6 +61,17 @@ def _light_base() -> str:
             font-size: 12px;
             color: #999;
             margin-top: 20px;
+        }
+        .stream-status {
+            position: fixed;
+            bottom: 12px;
+            right: 16px;
+            font-size: 11px;
+            color: #999;
+            background: rgba(255,255,255,0.9);
+            padding: 4px 10px;
+            border-radius: 4px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         }"""
 
 
@@ -777,6 +788,16 @@ def _dark_base() -> str:
         }
         .terminal {
             padding: 12px 20px 40px 20px;
+        }
+        .stream-status {
+            position: fixed;
+            bottom: 12px;
+            right: 16px;
+            font-size: 11px;
+            color: #888;
+            background: rgba(37,37,38,0.9);
+            padding: 4px 10px;
+            border-radius: 4px;
         }"""
 
 

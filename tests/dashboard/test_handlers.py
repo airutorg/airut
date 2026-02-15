@@ -1465,3 +1465,331 @@ class TestStopEndpoint:
         html = response.get_data(as_text=True)
         # Check stop button is NOT present
         assert "stopTask()" not in html
+
+
+class TestEventsLogStreamEndpoint:
+    """Tests for the per-conversation events SSE stream endpoint."""
+
+    def test_events_log_stream_not_found(self) -> None:
+        """Returns 404 when conversation directory doesn't exist."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/conversation/nonexist/events/stream")
+        assert response.status_code == 404
+
+    def test_events_log_stream_found(self, tmp_path: Path) -> None:
+        """Returns SSE response for existing conversation."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.start_task("abc12345")
+        tracker.complete_task("abc12345", success=True)
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/conversation/abc12345/events/stream")
+        assert response.status_code == 200
+        assert response.content_type == "text/event-stream"
+
+        # Should contain initial event and done event (task is completed)
+        data = response.get_data(as_text=True)
+        assert "event: events\n" in data
+        assert "event: done\n" in data
+
+    def test_events_log_stream_connection_limit(self, tmp_path: Path) -> None:
+        """Returns 429 when SSE connection limit is reached."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+
+        # Exhaust all SSE slots
+        for _ in range(8):
+            server._sse_manager.try_acquire()
+
+        client = Client(server._wsgi_app)
+        response = client.get("/api/conversation/abc12345/events/stream")
+        assert response.status_code == 429
+        assert response.headers.get("Retry-After") == "5"
+
+    def test_events_log_stream_with_offset(self, tmp_path: Path) -> None:
+        """Passes offset parameter to the stream."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.start_task("abc12345")
+        tracker.complete_task("abc12345", success=True)
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get(
+            "/api/conversation/abc12345/events/stream?offset=42"
+        )
+        assert response.status_code == 200
+
+    def test_events_log_stream_invalid_offset(self, tmp_path: Path) -> None:
+        """Handles invalid offset parameter gracefully."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.start_task("abc12345")
+        tracker.complete_task("abc12345", success=True)
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get(
+            "/api/conversation/abc12345/events/stream?offset=invalid"
+        )
+        assert response.status_code == 200
+
+
+class TestNetworkLogStreamEndpoint:
+    """Tests for the per-conversation network log SSE stream endpoint."""
+
+    def test_network_log_stream_not_found(self) -> None:
+        """Returns 404 when conversation directory doesn't exist."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/conversation/nonexist/network/stream")
+        assert response.status_code == 404
+
+    def test_network_log_stream_found(self, tmp_path: Path) -> None:
+        """Returns SSE response for existing conversation."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.start_task("abc12345")
+        tracker.complete_task("abc12345", success=True)
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/conversation/abc12345/network/stream")
+        assert response.status_code == 200
+        assert response.content_type == "text/event-stream"
+
+        data = response.get_data(as_text=True)
+        assert "event: lines\n" in data
+        assert "event: done\n" in data
+
+    def test_network_log_stream_connection_limit(self, tmp_path: Path) -> None:
+        """Returns 429 when SSE connection limit is reached."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+
+        # Exhaust all SSE slots
+        for _ in range(8):
+            server._sse_manager.try_acquire()
+
+        client = Client(server._wsgi_app)
+        response = client.get("/api/conversation/abc12345/network/stream")
+        assert response.status_code == 429
+        assert response.headers.get("Retry-After") == "5"
+
+    def test_network_log_stream_with_offset(self, tmp_path: Path) -> None:
+        """Passes offset parameter to the stream."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.start_task("abc12345")
+        tracker.complete_task("abc12345", success=True)
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get(
+            "/api/conversation/abc12345/network/stream?offset=42"
+        )
+        assert response.status_code == 200
+
+    def test_network_log_stream_invalid_offset(self, tmp_path: Path) -> None:
+        """Handles invalid offset parameter gracefully."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.start_task("abc12345")
+        tracker.complete_task("abc12345", success=True)
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get(
+            "/api/conversation/abc12345/network/stream?offset=xyz"
+        )
+        assert response.status_code == 200
+
+
+class TestSSELivePages:
+    """Tests for SSE integration in HTML pages."""
+
+    def test_task_detail_no_meta_refresh(self) -> None:
+        """Task detail page no longer uses meta-refresh."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Task")
+        tracker.start_task("abc12345")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345")
+        html = response.get_data(as_text=True)
+
+        assert 'meta http-equiv="refresh"' not in html
+
+    def test_task_detail_has_sse_for_active(self) -> None:
+        """Task detail page includes SSE script for active tasks."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Task")
+        tracker.start_task("abc12345")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345")
+        html = response.get_data(as_text=True)
+
+        assert "connectTaskSSE" in html
+        assert "/api/events/stream" in html
+
+    def test_task_detail_no_sse_for_completed(self) -> None:
+        """Task detail page has no SSE script for completed tasks."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Task")
+        tracker.complete_task("abc12345", success=True)
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345")
+        html = response.get_data(as_text=True)
+
+        assert "connectTaskSSE" not in html
+
+    def test_repo_detail_no_meta_refresh(self) -> None:
+        """Repo detail page no longer uses meta-refresh."""
+        from lib.dashboard.tracker import (
+            RepoState,
+            RepoStatus,
+        )
+        from lib.dashboard.versioned import VersionClock, VersionedStore
+
+        tracker = TaskTracker()
+        clock = VersionClock()
+        repo_states: tuple[RepoState, ...] = (
+            RepoState(
+                repo_id="test-repo",
+                status=RepoStatus.LIVE,
+                git_repo_url="https://github.com/test/repo",
+                imap_server="imap.example.com",
+                storage_dir="/storage/test",
+            ),
+        )
+        repos_store: VersionedStore[tuple[RepoState, ...]] = VersionedStore(
+            repo_states, clock
+        )
+
+        server = DashboardServer(tracker, repos_store=repos_store, clock=clock)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/repo/test-repo")
+        html = response.get_data(as_text=True)
+
+        assert 'meta http-equiv="refresh"' not in html
+        assert "connectRepoSSE" in html
+
+    def test_actions_page_has_sse_for_active(self, tmp_path: Path) -> None:
+        """Actions page includes SSE script for active tasks."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Task")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345/actions")
+        html = response.get_data(as_text=True)
+
+        assert "connectEventsSSE" in html
+        assert "/events/stream" in html
+
+    def test_actions_page_no_sse_for_completed(self, tmp_path: Path) -> None:
+        """Actions page has no SSE script for completed tasks."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Task")
+        tracker.complete_task("abc12345", success=True)
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345/actions")
+        html = response.get_data(as_text=True)
+
+        assert "connectEventsSSE" not in html
+
+    def test_network_page_has_sse_for_active(self, tmp_path: Path) -> None:
+        """Network page includes SSE script for active tasks."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Task")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345/network")
+        html = response.get_data(as_text=True)
+
+        assert "connectNetworkSSE" in html
+        assert "/network/stream" in html
+
+    def test_network_page_no_sse_for_completed(self, tmp_path: Path) -> None:
+        """Network page has no SSE script for completed tasks."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Task")
+        tracker.complete_task("abc12345", success=True)
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345/network")
+        html = response.get_data(as_text=True)
+
+        assert "connectNetworkSSE" not in html

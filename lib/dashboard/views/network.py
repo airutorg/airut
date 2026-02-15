@@ -8,7 +8,7 @@
 import html
 import re
 
-from lib.dashboard.tracker import TaskState
+from lib.dashboard.tracker import TaskState, TaskStatus
 from lib.dashboard.views.styles import network_styles
 
 
@@ -36,6 +36,14 @@ def render_network_page(task: TaskState, log_content: str | None) -> str:
     else:
         logs_html = render_network_log_lines(log_content)
 
+    is_active = task.status in (TaskStatus.QUEUED, TaskStatus.IN_PROGRESS)
+    sse_script = _sse_network_script(task.conversation_id) if is_active else ""
+    status_notice = (
+        '<div id="stream-status" class="stream-status">Connecting...</div>'
+        if is_active
+        else ""
+    )
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -53,10 +61,12 @@ def render_network_page(task: TaskState, log_content: str | None) -> str:
         <h1>Network Logs: {task.conversation_id}</h1>
         <span class="subtitle">{escaped_subject}</span>
     </div>
-    <div class="terminal">
+    <div class="terminal" id="logs-container">
         {logs_html}
     </div>
+    {status_notice}
     <script>window.scrollTo(0, document.body.scrollHeight);</script>
+    {sse_script}
 </body>
 </html>"""
 
@@ -149,3 +159,127 @@ def render_network_log_lines(log_content: str) -> str:
             lines.append(f'<div class="log-line">{escaped}</div>')
 
     return "\n".join(lines)
+
+
+def _sse_network_script(conversation_id: str) -> str:
+    """JavaScript for SSE-based live network log streaming.
+
+    Connects to the per-conversation network log stream endpoint and
+    appends new lines to the terminal DOM as they arrive.
+
+    Args:
+        conversation_id: Conversation ID to stream network logs for.
+
+    Returns:
+        HTML <script> tag with SSE network log streaming logic.
+    """
+    return f"""
+    <script>
+        var currentOffset = 0;
+        var autoScroll = true;
+
+        window.addEventListener('scroll', function() {{
+            var nearBottom = (
+                window.innerHeight + window.scrollY
+                >= document.body.offsetHeight - 100
+            );
+            autoScroll = nearBottom;
+        }});
+
+        function escapeHtml(text) {{
+            var div = document.createElement('div');
+            div.appendChild(document.createTextNode(text));
+            return div.innerHTML;
+        }}
+
+        function classifyLine(line) {{
+            if (line.indexOf('=== TASK START') === 0) return 'task-start';
+            if (line.indexOf('BLOCKED') === 0) return 'blocked';
+            if (line.indexOf('ERROR') === 0) return 'conn-error';
+            if (line.indexOf('allowed') === 0) {{
+                // Check for error status codes (4xx, 5xx)
+                var m = line.match(/-> (\\d{{3}})(?:\\s|$)/);
+                if (m) {{
+                    var code = parseInt(m[1], 10);
+                    if (code < 200 || code >= 400) return 'error';
+                }}
+                return 'allowed';
+            }}
+            return '';
+        }}
+
+        function highlightLine(escaped, cls) {{
+            if (cls === 'blocked') {{
+                return escaped.replace(
+                    'BLOCKED',
+                    '<span class="highlight">BLOCKED</span>'
+                );
+            }}
+            if (cls === 'conn-error') {{
+                return escaped.replace(
+                    'ERROR',
+                    '<span class="highlight">ERROR</span>'
+                );
+            }}
+            if (cls === 'error') {{
+                var m = escaped.match(/-&gt; (\\d{{3}})/);
+                if (m) {{
+                    return escaped.replace(
+                        '-&gt; ' + m[1],
+                        '-&gt; <span class="highlight">' + m[1] + '</span>'
+                    );
+                }}
+            }}
+            return escaped;
+        }}
+
+        function renderLogLine(line) {{
+            var escaped = escapeHtml(line);
+            var cls = classifyLine(line);
+            var content = highlightLine(escaped, cls);
+            var clsAttr = cls ? ' ' + cls : '';
+            return '<div class="log-line' + clsAttr + '">'
+                + content + '</div>';
+        }}
+
+        function connectNetworkSSE() {{
+            var url = '/api/conversation/{conversation_id}/network/stream'
+                + '?offset=' + currentOffset;
+            var source = new EventSource(url);
+            var status = document.getElementById('stream-status');
+
+            source.addEventListener('lines', function(e) {{
+                try {{
+                    var data = JSON.parse(e.data);
+                    currentOffset = data.offset || currentOffset;
+                    var container = document.getElementById(
+                        'logs-container'
+                    );
+                    var lines = data.lines || [];
+                    for (var i = 0; i < lines.length; i++) {{
+                        container.insertAdjacentHTML(
+                            'beforeend', renderLogLine(lines[i])
+                        );
+                    }}
+                    if (lines.length > 0 && autoScroll) {{
+                        window.scrollTo(0, document.body.scrollHeight);
+                    }}
+                    if (status) status.textContent = 'Live';
+                }} catch (err) {{ /* ignore parse errors */ }}
+            }});
+
+            source.addEventListener('done', function(e) {{
+                source.close();
+                if (status) status.textContent = 'Complete';
+            }});
+
+            source.onerror = function() {{
+                source.close();
+                if (status) status.textContent = 'Disconnected';
+            }};
+
+            if (status) status.textContent = 'Live';
+        }}
+
+        connectNetworkSSE();
+    </script>"""

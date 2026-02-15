@@ -45,7 +45,6 @@ def render_repo_detail(repo: RepoState) -> str:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="refresh" content="30">
     <title>Repo: {escaped_repo_id} - Airut Dashboard</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <style>
@@ -56,7 +55,8 @@ def render_repo_detail(repo: RepoState) -> str:
     <div class="back-link"><a href="/">&larr; Back to Dashboard</a></div>
     <div class="repo-header">
         <h1>{escaped_repo_id}</h1>
-        <span class="status-badge {status_class}">{status_display}</span>
+        <span id="repo-status"
+            class="status-badge {status_class}">{status_display}</span>
     </div>
     <div class="detail-card">
         <div class="detail-section">
@@ -71,8 +71,92 @@ def render_repo_detail(repo: RepoState) -> str:
             <div class="detail-label">Storage Directory</div>
             <div class="detail-value mono">{escaped_storage}</div>
         </div>
-        {error_section}
+        <div id="error-section">{error_section}</div>
     </div>
-    <div class="refresh-notice">Auto-refreshes every 30 seconds</div>
+    <div id="stream-status" class="stream-status">Connecting...</div>
+    {_sse_repo_detail_script(repo.repo_id)}
 </body>
 </html>"""
+
+
+def _sse_repo_detail_script(repo_id: str) -> str:
+    """JavaScript for SSE-based live repo detail updates.
+
+    Connects to the global state stream and updates the repo detail
+    fields in real-time when state changes.
+
+    Args:
+        repo_id: Repository ID to track.
+
+    Returns:
+        HTML <script> tag with SSE repo detail update logic.
+    """
+    return f"""
+    <script>
+        function escapeHtml(text) {{
+            var div = document.createElement('div');
+            div.appendChild(document.createTextNode(text));
+            return div.innerHTML;
+        }}
+
+        function connectRepoSSE() {{
+            var source = new EventSource('/api/events/stream');
+            var status = document.getElementById('stream-status');
+
+            source.addEventListener('state', function(e) {{
+                try {{
+                    var data = JSON.parse(e.data);
+                    var repos = data.repos || [];
+                    var repo = null;
+                    for (var i = 0; i < repos.length; i++) {{
+                        if (repos[i].repo_id === '{repo_id}') {{
+                            repo = repos[i];
+                            break;
+                        }}
+                    }}
+                    if (!repo) return;
+
+                    // Update status badge
+                    var badge = document.getElementById('repo-status');
+                    if (badge) {{
+                        badge.textContent = repo.status.toUpperCase();
+                        badge.className = 'status-badge ' + repo.status;
+                    }}
+
+                    // Update error section
+                    var errSection = document.getElementById('error-section');
+                    if (errSection) {{
+                        if (repo.status === 'failed' && repo.error_message) {{
+                            var errType = escapeHtml(
+                                repo.error_type || 'Unknown'
+                            );
+                            var errMsg = escapeHtml(repo.error_message);
+                            errSection.innerHTML =
+                                '<div class="detail-section error-section">'
+                                + '<div class="detail-label">Error Type</div>'
+                                + '<div class="detail-value error-type">'
+                                    + errType + '</div>'
+                                + '<div class="detail-label">'
+                                    + 'Error Message</div>'
+                                + '<div class="detail-value error-message">'
+                                    + errMsg + '</div>'
+                                + '</div>';
+                        }} else {{
+                            errSection.innerHTML = '';
+                        }}
+                    }}
+
+                    if (status) status.textContent = 'Live';
+                }} catch (err) {{ /* ignore parse errors */ }}
+            }});
+
+            source.onerror = function() {{
+                source.close();
+                if (status) status.textContent = 'Disconnected';
+            }};
+
+            if (status) status.textContent = 'Live';
+        }}
+
+        connectRepoSSE();
+    </script>"""

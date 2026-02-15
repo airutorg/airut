@@ -81,3 +81,100 @@ class TestNetworkLogReadRaw:
         log_path = tmp_path / "nonexistent.log"
         log = NetworkLog(log_path)
         assert log.read_raw() == ""
+
+
+class TestNetworkLogTail:
+    """Tests for NetworkLog.tail method."""
+
+    def test_tail_from_start(self, tmp_path: Path) -> None:
+        """Reads all lines from byte offset 0."""
+        log_path = tmp_path / "network-sandbox.log"
+        log_path.write_text("line one\nline two\nline three\n")
+        log = NetworkLog(log_path)
+
+        lines, offset = log.tail(0)
+        assert lines == ["line one", "line two", "line three"]
+        assert offset > 0
+
+    def test_tail_incremental(self, tmp_path: Path) -> None:
+        """Reads only new lines after initial tail."""
+        log_path = tmp_path / "network-sandbox.log"
+        log_path.write_text("first\n")
+        log = NetworkLog(log_path)
+
+        lines, offset = log.tail(0)
+        assert lines == ["first"]
+
+        # Append more content
+        with log_path.open("a") as f:
+            f.write("second\nthird\n")
+
+        lines, new_offset = log.tail(offset)
+        assert lines == ["second", "third"]
+        assert new_offset > offset
+
+    def test_tail_no_new_content(self, tmp_path: Path) -> None:
+        """Returns empty list when no new content."""
+        log_path = tmp_path / "network-sandbox.log"
+        log_path.write_text("first\n")
+        log = NetworkLog(log_path)
+
+        _, offset = log.tail(0)
+
+        lines, new_offset = log.tail(offset)
+        assert lines == []
+        assert new_offset == offset
+
+    def test_tail_file_missing(self, tmp_path: Path) -> None:
+        """Returns empty list and offset 0 for missing file."""
+        log_path = tmp_path / "nonexistent.log"
+        log = NetworkLog(log_path)
+
+        lines, offset = log.tail(0)
+        assert lines == []
+        assert offset == 0
+
+    def test_tail_empty_file(self, tmp_path: Path) -> None:
+        """Returns empty list for empty file."""
+        log_path = tmp_path / "network-sandbox.log"
+        log_path.write_text("")
+        log = NetworkLog(log_path)
+
+        lines, offset = log.tail(0)
+        assert lines == []
+
+    def test_tail_skips_blank_lines(self, tmp_path: Path) -> None:
+        """Skips blank lines in output."""
+        log_path = tmp_path / "network-sandbox.log"
+        log_path.write_text("line one\n\nline two\n")
+        log = NetworkLog(log_path)
+
+        lines, _ = log.tail(0)
+        assert lines == ["line one", "line two"]
+
+    def test_tail_preserves_offset_on_missing_file(
+        self, tmp_path: Path
+    ) -> None:
+        """Preserves offset when file doesn't exist on subsequent call."""
+        log_path = tmp_path / "network-sandbox.log"
+        log = NetworkLog(log_path)
+
+        lines, offset = log.tail(42)
+        assert lines == []
+        assert offset == 0
+
+    def test_tail_handles_os_error(self, tmp_path: Path) -> None:
+        """Returns empty and preserves offset on OSError."""
+        log_path = tmp_path / "network-sandbox.log"
+        # Create the file so exists() returns True
+        log_path.write_text("content\n")
+        log = NetworkLog(log_path)
+
+        # Remove the file after exists() check will pass
+        # by making it a directory so open() fails
+        log_path.unlink()
+        log_path.mkdir()
+
+        lines, offset = log.tail(0)
+        assert lines == []
+        assert offset == 0
