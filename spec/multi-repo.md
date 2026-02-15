@@ -137,20 +137,19 @@ Each repo gets fully isolated storage. No files are shared between repos.
 ├── airut/                        # Per-repo storage root
 │   ├── git-mirror/               # Shared across conversations for this repo
 │   └── conversations/
-│       ├── abc12345/
+│       ├── abc12345/             # See doc/architecture.md for full layout
 │       │   ├── conversation.json
-│       │   ├── events.jsonl
 │       │   ├── workspace/
-│       │   ├── claude/
-│       │   ├── inbox/
-│       │   ├── outbox/
-│       │   └── storage/
+│       │   └── ...
 │       └── ...
 └── another-repo/                 # Second repo, fully isolated
     ├── git-mirror/
     └── conversations/
         └── ...
 ```
+
+See [doc/architecture.md](../doc/architecture.md#storage-structure) for the full
+conversation directory layout.
 
 ## Architecture
 

@@ -4,6 +4,52 @@ Implementation details for the network sandbox proxy infrastructure. For
 high-level documentation (threat model, security properties, configuration), see
 [doc/network-sandbox.md](../doc/network-sandbox.md).
 
+## Network Topology
+
+```
+┌───────────────────────────────────────────────────────────┐
+│  Podman network: airut-conv-{id}                          │
+│  (--internal, --disable-dns, --route → proxy IP)          │
+│                                                           │
+│  ┌────────────────┐    DNS    ┌──────────────────────┐    │
+│  │  Claude Code   │──────────▶│  airut-proxy-{id}    │─┐  │
+│  │  container     │  :80/:443 │  (mitmdump)          │ │  │
+│  │  (--dns proxy) │──────────▶│  + dns_responder.py  │ │  │
+│  └────────────────┘           └──────────────────────┘ │  │
+└────────────────────────────────────────────────────────┼──┘
+                              ┌──────────────────────────┼──┐
+                              │  Podman network:            │
+                              │  airut-egress (internet)    │
+                              │  (metric=5, wins over       │
+                              │   internal metric=10)       │
+                              └─────────────────────────────┘
+```
+
+- **Internal network** (`--internal --disable-dns`): Per-conversation network
+  with a `--route` that sends all client traffic to the proxy. The `--internal`
+  flag blocks direct internet access. `--disable-dns` prevents aardvark-dns from
+  overriding the client's `--dns` setting.
+- **Egress network**: Shared network with internet access. Only proxy containers
+  connect here. A lower route metric ensures the egress default route wins over
+  the internal route inside the dual-homed proxy.
+
+### Request Flow (Transparent DNS-Spoofing)
+
+1. Container makes a DNS query (e.g., `api.github.com`)
+2. The query goes to the proxy IP (set via `--dns` on the container)
+3. `dns_responder.py` returns the proxy IP for all A queries (no allowlist
+   check, no upstream DNS resolution)
+4. Container connects to the proxy IP on port 80/443
+5. mitmproxy in `regular` mode reads SNI (HTTPS) or Host header (HTTP)
+6. `proxy_filter.py` checks host + path against the allowlist:
+   - **Allowed**: mitmproxy connects upstream and forwards the request
+   - **Blocked**: HTTP 403 returned with instructions
+
+Note: Non-existent domains will appear to resolve from within the container.
+This is by design — the DNS responder intentionally avoids upstream DNS
+resolution to prevent DNS exfiltration (encoding stolen data in queries to
+attacker-controlled nameservers). The proxy handles all access control.
+
 ## Components
 
 | Component                       | Purpose                                               |

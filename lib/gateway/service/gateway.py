@@ -674,11 +674,8 @@ class EmailGatewayService:
                 logger.exception("Error in garbage collector: %s", e)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main() -> int:
     """Main entry point.
-
-    Args:
-        argv: Command-line arguments. If None, uses sys.argv[1:].
 
     Returns:
         Exit code (0=success, 1=config error, 2=startup, 3=runtime error).
@@ -700,7 +697,7 @@ def main(argv: list[str] | None = None) -> int:
             "exiting. Useful for systemd services to avoid restart loops."
         ),
     )
-    args = parser.parse_args(argv)
+    args = parser.parse_args()
 
     configure_logging(
         level=logging.DEBUG if args.debug else logging.INFO,

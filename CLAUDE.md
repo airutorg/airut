@@ -10,14 +10,16 @@ Network requests from containers are sandboxed; if requests fail, check
 
 ## Documentation
 
-High-level documentation in `doc/`:
+High-level documentation in `doc/` (see `doc/README.md` for full list):
 
 - `doc/architecture.md` — system architecture and data flow
 - `doc/security.md` — security model (email auth, isolation, credentials)
 - `doc/execution-sandbox.md` — container isolation and resource limits
 - `doc/network-sandbox.md` — network allowlist and proxy architecture
 - `doc/deployment.md` — installation and configuration
+- `doc/m365-oauth2.md` — Microsoft 365 OAuth2 setup for IMAP/SMTP
 - `doc/repo-onboarding.md` — onboarding new repositories
+- `doc/gerrit-onboarding.md` — Gerrit-specific onboarding
 - `doc/agentic-operation.md` — email-to-PR workflow patterns
 
 Implementation specs in `spec/` (see `spec/README.md` for full list):
