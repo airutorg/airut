@@ -14,10 +14,13 @@ import pytest
 
 from lib.airut import (
     _STUB_CONFIG,
+    _WAIT_POLL_SECONDS,
     _check_dependency,
     _dashboard_url,
+    _fetch_health,
     _fetch_running_version,
     _fmt_version,
+    _get_active_task_counts,
     _is_service_installed,
     _is_service_running,
     _local_dashboard_url,
@@ -452,6 +455,212 @@ class TestFetchRunningVersion:
         mock_urlopen.return_value = mock_resp
 
         assert _fetch_running_version("http://127.0.0.1:5200") is None
+
+
+# ── _fetch_health ──────────────────────────────────────────────────
+
+
+class TestFetchHealth:
+    @patch("lib.airut.urllib.request.urlopen")
+    def test_success(self, mock_urlopen: MagicMock) -> None:
+        """Returns parsed JSON on success."""
+        body = (
+            b'{"status":"ok","tasks":'
+            b'{"queued":1,"in_progress":2,"completed":3}}'
+        )
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = body
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        result = _fetch_health("http://127.0.0.1:5200")
+        assert result is not None
+        assert result["status"] == "ok"
+        assert result["tasks"] == {
+            "queued": 1,
+            "in_progress": 2,
+            "completed": 3,
+        }
+
+    @patch(
+        "lib.airut.urllib.request.urlopen",
+        side_effect=OSError("refused"),
+    )
+    def test_connection_refused(self, _m: MagicMock) -> None:
+        """Returns None on connection error."""
+        assert _fetch_health("http://127.0.0.1:5200") is None
+
+    @patch("lib.airut.urllib.request.urlopen")
+    def test_bad_json(self, mock_urlopen: MagicMock) -> None:
+        """Returns None on malformed JSON."""
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"not json"
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        assert _fetch_health("http://127.0.0.1:5200") is None
+
+    @patch("lib.airut.urllib.request.urlopen")
+    def test_strips_trailing_slash(self, mock_urlopen: MagicMock) -> None:
+        """Strips trailing slash from base URL."""
+        body = b'{"status":"ok"}'
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = body
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        _fetch_health("http://127.0.0.1:5200/")
+        call_args = mock_urlopen.call_args
+        req = call_args[0][0]
+        assert req.full_url == "http://127.0.0.1:5200/health"
+
+
+# ── _get_active_task_counts ────────────────────────────────────────
+
+
+class TestGetActiveTaskCounts:
+    @patch("lib.airut._fetch_health")
+    @patch("lib.airut.ServerConfig.from_yaml")
+    @patch("lib.airut.get_config_path")
+    def test_returns_counts(
+        self,
+        mock_config_path: MagicMock,
+        mock_from_yaml: MagicMock,
+        mock_health: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Returns (in_progress, queued) tuple from health data."""
+        config_path = tmp_path / "airut.yaml"
+        config_path.write_text("dummy")
+        mock_config_path.return_value = config_path
+
+        @dataclass
+        class FakeGlobal:
+            dashboard_base_url: str | None = None
+            dashboard_host: str = "127.0.0.1"
+            dashboard_port: int = 5200
+
+        config = MagicMock()
+        config.global_config = FakeGlobal()
+        mock_from_yaml.return_value = config
+        mock_health.return_value = {
+            "status": "ok",
+            "tasks": {"queued": 1, "in_progress": 2, "completed": 5},
+        }
+
+        result = _get_active_task_counts()
+        assert result == (2, 1)
+
+    @patch("lib.airut.get_config_path")
+    def test_no_config_file(
+        self, mock_config_path: MagicMock, tmp_path: Path
+    ) -> None:
+        """Returns None when config file does not exist."""
+        mock_config_path.return_value = tmp_path / "nonexistent.yaml"
+        assert _get_active_task_counts() is None
+
+    @patch("lib.airut.ServerConfig.from_yaml", side_effect=ValueError("bad"))
+    @patch("lib.airut.get_config_path")
+    def test_bad_config(
+        self,
+        mock_config_path: MagicMock,
+        _from_yaml: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Returns None when config is invalid."""
+        config_path = tmp_path / "airut.yaml"
+        config_path.write_text("bad")
+        mock_config_path.return_value = config_path
+        assert _get_active_task_counts() is None
+
+    @patch("lib.airut._fetch_health", return_value=None)
+    @patch("lib.airut.ServerConfig.from_yaml")
+    @patch("lib.airut.get_config_path")
+    def test_health_unreachable(
+        self,
+        mock_config_path: MagicMock,
+        mock_from_yaml: MagicMock,
+        _health: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Returns None when health endpoint is unreachable."""
+        config_path = tmp_path / "airut.yaml"
+        config_path.write_text("dummy")
+        mock_config_path.return_value = config_path
+
+        @dataclass
+        class FakeGlobal:
+            dashboard_base_url: str | None = None
+            dashboard_host: str = "127.0.0.1"
+            dashboard_port: int = 5200
+
+        config = MagicMock()
+        config.global_config = FakeGlobal()
+        mock_from_yaml.return_value = config
+
+        assert _get_active_task_counts() is None
+
+    @patch("lib.airut._fetch_health")
+    @patch("lib.airut.ServerConfig.from_yaml")
+    @patch("lib.airut.get_config_path")
+    def test_missing_tasks_key(
+        self,
+        mock_config_path: MagicMock,
+        mock_from_yaml: MagicMock,
+        mock_health: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Returns None when health response has no tasks key."""
+        config_path = tmp_path / "airut.yaml"
+        config_path.write_text("dummy")
+        mock_config_path.return_value = config_path
+
+        @dataclass
+        class FakeGlobal:
+            dashboard_base_url: str | None = None
+            dashboard_host: str = "127.0.0.1"
+            dashboard_port: int = 5200
+
+        config = MagicMock()
+        config.global_config = FakeGlobal()
+        mock_from_yaml.return_value = config
+        mock_health.return_value = {"status": "ok"}
+
+        assert _get_active_task_counts() is None
+
+    @patch("lib.airut._fetch_health")
+    @patch("lib.airut.ServerConfig.from_yaml")
+    @patch("lib.airut.get_config_path")
+    def test_non_int_counts(
+        self,
+        mock_config_path: MagicMock,
+        mock_from_yaml: MagicMock,
+        mock_health: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Returns None when task counts are not integers."""
+        config_path = tmp_path / "airut.yaml"
+        config_path.write_text("dummy")
+        mock_config_path.return_value = config_path
+
+        @dataclass
+        class FakeGlobal:
+            dashboard_base_url: str | None = None
+            dashboard_host: str = "127.0.0.1"
+            dashboard_port: int = 5200
+
+        config = MagicMock()
+        config.global_config = FakeGlobal()
+        mock_from_yaml.return_value = config
+        mock_health.return_value = {
+            "status": "ok",
+            "tasks": {"queued": "one", "in_progress": 0, "completed": 0},
+        }
+
+        assert _get_active_task_counts() is None
 
 
 # ── cmd_check ───────────────────────────────────────────────────────
@@ -962,12 +1171,14 @@ class TestCmdUpdate:
     @patch("lib.airut.subprocess.run")
     @patch("lib.install_services.get_airut_path", return_value="/usr/bin/airut")
     @patch("lib.install_services.uninstall_services")
+    @patch("lib.airut._is_service_running", return_value=False)
     @patch("lib.airut._is_service_installed", return_value=True)
     @patch("lib.airut._use_color", return_value=False)
     def test_service_installed_full_cycle(
         self,
         _color: MagicMock,
         _installed: MagicMock,
+        _running: MagicMock,
         mock_uninstall: MagicMock,
         _airut_path: MagicMock,
         mock_run: MagicMock,
@@ -1025,12 +1236,14 @@ class TestCmdUpdate:
         "lib.install_services.uninstall_services",
         side_effect=RuntimeError("fail"),
     )
+    @patch("lib.airut._is_service_running", return_value=False)
     @patch("lib.airut._is_service_installed", return_value=True)
     @patch("lib.airut._use_color", return_value=False)
     def test_uninstall_error(
         self,
         _color: MagicMock,
         _installed: MagicMock,
+        _running: MagicMock,
         _uninstall: MagicMock,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
@@ -1043,12 +1256,14 @@ class TestCmdUpdate:
     @patch("lib.airut.subprocess.run")
     @patch("lib.install_services.get_airut_path", return_value="/usr/bin/airut")
     @patch("lib.install_services.uninstall_services")
+    @patch("lib.airut._is_service_running", return_value=False)
     @patch("lib.airut._is_service_installed", return_value=True)
     @patch("lib.airut._use_color", return_value=False)
     def test_reinstall_fails(
         self,
         _color: MagicMock,
         _installed: MagicMock,
+        _running: MagicMock,
         _uninstall: MagicMock,
         _airut_path: MagicMock,
         mock_run: MagicMock,
@@ -1072,12 +1287,14 @@ class TestCmdUpdate:
         return_value="/nonexistent/airut",
     )
     @patch("lib.install_services.uninstall_services")
+    @patch("lib.airut._is_service_running", return_value=False)
     @patch("lib.airut._is_service_installed", return_value=True)
     @patch("lib.airut._use_color", return_value=False)
     def test_reinstall_binary_not_found(
         self,
         _color: MagicMock,
         _installed: MagicMock,
+        _running: MagicMock,
         _uninstall: MagicMock,
         _airut_path: MagicMock,
         mock_run: MagicMock,
@@ -1127,6 +1344,222 @@ class TestCmdUpdate:
         result = cmd_update([])
         assert result == 0
         out = capsys.readouterr().out
+        assert "Update complete." in out
+
+    @patch("lib.airut._get_active_task_counts", return_value=(2, 1))
+    @patch("lib.airut._is_service_running", return_value=True)
+    @patch("lib.airut._is_service_installed", return_value=True)
+    @patch("lib.airut._use_color", return_value=False)
+    def test_tasks_in_flight_blocks_update(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _running: MagicMock,
+        _counts: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Returns 1 when tasks are in flight and no flags given."""
+        result = cmd_update([])
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "Cannot update:" in out
+        assert "2 running" in out
+        assert "1 queued" in out
+        assert "--wait" in out
+        assert "--force" in out
+
+    @patch("lib.airut.subprocess.run")
+    @patch("lib.airut._get_active_task_counts", return_value=(2, 1))
+    @patch("lib.airut._is_service_running", return_value=True)
+    @patch("lib.airut._is_service_installed", return_value=True)
+    @patch("lib.airut._use_color", return_value=False)
+    def test_force_bypasses_check(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _running: MagicMock,
+        _counts: MagicMock,
+        mock_run: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """--force bypasses the in-flight task check."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="Updated", stderr=""),  # uv upgrade
+            MagicMock(returncode=0, stdout="", stderr=""),  # install-service
+        ]
+        with patch("lib.install_services.uninstall_services"):
+            with patch(
+                "lib.install_services.get_airut_path",
+                return_value="/usr/bin/airut",
+            ):
+                result = cmd_update(["--force"])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "Cannot update:" not in out
+        assert "Update complete." in out
+
+    @patch("lib.airut.time.sleep")
+    @patch("lib.airut._get_active_task_counts")
+    @patch("lib.airut._is_service_running", return_value=True)
+    @patch("lib.airut._is_service_installed", return_value=True)
+    @patch("lib.airut._use_color", return_value=False)
+    def test_wait_polls_until_idle(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _running: MagicMock,
+        mock_counts: MagicMock,
+        mock_sleep: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """--wait polls until tasks drain, then proceeds."""
+        # First call: tasks active; second call: still active; third: idle
+        mock_counts.side_effect = [(1, 0), (1, 0), (0, 0)]
+
+        with (
+            patch("lib.airut.subprocess.run") as mock_run,
+            patch("lib.install_services.uninstall_services"),
+            patch(
+                "lib.install_services.get_airut_path",
+                return_value="/usr/bin/airut",
+            ),
+        ):
+            mock_run.side_effect = [
+                MagicMock(
+                    returncode=0, stdout="Updated", stderr=""
+                ),  # uv upgrade
+                MagicMock(returncode=0, stdout="", stderr=""),  # install
+            ]
+            result = cmd_update(["--wait"])
+
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "Waiting for tasks to complete" in out
+        assert "All tasks completed." in out
+        assert mock_sleep.call_count == 2
+        mock_sleep.assert_called_with(_WAIT_POLL_SECONDS)
+
+    @patch("lib.airut.time.sleep")
+    @patch("lib.airut._get_active_task_counts")
+    @patch("lib.airut._is_service_running", return_value=True)
+    @patch("lib.airut._is_service_installed", return_value=True)
+    @patch("lib.airut._use_color", return_value=False)
+    def test_wait_service_goes_away(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _running: MagicMock,
+        mock_counts: MagicMock,
+        mock_sleep: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """--wait proceeds when service becomes unreachable."""
+        # First call: tasks active; second call: service gone
+        mock_counts.side_effect = [(1, 0), None]
+
+        with (
+            patch("lib.airut.subprocess.run") as mock_run,
+            patch("lib.install_services.uninstall_services"),
+            patch(
+                "lib.install_services.get_airut_path",
+                return_value="/usr/bin/airut",
+            ),
+        ):
+            mock_run.side_effect = [
+                MagicMock(
+                    returncode=0, stdout="Updated", stderr=""
+                ),  # uv upgrade
+                MagicMock(returncode=0, stdout="", stderr=""),  # install
+            ]
+            result = cmd_update(["--wait"])
+
+        assert result == 0
+
+    @patch("lib.airut.subprocess.run")
+    @patch("lib.airut._get_active_task_counts", return_value=(0, 0))
+    @patch("lib.airut._is_service_running", return_value=True)
+    @patch("lib.airut._is_service_installed", return_value=True)
+    @patch("lib.airut._use_color", return_value=False)
+    def test_no_tasks_proceeds(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _running: MagicMock,
+        _counts: MagicMock,
+        mock_run: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Proceeds when service is running but no tasks in flight."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="Updated", stderr=""),  # uv upgrade
+            MagicMock(returncode=0, stdout="", stderr=""),  # install-service
+        ]
+        with patch("lib.install_services.uninstall_services"):
+            with patch(
+                "lib.install_services.get_airut_path",
+                return_value="/usr/bin/airut",
+            ):
+                result = cmd_update([])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "Cannot update:" not in out
+        assert "Update complete." in out
+
+    @patch("lib.airut.subprocess.run")
+    @patch("lib.airut._get_active_task_counts", return_value=None)
+    @patch("lib.airut._is_service_running", return_value=True)
+    @patch("lib.airut._is_service_installed", return_value=True)
+    @patch("lib.airut._use_color", return_value=False)
+    def test_health_unreachable_proceeds(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _running: MagicMock,
+        _counts: MagicMock,
+        mock_run: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Proceeds when health endpoint is unreachable (fail open)."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="Updated", stderr=""),  # uv upgrade
+            MagicMock(returncode=0, stdout="", stderr=""),  # install-service
+        ]
+        with patch("lib.install_services.uninstall_services"):
+            with patch(
+                "lib.install_services.get_airut_path",
+                return_value="/usr/bin/airut",
+            ):
+                result = cmd_update([])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "Cannot update:" not in out
+
+    @patch("lib.airut.subprocess.run")
+    @patch("lib.airut._is_service_running", return_value=False)
+    @patch("lib.airut._is_service_installed", return_value=True)
+    @patch("lib.airut._use_color", return_value=False)
+    def test_service_not_running_skips_check(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _running: MagicMock,
+        mock_run: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Skips task check when service is installed but not running."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="Updated", stderr=""),  # uv upgrade
+            MagicMock(returncode=0, stdout="", stderr=""),  # install-service
+        ]
+        with patch("lib.install_services.uninstall_services"):
+            with patch(
+                "lib.install_services.get_airut_path",
+                return_value="/usr/bin/airut",
+            ):
+                result = cmd_update([])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "Cannot update:" not in out
         assert "Update complete." in out
 
 
