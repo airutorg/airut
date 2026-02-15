@@ -20,6 +20,7 @@ name = "airut"
 source = { editable = "." }
 dependencies = [
     { name = "msal" },
+    { name = "packaging" },
     { name = "platformdirs" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -47,6 +48,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "msal", specifier = ">=1.31" },
+    { name = "packaging", specifier = ">=21.0" },
     { name = "platformdirs", specifier = ">=4.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
