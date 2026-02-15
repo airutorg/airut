@@ -88,6 +88,11 @@ def _logo_styles() -> str:
             gap: 12px;
             margin-bottom: 8px;
         }
+        .title-row h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 600;
+        }
         .logo {
             height: 1.2em;
             width: auto;
