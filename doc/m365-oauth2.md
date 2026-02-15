@@ -128,7 +128,7 @@ Set-TransportConfig -SmtpClientAuthenticationDisabled $false
 
 ## Step 7: Configure Airut
 
-Add the OAuth2 credentials to `config/airut.yaml`:
+Add the OAuth2 credentials to `~/.config/airut/airut.yaml`:
 
 ```yaml
 repos:
@@ -159,7 +159,7 @@ repos:
       - you@company.com
 ```
 
-Add the corresponding values to your `.env` file:
+Add the corresponding values to `~/.config/airut/.env`:
 
 ```bash
 AZURE_TENANT_ID=your-tenant-id

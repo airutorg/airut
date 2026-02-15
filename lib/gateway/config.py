@@ -5,8 +5,13 @@
 
 """Configuration for email gateway service.
 
-Server configuration is loaded from a YAML file (``config/airut.yaml``)
-with support for ``!env`` tags that resolve values from environment variables.
+Server configuration is loaded from a YAML file.  The default location
+follows the XDG Base Directory Specification:
+
+    ``$XDG_CONFIG_HOME/airut/airut.yaml``
+    (typically ``~/.config/airut/airut.yaml``)
+
+``!env`` tags resolve values from environment variables.
 
 The server config defines global settings (execution limits, dashboard) and
 per-repo settings (email credentials, authorization, secrets).  Each repo
@@ -28,6 +33,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, overload
 
 import yaml
+from platformdirs import user_config_path, user_state_path
 
 from lib.gateway.dotenv_loader import load_dotenv_once
 from lib.logging import SecretFilter
@@ -39,8 +45,48 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_REPO_ROOT = Path(__file__).parent.parent.parent
-_DEFAULT_CONFIG_PATH = "config/airut.yaml"
+#: Application name for XDG path resolution.
+_APP_NAME = "airut"
+
+
+def get_config_path() -> Path:
+    """Return the default server config file path.
+
+    Uses XDG: ``$XDG_CONFIG_HOME/airut/airut.yaml`` (typically
+    ``~/.config/airut/airut.yaml``).
+
+    Returns:
+        Path to the config file.
+    """
+    return user_config_path(_APP_NAME) / "airut.yaml"
+
+
+def get_dotenv_path() -> Path:
+    """Return the default ``.env`` file path inside the XDG config directory.
+
+    Uses XDG: ``$XDG_CONFIG_HOME/airut/.env`` (typically
+    ``~/.config/airut/.env``).
+
+    Returns:
+        Path to the ``.env`` file.
+    """
+    return user_config_path(_APP_NAME) / ".env"
+
+
+def get_storage_dir(repo_id: str) -> Path:
+    """Return the storage directory for a repository.
+
+    Uses XDG: ``$XDG_STATE_HOME/airut/<repo_id>`` (typically
+    ``~/.local/state/airut/<repo_id>``).
+
+    Args:
+        repo_id: Repository identifier.
+
+    Returns:
+        Path to the repo's storage directory.
+    """
+    return user_state_path(_APP_NAME) / repo_id
+
 
 #: Signing type identifier for AWS SigV4/SigV4A credential re-signing.
 SIGNING_TYPE_AWS_SIGV4 = "aws-sigv4"
@@ -572,14 +618,16 @@ class GlobalConfig:
 class RepoServerConfig:
     """Per-repo server-side configuration.
 
-    Contains email credentials, authorization, storage, and secrets for a
-    single repository.  Loaded from the ``repos.<name>`` section of the
-    server config file.
+    Contains email credentials, authorization, and secrets for a single
+    repository.  Loaded from the ``repos.<name>`` section of the server
+    config file.
+
+    Storage location is determined by ``get_storage_dir(repo_id)`` using
+    XDG state directory conventions.
 
     Attributes:
         repo_id: Repository identifier (key from ``repos`` mapping).
         git_repo_url: Git repository URL to clone from.
-        storage_dir: Root directory for this repo's persistent data.
         imap_server: IMAP server hostname.
         imap_port: IMAP port.
         smtp_server: SMTP server hostname.
@@ -616,7 +664,6 @@ class RepoServerConfig:
 
     repo_id: str
     git_repo_url: str
-    storage_dir: Path
     imap_server: str
     imap_port: int
     smtp_server: str
@@ -715,6 +762,11 @@ class RepoServerConfig:
             self.authorized_senders,
         )
 
+    @property
+    def storage_dir(self) -> Path:
+        """Return the XDG state directory for this repo's persistent data."""
+        return get_storage_dir(self.repo_id)
+
 
 @dataclass(frozen=True)
 class ServerConfig:
@@ -752,18 +804,6 @@ class ServerConfig:
                 )
             seen_inboxes[inbox_key] = repo_id
 
-        # Validate no duplicate storage dirs
-        seen_dirs: dict[Path, str] = {}
-        for repo_id, repo in self.repos.items():
-            resolved = repo.storage_dir.resolve()
-            if resolved in seen_dirs:
-                raise ConfigError(
-                    f"Repo '{repo_id}' and repo '{seen_dirs[resolved]}' "
-                    f"share the same storage_dir ({repo.storage_dir}). "
-                    f"Each repo must have its own storage directory."
-                )
-            seen_dirs[resolved] = repo_id
-
         logger.info(
             "Server config loaded: %d repos, max_concurrent=%d",
             len(self.repos),
@@ -780,7 +820,7 @@ class ServerConfig:
 
         Args:
             config_path: Path to YAML config file.  Defaults to
-                ``config/airut.yaml`` relative to the repo root.
+                ``~/.config/airut/airut.yaml`` (XDG).
 
         Returns:
             ServerConfig instance.
@@ -791,7 +831,7 @@ class ServerConfig:
         load_dotenv_once()
 
         if config_path is None:
-            config_path = _REPO_ROOT / _DEFAULT_CONFIG_PATH
+            config_path = get_config_path()
 
         if not config_path.exists():
             raise ConfigError(f"Config file not found: {config_path}")
@@ -900,11 +940,6 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
             raw.get("git", {}).get("repo_url"),
             str,
             required=f"{prefix}.git.repo_url",
-        ),
-        storage_dir=_resolve(
-            raw.get("storage_dir"),
-            Path,
-            required=f"{prefix}.storage_dir",
         ),
         imap_server=_resolve(
             email.get("imap_server"),

@@ -321,13 +321,17 @@ def test_enable_and_start_service_start_fails() -> None:
 
 def test_generate_unit_email_gateway(mock_repo_root: Path) -> None:
     """Test generate_unit produces correct email gateway unit."""
-    result = install_services.generate_unit(
-        "airut.service", mock_repo_root, "/usr/bin/uv"
-    )
+    with patch(
+        "lib.install_services.get_dotenv_path",
+        return_value=Path("/home/test/.config/airut/.env"),
+    ):
+        result = install_services.generate_unit(
+            "airut.service", mock_repo_root, "/usr/bin/uv"
+        )
 
     assert f"WorkingDirectory={mock_repo_root}" in result
     assert "ExecStart=/usr/bin/uv run airut --resilient" in result
-    assert f"EnvironmentFile={mock_repo_root}/.env" in result
+    assert "EnvironmentFile=-/home/test/.config/airut/.env" in result
     assert "Restart=always" in result
 
 
@@ -1258,3 +1262,137 @@ def test_configure_logging_debug() -> None:
 
         mock_config.assert_called_once()
         assert mock_config.call_args[1]["level"] == pytest.approx(10)  # DEBUG
+
+
+# ---------------------------------------------------------------------------
+# Config migration
+# ---------------------------------------------------------------------------
+
+
+class TestMigrateConfig:
+    """Tests for migrate_config()."""
+
+    @staticmethod
+    def _patches(xdg_config: Path, xdg_dotenv: Path):
+        """Return patches for both XDG paths as a tuple of CMs."""
+        return (
+            patch(
+                "lib.install_services.get_config_path",
+                return_value=xdg_config,
+            ),
+            patch(
+                "lib.install_services.get_dotenv_path",
+                return_value=xdg_dotenv,
+            ),
+        )
+
+    def test_moves_legacy_config(self, tmp_path: Path) -> None:
+        """Moves config from repo_root/config/ to XDG location."""
+        repo_root = tmp_path / "repo"
+        legacy = repo_root / "config" / "airut.yaml"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text("repos: {}")
+
+        xdg_config = tmp_path / "xdg" / "airut" / "airut.yaml"
+        xdg_dotenv = tmp_path / "xdg" / "airut" / ".env"
+
+        p1, p2 = self._patches(xdg_config, xdg_dotenv)
+        with p1, p2:
+            install_services.migrate_config(repo_root)
+
+        assert xdg_config.exists()
+        assert xdg_config.read_text() == "repos: {}"
+        assert not legacy.exists()
+
+    def test_moves_legacy_dotenv(self, tmp_path: Path) -> None:
+        """Moves .env from repo_root/ to XDG location."""
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        legacy_dotenv = repo_root / ".env"
+        legacy_dotenv.write_text("SECRET=value")
+
+        xdg_config = tmp_path / "xdg" / "airut" / "airut.yaml"
+        xdg_dotenv = tmp_path / "xdg" / "airut" / ".env"
+
+        p1, p2 = self._patches(xdg_config, xdg_dotenv)
+        with p1, p2:
+            install_services.migrate_config(repo_root)
+
+        assert xdg_dotenv.exists()
+        assert xdg_dotenv.read_text() == "SECRET=value"
+        assert not legacy_dotenv.exists()
+
+    def test_moves_both_files(self, tmp_path: Path) -> None:
+        """Moves both airut.yaml and .env in a single migration."""
+        repo_root = tmp_path / "repo"
+        legacy_config = repo_root / "config" / "airut.yaml"
+        legacy_config.parent.mkdir(parents=True)
+        legacy_config.write_text("repos: {}")
+        legacy_dotenv = repo_root / ".env"
+        legacy_dotenv.write_text("KEY=val")
+
+        xdg_config = tmp_path / "xdg" / "airut" / "airut.yaml"
+        xdg_dotenv = tmp_path / "xdg" / "airut" / ".env"
+
+        p1, p2 = self._patches(xdg_config, xdg_dotenv)
+        with p1, p2:
+            install_services.migrate_config(repo_root)
+
+        assert xdg_config.read_text() == "repos: {}"
+        assert xdg_dotenv.read_text() == "KEY=val"
+        assert not legacy_config.exists()
+        assert not legacy_dotenv.exists()
+
+    def test_noop_when_xdg_exists(self, tmp_path: Path) -> None:
+        """Does nothing if XDG config already exists."""
+        repo_root = tmp_path / "repo"
+        legacy = repo_root / "config" / "airut.yaml"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text("old")
+
+        xdg_config = tmp_path / "xdg" / "airut" / "airut.yaml"
+        xdg_config.parent.mkdir(parents=True)
+        xdg_config.write_text("new")
+        xdg_dotenv = tmp_path / "xdg" / "airut" / ".env"
+
+        p1, p2 = self._patches(xdg_config, xdg_dotenv)
+        with p1, p2:
+            install_services.migrate_config(repo_root)
+
+        # Config untouched
+        assert xdg_config.read_text() == "new"
+        assert legacy.read_text() == "old"
+
+    def test_noop_dotenv_when_xdg_exists(self, tmp_path: Path) -> None:
+        """Does not overwrite XDG .env if it already exists."""
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        legacy_dotenv = repo_root / ".env"
+        legacy_dotenv.write_text("OLD=val")
+
+        xdg_config = tmp_path / "xdg" / "airut" / "airut.yaml"
+        xdg_dotenv = tmp_path / "xdg" / "airut" / ".env"
+        xdg_dotenv.parent.mkdir(parents=True)
+        xdg_dotenv.write_text("NEW=val")
+
+        p1, p2 = self._patches(xdg_config, xdg_dotenv)
+        with p1, p2:
+            install_services.migrate_config(repo_root)
+
+        assert xdg_dotenv.read_text() == "NEW=val"
+        assert legacy_dotenv.read_text() == "OLD=val"
+
+    def test_noop_when_no_legacy(self, tmp_path: Path) -> None:
+        """Does nothing if legacy files don't exist."""
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        xdg_config = tmp_path / "xdg" / "airut" / "airut.yaml"
+        xdg_dotenv = tmp_path / "xdg" / "airut" / ".env"
+
+        p1, p2 = self._patches(xdg_config, xdg_dotenv)
+        with p1, p2:
+            install_services.migrate_config(repo_root)
+
+        assert not xdg_config.exists()
+        assert not xdg_dotenv.exists()

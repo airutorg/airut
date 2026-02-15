@@ -20,6 +20,7 @@ from lib.gateway.config import (
     GlobalConfig,
     RepoServerConfig,
     ServerConfig,
+    get_storage_dir,
 )
 
 from .email_server import TestEmailServer
@@ -153,8 +154,10 @@ class IntegrationEnvironment:
 
         # Create directories
         master_repo = create_test_repo(tmp_path / "master_repo")
-        storage_dir = tmp_path / "storage"
-        storage_dir.mkdir()
+        # storage_dir uses get_storage_dir() which is patched by the
+        # autouse _mock_proxy_infra fixture to point to tmp_path/storage
+        storage_dir = get_storage_dir("test")
+        storage_dir.mkdir(parents=True, exist_ok=True)
         mitmproxy_confdir = tmp_path / "mitmproxy-confdir"
 
         # Create infrastructure files
@@ -193,7 +196,6 @@ class IntegrationEnvironment:
             authorized_senders=authorized_senders,
             trusted_authserv_id="test.local",
             git_repo_url=str(master_repo),
-            storage_dir=storage_dir,
             use_imap_idle=False,  # Use polling for predictable testing
             poll_interval_seconds=1,  # Fast polling for tests
             smtp_require_auth=False,  # Test server doesn't support AUTH
@@ -252,9 +254,10 @@ class IntegrationEnvironment:
         # Unique network name to avoid conflicts in parallel tests
         egress_network = f"airut-egress-{uuid.uuid4().hex[:8]}"
 
-        # Create per-repo git repos and storage
+        # storage_dir parent — get_storage_dir() is patched by the
+        # autouse _mock_proxy_infra fixture to use tmp_path/storage
         storage_dir = tmp_path / "storage"
-        storage_dir.mkdir()
+        storage_dir.mkdir(exist_ok=True)
         mitmproxy_confdir = tmp_path / "mitmproxy-confdir"
 
         # Infrastructure files (shared)
@@ -289,8 +292,7 @@ class IntegrationEnvironment:
             master_repo = create_test_repo(tmp_path / f"master_repo_{repo_id}")
             if first_master_repo is None:
                 first_master_repo = master_repo
-            repo_storage = storage_dir / repo_id
-            repo_storage.mkdir()
+            get_storage_dir(repo_id).mkdir(parents=True, exist_ok=True)
             senders = (
                 authorized_senders_per_repo.get(repo_id, ["user@test.local"])
                 if authorized_senders_per_repo
@@ -308,7 +310,6 @@ class IntegrationEnvironment:
                 authorized_senders=senders,
                 trusted_authserv_id="test.local",
                 git_repo_url=str(master_repo),
-                storage_dir=repo_storage,
                 use_imap_idle=False,
                 poll_interval_seconds=1,
                 smtp_require_auth=False,

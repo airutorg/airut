@@ -24,6 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from lib.gateway.config import get_config_path, get_dotenv_path
 from lib.update_lock import UpdateLock
 
 
@@ -79,6 +80,36 @@ def configure_logging(debug: bool = False) -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
+
+def migrate_config(repo_root: Path) -> None:
+    """Migrate config files from installation directory to XDG location.
+
+    Migrates both ``airut.yaml`` and ``.env`` from their legacy locations
+    to ``~/.config/airut/``.  Each file is moved independently — if one
+    already exists at the XDG location it is left untouched.
+
+    Args:
+        repo_root: Path to repository root.
+    """
+    xdg_config = get_config_path()
+    legacy_config = repo_root / "config" / "airut.yaml"
+
+    # Ensure XDG directory exists for both moves
+    xdg_config.parent.mkdir(parents=True, exist_ok=True)
+
+    if not xdg_config.exists() and legacy_config.exists():
+        logger.info("Migrating config: %s -> %s", legacy_config, xdg_config)
+        shutil.move(str(legacy_config), str(xdg_config))
+
+    xdg_dotenv = get_dotenv_path()
+    legacy_dotenv = repo_root / ".env"
+
+    if not xdg_dotenv.exists() and legacy_dotenv.exists():
+        logger.info("Migrating .env: %s -> %s", legacy_dotenv, xdg_dotenv)
+        shutil.move(str(legacy_dotenv), str(xdg_dotenv))
+
+    logger.info("Config migration complete")
 
 
 def get_repo_root() -> Path:
@@ -194,6 +225,7 @@ def generate_unit(
     wd = str(repo_root)
 
     if service_name == "airut.service":
+        env_file = str(get_dotenv_path())
         return (
             "[Unit]\n"
             "Description=Airut Email Gateway\n"
@@ -202,7 +234,7 @@ def generate_unit(
             "[Service]\n"
             f"WorkingDirectory={wd}\n"
             f"ExecStart={uv_path} run airut --resilient\n"
-            f"EnvironmentFile={wd}/.env\n"
+            f"EnvironmentFile=-{env_file}\n"
             "Restart=always\n"
             "RestartSec=10\n"
             "StandardOutput=journal\n"
@@ -370,6 +402,9 @@ def install_services(
         channel: Update channel ('rel' or 'dev').
         interval: Polling interval override in minutes.
     """
+    # Migrate config from legacy location before starting services
+    migrate_config(repo_root)
+
     check_linger()
 
     systemd_dir = get_systemd_user_dir()
@@ -629,6 +664,9 @@ def apply_update(repo_root: Path, channel: str = DEFAULT_CHANNEL) -> bool:
         logger.debug("Dependencies synced")
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"uv sync failed: {e.stderr.strip()}") from e
+
+    # Migrate config from legacy location before re-executing
+    migrate_config(repo_root)
 
     # Execute the new version of this script, skipping updater reinstall
     # since the updater is the process calling this

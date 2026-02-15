@@ -165,8 +165,6 @@ repos:
     git:
       repo_url: https://gerrit.example.com/a/my-project
 
-    storage_dir: ~/airut-storage/my-project
-
     imap:
       use_idle: true
 

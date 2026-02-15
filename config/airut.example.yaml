@@ -105,9 +105,6 @@ repos:
       # Repository URL cloned into each conversation workspace.
       repo_url: https://github.com/you/my-project.git
 
-    # Root directory for this repo's persistent data: sessions, git mirror.
-    storage_dir: ~/airut-storage/my-project
-
     imap:
       # Seconds between IMAP polls (only used when use_idle is false).
       poll_interval: 30
@@ -196,7 +193,6 @@ repos:
   #   trusted_authserv_id: mail.example.com
   #   git:
   #     repo_url: https://github.com/you/another-repo.git
-  #   storage_dir: ~/airut-storage/another-repo
   #   secrets:
   #     ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
   #     GH_TOKEN: !env GH_TOKEN

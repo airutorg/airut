@@ -127,7 +127,8 @@ See [network-sandbox.md](network-sandbox.md) for full details.
 
 ### Server Secrets
 
-Server credentials are configured in `config/airut.yaml` using `!env` tags:
+Server credentials are configured in `~/.config/airut/airut.yaml` using `!env`
+tags:
 
 ```yaml
 repos:
@@ -139,7 +140,7 @@ repos:
       GH_TOKEN: !env GH_TOKEN
 ```
 
-Actual values come from environment variables or `.env` file (gitignored).
+Actual values come from environment variables or `~/.config/airut/.env`.
 
 ### Container Secrets
 
