@@ -17,7 +17,9 @@ from lib.version import (
     UpstreamVersion,
     _check_github,
     _check_pypi,
+    _fetch_pypi_version,
     _get_git_version_info_live,
+    _is_older,
     _try_embedded,
     check_upstream_version,
     get_git_version_info,
@@ -698,4 +700,172 @@ class TestCheckUpstreamVersion:
     def test_returns_none_for_archive(self, _src: MagicMock) -> None:
         """Returns None for archive installs."""
         result = check_upstream_version(_make_vi())
+        assert result is None
+
+
+# ── _is_older ──────────────────────────────────────────────────────
+
+
+class TestIsOlder:
+    """Tests for _is_older helper."""
+
+    def test_older_version(self) -> None:
+        """Returns True when candidate is older."""
+        assert _is_older("0.7.0", "0.8.0") is True
+
+    def test_newer_version(self) -> None:
+        """Returns False when candidate is newer."""
+        assert _is_older("0.9.0", "0.8.0") is False
+
+    def test_equal_version(self) -> None:
+        """Returns False when versions are equal."""
+        assert _is_older("0.8.0", "0.8.0") is False
+
+    def test_invalid_candidate(self) -> None:
+        """Returns False when candidate is unparseable."""
+        assert _is_older("not-a-version", "0.8.0") is False
+
+    def test_invalid_reference(self) -> None:
+        """Returns False when reference is unparseable."""
+        assert _is_older("0.8.0", "not-a-version") is False
+
+    def test_pre_release(self) -> None:
+        """Handles pre-release versions correctly."""
+        assert _is_older("0.8.0a1", "0.8.0") is True
+        assert _is_older("0.8.0", "0.8.0a1") is False
+
+
+# ── _fetch_pypi_version ───────────────────────────────────────────
+
+
+class TestFetchPyPIVersion:
+    """Tests for _fetch_pypi_version helper."""
+
+    @patch("lib.version.urllib.request.urlopen")
+    def test_returns_version(self, mock_urlopen: MagicMock) -> None:
+        """Returns version string from PyPI response."""
+        body = json.dumps({"info": {"version": "0.9.0"}}).encode()
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = body
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        assert _fetch_pypi_version() == "0.9.0"
+
+    @patch("lib.version.urllib.request.urlopen")
+    def test_returns_none_on_network_error(
+        self, mock_urlopen: MagicMock
+    ) -> None:
+        """Returns None on network failure."""
+        mock_urlopen.side_effect = urllib.error.URLError("timeout")
+        assert _fetch_pypi_version() is None
+
+    @patch("lib.version.urllib.request.urlopen")
+    def test_returns_none_on_empty_version(
+        self, mock_urlopen: MagicMock
+    ) -> None:
+        """Returns None when PyPI returns empty version string."""
+        body = json.dumps({"info": {"version": ""}}).encode()
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = body
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        assert _fetch_pypi_version() is None
+
+
+# ── _check_pypi retry / downgrade prevention ──────────────────────
+
+
+class TestCheckPyPIRetryAndDowngrade:
+    """Tests for _check_pypi retry and downgrade prevention."""
+
+    @patch("lib.version.time.sleep")
+    @patch("lib.version._fetch_pypi_version")
+    def test_retries_when_upstream_older_than_installed(
+        self, mock_fetch: MagicMock, mock_sleep: MagicMock
+    ) -> None:
+        """Retries PyPI fetch when first result is older than installed."""
+        # First call returns stale (older) version, second returns fresh.
+        mock_fetch.side_effect = ["0.7.0", "0.8.0"]
+        result = _check_pypi(_make_vi(version="v0.8.0"))
+        assert result is not None
+        assert result.update_available is False
+        assert result.latest == "0.8.0"
+        assert mock_fetch.call_count == 2
+        mock_sleep.assert_called_once()
+
+    @patch("lib.version.time.sleep")
+    @patch("lib.version._fetch_pypi_version")
+    def test_retry_succeeds_with_newer_version(
+        self, mock_fetch: MagicMock, mock_sleep: MagicMock
+    ) -> None:
+        """Retry returns newer version after stale first response."""
+        mock_fetch.side_effect = ["0.7.0", "0.9.0"]
+        result = _check_pypi(_make_vi(version="v0.8.0"))
+        assert result is not None
+        assert result.update_available is True
+        assert result.latest == "0.9.0"
+        assert mock_fetch.call_count == 2
+
+    @patch("lib.version.time.sleep")
+    @patch("lib.version._fetch_pypi_version")
+    def test_no_retry_when_upstream_newer(
+        self, mock_fetch: MagicMock, mock_sleep: MagicMock
+    ) -> None:
+        """Does not retry when upstream is newer than installed."""
+        mock_fetch.return_value = "0.9.0"
+        result = _check_pypi(_make_vi(version="v0.8.0"))
+        assert result is not None
+        assert result.update_available is True
+        assert mock_fetch.call_count == 1
+        mock_sleep.assert_not_called()
+
+    @patch("lib.version.time.sleep")
+    @patch("lib.version._fetch_pypi_version")
+    def test_no_retry_when_versions_equal(
+        self, mock_fetch: MagicMock, mock_sleep: MagicMock
+    ) -> None:
+        """Does not retry when versions match."""
+        mock_fetch.return_value = "0.8.0"
+        result = _check_pypi(_make_vi(version="v0.8.0"))
+        assert result is not None
+        assert result.update_available is False
+        assert mock_fetch.call_count == 1
+        mock_sleep.assert_not_called()
+
+    @patch("lib.version.time.sleep")
+    @patch("lib.version._fetch_pypi_version")
+    def test_downgrade_never_reported(
+        self, mock_fetch: MagicMock, mock_sleep: MagicMock
+    ) -> None:
+        """Never reports update_available when upstream is older."""
+        # Both attempts return old version.
+        mock_fetch.side_effect = ["0.7.0", "0.7.0"]
+        result = _check_pypi(_make_vi(version="v0.8.0"))
+        assert result is not None
+        assert result.update_available is False
+        assert result.latest == "0.7.0"
+        assert result.current == "0.8.0"
+
+    @patch("lib.version.time.sleep")
+    @patch("lib.version._fetch_pypi_version")
+    def test_retry_returns_none_keeps_first_result(
+        self, mock_fetch: MagicMock, mock_sleep: MagicMock
+    ) -> None:
+        """Uses first result when retry fetch fails."""
+        mock_fetch.side_effect = ["0.7.0", None]
+        result = _check_pypi(_make_vi(version="v0.8.0"))
+        assert result is not None
+        # Still older → no update reported.
+        assert result.update_available is False
+        assert result.latest == "0.7.0"
+
+    @patch("lib.version._fetch_pypi_version")
+    def test_first_fetch_fails(self, mock_fetch: MagicMock) -> None:
+        """Returns None when first fetch fails."""
+        mock_fetch.return_value = None
+        result = _check_pypi(_make_vi(version="v0.8.0"))
         assert result is None

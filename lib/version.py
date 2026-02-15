@@ -22,11 +22,14 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
+
+from packaging.version import InvalidVersion, Version
 
 
 logger = logging.getLogger(__name__)
@@ -181,19 +184,14 @@ def check_upstream_version(
     return None
 
 
-def _check_pypi(
-    version_info: GitVersionInfo,
-    *,
-    timeout: float = 5,
-) -> UpstreamVersion | None:
-    """Query PyPI for the latest release version.
+def _fetch_pypi_version(*, timeout: float = 5) -> str | None:
+    """Fetch the latest version string from PyPI.
 
     Args:
-        version_info: Current version info.
         timeout: HTTP request timeout in seconds.
 
     Returns:
-        UpstreamVersion or None on failure.
+        Version string (e.g. ``"0.9.0"``), or None on failure.
     """
     url = f"https://pypi.org/pypi/{PACKAGE_NAME}/json"
     try:
@@ -205,11 +203,67 @@ def _check_pypi(
         return None
 
     latest = data.get("info", {}).get("version", "")
-    if not latest:
-        return None
+    return latest or None
 
+
+#: Seconds to wait between PyPI retry attempts.
+_PYPI_RETRY_DELAY = 1.0
+
+
+def _check_pypi(
+    version_info: GitVersionInfo,
+    *,
+    timeout: float = 5,
+) -> UpstreamVersion | None:
+    """Query PyPI for the latest release version.
+
+    Retries once when the returned version is older than the installed
+    version, which can happen due to stale CDN caches.  Never reports
+    an update when the upstream version is older than the installed
+    version (prevents accidental downgrades).
+
+    Args:
+        version_info: Current version info.
+        timeout: HTTP request timeout in seconds.
+
+    Returns:
+        UpstreamVersion or None on failure.
+    """
     # Current version from embedded metadata, stripped of leading "v".
     current = version_info.version.lstrip("v")
+
+    latest = _fetch_pypi_version(timeout=timeout)
+    if latest is None:
+        return None
+
+    # When PyPI returns a version older than installed, retry once —
+    # the CDN cache may be stale and a second request often hits a
+    # fresh edge.
+    if _is_older(latest, current):
+        logger.debug(
+            "PyPI returned %s which is older than installed %s; retrying",
+            latest,
+            current,
+        )
+        time.sleep(_PYPI_RETRY_DELAY)
+        retry = _fetch_pypi_version(timeout=timeout)
+        if retry is not None:
+            latest = retry
+
+    # Never suggest a downgrade.
+    if _is_older(latest, current):
+        logger.debug(
+            "PyPI version %s is still older than installed %s; "
+            "reporting up-to-date",
+            latest,
+            current,
+        )
+        return UpstreamVersion(
+            source="pypi",
+            latest=latest,
+            current=current,
+            update_available=False,
+        )
 
     return UpstreamVersion(
         source="pypi",
@@ -217,6 +271,19 @@ def _check_pypi(
         current=current,
         update_available=latest != current,
     )
+
+
+def _is_older(candidate: str, reference: str) -> bool:
+    """Return True if *candidate* is strictly older than *reference*.
+
+    Uses PEP 440 version parsing.  Returns False if either string
+    cannot be parsed (fall back to simple string comparison in the
+    caller).
+    """
+    try:
+        return Version(candidate) < Version(reference)
+    except InvalidVersion:
+        return False
 
 
 def _check_github(
