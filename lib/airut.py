@@ -31,7 +31,11 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+
+if TYPE_CHECKING:
+    from lib.version import GitVersionInfo
 
 from lib.gateway.config import (
     ConfigError,
@@ -354,6 +358,36 @@ def _fetch_health(
         return None
 
 
+#: Suggested command to restart the systemd user service.
+_RESTART_CMD = "systemctl --user restart airut"
+
+
+def _running_is_newer(
+    running: dict[str, str],
+    installed: GitVersionInfo,
+) -> bool:
+    """Return True if the running server version is newer than installed.
+
+    Compares via PEP 440 version strings when available, ignoring
+    unparseable or missing versions.
+
+    Args:
+        running: Version dict from the ``/version`` endpoint (has
+            ``version``, ``sha_short``, ``sha_full`` keys).
+        installed: Locally installed version info.
+
+    Returns:
+        True if the running version is strictly newer.
+    """
+    from lib.version import _is_older
+
+    rv = running.get("version", "").lstrip("v")
+    iv = installed.version.lstrip("v")
+    if rv and iv:
+        return _is_older(iv, rv)
+    return False
+
+
 # ── check subcommand ────────────────────────────────────────────────
 
 
@@ -463,11 +497,17 @@ def cmd_check(argv: list[str]) -> int:
                             f"running {rl}, "
                             f"installed {version_label}"
                         )
-                        print(
-                            "  Run "
-                            f"{s.cyan('airut update')}"
-                            " to apply the update."
-                        )
+                        # If the running server has a newer version
+                        # than what is installed, the binary just
+                        # needs a restart — no upgrade required.
+                        if _running_is_newer(rv, vi):
+                            print(f"  Run {s.cyan(_RESTART_CMD)} to apply.")
+                        else:
+                            print(
+                                "  Run "
+                                f"{s.cyan('airut update')}"
+                                " to apply the update."
+                            )
         else:
             print(f"  airut.service: {s.yellow('stopped')}")
     else:

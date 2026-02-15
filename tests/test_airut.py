@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from lib.airut import (
+    _RESTART_CMD,
     _STUB_CONFIG,
     _SUBCOMMAND_HELP,
     _WAIT_POLL_SECONDS,
@@ -27,6 +28,7 @@ from lib.airut import (
     _local_dashboard_url,
     _parse_version,
     _print_info,
+    _running_is_newer,
     _Style,
     _use_color,
     cli,
@@ -37,7 +39,7 @@ from lib.airut import (
     cmd_uninstall_service,
     cmd_update,
 )
-from lib.version import UpstreamVersion
+from lib.version import GitVersionInfo, UpstreamVersion
 
 
 # ── _parse_version ──────────────────────────────────────────────────
@@ -456,6 +458,77 @@ class TestFetchRunningVersion:
         mock_urlopen.return_value = mock_resp
 
         assert _fetch_running_version("http://127.0.0.1:5200") is None
+
+
+# ── _running_is_newer ─────────────────────────────────────────────
+
+
+class TestRunningIsNewer:
+    def test_running_newer(self) -> None:
+        """Returns True when running version is newer."""
+        running = {"version": "v0.9.0", "sha_short": "aaa1111"}
+        installed = GitVersionInfo(
+            version="v0.8.0",
+            sha_short="bbb2222",
+            sha_full="b" * 40,
+            full_status="",
+        )
+        assert _running_is_newer(running, installed) is True
+
+    def test_running_older(self) -> None:
+        """Returns False when running version is older."""
+        running = {"version": "v0.7.0", "sha_short": "aaa1111"}
+        installed = GitVersionInfo(
+            version="v0.8.0",
+            sha_short="bbb2222",
+            sha_full="b" * 40,
+            full_status="",
+        )
+        assert _running_is_newer(running, installed) is False
+
+    def test_same_version(self) -> None:
+        """Returns False when versions are equal."""
+        running = {"version": "v0.8.0", "sha_short": "aaa1111"}
+        installed = GitVersionInfo(
+            version="v0.8.0",
+            sha_short="bbb2222",
+            sha_full="b" * 40,
+            full_status="",
+        )
+        assert _running_is_newer(running, installed) is False
+
+    def test_empty_running_version(self) -> None:
+        """Returns False when running version is empty."""
+        running = {"version": "", "sha_short": "aaa1111"}
+        installed = GitVersionInfo(
+            version="v0.8.0",
+            sha_short="bbb2222",
+            sha_full="b" * 40,
+            full_status="",
+        )
+        assert _running_is_newer(running, installed) is False
+
+    def test_empty_installed_version(self) -> None:
+        """Returns False when installed version is empty."""
+        running = {"version": "v0.9.0", "sha_short": "aaa1111"}
+        installed = GitVersionInfo(
+            version="",
+            sha_short="bbb2222",
+            sha_full="b" * 40,
+            full_status="",
+        )
+        assert _running_is_newer(running, installed) is False
+
+    def test_missing_version_key(self) -> None:
+        """Returns False when running dict lacks version key."""
+        running = {"sha_short": "aaa1111"}
+        installed = GitVersionInfo(
+            version="v0.8.0",
+            sha_short="bbb2222",
+            sha_full="b" * 40,
+            full_status="",
+        )
+        assert _running_is_newer(running, installed) is False
 
 
 # ── _fetch_health ──────────────────────────────────────────────────
@@ -973,6 +1046,28 @@ repos:
         assert "Version mismatch" in out
         assert "v0.7.0" in out
         assert "airut update" in out
+        assert _RESTART_CMD not in out
+
+    def test_version_mismatch_running_newer_suggests_restart(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Suggests restart when running server is newer than installed."""
+        _path, ctx = _check_patches(
+            tmp_path,
+            service_installed=True,
+            service_running=True,
+            running_version={
+                "version": "v0.9.0",
+                "sha_short": "new5678",
+                "sha_full": "new5678" * 5,
+            },
+        )
+        with ctx:
+            cmd_check([])
+        out = capsys.readouterr().out
+        assert "Version mismatch" in out
+        assert _RESTART_CMD in out
+        assert "airut update" not in out
 
     def test_no_mismatch_when_versions_match(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
