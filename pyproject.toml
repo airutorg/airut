@@ -102,20 +102,14 @@ python_functions = ["test_*"]
 addopts = "--disable-socket --ignore=tests/integration"
 
 [tool.pip-licenses]
-# Allowed licenses for dependencies (using partial matching)
+# Allowed licenses for runtime dependencies (using partial matching).
+# Checked via scripts/check_licenses.py which scans only runtime deps.
 # See: https://spdx.org/licenses/ for license identifiers
-# Note: partial-match allows "MIT" to match "MIT License", etc.
 allow-only = """
 Apache;
 BSD;
-GNU Lesser General Public License;
-ISC;
-LGPL;
 MIT;
 MPL;
-Mozilla Public License;
-PSF;
-Python Software Foundation;
-Unlicense
+Mozilla Public License
 """
 partial-match = true
