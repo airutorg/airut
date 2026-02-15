@@ -51,20 +51,18 @@ The dashboard consists of these components in `lib/dashboard/`:
 
 ### State Management
 
-All dashboard-visible state flows through versioned interfaces:
+All dashboard-visible state flows through versioned interfaces. See
+[live-dashboard.md](live-dashboard.md) for the full versioned state design
+(VersionClock, VersionedStore, immutability contract, and append-only log
+streaming).
+
+Key stores:
 
 - **BootState**: Frozen dataclass wrapped in `VersionedStore[BootState]`.
-  Mutations use `dataclasses.replace()` and `store.update()`.
 - **RepoStates**: Frozen dataclass collection wrapped in
-  `VersionedStore[tuple[RepoState, ...]]`. Updated atomically.
+  `VersionedStore[tuple[RepoState, ...]]`.
 - **TaskTracker**: Uses internal locking and calls `VersionClock.tick()` on
   every mutation. Provides `get_snapshot()` for atomic reads.
-
-This guarantees:
-
-- **Atomicity**: Readers always see consistent snapshots (no torn reads)
-- **Versioning**: Every change has a monotonic version number
-- **Notification**: SSE waiters wake on every change
 
 ### Data Flow
 
