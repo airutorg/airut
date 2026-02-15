@@ -28,10 +28,8 @@ You → Email → Airut → Claude Code (container) → PR → Email reply → Y
 
 ### Prerequisites
 
-- Linux VM (tested on Debian 13)
-- Rootless Podman (for container execution)
-- Python 3.13+ (via uv)
-- Git and GitHub CLI (`gh`)
+- Linux (dedicated VM recommended, Debian 13 tested)
+- [uv](https://docs.astral.sh/uv/), Git, and Podman (rootless)
 - Dedicated email account with IMAP/SMTP access
 
 ### Install

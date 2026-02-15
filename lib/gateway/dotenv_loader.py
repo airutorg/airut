@@ -12,8 +12,7 @@ The loader reads environment variables from two locations (in order):
 
 1. ``~/.config/airut/.env`` (XDG config directory) — primary location
 2. ``.env`` in the current working directory — allows per-invocation
-   overrides when running ``uv run airut`` or ``scripts/airut.py``
-   interactively
+   overrides when running ``airut`` interactively
 
 Variables set by the first file are **not** overwritten by the second
 (``python-dotenv`` respects existing env vars by default).
