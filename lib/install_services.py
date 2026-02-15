@@ -233,7 +233,7 @@ def generate_unit(
             "\n"
             "[Service]\n"
             f"WorkingDirectory={wd}\n"
-            f"ExecStart={uv_path} run airut --resilient\n"
+            f"ExecStart={uv_path} run airut run-gateway --resilient\n"
             f"EnvironmentFile=-{env_file}\n"
             "Restart=always\n"
             "RestartSec=10\n"
