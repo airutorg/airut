@@ -19,7 +19,8 @@ conversation isolation and container-based execution for security.
 
 - **EmailListener** - IMAP polling loop with authentication and quote stripping
 - **ConversationManager** - Git checkout management and state persistence
-- **ClaudeExecutor** - Podman container wrapper for Claude Code execution
+- **Sandbox** - Container lifecycle, network isolation, and execution
+  (`lib/sandbox/`)
 - **EmailResponder** - SMTP reply construction with threading support
 - **SenderAuthenticator** - DMARC verification on trusted headers
 - **SenderAuthorizer** - Sender allowlist checking
@@ -34,9 +35,9 @@ IMAP Server
     -> ConversationManager
       -> Initialize/resume git checkout
       -> Save attachments to inbox/
-    -> ClaudeExecutor
+    -> Sandbox (Task)
       -> Spawn Podman container
-      -> Mount conversation repo
+      -> Mount conversation directories
       -> Run claude CLI
     -> EmailResponder
       -> Parse JSON output
@@ -54,7 +55,7 @@ Each conversation is an isolated session with git workspace and metadata:
 ├── git-mirror/                  # Local git mirror for fast clones
 │   └── (bare git repository)
 ├── conversations/                    # All conversations
-│   ├── abc12345/                # Session ID (8-char hex)
+│   ├── abc12345/                # Conversation ID (8-char hex)
 │   │   ├── conversation.json    # Conversation metadata (NOT mounted to container)
 │   │   ├── events.jsonl         # Streaming event log (NOT mounted to container)
 │   │   ├── workspace/           # Git workspace (mounted at /workspace)
