@@ -401,7 +401,7 @@ def process_message(
             "and /storage is reset. "
             "Markdown formatting is supported in your responses. "
             "To send files back to the user, place them in the "
-            "/outbox/ directory root (no subdirectories). "
+            "/outbox directory root (no subdirectories). "
             "Use /storage to persist files across messages.\n\n"
             "IMPORTANT: AskUserQuestion and plan mode tools "
             "(EnterPlanMode/ExitPlanMode) do not work over email "
