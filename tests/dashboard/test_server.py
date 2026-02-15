@@ -49,6 +49,7 @@ class TestDashboardServer:
         """Test server initialization with version info."""
         tracker = TaskTracker()
         version_info = VersionInfo(
+            version="v0.7.0",
             git_sha="abc1234",
             git_sha_full="abc1234567890abcdef1234567890abcdef123456",
             worktree_clean=True,
@@ -123,6 +124,7 @@ class TestDashboardServer:
         """Test /.version endpoint returns full git status."""
         tracker = TaskTracker()
         version_info = VersionInfo(
+            version="",
             git_sha="abc1234",
             git_sha_full="abc1234567890abcdef1234567890abcdef123456",
             worktree_clean=True,
@@ -419,6 +421,7 @@ class TestDashboardServer:
         """Test dashboard shows version info when clean worktree."""
         tracker = TaskTracker()
         version_info = VersionInfo(
+            version="",
             git_sha="abc1234",
             git_sha_full="abc1234567890abcdef1234567890abcdef123456",
             worktree_clean=True,
@@ -447,6 +450,7 @@ class TestDashboardServer:
         """Test dashboard shows version info when worktree is modified."""
         tracker = TaskTracker()
         version_info = VersionInfo(
+            version="",
             git_sha="def5678",
             git_sha_full="def5678901234567890abcdef1234567890abcdef",
             worktree_clean=False,
@@ -467,6 +471,28 @@ class TestDashboardServer:
 
         # Check CSS classes
         assert 'class="version-status modified"' in html
+
+    def test_index_with_version_tag(self) -> None:
+        """Test dashboard shows version tag when available."""
+        tracker = TaskTracker()
+        version_info = VersionInfo(
+            version="v0.7.0",
+            git_sha="abc1234",
+            git_sha_full="abc1234567890abcdef1234567890abcdef123456",
+            worktree_clean=True,
+            full_status="=== VERSION ===\nv0.7.0 (abc1234)",
+            started_at=946684800.0,
+        )
+        server = DashboardServer(tracker, version_info=version_info)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/")
+        html = response.get_data(as_text=True)
+
+        # Version tag should be displayed as the link text
+        assert "v0.7.0" in html
+        assert 'href="/.version"' in html
+        assert 'class="version-sha"' in html
 
     def test_index_without_version_info(self) -> None:
         """Test dashboard works without version info."""

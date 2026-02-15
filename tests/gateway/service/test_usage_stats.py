@@ -33,6 +33,7 @@ class TestCaptureVersionInfo:
 
     def test_capture_clean_worktree(self) -> None:
         mock_git_version = GitVersionInfo(
+            version="v0.7.0",
             sha_short="abc1234",
             sha_full="abc1234567890abcdef1234567890abcdef123456",
             worktree_clean=True,
@@ -48,6 +49,7 @@ class TestCaptureVersionInfo:
             mock_get_version.return_value = mock_git_version
             result = capture_version_info()
 
+        assert result.version == "v0.7.0"
         assert result.git_sha == "abc1234"
         assert (
             result.git_sha_full == "abc1234567890abcdef1234567890abcdef123456"
@@ -58,6 +60,7 @@ class TestCaptureVersionInfo:
 
     def test_capture_dirty_worktree(self) -> None:
         mock_git_version = GitVersionInfo(
+            version="",
             sha_short="def5678",
             sha_full="def5678901234567890abcdef1234567890abcdef",
             worktree_clean=False,
@@ -79,6 +82,7 @@ class TestCaptureVersionInfo:
 
     def test_capture_passes_repo_root(self) -> None:
         mock_git_version = GitVersionInfo(
+            version="",
             sha_short="abc1234",
             sha_full="abc1234567890abcdef1234567890abcdef123456",
             worktree_clean=True,

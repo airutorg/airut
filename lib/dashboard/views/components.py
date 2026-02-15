@@ -82,10 +82,11 @@ def render_version_info(version_info: VersionInfo | None) -> str:
     # Pass raw timestamp for JavaScript to format in local timezone
     started_ts = version_info.started_at
     git_sha = version_info.git_sha
+    version_label = version_info.version or git_sha
 
     return f"""
         <div class="version-info">
-            <a href="/.version" class="version-sha">{git_sha}</a>
+            <a href="/.version" class="version-sha">{version_label}</a>
             <span class="version-status {status_class}">{status_text}</span>
             <span class="version-started">Started: <span
                 class="local-time"
