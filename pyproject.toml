@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "airut"
-version = "0.7.0"
+version = "0.8.0"
 description = "Headless Claude Code interaction via email"
 license = "MIT"
 readme = "README.md"
