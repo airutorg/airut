@@ -5,11 +5,8 @@ regular user (not root) using systemd user services and rootless Podman.
 
 ## Prerequisites
 
-- **Linux VM** (tested on Debian 13)
-- **Rootless Podman** (for container execution)
-- **Python 3.13+** (via uv)
-- **uv** (Python package manager)
-- **Git** and **GitHub CLI** (`gh`)
+- **Linux** (dedicated VM recommended, Debian 13 tested)
+- **[uv](https://docs.astral.sh/uv/)**, **Git**, and **Podman** (rootless)
 - **Dedicated email account** with IMAP/SMTP access — one per repository (see
   [Email Setup](#email-setup) for details)
 - **Git credentials** for fetching configured repositories (see below)
@@ -22,14 +19,6 @@ regular user (not root) using systemd user services and rootless Podman.
 # Debian
 sudo apt update
 sudo apt install -y podman git curl
-
-# Install GitHub CLI
-curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-  | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] \
-  https://cli.github.com/packages stable main" \
-  | sudo tee /etc/apt/sources.list.d/github-cli.list
-sudo apt update && sudo apt install -y gh
 ```
 
 ### 2. Install uv
@@ -64,7 +53,8 @@ all configured repos.
 **Important:** The `GH_TOKEN` and other secrets in `~/.config/airut/airut.yaml`
 are only passed to containers — they don't affect the server's git operations.
 
-For GitHub repositories, authenticate with `gh`:
+For GitHub repositories, the recommended approach is to install
+[GitHub CLI](https://cli.github.com/) (`gh`) and authenticate:
 
 ```bash
 gh auth login
@@ -159,9 +149,9 @@ EOF
 chmod 600 ~/.config/airut/.env
 ```
 
-When running `uv run airut` or `scripts/airut.py` interactively, a `.env` file
-in the current working directory is also loaded (after the XDG file). Variables
-already set by the XDG `.env` are not overwritten.
+When running `airut` interactively, a `.env` file in the current working
+directory is also loaded (after the XDG file). Variables already set by the XDG
+`.env` are not overwritten.
 
 See [Configuration](#configuration) for full details.
 

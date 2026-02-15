@@ -110,8 +110,13 @@ development Dockerfile for your project.
 
 - `claude` must be installed and in PATH (Claude Code CLI)
 - `git` should be installed for version control operations
-- `gh` (GitHub CLI) is recommended if using GitHub for git authentication and PR
-  operations
+
+**For GitHub repositories:** Install `gh` (GitHub CLI) in the container and use
+the `gh auth git-credential` credential helper. This ensures all git operations
+use HTTPS, and authentication is handled by the `GH_TOKEN` environment variable.
+Pass `GH_TOKEN` as a
+[masked secret](network-sandbox.md#masked-secrets-token-replacement) so the real
+token never enters the container — the proxy injects it only for scoped hosts.
 
 The Airut server adds an entrypoint overlay — don't define `ENTRYPOINT`.
 

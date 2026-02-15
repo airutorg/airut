@@ -37,49 +37,6 @@ You → Email → Airut → Claude Code (container) → PR → Email reply → Y
 - **File attachments**: Send files to `/inbox`; receive files from `/outbox`
 - **Web dashboard**: Monitor running tasks and view network activity logs
 
-## Guided Setup
-
-The easiest way to get started is to paste the prompt below into
-[Claude](https://claude.ai). It will read the docs and walk you through
-installation interactively.
-
-<details>
-<summary>Copy this prompt into your AI assistant</summary>
-
-```
-I want to set up Airut — a headless Claude Code interaction system that
-works via email.
-Help me install and deploy it step by step, interactively.
-
-Before we start, read these docs to understand the system (fetch all of
-them):
-
-- README: https://raw.githubusercontent.com/airutorg/airut/main/README.md
-- Deployment guide:
-  https://raw.githubusercontent.com/airutorg/airut/main/doc/deployment.md
-- Repo onboarding:
-  https://raw.githubusercontent.com/airutorg/airut/main/doc/repo-onboarding.md
-- Architecture:
-  https://raw.githubusercontent.com/airutorg/airut/main/doc/architecture.md
-- Agentic operation:
-  https://raw.githubusercontent.com/airutorg/airut/main/doc/agentic-operation.md
-- Security model:
-  https://raw.githubusercontent.com/airutorg/airut/main/doc/security.md
-- Execution sandbox:
-  https://raw.githubusercontent.com/airutorg/airut/main/doc/execution-sandbox.md
-- Network sandbox:
-  https://raw.githubusercontent.com/airutorg/airut/main/doc/network-sandbox.md
-- Example config:
-  https://raw.githubusercontent.com/airutorg/airut/main/config/airut.example.yaml
-
-After reading, guide me through setup one step at a time. Ask me questions to
-determine my environment (OS, email provider, GitHub vs Gerrit, etc.) before
-giving specific instructions. Cover both server deployment and onboarding my
-first repository.
-```
-
-</details>
-
 ## Why Email?
 
 ### A Super-Optimized Communication Medium
@@ -165,25 +122,48 @@ starting point for onboarding your own projects.
 
 ## Quick Start
 
-1. **Deploy Airut** on a Linux VM (see [deployment.md](doc/deployment.md))
+### Prerequisites
 
-2. **Create a dedicated email account** for each repository — Airut treats the
-   inbox as a work queue and permanently deletes messages after processing (see
-   [Dedicated Inbox Requirement](doc/deployment.md#dedicated-inbox-requirement))
+- Linux (dedicated VM recommended, Debian 13 tested)
+- [uv](https://docs.astral.sh/uv/), Git, and Podman (rootless)
+- Dedicated email account with IMAP/SMTP access (one per repository)
 
-3. **Onboard a repository** by creating `.airut/` configuration (see
-   [repo-onboarding.md](doc/repo-onboarding.md))
+### Install and Configure
 
-4. **Send an email** to your configured address:
+```bash
+uv tool install airut          # Install from PyPI
+airut init                     # Generate config at ~/.config/airut/airut.yaml
+```
 
-   ```
-   To: airut@example.com
-   Subject: Fix the typo in README
+Edit `~/.config/airut/airut.yaml` with your email, repo, and secrets. See
+[deployment.md](doc/deployment.md) for the full guide including email providers,
+secrets management, and git credentials.
 
-   Please fix the typo in the README file.
-   ```
+[Onboard your repository](doc/repo-onboarding.md) by creating the `.airut/`
+directory with container Dockerfile, network allowlist, and `CLAUDE.md`.
 
-5. **Receive the response** with results and PR link
+### Deploy
+
+```bash
+airut check                    # Validate config and system dependencies
+airut install-service          # Install and start systemd service
+airut check                    # Verify everything is running
+```
+
+### Send Your First Email
+
+```
+To: airut@example.com
+Subject: Fix the typo in README
+
+Please fix the typo in the README file.
+```
+
+### Update
+
+```bash
+airut update                   # Stop service, upgrade, restart
+```
 
 ## Project Structure
 
