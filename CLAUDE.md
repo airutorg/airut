@@ -31,6 +31,7 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
 - `spec/repo-config.md` — repo config schema and YAML tags
 - `spec/image.md` — two-layer container image build
 - `spec/dashboard.md` — web dashboard endpoints and UI
+- `spec/cli.md` — CLI subcommands, service management, self-update
 
 ## Operational Workflows
 
