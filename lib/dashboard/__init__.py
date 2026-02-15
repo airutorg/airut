@@ -15,6 +15,7 @@ from lib.dashboard.formatters import (
     format_timestamp,
 )
 from lib.dashboard.server import DashboardServer
+from lib.dashboard.sse import SSEConnectionManager
 from lib.dashboard.tracker import (
     BootPhase,
     BootState,
@@ -37,6 +38,7 @@ __all__ = [
     "DashboardServer",
     "RepoState",
     "RepoStatus",
+    "SSEConnectionManager",
     "TaskState",
     "TaskStatus",
     "TaskTracker",

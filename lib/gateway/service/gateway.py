@@ -253,6 +253,7 @@ class EmailGatewayService:
             stop_callback=self._stop_execution,
             boot_store=self._boot_store,
             repos_store=self._repos_store,
+            clock=self._clock,
         )
         self.dashboard.start()
 

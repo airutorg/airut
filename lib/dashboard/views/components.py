@@ -131,31 +131,12 @@ def render_repos_section(repo_states: list[RepoState] | None) -> str:
         status_summary += f", {failed_count} failed"
 
     return f"""
-    <div class="repos-section">
+    <div id="repos-section" class="repos-section">
         <div class="repos-header">Repositories ({status_summary})</div>
         <div class="repos-grid">
             {"".join(repo_cards)}
         </div>
     </div>"""
-
-
-def boot_refresh_interval(boot_state: BootState | None) -> int:
-    """Return the auto-refresh interval in seconds.
-
-    During boot (non-READY, non-FAILED), refreshes every 5 seconds.
-    Otherwise, uses the normal 30-second interval.
-
-    Args:
-        boot_state: Current boot state, or None.
-
-    Returns:
-        Refresh interval in seconds.
-    """
-    if boot_state is None:
-        return 30
-    if boot_state.phase in (BootPhase.READY, BootPhase.FAILED):
-        return 30
-    return 5
 
 
 def render_boot_state(boot_state: BootState | None) -> str:
@@ -184,7 +165,7 @@ def render_boot_state(boot_state: BootState | None) -> str:
             escaped_tb = html.escape(boot_state.error_traceback)
             traceback_html = f'<pre class="boot-traceback">{escaped_tb}</pre>'
         return f"""
-    <div class="boot-banner boot-error">
+    <div id="boot-section" class="boot-banner boot-error">
         <div class="boot-icon">&#x2717;</div>
         <div class="boot-content">
             <div class="boot-title">Boot Failed: {error_type}</div>
@@ -203,7 +184,7 @@ def render_boot_state(boot_state: BootState | None) -> str:
     message = html.escape(boot_state.message)
 
     return f"""
-    <div class="boot-banner boot-progress">
+    <div id="boot-section" class="boot-banner boot-progress">
         <div class="boot-spinner"></div>
         <div class="boot-content">
             <div class="boot-title">{phase_label}...</div>

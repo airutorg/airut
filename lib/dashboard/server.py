@@ -26,8 +26,9 @@ from werkzeug.wrappers import Request, Response
 
 from lib.dashboard.formatters import VersionInfo
 from lib.dashboard.handlers import RequestHandlers
+from lib.dashboard.sse import SSEConnectionManager
 from lib.dashboard.tracker import BootState, RepoState, TaskTracker
-from lib.dashboard.versioned import VersionedStore
+from lib.dashboard.versioned import VersionClock, VersionedStore
 
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ class DashboardServer:
         stop_callback: Any = None,
         boot_store: VersionedStore[BootState] | None = None,
         repos_store: VersionedStore[tuple[RepoState, ...]] | None = None,
+        clock: VersionClock | None = None,
     ) -> None:
         """Initialize dashboard server.
 
@@ -63,6 +65,7 @@ class DashboardServer:
                 Should accept conversation_id and return bool.
             boot_store: Versioned boot state store.
             repos_store: Versioned repo states store.
+            clock: Shared version clock for SSE streaming.
         """
         self.tracker = tracker
         self.host = host
@@ -71,6 +74,7 @@ class DashboardServer:
         self.stop_callback = stop_callback
         self._server: Any = None
         self._thread: threading.Thread | None = None
+        self._sse_manager = SSEConnectionManager()
 
         # Initialize request handlers
         self._handlers = RequestHandlers(
@@ -80,6 +84,8 @@ class DashboardServer:
             stop_callback=stop_callback,
             boot_store=boot_store,
             repos_store=repos_store,
+            clock=clock,
+            sse_manager=self._sse_manager,
         )
 
         self._url_map = Map(
@@ -115,6 +121,7 @@ class DashboardServer:
                     methods=["POST"],
                 ),
                 Rule("/api/repos", endpoint="api_repos"),
+                Rule("/api/events/stream", endpoint="events_stream"),
                 Rule("/health", endpoint="health"),
             ]
         )
@@ -135,6 +142,7 @@ class DashboardServer:
             "api_task": self._handlers.handle_api_task,
             "api_task_stop": self._handlers.handle_api_task_stop,
             "api_repos": self._handlers.handle_api_repos,
+            "events_stream": self._handlers.handle_events_stream,
             "health": self._handlers.handle_health,
         }
 
