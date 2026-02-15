@@ -247,12 +247,26 @@ REPLACEMENTS: list[Replacement] = [
         replacement="import airut",
         description="Markdown: import lib → import airut (code blocks)",
     ),
+    # Quoted strings: "lib. (entry points in code blocks)
+    Replacement(
+        glob="**/*.md",
+        pattern=r'"lib\.',
+        replacement='"airut.',
+        description='Markdown: "lib. → "airut. (code blocks)',
+    ),
     # Quoted paths: "lib/
     Replacement(
         glob="**/*.md",
         pattern=r'"lib/',
         replacement='"airut/',
         description='Markdown: "lib/ → "airut/',
+    ),
+    # Start-of-line lib/ in code blocks (directory trees)
+    Replacement(
+        glob="**/*.md",
+        pattern=r"(?m)^lib/",
+        replacement="airut/",
+        description="Markdown: ^lib/ → ^airut/ (code block trees)",
     ),
     # Coverage flag in command examples: --cov=lib
     Replacement(
