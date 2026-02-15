@@ -17,8 +17,9 @@ Usage:
 
 The script operates in four phases:
 
-1. **Directory renames** — ``git mv lib airut`` and
-   ``git mv tests/test_lib tests/test_airut`` to preserve blame history.
+1. **Directory renames** — ``git mv lib airut``,
+   ``git mv tests/test_airut.py tests/test_cli.py`` (resolve collision),
+   and ``git mv tests/test_lib tests/test_airut`` to preserve blame.
 2. **Content replacements** — targeted regex substitutions per file type.
 3. **Formatting** — runs ``ruff format`` and ``ruff check --fix`` (with
    ``--format`` flag).
@@ -364,6 +365,10 @@ def rename_directories(dry_run: bool) -> list[str]:
     exists with only build artifacts (``_version.py``, ``__pycache__``),
     it is removed first so ``git mv`` can proceed.
 
+    Before renaming the test directory, ``tests/test_airut.py`` is moved
+    to ``tests/test_cli.py`` to avoid a file/directory name collision
+    (``tests/test_airut.py`` vs ``tests/test_airut/``).
+
     Returns:
         List of rename descriptions.
     """
@@ -375,6 +380,14 @@ def rename_directories(dry_run: bool) -> list[str]:
         _remove_stale_directory(airut_dir, dry_run)
         if not airut_dir.exists():
             renames.append((lib_dir, airut_dir))
+
+    # Rename tests/test_airut.py → tests/test_cli.py BEFORE renaming
+    # the test_lib/ directory, to avoid a name collision between the
+    # file (test_airut.py) and the directory (test_airut/).
+    test_airut_file = ROOT / "tests" / "test_airut.py"
+    test_cli_file = ROOT / "tests" / "test_cli.py"
+    if test_airut_file.is_file() and not test_cli_file.exists():
+        renames.append((test_airut_file, test_cli_file))
 
     test_lib = ROOT / "tests" / "test_lib"
     test_airut = ROOT / "tests" / "test_airut"
