@@ -28,8 +28,10 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
+from typing import Any
 
 from lib.gateway.config import (
     ConfigError,
@@ -325,6 +327,33 @@ def _fetch_running_version(
         return None
 
 
+def _fetch_health(
+    base_url: str,
+) -> dict[str, Any] | None:
+    """Fetch health status from the running dashboard server.
+
+    Args:
+        base_url: Dashboard base URL (e.g. ``http://127.0.0.1:5200``).
+
+    Returns:
+        Parsed JSON dict with ``status``, ``tasks``, ``repos`` keys,
+        or None if the request fails.
+    """
+    url = f"{base_url.rstrip('/')}/health"
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data: dict[str, Any] = json.loads(resp.read().decode())
+            return data
+    except (
+        urllib.error.URLError,
+        OSError,
+        json.JSONDecodeError,
+        ValueError,
+    ):
+        return None
+
+
 # ── check subcommand ────────────────────────────────────────────────
 
 
@@ -458,6 +487,45 @@ def cmd_check(argv: list[str]) -> int:
 # ── update subcommand ───────────────────────────────────────────────
 
 
+def _get_active_task_counts() -> tuple[int, int] | None:
+    """Query the running gateway for active task counts.
+
+    Loads the server config to determine the local dashboard address,
+    then fetches ``/health`` to get task counts.
+
+    Returns:
+        ``(in_progress, queued)`` tuple, or None if the service is not
+        reachable or not configured.
+    """
+    config_path = get_config_path()
+    if not config_path.exists():
+        return None
+
+    try:
+        config = ServerConfig.from_yaml(config_path)
+    except (ConfigError, ValueError, Exception):
+        return None
+
+    local_url = _local_dashboard_url(config)
+    health = _fetch_health(local_url)
+    if health is None:
+        return None
+
+    tasks = health.get("tasks")
+    if not isinstance(tasks, dict):
+        return None
+
+    in_progress = tasks.get("in_progress")
+    queued = tasks.get("queued")
+    if not isinstance(in_progress, int) or not isinstance(queued, int):
+        return None
+
+    return in_progress, queued
+
+
+_WAIT_POLL_SECONDS = 10
+
+
 def cmd_update(argv: list[str]) -> int:
     """Update airut to the latest version.
 
@@ -465,14 +533,66 @@ def cmd_update(argv: list[str]) -> int:
     upgrading, then reinstalls the service (which also starts it) using
     the newly installed ``airut`` binary.
 
+    Refuses to proceed when the running gateway has queued or in-progress
+    tasks.  Use ``--force`` to override, or ``--wait`` to poll until the
+    gateway is idle.
+
     Args:
-        argv: Extra arguments (currently unused).
+        argv: Extra arguments (``--force``, ``--wait``).
 
     Returns:
         Exit code (0 on success, 1 on error).
     """
     s = _Style(_use_color())
+    force = "--force" in argv
+    wait = "--wait" in argv
     service_was_installed = _is_service_installed()
+
+    # ── Pre-flight: check for tasks in flight ──────────────────
+    if service_was_installed and _is_service_running() and not force:
+        counts = _get_active_task_counts()
+        if counts is not None:
+            in_progress, queued = counts
+            active = in_progress + queued
+
+            if active > 0 and wait:
+                print(
+                    f"  {s.yellow('Tasks in flight:')} "
+                    f"{in_progress} running, {queued} queued."
+                )
+                print(f"  {s.dim('Waiting for tasks to complete...')}")
+
+                while active > 0:
+                    time.sleep(_WAIT_POLL_SECONDS)
+                    counts = _get_active_task_counts()
+                    if counts is None:
+                        # Service went away — safe to proceed.
+                        break
+                    in_progress, queued = counts
+                    active = in_progress + queued
+                    if active > 0:
+                        print(
+                            f"  {
+                                s.dim(
+                                    f'  Still waiting: '
+                                    f'{in_progress} running, '
+                                    f'{queued} queued...'
+                                )
+                            }"
+                        )
+
+                print(f"  {s.green('All tasks completed.')}")
+
+            elif active > 0:
+                print(
+                    f"  {s.red('Cannot update:')} "
+                    f"{in_progress} running, {queued} queued task(s)."
+                )
+                print(
+                    f"  Use {s.cyan('airut update --wait')} to wait, "
+                    f"or {s.cyan('airut update --force')} to update anyway."
+                )
+                return 1
 
     # ── Stop and uninstall service if installed ────────────────
     if service_was_installed:
