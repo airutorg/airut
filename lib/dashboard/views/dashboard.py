@@ -299,6 +299,7 @@ def render_dashboard(
     </style>
 </head>
 <body>
+<div class="page">
     <div class="title-row">
         {render_logo()}
         <h1>Airut Dashboard</h1>
@@ -333,6 +334,7 @@ def render_dashboard(
         </div>
     </div>
     <div id="status-notice" class="refresh-notice">Connecting...</div>
+</div>
     {local_time_script()}
     {update_check_script()}
     {_sse_live_script()}

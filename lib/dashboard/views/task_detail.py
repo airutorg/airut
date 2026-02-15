@@ -87,6 +87,7 @@ def render_task_detail(
     </style>
 </head>
 <body>
+<div class="page">
     <div class="back"><a href="/">&larr; Back to Dashboard</a></div>
     <div class="card">
         <h1>Conversation: {task.conversation_id}</h1>
@@ -165,6 +166,7 @@ def render_task_detail(
         {render_action_buttons(task)}
     </div>
     {session_section}
+</div>
     {status_notice}
     {render_stop_script(task)}
     {sse_script}

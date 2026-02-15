@@ -27,9 +27,12 @@ def _light_base() -> str:
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
                          "Helvetica Neue", Arial, sans-serif;
             margin: 0;
-            padding: 20px;
+            padding: 0;
             background: #f5f5f5;
             color: #333;
+        }
+        .page {
+            padding: 20px;
         }
         a { color: #337ab7; text-decoration: none; }
         a:hover { text-decoration: underline; }
@@ -415,7 +418,7 @@ def _task_detail_specific() -> str:
         CSS string.
     """
     return """\
-        body {
+        .page {
             max-width: 900px;
         }
         .back { margin-bottom: 20px; }
