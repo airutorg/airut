@@ -19,6 +19,7 @@ from lib.airut import (
     _fmt_version,
     _is_service_installed,
     _is_service_running,
+    _local_dashboard_url,
     _parse_version,
     _print_info,
     _Style,
@@ -354,6 +355,37 @@ class TestDashboardUrl:
         config = MagicMock()
         config.global_config = FakeGlobal()
         assert _dashboard_url(config) == "http://0.0.0.0:8080"
+
+
+# ── _local_dashboard_url ──────────────────────────────────────────
+
+
+class TestLocalDashboardUrl:
+    def test_ignores_base_url(self) -> None:
+        """Always uses host:port, ignoring dashboard_base_url."""
+
+        @dataclass
+        class FakeGlobal:
+            dashboard_base_url: str | None = "https://dash.example.com"
+            dashboard_host: str = "127.0.0.1"
+            dashboard_port: int = 5200
+
+        config = MagicMock()
+        config.global_config = FakeGlobal()
+        assert _local_dashboard_url(config) == "http://127.0.0.1:5200"
+
+    def test_custom_host_port(self) -> None:
+        """Uses configured host and port."""
+
+        @dataclass
+        class FakeGlobal:
+            dashboard_base_url: str | None = None
+            dashboard_host: str = "0.0.0.0"
+            dashboard_port: int = 8080
+
+        config = MagicMock()
+        config.global_config = FakeGlobal()
+        assert _local_dashboard_url(config) == "http://0.0.0.0:8080"
 
 
 # ── _fetch_running_version ─────────────────────────────────────────
@@ -738,6 +770,65 @@ repos:
             cmd_check([])
         out = capsys.readouterr().out
         assert "Version mismatch" not in out
+
+    def test_version_fetch_uses_local_url(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Version fetch bypasses dashboard_base_url and uses local addr."""
+        config_with_base_url = _VALID_CONFIG + (
+            "dashboard:\n"
+            "  base_url: https://dash.example.com\n"
+            "  host: 127.0.0.1\n"
+            "  port: 5200\n"
+        )
+        config_path = tmp_path / "airut.yaml"
+        config_path.write_text(config_with_base_url)
+        dotenv_path = tmp_path / ".env"
+
+        from contextlib import ExitStack
+
+        stack = ExitStack()
+        stack.enter_context(
+            patch("lib.airut.get_config_path", return_value=config_path)
+        )
+        stack.enter_context(
+            patch("lib.airut.get_dotenv_path", return_value=dotenv_path)
+        )
+        stack.enter_context(
+            patch(
+                "lib.airut._check_dependency",
+                return_value=(True, "git: 2.43.0 (>= 2.25)"),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "lib.git_version.get_git_version_info",
+                return_value=_FakeVersionInfo(),
+            )
+        )
+        stack.enter_context(
+            patch("lib.airut._is_service_installed", return_value=True)
+        )
+        stack.enter_context(
+            patch("lib.airut._is_service_running", return_value=True)
+        )
+        mock_fetch = MagicMock(return_value=None)
+        stack.enter_context(
+            patch("lib.airut._fetch_running_version", mock_fetch)
+        )
+        stack.enter_context(
+            patch(
+                "lib.git_version.check_upstream_version",
+                return_value=None,
+            )
+        )
+        stack.enter_context(patch("lib.airut._use_color", return_value=False))
+        with stack:
+            cmd_check([])
+        mock_fetch.assert_called_once_with("http://127.0.0.1:5200")
+        # Public URL should still appear in service status display
+        out = capsys.readouterr().out
+        assert "https://dash.example.com" in out
 
     def test_shows_pypi_update(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

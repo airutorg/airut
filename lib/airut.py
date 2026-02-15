@@ -264,14 +264,25 @@ def _is_service_running() -> bool:
 
 
 def _dashboard_url(config: ServerConfig) -> str:
-    """Return the dashboard URL from config.
+    """Return the public dashboard URL from config.
 
     Uses ``dashboard_base_url`` if set, otherwise falls back to the
-    bound address and port.
+    bound address and port.  Suitable for display purposes and links.
     """
     gc = config.global_config
     if gc.dashboard_base_url:
         return gc.dashboard_base_url
+    return _local_dashboard_url(config)
+
+
+def _local_dashboard_url(config: ServerConfig) -> str:
+    """Return the local dashboard URL from the bound address and port.
+
+    Always uses ``dashboard_host`` and ``dashboard_port``, ignoring
+    ``dashboard_base_url``.  Use this for internal requests that must
+    bypass any authenticating reverse proxy.
+    """
+    gc = config.global_config
     return f"http://{gc.dashboard_host}:{gc.dashboard_port}"
 
 
@@ -400,8 +411,8 @@ def cmd_check(argv: list[str]) -> int:
 
             # Check running version against local version
             if config:
-                url = _dashboard_url(config)
-                rv = _fetch_running_version(url)
+                local_url = _local_dashboard_url(config)
+                rv = _fetch_running_version(local_url)
                 if rv:
                     running_sha = rv.get("sha_short", "")
                     if running_sha and running_sha != vi.sha_short:
