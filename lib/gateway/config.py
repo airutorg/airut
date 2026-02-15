@@ -61,6 +61,18 @@ def get_config_path() -> Path:
     return user_config_path(_APP_NAME) / "airut.yaml"
 
 
+def get_dotenv_path() -> Path:
+    """Return the default ``.env`` file path inside the XDG config directory.
+
+    Uses XDG: ``$XDG_CONFIG_HOME/airut/.env`` (typically
+    ``~/.config/airut/.env``).
+
+    Returns:
+        Path to the ``.env`` file.
+    """
+    return user_config_path(_APP_NAME) / ".env"
+
+
 def get_storage_dir(repo_id: str) -> Path:
     """Return the storage directory for a repository.
 

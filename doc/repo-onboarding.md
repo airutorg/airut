@@ -240,7 +240,7 @@ masked secrets and
 [network-sandbox.md](network-sandbox.md#signing-credentials-aws-sigv4-re-signing)
 for signing credentials.
 
-Add secrets to `.env`:
+Add secrets to `~/.config/airut/.env`:
 
 ```bash
 YOUR_REPO_EMAIL_PASSWORD=password

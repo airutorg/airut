@@ -37,6 +37,7 @@ from lib.gateway.config import (
     generate_session_token_surrogate,
     generate_surrogate,
     get_config_path,
+    get_dotenv_path,
     get_storage_dir,
 )
 from lib.logging import SecretFilter
@@ -616,6 +617,13 @@ def test_get_config_path() -> None:
     """get_config_path returns XDG config directory."""
     path = get_config_path()
     assert path.name == "airut.yaml"
+    assert path.parent.name == "airut"
+
+
+def test_get_dotenv_path() -> None:
+    """get_dotenv_path returns .env in XDG config directory."""
+    path = get_dotenv_path()
+    assert path.name == ".env"
     assert path.parent.name == "airut"
 
 

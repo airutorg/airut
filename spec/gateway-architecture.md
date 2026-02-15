@@ -336,7 +336,8 @@ Configuration is split into two layers:
 - **Server config** (`~/.config/airut/airut.yaml`) — deployment infrastructure,
   mail credentials, operator controls, and a `secrets` pool. Values use `!env`
   tags to resolve from environment variables. A `.env` file is automatically
-  loaded from the repo root before resolving tags.
+  loaded from `~/.config/airut/.env` (and from the working directory, if
+  present) before resolving tags.
 - **Repo config** (`.airut/airut.yaml`) — repo-specific behavior: model,
   timeout, network allowlist, and container environment variables. Loaded from
   the git mirror at the start of each task. Uses `!secret` tags to reference the

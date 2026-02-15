@@ -159,7 +159,7 @@ repos:
       - you@company.com
 ```
 
-Add the corresponding values to your `.env` file:
+Add the corresponding values to `~/.config/airut/.env`:
 
 ```bash
 AZURE_TENANT_ID=your-tenant-id

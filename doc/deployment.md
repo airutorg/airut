@@ -137,17 +137,21 @@ repos:
       GH_TOKEN: !env GH_TOKEN
 ```
 
-Environment variables can be set in a `.env` file in the repository root, which
-is automatically loaded by the service:
+Environment variables can be set in `~/.config/airut/.env` (next to
+`airut.yaml`), which is automatically loaded by the service:
 
 ```bash
-cat > .env << 'EOF'
+cat > ~/.config/airut/.env << 'EOF'
 EMAIL_PASSWORD=your-email-password
 ANTHROPIC_API_KEY=sk-ant-...
 GH_TOKEN=ghp_your-github-token
 EOF
-chmod 600 .env
+chmod 600 ~/.config/airut/.env
 ```
+
+When running `uv run airut` or `scripts/airut.py` interactively, a `.env` file
+in the current working directory is also loaded (after the XDG file). Variables
+already set by the XDG `.env` are not overwritten.
 
 See [Configuration](#configuration) for full details.
 
@@ -238,11 +242,10 @@ repos:
 ### Secrets
 
 Secrets can be specified inline in `~/.config/airut/airut.yaml` or loaded from
-environment variables using `!env` tags. If using environment variables, they
-can be set in a `.env` file in the repository root — automatically loaded by the
-service.
+environment variables using `!env` tags. If using environment variables, set
+them in `~/.config/airut/.env` — automatically loaded by the service.
 
-Example `.env` file:
+Example `~/.config/airut/.env` file:
 
 ```bash
 EMAIL_PASSWORD=your-password
@@ -250,8 +253,11 @@ ANTHROPIC_API_KEY=sk-ant-...
 GH_TOKEN=ghp_...
 ```
 
-Keep `.env` secure (`chmod 600`). The file is gitignored and should never be
-committed.
+Keep `.env` secure (`chmod 600`). The file should never be committed to version
+control.
+
+The service also loads `.env` from the current working directory (if present),
+so you can provide per-invocation overrides when running interactively.
 
 ### Masked Secrets
 
@@ -468,7 +474,7 @@ emails.
 journalctl --user -u airut -n 50
 
 # Common issues:
-# - Missing .env file or secrets
+# - Missing ~/.config/airut/.env or secrets
 # - Invalid YAML in ~/.config/airut/airut.yaml
 # - Podman not installed or not rootless
 ```
@@ -587,7 +593,7 @@ rm -rf ~/airut-storage/my-project/conversations/
 
 ```bash
 # Update credentials in .env
-nano ~/airut/.env
+nano ~/.config/airut/.env
 
 # Or update config directly
 nano ~/.config/airut/airut.yaml

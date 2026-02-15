@@ -140,7 +140,7 @@ repos:
       GH_TOKEN: !env GH_TOKEN
 ```
 
-Actual values come from environment variables or `.env` file (gitignored).
+Actual values come from environment variables or `~/.config/airut/.env`.
 
 ### Container Secrets
 

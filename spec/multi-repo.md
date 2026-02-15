@@ -312,6 +312,6 @@ different addresses for different repos.
 This is a clean break. The old flat config format is not supported. To migrate:
 
 1. Restructure `config/airut.yaml` to the new `repos:` format
-2. Update `.env` with per-repo secret variable names
+2. Update `~/.config/airut/.env` with per-repo secret variable names
 
 No code maintains backwards compatibility with the old format.
