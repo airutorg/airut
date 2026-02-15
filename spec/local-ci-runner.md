@@ -83,6 +83,18 @@ The script derives steps from workflow files but filters for local relevance:
 | Test coverage   | `uv run pytest --cov=lib --cov-fail-under=100` | Yes     |
 | Worktree clean  | `git status --porcelain`                       | Yes     |
 
+#### From `security.yml`
+
+| Step               | Command                                   | Include |
+| ------------------ | ----------------------------------------- | ------- |
+| License check      | `uv run python scripts/check_licenses.py` | Yes     |
+| Vulnerability scan | `uv run uv-secure uv.lock`                | Yes     |
+
+The license check resolves the transitive closure of runtime dependencies (via
+`uv tree --no-dev`) and passes only those packages to `pip-licenses`. This
+ensures the license audit covers exactly what ships in a production install,
+without being affected by dev tooling licenses.
+
 #### From `e2e.yml`
 
 | Step                    | Command                                                   | Include |

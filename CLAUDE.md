@@ -248,6 +248,7 @@ scripts/                    - CLI tools
   airut.py                  - Email gateway entry point (uv run airut)
   ci.py, pr.py              - CI/PR tools
   install_services.py       - Migration stub for legacy updater
+  check_licenses.py         - Runtime dependency license compliance
   check_markdown.py         - Markdown validation
 spec/                       - Design specifications (see spec/README.md)
 tests/                      - Unit tests (100% coverage required)

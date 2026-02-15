@@ -17,6 +17,6 @@ jobs:
       - run: uv python install 3.13
       - run: uv sync
       - name: License check
-        run: uv run pip-licenses
+        run: uv run python scripts/check_licenses.py
       - name: Vulnerability scan
         run: uv run uv-secure uv.lock

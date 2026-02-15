@@ -97,7 +97,7 @@ STEPS: list[Step] = [
     # security.yml steps
     Step(
         name="License check",
-        command="uv run pip-licenses",
+        command="uv run python scripts/check_licenses.py",
         workflow="security",
     ),
     Step(
