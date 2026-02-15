@@ -403,6 +403,55 @@ class TestConversationStore:
         )
         assert store.get_last_successful_response() is None
 
+    def test_set_pending_request(self, tmp_path: Path) -> None:
+        store = ConversationStore(tmp_path)
+        store.set_pending_request("abc12345", "Fix the login bug")
+
+        loaded = store.load()
+        assert loaded is not None
+        assert loaded.pending_request_text == "Fix the login bug"
+
+    def test_set_pending_request_creates_metadata(self, tmp_path: Path) -> None:
+        store = ConversationStore(tmp_path)
+        store.set_pending_request("abc12345", "Hello")
+
+        loaded = store.load()
+        assert loaded is not None
+        assert loaded.conversation_id == "abc12345"
+        assert loaded.pending_request_text == "Hello"
+        assert loaded.replies == []
+
+    def test_set_pending_request_preserves_existing(
+        self, tmp_path: Path
+    ) -> None:
+        store = ConversationStore(tmp_path)
+        store.set_model("abc", "opus")
+        store.add_reply("abc", _make_reply())
+
+        store.set_pending_request("abc", "New request")
+
+        loaded = store.load()
+        assert loaded is not None
+        assert loaded.model == "opus"
+        assert len(loaded.replies) == 1
+        assert loaded.pending_request_text == "New request"
+
+    def test_add_reply_clears_pending_request(self, tmp_path: Path) -> None:
+        store = ConversationStore(tmp_path)
+        store.set_pending_request("abc", "Pending prompt")
+
+        # Confirm pending is set
+        loaded = store.load()
+        assert loaded is not None
+        assert loaded.pending_request_text == "Pending prompt"
+
+        # add_reply should clear it
+        store.add_reply("abc", _make_reply())
+
+        loaded = store.load()
+        assert loaded is not None
+        assert loaded.pending_request_text is None
+
 
 # ── Round-trip integration tests ─────────────────────────────────────
 

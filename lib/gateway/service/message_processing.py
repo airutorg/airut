@@ -469,6 +469,9 @@ def process_message(
         # Register task for stop functionality
         service.register_active_task(conv_id, task)
 
+        # Persist request text so dashboard can show it during execution
+        conversation_store.set_pending_request(conv_id, prompt)
+
         # Start new reply delimiter in event log
         task.event_log.start_new_reply()
 
@@ -535,6 +538,9 @@ def process_message(
                 network_sandbox=network_sandbox,
                 timeout_seconds=repo_config.timeout,
             )
+
+            # Persist recovery prompt for dashboard visibility
+            conversation_store.set_pending_request(conv_id, recovery_prompt)
 
             # Start new reply delimiter for recovery attempt
             task.event_log.start_new_reply()

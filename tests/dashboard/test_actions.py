@@ -106,6 +106,48 @@ class TestActionsPageEndpoint:
         response = client.get("/conversation/nonexistent/actions")
         assert response.status_code == 404
 
+    def test_in_progress_shows_request_text(
+        self, harness: DashboardHarness
+    ) -> None:
+        """Test actions page shows user prompt for in-progress tasks.
+
+        When a task is running, the user's prompt should be visible even
+        before the reply completes (i.e., before conversation.json has the
+        reply with request_text).
+
+        Regression test for prompt visibility after PR #72.
+        """
+        from tests.dashboard.conftest import parse_events
+
+        # Persist the pending request text (simulates what gateway does
+        # before execution starts via conversation_store.set_pending_request)
+        harness.store.set_pending_request(
+            harness.CONV_ID, "Please fix the login bug"
+        )
+
+        events = parse_events(
+            {"type": "system", "subtype": "init", "tools": ["Bash"]},
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": "Looking into it."}]
+                },
+            },
+        )
+
+        # Write events to event log (simulating streaming during execution)
+        harness.event_log.start_new_reply()
+        for event in events:
+            harness.event_log.append_event(event)
+
+        # Do NOT call harness.store.add_reply() — reply hasn't completed yet
+
+        html = harness.get_html("/conversation/abc12345/actions")
+
+        # Must show the user's prompt even during in-progress execution
+        assert "prompt" in html
+        assert "Please fix the login bug" in html
+
     def test_no_events_and_no_replies(self) -> None:
         """Test actions page shows 'no actions' when truly empty.
 
@@ -803,3 +845,194 @@ class TestToolResultRendering:
 
         html = harness.get_html("/conversation/abc12345/actions")
         assert "(empty)" in html
+
+
+class TestActionsPageE2E:
+    """End-to-end tests for the actions page.
+
+    Tests the full flow from HTTP request through data loading and
+    rendering, covering realistic multi-reply conversations and
+    lifecycle transitions that have caused regressions.
+    """
+
+    def test_complete_single_reply_with_prompt(
+        self, harness: DashboardHarness
+    ) -> None:
+        """Test completed reply shows both prompt and events."""
+        harness.add_events(
+            {"type": "system", "subtype": "init", "tools": ["Bash"]},
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "Done."}]},
+            },
+            result_event(),
+            request_text="Fix the login page CSS",
+        )
+
+        html = harness.get_html("/conversation/abc12345/actions")
+
+        # Structure checks
+        assert "Reply #1" in html
+        assert "Fix the login page CSS" in html
+        assert "ev-request-label" in html
+        assert "system:" in html
+        assert "Done." in html
+        assert "result:" in html
+        assert "No actions recorded" not in html
+
+    def test_multi_reply_conversation(self, harness: DashboardHarness) -> None:
+        """Test conversation with multiple completed replies.
+
+        Each reply should have its own section with correct numbering,
+        prompt, and events.
+        """
+        harness.add_events(
+            {"type": "system", "subtype": "init", "tools": ["Bash"]},
+            result_event(),
+            request_text="First request",
+        )
+        harness.add_events(
+            {"type": "system", "subtype": "init", "tools": ["Read"]},
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "Updated."}]},
+            },
+            result_event(),
+            request_text="Second request",
+        )
+
+        html = harness.get_html("/conversation/abc12345/actions")
+
+        assert "Reply #1" in html
+        assert "Reply #2" in html
+        assert "First request" in html
+        assert "Second request" in html
+        assert "Updated." in html
+
+    def test_completed_reply_then_in_progress(
+        self, harness: DashboardHarness
+    ) -> None:
+        """Test page with one completed reply and one in-progress.
+
+        The completed reply should show its prompt from conversation.json.
+        The in-progress reply should show its prompt from
+        pending_request_text in conversation.json.
+        """
+        from tests.dashboard.conftest import parse_events
+
+        # First reply: completed
+        harness.add_events(
+            {"type": "system", "subtype": "init", "tools": ["Bash"]},
+            result_event(),
+            request_text="Initial setup request",
+        )
+
+        # Second reply: in-progress (events only, no completed reply)
+        harness.store.set_pending_request(harness.CONV_ID, "Follow-up request")
+
+        events = parse_events(
+            {"type": "system", "subtype": "init", "tools": ["Read"]},
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "tu_1",
+                            "name": "Read",
+                            "input": {"file_path": "/workspace/main.py"},
+                        }
+                    ]
+                },
+            },
+        )
+        harness.event_log.start_new_reply()
+        for event in events:
+            harness.event_log.append_event(event)
+
+        html = harness.get_html("/conversation/abc12345/actions")
+
+        # Completed reply
+        assert "Reply #1" in html
+        assert "Initial setup request" in html
+        # In-progress reply
+        assert "Reply #2" in html
+        assert "in progress" in html
+        assert "Follow-up request" in html
+        assert "/workspace/main.py" in html
+
+    def test_in_progress_no_events_yet(self, harness: DashboardHarness) -> None:
+        """Test page when task just started with no events or replies.
+
+        When pending_request_text is set but no streaming events have
+        arrived yet, the page should still show the prompt in an
+        in-progress section rather than "No actions recorded".
+        """
+        harness.store.set_pending_request(harness.CONV_ID, "Some request")
+
+        html = harness.get_html("/conversation/abc12345/actions")
+        assert "No actions recorded" not in html
+        assert "Some request" in html
+        assert "in progress" in html
+        assert "Reply #1" in html
+
+    def test_html_escaping_in_prompt(self, harness: DashboardHarness) -> None:
+        """Test that user prompts are HTML-escaped to prevent XSS."""
+        from tests.dashboard.conftest import parse_events
+
+        harness.store.set_pending_request(
+            harness.CONV_ID,
+            '<script>alert("xss")</script>',
+        )
+
+        events = parse_events(
+            {"type": "system", "subtype": "init", "tools": []},
+        )
+        harness.event_log.start_new_reply()
+        for event in events:
+            harness.event_log.append_event(event)
+
+        html = harness.get_html("/conversation/abc12345/actions")
+
+        # Must be escaped, not raw — check for the specific injected tag
+        assert '<script>alert("xss")</script>' not in html
+        assert "&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;" in html
+
+    def test_completed_reply_prompt_from_conversation_json(
+        self, harness: DashboardHarness
+    ) -> None:
+        """Test that completed replies use request_text from their ReplySummary.
+
+        Even if pending_request_text is set (e.g., from a new in-progress
+        request), completed replies should use the request_text stored in
+        their ReplySummary.
+        """
+        harness.add_events(
+            {"type": "system", "subtype": "init", "tools": []},
+            result_event(),
+            request_text="Original prompt from conversation.json",
+        )
+
+        # Simulate a new request writing pending_request_text
+        harness.store.set_pending_request(
+            harness.CONV_ID, "New prompt for next request"
+        )
+
+        html = harness.get_html("/conversation/abc12345/actions")
+
+        # Completed reply shows its own request_text
+        assert "Original prompt from conversation.json" in html
+
+    def test_error_reply_shows_prompt(self, harness: DashboardHarness) -> None:
+        """Test that error replies still show the user's prompt."""
+        harness.add_events(
+            {"type": "system", "subtype": "init", "tools": []},
+            result_event(subtype="error", is_error=True),
+            request_text="Request that caused an error",
+        )
+
+        html = harness.get_html("/conversation/abc12345/actions")
+
+        assert "Request that caused an error" in html
+        assert "Reply #1" in html
+        assert "reply-section" in html
