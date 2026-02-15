@@ -23,12 +23,12 @@ from lib.airut import (
     _fetch_running_version,
     _fmt_version,
     _get_active_task_counts,
+    _has_version_mismatch,
     _is_service_installed,
     _is_service_running,
     _local_dashboard_url,
     _parse_version,
     _print_info,
-    _running_is_newer,
     _Style,
     _use_color,
     cli,
@@ -39,7 +39,7 @@ from lib.airut import (
     cmd_uninstall_service,
     cmd_update,
 )
-from lib.version import GitVersionInfo, UpstreamVersion
+from lib.version import UpstreamVersion
 
 
 # ── _parse_version ──────────────────────────────────────────────────
@@ -460,75 +460,124 @@ class TestFetchRunningVersion:
         assert _fetch_running_version("http://127.0.0.1:5200") is None
 
 
-# ── _running_is_newer ─────────────────────────────────────────────
+# ── _has_version_mismatch ──────────────────────────────────────────
 
 
-class TestRunningIsNewer:
-    def test_running_newer(self) -> None:
-        """Returns True when running version is newer."""
-        running = {"version": "v0.9.0", "sha_short": "aaa1111"}
-        installed = GitVersionInfo(
+class TestHasVersionMismatch:
+    def _mock_config(self) -> MagicMock:
+        return MagicMock(
+            global_config=MagicMock(
+                dashboard_host="127.0.0.1",
+                dashboard_port=5200,
+            )
+        )
+
+    def _mock_vi(self) -> MagicMock:
+        return MagicMock(
             version="v0.8.0",
-            sha_short="bbb2222",
-            sha_full="b" * 40,
-            full_status="",
+            sha_short="abc1234",
         )
-        assert _running_is_newer(running, installed) is True
 
-    def test_running_older(self) -> None:
-        """Returns False when running version is older."""
-        running = {"version": "v0.7.0", "sha_short": "aaa1111"}
-        installed = GitVersionInfo(
-            version="v0.8.0",
-            sha_short="bbb2222",
-            sha_full="b" * 40,
-            full_status="",
-        )
-        assert _running_is_newer(running, installed) is False
+    def test_mismatch_detected(self, tmp_path: Path) -> None:
+        """Returns True when running SHA differs."""
+        cfg = tmp_path / "airut.yaml"
+        cfg.write_text("x: 1")
+        rv = {
+            "version": "v0.7.0",
+            "sha_short": "old5678",
+        }
+        with (
+            patch(
+                "lib.airut.get_config_path",
+                return_value=cfg,
+            ),
+            patch(
+                "lib.airut.ServerConfig.from_yaml",
+                return_value=self._mock_config(),
+            ),
+            patch(
+                "lib.airut._fetch_running_version",
+                return_value=rv,
+            ),
+            patch(
+                "lib.version.get_git_version_info",
+                return_value=self._mock_vi(),
+            ),
+        ):
+            assert _has_version_mismatch() is True
 
-    def test_same_version(self) -> None:
-        """Returns False when versions are equal."""
-        running = {"version": "v0.8.0", "sha_short": "aaa1111"}
-        installed = GitVersionInfo(
-            version="v0.8.0",
-            sha_short="bbb2222",
-            sha_full="b" * 40,
-            full_status="",
-        )
-        assert _running_is_newer(running, installed) is False
+    def test_no_mismatch(self, tmp_path: Path) -> None:
+        """Returns False when SHAs match."""
+        cfg = tmp_path / "airut.yaml"
+        cfg.write_text("x: 1")
+        rv = {
+            "version": "v0.8.0",
+            "sha_short": "abc1234",
+        }
+        with (
+            patch(
+                "lib.airut.get_config_path",
+                return_value=cfg,
+            ),
+            patch(
+                "lib.airut.ServerConfig.from_yaml",
+                return_value=self._mock_config(),
+            ),
+            patch(
+                "lib.airut._fetch_running_version",
+                return_value=rv,
+            ),
+            patch(
+                "lib.version.get_git_version_info",
+                return_value=self._mock_vi(),
+            ),
+        ):
+            assert _has_version_mismatch() is False
 
-    def test_empty_running_version(self) -> None:
-        """Returns False when running version is empty."""
-        running = {"version": "", "sha_short": "aaa1111"}
-        installed = GitVersionInfo(
-            version="v0.8.0",
-            sha_short="bbb2222",
-            sha_full="b" * 40,
-            full_status="",
-        )
-        assert _running_is_newer(running, installed) is False
+    def test_no_config_file(self, tmp_path: Path) -> None:
+        """Returns False when config missing."""
+        cfg = tmp_path / "nonexistent.yaml"
+        with patch(
+            "lib.airut.get_config_path",
+            return_value=cfg,
+        ):
+            assert _has_version_mismatch() is False
 
-    def test_empty_installed_version(self) -> None:
-        """Returns False when installed version is empty."""
-        running = {"version": "v0.9.0", "sha_short": "aaa1111"}
-        installed = GitVersionInfo(
-            version="",
-            sha_short="bbb2222",
-            sha_full="b" * 40,
-            full_status="",
-        )
-        assert _running_is_newer(running, installed) is False
+    def test_fetch_fails(self, tmp_path: Path) -> None:
+        """Returns False when fetch fails."""
+        cfg = tmp_path / "airut.yaml"
+        cfg.write_text("x: 1")
+        with (
+            patch(
+                "lib.airut.get_config_path",
+                return_value=cfg,
+            ),
+            patch(
+                "lib.airut.ServerConfig.from_yaml",
+                return_value=self._mock_config(),
+            ),
+            patch(
+                "lib.airut._fetch_running_version",
+                return_value=None,
+            ),
+        ):
+            assert _has_version_mismatch() is False
 
-    def test_missing_version_key(self) -> None:
-        """Returns False when running dict lacks version key."""
-        running = {"sha_short": "aaa1111"}
-        installed = GitVersionInfo(
-            version="v0.8.0",
-            sha_short="bbb2222",
-            sha_full="b" * 40,
-            full_status="",
-        )
-        assert _running_is_newer(running, installed) is False
+    def test_config_parse_error(self, tmp_path: Path) -> None:
+        """Returns False when config cannot be parsed."""
+        cfg = tmp_path / "airut.yaml"
+        cfg.write_text("x: 1")
+        with (
+            patch(
+                "lib.airut.get_config_path",
+                return_value=cfg,
+            ),
+            patch(
+                "lib.airut.ServerConfig.from_yaml",
+                side_effect=ValueError("bad"),
+            ),
+        ):
+            assert _has_version_mismatch() is False
 
 
 # ── _fetch_health ──────────────────────────────────────────────────
@@ -1029,7 +1078,7 @@ repos:
     def test_version_mismatch_warning(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Warns when running server version differs from installed."""
+        """Suggests restart when running version is older."""
         _path, ctx = _check_patches(
             tmp_path,
             service_installed=True,
@@ -1045,8 +1094,8 @@ repos:
         out = capsys.readouterr().out
         assert "Version mismatch" in out
         assert "v0.7.0" in out
-        assert "airut update" in out
-        assert _RESTART_CMD not in out
+        assert _RESTART_CMD in out
+        assert "airut update" not in out
 
     def test_version_mismatch_running_newer_suggests_restart(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -1490,6 +1539,66 @@ class TestCmdUpdate:
         assert result == 0
         out = capsys.readouterr().out
         assert "Already up to date." in out
+
+    @patch("lib.airut.subprocess.run")
+    @patch("lib.install_services.get_airut_path", return_value="/usr/bin/airut")
+    @patch("lib.install_services.uninstall_services")
+    @patch("lib.airut._has_version_mismatch", return_value=True)
+    @patch("lib.airut._is_service_running", return_value=True)
+    @patch("lib.airut._is_service_installed", return_value=True)
+    @patch("lib.airut._use_color", return_value=False)
+    def test_nothing_to_upgrade_but_version_mismatch_restarts(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _running: MagicMock,
+        _mismatch: MagicMock,
+        mock_uninstall: MagicMock,
+        _airut_path: MagicMock,
+        mock_run: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Restarts when binary is current but service stale."""
+        mock_run.side_effect = [
+            MagicMock(
+                returncode=0, stdout="Nothing to upgrade", stderr=""
+            ),  # uv upgrade
+            MagicMock(returncode=0, stdout="", stderr=""),  # install-service
+        ]
+        result = cmd_update([])
+        assert result == 0
+        mock_uninstall.assert_called_once()
+        out = capsys.readouterr().out
+        assert "running service needs a restart" in out
+        assert "Stopping and uninstalling" in out
+        assert "Reinstalling" in out
+        assert "Update complete." in out
+
+    @patch("lib.airut.subprocess.run")
+    @patch("lib.airut._has_version_mismatch", return_value=False)
+    @patch("lib.airut._is_service_running", return_value=True)
+    @patch("lib.airut._is_service_installed", return_value=True)
+    @patch("lib.airut._use_color", return_value=False)
+    def test_nothing_to_upgrade_no_mismatch_skips_restart(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _running: MagicMock,
+        _mismatch: MagicMock,
+        mock_run: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Skips restart when binary and running service match."""
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="Nothing to upgrade", stderr=""
+        )
+        result = cmd_update([])
+        assert result == 0
+        mock_run.assert_called_once()
+        out = capsys.readouterr().out
+        assert "Already up to date." in out
+        assert "Stopping" not in out
+        assert "Reinstalling" not in out
 
     @patch("lib.airut._get_active_task_counts", return_value=(2, 1))
     @patch("lib.airut._is_service_running", return_value=True)
