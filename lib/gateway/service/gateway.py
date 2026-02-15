@@ -41,9 +41,9 @@ from lib.gateway.service.message_processing import (
     process_message,
 )
 from lib.gateway.service.repo_handler import RepoHandler
-from lib.git_version import GitVersionInfo, get_git_version_info
 from lib.logging import configure_logging
 from lib.sandbox import Sandbox, SandboxConfig, Task
+from lib.version import GitVersionInfo, get_git_version_info
 
 
 logger = logging.getLogger(__name__)

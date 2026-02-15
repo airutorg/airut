@@ -18,7 +18,7 @@ from lib.gateway.service import (
     capture_version_info,
     extract_usage_stats,
 )
-from lib.git_version import GitVersionInfo
+from lib.version import GitVersionInfo
 
 
 def _parse(*raw_events: dict) -> list[StreamEvent]:

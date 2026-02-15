@@ -39,8 +39,8 @@ from lib.dashboard.tracker import (
 from lib.dashboard.versioned import VersionClock, VersionedStore
 from lib.dashboard.views import get_favicon_svg
 from lib.gateway.conversation import CONVERSATION_ID_PATTERN
-from lib.git_version import GitVersionInfo, check_upstream_version
 from lib.sandbox import NETWORK_LOG_FILENAME, EventLog, NetworkLog
+from lib.version import GitVersionInfo, check_upstream_version
 
 
 logger = logging.getLogger(__name__)

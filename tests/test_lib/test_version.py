@@ -3,7 +3,7 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Tests for lib/git_version.py."""
+"""Tests for lib/version.py."""
 
 import json
 import subprocess
@@ -11,7 +11,7 @@ import urllib.error
 from importlib.metadata import PackageNotFoundError
 from unittest.mock import MagicMock, patch
 
-from lib.git_version import (
+from lib.version import (
     GitVersionInfo,
     InstallSource,
     UpstreamVersion,
@@ -104,13 +104,13 @@ class TestGetGitVersionInfo:
             sha_full="a" * 40,
             full_status="embedded",
         )
-        with patch("lib.git_version._try_embedded", return_value=embedded):
+        with patch("lib.version._try_embedded", return_value=embedded):
             result = get_git_version_info()
         assert result is embedded
 
     def test_falls_back_to_git_when_no_embedded(self) -> None:
         """Should use git when embedded module is not available."""
-        with patch("lib.git_version._try_embedded", return_value=None):
+        with patch("lib.version._try_embedded", return_value=None):
             info = get_git_version_info()
         assert isinstance(info, GitVersionInfo)
         assert "=== HEAD COMMIT ===" in info.full_status
@@ -313,7 +313,7 @@ def _mock_dist(direct_url_json: str | None) -> MagicMock:
 class TestGetInstallSource:
     """Tests for get_install_source function."""
 
-    @patch("lib.git_version.distribution")
+    @patch("lib.version.distribution")
     def test_pypi_install(self, mock_distribution: MagicMock) -> None:
         """Returns 'pypi' when no direct_url.json exists."""
         mock_distribution.return_value = _mock_dist(None)
@@ -321,7 +321,7 @@ class TestGetInstallSource:
         assert src.kind == "pypi"
         assert src.url is None
 
-    @patch("lib.git_version.distribution")
+    @patch("lib.version.distribution")
     def test_vcs_install(self, mock_distribution: MagicMock) -> None:
         """Returns 'vcs' with commit info for git+https installs."""
         direct_url = json.dumps(
@@ -341,7 +341,7 @@ class TestGetInstallSource:
         assert src.vcs_commit == "abc123def456"
         assert src.vcs_requested_revision == "main"
 
-    @patch("lib.git_version.distribution")
+    @patch("lib.version.distribution")
     def test_editable_install(self, mock_distribution: MagicMock) -> None:
         """Returns 'editable' for pip install -e."""
         direct_url = json.dumps(
@@ -355,7 +355,7 @@ class TestGetInstallSource:
         assert src.kind == "editable"
         assert src.url == "file:///home/user/airut"
 
-    @patch("lib.git_version.distribution")
+    @patch("lib.version.distribution")
     def test_local_dir_install(self, mock_distribution: MagicMock) -> None:
         """Returns 'local-dir' for non-editable local install."""
         direct_url = json.dumps(
@@ -368,7 +368,7 @@ class TestGetInstallSource:
         src = get_install_source()
         assert src.kind == "local-dir"
 
-    @patch("lib.git_version.distribution")
+    @patch("lib.version.distribution")
     def test_archive_install(self, mock_distribution: MagicMock) -> None:
         """Returns 'archive' for direct URL archive installs."""
         direct_url = json.dumps(
@@ -382,21 +382,21 @@ class TestGetInstallSource:
         assert src.kind == "archive"
         assert src.url == "https://example.com/airut-0.8.0.tar.gz"
 
-    @patch("lib.git_version.distribution")
+    @patch("lib.version.distribution")
     def test_package_not_found(self, mock_distribution: MagicMock) -> None:
         """Returns 'unknown' when package is not installed."""
         mock_distribution.side_effect = PackageNotFoundError("airut")
         src = get_install_source()
         assert src.kind == "unknown"
 
-    @patch("lib.git_version.distribution")
+    @patch("lib.version.distribution")
     def test_malformed_json(self, mock_distribution: MagicMock) -> None:
         """Returns 'unknown' for malformed direct_url.json."""
         mock_distribution.return_value = _mock_dist("{invalid json")
         src = get_install_source()
         assert src.kind == "unknown"
 
-    @patch("lib.git_version.distribution")
+    @patch("lib.version.distribution")
     def test_unknown_direct_url_structure(
         self, mock_distribution: MagicMock
     ) -> None:
@@ -453,7 +453,7 @@ def _make_vi(**kwargs: object) -> GitVersionInfo:
 class TestCheckPyPI:
     """Tests for _check_pypi function."""
 
-    @patch("lib.git_version.urllib.request.urlopen")
+    @patch("lib.version.urllib.request.urlopen")
     def test_update_available(self, mock_urlopen: MagicMock) -> None:
         """Detects when PyPI has a newer version."""
         body = json.dumps({"info": {"version": "0.9.0"}}).encode()
@@ -470,7 +470,7 @@ class TestCheckPyPI:
         assert result.current == "0.8.0"
         assert result.update_available is True
 
-    @patch("lib.git_version.urllib.request.urlopen")
+    @patch("lib.version.urllib.request.urlopen")
     def test_up_to_date(self, mock_urlopen: MagicMock) -> None:
         """No update when versions match."""
         body = json.dumps({"info": {"version": "0.8.0"}}).encode()
@@ -484,14 +484,14 @@ class TestCheckPyPI:
         assert result is not None
         assert result.update_available is False
 
-    @patch("lib.git_version.urllib.request.urlopen")
+    @patch("lib.version.urllib.request.urlopen")
     def test_network_error(self, mock_urlopen: MagicMock) -> None:
         """Returns None on network failure."""
         mock_urlopen.side_effect = urllib.error.URLError("timeout")
         result = _check_pypi(_make_vi())
         assert result is None
 
-    @patch("lib.git_version.urllib.request.urlopen")
+    @patch("lib.version.urllib.request.urlopen")
     def test_empty_version(self, mock_urlopen: MagicMock) -> None:
         """Returns None when PyPI returns empty version."""
         body = json.dumps({"info": {"version": ""}}).encode()
@@ -504,7 +504,7 @@ class TestCheckPyPI:
         result = _check_pypi(_make_vi())
         assert result is None
 
-    @patch("lib.git_version.urllib.request.urlopen")
+    @patch("lib.version.urllib.request.urlopen")
     def test_malformed_response(self, mock_urlopen: MagicMock) -> None:
         """Returns None on malformed JSON response."""
         mock_resp = MagicMock()
@@ -523,7 +523,7 @@ class TestCheckPyPI:
 class TestCheckGitHub:
     """Tests for _check_github function."""
 
-    @patch("lib.git_version.urllib.request.urlopen")
+    @patch("lib.version.urllib.request.urlopen")
     def test_update_available(self, mock_urlopen: MagicMock) -> None:
         """Detects when GitHub has a newer commit."""
         new_sha = "b" * 40
@@ -541,7 +541,7 @@ class TestCheckGitHub:
         assert result.current == "a" * 40
         assert result.update_available is True
 
-    @patch("lib.git_version.urllib.request.urlopen")
+    @patch("lib.version.urllib.request.urlopen")
     def test_up_to_date(self, mock_urlopen: MagicMock) -> None:
         """No update when commit SHAs match."""
         sha = "a" * 40
@@ -556,14 +556,14 @@ class TestCheckGitHub:
         assert result is not None
         assert result.update_available is False
 
-    @patch("lib.git_version.urllib.request.urlopen")
+    @patch("lib.version.urllib.request.urlopen")
     def test_network_error(self, mock_urlopen: MagicMock) -> None:
         """Returns None on network failure."""
         mock_urlopen.side_effect = OSError("connection refused")
         result = _check_github(_make_vi())
         assert result is None
 
-    @patch("lib.git_version.urllib.request.urlopen")
+    @patch("lib.version.urllib.request.urlopen")
     def test_empty_sha(self, mock_urlopen: MagicMock) -> None:
         """Returns None when GitHub returns empty SHA."""
         body = json.dumps({"commit": {"sha": ""}}).encode()
@@ -576,7 +576,7 @@ class TestCheckGitHub:
         result = _check_github(_make_vi())
         assert result is None
 
-    @patch("lib.git_version.urllib.request.urlopen")
+    @patch("lib.version.urllib.request.urlopen")
     def test_custom_branch(self, mock_urlopen: MagicMock) -> None:
         """Uses the specified branch in the API URL."""
         body = json.dumps({"commit": {"sha": "b" * 40}}).encode()
@@ -598,9 +598,9 @@ class TestCheckGitHub:
 class TestCheckUpstreamVersion:
     """Tests for check_upstream_version routing."""
 
-    @patch("lib.git_version._check_pypi")
+    @patch("lib.version._check_pypi")
     @patch(
-        "lib.git_version.get_install_source",
+        "lib.version.get_install_source",
         return_value=InstallSource(kind="pypi"),
     )
     def test_routes_to_pypi(
@@ -618,9 +618,9 @@ class TestCheckUpstreamVersion:
         assert result.source == "pypi"
         mock_pypi.assert_called_once()
 
-    @patch("lib.git_version._check_github")
+    @patch("lib.version._check_github")
     @patch(
-        "lib.git_version.get_install_source",
+        "lib.version.get_install_source",
         return_value=InstallSource(
             kind="vcs",
             url="https://github.com/airutorg/airut.git",
@@ -647,14 +647,14 @@ class TestCheckUpstreamVersion:
         assert kwargs["branch"] == "develop"
 
     @patch(
-        "lib.git_version.get_install_source",
+        "lib.version.get_install_source",
         return_value=InstallSource(
             kind="vcs",
             url="https://github.com/airutorg/airut.git",
             vcs_commit="abc123",
         ),
     )
-    @patch("lib.git_version._check_github")
+    @patch("lib.version._check_github")
     def test_vcs_defaults_to_main(
         self, mock_gh: MagicMock, _src: MagicMock
     ) -> None:
@@ -665,7 +665,7 @@ class TestCheckUpstreamVersion:
         assert kwargs["branch"] == "main"
 
     @patch(
-        "lib.git_version.get_install_source",
+        "lib.version.get_install_source",
         return_value=InstallSource(kind="editable"),
     )
     def test_returns_none_for_editable(self, _src: MagicMock) -> None:
@@ -674,7 +674,7 @@ class TestCheckUpstreamVersion:
         assert result is None
 
     @patch(
-        "lib.git_version.get_install_source",
+        "lib.version.get_install_source",
         return_value=InstallSource(kind="local-dir"),
     )
     def test_returns_none_for_local_dir(self, _src: MagicMock) -> None:
@@ -683,7 +683,7 @@ class TestCheckUpstreamVersion:
         assert result is None
 
     @patch(
-        "lib.git_version.get_install_source",
+        "lib.version.get_install_source",
         return_value=InstallSource(kind="unknown"),
     )
     def test_returns_none_for_unknown(self, _src: MagicMock) -> None:
@@ -692,7 +692,7 @@ class TestCheckUpstreamVersion:
         assert result is None
 
     @patch(
-        "lib.git_version.get_install_source",
+        "lib.version.get_install_source",
         return_value=InstallSource(kind="archive"),
     )
     def test_returns_none_for_archive(self, _src: MagicMock) -> None:

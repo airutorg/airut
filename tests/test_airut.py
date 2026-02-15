@@ -37,7 +37,7 @@ from lib.airut import (
     cmd_uninstall_service,
     cmd_update,
 )
-from lib.git_version import UpstreamVersion
+from lib.version import UpstreamVersion
 
 
 # ── _parse_version ──────────────────────────────────────────────────
@@ -732,7 +732,7 @@ def _check_patches(
     )
     stack.enter_context(
         patch(
-            "lib.git_version.get_git_version_info",
+            "lib.version.get_git_version_info",
             return_value=_FakeVersionInfo(),
         )
     )
@@ -756,7 +756,7 @@ def _check_patches(
     )
     stack.enter_context(
         patch(
-            "lib.git_version.check_upstream_version",
+            "lib.version.check_upstream_version",
             return_value=upstream_version,
         )
     )
@@ -1039,7 +1039,7 @@ repos:
         )
         stack.enter_context(
             patch(
-                "lib.git_version.get_git_version_info",
+                "lib.version.get_git_version_info",
                 return_value=_FakeVersionInfo(),
             )
         )
@@ -1055,7 +1055,7 @@ repos:
         )
         stack.enter_context(
             patch(
-                "lib.git_version.check_upstream_version",
+                "lib.version.check_upstream_version",
                 return_value=None,
             )
         )
@@ -1636,7 +1636,7 @@ class TestCmdRunGateway:
 class TestPrintInfo:
     @patch("lib.airut._use_color", return_value=False)
     @patch(
-        "lib.git_version.get_git_version_info",
+        "lib.version.get_git_version_info",
         return_value=_FakeVersionInfo(),
     )
     def test_shows_version_and_usage(
@@ -1658,7 +1658,7 @@ class TestPrintInfo:
 
     @patch("lib.airut._use_color", return_value=False)
     @patch(
-        "lib.git_version.get_git_version_info",
+        "lib.version.get_git_version_info",
         return_value=_FakeVersionInfo(version="", sha_short="def5678"),
     )
     def test_falls_back_to_sha(

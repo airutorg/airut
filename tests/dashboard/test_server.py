@@ -1180,7 +1180,7 @@ class TestUpdateEndpoint:
     @patch("lib.dashboard.handlers.check_upstream_version")
     def test_update_available(self, mock_check: MagicMock) -> None:
         """Test /update endpoint when update is available."""
-        from lib.git_version import GitVersionInfo, UpstreamVersion
+        from lib.version import GitVersionInfo, UpstreamVersion
 
         git_info = GitVersionInfo(
             version="v0.8.0",
@@ -1212,7 +1212,7 @@ class TestUpdateEndpoint:
     @patch("lib.dashboard.handlers.check_upstream_version")
     def test_up_to_date(self, mock_check: MagicMock) -> None:
         """Test /update endpoint when up to date."""
-        from lib.git_version import GitVersionInfo, UpstreamVersion
+        from lib.version import GitVersionInfo, UpstreamVersion
 
         git_info = GitVersionInfo(
             version="v0.8.0",
@@ -1242,7 +1242,7 @@ class TestUpdateEndpoint:
     @patch("lib.dashboard.handlers.check_upstream_version")
     def test_upstream_check_not_applicable(self, mock_check: MagicMock) -> None:
         """Test /update when upstream check returns None."""
-        from lib.git_version import GitVersionInfo
+        from lib.version import GitVersionInfo
 
         git_info = GitVersionInfo(
             version="v0.8.0",
@@ -1276,7 +1276,7 @@ class TestUpdateEndpoint:
     @patch("lib.dashboard.handlers.check_upstream_version")
     def test_current_falls_back_to_sha(self, mock_check: MagicMock) -> None:
         """Test /update uses sha_short when version is empty."""
-        from lib.git_version import GitVersionInfo
+        from lib.version import GitVersionInfo
 
         git_info = GitVersionInfo(
             version="",
