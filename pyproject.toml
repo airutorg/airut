@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "airut"
 version = "0.7.0"
@@ -24,6 +28,12 @@ dependencies = [
     "uv-secure>=0.6",
     "werkzeug>=3.1.5",
 ]
+
+[project.scripts]
+airut = "lib.airut:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["lib"]
 
 [tool.ruff]
 line-length = 80
