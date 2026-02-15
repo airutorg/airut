@@ -326,7 +326,7 @@ def test_generate_unit_email_gateway(mock_repo_root: Path) -> None:
     )
 
     assert f"WorkingDirectory={mock_repo_root}" in result
-    assert "ExecStart=/usr/bin/uv run airut --resilient" in result
+    assert "ExecStart=/usr/bin/uv run airut run-gateway --resilient" in result
     assert f"EnvironmentFile={mock_repo_root}/.env" in result
     assert "Restart=always" in result
 
