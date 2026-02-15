@@ -92,7 +92,7 @@ class DashboardServer:
             [
                 Rule("/", endpoint="index"),
                 Rule("/favicon.svg", endpoint="favicon"),
-                Rule("/.version", endpoint="version"),
+                Rule("/version", endpoint="version"),
                 Rule("/repo/<repo_id>", endpoint="repo_detail"),
                 Rule(
                     "/conversation/<conversation_id>",

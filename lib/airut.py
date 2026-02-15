@@ -20,12 +20,21 @@ Subcommands:
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 
-from lib.gateway.config import ConfigError, ServerConfig, get_config_path
+from lib.gateway.config import (
+    ConfigError,
+    ServerConfig,
+    get_config_path,
+    get_dotenv_path,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -104,6 +113,52 @@ def _fmt_version(v: tuple[int, ...]) -> str:
     return ".".join(str(p) for p in v)
 
 
+# ── Terminal colors ─────────────────────────────────────────────────
+
+
+def _use_color() -> bool:
+    """Determine whether to use ANSI color codes in output.
+
+    Returns True when stdout is a TTY and the ``NO_COLOR`` environment
+    variable is not set.  ``TERM=dumb`` also disables color.
+    """
+    if os.environ.get("NO_COLOR"):
+        return False
+    if os.environ.get("TERM") == "dumb":
+        return False
+    return sys.stdout.isatty()
+
+
+class _Style:
+    """ANSI escape helpers.  All methods return plain text when color is off."""
+
+    def __init__(self, color: bool) -> None:
+        self._on = color
+
+    def _wrap(self, code: str, text: str) -> str:
+        if not self._on:
+            return text
+        return f"\033[{code}m{text}\033[0m"
+
+    def bold(self, text: str) -> str:
+        return self._wrap("1", text)
+
+    def green(self, text: str) -> str:
+        return self._wrap("32", text)
+
+    def red(self, text: str) -> str:
+        return self._wrap("31", text)
+
+    def yellow(self, text: str) -> str:
+        return self._wrap("33", text)
+
+    def dim(self, text: str) -> str:
+        return self._wrap("2", text)
+
+    def cyan(self, text: str) -> str:
+        return self._wrap("36", text)
+
+
 # ── Dependency checking ─────────────────────────────────────────────
 
 
@@ -111,7 +166,7 @@ def _check_dependency(
     name: str,
     version_cmd: list[str],
     min_version: tuple[int, ...] | None = None,
-) -> bool:
+) -> tuple[bool, str]:
     """Check a single dependency is installed and meets version requirements.
 
     Args:
@@ -121,12 +176,12 @@ def _check_dependency(
             version check.
 
     Returns:
-        True if the dependency is available (and meets version if specified).
+        ``(ok, detail)`` — *ok* is True when the check passes, *detail*
+        is a human-readable status string (no leading indent).
     """
     path = shutil.which(name)
     if path is None:
-        logger.error("  %s: NOT FOUND", name)
-        return False
+        return False, f"{name}: not found"
 
     try:
         result = subprocess.run(
@@ -137,40 +192,22 @@ def _check_dependency(
         )
         raw = result.stdout.strip() or result.stderr.strip()
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        logger.error("  %s: found at %s but failed to get version", name, path)
-        return False
+        return False, f"{name}: found at {path} but failed to get version"
 
     try:
         version = _parse_version(raw)
     except ValueError:
-        logger.error(
-            "  %s: found at %s but cannot parse version from: %s",
-            name,
-            path,
-            raw,
-        )
-        return False
+        return False, f"{name}: cannot parse version from: {raw}"
 
     if min_version and version < min_version:
-        logger.error(
-            "  %s: %s (need >= %s)",
-            name,
-            _fmt_version(version),
-            _fmt_version(min_version),
-        )
-        return False
+        got = _fmt_version(version)
+        want = _fmt_version(min_version)
+        return False, f"{name}: {got} (need >= {want})"
 
     version_str = _fmt_version(version)
     if min_version:
-        logger.info(
-            "  %s: %s (>= %s)",
-            name,
-            version_str,
-            _fmt_version(min_version),
-        )
-    else:
-        logger.info("  %s: %s", name, version_str)
-    return True
+        return True, f"{name}: {version_str} (>= {_fmt_version(min_version)})"
+    return True, f"{name}: {version_str}"
 
 
 # ── init subcommand ─────────────────────────────────────────────────
@@ -200,14 +237,79 @@ def cmd_init(argv: list[str]) -> int:
     return 0
 
 
+# ── Service status helpers ──────────────────────────────────────────
+
+
+def _is_service_installed() -> bool:
+    """Return True if the airut systemd user unit file exists."""
+    from lib.install_services import get_systemd_user_dir
+
+    unit_path = get_systemd_user_dir() / "airut.service"
+    return unit_path.exists()
+
+
+def _is_service_running() -> bool:
+    """Return True if airut.service is active (running)."""
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "is-active", "airut.service"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.stdout.strip() == "active"
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+def _dashboard_url(config: ServerConfig) -> str:
+    """Return the dashboard URL from config.
+
+    Uses ``dashboard_base_url`` if set, otherwise falls back to the
+    bound address and port.
+    """
+    gc = config.global_config
+    if gc.dashboard_base_url:
+        return gc.dashboard_base_url
+    return f"http://{gc.dashboard_host}:{gc.dashboard_port}"
+
+
+def _fetch_running_version(
+    base_url: str,
+) -> dict[str, str] | None:
+    """Fetch version info from the running dashboard server.
+
+    Args:
+        base_url: Dashboard base URL (e.g. ``http://127.0.0.1:5200``).
+
+    Returns:
+        Parsed JSON dict with ``version``, ``sha_short``, ``sha_full``
+        keys, or None if the request fails.
+    """
+    url = f"{base_url.rstrip('/')}/version"
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data: dict[str, str] = json.loads(resp.read().decode())
+            return data
+    except (
+        urllib.error.URLError,
+        OSError,
+        json.JSONDecodeError,
+        ValueError,
+    ):
+        return None
+
+
 # ── check subcommand ────────────────────────────────────────────────
 
 
 def cmd_check(argv: list[str]) -> int:
-    """Run readiness checks.
+    """Run readiness checks and print installation status.
 
-    Verifies that the server configuration can be parsed and that required
-    system dependencies are installed and meet minimum version requirements.
+    Displays version information, configuration status, system
+    dependencies, and service health.  Dependency and configuration
+    failures affect the exit code; service status is informational only.
 
     Args:
         argv: Extra arguments (currently unused).
@@ -215,58 +317,99 @@ def cmd_check(argv: list[str]) -> int:
     Returns:
         0 if all checks pass, 1 if any check fails.
     """
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(message)s",
-    )
-
+    s = _Style(_use_color())
     all_ok = True
 
-    # ── Configuration ───────────────────────────────────────────
-    logger.info("Checking configuration...")
-    config_path = get_config_path()
+    # ── Version ─────────────────────────────────────────────────
+    from lib.git_version import get_git_version_info
 
+    vi = get_git_version_info()
+    version_label = vi.version or vi.sha_short
+    print(s.bold(f"Airut {version_label}"))
+    print()
+
+    # ── Configuration ───────────────────────────────────────────
+    print(s.bold("Configuration"))
+    config_path = get_config_path()
+    print(f"  Config file: {s.dim(str(config_path))}")
+
+    config: ServerConfig | None = None
     if not config_path.exists():
-        logger.error(
-            "  Config file not found: %s\n"
-            "  Run 'airut init' to create a stub config.",
-            config_path,
-        )
+        print(f"  Status:      {s.red('not found')}")
+        print(f"  Run {s.cyan('airut init')} to create a stub config.")
         all_ok = False
     else:
         try:
             config = ServerConfig.from_yaml(config_path)
             repo_ids = ", ".join(sorted(config.repos))
-            logger.info(
-                "  Config OK: %d repo(s) configured (%s)",
-                len(config.repos),
-                repo_ids,
+            print(
+                f"  Status:      {s.green('ok')} — "
+                f"{len(config.repos)} repo(s) ({repo_ids})"
             )
         except (ConfigError, ValueError, Exception) as e:
-            logger.error("  Configuration error: %s", e)
+            print(f"  Status:      {s.red('error')} — {e}")
             all_ok = False
 
+    dotenv_path = get_dotenv_path()
+    if dotenv_path.exists():
+        print(f"  Env file:    {s.dim(str(dotenv_path))}")
+
+    print()
+
     # ── System dependencies ─────────────────────────────────────
-    logger.info("Checking system dependencies...")
+    print(s.bold("Dependencies"))
+    for name, version_cmd, min_ver in [
+        ("git", ["git", "--version"], _MIN_VERSIONS["git"]),
+        ("podman", ["podman", "--version"], _MIN_VERSIONS["podman"]),
+    ]:
+        ok, detail = _check_dependency(name, version_cmd, min_ver)
+        if ok:
+            print(f"  {s.green('✓')} {detail}")
+        else:
+            print(f"  {s.red('✗')} {detail}")
+            all_ok = False
+    print()
 
-    if not _check_dependency(
-        "git",
-        ["git", "--version"],
-        _MIN_VERSIONS["git"],
-    ):
-        all_ok = False
+    # ── Service status (informational) ──────────────────────────
+    print(s.bold("Service"))
+    if _is_service_installed():
+        if _is_service_running():
+            label = s.green("running")
+            if config:
+                url = _dashboard_url(config)
+                label += f"  {s.dim(url)}"
+            print(f"  airut.service: {label}")
 
-    if not _check_dependency(
-        "podman",
-        ["podman", "--version"],
-        _MIN_VERSIONS["podman"],
-    ):
-        all_ok = False
-
-    if all_ok:
-        logger.info("All checks passed.")
+            # Check running version against local version
+            if config:
+                url = _dashboard_url(config)
+                rv = _fetch_running_version(url)
+                if rv:
+                    running_sha = rv.get("sha_short", "")
+                    if running_sha and running_sha != vi.sha_short:
+                        rl = rv.get("version") or running_sha
+                        print(
+                            f"  {s.yellow('Version mismatch:')} "
+                            f"running {rl}, "
+                            f"installed {version_label}"
+                        )
+                        print(
+                            "  Run "
+                            f"{s.cyan('systemctl --user restart airut')}"
+                            " to apply the update."
+                        )
+        else:
+            print(f"  airut.service: {s.yellow('stopped')}")
     else:
-        logger.error("Some checks failed.")
+        print(f"  airut.service: {s.yellow('not installed')}")
+        print(f"  Run {s.cyan('airut install-service')} to install.")
+    print()
+
+    # ── Summary ─────────────────────────────────────────────────
+    if all_ok:
+        print(s.green("All checks passed."))
+    else:
+        print(s.red("Some checks failed."))
 
     return 0 if all_ok else 1
 

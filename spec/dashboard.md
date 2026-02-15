@@ -119,7 +119,7 @@ credential problems) while others continue processing emails.
 | Route                                   | Method | Description                           |
 | --------------------------------------- | ------ | ------------------------------------- |
 | `/`                                     | GET    | Main dashboard with task lists        |
-| `/.version`                             | GET    | Full git version info (plain text)    |
+| `/version`                              | GET    | Structured version info (JSON)        |
 | `/repo/{repo_id}`                       | GET    | Repository detail view                |
 | `/conversation/{conv_id}`               | GET    | Task detail view                      |
 | `/conversation/{conv_id}/actions`       | GET    | Actions timeline viewer               |

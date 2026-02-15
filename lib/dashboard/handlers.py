@@ -151,18 +151,24 @@ class RequestHandlers:
             request: Incoming request.
 
         Returns:
-            Plain text response with full git version info.
+            JSON response with structured version info.
         """
         if not self.version_info:
             return Response(
-                "Version info not available\n",
+                json.dumps({"error": "Version info not available"}),
                 status=404,
-                content_type="text/plain; charset=utf-8",
+                content_type="application/json",
             )
 
+        data = {
+            "version": self.version_info.version,
+            "sha_short": self.version_info.git_sha,
+            "sha_full": self.version_info.git_sha_full,
+        }
+
         return Response(
-            self.version_info.full_status,
-            content_type="text/plain; charset=utf-8",
+            json.dumps(data),
+            content_type="application/json",
             headers={
                 "Cache-Control": "no-cache, no-store, must-revalidate",
                 "Pragma": "no-cache",
