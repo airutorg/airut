@@ -44,7 +44,6 @@ from lib.gateway.service.repo_handler import RepoHandler
 from lib.git_version import get_git_version_info
 from lib.logging import configure_logging
 from lib.sandbox import Sandbox, SandboxConfig, Task
-from lib.update_lock import UpdateLock
 
 
 logger = logging.getLogger(__name__)
@@ -121,9 +120,6 @@ class EmailGatewayService:
         # Active tasks for stop functionality
         self._active_tasks: dict[str, object] = {}
         self._active_tasks_lock = threading.Lock()
-
-        # Update lock for coordinating with auto-updater
-        self._update_lock = UpdateLock(repo_root / ".update.lock")
 
         # Dashboard components — versioned state
         self._clock = VersionClock()
@@ -561,8 +557,6 @@ class EmailGatewayService:
         )
 
         with self._futures_lock:
-            if len(self._pending_futures) == 0:
-                self._update_lock.try_acquire()
             self._pending_futures.add(future)
 
         future.add_done_callback(self._on_future_complete)
@@ -572,8 +566,6 @@ class EmailGatewayService:
         """Callback when a future completes."""
         with self._futures_lock:
             self._pending_futures.discard(future)
-            if len(self._pending_futures) == 0:
-                self._update_lock.release()
 
         try:
             exception = future.exception()

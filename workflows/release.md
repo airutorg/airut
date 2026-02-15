@@ -86,11 +86,20 @@ Send the release URL to the user. They will review and publish it.
 
 ## How the Release is Consumed
 
-The auto-updater (`lib/install_services.py`) supports two channels:
+Airut is installed via `uv tool install` and updated manually:
 
-- **`rel`** (default): Tracks the latest `v*` git tag. Polls every 6 hours.
-  Publishing the GitHub release creates the tag, which the updater detects.
-- **`dev`**: Tracks `origin/main` HEAD. Polls every 30 minutes.
+```bash
+uv tool upgrade airut
+systemctl --user restart airut
+```
 
-After the release is published, `rel`-channel installations will pick up the new
-version within 6 hours (or on next poll).
+The update channel depends on how the tool was installed:
+
+- **Dev**:
+  `uv tool install airut --from git+https://github.com/airutorg/airut.git` —
+  tracks main branch.
+- **Release** (future): `uv tool install airut` — installs from PyPI (tagged
+  releases only).
+
+After the release is published, users can pull the new version with
+`uv tool upgrade airut`.

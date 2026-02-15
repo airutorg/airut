@@ -90,7 +90,6 @@ def make_service(
         patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
         patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
         patch("lib.gateway.service.repo_handler.ConversationManager"),
-        patch("lib.gateway.service.gateway.UpdateLock"),
         patch("lib.gateway.service.gateway.capture_version_info") as mock_ver,
         patch("lib.gateway.service.gateway.TaskTracker"),
         patch("lib.gateway.service.gateway.Sandbox"),

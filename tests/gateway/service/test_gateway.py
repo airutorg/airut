@@ -41,7 +41,6 @@ class TestEmailGatewayServiceInit:
             patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
             patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
             patch("lib.gateway.service.repo_handler.ConversationManager"),
-            patch("lib.gateway.service.gateway.UpdateLock") as mock_ulock,
             patch("lib.gateway.service.gateway.capture_version_info") as mv,
             patch("lib.gateway.service.gateway.TaskTracker"),
             patch("lib.gateway.service.gateway.Sandbox"),
@@ -51,10 +50,9 @@ class TestEmailGatewayServiceInit:
             ),
         ):
             mv.return_value = MagicMock(git_sha="x", worktree_clean=True)
-            EmailGatewayService(server_config, repo_root=None)
-            # UpdateLock should receive a path derived from __file__
-            lock_path = mock_ulock.call_args[0][0]
-            assert lock_path.name == ".update.lock"
+            svc = EmailGatewayService(server_config, repo_root=None)
+            # repo_root should be auto-detected
+            assert svc.repo_root is not None
 
     def test_init_custom_egress_network(
         self, email_config, tmp_path: Path
@@ -73,7 +71,6 @@ class TestEmailGatewayServiceInit:
             patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
             patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
             patch("lib.gateway.service.repo_handler.ConversationManager"),
-            patch("lib.gateway.service.gateway.UpdateLock"),
             patch("lib.gateway.service.gateway.capture_version_info") as mv,
             patch("lib.gateway.service.gateway.TaskTracker"),
             patch("lib.gateway.service.gateway.Sandbox") as mock_sandbox,
@@ -125,19 +122,6 @@ class TestSubmitMessage:
         assert result is True
         assert mock_future in svc._pending_futures
 
-    def test_acquires_update_lock_on_first(
-        self, email_config, tmp_path: Path
-    ) -> None:
-        svc, handler = make_service(email_config, tmp_path)
-        svc._executor_pool = MagicMock()
-        svc.tracker.is_task_active.return_value = False
-        mock_future = MagicMock()
-        svc._executor_pool.submit.return_value = mock_future
-
-        msg = make_message(subject="New task")
-        svc.submit_message(msg, handler)
-        svc._update_lock.try_acquire.assert_called_once()
-
     def test_new_message_temp_id(self, email_config, tmp_path: Path) -> None:
         svc, handler = make_service(email_config, tmp_path)
         svc._executor_pool = MagicMock()
@@ -153,16 +137,13 @@ class TestSubmitMessage:
 
 
 class TestOnFutureComplete:
-    def test_removes_future_and_releases_lock(
-        self, email_config, tmp_path: Path
-    ) -> None:
+    def test_removes_future(self, email_config, tmp_path: Path) -> None:
         svc, _ = make_service(email_config, tmp_path)
         future = MagicMock(spec=concurrent.futures.Future)
         future.exception.return_value = None
         svc._pending_futures.add(future)
         svc._on_future_complete(future)
         assert future not in svc._pending_futures
-        svc._update_lock.release.assert_called_once()
 
     def test_logs_exception(self, email_config, tmp_path: Path) -> None:
         svc, _ = make_service(email_config, tmp_path)
@@ -178,16 +159,15 @@ class TestOnFutureComplete:
         svc._pending_futures.add(future)
         svc._on_future_complete(future)
 
-    def test_no_release_if_still_pending(
-        self, email_config, tmp_path: Path
-    ) -> None:
+    def test_keeps_other_futures(self, email_config, tmp_path: Path) -> None:
         svc, _ = make_service(email_config, tmp_path)
         f1 = MagicMock(spec=concurrent.futures.Future)
         f1.exception.return_value = None
         f2 = MagicMock(spec=concurrent.futures.Future)
         svc._pending_futures = {f1, f2}
         svc._on_future_complete(f1)
-        svc._update_lock.release.assert_not_called()
+        assert f2 in svc._pending_futures
+        assert f1 not in svc._pending_futures
 
 
 class TestGetConversationLock:
@@ -389,7 +369,6 @@ class TestRepoHandlerInitError:
                 "lib.gateway.service.repo_handler.ConversationManager",
                 side_effect=RuntimeError("Git clone failed"),
             ),
-            patch("lib.gateway.service.gateway.UpdateLock"),
             patch("lib.gateway.service.gateway.capture_version_info") as mv,
             patch("lib.gateway.service.gateway.TaskTracker"),
             patch("lib.gateway.service.gateway.Sandbox"),
@@ -430,7 +409,6 @@ class TestRepoHandlerInitError:
                 "lib.gateway.service.repo_handler.ConversationManager",
                 side_effect=RuntimeError("Git clone failed"),
             ),
-            patch("lib.gateway.service.gateway.UpdateLock"),
             patch("lib.gateway.service.gateway.capture_version_info") as mv,
             patch("lib.gateway.service.gateway.TaskTracker"),
             patch("lib.gateway.service.gateway.Sandbox"),
@@ -1057,7 +1035,6 @@ class TestUpstreamDnsResolution:
             patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
             patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
             patch("lib.gateway.service.repo_handler.ConversationManager"),
-            patch("lib.gateway.service.gateway.UpdateLock"),
             patch("lib.gateway.service.gateway.capture_version_info") as mv,
             patch("lib.gateway.service.gateway.TaskTracker"),
             patch("lib.gateway.service.gateway.Sandbox") as mock_sandbox,
@@ -1091,7 +1068,6 @@ class TestUpstreamDnsResolution:
             patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
             patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
             patch("lib.gateway.service.repo_handler.ConversationManager"),
-            patch("lib.gateway.service.gateway.UpdateLock"),
             patch("lib.gateway.service.gateway.capture_version_info") as mv,
             patch("lib.gateway.service.gateway.TaskTracker"),
             patch("lib.gateway.service.gateway.Sandbox") as mock_sandbox,
@@ -1123,7 +1099,6 @@ class TestUpstreamDnsResolution:
             patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
             patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
             patch("lib.gateway.service.repo_handler.ConversationManager"),
-            patch("lib.gateway.service.gateway.UpdateLock"),
             patch("lib.gateway.service.gateway.capture_version_info") as mv,
             patch("lib.gateway.service.gateway.TaskTracker"),
             patch("lib.gateway.service.gateway.Sandbox"),

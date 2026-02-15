@@ -488,45 +488,6 @@ Messages to the same conversation are serialized to prevent race conditions:
 This allows parallel processing of different conversations while ensuring
 sequential processing within each conversation.
 
-## Update Coordination
-
-The email service coordinates with the auto-updater to prevent updates during
-active processing. See [auto-updater.md](auto-updater.md) for full details.
-
-### Lock File Mechanism
-
-Both services use an advisory file lock (`.update.lock` in repo root):
-
-- **Email service acquires lock** when it becomes busy (message processing or
-  Claude execution begins)
-- **Email service releases lock** when it becomes idle (all pending work
-  completes)
-- **Auto-updater checks lock** before applying updates; skips if locked
-
-### Busy State Transitions
-
-```
-IDLE (no lock)
-  -> Receive message
-    -> Submit to thread pool
-      -> Acquire lock (busy count 0 → 1)
-  -> Message processing completes
-    -> Future completes callback
-      -> If busy count 1 → 0: Release lock
-BUSY (lock held)
-  -> More messages arrive
-    -> Submit to thread pool (busy count increments)
-  -> Messages complete
-    -> Futures complete (busy count decrements)
-    -> When count reaches 0: Release lock → IDLE
-```
-
-### Implementation
-
-The lock is managed via `UpdateLock` class from `lib/update_lock.py`. The
-service tracks a "busy count" (pending futures) and acquires/releases the lock
-at state transitions (0→1 and 1→0).
-
 ## Future Enhancements
 
 None currently planned. Previous items (rich HTML email, task stop/cancel) have

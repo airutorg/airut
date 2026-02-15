@@ -182,7 +182,6 @@ EmailGatewayService (orchestrator)
 | `TaskTracker`         | Shared   | Global view, tasks tagged with `repo_id`                    |
 | `DashboardServer`     | Shared   | Single dashboard for all repos                              |
 | `ThreadPoolExecutor`  | Shared   | Global `max_concurrent` limit across repos                  |
-| `UpdateLock`          | Shared   | One update lock for the server process                      |
 
 ### Listener Threading Model
 
