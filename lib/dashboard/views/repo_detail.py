@@ -52,6 +52,7 @@ def render_repo_detail(repo: RepoState) -> str:
     </style>
 </head>
 <body>
+<div class="page">
     <div class="back-link"><a href="/">&larr; Back to Dashboard</a></div>
     <div class="repo-header">
         <h1>{escaped_repo_id}</h1>
@@ -73,6 +74,7 @@ def render_repo_detail(repo: RepoState) -> str:
         </div>
         <div id="error-section">{error_section}</div>
     </div>
+</div>
     <div id="stream-status" class="stream-status">Connecting...</div>
     {_sse_repo_detail_script(repo.repo_id)}
 </body>
