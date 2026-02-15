@@ -976,6 +976,46 @@ class TestActionsPageE2E:
         assert "in progress" in html
         assert "Reply #1" in html
 
+    def test_completed_reply_then_pending_no_events(
+        self, harness: DashboardHarness
+    ) -> None:
+        """Test page with completed reply then pending request, no new events.
+
+        When replying to an existing conversation: a completed reply exists,
+        set_pending_request is called, start_new_reply writes a delimiter,
+        but no events have been written to the event log yet. The pending
+        request should still be visible.
+
+        Regression test: pending_request_text was not shown on the actions
+        page when replying to an existing conversation because the empty
+        event group was skipped by read_all(), making in_progress_groups
+        empty, which should fall through to the elif branch — but didn't
+        when event_groups had the same length as replies.
+        """
+        # First reply: completed (writes events to event log)
+        harness.add_events(
+            {"type": "system", "subtype": "init", "tools": ["Bash"]},
+            result_event(),
+            request_text="Initial request",
+        )
+
+        # Second reply starts: pending request set, delimiter written,
+        # but NO events appended yet (the exact state when user reports
+        # not seeing the prompt)
+        harness.store.set_pending_request(
+            harness.CONV_ID, "Follow-up pending request"
+        )
+        harness.event_log.start_new_reply()
+
+        html = harness.get_html("/conversation/abc12345/actions")
+
+        # Completed reply should show
+        assert "Reply #1" in html
+        assert "Initial request" in html
+        # Pending request must be visible even without new events
+        assert "Follow-up pending request" in html
+        assert "in progress" in html
+
     def test_html_escaping_in_prompt(self, harness: DashboardHarness) -> None:
         """Test that user prompts are HTML-escaped to prevent XSS."""
         from tests.dashboard.conftest import parse_events
@@ -1064,3 +1104,40 @@ class TestSSEServerSideRendering:
         assert "renderStreamEvent" not in html
         assert "escapeHtml" not in html
         assert "formatDiffBlock" not in html
+
+    def test_sse_offset_matches_event_log_size(
+        self, harness: DashboardHarness
+    ) -> None:
+        """SSE starts from current event log byte offset, not zero.
+
+        When the page loads, all existing events are server-rendered in
+        the initial HTML. The SSE script must start from the current
+        event log byte offset so it only receives NEW events, avoiding
+        duplicate content that hides the pending request prompt.
+
+        Regression test: SSE started from offset 0, causing all events
+        to be appended again as raw HTML fragments after the structured
+        timeline (which included the pending request prompt). Auto-scroll
+        then moved past the pending request to the duplicated events.
+        """
+        # Write some events so the event log has a non-zero byte offset
+        harness.add_events(
+            {"type": "system", "subtype": "init", "tools": ["Bash"]},
+            result_event(),
+            request_text="First request",
+        )
+
+        # Start a follow-up reply (task must be in-progress for SSE)
+        harness.tracker.start_task(harness.CONV_ID)
+        harness.store.set_pending_request(harness.CONV_ID, "Follow-up request")
+        harness.event_log.start_new_reply()
+
+        # Get the actual byte offset of the event log
+        file_size = harness.event_log.file_path.stat().st_size
+        assert file_size > 0
+
+        html = harness.get_html("/conversation/abc12345/actions")
+
+        # SSE script must start from the current offset, not 0
+        assert f"var currentOffset = {file_size}" in html
+        assert "var currentOffset = 0" not in html

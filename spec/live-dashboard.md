@@ -74,7 +74,8 @@ offset-based tailing of network log lines.
 
 Both log streams follow the same pattern:
 
-1. Client connects with `?offset=0` (or last known offset)
+1. Client connects with `?offset=<N>` where N is the event log byte offset at
+   page render time (embedded in the SSE script by the server)
 2. Server calls `tail(offset)` and sends any new data
 3. If no new data and task is still running, polls on interval (500ms)
 4. Sends heartbeat comments every 15 seconds
