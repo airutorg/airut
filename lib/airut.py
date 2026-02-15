@@ -321,11 +321,28 @@ def cmd_check(argv: list[str]) -> int:
     all_ok = True
 
     # ── Version ─────────────────────────────────────────────────
-    from lib.git_version import get_git_version_info
+    from lib.git_version import check_upstream_version, get_git_version_info
 
     vi = get_git_version_info()
     version_label = vi.version or vi.sha_short
     print(s.bold(f"Airut {version_label}"))
+
+    upstream = check_upstream_version(vi)
+    if upstream and upstream.update_available:
+        if upstream.source == "pypi":
+            print(
+                f"  {s.yellow('Update available:')} "
+                f"{upstream.current} → {upstream.latest}"
+            )
+            print(f"  Run {s.cyan('uv tool upgrade airut')} to update.")
+        else:
+            short_current = upstream.current[:7]
+            short_latest = upstream.latest[:7]
+            print(
+                f"  {s.yellow('Update available:')} "
+                f"{short_current} → {short_latest}"
+            )
+            print(f"  Run {s.cyan('uv tool upgrade airut')} to update.")
     print()
 
     # ── Configuration ───────────────────────────────────────────

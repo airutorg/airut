@@ -20,13 +20,24 @@ Two resolution strategies are supported:
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 
 
 logger = logging.getLogger(__name__)
+
+#: Package name as registered on PyPI and in importlib.metadata.
+PACKAGE_NAME = "airut"
+
+#: GitHub owner/repo for upstream commit checks.
+GITHUB_OWNER = "airutorg"
+GITHUB_REPO = "airut"
 
 
 @dataclass
@@ -48,6 +59,209 @@ class GitVersionInfo:
     sha_full: str
     worktree_clean: bool
     full_status: str
+
+
+@dataclass
+class InstallSource:
+    """Describes how the package was installed.
+
+    Attributes:
+        kind: One of ``"pypi"``, ``"vcs"``, ``"editable"``, ``"local-dir"``,
+            ``"archive"``, or ``"unknown"``.
+        url: Remote URL for VCS or archive installs, local path for
+            editable/local-dir installs.  None for PyPI installs.
+        vcs_commit: Resolved commit hash for VCS installs.
+        vcs_requested_revision: Branch/tag/ref requested for VCS installs.
+    """
+
+    kind: str
+    url: str | None = None
+    vcs_commit: str | None = None
+    vcs_requested_revision: str | None = None
+
+
+def get_install_source() -> InstallSource:
+    """Determine how the package was installed.
+
+    Uses PEP 610 ``direct_url.json`` metadata from the distribution info.
+    Absence of ``direct_url.json`` indicates a standard index install (PyPI).
+
+    Returns:
+        InstallSource describing the installation origin.
+    """
+    try:
+        dist = distribution(PACKAGE_NAME)
+    except PackageNotFoundError:
+        return InstallSource(kind="unknown")
+
+    raw = dist.read_text("direct_url.json")
+    if raw is None:
+        return InstallSource(kind="pypi")
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return InstallSource(kind="unknown")
+
+    url = data.get("url")
+
+    if "vcs_info" in data:
+        vcs_info = data["vcs_info"]
+        return InstallSource(
+            kind="vcs",
+            url=url,
+            vcs_commit=vcs_info.get("commit_id"),
+            vcs_requested_revision=vcs_info.get("requested_revision"),
+        )
+
+    if "archive_info" in data:
+        return InstallSource(kind="archive", url=url)
+
+    if "dir_info" in data:
+        editable = data["dir_info"].get("editable", False)
+        return InstallSource(
+            kind="editable" if editable else "local-dir",
+            url=url,
+        )
+
+    return InstallSource(kind="unknown")
+
+
+@dataclass
+class UpstreamVersion:
+    """Latest version information from upstream.
+
+    Attributes:
+        source: Where the check was made (``"pypi"`` or ``"github"``).
+        latest: Latest version string (PyPI version) or commit SHA
+            (GitHub).
+        current: Current installed version string or commit SHA.
+        update_available: True if the upstream version differs from
+            the installed version.
+    """
+
+    source: str
+    latest: str
+    current: str
+    update_available: bool
+
+
+def check_upstream_version(
+    version_info: GitVersionInfo,
+    *,
+    timeout: float = 5,
+) -> UpstreamVersion | None:
+    """Check if a newer version is available upstream.
+
+    For PyPI installs, queries the PyPI JSON API for the latest release.
+    For VCS (GitHub) installs, queries the GitHub API for the latest
+    commit on the requested branch.
+
+    For editable, local-dir, and unknown installs, returns None since
+    there is no meaningful upstream to check.
+
+    Args:
+        version_info: Current version info from ``get_git_version_info()``.
+        timeout: HTTP request timeout in seconds.
+
+    Returns:
+        UpstreamVersion with comparison result, or None if the check
+        is not applicable or fails.
+    """
+    source = get_install_source()
+
+    if source.kind == "pypi":
+        return _check_pypi(version_info, timeout=timeout)
+
+    if source.kind == "vcs":
+        return _check_github(
+            version_info,
+            branch=source.vcs_requested_revision or "main",
+            timeout=timeout,
+        )
+
+    # Editable / local-dir / archive / unknown — nothing to check.
+    return None
+
+
+def _check_pypi(
+    version_info: GitVersionInfo,
+    *,
+    timeout: float = 5,
+) -> UpstreamVersion | None:
+    """Query PyPI for the latest release version.
+
+    Args:
+        version_info: Current version info.
+        timeout: HTTP request timeout in seconds.
+
+    Returns:
+        UpstreamVersion or None on failure.
+    """
+    url = f"https://pypi.org/pypi/{PACKAGE_NAME}/json"
+    try:
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("Accept", "application/json")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode())
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
+        return None
+
+    latest = data.get("info", {}).get("version", "")
+    if not latest:
+        return None
+
+    # Current version from embedded metadata, stripped of leading "v".
+    current = version_info.version.lstrip("v")
+
+    return UpstreamVersion(
+        source="pypi",
+        latest=latest,
+        current=current,
+        update_available=latest != current,
+    )
+
+
+def _check_github(
+    version_info: GitVersionInfo,
+    *,
+    branch: str = "main",
+    timeout: float = 5,
+) -> UpstreamVersion | None:
+    """Query GitHub API for the latest commit on a branch.
+
+    Args:
+        version_info: Current version info (needs ``sha_full``).
+        branch: Branch name to check.
+        timeout: HTTP request timeout in seconds.
+
+    Returns:
+        UpstreamVersion or None on failure.
+    """
+    url = (
+        f"https://api.github.com/repos/"
+        f"{GITHUB_OWNER}/{GITHUB_REPO}/branches/{branch}"
+    )
+    try:
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("Accept", "application/vnd.github+json")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode())
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
+        return None
+
+    latest_sha = data.get("commit", {}).get("sha", "")
+    if not latest_sha:
+        return None
+
+    current_sha = version_info.sha_full
+
+    return UpstreamVersion(
+        source="github",
+        latest=latest_sha,
+        current=current_sha,
+        update_available=latest_sha != current_sha,
+    )
 
 
 def _try_embedded() -> GitVersionInfo | None:

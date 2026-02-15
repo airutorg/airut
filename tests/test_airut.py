@@ -29,6 +29,7 @@ from lib.airut import (
     cmd_run_gateway,
     cmd_uninstall_service,
 )
+from lib.git_version import UpstreamVersion
 
 
 # ── _parse_version ──────────────────────────────────────────────────
@@ -430,6 +431,7 @@ def _check_patches(
     service_running: bool = False,
     dotenv: bool = False,
     running_version: dict[str, str] | None = None,
+    upstream_version: object | None = None,
 ):
     """Build a ``contextmanager`` that patches everything cmd_check needs.
 
@@ -480,6 +482,12 @@ def _check_patches(
         patch(
             "lib.airut._fetch_running_version",
             return_value=running_version,
+        )
+    )
+    stack.enter_context(
+        patch(
+            "lib.git_version.check_upstream_version",
+            return_value=upstream_version,
         )
     )
     stack.enter_context(patch("lib.airut._use_color", return_value=False))
@@ -729,6 +737,76 @@ repos:
             cmd_check([])
         out = capsys.readouterr().out
         assert "Version mismatch" not in out
+
+    def test_shows_pypi_update(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Shows update available message for PyPI installs."""
+        _path, ctx = _check_patches(
+            tmp_path,
+            upstream_version=UpstreamVersion(
+                source="pypi",
+                latest="0.9.0",
+                current="0.8.0",
+                update_available=True,
+            ),
+        )
+        with ctx:
+            cmd_check([])
+        out = capsys.readouterr().out
+        assert "Update available:" in out
+        assert "0.8.0" in out
+        assert "0.9.0" in out
+        assert "uv tool upgrade airut" in out
+
+    def test_shows_github_update(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Shows update available message for VCS/GitHub installs."""
+        _path, ctx = _check_patches(
+            tmp_path,
+            upstream_version=UpstreamVersion(
+                source="github",
+                latest="b" * 40,
+                current="a" * 40,
+                update_available=True,
+            ),
+        )
+        with ctx:
+            cmd_check([])
+        out = capsys.readouterr().out
+        assert "Update available:" in out
+        assert "aaaaaaa" in out
+        assert "bbbbbbb" in out
+        assert "uv tool upgrade airut" in out
+
+    def test_no_update_message_when_up_to_date(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """No update message when upstream matches installed."""
+        _path, ctx = _check_patches(
+            tmp_path,
+            upstream_version=UpstreamVersion(
+                source="pypi",
+                latest="0.8.0",
+                current="0.8.0",
+                update_available=False,
+            ),
+        )
+        with ctx:
+            cmd_check([])
+        out = capsys.readouterr().out
+        assert "Update available:" not in out
+
+    def test_no_update_message_when_check_fails(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """No update message when upstream check returns None."""
+        _path, ctx = _check_patches(tmp_path, upstream_version=None)
+        with ctx:
+            cmd_check([])
+        out = capsys.readouterr().out
+        assert "Update available:" not in out
 
 
 # ── cmd_run_gateway ─────────────────────────────────────────────────
