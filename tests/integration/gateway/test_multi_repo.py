@@ -193,9 +193,7 @@ events = [
 
             try:
                 resp = env.email_server.wait_for_sent(
-                    lambda m: (
-                        "private response" in get_message_text(m).lower()
-                    ),
+                    lambda m: "private response" in get_message_text(m).lower(),
                     timeout=_TIMEOUT,
                 )
                 assert resp is not None, "No response for Alice's task"

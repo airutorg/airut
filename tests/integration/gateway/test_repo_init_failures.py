@@ -270,8 +270,9 @@ events = [
                 env.email_server.inject_message_to("working", msg)
 
                 response = env.email_server.wait_for_sent(
-                    lambda m: "working repo response"
-                    in get_message_text(m).lower(),
+                    lambda m: (
+                        "working repo response" in get_message_text(m).lower()
+                    ),
                     timeout=15.0,
                 )
                 assert response is not None, (

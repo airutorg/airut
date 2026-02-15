@@ -58,8 +58,10 @@ time.sleep(999)
             # Should receive an error response
             # Wait longer than execution timeout (30s) for the error to arrive
             response = integration_env.email_server.wait_for_sent(
-                lambda m: "timed out" in get_message_text(m).lower()
-                or "error" in get_message_text(m).lower(),
+                lambda m: (
+                    "timed out" in get_message_text(m).lower()
+                    or "error" in get_message_text(m).lower()
+                ),
                 timeout=45.0,
             )
             assert response is not None, (
@@ -101,8 +103,10 @@ sys.exit(1)
         try:
             # Should receive an error response
             response = integration_env.email_server.wait_for_sent(
-                lambda m: "failed" in get_message_text(m).lower()
-                or "error" in get_message_text(m).lower(),
+                lambda m: (
+                    "failed" in get_message_text(m).lower()
+                    or "error" in get_message_text(m).lower()
+                ),
                 timeout=30.0,
             )
             assert response is not None, (
@@ -139,9 +143,11 @@ sys.exit(0)
         try:
             # Should receive an error response
             response = integration_env.email_server.wait_for_sent(
-                lambda m: "failed" in get_message_text(m).lower()
-                or "error" in get_message_text(m).lower()
-                or "parse" in get_message_text(m).lower(),
+                lambda m: (
+                    "failed" in get_message_text(m).lower()
+                    or "error" in get_message_text(m).lower()
+                    or "parse" in get_message_text(m).lower()
+                ),
                 timeout=30.0,
             )
             assert response is not None, (

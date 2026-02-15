@@ -42,10 +42,16 @@ source ~/.bashrc  # or restart shell
 ### 3. Install Airut
 
 ```bash
-uv tool install airut --from git+https://github.com/airutorg/airut.git
+uv tool install airut
 ```
 
-This installs the `airut` command to `~/.local/bin/airut`.
+This installs the latest release from PyPI to `~/.local/bin/airut`.
+
+To install from the main branch (latest development version):
+
+```bash
+uv tool install airut --from git+https://github.com/airutorg/airut.git
+```
 
 For development, you can also run from a local clone using `uv run airut`.
 
@@ -426,11 +432,11 @@ uv tool upgrade airut
 
 The update channel is determined by how the tool was originally installed:
 
+- **Release channel**: `uv tool install airut` — installs from PyPI (tagged
+  releases only).
 - **Dev channel**:
   `uv tool install airut --from git+https://github.com/airutorg/airut.git` —
   tracks the main branch.
-- **Release channel** (future): `uv tool install airut` — installs from PyPI
-  (tagged releases only).
 
 After upgrading, restart the service to pick up the new version:
 
@@ -618,8 +624,12 @@ uv tool upgrade airut
 systemctl --user restart airut
 ```
 
-To switch from dev to release channel (or vice versa), reinstall the tool:
+To switch channels, reinstall the tool with `--force`:
 
 ```bash
+# Switch to release channel (PyPI)
+uv tool install airut --force
+
+# Switch to dev channel (main branch)
 uv tool install airut --force --from git+https://github.com/airutorg/airut.git
 ```

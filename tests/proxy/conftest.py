@@ -30,7 +30,7 @@ def _install_mitmproxy_mock() -> None:
     # Build a minimal http module with HTTPFlow and Response.make
     http_mod = types.ModuleType("mitmproxy.http")
 
-    class _MockHeaders(dict):  # type: ignore[type-arg]
+    class _MockHeaders(dict):
         """Minimal mitmproxy Headers stand-in (dict-like)."""
 
         @property

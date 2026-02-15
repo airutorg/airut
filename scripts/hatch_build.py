@@ -82,7 +82,7 @@ def _get_build_version() -> tuple[str, str, str]:
     return version, sha_short, sha_full
 
 
-class GitVersionBuildHook(_Base):  # type: ignore[misc]
+class GitVersionBuildHook(_Base):
     """Hatch build hook that generates lib/_version.py."""
 
     PLUGIN_NAME = "git-version"

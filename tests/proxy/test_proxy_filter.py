@@ -1541,7 +1541,7 @@ class TestDeferredResigning:
 
         pf.requestheaders(flow)
         # Simulate mitmproxy providing body as str instead of bytes
-        flow.request.content = body_str  # type: ignore[assignment]
+        flow.request.content = body_str
         pf.request(flow)
 
         assert flow.metadata.get("aws_resigned") is True

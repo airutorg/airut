@@ -161,7 +161,7 @@ class SenderAuthenticator:
             Lowercase email address if authentication succeeds, None
             otherwise.
         """
-        from_values: list[str] = message.get_all("From", [])  # type: ignore[assignment]
+        from_values: list[str] = message.get_all("From", [])
         if len(from_values) != 1:
             logger.warning(
                 "Rejecting message with %d From headers (expected 1)",
@@ -214,7 +214,7 @@ class SenderAuthenticator:
             True if the first Authentication-Results header is from the
             trusted server and contains ``dmarc=pass``.
         """
-        all_results: list[str] = message.get_all("Authentication-Results", [])  # type: ignore[assignment]
+        all_results: list[str] = message.get_all("Authentication-Results", [])
 
         if not all_results:
             logger.warning("No Authentication-Results header found")
@@ -301,7 +301,7 @@ class SenderAuthenticator:
             return False
 
         # Only fall back when there are NO Authentication-Results headers.
-        all_results: list[str] = message.get_all("Authentication-Results", [])  # type: ignore[assignment]
+        all_results: list[str] = message.get_all("Authentication-Results", [])
         if all_results:
             return False
 

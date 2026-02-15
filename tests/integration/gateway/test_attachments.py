@@ -65,8 +65,9 @@ events = [
 
             # Wait for response with Claude's output
             response = integration_env.email_server.wait_for_sent(
-                lambda m: m != ack
-                and "processed" in get_message_text(m).lower(),
+                lambda m: (
+                    m != ack and "processed" in get_message_text(m).lower()
+                ),
                 timeout=30.0,
             )
             assert response is not None, "Did not receive response email"
@@ -135,8 +136,9 @@ events = [
 
             # Now wait for final response
             response = integration_env.email_server.wait_for_sent(
-                lambda m: m != ack
-                and "processed" in get_message_text(m).lower(),
+                lambda m: (
+                    m != ack and "processed" in get_message_text(m).lower()
+                ),
                 timeout=30.0,
             )
             assert response is not None, "Did not receive response email"
@@ -211,8 +213,9 @@ events = [
 
             # Wait for final response
             response = integration_env.email_server.wait_for_sent(
-                lambda m: m != ack
-                and "processed" in get_message_text(m).lower(),
+                lambda m: (
+                    m != ack and "processed" in get_message_text(m).lower()
+                ),
                 timeout=30.0,
             )
             assert response is not None, "Did not receive response email"
@@ -268,8 +271,9 @@ events = [
 
             # Wait for final response
             response = integration_env.email_server.wait_for_sent(
-                lambda m: m != ack
-                and "processed" in get_message_text(m).lower(),
+                lambda m: (
+                    m != ack and "processed" in get_message_text(m).lower()
+                ),
                 timeout=30.0,
             )
             assert response is not None, "Did not receive response email"

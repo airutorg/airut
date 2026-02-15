@@ -132,8 +132,10 @@ events = [
         try:
             # Wait for response
             response = integration_env.email_server.wait_for_sent(
-                lambda m: "Created" in get_message_text(m)
-                and "received" not in get_message_text(m).lower(),
+                lambda m: (
+                    "Created" in get_message_text(m)
+                    and "received" not in get_message_text(m).lower()
+                ),
                 timeout=30.0,
             )
             assert response is not None
@@ -214,8 +216,10 @@ events = [
 
             # Wait for first response
             response1 = integration_env.email_server.wait_for_sent(
-                lambda m: "First conversation" in get_message_text(m)
-                and "received" not in get_message_text(m).lower(),
+                lambda m: (
+                    "First conversation" in get_message_text(m)
+                    and "received" not in get_message_text(m).lower()
+                ),
                 timeout=30.0,
             )
             assert response1 is not None
@@ -265,8 +269,10 @@ events = [
 
             # Wait for second response
             response2 = integration_env.email_server.wait_for_sent(
-                lambda m: "Second conversation" in get_message_text(m)
-                and "received" not in get_message_text(m).lower(),
+                lambda m: (
+                    "Second conversation" in get_message_text(m)
+                    and "received" not in get_message_text(m).lower()
+                ),
                 timeout=30.0,
             )
             assert response2 is not None
@@ -481,8 +487,10 @@ events = [
 
             # Wait for first response
             response1 = integration_env.email_server.wait_for_sent(
-                lambda m: "First" in get_message_text(m)
-                and "received" not in get_message_text(m).lower(),
+                lambda m: (
+                    "First" in get_message_text(m)
+                    and "received" not in get_message_text(m).lower()
+                ),
                 timeout=30.0,
             )
             assert response1 is not None
@@ -529,8 +537,10 @@ events = [
 
             # Wait for second response
             response2 = integration_env.email_server.wait_for_sent(
-                lambda m: "Second" in get_message_text(m)
-                and "received" not in get_message_text(m).lower(),
+                lambda m: (
+                    "Second" in get_message_text(m)
+                    and "received" not in get_message_text(m).lower()
+                ),
                 timeout=30.0,
             )
             assert response2 is not None

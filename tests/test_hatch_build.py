@@ -36,16 +36,16 @@ def _make_hook(root: str) -> GitVersionBuildHook:
         hook = GitVersionBuildHook(
             root,
             {},
-            MagicMock(),  # type: ignore[arg-type]  # BuilderConfigBound
-            MagicMock(),  # type: ignore[arg-type]  # ProjectMetadata
+            MagicMock(),  # BuilderConfigBound
+            MagicMock(),  # ProjectMetadata
             "",
             "",
             None,
         )
     else:
         # hatchling not installed — _Base is object
-        hook = GitVersionBuildHook()  # type: ignore[call-arg]
-        hook.root = root  # type: ignore[attr-defined]
+        hook = GitVersionBuildHook()
+        hook.root = root
     return hook
 
 
