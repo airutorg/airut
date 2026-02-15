@@ -61,6 +61,7 @@ def capture_version_info(repo_root: Path | None = None) -> VersionInfo:
     git_version = get_git_version_info(repo_root)
 
     return VersionInfo(
+        version=git_version.version,
         git_sha=git_version.sha_short,
         git_sha_full=git_version.sha_full,
         worktree_clean=git_version.worktree_clean,
@@ -170,9 +171,10 @@ class EmailGatewayService:
                 )
 
         logger.info("Email gateway service initialized")
+        version_label = self._version_info.version or self._version_info.git_sha
         logger.info(
             "Version: %s (%s)",
-            self._version_info.git_sha,
+            version_label,
             "clean" if self._version_info.worktree_clean else "modified",
         )
         logger.info(

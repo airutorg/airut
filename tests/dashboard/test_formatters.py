@@ -65,6 +65,7 @@ class TestVersionInfo:
     def test_create(self) -> None:
         """Test creating VersionInfo."""
         info = VersionInfo(
+            version="v0.7.0",
             git_sha="abc1234",
             git_sha_full="abc1234567890abcdef1234567890abcdef123456",
             worktree_clean=True,
@@ -72,6 +73,7 @@ class TestVersionInfo:
             started_at=946684800.0,
         )
 
+        assert info.version == "v0.7.0"
         assert info.git_sha == "abc1234"
         assert info.git_sha_full == "abc1234567890abcdef1234567890abcdef123456"
         assert info.worktree_clean is True
@@ -81,6 +83,7 @@ class TestVersionInfo:
     def test_create_dirty(self) -> None:
         """Test creating VersionInfo with dirty worktree."""
         info = VersionInfo(
+            version="",
             git_sha="def5678",
             git_sha_full="def5678901234567890abcdef1234567890abcdef",
             worktree_clean=False,

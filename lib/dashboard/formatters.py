@@ -18,6 +18,8 @@ class VersionInfo:
     """Version information captured at service startup.
 
     Attributes:
+        version: Human-readable version string (e.g. "v0.7.0").
+            Empty string when no version tag is available.
         git_sha: Short git commit SHA (7-8 characters).
         git_sha_full: Full 40-character git commit SHA.
         worktree_clean: True if working tree was clean at startup.
@@ -25,6 +27,7 @@ class VersionInfo:
         started_at: Unix timestamp when service started.
     """
 
+    version: str
     git_sha: str
     git_sha_full: str
     worktree_clean: bool
