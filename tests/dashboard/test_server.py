@@ -393,8 +393,9 @@ class TestDashboardServer:
         assert "p1" in html
         assert "c1" in html
 
-        # Check auto-refresh meta tag
-        assert 'http-equiv="refresh"' in html
+        # Check SSE connectivity (replaced meta-refresh)
+        assert "EventSource" in html
+        assert "/api/events/stream" in html
 
     def test_index_shows_repo_badge_and_sender(self) -> None:
         """Test dashboard renders repo badge and sender for tasks."""
@@ -776,8 +777,8 @@ class TestDashboardServer:
         assert "boot-progress" in html
         assert "Starting repositories..." in html
         assert "Starting repository &#x27;my-repo&#x27;..." in html
-        # Fast refresh during boot
-        assert 'content="5"' in html
+        # SSE used for live updates (no meta-refresh)
+        assert "EventSource" in html
 
     def test_index_shows_boot_error_banner(self) -> None:
         """Test dashboard shows error banner when boot failed."""
@@ -803,8 +804,8 @@ class TestDashboardServer:
         assert "All repos failed" in html
         assert "boot-traceback" in html
         assert "Traceback:" in html
-        # Normal refresh for failed state
-        assert 'content="30"' in html
+        # SSE used for live updates (no meta-refresh)
+        assert "EventSource" in html
 
     def test_index_no_boot_banner_when_ready(self) -> None:
         """Test dashboard hides boot banner when boot is complete."""
@@ -823,7 +824,8 @@ class TestDashboardServer:
 
         # The boot banner div should not be rendered in the body
         assert '<div class="boot-banner' not in html
-        assert 'content="30"' in html
+        # SSE used for live updates (no meta-refresh)
+        assert "EventSource" in html
 
     def test_index_no_boot_banner_when_no_boot_state(self) -> None:
         """Test dashboard hides boot banner when no boot state provided."""
@@ -867,8 +869,11 @@ class TestDashboardServer:
 
         assert "boot-icon" in html  # Error icon rendered
         assert "Boot Failed: ValueError" in html
-        # No <pre> tag with traceback rendered
-        assert "<pre" not in html
+        # Extract boot container content and verify no traceback
+        boot_start = html.index('id="boot-container"')
+        boot_end = html.index("</div>", boot_start + 200) + 6
+        boot_html = html[boot_start:boot_end]
+        assert "boot-traceback" not in boot_html
 
     def test_boot_progress_starting_phase(self) -> None:
         """Test boot progress banner shows STARTING phase."""
@@ -887,6 +892,220 @@ class TestDashboardServer:
 
         assert "Initializing..." in html
         assert "boot-spinner" in html
+
+
+class TestSSEEndpoint:
+    """Tests for SSE streaming endpoint."""
+
+    def test_events_stream_no_clock(self) -> None:
+        """Test /api/events/stream returns 503 when no clock configured."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)  # No clock
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/events/stream")
+        assert response.status_code == 503
+        data = response.get_json()
+        assert "error" in data
+
+    def test_events_stream_returns_sse(self) -> None:
+        """Test /api/events/stream returns SSE content type."""
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        tracker.add_task("t1", "Task 1")
+
+        server = DashboardServer(tracker, clock=clock)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/events/stream")
+        assert response.status_code == 200
+        assert response.content_type == "text/event-stream"
+        assert response.headers.get("Cache-Control") == "no-cache"
+        assert response.headers.get("X-Accel-Buffering") == "no"
+
+    def test_events_stream_last_event_id(self) -> None:
+        """Test /api/events/stream uses Last-Event-ID header."""
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        server = DashboardServer(tracker, clock=clock)
+        client = Client(server._wsgi_app)
+
+        response = client.get(
+            "/api/events/stream",
+            headers={"Last-Event-ID": "5"},
+        )
+        assert response.status_code == 200
+        assert response.content_type == "text/event-stream"
+
+    def test_events_stream_last_event_id_invalid(self) -> None:
+        """Test /api/events/stream handles invalid Last-Event-ID."""
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        server = DashboardServer(tracker, clock=clock)
+        client = Client(server._wsgi_app)
+
+        response = client.get(
+            "/api/events/stream",
+            headers={"Last-Event-ID": "not-a-number"},
+        )
+        assert response.status_code == 200
+
+    def test_events_stream_version_param(self) -> None:
+        """Test /api/events/stream uses version query parameter."""
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        server = DashboardServer(tracker, clock=clock)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/events/stream?version=3")
+        assert response.status_code == 200
+        assert response.content_type == "text/event-stream"
+
+    def test_events_stream_invalid_version_param(self) -> None:
+        """Test /api/events/stream handles invalid version param."""
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        server = DashboardServer(tracker, clock=clock)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/events/stream?version=abc")
+        assert response.status_code == 200
+
+    def test_events_stream_connection_limit(self) -> None:
+        """Test /api/events/stream returns 429 when limit reached."""
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        server = DashboardServer(tracker, clock=clock)
+
+        # Exhaust all slots
+        for _ in range(8):
+            server._sse_manager.try_acquire()
+
+        client = Client(server._wsgi_app)
+        response = client.get("/api/events/stream")
+        assert response.status_code == 429
+        data = response.get_json()
+        assert "Too many" in data["error"]
+        assert response.headers.get("Retry-After") == "5"
+
+    def test_events_stream_releases_on_close(self) -> None:
+        """Test SSE connection releases slot when closed."""
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        server = DashboardServer(tracker, clock=clock)
+
+        assert server._sse_manager.active == 0
+
+        # Make a request (werkzeug test client reads the response)
+        client = Client(server._wsgi_app)
+        client.get("/api/events/stream")
+
+        # After response is consumed, slot should be released
+        assert server._sse_manager.active == 0
+
+
+class TestETagSupport:
+    """Tests for ETag/304 conditional request support."""
+
+    def test_api_tasks_etag_header(self) -> None:
+        """Test /api/conversations returns ETag header."""
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        server = DashboardServer(tracker, clock=clock)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/conversations")
+        assert response.status_code == 200
+        etag = response.headers.get("ETag")
+        assert etag is not None
+        assert etag.startswith('"v')
+        assert response.headers.get("Cache-Control") == "no-cache"
+
+    def test_api_tasks_304_on_match(self) -> None:
+        """Test /api/conversations returns 304 when ETag matches."""
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        server = DashboardServer(tracker, clock=clock)
+        client = Client(server._wsgi_app)
+
+        # First request to get ETag
+        response = client.get("/api/conversations")
+        etag = response.headers.get("ETag")
+
+        # Second request with matching ETag
+        response = client.get(
+            "/api/conversations",
+            headers={"If-None-Match": etag},
+        )
+        assert response.status_code == 304
+
+    def test_api_tasks_200_on_mismatch(self) -> None:
+        """Test /api/conversations returns 200 when ETag doesn't match."""
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        server = DashboardServer(tracker, clock=clock)
+        client = Client(server._wsgi_app)
+
+        response = client.get(
+            "/api/conversations",
+            headers={"If-None-Match": '"v999"'},
+        )
+        assert response.status_code == 200
+
+    def test_api_repos_etag(self) -> None:
+        """Test /api/repos returns ETag and supports 304."""
+        clock = VersionClock()
+        repos_store: VersionedStore[tuple[RepoState, ...]] = VersionedStore(
+            (), clock
+        )
+        tracker = TaskTracker(clock=clock)
+        server = DashboardServer(tracker, clock=clock, repos_store=repos_store)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/repos")
+        assert response.status_code == 200
+        etag = response.headers.get("ETag")
+        assert etag is not None
+
+        # 304 on match
+        response = client.get("/api/repos", headers={"If-None-Match": etag})
+        assert response.status_code == 304
+
+    def test_health_etag(self) -> None:
+        """Test /health returns ETag and supports 304."""
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        server = DashboardServer(tracker, clock=clock)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/health")
+        assert response.status_code == 200
+        etag = response.headers.get("ETag")
+        assert etag is not None
+
+        # 304 on match
+        response = client.get("/health", headers={"If-None-Match": etag})
+        assert response.status_code == 304
+
+    def test_etag_changes_after_state_update(self) -> None:
+        """Test ETag changes when state is updated."""
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        server = DashboardServer(tracker, clock=clock)
+        client = Client(server._wsgi_app)
+
+        # Get initial ETag
+        response1 = client.get("/api/conversations")
+        etag1 = response1.headers.get("ETag")
+
+        # Update state
+        tracker.add_task("t1", "New Task")
+
+        # Get new ETag
+        response2 = client.get("/api/conversations")
+        etag2 = response2.headers.get("ETag")
+
+        assert etag1 != etag2
 
 
 class TestDashboardServerStartStop:

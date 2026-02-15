@@ -546,32 +546,38 @@ the existing thread-safety bugs.
 but state access is now atomic and versioned. Thread-safety bugs in BootState
 and RepoState are fixed.
 
-### Phase 2: SSE State Stream
+### Phase 2: SSE State Stream — IMPLEMENTED
 
 **Goal**: Add the `/api/events/stream` SSE endpoint with connection limits and
 polling fallback. Replace meta-refresh on the main dashboard with EventSource.
 
 **Scope**:
 
-- New module: `lib/dashboard/sse.py` — SSE response helpers (format SSE
-  messages, generator for state stream), `SSEConnectionManager`
-- Modify `lib/dashboard/server.py` — add `/api/events/stream` route
+- New module: `lib/dashboard/sse.py` — SSE response helpers (`format_sse_event`,
+  `format_sse_comment`, `build_state_snapshot`, `sse_state_stream` generator),
+  `SSEConnectionManager`, state-to-dict conversion helpers
+- Modify `lib/dashboard/server.py` — add `/api/events/stream` route, accept
+  `clock` parameter, create `SSEConnectionManager`
 - Modify `lib/dashboard/handlers.py` — add `handle_events_stream()` handler that
   uses `VersionClock.wait()` and `SSEConnectionManager`; add `ETag` headers to
-  existing JSON API endpoints (`/api/conversations`, `/api/repos`, `/health`)
-  for polling fallback
-- New frontend JS: `EventSource` connection with fallback to ETag polling,
-  `updateDashboard()` DOM updater
-- Remove meta-refresh from main dashboard template
-- Modify `lib/dashboard/views/` — add JS to dashboard template, structure HTML
-  for dynamic updates (add IDs/classes for update targets)
-- Tests: SSE handler tests, connection limit tests, ETag/304 tests, frontend
-  fallback behavior
+  JSON API endpoints (`/api/conversations`, `/api/repos`, `/health`) with
+  `304 Not Modified` support via `If-None-Match`
+- Frontend JS in `lib/dashboard/views/dashboard.py` — `EventSource` connection
+  with fallback to ETag polling, `updateDashboard()` DOM updater that replaces
+  boot banner, repos section, and task columns in real time
+- Removed meta-refresh from main dashboard template
+- Removed `boot_refresh_interval()` helper (no longer needed)
+- Added IDs to dynamic DOM sections: `boot-container`, `repos-container`,
+  `queued-header`, `queued-list`, `in-progress-header`, `in-progress-list`,
+  `completed-header`, `completed-list`, `status-notice`
+- Modify `lib/gateway/service/gateway.py` — pass `clock` to `DashboardServer`
+- Tests: SSE handler tests, connection limit tests, ETag/304 tests, state stream
+  generator tests, snapshot builder tests
 
 **Observable result**: Main dashboard updates in real time when tasks are
 queued, start, or complete. No more page refreshes. Falls back gracefully to
 5-second ETag polling when SSE connections are exhausted. Task detail and other
-pages still use meta-refresh.
+pages still use meta-refresh (Phase 3).
 
 ### Phase 3: Log Stream Endpoints
 

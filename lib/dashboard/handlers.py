@@ -10,7 +10,7 @@ Provides handler functions for all dashboard HTTP endpoints.
 
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -24,6 +24,10 @@ from lib.conversation import (
 )
 from lib.dashboard import views
 from lib.dashboard.formatters import VersionInfo
+from lib.dashboard.sse import (
+    SSEConnectionManager,
+    sse_state_stream,
+)
 from lib.dashboard.tracker import (
     BootState,
     RepoState,
@@ -31,7 +35,7 @@ from lib.dashboard.tracker import (
     TaskStatus,
     TaskTracker,
 )
-from lib.dashboard.versioned import VersionedStore
+from lib.dashboard.versioned import VersionClock, VersionedStore
 from lib.dashboard.views import get_favicon_svg
 from lib.gateway.conversation import CONVERSATION_ID_PATTERN
 from lib.sandbox import NETWORK_LOG_FILENAME, EventLog
@@ -55,6 +59,8 @@ class RequestHandlers:
         stop_callback: Any = None,
         boot_store: VersionedStore[BootState] | None = None,
         repos_store: VersionedStore[tuple[RepoState, ...]] | None = None,
+        clock: VersionClock | None = None,
+        sse_manager: SSEConnectionManager | None = None,
     ) -> None:
         """Initialize request handlers.
 
@@ -66,6 +72,8 @@ class RequestHandlers:
             stop_callback: Optional callable to stop an execution.
             boot_store: Versioned boot state store.
             repos_store: Versioned repo states store.
+            clock: Shared version clock for SSE streaming.
+            sse_manager: SSE connection manager for enforcing limits.
         """
         self.tracker = tracker
         self.version_info = version_info
@@ -73,6 +81,8 @@ class RequestHandlers:
         self.stop_callback = stop_callback
         self._boot_store = boot_store
         self._repos_store = repos_store
+        self._clock = clock
+        self._sse_manager = sse_manager or SSEConnectionManager()
 
     def _get_boot_state(self) -> BootState | None:
         """Read current boot state from versioned store."""
@@ -295,16 +305,27 @@ class RequestHandlers:
     def handle_api_tasks(self, request: Request) -> Response:
         """Handle JSON API for all tasks.
 
+        Supports ETag-based conditional requests. If the client sends
+        an ``If-None-Match`` header matching the current version, returns
+        304 Not Modified.
+
         Args:
             request: Incoming request.
 
         Returns:
-            JSON response with task list.
+            JSON response with task list, or 304 if unchanged.
         """
+        version = self._get_clock_version()
+        etag = f'"v{version}"'
+
+        if request.headers.get("If-None-Match") == etag:
+            return Response(status=304, headers={"ETag": etag})
+
         tasks = self.tracker.get_all_tasks()
         return Response(
             json.dumps([self._task_to_dict(t) for t in tasks]),
             content_type="application/json",
+            headers={"ETag": etag, "Cache-Control": "no-cache"},
         )
 
     def handle_api_task(
@@ -371,12 +392,20 @@ class RequestHandlers:
     def handle_api_repos(self, request: Request) -> Response:
         """Handle JSON API for repository status.
 
+        Supports ETag-based conditional requests.
+
         Args:
             request: Incoming request.
 
         Returns:
-            JSON response with repository status list.
+            JSON response with repository status list, or 304.
         """
+        version = self._get_clock_version()
+        etag = f'"v{version}"'
+
+        if request.headers.get("If-None-Match") == etag:
+            return Response(status=304, headers={"ETag": etag})
+
         repos = [
             {
                 "repo_id": r.repo_id,
@@ -393,18 +422,27 @@ class RequestHandlers:
         return Response(
             json.dumps(repos),
             content_type="application/json",
+            headers={"ETag": etag, "Cache-Control": "no-cache"},
         )
 
     def handle_health(self, request: Request) -> Response:
         """Handle health check endpoint.
 
+        Supports ETag-based conditional requests.
+
         Args:
             request: Incoming request.
 
         Returns:
-            JSON response indicating server health.
+            JSON response indicating server health, or 304.
         """
         from lib.dashboard.tracker import BootPhase
+
+        version = self._get_clock_version()
+        etag = f'"v{version}"'
+
+        if request.headers.get("If-None-Match") == etag:
+            return Response(status=304, headers={"ETag": etag})
 
         counts = self.tracker.get_counts()
         boot_state = self._get_boot_state()
@@ -445,6 +483,7 @@ class RequestHandlers:
         return Response(
             json.dumps(result),
             content_type="application/json",
+            headers={"ETag": etag, "Cache-Control": "no-cache"},
         )
 
     def handle_api_task_stop(
@@ -507,6 +546,84 @@ class RequestHandlers:
                 status=500,
                 content_type="application/json",
             )
+
+    def handle_events_stream(self, request: Request) -> Response:
+        """Handle SSE state stream endpoint.
+
+        Pushes composite state snapshots whenever any versioned state
+        changes. Falls back to 429 when the SSE connection limit is
+        reached.
+
+        Args:
+            request: Incoming request.
+
+        Returns:
+            SSE streaming response, or 429 if at connection limit.
+        """
+        if self._clock is None:
+            return Response(
+                json.dumps({"error": "SSE not available"}),
+                status=503,
+                content_type="application/json",
+            )
+
+        if not self._sse_manager.try_acquire():
+            return Response(
+                json.dumps({"error": "Too many SSE connections"}),
+                status=429,
+                content_type="application/json",
+                headers={"Retry-After": "5"},
+            )
+
+        # Parse client version from query string or Last-Event-ID header
+        client_version = 0
+        last_event_id = request.headers.get("Last-Event-ID")
+        if last_event_id is not None:
+            try:
+                client_version = int(last_event_id)
+            except ValueError:
+                pass
+        else:
+            version_param = request.args.get("version")
+            if version_param is not None:
+                try:
+                    client_version = int(version_param)
+                except ValueError:
+                    pass
+
+        clock = self._clock
+
+        def generate() -> Iterable[str]:
+            try:
+                yield from sse_state_stream(
+                    clock,
+                    self.tracker,
+                    self._boot_store,
+                    self._repos_store,
+                    client_version,
+                )
+            finally:
+                self._sse_manager.release()
+
+        return Response(
+            generate(),
+            content_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    def _get_clock_version(self) -> int:
+        """Get the current version clock value.
+
+        Returns:
+            Current version number, or 0 if no clock is configured.
+        """
+        if self._clock is None:
+            return 0
+        return self._clock.version
 
     def _find_conversation_dir(self, conversation_id: str) -> Path | None:
         """Find the conversation directory across all repos.

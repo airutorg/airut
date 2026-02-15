@@ -39,7 +39,10 @@ The dashboard consists of these components in `lib/dashboard/`:
 
 - **VersionClock + VersionedStore** (`versioned.py`): Global monotonic version
   counter and thread-safe versioned state containers. Every state mutation ticks
-  the clock. SSE endpoints (future) will wait on it and wake on any change.
+  the clock. SSE endpoints wait on it and wake on any change.
+- **SSE** (`sse.py`): Server-Sent Events support for real-time dashboard
+  updates. Includes SSE message formatting, state stream generator, and
+  connection manager to enforce concurrent connection limits.
 - **TaskTracker** (`tracker.py`): Thread-safe in-memory task state management
   with bounded history (default 100 completed tasks). Integrates with the shared
   `VersionClock`.
@@ -61,7 +64,7 @@ This guarantees:
 
 - **Atomicity**: Readers always see consistent snapshots (no torn reads)
 - **Versioning**: Every change has a monotonic version number
-- **Notification**: Future SSE waiters will wake on every change
+- **Notification**: SSE waiters wake on every change
 
 ### Data Flow
 
@@ -85,8 +88,9 @@ visibility into startup progress and errors from the moment the service starts.
 4. **Ready** — Boot complete, service operational (banner hidden)
 5. **Failed** — Boot error with full details (error type, message, traceback)
 
-During boot, the dashboard auto-refreshes every 5 seconds. After boot completes
-(or fails), it returns to the normal 30-second refresh interval.
+The main dashboard receives real-time updates via Server-Sent Events (SSE). When
+SSE is unavailable, it falls back to ETag-based polling (5-second interval). See
+`spec/live-dashboard.md` for the full SSE specification.
 
 The `/health` endpoint reflects boot state: `"booting"` during startup,
 `"error"` on boot failure, `"ok"` when running with live repos, `"degraded"`
@@ -114,19 +118,20 @@ credential problems) while others continue processing emails.
 
 ### HTTP Endpoints
 
-| Route                                  | Method | Description                            |
-| -------------------------------------- | ------ | -------------------------------------- |
-| `/`                                    | GET    | Main dashboard with task lists         |
-| `/.version`                            | GET    | Full git version info (plain text)     |
-| `/repo/{repo_id}`                      | GET    | Repository detail view                 |
-| `/conversation/{conv_id}`              | GET    | Task detail view                       |
-| `/conversation/{conv_id}/conversation` | GET    | Raw conversation JSON                  |
-| `/conversation/{conv_id}/actions`      | GET    | Actions timeline viewer                |
-| `/api/repos`                           | GET    | JSON API for repository status         |
-| `/api/conversations`                   | GET    | JSON API for task list                 |
-| `/api/conversation/{id}`               | GET    | JSON API for single task               |
-| `/api/conversation/{id}/stop`          | POST   | Stop a running task                    |
-| `/health`                              | GET    | Health check endpoint (includes repos) |
+| Route                                  | Method | Description                           |
+| -------------------------------------- | ------ | ------------------------------------- |
+| `/`                                    | GET    | Main dashboard with task lists        |
+| `/.version`                            | GET    | Full git version info (plain text)    |
+| `/repo/{repo_id}`                      | GET    | Repository detail view                |
+| `/conversation/{conv_id}`              | GET    | Task detail view                      |
+| `/conversation/{conv_id}/conversation` | GET    | Raw conversation JSON                 |
+| `/conversation/{conv_id}/actions`      | GET    | Actions timeline viewer               |
+| `/api/repos`                           | GET    | JSON API for repository status (ETag) |
+| `/api/conversations`                   | GET    | JSON API for task list (ETag)         |
+| `/api/conversation/{id}`               | GET    | JSON API for single task              |
+| `/api/conversation/{id}/stop`          | POST   | Stop a running task                   |
+| `/api/events/stream`                   | GET    | SSE state stream (real-time updates)  |
+| `/health`                              | GET    | Health check endpoint (ETag)          |
 
 ## Configuration
 
