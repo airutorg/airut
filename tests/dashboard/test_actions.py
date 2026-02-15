@@ -1104,3 +1104,40 @@ class TestSSEServerSideRendering:
         assert "renderStreamEvent" not in html
         assert "escapeHtml" not in html
         assert "formatDiffBlock" not in html
+
+    def test_sse_offset_matches_event_log_size(
+        self, harness: DashboardHarness
+    ) -> None:
+        """SSE starts from current event log byte offset, not zero.
+
+        When the page loads, all existing events are server-rendered in
+        the initial HTML. The SSE script must start from the current
+        event log byte offset so it only receives NEW events, avoiding
+        duplicate content that hides the pending request prompt.
+
+        Regression test: SSE started from offset 0, causing all events
+        to be appended again as raw HTML fragments after the structured
+        timeline (which included the pending request prompt). Auto-scroll
+        then moved past the pending request to the duplicated events.
+        """
+        # Write some events so the event log has a non-zero byte offset
+        harness.add_events(
+            {"type": "system", "subtype": "init", "tools": ["Bash"]},
+            result_event(),
+            request_text="First request",
+        )
+
+        # Start a follow-up reply (task must be in-progress for SSE)
+        harness.tracker.start_task(harness.CONV_ID)
+        harness.store.set_pending_request(harness.CONV_ID, "Follow-up request")
+        harness.event_log.start_new_reply()
+
+        # Get the actual byte offset of the event log
+        file_size = harness.event_log.file_path.stat().st_size
+        assert file_size > 0
+
+        html = harness.get_html("/conversation/abc12345/actions")
+
+        # SSE script must start from the current offset, not 0
+        assert f"var currentOffset = {file_size}" in html
+        assert "var currentOffset = 0" not in html

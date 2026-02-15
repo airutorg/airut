@@ -212,12 +212,21 @@ class RequestHandlers:
         # Load events from event log for the actions view
         conversation_dir = self._find_conversation_dir(conversation_id)
         event_groups = None
+        event_log_offset = 0
         if conversation_dir is not None:
             event_log = EventLog(conversation_dir)
             event_groups = event_log.read_all()
+            # Capture byte offset so SSE starts after already-rendered events
+            if event_log.file_path.exists():
+                event_log_offset = event_log.file_path.stat().st_size
 
         return Response(
-            views.render_actions_page(task, conversation, event_groups),
+            views.render_actions_page(
+                task,
+                conversation,
+                event_groups,
+                event_log_offset=event_log_offset,
+            ),
             content_type="text/html; charset=utf-8",
         )
 
@@ -241,18 +250,23 @@ class RequestHandlers:
         # Load network logs from conversation directory
         conversation_dir = self._find_conversation_dir(conversation_id)
         log_content: str | None = None
+        network_log_offset = 0
         if conversation_dir is not None:
             log_path = conversation_dir / NETWORK_LOG_FILENAME
             if log_path.exists():
                 try:
                     log_content = log_path.read_text()
+                    # Capture byte offset so SSE starts after rendered lines
+                    network_log_offset = log_path.stat().st_size
                 except OSError as e:
                     logger.warning(
                         "Failed to read network log %s: %s", log_path, e
                     )
 
         return Response(
-            views.render_network_page(task, log_content),
+            views.render_network_page(
+                task, log_content, network_log_offset=network_log_offset
+            ),
             content_type="text/html; charset=utf-8",
         )
 

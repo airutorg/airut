@@ -1792,6 +1792,36 @@ class TestSSELivePages:
         assert "connectNetworkSSE" in html
         assert "/network/stream" in html
 
+    def test_network_page_sse_offset_matches_log_size(
+        self, tmp_path: Path
+    ) -> None:
+        """Network SSE starts from current log byte offset, not zero.
+
+        Same fix as actions page: SSE must start from the current byte
+        offset so it only sends new lines, not duplicate the initial HTML.
+        """
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Task")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        # Write some network log content
+        log_path = conv_dir / "network-sandbox.log"
+        log_content = "allowed GET https://example.com -> 200\n"
+        log_path.write_text(log_content)
+        file_size = log_path.stat().st_size
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345/network")
+        html = response.get_data(as_text=True)
+
+        assert f"var currentOffset = {file_size}" in html
+        assert "var currentOffset = 0" not in html
+
     def test_network_page_no_sse_for_completed(self, tmp_path: Path) -> None:
         """Network page has no SSE script for completed tasks."""
         tracker = TaskTracker()

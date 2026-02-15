@@ -16,12 +16,20 @@ from lib.dashboard.views.styles import network_styles
 _STATUS_CODE_PATTERN = re.compile(r"-> (\d{3})(?:\s|$)")
 
 
-def render_network_page(task: TaskState, log_content: str | None) -> str:
+def render_network_page(
+    task: TaskState,
+    log_content: str | None,
+    *,
+    network_log_offset: int = 0,
+) -> str:
     """Render network logs viewer page HTML.
 
     Args:
         task: Task to display.
         log_content: Raw network log content, or None if unavailable.
+        network_log_offset: Current byte offset in the network log file.
+            Used as the starting offset for SSE streaming so the
+            client only receives lines written after the page rendered.
 
     Returns:
         HTML string for network logs page.
@@ -37,7 +45,11 @@ def render_network_page(task: TaskState, log_content: str | None) -> str:
         logs_html = render_network_log_lines(log_content)
 
     is_active = task.status in (TaskStatus.QUEUED, TaskStatus.IN_PROGRESS)
-    sse_script = _sse_network_script(task.conversation_id) if is_active else ""
+    sse_script = (
+        _sse_network_script(task.conversation_id, network_log_offset)
+        if is_active
+        else ""
+    )
     status_notice = (
         '<div id="stream-status" class="stream-status">Connecting...</div>'
         if is_active
@@ -164,7 +176,7 @@ def render_network_log_lines(log_content: str) -> str:
     return "\n".join(lines)
 
 
-def _sse_network_script(conversation_id: str) -> str:
+def _sse_network_script(conversation_id: str, initial_offset: int = 0) -> str:
     """JavaScript for SSE-based live network log streaming.
 
     Connects to the per-conversation network log stream endpoint and
@@ -172,13 +184,16 @@ def _sse_network_script(conversation_id: str) -> str:
 
     Args:
         conversation_id: Conversation ID to stream network logs for.
+        initial_offset: Byte offset to start streaming from.
+            Set to the current network log file size so the SSE
+            only sends lines written after the page rendered.
 
     Returns:
         HTML <script> tag with SSE network log streaming logic.
     """
     return f"""
     <script>
-        var currentOffset = 0;
+        var currentOffset = {initial_offset};
         var autoScroll = true;
 
         window.addEventListener('scroll', function() {{

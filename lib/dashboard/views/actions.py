@@ -34,6 +34,8 @@ def render_actions_page(
     task: TaskState,
     conversation: ConversationMetadata | None,
     event_groups: list[list[StreamEvent]] | None = None,
+    *,
+    event_log_offset: int = 0,
 ) -> str:
     """Render actions viewer page HTML.
 
@@ -41,6 +43,9 @@ def render_actions_page(
         task: Task to display.
         conversation: Conversation metadata with reply summaries.
         event_groups: Events grouped by reply from EventLog.
+        event_log_offset: Current byte offset in the event log file.
+            Used as the starting offset for SSE streaming so the
+            client only receives events written after the page rendered.
 
     Returns:
         HTML string for actions page.
@@ -60,7 +65,11 @@ def render_actions_page(
         actions_content = render_actions_timeline(conversation, event_groups)
 
     is_active = task.status in (TaskStatus.QUEUED, TaskStatus.IN_PROGRESS)
-    sse_script = _sse_events_script(task.conversation_id) if is_active else ""
+    sse_script = (
+        _sse_events_script(task.conversation_id, event_log_offset)
+        if is_active
+        else ""
+    )
     status_notice = (
         '<div id="stream-status" class="stream-status">Connecting...</div>'
         if is_active
@@ -107,7 +116,7 @@ def render_actions_page(
 </html>"""
 
 
-def _sse_events_script(conversation_id: str) -> str:
+def _sse_events_script(conversation_id: str, initial_offset: int = 0) -> str:
     """JavaScript for SSE-based live event streaming.
 
     Connects to the per-conversation events stream endpoint and
@@ -115,13 +124,16 @@ def _sse_events_script(conversation_id: str) -> str:
 
     Args:
         conversation_id: Conversation ID to stream events for.
+        initial_offset: Byte offset to start streaming from.
+            Set to the current event log file size so the SSE
+            only sends events written after the page rendered.
 
     Returns:
         HTML <script> tag with SSE event streaming logic.
     """
     return f"""
     <script>
-        var currentOffset = 0;
+        var currentOffset = {initial_offset};
         var autoScroll = true;
 
         // Track if user has scrolled up (disable auto-scroll)
