@@ -76,6 +76,7 @@ python-version = "3.13"
 
 [tool.ty.src]
 include = ["lib", "scripts", "tests"]
+exclude = ["lib/_bundled/proxy"]
 
 [tool.ty.terminal]
 error-on-warning = true

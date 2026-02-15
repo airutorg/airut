@@ -6,9 +6,9 @@
 """Tests for proxy allowlist matching logic.
 
 Tests the _match_pattern function and NetworkAllowlist._is_allowed logic
-defined in proxy/proxy_filter.py. Since the file is a mitmproxy addon,
-we test the logic by reimplementing the key functions here to avoid
-mitmproxy dependencies.
+defined in lib/_bundled/proxy/proxy_filter.py. Since the file is a
+mitmproxy addon, we test the logic by reimplementing the key functions
+here to avoid mitmproxy dependencies.
 """
 
 import fnmatch
@@ -18,7 +18,7 @@ from typing import TypedDict
 def _match_pattern(pattern: str, value: str) -> bool:
     """Match value against pattern using fnmatch if wildcards present.
 
-    This is a copy of the function from proxy/proxy_filter.py
+    This is a copy of the function from lib/_bundled/proxy/proxy_filter.py
     for testing purposes (to avoid mitmproxy import dependencies).
 
     Args:
@@ -36,7 +36,7 @@ def _match_pattern(pattern: str, value: str) -> bool:
 def _match_header_pattern(pattern: str, header_name: str) -> bool:
     """Match header name against pattern, case-insensitively.
 
-    This is a copy of the function from proxy/proxy_filter.py
+    This is a copy of the function from lib/_bundled/proxy/proxy_filter.py
     for testing purposes (to avoid mitmproxy import dependencies).
 
     HTTP headers are case-insensitive per RFC 7230. This function performs

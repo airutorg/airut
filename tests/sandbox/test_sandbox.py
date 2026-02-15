@@ -20,7 +20,8 @@ class TestSandboxConfig:
         """Default configuration values."""
         config = SandboxConfig()
         assert config.container_command == "podman"
-        assert config.proxy_dir == Path("proxy")
+        assert config.proxy_dir.name == "proxy"
+        assert config.proxy_dir.is_absolute()
         assert config.upstream_dns == "1.1.1.1"
         assert config.max_image_age_hours == 24
 

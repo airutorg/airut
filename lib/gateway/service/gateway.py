@@ -23,6 +23,7 @@ import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
 from email.message import Message
+from importlib.resources import files
 from pathlib import Path
 
 from lib.dashboard import (
@@ -141,9 +142,10 @@ class EmailGatewayService:
             upstream_dns = get_system_resolver()
 
         # Sandbox (shared infrastructure, per-task execution)
+        proxy_dir = files("lib._bundled.proxy")
         sandbox_config = SandboxConfig(
             container_command=self.global_config.container_command,
-            proxy_dir=self.repo_root / "proxy",
+            proxy_dir=Path(str(proxy_dir)),
             upstream_dns=upstream_dns,
         )
         self.sandbox = Sandbox(

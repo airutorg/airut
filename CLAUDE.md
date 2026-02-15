@@ -217,7 +217,7 @@ is created AND GitHub CI passes (step 3).
 
 **All checks are mandatory. No workarounds or exceptions.**
 
-- **100% test coverage** - every line in `lib/` and `proxy/` must be tested
+- **100% test coverage** - every line in `lib/` must be tested
 - **No `pytest.skip()`** - write proper mocks instead
 - **No `# type: ignore`** without specific error code and justification
 - **No `# noqa`** without specific code and justification
@@ -228,8 +228,10 @@ is created AND GitHub CI passes (step 3).
 ```
 .airut/                     - Repo-specific Airut configuration
 config/                     - Server configuration templates
-proxy/                      - Network sandbox (proxy filter, DNS, AWS signing)
 lib/                        - Library code
+  _bundled/                 - Static resources bundled into wheel
+    assets/                 - Logo SVG
+    proxy/                  - Network sandbox (proxy filter, DNS, AWS signing)
   claude_output/            - Typed Claude streaming JSON output parser
   conversation/             - Conversation directory layout and preparation
   sandbox/                  - Sandboxed execution (container, proxy, session, image)

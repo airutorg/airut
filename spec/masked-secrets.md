@@ -131,7 +131,8 @@ surrogate -> ReplacementEntry(real_value, scopes, headers)
 
 ## Proxy Replacement
 
-The proxy addon (`proxy/proxy_filter.py`) performs replacement in `request()`:
+The proxy addon (`lib/_bundled/proxy/proxy_filter.py`) performs replacement in
+`request()`:
 
 1. Load replacement map from `/replacements.json` at startup
 2. For each request, check if host matches any surrogate's scopes

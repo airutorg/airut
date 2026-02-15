@@ -11,7 +11,7 @@ conversation data section, and the local-time JavaScript snippet.
 """
 
 import html
-from pathlib import Path
+from importlib.resources import files
 
 from lib.conversation import ConversationMetadata
 from lib.dashboard.formatters import (
@@ -28,9 +28,8 @@ from lib.dashboard.tracker import (
 )
 
 
-# Load logo SVG at module import time. The assets folder is at repo root.
-_ASSETS_DIR = Path(__file__).parent.parent.parent.parent / "assets"
-_LOGO_SVG = (_ASSETS_DIR / "logo.svg").read_text()
+# Load logo SVG at module import time from embedded package data.
+_LOGO_SVG = files("lib._bundled.assets").joinpath("logo.svg").read_text()
 
 
 def get_favicon_svg() -> str:

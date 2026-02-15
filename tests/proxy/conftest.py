@@ -3,16 +3,15 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Shared fixtures for proxy/ module tests.
+"""Shared fixtures for proxy module tests.
 
-Installs mitmproxy mocks so ``proxy.proxy_filter`` can be imported
-without the real mitmproxy package (which is only installed inside the
-proxy container).
+Installs mitmproxy mocks so ``lib._bundled.proxy.proxy_filter`` can be
+imported without the real mitmproxy package (which is only installed
+inside the proxy container).
 """
 
 import sys
 import types
-from pathlib import Path
 from unittest.mock import MagicMock
 
 
@@ -119,13 +118,15 @@ def _install_mitmproxy_mock() -> None:
 
 
 def _add_proxy_to_path() -> None:
-    """Add ``proxy/`` to sys.path for bare ``import aws_signing``.
+    """Add ``lib/_bundled/proxy/`` to sys.path for bare ``import aws_signing``.
 
     Inside the container, ``aws_signing.py`` lives at ``/aws_signing.py``
     and is imported via bare ``from aws_signing import ...``.  In tests,
-    ``proxy/`` must be on sys.path for that import to work.
+    ``lib/_bundled/proxy/`` must be on sys.path for that import to work.
     """
-    proxy_dir = str(Path(__file__).parent.parent.parent / "proxy")
+    from importlib.resources import files
+
+    proxy_dir = str(files("lib._bundled.proxy"))
     if proxy_dir not in sys.path:
         sys.path.insert(0, proxy_dir)
 

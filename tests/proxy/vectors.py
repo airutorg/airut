@@ -11,7 +11,7 @@ used across ``test_aws_signing.py`` and ``test_proxy_filter.py``.
 
 from typing import Any
 
-from proxy.aws_signing import SIGNING_TYPE_AWS_SIGV4
+from lib._bundled.proxy.aws_signing import SIGNING_TYPE_AWS_SIGV4
 
 
 # Real credential pair used in AWS documentation examples
