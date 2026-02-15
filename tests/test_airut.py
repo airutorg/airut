@@ -18,7 +18,10 @@ from lib.airut import (
     cli,
     cmd_check,
     cmd_init,
+    cmd_install_service,
     cmd_run_gateway,
+    cmd_uninstall_service,
+    cmd_update,
 )
 
 
@@ -436,6 +439,49 @@ class TestCli:
             cli()
         mock_exit.assert_called_once_with(1)
 
+    @patch("lib.airut.sys.exit")
+    @patch("lib.airut.cmd_install_service", return_value=0)
+    def test_install_service_subcommand(
+        self, mock_install: MagicMock, mock_exit: MagicMock
+    ) -> None:
+        with patch("lib.airut.sys.argv", ["airut", "install-service"]):
+            cli()
+        mock_install.assert_called_once_with([])
+        mock_exit.assert_called_once_with(0)
+
+    @patch("lib.airut.sys.exit")
+    @patch("lib.airut.cmd_uninstall_service", return_value=0)
+    def test_uninstall_service_subcommand(
+        self, mock_uninstall: MagicMock, mock_exit: MagicMock
+    ) -> None:
+        with patch("lib.airut.sys.argv", ["airut", "uninstall-service"]):
+            cli()
+        mock_uninstall.assert_called_once_with([])
+        mock_exit.assert_called_once_with(0)
+
+    @patch("lib.airut.sys.exit")
+    @patch("lib.airut.cmd_update", return_value=0)
+    def test_update_subcommand(
+        self, mock_update: MagicMock, mock_exit: MagicMock
+    ) -> None:
+        with patch("lib.airut.sys.argv", ["airut", "update"]):
+            cli()
+        mock_update.assert_called_once_with([])
+        mock_exit.assert_called_once_with(0)
+
+    @patch("lib.airut.sys.exit")
+    @patch("lib.airut.cmd_install_service", return_value=0)
+    def test_install_service_with_args(
+        self, mock_install: MagicMock, mock_exit: MagicMock
+    ) -> None:
+        with patch(
+            "lib.airut.sys.argv",
+            ["airut", "install-service", "--interval", "60"],
+        ):
+            cli()
+        mock_install.assert_called_once_with(["--interval", "60"])
+        mock_exit.assert_called_once_with(0)
+
     def test_help_flag(self) -> None:
         with (
             patch("lib.airut.sys.argv", ["airut", "--help"]),
@@ -443,3 +489,94 @@ class TestCli:
         ):
             cli()
         assert exc_info.value.code == 0
+
+
+# ── cmd_install_service ────────────────────────────────────────────
+
+
+class TestCmdInstallService:
+    @patch("lib.install_services.install_services")
+    def test_default(self, mock_install: MagicMock) -> None:
+        """Calls install_services with updater and no interval override."""
+        result = cmd_install_service([])
+        assert result == 0
+        mock_install.assert_called_once_with(
+            with_updater=True,
+            interval=None,
+        )
+
+    @patch("lib.install_services.install_services")
+    def test_skip_updater(self, mock_install: MagicMock) -> None:
+        """Passes skip-updater flag through."""
+        result = cmd_install_service(["--skip-updater"])
+        assert result == 0
+        mock_install.assert_called_once_with(
+            with_updater=False,
+            interval=None,
+        )
+
+    @patch("lib.install_services.install_services")
+    def test_with_interval(self, mock_install: MagicMock) -> None:
+        """Passes interval override through."""
+        result = cmd_install_service(["--interval", "60"])
+        assert result == 0
+        mock_install.assert_called_once_with(
+            with_updater=True,
+            interval=60,
+        )
+
+    @patch(
+        "lib.install_services.install_services",
+        side_effect=RuntimeError("Linger not enabled"),
+    )
+    def test_runtime_error(self, _mock: MagicMock) -> None:
+        """Returns 1 on RuntimeError."""
+        result = cmd_install_service([])
+        assert result == 1
+
+
+# ── cmd_uninstall_service ──────────────────────────────────────────
+
+
+class TestCmdUninstallService:
+    @patch("lib.install_services.uninstall_services")
+    def test_default(self, mock_uninstall: MagicMock) -> None:
+        """Calls uninstall_services."""
+        result = cmd_uninstall_service([])
+        assert result == 0
+        mock_uninstall.assert_called_once()
+
+    @patch(
+        "lib.install_services.uninstall_services",
+        side_effect=RuntimeError("systemctl failed"),
+    )
+    def test_runtime_error(self, _mock: MagicMock) -> None:
+        """Returns 1 on RuntimeError."""
+        result = cmd_uninstall_service([])
+        assert result == 1
+
+
+# ── cmd_update ─────────────────────────────────────────────────────
+
+
+class TestCmdUpdate:
+    @patch("lib.install_services.apply_update", return_value=True)
+    def test_update_applied(self, _mock: MagicMock) -> None:
+        """Returns 0 when update is applied."""
+        result = cmd_update([])
+        assert result == 0
+
+    @patch("lib.install_services.apply_update", return_value=False)
+    def test_update_skipped(self, _mock: MagicMock) -> None:
+        """Returns 0 even when update is skipped (busy)."""
+        result = cmd_update([])
+        assert result == 0
+
+    @patch(
+        "lib.install_services.apply_update",
+        side_effect=RuntimeError("upgrade failed"),
+    )
+    def test_runtime_error(self, _mock: MagicMock) -> None:
+        """Returns 1 on RuntimeError."""
+        result = cmd_update([])
+        assert result == 1

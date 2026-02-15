@@ -42,6 +42,10 @@ class TestEmailGatewayServiceInit:
             patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
             patch("lib.gateway.service.repo_handler.ConversationManager"),
             patch("lib.gateway.service.gateway.UpdateLock") as mock_ulock,
+            patch(
+                "lib.gateway.service.gateway.get_update_lock_path",
+                return_value=Path("/run/user/1000/airut/update.lock"),
+            ),
             patch("lib.gateway.service.gateway.capture_version_info") as mv,
             patch("lib.gateway.service.gateway.TaskTracker"),
             patch("lib.gateway.service.gateway.Sandbox"),
@@ -52,9 +56,9 @@ class TestEmailGatewayServiceInit:
         ):
             mv.return_value = MagicMock(git_sha="x", worktree_clean=True)
             EmailGatewayService(server_config, repo_root=None)
-            # UpdateLock should receive a path derived from __file__
+            # UpdateLock should receive the XDG runtime lock path
             lock_path = mock_ulock.call_args[0][0]
-            assert lock_path.name == ".update.lock"
+            assert lock_path == Path("/run/user/1000/airut/update.lock")
 
     def test_init_custom_egress_network(
         self, email_config, tmp_path: Path

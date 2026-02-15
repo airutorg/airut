@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, overload
 
 import yaml
-from platformdirs import user_config_path, user_state_path
+from platformdirs import user_config_path, user_runtime_path, user_state_path
 
 from lib.gateway.dotenv_loader import load_dotenv_once
 from lib.logging import SecretFilter
@@ -71,6 +71,19 @@ def get_dotenv_path() -> Path:
         Path to the ``.env`` file.
     """
     return user_config_path(_APP_NAME) / ".env"
+
+
+def get_runtime_dir() -> Path:
+    """Return the XDG runtime directory for Airut.
+
+    Uses XDG: ``$XDG_RUNTIME_DIR/airut`` (typically
+    ``/run/user/<uid>/airut``).  Suitable for transient runtime files
+    such as advisory lock files that should not persist across reboots.
+
+    Returns:
+        Path to the runtime directory.
+    """
+    return user_runtime_path(_APP_NAME)
 
 
 def get_storage_dir(repo_id: str) -> Path:

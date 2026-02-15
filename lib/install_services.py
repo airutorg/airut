@@ -6,13 +6,11 @@
 """Systemd user service management and auto-update logic.
 
 This module contains the core logic for installing, uninstalling, and
-auto-updating Airut's systemd user services. It supports two update channels:
+auto-updating Airut's systemd user services.  Airut is installed via
+``uv tool install`` and updated via ``uv tool upgrade``.
 
-- **rel** (default): Updates based on the latest ``v*`` git tag. Polls every
-  6 hours by default.
-- **dev**: Tracks ``origin/main`` HEAD. Polls every 30 minutes by default.
-
-The thin CLI entry point lives in ``scripts/install_services.py``.
+The CLI entry point is ``airut install-service`` / ``airut uninstall-service``
+/ ``airut update`` (see ``lib/airut.py``).
 """
 
 from __future__ import annotations
@@ -21,26 +19,16 @@ import logging
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
-from lib.gateway.config import get_config_path, get_dotenv_path
+from lib.gateway.config import get_runtime_dir
 from lib.update_lock import UpdateLock
 
 
 logger = logging.getLogger(__name__)
 
-# Update channel definitions
-CHANNEL_REL = "rel"
-CHANNEL_DEV = "dev"
-VALID_CHANNELS = (CHANNEL_REL, CHANNEL_DEV)
-DEFAULT_CHANNEL = CHANNEL_REL
-
-# Default polling intervals in minutes per channel
-CHANNEL_DEFAULT_INTERVALS: dict[str, int] = {
-    CHANNEL_REL: 360,  # 6 hours
-    CHANNEL_DEV: 30,  # 30 minutes
-}
+# Default auto-updater polling interval in minutes.
+DEFAULT_UPDATE_INTERVAL = 30
 
 # Service names
 SERVICES = [
@@ -68,69 +56,15 @@ SERVICE_START_ORDER = [
 ]
 
 
-def configure_logging(debug: bool = False) -> None:
-    """Configure logging.
+def get_update_lock_path() -> Path:
+    """Return the path to the update advisory lock file.
 
-    Args:
-        debug: If True, enable DEBUG level logging.
-    """
-    level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
-
-def migrate_config(repo_root: Path) -> None:
-    """Migrate config files from installation directory to XDG location.
-
-    Migrates both ``airut.yaml`` and ``.env`` from their legacy locations
-    to ``~/.config/airut/``.  Each file is moved independently — if one
-    already exists at the XDG location it is left untouched.
-
-    Args:
-        repo_root: Path to repository root.
-    """
-    xdg_config = get_config_path()
-    legacy_config = repo_root / "config" / "airut.yaml"
-
-    # Ensure XDG directory exists for both moves
-    xdg_config.parent.mkdir(parents=True, exist_ok=True)
-
-    if not xdg_config.exists() and legacy_config.exists():
-        logger.info("Migrating config: %s -> %s", legacy_config, xdg_config)
-        shutil.move(str(legacy_config), str(xdg_config))
-
-    xdg_dotenv = get_dotenv_path()
-    legacy_dotenv = repo_root / ".env"
-
-    if not xdg_dotenv.exists() and legacy_dotenv.exists():
-        logger.info("Migrating .env: %s -> %s", legacy_dotenv, xdg_dotenv)
-        shutil.move(str(legacy_dotenv), str(xdg_dotenv))
-
-    logger.info("Config migration complete")
-
-
-def get_repo_root() -> Path:
-    """Get the repository root directory.
+    Uses ``$XDG_RUNTIME_DIR/airut/update.lock`` via ``platformdirs``.
 
     Returns:
-        Path to repository root.
-
-    Raises:
-        RuntimeError: If not in a git repository.
+        Path to the lock file.
     """
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return Path(result.stdout.strip())
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Not in a git repository: {e}") from e
+    return get_runtime_dir() / "update.lock"
 
 
 def get_systemd_user_dir() -> Path:
@@ -155,6 +89,21 @@ def get_uv_path() -> str:
     if found:
         return str(Path(found).resolve())
     return str(Path.home() / ".local" / "bin" / "uv")
+
+
+def get_airut_path() -> str:
+    """Get the path to the airut executable.
+
+    Uses shutil.which to find airut on PATH, falling back to
+    ``~/.local/bin/airut`` (the default ``uv tool install`` location).
+
+    Returns:
+        Absolute path to airut executable.
+    """
+    found = shutil.which("airut")
+    if found:
+        return str(Path(found).resolve())
+    return str(Path.home() / ".local" / "bin" / "airut")
 
 
 def check_linger() -> None:
@@ -201,20 +150,17 @@ def interval_to_oncalendar(minutes: int) -> str:
 
 def generate_unit(
     service_name: str,
-    repo_root: Path,
-    uv_path: str,
+    airut_path: str,
     *,
-    channel: str = DEFAULT_CHANNEL,
     interval: int | None = None,
 ) -> str:
     """Generate a systemd unit file content.
 
     Args:
         service_name: Name of the service (e.g. 'airut.service').
-        repo_root: Absolute path to the repository root.
-        uv_path: Absolute path to the uv executable.
-        channel: Update channel ('rel' or 'dev').
-        interval: Polling interval in minutes. If None, uses channel default.
+        airut_path: Absolute path to the airut executable.
+        interval: Polling interval in minutes for the updater timer.
+            If None, uses DEFAULT_UPDATE_INTERVAL.
 
     Returns:
         Unit file content as a string.
@@ -222,19 +168,14 @@ def generate_unit(
     Raises:
         ValueError: If service_name is unknown.
     """
-    wd = str(repo_root)
-
     if service_name == "airut.service":
-        env_file = str(get_dotenv_path())
         return (
             "[Unit]\n"
             "Description=Airut Email Gateway\n"
             "After=network.target\n"
             "\n"
             "[Service]\n"
-            f"WorkingDirectory={wd}\n"
-            f"ExecStart={uv_path} run airut run-gateway --resilient\n"
-            f"EnvironmentFile=-{env_file}\n"
+            f"ExecStart={airut_path} run-gateway --resilient\n"
             "Restart=always\n"
             "RestartSec=10\n"
             "StandardOutput=journal\n"
@@ -252,9 +193,7 @@ def generate_unit(
             "\n"
             "[Service]\n"
             "Type=oneshot\n"
-            f"WorkingDirectory={wd}\n"
-            f"ExecStart={uv_path} run scripts/install_services.py"
-            f" --update --channel {channel}\n"
+            f"ExecStart={airut_path} update\n"
             "StandardOutput=journal\n"
             "StandardError=journal\n"
             "\n"
@@ -263,7 +202,7 @@ def generate_unit(
         )
 
     if service_name == "airut-updater.timer":
-        effective_interval = interval or CHANNEL_DEFAULT_INTERVALS[channel]
+        effective_interval = interval or DEFAULT_UPDATE_INTERVAL
         oncalendar = interval_to_oncalendar(effective_interval)
         return (
             "[Unit]\n"
@@ -386,10 +325,8 @@ def enable_and_start_service(service_name: str) -> None:
 
 
 def install_services(
-    repo_root: Path,
     *,
     with_updater: bool = True,
-    channel: str = DEFAULT_CHANNEL,
     interval: int | None = None,
 ) -> None:
     """Install all services.
@@ -397,20 +334,15 @@ def install_services(
     Services are started in order: email-gateway -> updater.
 
     Args:
-        repo_root: Path to repository root.
         with_updater: If True, also install auto-updater services.
-        channel: Update channel ('rel' or 'dev').
-        interval: Polling interval override in minutes.
+        interval: Polling interval override in minutes for the updater timer.
     """
-    # Migrate config from legacy location before starting services
-    migrate_config(repo_root)
-
     check_linger()
 
     systemd_dir = get_systemd_user_dir()
     systemd_dir.mkdir(parents=True, exist_ok=True)
 
-    uv_path = get_uv_path()
+    airut_path = get_airut_path()
 
     # Determine which services to install
     services_to_install = list(SERVICES)
@@ -421,9 +353,7 @@ def install_services(
     for service_name in services_to_install:
         unit_content = generate_unit(
             service_name,
-            repo_root,
-            uv_path,
-            channel=channel,
+            airut_path,
             interval=interval,
         )
         install_service(service_name, unit_content, systemd_dir)
@@ -464,306 +394,37 @@ def uninstall_services(with_updater: bool = True) -> None:
     logger.info("All services uninstalled successfully")
 
 
-def get_latest_release_tag(repo_root: Path) -> str | None:
-    """Find the latest v* tag by version sort order.
+def apply_update() -> bool:
+    """Run ``uv tool upgrade airut`` with update-lock coordination.
 
-    Tags must have been fetched before calling this function.
-
-    Args:
-        repo_root: Path to repository root.
-
-    Returns:
-        Tag name (e.g. 'v0.3.0'), or None if no v* tags exist.
-
-    Raises:
-        RuntimeError: If git command fails.
-    """
-    try:
-        result = subprocess.run(
-            ["git", "tag", "-l", "v*", "--sort=-v:refname"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"git tag failed: {e.stderr.strip()}") from e
-
-    tags = result.stdout.strip().splitlines()
-    return tags[0] if tags else None
-
-
-def check_for_updates(repo_root: Path, channel: str = DEFAULT_CHANNEL) -> bool:
-    """Check if repository updates are available.
-
-    Args:
-        repo_root: Path to repository root.
-        channel: Update channel ('rel' or 'dev').
-
-    Returns:
-        True if updates are available, False otherwise.
-
-    Raises:
-        RuntimeError: If git operations fail.
-    """
-    logger.info("Checking for updates (channel=%s)", channel)
-
-    # Fetch latest from origin (include tags for rel channel)
-    try:
-        fetch_cmd = ["git", "fetch", "origin"]
-        if channel == CHANNEL_REL:
-            fetch_cmd.append("--tags")
-        subprocess.run(
-            fetch_cmd,
-            cwd=repo_root,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"git fetch failed: {e.stderr.strip()}") from e
-
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        local_rev = result.stdout.strip()
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"git rev-parse failed: {e.stderr.strip()}") from e
-
-    if channel == CHANNEL_DEV:
-        # Compare HEAD vs origin/main
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "origin/main"],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            remote_rev = result.stdout.strip()
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(
-                f"git rev-parse failed: {e.stderr.strip()}"
-            ) from e
-    else:
-        # rel channel: compare HEAD vs latest v* tag
-        tag = get_latest_release_tag(repo_root)
-        if tag is None:
-            logger.info("No v* tags found, no updates available")
-            return False
-
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", f"{tag}^{{}}"],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            remote_rev = result.stdout.strip()
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(
-                f"git rev-parse failed: {e.stderr.strip()}"
-            ) from e
-
-    if local_rev != remote_rev:
-        logger.info(
-            "Updates available: %s -> %s", local_rev[:8], remote_rev[:8]
-        )
-        return True
-
-    logger.info("No updates available")
-    return False
-
-
-def apply_update(repo_root: Path, channel: str = DEFAULT_CHANNEL) -> bool:
-    """Apply repository update and reinstall services.
-
-    Acquires the update lock before proceeding. If the email service is busy,
-    the update is skipped and will be retried on the next timer trigger.
-
-    Args:
-        repo_root: Path to repository root.
-        channel: Update channel ('rel' or 'dev').
+    Acquires the update lock before proceeding.  If the email service is
+    busy (lock held), the update is skipped and will be retried on the next
+    timer trigger.
 
     Returns:
         True if update was applied, False if skipped due to busy service.
 
     Raises:
-        RuntimeError: If update fails.
+        RuntimeError: If the upgrade command fails.
     """
-    # Try to acquire update lock (email service may be busy)
-    lock = UpdateLock(repo_root / ".update.lock")
+    lock = UpdateLock(get_update_lock_path())
     if not lock.try_acquire():
         logger.info("Email service is busy, skipping update")
         return False
 
-    # Lock acquired - will be released when process exits (including os.execv)
-    logger.info("Applying update (channel=%s)", channel)
+    # Lock acquired — will be released when this process exits
+    logger.info("Running uv tool upgrade")
 
-    # Uninstall services (but not the updater itself)
-    uninstall_services(with_updater=False)
-
-    if channel == CHANNEL_DEV:
-        # Checkout main and reset to origin/main
-        try:
-            subprocess.run(
-                ["git", "checkout", "main"],
-                cwd=repo_root,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            subprocess.run(
-                ["git", "reset", "--hard", "origin/main"],
-                cwd=repo_root,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            logger.info("Repository updated to origin/main")
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(
-                f"git checkout/reset failed: {e.stderr.strip()}"
-            ) from e
-    else:
-        # rel channel: checkout the latest tag (detached HEAD)
-        tag = get_latest_release_tag(repo_root)
-        if tag is None:
-            raise RuntimeError("No v* tags found during apply_update")
-        try:
-            subprocess.run(
-                ["git", "checkout", tag],
-                cwd=repo_root,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            logger.info("Repository updated to tag %s", tag)
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(
-                f"git checkout failed: {e.stderr.strip()}"
-            ) from e
-
-    # Sync dependencies before re-executing
-    logger.info("Syncing dependencies")
     uv_path = get_uv_path()
     try:
         subprocess.run(
-            [uv_path, "sync"],
-            cwd=repo_root,
+            [uv_path, "tool", "upgrade", "airut"],
             check=True,
             capture_output=True,
             text=True,
         )
-        logger.debug("Dependencies synced")
+        logger.info("Upgrade completed successfully")
     except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"uv sync failed: {e.stderr.strip()}") from e
+        raise RuntimeError(f"uv tool upgrade failed: {e.stderr.strip()}") from e
 
-    # Migrate config from legacy location before re-executing
-    migrate_config(repo_root)
-
-    # Execute the new version of this script, skipping updater reinstall
-    # since the updater is the process calling this
-    logger.info("Executing updated installer")
-    script_path = repo_root / "scripts" / "install_services.py"
-    args = [sys.executable, str(script_path), "--skip-updater"]
-    os.execv(sys.executable, args)
-    return True  # Unreachable - os.execv replaces process
-
-
-def main() -> int:
-    """Main entry point.
-
-    Returns:
-        Exit code.
-    """
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Manage systemd user services for Airut",
-    )
-    parser.add_argument(
-        "--update",
-        action="store_true",
-        help="Check for updates and apply if available",
-    )
-    parser.add_argument(
-        "--uninstall",
-        action="store_true",
-        help="Uninstall all services",
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug logging",
-    )
-    parser.add_argument(
-        "--skip-updater",
-        action="store_true",
-        help="Skip installing updater services (used during self-update)",
-    )
-    parser.add_argument(
-        "--channel",
-        choices=VALID_CHANNELS,
-        default=DEFAULT_CHANNEL,
-        help=(
-            f"Update channel: 'rel' for tagged releases, "
-            f"'dev' for main branch (default: {DEFAULT_CHANNEL})"
-        ),
-    )
-    parser.add_argument(
-        "--interval",
-        type=int,
-        default=None,
-        metavar="MINUTES",
-        help=(
-            "Override polling interval in minutes "
-            f"(default: {CHANNEL_DEFAULT_INTERVALS[CHANNEL_REL]} for rel, "
-            f"{CHANNEL_DEFAULT_INTERVALS[CHANNEL_DEV]} for dev)"
-        ),
-    )
-    args = parser.parse_args()
-
-    configure_logging(debug=args.debug)
-
-    try:
-        repo_root = get_repo_root()
-        logger.debug("Repository root: %s", repo_root)
-
-        if args.uninstall:
-            uninstall_services()
-            return 0
-
-        if args.update:
-            if check_for_updates(repo_root, channel=args.channel):
-                if apply_update(repo_root, channel=args.channel):
-                    # Should not reach here (os.execv replaces process)
-                    return 0
-                else:
-                    # Email service busy, skipped update
-                    return 0
-            else:
-                # No updates, exit quietly
-                return 0
-
-        # Default: install services
-        install_services(
-            repo_root,
-            with_updater=not args.skip_updater,
-            channel=args.channel,
-            interval=args.interval,
-        )
-        return 0
-
-    except RuntimeError as e:
-        logger.error("%s", e)
-        return 1
-    except Exception as e:
-        logger.exception("Unexpected error: %s", e)
-        return 1
+    return True

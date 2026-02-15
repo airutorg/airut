@@ -5,9 +5,10 @@ releases or the development branch.
 
 ## Overview
 
-A systemd timer triggers periodic checks for repository updates. When updates
-are available, services are reinstalled from the new code. The update process
-coordinates with the email service via a lock file to avoid interrupting
+A systemd timer triggers periodic calls to `airut update`, which runs
+`uv tool upgrade airut`. The upgrade pulls from whatever source was used at
+`uv tool install` time (e.g., a GitHub repo URL or PyPI). The update process
+coordinates with the email service via an advisory lock to avoid interrupting
 in-progress work.
 
 **Key principle**: Updates should never disrupt active email processing or
@@ -15,51 +16,44 @@ Claude execution.
 
 ## Update Channels
 
-The updater supports two channels, selected at install time via `--channel`:
+The update channel is determined by the install source, not by a runtime flag:
 
-| Channel         | Target            | Default Interval | Description                      |
-| --------------- | ----------------- | ---------------- | -------------------------------- |
-| `rel` (default) | Latest `v*` tag   | 6 hours          | Stable tagged releases only      |
-| `dev`           | `origin/main` tip | 30 minutes       | Tracks main branch (development) |
+| Channel | Install Command                                                          | Description                      |
+| ------- | ------------------------------------------------------------------------ | -------------------------------- |
+| Dev     | `uv tool install airut --from git+https://github.com/airutorg/airut.git` | Tracks main branch (development) |
+| Release | `uv tool install airut` (future, from PyPI)                              | Stable tagged releases only      |
 
-The channel is persisted in the generated `airut-updater.service` unit file's
-`ExecStart` line, so it survives service restarts and self-updates.
+`uv tool upgrade airut` re-resolves from the same source, so the channel is
+sticky. To switch channels, reinstall with `--force` and a different source.
 
-The polling interval can be overridden with `--interval MINUTES` at install
-time. The override is persisted in the generated `airut-updater.timer` unit.
+The polling interval defaults to 30 minutes and can be overridden with
+`airut install-service --interval MINUTES`. The override is persisted in the
+generated `airut-updater.timer` unit.
 
 ## Architecture
 
 ### Components
 
-- **airut-updater.timer** — Systemd timer triggering at channel-appropriate
-  interval
-- **airut-updater.service** — One-shot service running the update check
+- **airut-updater.timer** — Systemd timer triggering at configured interval
+- **airut-updater.service** — One-shot service running `airut update`
 - **lib/install_services.py** — Update logic and service management
-- **scripts/install_services.py** — Thin CLI entry point
+- **lib/airut.py** — CLI entry points (`update`, `install-service`,
+  `uninstall-service`)
 - **UpdateLock** — File-based lock for coordinating with email service
 
 ### Update Flow
 
 ```
-Timer triggers (per channel interval)
-  -> install_services.py --update --channel <channel>
+Timer triggers (per configured interval)
+  -> airut update
     -> Try to acquire update lock (non-blocking)
       -> If locked: Log "Email service busy", exit 0
       -> If acquired: Hold lock and continue
-    -> git fetch origin [--tags for rel]
-    -> Compare HEAD vs target
-      -> dev: HEAD vs origin/main
-      -> rel: HEAD vs latest v* tag commit
-      -> If same: Exit (no updates)
-      -> If different: Apply update
-        -> Uninstall main services (not updater)
-        -> dev: git checkout main && git reset --hard origin/main
-        -> rel: git checkout <tag> (detached HEAD)
-        -> uv sync (update dependencies)
-        -> os.execv() to new installer with --skip-updater
-          -> Reinstall services
-          -> Lock auto-releases on exit
+    -> uv tool upgrade airut
+      -> Pulls from original install source
+      -> If no new version: exits quietly
+      -> If upgraded: new version is immediately active
+    -> Lock auto-releases on exit
 ```
 
 ## Update Coordination
@@ -73,7 +67,8 @@ The email service and auto-updater coordinate using an advisory file lock:
 | Email service | Acquires lock when busy, releases when idle       |
 | Auto-updater  | Tries non-blocking acquire; exits if lock is held |
 
-**Lock file**: `.update.lock` in repository root (gitignored)
+**Lock file**: `$XDG_RUNTIME_DIR/airut/update.lock` (typically
+`/run/user/<uid>/airut/update.lock`)
 
 **Lock implementation**: Uses `fcntl.flock()` with `LOCK_EX | LOCK_NB`:
 
@@ -103,36 +98,24 @@ The email service is considered **idle** when:
 
 ## Configuration
 
-### Install with Channel
+### Install Services
 
 ```bash
-# Default: rel channel, 6-hour polling
-uv run scripts/install_services.py
+# Default: 30-minute polling
+airut install-service
 
-# Explicit rel channel
-uv run scripts/install_services.py --channel rel
+# Without auto-updater
+airut install-service --skip-updater
 
-# Dev channel (tracks main branch)
-uv run scripts/install_services.py --channel dev
-
-# Custom polling interval (any channel)
-uv run scripts/install_services.py --channel dev --interval 15
+# Custom polling interval
+airut install-service --interval 60
 ```
 
-### Systemd Timer (rel channel, default)
+### Systemd Timer
 
 ```ini
 [Timer]
-OnCalendar=*-*-* 0/6:00:00   # Every 6 hours
-OnBootSec=1min                # 1 minute after boot
-Persistent=true               # Catch up missed runs
-```
-
-### Systemd Timer (dev channel)
-
-```ini
-[Timer]
-OnCalendar=*:0/30     # Every 30 minutes
+OnCalendar=*:0/30     # Every 30 minutes (default)
 OnBootSec=1min
 Persistent=true
 ```
@@ -142,8 +125,7 @@ Persistent=true
 ```ini
 [Service]
 Type=oneshot
-WorkingDirectory=%h/airut
-ExecStart=%h/.local/bin/uv run scripts/install_services.py --update --channel rel
+ExecStart=%h/.local/bin/airut update
 ```
 
 ## Exit Codes
@@ -152,13 +134,34 @@ ExecStart=%h/.local/bin/uv run scripts/install_services.py --update --channel re
 | ---- | -------------------------------- |
 | 0    | Success (update applied or none) |
 | 0    | Email service busy (skipped)     |
-| 1    | Configuration error              |
-| 2    | Git operation failed             |
-| 3    | Systemd operation failed         |
+| 1    | Upgrade command failed           |
 
 Note: "Email service busy" exits with code 0 (not an error condition).
 
+## Migration from Git-Clone Deployment
+
+Existing deployments that use the old git-clone model with
+`scripts/install_services.py` will automatically migrate when the updater
+fetches a version containing the migration stub. The stub:
+
+1. Uninstalls all old systemd services
+2. Runs `uv tool install airut` from the GitHub repo
+3. Runs `airut install-service` to create new-style unit files
+
+After migration, the old script is never called again.
+
 ## Design Rationale
+
+### Why `uv tool upgrade` Instead of Git Operations?
+
+- **Hermetic installs**: `uv tool install` creates an isolated venv with pinned
+  dependencies — no stale virtualenvs or dependency drift
+- **No working directory**: No git clone to maintain, no `WorkingDirectory` in
+  systemd units
+- **Standard tooling**: Leverages uv's existing upgrade mechanism instead of
+  custom git fetch/reset/sync logic
+- **Future PyPI support**: Same command works for PyPI releases without code
+  changes
 
 ### Why File Locking Instead of Systemd Dependencies?
 
@@ -181,16 +184,9 @@ Note: "Email service busy" exits with code 0 (not an error condition).
 - **No systemd noise**: Prevents failed unit status in journal
 - **Timer continues**: Systemd timer triggers regardless of exit code
 
-### Why Two Channels?
+### Why XDG Runtime Dir for Lock File?
 
-- **rel**: Predictable, stable updates for production deployments. Only moves to
-  explicitly tagged releases.
-- **dev**: Continuous updates for development/testing. Mirrors the previous
-  behavior of tracking `origin/main`.
-
-### Why Persist Channel in Unit File?
-
-The channel is embedded in the `ExecStart` line of `airut-updater.service`.
-Since `--skip-updater` is passed during the self-update handoff (`os.execv`),
-the updater unit is never regenerated during updates — preserving the originally
-chosen channel and interval.
+- **Per-user isolation**: `/run/user/<uid>/airut/` is per-user and tmpfs-backed
+- **No persistent state**: Lock file is transient; cleaned on reboot
+- **Works with linger**: `XDG_RUNTIME_DIR` persists when linger is enabled
+- **No git repo dependency**: Lock file doesn't require a working directory
