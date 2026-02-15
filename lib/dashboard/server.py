@@ -99,10 +99,6 @@ class DashboardServer:
                     endpoint="task_detail",
                 ),
                 Rule(
-                    "/conversation/<conversation_id>/conversation",
-                    endpoint="task_conversation_json",
-                ),
-                Rule(
                     "/conversation/<conversation_id>/actions",
                     endpoint="task_actions",
                 ),
@@ -141,9 +137,6 @@ class DashboardServer:
             "version": self._handlers.handle_version,
             "repo_detail": self._handlers.handle_repo_detail,
             "task_detail": self._handlers.handle_task_detail,
-            "task_conversation_json": (
-                self._handlers.handle_task_conversation_json
-            ),
             "task_actions": self._handlers.handle_task_actions,
             "task_network": self._handlers.handle_task_network,
             "api_tasks": self._handlers.handle_api_tasks,
