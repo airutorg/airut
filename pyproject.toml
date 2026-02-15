@@ -10,25 +10,29 @@ license = "MIT"
 readme = "PYPI_README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
+    "msal>=1.31",
+    "platformdirs>=4.0",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0.3",
+    "werkzeug>=3.1.5",
+]
+
+[dependency-groups]
+dev = [
     "aiosmtpd>=1.4.6",
     "cryptography>=46.0.4",
     "mdformat>=0.7",
-    "msal>=1.31",
     "mdformat-frontmatter>=2",
     "mdformat-gfm>=0.3",
     "mdformat-ruff>=0.1",
     "pip-licenses>=5.0",
-    "platformdirs>=4.0",
     "pytest>=8.0",
     "pytest-cov>=4.1",
     "pytest-socket>=0.7.0",
     "pytest-xdist>=3.8.0",
-    "python-dotenv>=1.0",
-    "pyyaml>=6.0.3",
     "ruff>=0.14",
     "ty>=0.0.8",
     "uv-secure>=0.6",
-    "werkzeug>=3.1.5",
 ]
 
 [project.scripts]
