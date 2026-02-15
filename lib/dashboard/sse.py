@@ -275,6 +275,23 @@ def sse_state_stream(
         )
 
 
+def _render_events_html(events: list[Any]) -> str:
+    """Render stream events to HTML fragments.
+
+    Args:
+        events: List of StreamEvent objects.
+
+    Returns:
+        HTML string with all events rendered.
+    """
+    from lib.dashboard.views.actions import render_single_event
+
+    parts: list[str] = []
+    for event in events:
+        parts.append(render_single_event(event))
+    return "".join(parts)
+
+
 def sse_events_log_stream(
     event_log: Any,
     tracker: TaskTracker,
@@ -286,7 +303,8 @@ def sse_events_log_stream(
     """Generate SSE events for a conversation's event log stream.
 
     Polls ``EventLog.tail()`` for new events and yields them as SSE
-    messages. Sends a terminal ``done`` event when the task completes.
+    messages containing pre-rendered HTML fragments. Sends a terminal
+    ``done`` event when the task completes.
 
     Args:
         event_log: EventLog instance for the conversation.
@@ -304,20 +322,9 @@ def sse_events_log_stream(
 
     # Send initial catch-up with retry interval
     events, offset = event_log.tail(offset)
-    if events:
-        data = json.dumps(
-            {
-                "offset": offset,
-                "events": [json.loads(e.raw) for e in events],
-            }
-        )
-        yield format_sse_event("events", data, retry=1000)
-    else:
-        yield format_sse_event(
-            "events",
-            json.dumps({"offset": offset, "events": []}),
-            retry=1000,
-        )
+    html = _render_events_html(events) if events else ""
+    data = json.dumps({"offset": offset, "html": html})
+    yield format_sse_event("html", data, retry=1000)
 
     while True:
         time.sleep(poll_interval)
@@ -326,13 +333,9 @@ def sse_events_log_stream(
         if events:
             offset = new_offset
             last_heartbeat = time.monotonic()
-            data = json.dumps(
-                {
-                    "offset": offset,
-                    "events": [json.loads(e.raw) for e in events],
-                }
-            )
-            yield format_sse_event("events", data)
+            html = _render_events_html(events)
+            data = json.dumps({"offset": offset, "html": html})
+            yield format_sse_event("html", data)
 
         # Check if task is done
         task = tracker.get_task(conversation_id)
@@ -340,13 +343,9 @@ def sse_events_log_stream(
             # Drain any remaining events
             events, offset = event_log.tail(offset)
             if events:
-                data = json.dumps(
-                    {
-                        "offset": offset,
-                        "events": [json.loads(e.raw) for e in events],
-                    }
-                )
-                yield format_sse_event("events", data)
+                html = _render_events_html(events)
+                data = json.dumps({"offset": offset, "html": html})
+                yield format_sse_event("html", data)
             yield format_sse_event("done", json.dumps({"offset": offset}))
             return
 
@@ -354,6 +353,24 @@ def sse_events_log_stream(
         if time.monotonic() - last_heartbeat >= heartbeat_interval:
             yield format_sse_comment("heartbeat")
             last_heartbeat = time.monotonic()
+
+
+def _render_network_lines_html(lines: list[str]) -> str:
+    """Render network log lines to HTML fragments.
+
+    Args:
+        lines: List of raw log line strings.
+
+    Returns:
+        HTML string with all lines rendered.
+    """
+    from lib.dashboard.views.network import render_network_log_line
+
+    parts: list[str] = []
+    for line in lines:
+        if line:
+            parts.append(render_network_log_line(line))
+    return "".join(parts)
 
 
 def sse_network_log_stream(
@@ -367,7 +384,8 @@ def sse_network_log_stream(
     """Generate SSE events for a conversation's network log stream.
 
     Polls ``NetworkLog.tail()`` for new lines and yields them as SSE
-    messages. Sends a terminal ``done`` event when the task completes.
+    messages containing pre-rendered HTML fragments. Sends a terminal
+    ``done`` event when the task completes.
 
     Args:
         network_log: NetworkLog instance for the conversation.
@@ -385,15 +403,9 @@ def sse_network_log_stream(
 
     # Send initial catch-up with retry interval
     lines, offset = network_log.tail(offset)
-    if lines:
-        data = json.dumps({"offset": offset, "lines": lines})
-        yield format_sse_event("lines", data, retry=1000)
-    else:
-        yield format_sse_event(
-            "lines",
-            json.dumps({"offset": offset, "lines": []}),
-            retry=1000,
-        )
+    html = _render_network_lines_html(lines) if lines else ""
+    data = json.dumps({"offset": offset, "html": html})
+    yield format_sse_event("html", data, retry=1000)
 
     while True:
         time.sleep(poll_interval)
@@ -402,8 +414,9 @@ def sse_network_log_stream(
         if lines:
             offset = new_offset
             last_heartbeat = time.monotonic()
-            data = json.dumps({"offset": offset, "lines": lines})
-            yield format_sse_event("lines", data)
+            html = _render_network_lines_html(lines)
+            data = json.dumps({"offset": offset, "html": html})
+            yield format_sse_event("html", data)
 
         # Check if task is done
         task = tracker.get_task(conversation_id)
@@ -411,8 +424,9 @@ def sse_network_log_stream(
             # Drain any remaining lines
             lines, offset = network_log.tail(offset)
             if lines:
-                data = json.dumps({"offset": offset, "lines": lines})
-                yield format_sse_event("lines", data)
+                html = _render_network_lines_html(lines)
+                data = json.dumps({"offset": offset, "html": html})
+                yield format_sse_event("html", data)
             yield format_sse_event("done", json.dumps({"offset": offset}))
             return
 

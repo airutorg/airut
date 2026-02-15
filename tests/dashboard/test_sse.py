@@ -438,7 +438,7 @@ class TestSSEEventsLogStream:
     """Tests for the events log SSE stream generator."""
 
     def test_initial_event_empty(self, tmp_path: Path) -> None:
-        """Stream yields initial event with empty events list."""
+        """Stream yields initial event with empty HTML."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
         tracker.start_task("t1")
@@ -450,10 +450,10 @@ class TestSSEEventsLogStream:
         )
         first = next(gen)
 
-        assert "event: events\n" in first
+        assert "event: html\n" in first
         assert "retry: 1000\n" in first
         data = _parse_sse_data(first)
-        assert data["events"] == []
+        assert data["html"] == ""
         assert "offset" in data
 
     def test_done_event_on_completed_task(self, tmp_path: Path) -> None:
@@ -496,7 +496,7 @@ class TestSSEEventsLogStream:
         assert "event: done\n" in event
 
     def test_streams_new_events(self, tmp_path: Path) -> None:
-        """Stream yields new events as they are appended."""
+        """Stream yields new events as pre-rendered HTML."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
         tracker.start_task("t1")
@@ -520,8 +520,8 @@ class TestSSEEventsLogStream:
         first = next(gen)
 
         data = _parse_sse_data(first)
-        assert len(data["events"]) == 1
-        assert data["events"][0]["type"] == "system"
+        assert "system:" in data["html"]
+        assert "init" in data["html"]
 
     def test_heartbeat_on_idle(self, tmp_path: Path) -> None:
         """Stream sends heartbeat when idle."""
@@ -572,11 +572,11 @@ class TestSSEEventsLogStream:
         for e in events:
             event_log.append_event(e)
 
-        # Next poll should pick up the new events
+        # Next poll should pick up the new events as HTML
         event = next(gen)
-        assert "event: events\n" in event
+        assert "event: html\n" in event
         data = _parse_sse_data(event)
-        assert len(data["events"]) == 1
+        assert "system:" in data["html"]
 
         # Now complete the task
         tracker.complete_task("t1", success=True)
@@ -605,10 +605,10 @@ class TestSSEEventsLogStream:
         gen = sse_events_log_stream(
             event_log, tracker, "t1", 0, poll_interval=0.01
         )
-        # Initial snapshot includes the existing events
+        # Initial snapshot includes the existing events as HTML
         first = next(gen)
         data = _parse_sse_data(first)
-        assert len(data["events"]) == 1
+        assert "system:" in data["html"]
 
         # Write more events and complete the task simultaneously
         events2 = parse_stream_events(
@@ -626,9 +626,9 @@ class TestSSEEventsLogStream:
                 break
 
         # Should have gotten the drained events and a done
-        has_events = any("event: events\n" in e for e in remaining)
+        has_html = any("event: html\n" in e for e in remaining)
         has_done = any("event: done\n" in e for e in remaining)
-        assert has_events or has_done  # at minimum done event
+        assert has_html or has_done  # at minimum done event
         assert has_done
 
     def test_drain_has_remaining_events(self, tmp_path: Path) -> None:
@@ -684,11 +684,11 @@ class TestSSEEventsLogStream:
             if "event: done\n" in event:
                 break
 
-        # Drain should have emitted events
-        events_msgs = [e for e in remaining if "event: events\n" in e]
-        assert len(events_msgs) >= 1
-        drain_data = _parse_sse_data(events_msgs[-1])
-        assert len(drain_data["events"]) > 0
+        # Drain should have emitted HTML
+        html_msgs = [e for e in remaining if "event: html\n" in e]
+        assert len(html_msgs) >= 1
+        drain_data = _parse_sse_data(html_msgs[-1])
+        assert len(drain_data["html"]) > 0
         assert any("event: done\n" in e for e in remaining)
 
     def test_heartbeat_resets_timestamp(self, tmp_path: Path) -> None:
@@ -724,7 +724,7 @@ class TestSSENetworkLogStream:
     """Tests for the network log SSE stream generator."""
 
     def test_initial_event_empty(self, tmp_path: Path) -> None:
-        """Stream yields initial event with empty lines list."""
+        """Stream yields initial event with empty HTML."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
         tracker.start_task("t1")
@@ -736,13 +736,13 @@ class TestSSENetworkLogStream:
         )
         first = next(gen)
 
-        assert "event: lines\n" in first
+        assert "event: html\n" in first
         assert "retry: 1000\n" in first
         data = _parse_sse_data(first)
-        assert data["lines"] == []
+        assert data["html"] == ""
 
     def test_streams_new_lines(self, tmp_path: Path) -> None:
-        """Stream yields new lines as they are appended."""
+        """Stream yields new lines as pre-rendered HTML."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
         tracker.start_task("t1")
@@ -756,8 +756,8 @@ class TestSSENetworkLogStream:
         first = next(gen)
 
         data = _parse_sse_data(first)
-        assert len(data["lines"]) == 1
-        assert "github.com" in data["lines"][0]
+        assert "github.com" in data["html"]
+        assert "log-line" in data["html"]
 
     def test_done_event_on_completed_task(self, tmp_path: Path) -> None:
         """Stream sends done event when task is completed."""
@@ -818,12 +818,12 @@ class TestSSENetworkLogStream:
         # Write log content while stream is running
         log_path.write_text("allowed GET https://api.github.com -> 200\n")
 
-        # Next poll should pick up the new lines
+        # Next poll should pick up the new lines as HTML
         event = next(gen)
-        assert "event: lines\n" in event
+        assert "event: html\n" in event
         data = _parse_sse_data(event)
-        assert len(data["lines"]) == 1
-        assert "github.com" in data["lines"][0]
+        assert "github.com" in data["html"]
+        assert "log-line" in data["html"]
 
         # Now complete the task
         tracker.complete_task("t1", success=True)
@@ -845,7 +845,7 @@ class TestSSENetworkLogStream:
         # Consume initial snapshot
         first = next(gen)
         data = _parse_sse_data(first)
-        assert len(data["lines"]) == 1
+        assert "line1" in data["html"]
 
         # Append more and complete
         with log_path.open("a") as f:
@@ -903,10 +903,10 @@ class TestSSENetworkLogStream:
             if "event: done\n" in event:
                 break
 
-        lines_msgs = [e for e in remaining if "event: lines\n" in e]
-        assert len(lines_msgs) >= 1
-        drain_data = _parse_sse_data(lines_msgs[-1])
-        assert len(drain_data["lines"]) > 0
+        html_msgs = [e for e in remaining if "event: html\n" in e]
+        assert len(html_msgs) >= 1
+        drain_data = _parse_sse_data(html_msgs[-1])
+        assert len(drain_data["html"]) > 0
         assert any("event: done\n" in e for e in remaining)
 
     def test_heartbeat_resets_timestamp(self, tmp_path: Path) -> None:

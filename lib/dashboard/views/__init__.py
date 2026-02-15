@@ -39,6 +39,7 @@ from lib.dashboard.views.components import (
 )
 from lib.dashboard.views.dashboard import render_dashboard
 from lib.dashboard.views.network import (
+    render_network_log_line,
     render_network_log_lines,
     render_network_page,
 )
@@ -55,6 +56,7 @@ __all__ = [
     "render_dashboard",
     "render_events_list",
     "render_logo",
+    "render_network_log_line",
     "render_network_log_lines",
     "render_network_page",
     "render_repo_detail",
