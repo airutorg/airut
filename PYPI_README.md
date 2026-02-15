@@ -67,14 +67,13 @@ airut check
 airut install-service
 
 # Verify it's running
-systemctl --user status airut
+airut check
 ```
 
 ### Update
 
 ```bash
-uv tool upgrade airut
-systemctl --user restart airut
+airut update
 ```
 
 ## How It Works
