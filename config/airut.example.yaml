@@ -4,12 +4,13 @@
 # Repo-specific behaviour (git identity, model, timeout, container env,
 # network) is in .airut/airut.yaml (loaded from each repo's git mirror).
 #
-# Copy this file to config/airut.yaml and fill in your values.
-# config/airut.yaml is gitignored — never commit real credentials.
+# Run `airut init` to create a stub at ~/.config/airut/airut.yaml,
+# then use this file as a reference for all available options.
+# Never commit real credentials.
 #
 # Values tagged with !env are resolved from environment variables at load
-# time.  Use !env for secrets; put everything else inline.  You can also
-# load env vars from a .env file (auto-loaded from repo root).
+# time.  Use !env for secrets; put everything else inline.  Set env vars
+# in ~/.config/airut/.env (auto-loaded by the service).
 
 execution:
   # Maximum number of Claude containers running in parallel (global).

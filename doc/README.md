@@ -5,6 +5,9 @@ properties, and operational procedures.
 
 For implementation-level specifications, see [spec/](../spec/).
 
+**Getting started?** Read [deployment.md](deployment.md) first, then
+[repo-onboarding.md](repo-onboarding.md) to configure your first repository.
+
 ## Architecture
 
 - [architecture.md](architecture.md) — System architecture and data flow
@@ -19,6 +22,6 @@ For implementation-level specifications, see [spec/](../spec/).
 ## Operations
 
 - [deployment.md](deployment.md) — Installation and server configuration
-- [m365-oauth2.md](m365-oauth2.md) — Microsoft 365 OAuth2 setup for IMAP/SMTP
 - [repo-onboarding.md](repo-onboarding.md) — Onboarding new repositories
 - [gerrit-onboarding.md](gerrit-onboarding.md) — Gerrit-specific onboarding
+- [m365-oauth2.md](m365-oauth2.md) — Microsoft 365 OAuth2 setup for IMAP/SMTP

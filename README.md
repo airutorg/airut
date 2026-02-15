@@ -184,7 +184,7 @@ airut/
 │   ├── gateway/           # Email gateway service
 │   └── gh/                # GitHub API wrappers
 ├── scripts/               # CLI tools
-│   ├── gateway/           # Email gateway CLI
+│   ├── airut.py           # CLI entry point (uv run airut)
 │   ├── ci.py              # Local CI runner
 │   └── pr.py              # PR workflow tool
 └── tests/                 # Unit and integration tests

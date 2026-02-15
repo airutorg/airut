@@ -311,6 +311,34 @@ def test_generate_unit_unknown() -> None:
         install_services.generate_unit("unknown.service", "/usr/bin/airut")
 
 
+# --- _get_username tests ---
+
+
+def test_get_username_from_env() -> None:
+    """Test _get_username returns $USER when set."""
+    with patch.dict("os.environ", {"USER": "testuser"}):
+        assert install_services._get_username() == "testuser"
+
+
+def test_get_username_from_getlogin() -> None:
+    """Test _get_username falls back to os.getlogin()."""
+    with (
+        patch.dict("os.environ", {}, clear=True),
+        patch("os.getlogin", return_value="loginuser"),
+    ):
+        assert install_services._get_username() == "loginuser"
+
+
+def test_get_username_no_user_no_tty() -> None:
+    """Test _get_username raises RuntimeError when both fail."""
+    with (
+        patch.dict("os.environ", {}, clear=True),
+        patch("os.getlogin", side_effect=OSError("No tty")),
+    ):
+        with pytest.raises(RuntimeError, match="Cannot determine username"):
+            install_services._get_username()
+
+
 # --- check_linger tests ---
 
 
@@ -352,6 +380,16 @@ def test_check_linger_enabled_via_file(tmp_path: Path) -> None:
     ):
         mock_path.return_value = linger_dir / "testuser"
         install_services.check_linger()
+
+
+def test_check_linger_username_error() -> None:
+    """Test check_linger propagates _get_username RuntimeError."""
+    with (
+        patch.dict("os.environ", {}, clear=True),
+        patch("os.getlogin", side_effect=OSError("No tty")),
+    ):
+        with pytest.raises(RuntimeError, match="Cannot determine username"):
+            install_services.check_linger()
 
 
 # --- get_airut_path tests ---
