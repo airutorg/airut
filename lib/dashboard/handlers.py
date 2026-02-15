@@ -40,7 +40,12 @@ from lib.dashboard.versioned import VersionClock, VersionedStore
 from lib.dashboard.views import get_favicon_svg
 from lib.gateway.conversation import CONVERSATION_ID_PATTERN
 from lib.sandbox import NETWORK_LOG_FILENAME, EventLog, NetworkLog
-from lib.version import GitVersionInfo, check_upstream_version
+from lib.version import (
+    GitVersionInfo,
+    check_upstream_version,
+    github_commit_url,
+    github_release_url,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -214,10 +219,19 @@ class RequestHandlers:
             data["latest"] = upstream.latest
             data["update_available"] = upstream.update_available
             data["source"] = upstream.source
+            # Provide a direct link to the new release/commit page.
+            if upstream.update_available:
+                if upstream.source == "pypi":
+                    data["release_url"] = github_release_url(upstream.latest)
+                else:
+                    data["release_url"] = github_commit_url(upstream.latest)
+            else:
+                data["release_url"] = None
         else:
             data["latest"] = None
             data["update_available"] = False
             data["source"] = None
+            data["release_url"] = None
 
         return Response(
             json.dumps(data),

@@ -24,6 +24,8 @@ from lib.version import (
     check_upstream_version,
     get_git_version_info,
     get_install_source,
+    github_commit_url,
+    github_release_url,
 )
 
 
@@ -733,6 +735,42 @@ class TestIsOlder:
         """Handles pre-release versions correctly."""
         assert _is_older("0.8.0a1", "0.8.0") is True
         assert _is_older("0.8.0", "0.8.0a1") is False
+
+
+# ── URL helpers ───────────────────────────────────────────────────
+
+
+class TestGitHubReleaseUrl:
+    """Tests for github_release_url helper."""
+
+    def test_with_v_prefix(self) -> None:
+        """Version with v prefix is used as-is."""
+        assert github_release_url("v0.9.0") == (
+            "https://github.com/airutorg/airut/releases/tag/v0.9.0"
+        )
+
+    def test_without_v_prefix(self) -> None:
+        """Version without v prefix gets one added."""
+        assert github_release_url("0.9.0") == (
+            "https://github.com/airutorg/airut/releases/tag/v0.9.0"
+        )
+
+
+class TestGitHubCommitUrl:
+    """Tests for github_commit_url helper."""
+
+    def test_full_sha(self) -> None:
+        """Constructs URL for full 40-character SHA."""
+        sha = "a" * 40
+        assert github_commit_url(sha) == (
+            f"https://github.com/airutorg/airut/commit/{sha}"
+        )
+
+    def test_short_sha(self) -> None:
+        """Constructs URL for short SHA."""
+        assert github_commit_url("abc1234") == (
+            "https://github.com/airutorg/airut/commit/abc1234"
+        )
 
 
 # ── _fetch_pypi_version ───────────────────────────────────────────

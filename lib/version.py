@@ -328,6 +328,31 @@ def _check_github(
     )
 
 
+def github_release_url(version: str) -> str:
+    """Construct a GitHub releases page URL for a version tag.
+
+    Args:
+        version: Version string (e.g. "v0.7.0" or "0.7.0").
+
+    Returns:
+        URL to the GitHub releases page for this tag.
+    """
+    tag = version if version.startswith("v") else f"v{version}"
+    return f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/tag/{tag}"
+
+
+def github_commit_url(sha: str) -> str:
+    """Construct a GitHub commit page URL.
+
+    Args:
+        sha: Full or short commit SHA.
+
+    Returns:
+        URL to the GitHub commit page.
+    """
+    return f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/commit/{sha}"
+
+
 def _try_embedded() -> GitVersionInfo | None:
     """Try to load version info from the build-time embedded module.
 

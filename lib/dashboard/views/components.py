@@ -26,6 +26,7 @@ from lib.dashboard.tracker import (
     TaskState,
     TaskStatus,
 )
+from lib.version import github_commit_url, github_release_url
 
 
 # Load logo SVG at module import time from embedded package data.
@@ -75,9 +76,16 @@ def render_version_info(version_info: VersionInfo | None) -> str:
     git_sha = version_info.git_sha
     version_label = version_info.version or git_sha
 
+    # Link to GitHub release page (tagged version) or commit page (dev).
+    if version_info.version:
+        version_url = github_release_url(version_info.version)
+    else:
+        version_url = github_commit_url(version_info.git_sha_full)
+
     return f"""
         <div class="version-info">
-            <a href="/version" class="version-sha">{version_label}</a>
+            <a href="{version_url}" class="version-sha"
+                target="_blank" rel="noopener">{version_label}</a>
             <span id="update-status" class="version-status checking"
             >checking...</span>
             <span class="version-started">Started: <span
@@ -523,9 +531,24 @@ def update_check_script() -> str:
                 })
                 .then(function(data) {
                     if (data.update_available) {
-                        el.textContent = 'update available';
-                        el.className = 'version-status update-available';
-                        el.title = data.current + ' \\u2192 ' + data.latest;
+                        if (data.release_url) {
+                            var link = document.createElement('a');
+                            link.href = data.release_url;
+                            link.target = '_blank';
+                            link.rel = 'noopener';
+                            link.textContent = 'update available';
+                            link.className = 'version-status update-available';
+                            link.title = (
+                                data.current + ' \\u2192 ' + data.latest
+                            );
+                            el.replaceWith(link);
+                        } else {
+                            el.textContent = 'update available';
+                            el.className = 'version-status update-available';
+                            el.title = (
+                                data.current + ' \\u2192 ' + data.latest
+                            );
+                        }
                     } else {
                         el.textContent = 'up to date';
                         el.className = 'version-status up-to-date';

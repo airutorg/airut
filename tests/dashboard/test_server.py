@@ -429,9 +429,11 @@ class TestDashboardServer:
         response = client.get("/")
         html = response.get_data(as_text=True)
 
-        # Check version info is displayed with link to /.version
+        # Check version info is displayed with link to GitHub commit
         assert "abc1234" in html
-        assert 'href="/version"' in html  # SHA links to version endpoint
+        sha_full = "abc1234567890abcdef1234567890abcdef123456"
+        expected_url = f"https://github.com/airutorg/airut/commit/{sha_full}"
+        assert f'href="{expected_url}"' in html
         # Startup time uses JavaScript for local timezone formatting
         assert 'data-timestamp="946684800.0"' in html
         assert 'class="local-time"' in html
@@ -485,7 +487,8 @@ class TestDashboardServer:
 
         # Version tag should be displayed as the link text
         assert "v0.7.0" in html
-        assert 'href="/version"' in html
+        expected_url = "https://github.com/airutorg/airut/releases/tag/v0.7.0"
+        assert f'href="{expected_url}"' in html
         assert 'class="version-sha"' in html
 
     def test_index_without_version_info(self) -> None:
@@ -1208,6 +1211,9 @@ class TestUpdateEndpoint:
         assert data["latest"] == "0.9.0"
         assert data["update_available"] is True
         assert data["source"] == "pypi"
+        assert data["release_url"] == (
+            "https://github.com/airutorg/airut/releases/tag/v0.9.0"
+        )
 
     @patch("lib.dashboard.handlers.check_upstream_version")
     def test_up_to_date(self, mock_check: MagicMock) -> None:
@@ -1238,6 +1244,7 @@ class TestUpdateEndpoint:
         assert data["current"] == "v0.8.0"
         assert data["latest"] == "0.8.0"
         assert data["update_available"] is False
+        assert data["release_url"] is None
 
     @patch("lib.dashboard.handlers.check_upstream_version")
     def test_upstream_check_not_applicable(self, mock_check: MagicMock) -> None:
@@ -1263,6 +1270,7 @@ class TestUpdateEndpoint:
         assert data["current"] == "v0.8.0"
         assert data["latest"] is None
         assert data["update_available"] is False
+        assert data["release_url"] is None
 
     def test_no_version_info(self) -> None:
         """Test /update returns 404 when no version info."""
@@ -1293,3 +1301,33 @@ class TestUpdateEndpoint:
         response = client.get("/update")
         data = json.loads(response.get_data(as_text=True))
         assert data["current"] == "abc1234"
+
+    @patch("lib.dashboard.handlers.check_upstream_version")
+    def test_release_url_github_source(self, mock_check: MagicMock) -> None:
+        """Test /update returns commit URL for GitHub source updates."""
+        from lib.version import GitVersionInfo, UpstreamVersion
+
+        git_info = GitVersionInfo(
+            version="",
+            sha_short="abc1234",
+            sha_full="abc1234567890abcdef1234567890abcdef123456",
+            full_status="...",
+        )
+        new_sha = "b" * 40
+        mock_check.return_value = UpstreamVersion(
+            source="github",
+            latest=new_sha,
+            current="abc1234567890abcdef1234567890abcdef123456",
+            update_available=True,
+        )
+
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, git_version_info=git_info)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/update")
+        data = json.loads(response.get_data(as_text=True))
+        assert data["update_available"] is True
+        assert data["release_url"] == (
+            f"https://github.com/airutorg/airut/commit/{new_sha}"
+        )
