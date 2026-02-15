@@ -142,9 +142,9 @@ Each repo gets fully isolated storage. No files are shared between repos.
 │       │   ├── events.jsonl
 │       │   ├── workspace/
 │       │   ├── claude/
-│       │   ├── gitconfig
 │       │   ├── inbox/
-│       │   └── outbox/
+│       │   ├── outbox/
+│       │   └── storage/
 │       └── ...
 └── another-repo/                 # Second repo, fully isolated
     ├── git-mirror/
@@ -166,7 +166,7 @@ EmailGatewayService (orchestrator)
 │   │   ├── authenticator: SenderAuthenticator (per-repo authserv_id)
 │   │   ├── authorizer: SenderAuthorizer    (per-repo authorized_senders)
 │   │   ├── conversation_manager: ConversationManager (per-repo storage)
-│   │   └── executor: ClaudeExecutor        (per-repo mirror for images)
+│   │   └── sandbox: Sandbox                (per-repo mirror for images)
 │   └── "another-repo" → RepoHandler
 │       └── ...
 ├── proxy_manager: ProxyManager     (shared gateway, per-conversation proxy)
@@ -182,7 +182,7 @@ EmailGatewayService (orchestrator)
 | `SenderAuthenticator` | Per-repo | Different `trusted_authserv_id`                             |
 | `SenderAuthorizer`    | Per-repo | Different `authorized_senders`                              |
 | `ConversationManager` | Per-repo | Different storage directory and git mirror                  |
-| `ClaudeExecutor`      | Per-repo | Different mirror (for image builds from Dockerfile)         |
+| `Sandbox`             | Per-repo | Different mirror (for image builds from Dockerfile)         |
 | `ProxyManager`        | Shared   | Gateway infra shared; per-conversation proxy uses allowlist |
 | `TaskTracker`         | Shared   | Global view, tasks tagged with `repo_id`                    |
 | `DashboardServer`     | Shared   | Single dashboard for all repos                              |
@@ -221,7 +221,7 @@ class RepoHandler:
     authenticator: SenderAuthenticator
     authorizer: SenderAuthorizer
     conversation_manager: ConversationManager
-    executor: ClaudeExecutor
+    sandbox: Sandbox
 ```
 
 Message processing logic (currently in `EmailGatewayService._process_message`)
