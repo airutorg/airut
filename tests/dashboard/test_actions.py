@@ -1141,3 +1141,60 @@ class TestSSEServerSideRendering:
         # SSE script must start from the current offset, not 0
         assert f"var currentOffset = {file_size}" in html
         assert "var currentOffset = 0" not in html
+
+    def test_sse_catchup_does_not_duplicate_events(
+        self, harness: DashboardHarness
+    ) -> None:
+        """SSE catch-up from page offset returns no already-rendered events.
+
+        When the actions page loads, events are server-rendered in the
+        initial HTML. The SSE stream must start from the byte offset at
+        render time. Calling tail() at that offset must return zero
+        events, proving the SSE catch-up will not duplicate content.
+
+        Regression test: with offset=0, SSE re-sent ALL events as raw
+        HTML fragments after the structured timeline, duplicating them.
+        """
+        from lib.sandbox import EventLog
+
+        # Write events to the event log
+        harness.add_events(
+            {"type": "system", "subtype": "init", "tools": ["Bash"]},
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": "Working on it."}]
+                },
+            },
+            result_event(),
+            request_text="Fix the bug",
+        )
+
+        # Start a follow-up reply (task in-progress enables SSE)
+        harness.tracker.start_task(harness.CONV_ID)
+        harness.store.set_pending_request(harness.CONV_ID, "Next request")
+        harness.event_log.start_new_reply()
+
+        # Render the page — captures offset in SSE script
+        file_size = harness.event_log.file_path.stat().st_size
+        html = harness.get_html("/conversation/abc12345/actions")
+
+        # Page must contain the server-rendered events
+        assert "Working on it." in html
+        assert "Next request" in html
+
+        # SSE catch-up from the page offset must return NO events
+        # (all events are already rendered in the initial HTML)
+        event_log = EventLog(harness.conv_dir)
+        events, _ = event_log.tail(file_size)
+        assert events == [], (
+            "SSE catch-up from page offset must not return already-rendered "
+            f"events, but got {len(events)} events"
+        )
+
+        # Verify that offset=0 WOULD return events (the old bug)
+        events_from_zero, _ = event_log.tail(0)
+        assert len(events_from_zero) > 0, (
+            "tail(0) should return events, confirming offset=0 would "
+            "cause duplication"
+        )

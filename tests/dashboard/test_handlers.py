@@ -1822,6 +1822,66 @@ class TestSSELivePages:
         assert f"var currentOffset = {file_size}" in html
         assert "var currentOffset = 0" not in html
 
+    def test_network_page_sse_catchup_does_not_duplicate_lines(
+        self, tmp_path: Path
+    ) -> None:
+        """SSE catch-up from page offset returns no already-rendered lines.
+
+        When the network page loads, log lines are server-rendered in the
+        initial HTML. The SSE stream must start from the byte offset at
+        render time. Calling tail() at that offset must return zero
+        lines, proving the SSE catch-up will not duplicate content.
+
+        Regression test: with offset=0, SSE re-sent ALL log lines as
+        raw HTML fragments after the server-rendered content, duplicating
+        the entire network log.
+        """
+        from lib.sandbox import NetworkLog
+
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Task")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        # Write network log content
+        log_path = conv_dir / "network-sandbox.log"
+        log_lines = (
+            "=== TASK START abc12345 ===\n"
+            "allowed GET https://api.example.com/v1/data -> 200\n"
+            "BLOCKED POST https://evil.example.com/exfil\n"
+        )
+        log_path.write_text(log_lines)
+        file_size = log_path.stat().st_size
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345/network")
+        html = response.get_data(as_text=True)
+
+        # Page must contain the server-rendered log lines
+        assert "api.example.com" in html
+        assert "BLOCKED" in html
+        assert "TASK START" in html
+
+        # SSE catch-up from the page offset must return NO lines
+        # (all lines are already rendered in the initial HTML)
+        network_log = NetworkLog(log_path)
+        lines, _ = network_log.tail(file_size)
+        assert lines == [], (
+            "SSE catch-up from page offset must not return "
+            f"already-rendered lines, but got {len(lines)} lines"
+        )
+
+        # Verify that offset=0 WOULD return lines (the old bug)
+        lines_from_zero, _ = network_log.tail(0)
+        assert len(lines_from_zero) > 0, (
+            "tail(0) should return lines, confirming offset=0 would "
+            "cause duplication"
+        )
+
     def test_network_page_no_sse_for_completed(self, tmp_path: Path) -> None:
         """Network page has no SSE script for completed tasks."""
         tracker = TaskTracker()
