@@ -67,7 +67,8 @@ class TestProxyManagerInit:
         """ProxyManager sets default values."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
         assert pm._cmd == "podman"
-        assert pm._proxy_dir == Path("proxy")
+        assert pm._proxy_dir.name == "proxy"
+        assert pm._proxy_dir.is_absolute()
         assert pm._egress_network == EGRESS_NETWORK
         assert pm._upstream_dns == "1.1.1.1"
         assert pm._active_proxies == {}

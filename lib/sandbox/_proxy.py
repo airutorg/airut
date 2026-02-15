@@ -35,6 +35,7 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass
+from importlib.resources import files
 from pathlib import Path
 
 from lib.sandbox.network_log import NETWORK_LOG_FILENAME
@@ -112,7 +113,7 @@ class ProxyManager:
         upstream_dns: str,
     ) -> None:
         self._cmd = container_command
-        self._proxy_dir = proxy_dir or Path("proxy")
+        self._proxy_dir = proxy_dir or Path(str(files("lib._bundled.proxy")))
         self._egress_network = egress_network
         self._upstream_dns = upstream_dns
         self._lock = threading.Lock()

@@ -50,7 +50,7 @@ lib/sandbox/
   _entrypoint.py                  # generated entrypoint script
   _image.py                       # two-layer image build logic
 
-proxy/
+lib/_bundled/proxy/
   proxy.dockerfile                # proxy container image
   proxy_filter.py                 # mitmproxy allowlist/URL-prefix addon
   proxy-entrypoint.sh             # proxy container entrypoint

@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass, field
+from importlib.resources import files
 from pathlib import Path
 
 from lib.sandbox._image import (
@@ -28,6 +29,11 @@ from lib.sandbox.task import ContainerEnv, Mount, NetworkSandboxConfig, Task
 logger = logging.getLogger(__name__)
 
 
+def _default_proxy_dir() -> Path:
+    """Resolve the proxy directory from embedded package data."""
+    return Path(str(files("lib._bundled.proxy")))
+
+
 @dataclass(frozen=True)
 class SandboxConfig:
     """Construction-time configuration for the sandbox.
@@ -40,7 +46,7 @@ class SandboxConfig:
     """
 
     container_command: str = "podman"
-    proxy_dir: Path = field(default_factory=lambda: Path("proxy"))
+    proxy_dir: Path = field(default_factory=_default_proxy_dir)
     upstream_dns: str = "1.1.1.1"
     max_image_age_hours: int = 24
 

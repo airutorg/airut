@@ -194,8 +194,10 @@ airut/
 ├── spec/                  # Implementation specifications
 ├── .airut/                # Repo-specific Airut configuration
 ├── config/                # Server configuration templates
-├── proxy/                 # Network sandbox (proxy filter, DNS, AWS signing)
 ├── lib/                   # Library code
+│   ├── _bundled/          # Static resources bundled into wheel
+│   │   ├── assets/        # Logo SVG
+│   │   └── proxy/         # Network sandbox (proxy filter, DNS, AWS signing)
 │   ├── sandbox/           # Sandboxed execution (container, proxy, session, image)
 │   ├── conversation/      # Conversation directory layout and preparation
 │   ├── dashboard/         # Web dashboard server
