@@ -52,7 +52,6 @@ class TestDashboardServer:
             version="v0.7.0",
             git_sha="abc1234",
             git_sha_full="abc1234567890abcdef1234567890abcdef123456",
-            worktree_clean=True,
             full_status="=== HEAD COMMIT ===\ncommit abc1234",
             started_at=946684800.0,
         )
@@ -127,7 +126,6 @@ class TestDashboardServer:
             version="v0.8.0",
             git_sha="abc1234",
             git_sha_full="abc1234567890abcdef1234567890abcdef123456",
-            worktree_clean=True,
             full_status="...",
             started_at=946684800.0,
         )
@@ -416,13 +414,12 @@ class TestDashboardServer:
         assert "user@example.com" in html
 
     def test_index_with_version_info_clean(self) -> None:
-        """Test dashboard shows version info when clean worktree."""
+        """Test dashboard shows version info with update check placeholder."""
         tracker = TaskTracker()
         version_info = VersionInfo(
             version="",
             git_sha="abc1234",
             git_sha_full="abc1234567890abcdef1234567890abcdef123456",
-            worktree_clean=True,
             full_status="=== HEAD COMMIT ===\ncommit abc1234",
             started_at=946684800.0,  # 2000-01-01 00:00:00 UTC
         )
@@ -434,7 +431,6 @@ class TestDashboardServer:
 
         # Check version info is displayed with link to /.version
         assert "abc1234" in html
-        assert "clean" in html
         assert 'href="/version"' in html  # SHA links to version endpoint
         # Startup time uses JavaScript for local timezone formatting
         assert 'data-timestamp="946684800.0"' in html
@@ -442,16 +438,18 @@ class TestDashboardServer:
 
         # Check CSS classes
         assert 'class="version-sha"' in html
-        assert 'class="version-status clean"' in html
+
+        # Check update check placeholder
+        assert 'id="update-status"' in html
+        assert "checking..." in html
 
     def test_index_with_version_info_modified(self) -> None:
-        """Test dashboard shows version info when worktree is modified."""
+        """Test dashboard shows version info with update check placeholder."""
         tracker = TaskTracker()
         version_info = VersionInfo(
             version="",
             git_sha="def5678",
             git_sha_full="def5678901234567890abcdef1234567890abcdef",
-            worktree_clean=False,
             full_status="=== HEAD COMMIT ===\ncommit def5678",
             started_at=1000000000.0,  # 2001-09-09 01:46:40 UTC
         )
@@ -463,12 +461,11 @@ class TestDashboardServer:
 
         # Check version info is displayed
         assert "def5678" in html
-        assert "modified" in html
         # Startup time uses JavaScript for local timezone formatting
         assert 'data-timestamp="1000000000.0"' in html
 
-        # Check CSS classes
-        assert 'class="version-status modified"' in html
+        # Check update check placeholder
+        assert 'id="update-status"' in html
 
     def test_index_with_version_tag(self) -> None:
         """Test dashboard shows version tag when available."""
@@ -477,7 +474,6 @@ class TestDashboardServer:
             version="v0.7.0",
             git_sha="abc1234",
             git_sha_full="abc1234567890abcdef1234567890abcdef123456",
-            worktree_clean=True,
             full_status="=== VERSION ===\nv0.7.0 (abc1234)",
             started_at=946684800.0,
         )
@@ -1176,3 +1172,124 @@ class TestDashboardServerStartStop:
 
         # Should not raise
         server.stop()
+
+
+class TestUpdateEndpoint:
+    """Tests for /update endpoint."""
+
+    @patch("lib.dashboard.handlers.check_upstream_version")
+    def test_update_available(self, mock_check: MagicMock) -> None:
+        """Test /update endpoint when update is available."""
+        from lib.git_version import GitVersionInfo, UpstreamVersion
+
+        git_info = GitVersionInfo(
+            version="v0.8.0",
+            sha_short="abc1234",
+            sha_full="abc1234567890abcdef1234567890abcdef123456",
+            full_status="...",
+        )
+        mock_check.return_value = UpstreamVersion(
+            source="pypi",
+            latest="0.9.0",
+            current="0.8.0",
+            update_available=True,
+        )
+
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, git_version_info=git_info)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/update")
+        assert response.status_code == 200
+        assert response.content_type == "application/json"
+
+        data = json.loads(response.get_data(as_text=True))
+        assert data["current"] == "v0.8.0"
+        assert data["latest"] == "0.9.0"
+        assert data["update_available"] is True
+        assert data["source"] == "pypi"
+
+    @patch("lib.dashboard.handlers.check_upstream_version")
+    def test_up_to_date(self, mock_check: MagicMock) -> None:
+        """Test /update endpoint when up to date."""
+        from lib.git_version import GitVersionInfo, UpstreamVersion
+
+        git_info = GitVersionInfo(
+            version="v0.8.0",
+            sha_short="abc1234",
+            sha_full="abc1234567890abcdef1234567890abcdef123456",
+            full_status="...",
+        )
+        mock_check.return_value = UpstreamVersion(
+            source="pypi",
+            latest="0.8.0",
+            current="0.8.0",
+            update_available=False,
+        )
+
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, git_version_info=git_info)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/update")
+        assert response.status_code == 200
+
+        data = json.loads(response.get_data(as_text=True))
+        assert data["current"] == "v0.8.0"
+        assert data["latest"] == "0.8.0"
+        assert data["update_available"] is False
+
+    @patch("lib.dashboard.handlers.check_upstream_version")
+    def test_upstream_check_not_applicable(self, mock_check: MagicMock) -> None:
+        """Test /update when upstream check returns None."""
+        from lib.git_version import GitVersionInfo
+
+        git_info = GitVersionInfo(
+            version="v0.8.0",
+            sha_short="abc1234",
+            sha_full="abc1234567890abcdef1234567890abcdef123456",
+            full_status="...",
+        )
+        mock_check.return_value = None
+
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, git_version_info=git_info)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/update")
+        assert response.status_code == 200
+
+        data = json.loads(response.get_data(as_text=True))
+        assert data["current"] == "v0.8.0"
+        assert data["latest"] is None
+        assert data["update_available"] is False
+
+    def test_no_version_info(self) -> None:
+        """Test /update returns 404 when no version info."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/update")
+        assert response.status_code == 404
+
+    @patch("lib.dashboard.handlers.check_upstream_version")
+    def test_current_falls_back_to_sha(self, mock_check: MagicMock) -> None:
+        """Test /update uses sha_short when version is empty."""
+        from lib.git_version import GitVersionInfo
+
+        git_info = GitVersionInfo(
+            version="",
+            sha_short="abc1234",
+            sha_full="abc1234567890abcdef1234567890abcdef123456",
+            full_status="...",
+        )
+        mock_check.return_value = None
+
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, git_version_info=git_info)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/update")
+        data = json.loads(response.get_data(as_text=True))
+        assert data["current"] == "abc1234"

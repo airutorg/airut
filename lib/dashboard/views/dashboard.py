@@ -14,6 +14,7 @@ from lib.dashboard.views.components import (
     render_repos_section,
     render_task_list,
     render_version_info,
+    update_check_script,
 )
 from lib.dashboard.views.styles import dashboard_styles
 
@@ -333,6 +334,7 @@ def render_dashboard(
     </div>
     <div id="status-notice" class="refresh-notice">Connecting...</div>
     {local_time_script()}
+    {update_check_script()}
     {_sse_live_script()}
 </body>
 </html>"""

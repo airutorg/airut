@@ -98,9 +98,7 @@ def make_service(
             return_value="127.0.0.53",
         ),
     ):
-        mock_ver.return_value = MagicMock(
-            git_sha="abc1234", worktree_clean=True
-        )
+        mock_ver.return_value = (MagicMock(git_sha="abc1234"), MagicMock())
         svc = EmailGatewayService(server_config, repo_root=tmp_path)
 
     handler = svc.repo_handlers["test"]

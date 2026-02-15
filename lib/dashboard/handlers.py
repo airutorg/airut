@@ -39,6 +39,7 @@ from lib.dashboard.tracker import (
 from lib.dashboard.versioned import VersionClock, VersionedStore
 from lib.dashboard.views import get_favicon_svg
 from lib.gateway.conversation import CONVERSATION_ID_PATTERN
+from lib.git_version import GitVersionInfo, check_upstream_version
 from lib.sandbox import NETWORK_LOG_FILENAME, EventLog, NetworkLog
 
 
@@ -62,6 +63,7 @@ class RequestHandlers:
         repos_store: VersionedStore[tuple[RepoState, ...]] | None = None,
         clock: VersionClock | None = None,
         sse_manager: SSEConnectionManager | None = None,
+        git_version_info: GitVersionInfo | None = None,
     ) -> None:
         """Initialize request handlers.
 
@@ -75,6 +77,7 @@ class RequestHandlers:
             repos_store: Versioned repo states store.
             clock: Shared version clock for SSE streaming.
             sse_manager: SSE connection manager for enforcing limits.
+            git_version_info: Git version info for upstream update checks.
         """
         self.tracker = tracker
         self.version_info = version_info
@@ -84,6 +87,7 @@ class RequestHandlers:
         self._repos_store = repos_store
         self._clock = clock
         self._sse_manager = sse_manager or SSEConnectionManager()
+        self._git_version_info = git_version_info
 
     def _get_boot_state(self) -> BootState | None:
         """Read current boot state from versioned store."""
@@ -173,6 +177,53 @@ class RequestHandlers:
                 "Cache-Control": "no-cache, no-store, must-revalidate",
                 "Pragma": "no-cache",
                 "Expires": "0",
+            },
+        )
+
+    def handle_update(self, request: Request) -> Response:
+        """Handle update check endpoint.
+
+        Returns the current version and the latest upstream version.
+        The upstream check may involve an HTTP request to PyPI or GitHub,
+        so this endpoint is separate from /version to avoid blocking
+        dashboard load.
+
+        Args:
+            request: Incoming request.
+
+        Returns:
+            JSON response with current and latest version info.
+        """
+        if not self._git_version_info:
+            return Response(
+                json.dumps({"error": "Version info not available"}),
+                status=404,
+                content_type="application/json",
+            )
+
+        upstream = check_upstream_version(self._git_version_info)
+
+        data: dict[str, Any] = {
+            "current": (
+                self._git_version_info.version
+                or self._git_version_info.sha_short
+            ),
+        }
+
+        if upstream is not None:
+            data["latest"] = upstream.latest
+            data["update_available"] = upstream.update_available
+            data["source"] = upstream.source
+        else:
+            data["latest"] = None
+            data["update_available"] = False
+            data["source"] = None
+
+        return Response(
+            json.dumps(data),
+            content_type="application/json",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
             },
         )
 

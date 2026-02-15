@@ -41,7 +41,7 @@ from lib.gateway.service.message_processing import (
     process_message,
 )
 from lib.gateway.service.repo_handler import RepoHandler
-from lib.git_version import get_git_version_info
+from lib.git_version import GitVersionInfo, get_git_version_info
 from lib.logging import configure_logging
 from lib.sandbox import Sandbox, SandboxConfig, Task
 
@@ -49,22 +49,24 @@ from lib.sandbox import Sandbox, SandboxConfig, Task
 logger = logging.getLogger(__name__)
 
 
-def capture_version_info() -> VersionInfo:
+def capture_version_info() -> tuple[VersionInfo, GitVersionInfo]:
     """Capture git version information at startup.
 
     Returns:
-        VersionInfo with git SHA and worktree status.
+        Tuple of (VersionInfo for dashboard display,
+        GitVersionInfo for upstream update checks).
     """
     git_version = get_git_version_info()
 
-    return VersionInfo(
+    version_info = VersionInfo(
         version=git_version.version,
         git_sha=git_version.sha_short,
         git_sha_full=git_version.sha_full,
-        worktree_clean=git_version.worktree_clean,
         full_status=git_version.full_status,
         started_at=time.time(),
     )
+
+    return version_info, git_version
 
 
 class EmailGatewayService:
@@ -122,7 +124,7 @@ class EmailGatewayService:
         self._clock = VersionClock()
         self.tracker = TaskTracker(clock=self._clock)
         self.dashboard: DashboardServer | None = None
-        self._version_info = capture_version_info()
+        self._version_info, self._git_version_info = capture_version_info()
         self._boot_store = VersionedStore(BootState(), self._clock)
         self._repos_store = VersionedStore(
             tuple[RepoState, ...](()), self._clock
@@ -167,11 +169,7 @@ class EmailGatewayService:
 
         logger.info("Email gateway service initialized")
         version_label = self._version_info.version or self._version_info.git_sha
-        logger.info(
-            "Version: %s (%s)",
-            version_label,
-            "clean" if self._version_info.worktree_clean else "modified",
-        )
+        logger.info("Version: %s", version_label)
         logger.info(
             "Repos: %s",
             ", ".join(config.repos.keys()),
@@ -251,6 +249,7 @@ class EmailGatewayService:
             boot_store=self._boot_store,
             repos_store=self._repos_store,
             clock=self._clock,
+            git_version_info=self._git_version_info,
         )
         self.dashboard.start()
 

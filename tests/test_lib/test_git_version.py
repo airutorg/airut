@@ -34,25 +34,12 @@ class TestGitVersionInfo:
             version="v0.7.0",
             sha_short="abc1234",
             sha_full="abc1234567890abcdef1234567890abcdef123456",
-            worktree_clean=True,
             full_status="status output",
         )
         assert info.version == "v0.7.0"
         assert info.sha_short == "abc1234"
         assert info.sha_full == "abc1234567890abcdef1234567890abcdef123456"
-        assert info.worktree_clean is True
         assert info.full_status == "status output"
-
-    def test_worktree_not_clean(self) -> None:
-        """GitVersionInfo should store worktree_clean=False correctly."""
-        info = GitVersionInfo(
-            version="",
-            sha_short="abc1234",
-            sha_full="abc1234567890abcdef1234567890abcdef123456",
-            worktree_clean=False,
-            full_status="status output",
-        )
-        assert info.worktree_clean is False
 
     def test_empty_version(self) -> None:
         """GitVersionInfo should accept empty version string."""
@@ -60,7 +47,6 @@ class TestGitVersionInfo:
             version="",
             sha_short="abc1234",
             sha_full="abc1234567890abcdef1234567890abcdef123456",
-            worktree_clean=True,
             full_status="status output",
         )
         assert info.version == ""
@@ -98,7 +84,6 @@ class TestTryEmbedded:
         assert result.version == "v0.7.0"
         assert result.sha_short == "abc1234"
         assert result.sha_full == ("abc1234567890abcdef1234567890abcdef123456")
-        assert result.worktree_clean is True
         assert "=== VERSION ===" in result.full_status
         assert "v0.7.0" in result.full_status
 
@@ -117,7 +102,6 @@ class TestGetGitVersionInfo:
             version="v1.0.0",
             sha_short="aaa1111",
             sha_full="a" * 40,
-            worktree_clean=True,
             full_status="embedded",
         )
         with patch("lib.git_version._try_embedded", return_value=embedded):
@@ -159,11 +143,6 @@ class TestGetGitVersionInfoLive:
         assert "=== HEAD COMMIT ===" in info.full_status
         assert "=== WORKING TREE STATUS ===" in info.full_status
 
-    def test_worktree_clean_is_bool(self) -> None:
-        """worktree_clean should be a boolean."""
-        info = _get_git_version_info_live()
-        assert isinstance(info.worktree_clean, bool)
-
     def test_version_is_string(self) -> None:
         """Version should be a string (possibly empty)."""
         info = _get_git_version_info_live()
@@ -193,23 +172,6 @@ class TestGetGitVersionInfoLive:
             info = _get_git_version_info_live()
         assert info.sha_full == "unknown"
 
-    def test_handles_git_command_failure_for_porcelain(self) -> None:
-        """Should return worktree_clean=False when git status fails."""
-        call_count = 0
-
-        def side_effect(*args, **kwargs) -> MagicMock:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 4:  # Fourth call is for status --porcelain
-                raise subprocess.CalledProcessError(1, "git")
-            result = MagicMock()
-            result.stdout = "abc1234\n" if call_count < 4 else ""
-            return result
-
-        with patch("subprocess.run", side_effect=side_effect):
-            info = _get_git_version_info_live()
-        assert info.worktree_clean is False
-
     def test_handles_git_show_failure(self) -> None:
         """Should include error message when git show fails."""
         call_count = 0
@@ -217,12 +179,12 @@ class TestGetGitVersionInfoLive:
         def side_effect(*args, **kwargs) -> MagicMock:
             nonlocal call_count
             call_count += 1
-            if call_count == 5:  # Fifth call is for git show
+            if call_count == 4:  # Fourth call is for git show
                 err = subprocess.CalledProcessError(1, "git")
                 err.stderr = "fatal: not a git repo"
                 raise err
             result = MagicMock()
-            result.stdout = "abc1234\n" if call_count < 5 else ""
+            result.stdout = "abc1234\n" if call_count < 4 else ""
             return result
 
         with patch("subprocess.run", side_effect=side_effect):
@@ -236,53 +198,17 @@ class TestGetGitVersionInfoLive:
         def side_effect(*args, **kwargs) -> MagicMock:
             nonlocal call_count
             call_count += 1
-            if call_count == 6:  # Sixth call is for git status
+            if call_count == 5:  # Fifth call is for git status
                 err = subprocess.CalledProcessError(1, "git")
                 err.stderr = "fatal: error"
                 raise err
             result = MagicMock()
-            result.stdout = "abc1234\n" if call_count < 6 else "HEAD info"
+            result.stdout = "abc1234\n" if call_count < 5 else "HEAD info"
             return result
 
         with patch("subprocess.run", side_effect=side_effect):
             info = _get_git_version_info_live()
         assert "Error:" in info.full_status
-
-    def test_clean_worktree_detection(self) -> None:
-        """worktree_clean is True when status --porcelain returns empty."""
-        call_count = 0
-
-        def side_effect(*args, **kwargs) -> MagicMock:
-            nonlocal call_count
-            call_count += 1
-            result = MagicMock()
-            if call_count == 4:  # Fourth call is for status --porcelain
-                result.stdout = ""  # Empty = clean
-            else:
-                result.stdout = "abc1234\n"
-            return result
-
-        with patch("subprocess.run", side_effect=side_effect):
-            info = _get_git_version_info_live()
-        assert info.worktree_clean is True
-
-    def test_dirty_worktree_detection(self) -> None:
-        """worktree_clean is False when status --porcelain has output."""
-        call_count = 0
-
-        def side_effect(*args, **kwargs) -> MagicMock:
-            nonlocal call_count
-            call_count += 1
-            result = MagicMock()
-            if call_count == 4:  # Fourth call is for status --porcelain
-                result.stdout = " M file.py\n"  # Modified file
-            else:
-                result.stdout = "abc1234\n"
-            return result
-
-        with patch("subprocess.run", side_effect=side_effect):
-            info = _get_git_version_info_live()
-        assert info.worktree_clean is False
 
     def test_version_from_git_describe(self) -> None:
         """Version should come from git describe when tags exist."""
@@ -518,7 +444,6 @@ def _make_vi(**kwargs: object) -> GitVersionInfo:
         "version": "v0.8.0",
         "sha_short": "abc1234",
         "sha_full": "a" * 40,
-        "worktree_clean": True,
         "full_status": "",
     }
     defaults.update(kwargs)

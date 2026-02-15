@@ -125,14 +125,23 @@ def _version_info_styles() -> str:
             padding: 2px 6px;
             border-radius: 3px;
             font-weight: 500;
+            cursor: default;
         }
-        .version-status.clean {
+        .version-status.up-to-date {
             background: #dff0d8;
             color: #3c763d;
         }
-        .version-status.modified {
+        .version-status.update-available {
             background: #fcf8e3;
             color: #8a6d3b;
+        }
+        .version-status.checking {
+            background: #eee;
+            color: #888;
+        }
+        .version-status.check-failed {
+            background: #eee;
+            color: #888;
         }
         .version-started {
             color: #888;

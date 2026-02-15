@@ -22,15 +22,13 @@ class VersionInfo:
             Empty string when no version tag is available.
         git_sha: Short git commit SHA (7-8 characters).
         git_sha_full: Full 40-character git commit SHA.
-        worktree_clean: True if working tree was clean at startup.
-        full_status: Full git status output for /.version endpoint.
+        full_status: Full git status output for /version endpoint.
         started_at: Unix timestamp when service started.
     """
 
     version: str
     git_sha: str
     git_sha_full: str
-    worktree_clean: bool
     full_status: str
     started_at: float
 
