@@ -19,48 +19,56 @@ wheels = [
 name = "airut"
 source = { editable = "." }
 dependencies = [
+    { name = "msal" },
+    { name = "platformdirs" },
+    { name = "python-dotenv" },
+    { name = "pyyaml" },
+    { name = "werkzeug" },
+]
+
+[package.dev-dependencies]
+dev = [
     { name = "aiosmtpd" },
     { name = "cryptography" },
     { name = "mdformat" },
     { name = "mdformat-frontmatter" },
     { name = "mdformat-gfm" },
     { name = "mdformat-ruff" },
-    { name = "msal" },
     { name = "pip-licenses" },
-    { name = "platformdirs" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "pytest-socket" },
     { name = "pytest-xdist" },
-    { name = "python-dotenv" },
-    { name = "pyyaml" },
     { name = "ruff" },
     { name = "ty" },
     { name = "uv-secure" },
-    { name = "werkzeug" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "msal", specifier = ">=1.31" },
+    { name = "platformdirs", specifier = ">=4.0" },
+    { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "werkzeug", specifier = ">=3.1.5" },
+]
+
+[package.metadata.requires-dev]
+dev = [
     { name = "aiosmtpd", specifier = ">=1.4.6" },
     { name = "cryptography", specifier = ">=46.0.4" },
     { name = "mdformat", specifier = ">=0.7" },
     { name = "mdformat-frontmatter", specifier = ">=2" },
     { name = "mdformat-gfm", specifier = ">=0.3" },
     { name = "mdformat-ruff", specifier = ">=0.1" },
-    { name = "msal", specifier = ">=1.31" },
     { name = "pip-licenses", specifier = ">=5.0" },
-    { name = "platformdirs", specifier = ">=4.0" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-cov", specifier = ">=4.1" },
     { name = "pytest-socket", specifier = ">=0.7.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
-    { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "ruff", specifier = ">=0.14" },
     { name = "ty", specifier = ">=0.0.8" },
     { name = "uv-secure", specifier = ">=0.6" },
-    { name = "werkzeug", specifier = ">=3.1.5" },
 ]
 
 [[package]]
