@@ -1,12 +1,24 @@
 # Release Workflow
 
 Prepare and publish a new version of Airut. This is a multi-step process
-involving release notes review, version bump, and GitHub release creation.
+involving release notes review and GitHub release creation.
 
 ## Prerequisites
 
 - All changes for the release are merged to `main`
 - You have the previous version tag (e.g., `v0.4.0`) to diff against
+
+## How Versioning Works
+
+The package version is derived automatically from git tags — there is no static
+version in `pyproject.toml`. The `scripts/hatch_build.py` metadata hook reads
+`git describe --tags --match v*` at build time and converts it to a PEP 440
+version string:
+
+- Tag `v0.9.0` → version `0.9.0` (release)
+- Tag `v0.9.0-3-gabc1234` → version `0.9.0.dev3+gabc1234` (dev)
+
+This means: **creating a git tag IS the version bump.** No file edits needed.
 
 ## Steps
 
@@ -41,36 +53,16 @@ gh pr view <number> --json title,body
 
 Send the draft to the user for review over email. Iterate until approved.
 
-### 2. Bump Version
+### 2. Create Draft Release
 
-Once release notes are agreed, bump the version in `pyproject.toml`:
-
-```bash
-# Update version string
-# Edit pyproject.toml: version = "X.Y.Z"
-
-# Update lockfile
-uv lock
-
-# Run CI, commit, push, create PR
-uv run scripts/ci.py --fix
-git add pyproject.toml uv.lock
-git commit -m "Bump version to X.Y.Z"
-git push -u origin HEAD && gh pr create --fill
-uv run scripts/pr.py ci --wait -v
-```
-
-Wait for the user to approve and merge the PR before proceeding.
-
-### 3. Create Draft Release
-
-After the version bump PR is merged:
+Once release notes are agreed:
 
 ```bash
 git checkout main && git pull
 ```
 
-Create a draft release targeting `main` with the agreed release notes:
+Create a draft release targeting `main` with the agreed release notes. The tag
+name determines the package version (e.g., `v0.9.0` → version `0.9.0`):
 
 ```bash
 gh release create vX.Y.Z --draft --title "vX.Y.Z" --notes "<release-notes>" --target main
@@ -84,7 +76,7 @@ gh release view vX.Y.Z
 
 Send the release URL to the user. They will review and publish it.
 
-### 4. PyPI Publishing (Automatic)
+### 3. PyPI Publishing (Automatic)
 
 When the user publishes the GitHub release, the `publish.yml` workflow
 automatically builds and uploads the package to PyPI via Trusted Publisher. No

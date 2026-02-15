@@ -40,7 +40,7 @@ any action.** This is not optional - the workflow contains critical steps and
 context that cannot be summarized here.
 
 - **Preparing a release** → `workflows/release.md`
-  - Version bump, release notes, GitHub release creation
+  - Release notes, GitHub release creation (version derived from git tag)
 
 Read the entire workflow before starting. Workflows are living documents -
 update them if outdated.
