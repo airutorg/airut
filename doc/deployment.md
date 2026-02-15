@@ -422,13 +422,20 @@ airut uninstall-service
 
 ### Updating
 
-Airut is installed via `uv tool install` and updated manually with
-`uv tool upgrade`. There is no automatic updater — run the upgrade command when
-you want to pull in new changes:
+Use the built-in update command to upgrade airut. It handles stopping the
+service, applying the upgrade, and restarting the service automatically:
 
 ```bash
-uv tool upgrade airut
+airut update
 ```
+
+If the systemd service is installed, `airut update` will:
+
+1. Stop and uninstall the service
+2. Run `uv tool upgrade airut`
+3. Reinstall and start the service using the updated binary
+
+If the service is not installed, only the upgrade step is performed.
 
 The update channel is determined by how the tool was originally installed:
 
@@ -437,12 +444,6 @@ The update channel is determined by how the tool was originally installed:
 - **Dev channel**:
   `uv tool install airut --from git+https://github.com/airutorg/airut.git` —
   tracks the main branch.
-
-After upgrading, restart the service to pick up the new version:
-
-```bash
-systemctl --user restart airut
-```
 
 ## Dashboard
 
@@ -620,8 +621,7 @@ podman image prune -a
 ## Upgrading
 
 ```bash
-uv tool upgrade airut
-systemctl --user restart airut
+airut update
 ```
 
 To switch channels, reinstall the tool with `--force`:

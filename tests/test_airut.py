@@ -5,6 +5,7 @@
 
 """Tests for lib/airut.py — multi-command CLI."""
 
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -30,6 +31,7 @@ from lib.airut import (
     cmd_install_service,
     cmd_run_gateway,
     cmd_uninstall_service,
+    cmd_update,
 )
 from lib.git_version import UpstreamVersion
 
@@ -735,7 +737,7 @@ repos:
         out = capsys.readouterr().out
         assert "Version mismatch" in out
         assert "v0.7.0" in out
-        assert "systemctl --user restart airut" in out
+        assert "airut update" in out
 
     def test_no_mismatch_when_versions_match(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -849,7 +851,7 @@ repos:
         assert "Update available:" in out
         assert "0.8.0" in out
         assert "0.9.0" in out
-        assert "uv tool upgrade airut" in out
+        assert "airut update" in out
 
     def test_shows_github_update(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -870,7 +872,7 @@ repos:
         assert "Update available:" in out
         assert "aaaaaaa" in out
         assert "bbbbbbb" in out
-        assert "uv tool upgrade airut" in out
+        assert "airut update" in out
 
     def test_no_update_message_when_up_to_date(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -899,6 +901,208 @@ repos:
             cmd_check([])
         out = capsys.readouterr().out
         assert "Update available:" not in out
+
+
+# ── cmd_update ──────────────────────────────────────────────────────
+
+
+class TestCmdUpdate:
+    @patch("lib.airut.subprocess.run")
+    @patch("lib.airut._is_service_installed", return_value=False)
+    @patch("lib.airut._use_color", return_value=False)
+    def test_no_service_upgrade_only(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        mock_run: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Runs uv upgrade without service management."""
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="Updated airut v0.8.0 -> v0.9.0", stderr=""
+        )
+        result = cmd_update([])
+        assert result == 0
+        mock_run.assert_called_once_with(
+            ["uv", "tool", "upgrade", "airut"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        out = capsys.readouterr().out
+        assert "Update complete." in out
+        assert "Stopping" not in out
+        assert "Reinstalling" not in out
+
+    @patch("lib.airut.subprocess.run")
+    @patch("lib.install_services.get_airut_path", return_value="/usr/bin/airut")
+    @patch("lib.install_services.uninstall_services")
+    @patch("lib.airut._is_service_installed", return_value=True)
+    @patch("lib.airut._use_color", return_value=False)
+    def test_service_installed_full_cycle(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        mock_uninstall: MagicMock,
+        _airut_path: MagicMock,
+        mock_run: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Full cycle: uninstall, upgrade, reinstall."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="Updated", stderr=""),  # uv upgrade
+            MagicMock(returncode=0, stdout="", stderr=""),  # install-service
+        ]
+        result = cmd_update([])
+        assert result == 0
+        mock_uninstall.assert_called_once()
+        out = capsys.readouterr().out
+        assert "Stopping and uninstalling" in out
+        assert "Reinstalling" in out
+        assert "Update complete." in out
+
+    @patch("lib.airut.subprocess.run", side_effect=FileNotFoundError)
+    @patch("lib.airut._is_service_installed", return_value=False)
+    @patch("lib.airut._use_color", return_value=False)
+    def test_uv_not_found(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _run: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Returns 1 when uv is not on PATH."""
+        result = cmd_update([])
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "uv not found" in out
+
+    @patch("lib.airut.subprocess.run")
+    @patch("lib.airut._is_service_installed", return_value=False)
+    @patch("lib.airut._use_color", return_value=False)
+    def test_uv_upgrade_fails(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        mock_run: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Returns 1 when uv tool upgrade returns non-zero."""
+        mock_run.return_value = MagicMock(
+            returncode=1, stdout="", stderr="error: no such tool"
+        )
+        result = cmd_update([])
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "uv tool upgrade failed" in out
+
+    @patch(
+        "lib.install_services.uninstall_services",
+        side_effect=RuntimeError("fail"),
+    )
+    @patch("lib.airut._is_service_installed", return_value=True)
+    @patch("lib.airut._use_color", return_value=False)
+    def test_uninstall_error(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _uninstall: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Returns 1 when uninstall_services raises RuntimeError."""
+        result = cmd_update([])
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "Error uninstalling service" in out
+
+    @patch("lib.airut.subprocess.run")
+    @patch("lib.install_services.get_airut_path", return_value="/usr/bin/airut")
+    @patch("lib.install_services.uninstall_services")
+    @patch("lib.airut._is_service_installed", return_value=True)
+    @patch("lib.airut._use_color", return_value=False)
+    def test_reinstall_fails(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _uninstall: MagicMock,
+        _airut_path: MagicMock,
+        mock_run: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Returns 1 when reinstalling service fails."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="Updated", stderr=""),  # uv upgrade
+            MagicMock(
+                returncode=1, stdout="", stderr="linger error"
+            ),  # install
+        ]
+        result = cmd_update([])
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "Error reinstalling service" in out
+
+    @patch("lib.airut.subprocess.run")
+    @patch(
+        "lib.install_services.get_airut_path",
+        return_value="/nonexistent/airut",
+    )
+    @patch("lib.install_services.uninstall_services")
+    @patch("lib.airut._is_service_installed", return_value=True)
+    @patch("lib.airut._use_color", return_value=False)
+    def test_reinstall_binary_not_found(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _uninstall: MagicMock,
+        _airut_path: MagicMock,
+        mock_run: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Returns 1 when updated airut binary is not found."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="Updated", stderr=""),  # uv upgrade
+            FileNotFoundError("not found"),  # install-service
+        ]
+        result = cmd_update([])
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "Error reinstalling service" in out
+
+    @patch(
+        "lib.airut.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd="uv", timeout=120),
+    )
+    @patch("lib.airut._is_service_installed", return_value=False)
+    @patch("lib.airut._use_color", return_value=False)
+    def test_uv_timeout(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _run: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Returns 1 when uv tool upgrade times out."""
+        result = cmd_update([])
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "timed out" in out
+
+    @patch("lib.airut.subprocess.run")
+    @patch("lib.airut._is_service_installed", return_value=False)
+    @patch("lib.airut._use_color", return_value=False)
+    def test_no_output_from_upgrade(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        mock_run: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Succeeds even when uv produces no output."""
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        result = cmd_update([])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "Update complete." in out
 
 
 # ── cmd_run_gateway ─────────────────────────────────────────────────
@@ -940,6 +1144,7 @@ class TestPrintInfo:
         assert "run-gateway" in out
         assert "init" in out
         assert "check" in out
+        assert "update" in out
         assert "install-service" in out
         assert "uninstall-service" in out
 
@@ -1030,6 +1235,16 @@ class TestCli:
         with patch("lib.airut.sys.argv", ["airut", "run-gateway"]):
             cli()
         mock_exit.assert_called_once_with(1)
+
+    @patch("lib.airut.sys.exit")
+    @patch("lib.airut.cmd_update", return_value=0)
+    def test_update_subcommand(
+        self, mock_update: MagicMock, mock_exit: MagicMock
+    ) -> None:
+        with patch("lib.airut.sys.argv", ["airut", "update"]):
+            cli()
+        mock_update.assert_called_once_with([])
+        mock_exit.assert_called_once_with(0)
 
     @patch("lib.airut.sys.exit")
     @patch("lib.airut.cmd_install_service", return_value=0)

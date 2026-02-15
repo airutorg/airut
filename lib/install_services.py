@@ -7,7 +7,7 @@
 
 This module contains the core logic for installing and uninstalling Airut's
 systemd user services.  Airut is installed via ``uv tool install`` and can
-be updated manually with ``uv tool upgrade airut``.
+be updated with ``airut update``.
 
 The CLI entry point is ``airut install-service`` / ``airut uninstall-service``
 (see ``lib/airut.py``).

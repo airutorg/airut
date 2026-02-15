@@ -6,17 +6,18 @@
 """Airut CLI — multi-command entry point.
 
 Provides ``airut <command>`` with subcommands for running the gateway,
-initializing configuration, checking system readiness, and managing systemd
-services.  Running ``airut`` with no arguments prints version and usage
-information.
+initializing configuration, checking system readiness, managing systemd
+services, and updating the installation.  Running ``airut`` with no arguments
+prints version and usage information.
 
 Subcommands:
 
-* ``run-gateway``       — start the email gateway service
 * ``init``              — create a stub server config file
 * ``check``             — verify config and system dependencies
+* ``update``            — update airut to the latest version
 * ``install-service``   — install systemd user services
 * ``uninstall-service`` — uninstall systemd user services
+* ``run-gateway``       — start the email gateway service
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ _SUBCOMMANDS = frozenset(
         "run-gateway",
         "init",
         "check",
+        "update",
         "install-service",
         "uninstall-service",
     }
@@ -63,11 +65,12 @@ _USAGE = """\
 usage: airut <command> [args]
 
 commands:
-  run-gateway       Start the email gateway service
   init              Create a stub server config file
   check             Verify config and system dependencies
+  update            Update airut to the latest version
   install-service   Install systemd user services
   uninstall-service Uninstall systemd user services
+  run-gateway       Start the email gateway service
 
 Run 'airut <command> --help' for command-specific help.\
 """
@@ -346,7 +349,7 @@ def cmd_check(argv: list[str]) -> int:
                 f"  {s.yellow('Update available:')} "
                 f"{upstream.current} → {upstream.latest}"
             )
-            print(f"  Run {s.cyan('uv tool upgrade airut')} to update.")
+            print(f"  Run {s.cyan('airut update')} to update.")
         else:
             short_current = upstream.current[:7]
             short_latest = upstream.latest[:7]
@@ -354,7 +357,7 @@ def cmd_check(argv: list[str]) -> int:
                 f"  {s.yellow('Update available:')} "
                 f"{short_current} → {short_latest}"
             )
-            print(f"  Run {s.cyan('uv tool upgrade airut')} to update.")
+            print(f"  Run {s.cyan('airut update')} to update.")
     print()
 
     # ── Configuration ───────────────────────────────────────────
@@ -424,7 +427,7 @@ def cmd_check(argv: list[str]) -> int:
                         )
                         print(
                             "  Run "
-                            f"{s.cyan('systemctl --user restart airut')}"
+                            f"{s.cyan('airut update')}"
                             " to apply the update."
                         )
         else:
@@ -441,6 +444,91 @@ def cmd_check(argv: list[str]) -> int:
         print(s.red("Some checks failed."))
 
     return 0 if all_ok else 1
+
+
+# ── update subcommand ───────────────────────────────────────────────
+
+
+def cmd_update(argv: list[str]) -> int:
+    """Update airut to the latest version.
+
+    If the systemd service is installed, stops and uninstalls it before
+    upgrading, then reinstalls the service (which also starts it) using
+    the newly installed ``airut`` binary.
+
+    Args:
+        argv: Extra arguments (currently unused).
+
+    Returns:
+        Exit code (0 on success, 1 on error).
+    """
+    s = _Style(_use_color())
+    service_was_installed = _is_service_installed()
+
+    # ── Stop and uninstall service if installed ────────────────
+    if service_was_installed:
+        print(f"  {s.dim('Stopping and uninstalling service...')}")
+        from lib.install_services import uninstall_services
+
+        try:
+            uninstall_services()
+        except RuntimeError as e:
+            print(f"  {s.red('Error uninstalling service:')} {e}")
+            return 1
+
+    # ── Run uv tool upgrade ───────────────────────────────────
+    print(f"  {s.dim('Upgrading airut...')}")
+    try:
+        result = subprocess.run(
+            ["uv", "tool", "upgrade", "airut"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except FileNotFoundError:
+        print(f"  {s.red('Error:')} uv not found on PATH.")
+        return 1
+    except subprocess.TimeoutExpired:
+        print(f"  {s.red('Error:')} uv tool upgrade timed out.")
+        return 1
+
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        print(f"  {s.red('Error:')} uv tool upgrade failed.")
+        if detail:
+            print(f"  {detail}")
+        return 1
+
+    upgrade_output = result.stdout.strip() or result.stderr.strip()
+    if upgrade_output:
+        print(f"  {upgrade_output}")
+
+    # ── Reinstall service using the updated binary ────────────
+    if service_was_installed:
+        print(f"  {s.dim('Reinstalling service...')}")
+        from lib.install_services import get_airut_path
+
+        airut_path = get_airut_path()
+        try:
+            result = subprocess.run(
+                [airut_path, "install-service"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            print(f"  {s.red('Error reinstalling service:')} {e}")
+            return 1
+
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip()
+            print(f"  {s.red('Error reinstalling service.')}")
+            if detail:
+                print(f"  {detail}")
+            return 1
+
+    print(f"  {s.green('Update complete.')}")
+    return 0
 
 
 # ── run-gateway subcommand ──────────────────────────────────────────
@@ -522,6 +610,7 @@ _DISPATCH: dict[str, str] = {
     "run-gateway": "cmd_run_gateway",
     "init": "cmd_init",
     "check": "cmd_check",
+    "update": "cmd_update",
     "install-service": "cmd_install_service",
     "uninstall-service": "cmd_uninstall_service",
 }
