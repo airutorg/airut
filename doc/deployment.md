@@ -158,7 +158,7 @@ See [Configuration](#configuration) for full details.
 
 **Important:** The target repository must also be configured for Airut. See
 [repo-onboarding.md](repo-onboarding.md) for setting up the `.airut/` directory,
-container Dockerfile, network allowlist, and `CLAUDE.md` in the target repo.
+`CLAUDE.md`, and the email-to-PR workflow in the target repo.
 
 ### 7. Validate Configuration
 

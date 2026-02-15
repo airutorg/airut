@@ -140,7 +140,8 @@ Edit `~/.config/airut/airut.yaml` with your email, repo, and secrets. See
 secrets management, and git credentials.
 
 [Onboard your repository](doc/repo-onboarding.md) by creating the `.airut/`
-directory with container Dockerfile, network allowlist, and `CLAUDE.md`.
+directory with `airut.yaml`, container Dockerfile, and network allowlist. Create
+or update `CLAUDE.md` with instructions for the email-to-PR workflow.
 
 ### Deploy
 
