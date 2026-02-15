@@ -1036,3 +1036,36 @@ class TestActionsPageE2E:
         assert "Request that caused an error" in html
         assert "Reply #1" in html
         assert "reply-section" in html
+
+
+class TestSSEEditDiffRendering:
+    """Tests for Edit tool diff rendering in SSE JavaScript.
+
+    The SSE JavaScript handler must render Edit tool diffs with
+    diff-removed / diff-added markup, matching the Python-side
+    static rendering. Regression test for PR #84 which added SSE
+    streaming but only rendered the file path for Edit events.
+    """
+
+    def test_sse_script_renders_edit_diff(
+        self, harness: DashboardHarness
+    ) -> None:
+        """Test SSE JavaScript renders Edit diffs, not just file path.
+
+        When a task is in-progress, the actions page includes SSE
+        JavaScript that renders streamed events client-side. The Edit
+        tool handler must produce diff-removed / diff-added markup
+        from old_string and new_string, not just show the file path.
+        """
+        # Mark task as in-progress so SSE script is included
+        harness.tracker.start_task(harness.CONV_ID)
+
+        html = harness.get_html("/conversation/abc12345/actions")
+
+        # The SSE script must reference old_string and new_string
+        # from the Edit tool input to render diffs
+        assert "old_string" in html
+        assert "new_string" in html
+        # The SSE script must use diff-removed / diff-added classes
+        assert "diff-removed" in html
+        assert "diff-added" in html
