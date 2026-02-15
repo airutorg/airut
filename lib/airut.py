@@ -7,11 +7,12 @@
 
 Provides ``airut <command>`` with subcommands for running the gateway,
 initializing configuration, checking system readiness, and managing systemd
-services.
+services.  Running ``airut`` with no arguments prints version and usage
+information.
 
 Subcommands:
 
-* ``run-gateway``       — start the email gateway service (default)
+* ``run-gateway``       — start the email gateway service
 * ``init``              — create a stub server config file
 * ``check``             — verify config and system dependencies
 * ``install-service``   — install systemd user services
@@ -62,7 +63,7 @@ _USAGE = """\
 usage: airut <command> [args]
 
 commands:
-  run-gateway       Start the email gateway service (default)
+  run-gateway       Start the email gateway service
   init              Create a stub server config file
   check             Verify config and system dependencies
   install-service   Install systemd user services
@@ -515,27 +516,37 @@ _DISPATCH: dict[str, str] = {
 }
 
 
+def _print_info() -> None:
+    """Print version information and available commands."""
+    from lib.git_version import get_git_version_info
+
+    s = _Style(_use_color())
+    vi = get_git_version_info()
+    version_label = vi.version or vi.sha_short
+    print(s.bold(f"Airut {version_label}"))
+    print()
+    print(_USAGE)
+
+
 def cli() -> None:
     """Entry point for ``airut`` (via ``uv tool install`` or ``uv run``).
 
-    When no subcommand is given (or the first argument is a flag),
-    all arguments are forwarded to ``run-gateway``, preserving backward
-    compatibility with ``airut --resilient``.
+    When no arguments are given, prints version and usage information.
+    Requires an explicit subcommand for all operations.
     """
     argv = sys.argv[1:]
 
-    if argv and argv[0] == "--help":
-        print(_USAGE)
+    if not argv or argv[0] == "--help":
+        _print_info()
         sys.exit(0)
 
-    # If first arg is a known subcommand, split it off.  Otherwise treat
-    # everything as gateway args (backward compat).
-    if argv and argv[0] in _SUBCOMMANDS:
-        command = argv[0]
-        rest = argv[1:]
-    else:
-        command = "run-gateway"
-        rest = argv
+    if argv[0] not in _SUBCOMMANDS:
+        print(f"airut: unknown command '{argv[0]}'", file=sys.stderr)
+        print(_USAGE, file=sys.stderr)
+        sys.exit(2)
+
+    command = argv[0]
+    rest = argv[1:]
 
     # Look up handler by name so tests can mock individual commands.
     import lib.airut as _self

@@ -20,6 +20,7 @@ from lib.airut import (
     _is_service_installed,
     _is_service_running,
     _parse_version,
+    _print_info,
     _Style,
     _use_color,
     cli,
@@ -826,29 +827,76 @@ class TestCmdRunGateway:
         assert result == 0
 
 
+# ── _print_info ─────────────────────────────────────────────────────
+
+
+class TestPrintInfo:
+    @patch("lib.airut._use_color", return_value=False)
+    @patch(
+        "lib.git_version.get_git_version_info",
+        return_value=_FakeVersionInfo(),
+    )
+    def test_shows_version_and_usage(
+        self,
+        _vi: MagicMock,
+        _color: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Prints version header and usage listing all commands."""
+        _print_info()
+        out = capsys.readouterr().out
+        assert "Airut v0.8.0" in out
+        assert "run-gateway" in out
+        assert "init" in out
+        assert "check" in out
+        assert "install-service" in out
+        assert "uninstall-service" in out
+
+    @patch("lib.airut._use_color", return_value=False)
+    @patch(
+        "lib.git_version.get_git_version_info",
+        return_value=_FakeVersionInfo(version="", sha_short="def5678"),
+    )
+    def test_falls_back_to_sha(
+        self,
+        _vi: MagicMock,
+        _color: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Falls back to SHA when version tag is empty."""
+        _print_info()
+        out = capsys.readouterr().out
+        assert "Airut def5678" in out
+
+
 # ── cli() dispatch ──────────────────────────────────────────────────
 
 
 class TestCli:
-    @patch("lib.airut.sys.exit")
-    @patch("lib.gateway.service.main", return_value=0)
-    def test_no_args_defaults_to_gateway(
-        self, mock_main: MagicMock, mock_exit: MagicMock
-    ) -> None:
-        with patch("lib.airut.sys.argv", ["airut"]):
+    def test_no_args_prints_info(self) -> None:
+        """Bare ``airut`` prints version and usage, exits 0."""
+        with (
+            patch("lib.airut.sys.argv", ["airut"]),
+            patch("lib.airut._print_info") as mock_info,
+            pytest.raises(SystemExit) as exc_info,
+        ):
             cli()
-        mock_main.assert_called_once_with([])
-        mock_exit.assert_called_once_with(0)
+        mock_info.assert_called_once()
+        assert exc_info.value.code == 0
 
-    @patch("lib.airut.sys.exit")
-    @patch("lib.gateway.service.main", return_value=0)
-    def test_bare_flags_forward_to_gateway(
-        self, mock_main: MagicMock, mock_exit: MagicMock
+    def test_unknown_command_exits_with_error(
+        self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        with patch("lib.airut.sys.argv", ["airut", "--resilient"]):
+        """Unknown command prints error to stderr and exits 2."""
+        with (
+            patch("lib.airut.sys.argv", ["airut", "--resilient"]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
             cli()
-        mock_main.assert_called_once_with(["--resilient"])
-        mock_exit.assert_called_once_with(0)
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "unknown command '--resilient'" in err
+        assert "run-gateway" in err
 
     @patch("lib.airut.sys.exit")
     @patch("lib.gateway.service.main", return_value=0)
@@ -888,7 +936,7 @@ class TestCli:
     def test_nonzero_exit_propagated(
         self, mock_main: MagicMock, mock_exit: MagicMock
     ) -> None:
-        with patch("lib.airut.sys.argv", ["airut"]):
+        with patch("lib.airut.sys.argv", ["airut", "run-gateway"]):
             cli()
         mock_exit.assert_called_once_with(1)
 
@@ -913,11 +961,14 @@ class TestCli:
         mock_exit.assert_called_once_with(0)
 
     def test_help_flag(self) -> None:
+        """``airut --help`` prints version and usage, exits 0."""
         with (
             patch("lib.airut.sys.argv", ["airut", "--help"]),
+            patch("lib.airut._print_info") as mock_info,
             pytest.raises(SystemExit) as exc_info,
         ):
             cli()
+        mock_info.assert_called_once()
         assert exc_info.value.code == 0
 
 
