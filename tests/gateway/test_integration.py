@@ -1076,7 +1076,6 @@ Please help.
             authorized_senders=["authorized@example.com"],
             trusted_authserv_id="mx.example.com",
             git_repo_url=str(master_repo),
-            storage_dir=work_dir,
         )
         config = ServerConfig(
             global_config=global_config,
@@ -1595,7 +1594,6 @@ class TestRejectionReply:
             authorized_senders=["authorized@example.com"],
             trusted_authserv_id="mx.example.com",
             git_repo_url=str(master_repo),
-            storage_dir=work_dir,
         )
         config = ServerConfig(
             global_config=global_config,

@@ -58,7 +58,8 @@ resolved values are registered for log redaction.
 
 ## Server Config Changes
 
-The server config (`config/airut.yaml`) retains deployment-specific settings:
+The server config (`~/.config/airut/airut.yaml`) retains deployment-specific
+settings:
 
 - `email.*` — Mail server connectivity and credentials
 - `email.microsoft_oauth2.*` — Microsoft OAuth2 Client Credentials for M365
@@ -67,7 +68,6 @@ The server config (`config/airut.yaml`) retains deployment-specific settings:
   becomes optional when OAuth2 is configured.
 - `authorized_senders`, `trusted_authserv_id` — Access control
 - `git.repo_url` — Repository to clone
-- `storage_dir` — Server filesystem path
 - `imap.*` — Polling configuration
 - `execution.*` — `max_concurrent`, `shutdown_timeout`,
   `conversation_max_age_days`

@@ -57,7 +57,7 @@ Key files:
   access
 - `.airut/container/Dockerfile` — repo-defined container base image
 
-Server config (`config/airut.yaml`) is separate and handles deployment
+Server config (`~/.config/airut/airut.yaml`) is separate and handles deployment
 infrastructure. See `spec/repo-config.md` for the full schema.
 
 ## Security Model

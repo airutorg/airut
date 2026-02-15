@@ -128,7 +128,7 @@ Set-TransportConfig -SmtpClientAuthenticationDisabled $false
 
 ## Step 7: Configure Airut
 
-Add the OAuth2 credentials to `config/airut.yaml`:
+Add the OAuth2 credentials to `~/.config/airut/airut.yaml`:
 
 ```yaml
 repos:

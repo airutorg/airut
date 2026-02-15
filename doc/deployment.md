@@ -53,8 +53,8 @@ The Airut server fetches from configured repositories to maintain git mirrors.
 The user running the service must have git credentials that allow fetching from
 all configured repos.
 
-**Important:** The `GH_TOKEN` and other secrets in `config/airut.yaml` are only
-passed to containers — they don't affect the server's git operations.
+**Important:** The `GH_TOKEN` and other secrets in `~/.config/airut/airut.yaml`
+are only passed to containers — they don't affect the server's git operations.
 
 For GitHub repositories, authenticate with `gh`:
 
@@ -70,7 +70,7 @@ git ls-remote https://github.com/your-org/your-repo.git
 ```
 
 For private repositories, ensure the authenticated account has read access to
-all repos configured in `config/airut.yaml`.
+all repos configured in `~/.config/airut/airut.yaml`.
 
 **For Gerrit repositories**, use HTTP credentials with the git credential store
 instead of `gh`:
@@ -107,12 +107,13 @@ sudo loginctl enable-linger $USER
 Create configuration from the example:
 
 ```bash
-cp config/airut.example.yaml config/airut.yaml
+mkdir -p ~/.config/airut
+cp config/airut.example.yaml ~/.config/airut/airut.yaml
 ```
 
-Edit `config/airut.yaml` with your settings. Secrets can be specified inline or
-loaded from environment variables. The inline approach keeps everything in one
-file:
+Edit `~/.config/airut/airut.yaml` with your settings. Secrets can be specified
+inline or loaded from environment variables. The inline approach keeps
+everything in one file:
 
 ```yaml
 repos:
@@ -185,7 +186,7 @@ journalctl --user -u airut -f
 
 ## Configuration
 
-### Server Config (`config/airut.yaml`)
+### Server Config (`~/.config/airut/airut.yaml`)
 
 The server config uses a **multi-repo structure** where each repository is
 configured under the `repos:` mapping. This is the only supported format — there
@@ -224,8 +225,6 @@ repos:
     git:
       repo_url: https://github.com/your-org/repo.git
 
-    storage_dir: ~/airut-storage/my-project
-
     imap:
       poll_interval: 30
       use_idle: true
@@ -238,7 +237,7 @@ repos:
 
 ### Secrets
 
-Secrets can be specified inline in `config/airut.yaml` or loaded from
+Secrets can be specified inline in `~/.config/airut/airut.yaml` or loaded from
 environment variables using `!env` tags. If using environment variables, they
 can be set in a `.env` file in the repository root — automatically loaded by the
 service.
@@ -470,7 +469,7 @@ journalctl --user -u airut -n 50
 
 # Common issues:
 # - Missing .env file or secrets
-# - Invalid YAML in config/airut.yaml
+# - Invalid YAML in ~/.config/airut/airut.yaml
 # - Podman not installed or not rootless
 ```
 
@@ -591,7 +590,7 @@ rm -rf ~/airut-storage/my-project/conversations/
 nano ~/airut/.env
 
 # Or update config directly
-nano ~/airut/config/airut.yaml
+nano ~/.config/airut/airut.yaml
 
 # Restart service to pick up changes
 systemctl --user restart airut

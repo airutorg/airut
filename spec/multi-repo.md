@@ -52,8 +52,6 @@ repos:
     git:
       repo_url: https://github.com/airutorg/airut.git
 
-    storage_dir: ~/email-service-storage/airut
-
     email:
       imap_server: mail.example.com
       imap_port: 993
@@ -81,7 +79,6 @@ repos:
   another-repo:
     git:
       repo_url: https://github.com/other/repo.git
-    storage_dir: ~/email-service-storage/another-repo
     email:
       imap_server: mail.example.com
       imap_port: 993
@@ -119,7 +116,6 @@ At config load time:
   `(imap_server, username)` pair. This enforces the "no shared task queue"
   constraint.
 - **At least one repo:** The `repos` mapping must have at least one entry.
-- **Unique storage_dirs:** No two repos may share the same `storage_dir`.
 
 ## Repo Configuration
 
@@ -260,7 +256,6 @@ class RepoServerConfig:
 
     repo_id: str
     git_repo_url: str
-    storage_dir: Path
     imap_server: str
     imap_port: int
     smtp_server: str
@@ -317,7 +312,6 @@ different addresses for different repos.
 This is a clean break. The old flat config format is not supported. To migrate:
 
 1. Restructure `config/airut.yaml` to the new `repos:` format
-2. Move `storage_dir` contents into a repo-specific subdirectory
-3. Update `.env` with per-repo secret variable names
+2. Update `.env` with per-repo secret variable names
 
 No code maintains backwards compatibility with the old format.

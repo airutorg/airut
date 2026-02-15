@@ -208,10 +208,11 @@ account — Airut will process and delete every message it finds.
 
 ### Storage Structure
 
-Each conversation maps to a directory:
+Each conversation maps to a directory under the XDG state dir
+(`~/.local/state/airut/<repo_id>/`):
 
 ```
-{storage_dir}/
+{state_dir}/
 ├── git-mirror/              # Bare mirror for fast clones
 └── conversations/
     └── {conversation-id}/       # 8-char hex ID
@@ -249,8 +250,8 @@ Each repository has its own `RepoHandler` with isolated components.
 
 Airut uses a two-layer configuration model:
 
-**Server config** (`config/airut.yaml`) — deployment infrastructure managed by
-the operator:
+**Server config** (`~/.config/airut/airut.yaml`) — deployment infrastructure
+managed by the operator:
 
 - Email credentials (IMAP/SMTP)
 - Authorized senders and trusted auth servers

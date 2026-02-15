@@ -186,7 +186,7 @@ can be used as inspiration.
 
 ### 6. Configure Server
 
-Add the repository to your Airut server config (`config/airut.yaml`).
+Add the repository to your Airut server config (`~/.config/airut/airut.yaml`).
 
 > **Note:** The email account must be dedicated to this repository. Airut treats
 > the inbox as a work queue and permanently deletes messages after processing.
@@ -211,8 +211,6 @@ repos:
 
     git:
       repo_url: https://github.com/your-org/your-repo.git
-
-    storage_dir: ~/airut-storage/your-repo
 
     imap:
       use_idle: true

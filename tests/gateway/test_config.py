@@ -36,6 +36,8 @@ from lib.gateway.config import (
     _SecretRef,
     generate_session_token_surrogate,
     generate_surrogate,
+    get_config_path,
+    get_storage_dir,
 )
 from lib.logging import SecretFilter
 
@@ -344,8 +346,6 @@ def _make_repo_server_config(
     master_repo: Path, tmp_path: Path, **overrides: object
 ) -> RepoServerConfig:
     """Create a minimal RepoServerConfig for testing."""
-    work_dir = tmp_path / "work"
-    work_dir.mkdir(exist_ok=True)
     defaults: dict[str, object] = {
         "repo_id": "test",
         "imap_server": "imap.example.com",
@@ -358,7 +358,6 @@ def _make_repo_server_config(
         "authorized_senders": ["authorized@example.com"],
         "trusted_authserv_id": "mx.example.com",
         "git_repo_url": str(master_repo),
-        "storage_dir": work_dir,
     }
     defaults.update(overrides)
     return RepoServerConfig(**defaults)  # type: ignore[arg-type]
@@ -377,7 +376,7 @@ def test_repo_server_config_defaults(master_repo: Path, tmp_path: Path) -> None:
     assert config.email_password == "secret123"
     assert config.authorized_senders == ["authorized@example.com"]
     assert config.git_repo_url == str(master_repo)
-    assert config.storage_dir == tmp_path / "work"
+    assert config.storage_dir == get_storage_dir("test")
     assert config.poll_interval_seconds == 60
     assert config.use_imap_idle is True
     assert config.idle_reconnect_interval_seconds == 29 * 60
@@ -468,7 +467,6 @@ def test_repo_server_config_empty_repo_url(tmp_path: Path) -> None:
             authorized_senders=["authorized@example.com"],
             trusted_authserv_id="mx.example.com",
             git_repo_url="",
-            storage_dir=work_dir,
         )
 
 
@@ -609,6 +607,30 @@ def test_repo_server_config_internal_auth_fallback_enabled(
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# XDG path helpers
+# ---------------------------------------------------------------------------
+
+
+def test_get_config_path() -> None:
+    """get_config_path returns XDG config directory."""
+    path = get_config_path()
+    assert path.name == "airut.yaml"
+    assert path.parent.name == "airut"
+
+
+def test_get_storage_dir() -> None:
+    """get_storage_dir returns directory keyed by repo_id."""
+    path = get_storage_dir("my-repo")
+    assert path.name == "my-repo"
+
+
+def test_get_storage_dir_unique_per_repo() -> None:
+    """Different repo_ids produce different storage dirs."""
+    assert get_storage_dir("repo-a") != get_storage_dir("repo-b")
+
+
+# ---------------------------------------------------------------------------
 # ServerConfig.from_yaml
 # ---------------------------------------------------------------------------
 
@@ -626,7 +648,6 @@ repos:
     trusted_authserv_id: mx.test.com
     git:
       repo_url: {repo_url}
-    storage_dir: {storage_dir}
 """
 
 _FULL_YAML = """\
@@ -655,7 +676,6 @@ repos:
     trusted_authserv_id: mx.test.com
     git:
       repo_url: {repo_url}
-    storage_dir: {storage_dir}
     imap:
       poll_interval: 45
       use_idle: false
@@ -684,10 +704,8 @@ class TestServerConfigValidation:
             "authorized_senders": ["auth@example.com"],
             "trusted_authserv_id": "mx.example.com",
             "git_repo_url": "https://example.com/repo.git",
-            "storage_dir": tmp_path / repo_id,
         }
         defaults.update(overrides)
-        (tmp_path / repo_id).mkdir(exist_ok=True)
         return RepoServerConfig(**defaults)  # type: ignore[arg-type]
 
     def test_empty_repos_rejected(self, tmp_path: Path) -> None:
@@ -702,17 +720,6 @@ class TestServerConfigValidation:
         with pytest.raises(ConfigError, match="same IMAP inbox"):
             ServerConfig(global_config=GlobalConfig(), repos={"a": r1, "b": r2})
 
-    def test_duplicate_storage_dir_rejected(self, tmp_path: Path) -> None:
-        """Two repos sharing the same storage_dir are rejected."""
-        shared = tmp_path / "shared"
-        shared.mkdir()
-        r1 = self._repo("a", tmp_path, storage_dir=shared)
-        r2 = self._repo(
-            "b", tmp_path, email_username="b@example.com", storage_dir=shared
-        )
-        with pytest.raises(ConfigError, match="same storage_dir"):
-            ServerConfig(global_config=GlobalConfig(), repos={"a": r1, "b": r2})
-
 
 class TestFromYaml:
     """Tests for ServerConfig.from_yaml loading."""
@@ -720,11 +727,7 @@ class TestFromYaml:
     def test_minimal_config(self, master_repo: Path, tmp_path: Path) -> None:
         """Load minimal YAML with defaults."""
         yaml_path = tmp_path / "config.yaml"
-        yaml_path.write_text(
-            _MINIMAL_YAML.format(
-                repo_url=master_repo, storage_dir=tmp_path / "storage"
-            )
-        )
+        yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
 
         config = ServerConfig.from_yaml(yaml_path)
         repo = config.repos["test"]
@@ -751,11 +754,7 @@ class TestFromYaml:
     def test_full_config(self, master_repo: Path, tmp_path: Path) -> None:
         """Load fully specified YAML."""
         yaml_path = tmp_path / "config.yaml"
-        yaml_path.write_text(
-            _FULL_YAML.format(
-                repo_url=master_repo, storage_dir=tmp_path / "storage"
-            )
-        )
+        yaml_path.write_text(_FULL_YAML.format(repo_url=master_repo))
 
         with patch.dict(
             "os.environ",
@@ -795,11 +794,7 @@ class TestFromYaml:
     ) -> None:
         """network_sandbox_enabled defaults to True when not specified."""
         yaml_path = tmp_path / "config.yaml"
-        yaml_path.write_text(
-            _MINIMAL_YAML.format(
-                repo_url=master_repo, storage_dir=tmp_path / "storage"
-            )
-        )
+        yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
         config = ServerConfig.from_yaml(yaml_path)
         assert config.repos["test"].network_sandbox_enabled is True
 
@@ -808,9 +803,7 @@ class TestFromYaml:
     ) -> None:
         """network.sandbox_enabled: false is parsed from server config."""
         yaml_content = (
-            _MINIMAL_YAML.format(
-                repo_url=master_repo, storage_dir=tmp_path / "storage"
-            )
+            _MINIMAL_YAML.format(repo_url=master_repo)
             + "    network:\n      sandbox_enabled: false\n"
         )
         yaml_path = tmp_path / "config.yaml"
@@ -837,9 +830,9 @@ class TestFromYaml:
         """Raise ConfigError when !env var is not set."""
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(
-            _MINIMAL_YAML.format(
-                repo_url=master_repo, storage_dir=tmp_path / "storage"
-            ).replace("plain_password", "!env MISSING_VAR")
+            _MINIMAL_YAML.format(repo_url=master_repo).replace(
+                "plain_password", "!env MISSING_VAR"
+            )
         )
 
         with patch.dict("os.environ", {}, clear=True):
@@ -851,10 +844,7 @@ class TestFromYaml:
     ) -> None:
         """Secrets entries with unset !env vars are omitted."""
         yaml_content = (
-            _MINIMAL_YAML.format(
-                repo_url=master_repo, storage_dir=tmp_path / "storage"
-            )
-            + "    secrets:\n"
+            _MINIMAL_YAML.format(repo_url=master_repo) + "    secrets:\n"
             "      PRESENT: value\n"
             "      MISSING: !env UNSET_VAR\n"
         )
@@ -874,35 +864,31 @@ class TestFromYaml:
         with pytest.raises(ConfigError, match="YAML mapping"):
             ServerConfig.from_yaml(yaml_path)
 
-    def test_storage_dir_tilde_expansion(
+    def test_storage_dir_derived_from_repo_id(
         self, master_repo: Path, tmp_path: Path
     ) -> None:
-        """storage_dir with ~ is expanded to home directory."""
+        """storage_dir is derived from repo_id via XDG state path."""
         yaml_path = tmp_path / "config.yaml"
-        yaml_path.write_text(
-            _MINIMAL_YAML.format(
-                repo_url=master_repo, storage_dir="~/my-storage"
-            )
-        )
+        yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
 
         config = ServerConfig.from_yaml(yaml_path)
         repo = config.repos["test"]
 
-        assert repo.storage_dir == Path.home() / "my-storage"
+        assert repo.storage_dir == get_storage_dir("test")
 
     def test_default_config_path(
         self, master_repo: Path, tmp_path: Path
     ) -> None:
-        """from_yaml with no path uses default repo-relative path."""
-        yaml_path = tmp_path / "config" / "airut.yaml"
-        yaml_path.parent.mkdir()
-        yaml_path.write_text(
-            _MINIMAL_YAML.format(
-                repo_url=master_repo, storage_dir=tmp_path / "storage"
-            )
-        )
+        """from_yaml with no path uses XDG config path."""
+        xdg_dir = tmp_path / "xdg_config" / "airut"
+        xdg_dir.mkdir(parents=True)
+        yaml_path = xdg_dir / "airut.yaml"
+        yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
 
-        with patch("lib.gateway.config._REPO_ROOT", tmp_path):
+        with patch(
+            "lib.gateway.config.get_config_path",
+            return_value=yaml_path,
+        ):
             config = ServerConfig.from_yaml()
 
         assert config.repos["test"].imap_server == "imap.test.com"
@@ -912,9 +898,7 @@ class TestFromYaml:
     ) -> None:
         """!env works for bool fields like use_idle."""
         yaml_content = (
-            _MINIMAL_YAML.format(
-                repo_url=master_repo, storage_dir=tmp_path / "storage"
-            )
+            _MINIMAL_YAML.format(repo_url=master_repo)
             + "    imap:\n      use_idle: !env USE_IDLE\n"
         )
         yaml_path = tmp_path / "config.yaml"
@@ -930,9 +914,7 @@ class TestFromYaml:
     ) -> None:
         """!env works for int fields like poll_interval."""
         yaml_content = (
-            _MINIMAL_YAML.format(
-                repo_url=master_repo, storage_dir=tmp_path / "storage"
-            )
+            _MINIMAL_YAML.format(repo_url=master_repo)
             + "    imap:\n      poll_interval: !env POLL_INTERVAL\n"
         )
         yaml_path = tmp_path / "config.yaml"
@@ -964,11 +946,7 @@ class TestFromYaml:
     def test_loads_dotenv(self, master_repo: Path, tmp_path: Path) -> None:
         """from_yaml calls load_dotenv_once before parsing."""
         yaml_path = tmp_path / "config.yaml"
-        yaml_path.write_text(
-            _MINIMAL_YAML.format(
-                repo_url=master_repo, storage_dir=tmp_path / "storage"
-            )
-        )
+        yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
 
         with patch("lib.gateway.config.load_dotenv_once") as mock_dotenv:
             ServerConfig.from_yaml(yaml_path)
@@ -986,9 +964,7 @@ class TestFromYaml:
             "        client_id: my-client\n"
             "        client_secret: my-secret\n"
         )
-        base = _MINIMAL_YAML.format(
-            repo_url=master_repo, storage_dir=tmp_path / "storage"
-        )
+        base = _MINIMAL_YAML.format(repo_url=master_repo)
         # Insert after the from: line (last line of email: section)
         yaml_content = base.replace(
             '      from: "Test <test@example.com>"\n',
@@ -1014,9 +990,7 @@ class TestFromYaml:
             "        client_id: !env AZURE_CLIENT_ID\n"
             "        client_secret: !env AZURE_CLIENT_SECRET\n"
         )
-        base = _MINIMAL_YAML.format(
-            repo_url=master_repo, storage_dir=tmp_path / "storage"
-        )
+        base = _MINIMAL_YAML.format(repo_url=master_repo)
         yaml_content = base.replace(
             '      from: "Test <test@example.com>"\n',
             '      from: "Test <test@example.com>"\n' + oauth2_block,
@@ -1050,9 +1024,9 @@ class TestFromYaml:
             "        client_secret: my-secret\n"
         )
         # Remove password and add microsoft_oauth2 in the email section
-        base = _MINIMAL_YAML.format(
-            repo_url=master_repo, storage_dir=tmp_path / "storage"
-        ).replace("      password: plain_password\n", "")
+        base = _MINIMAL_YAML.format(repo_url=master_repo).replace(
+            "      password: plain_password\n", ""
+        )
         yaml_content = base.replace(
             '      from: "Test <test@example.com>"\n',
             '      from: "Test <test@example.com>"\n' + oauth2_block,
@@ -1071,11 +1045,7 @@ class TestFromYaml:
     ) -> None:
         """Without microsoft_oauth2 block, fields default to None."""
         yaml_path = tmp_path / "config.yaml"
-        yaml_path.write_text(
-            _MINIMAL_YAML.format(
-                repo_url=master_repo, storage_dir=tmp_path / "storage"
-            )
-        )
+        yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
 
         config = ServerConfig.from_yaml(yaml_path)
         repo = config.repos["test"]
@@ -1088,9 +1058,7 @@ class TestFromYaml:
         self, master_repo: Path, tmp_path: Path
     ) -> None:
         """microsoft_internal_auth_fallback parsed from YAML."""
-        base = _MINIMAL_YAML.format(
-            repo_url=master_repo, storage_dir=tmp_path / "storage"
-        )
+        base = _MINIMAL_YAML.format(repo_url=master_repo)
         yaml_content = base + "    microsoft_internal_auth_fallback: true\n"
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
@@ -1104,11 +1072,7 @@ class TestFromYaml:
     ) -> None:
         """microsoft_internal_auth_fallback defaults to False."""
         yaml_path = tmp_path / "config.yaml"
-        yaml_path.write_text(
-            _MINIMAL_YAML.format(
-                repo_url=master_repo, storage_dir=tmp_path / "storage"
-            )
-        )
+        yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
 
         config = ServerConfig.from_yaml(yaml_path)
         repo = config.repos["test"]

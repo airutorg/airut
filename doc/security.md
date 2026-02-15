@@ -127,7 +127,8 @@ See [network-sandbox.md](network-sandbox.md) for full details.
 
 ### Server Secrets
 
-Server credentials are configured in `config/airut.yaml` using `!env` tags:
+Server credentials are configured in `~/.config/airut/airut.yaml` using `!env`
+tags:
 
 ```yaml
 repos:

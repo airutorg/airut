@@ -39,9 +39,6 @@ class TestImapConnectionFailures:
         """Repo with no IMAP server listening is marked as failed."""
         # Create a valid environment first
         master_repo = create_test_repo(tmp_path / "master_repo")
-        storage_dir = tmp_path / "storage"
-        storage_dir.mkdir()
-
         # Infrastructure files
         docker_dir = tmp_path / "docker"
         docker_dir.mkdir()
@@ -70,7 +67,6 @@ class TestImapConnectionFailures:
             authorized_senders=["user@test.local"],
             trusted_authserv_id="test.local",
             git_repo_url=str(master_repo),
-            storage_dir=storage_dir,
             use_imap_idle=False,
             poll_interval_seconds=1,
         )
@@ -106,9 +102,6 @@ class TestImapConnectionFailures:
     ) -> None:
         """Repo with IMAP connection refused is marked as failed."""
         master_repo = create_test_repo(tmp_path / "master_repo")
-        storage_dir = tmp_path / "storage"
-        storage_dir.mkdir()
-
         # Infrastructure files
         docker_dir = tmp_path / "docker"
         docker_dir.mkdir()
@@ -135,7 +128,6 @@ class TestImapConnectionFailures:
             authorized_senders=["user@test.local"],
             trusted_authserv_id="test.local",
             git_repo_url=str(master_repo),
-            storage_dir=storage_dir,
             use_imap_idle=False,
             poll_interval_seconds=1,
         )
@@ -164,9 +156,6 @@ class TestGitCloneFailures:
         tmp_path: Path,
     ) -> None:
         """Repo with invalid git URL is marked as failed."""
-        storage_dir = tmp_path / "storage"
-        storage_dir.mkdir()
-
         # Infrastructure files
         docker_dir = tmp_path / "docker"
         docker_dir.mkdir()
@@ -193,7 +182,6 @@ class TestGitCloneFailures:
             authorized_senders=["user@test.local"],
             trusted_authserv_id="test.local",
             git_repo_url="/nonexistent/path/that/does/not/exist",
-            storage_dir=storage_dir,
             use_imap_idle=False,
             poll_interval_seconds=1,
         )

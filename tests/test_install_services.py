@@ -1258,3 +1258,67 @@ def test_configure_logging_debug() -> None:
 
         mock_config.assert_called_once()
         assert mock_config.call_args[1]["level"] == pytest.approx(10)  # DEBUG
+
+
+# ---------------------------------------------------------------------------
+# Config migration
+# ---------------------------------------------------------------------------
+
+
+class TestMigrateConfig:
+    """Tests for migrate_config()."""
+
+    def test_moves_legacy_config(self, tmp_path: Path) -> None:
+        """Moves config from repo_root/config/ to XDG location."""
+        repo_root = tmp_path / "repo"
+        legacy = repo_root / "config" / "airut.yaml"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text("repos: {}")
+
+        xdg_config = tmp_path / "xdg" / "airut" / "airut.yaml"
+
+        with patch(
+            "lib.install_services.get_config_path",
+            return_value=xdg_config,
+        ):
+            install_services.migrate_config(repo_root)
+
+        assert xdg_config.exists()
+        assert xdg_config.read_text() == "repos: {}"
+        assert not legacy.exists()
+
+    def test_noop_when_xdg_exists(self, tmp_path: Path) -> None:
+        """Does nothing if XDG config already exists."""
+        repo_root = tmp_path / "repo"
+        legacy = repo_root / "config" / "airut.yaml"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text("old")
+
+        xdg_config = tmp_path / "xdg" / "airut" / "airut.yaml"
+        xdg_config.parent.mkdir(parents=True)
+        xdg_config.write_text("new")
+
+        with patch(
+            "lib.install_services.get_config_path",
+            return_value=xdg_config,
+        ):
+            install_services.migrate_config(repo_root)
+
+        # Both files untouched
+        assert xdg_config.read_text() == "new"
+        assert legacy.read_text() == "old"
+
+    def test_noop_when_no_legacy(self, tmp_path: Path) -> None:
+        """Does nothing if legacy config doesn't exist."""
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+
+        xdg_config = tmp_path / "xdg" / "airut" / "airut.yaml"
+
+        with patch(
+            "lib.install_services.get_config_path",
+            return_value=xdg_config,
+        ):
+            install_services.migrate_config(repo_root)
+
+        assert not xdg_config.exists()

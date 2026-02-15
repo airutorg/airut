@@ -136,7 +136,7 @@ network:
   sandbox_enabled: true  # default; set to false to disable (break-glass)
 ```
 
-**Server config** (`config/airut.yaml`, per-repo):
+**Server config** (`~/.config/airut/airut.yaml`, per-repo):
 
 ```yaml
 repos:
@@ -284,7 +284,7 @@ credentials. The proxy swaps surrogates for real values only when the request
 host matches configured scopes.
 
 ```yaml
-# In config/airut.yaml (server config)
+# In ~/.config/airut/airut.yaml (server config)
 repos:
   my-project:
     masked_secrets:
@@ -365,7 +365,7 @@ The proxy then:
 4. Forwards the correctly-signed request upstream
 
 ```yaml
-# In config/airut.yaml (server config)
+# In ~/.config/airut/airut.yaml (server config)
 repos:
   my-project:
     signing_credentials:
@@ -443,7 +443,7 @@ If a broken `.airut/network-allowlist.yaml` gets merged to the default branch
 temporarily disable the sandbox:
 
 ```yaml
-# In config/airut.yaml
+# In ~/.config/airut/airut.yaml
 repos:
   my-project:
     network:

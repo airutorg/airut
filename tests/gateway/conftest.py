@@ -12,16 +12,27 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _mock_sandbox():
-    """Mock Sandbox for email gateway tests.
+def _mock_sandbox(tmp_path: Path):
+    """Mock Sandbox and redirect XDG state for gateway tests.
 
     The sandbox calls podman which isn't available in test
     environments. Provide a mock that returns sensible defaults.
+
+    Also redirects ``get_storage_dir()`` to use ``tmp_path`` so
+    tests don't touch the real filesystem.
     """
     mock_sandbox_class = MagicMock()
     mock_sandbox_instance = MagicMock()
     mock_sandbox_class.return_value = mock_sandbox_instance
-    with patch("lib.gateway.service.gateway.Sandbox", mock_sandbox_class):
+    storage_root = tmp_path / "state"
+    storage_root.mkdir(exist_ok=True)
+    with (
+        patch("lib.gateway.service.gateway.Sandbox", mock_sandbox_class),
+        patch(
+            "lib.gateway.config.user_state_path",
+            return_value=storage_root,
+        ),
+    ):
         yield
 
 
@@ -29,9 +40,6 @@ def _mock_sandbox():
 def email_config(tmp_path: Path, master_repo: Path):
     """Test email service configuration."""
     from lib.gateway.config import RepoServerConfig
-
-    storage_dir = tmp_path / "storage"
-    storage_dir.mkdir()
 
     return RepoServerConfig(
         repo_id="test",
@@ -45,7 +53,6 @@ def email_config(tmp_path: Path, master_repo: Path):
         authorized_senders=["authorized@example.com"],
         trusted_authserv_id="mx.example.com",
         git_repo_url=str(master_repo),
-        storage_dir=storage_dir,
     )
 
 
@@ -57,9 +64,6 @@ def microsoft_oauth2_email_config(tmp_path: Path, master_repo: Path):
     during tests.
     """
     from lib.gateway.config import RepoServerConfig
-
-    storage_dir = tmp_path / "storage"
-    storage_dir.mkdir()
 
     with patch("lib.gateway.microsoft_oauth2.ConfidentialClientApplication"):
         yield RepoServerConfig(
@@ -74,7 +78,6 @@ def microsoft_oauth2_email_config(tmp_path: Path, master_repo: Path):
             authorized_senders=["authorized@company.com"],
             trusted_authserv_id="mx.company.com",
             git_repo_url=str(master_repo),
-            storage_dir=storage_dir,
             microsoft_oauth2_tenant_id="test-tenant-id",
             microsoft_oauth2_client_id="test-client-id",
             microsoft_oauth2_client_secret="test-client-secret",
