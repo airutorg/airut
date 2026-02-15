@@ -1898,3 +1898,417 @@ class TestSSELivePages:
         html = response.get_data(as_text=True)
 
         assert "connectNetworkSSE" not in html
+
+
+class TestEventsLogPollEndpoint:
+    """Tests for the per-conversation events log polling endpoint."""
+
+    def test_events_poll_not_found(self) -> None:
+        """Returns 404 when conversation directory doesn't exist."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/conversation/nonexist/events/poll")
+        assert response.status_code == 404
+
+    def test_events_poll_empty_log(self, tmp_path: Path) -> None:
+        """Returns empty HTML and offset 0 for empty event log."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/conversation/abc12345/events/poll")
+        assert response.status_code == 200
+        assert response.content_type == "application/json"
+
+        data = json.loads(response.get_data(as_text=True))
+        assert data["offset"] == 0
+        assert data["html"] == ""
+        assert data["done"] is False
+
+    def test_events_poll_with_data(self, tmp_path: Path) -> None:
+        """Returns rendered HTML for new events."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        # Write raw event JSON directly to the log file
+        events_file = conv_dir / "events.jsonl"
+        raw = {"type": "assistant", "subtype": "text", "message": "hello"}
+        events_file.write_text(json.dumps(raw) + "\n")
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/conversation/abc12345/events/poll")
+        assert response.status_code == 200
+
+        data = json.loads(response.get_data(as_text=True))
+        assert data["offset"] > 0
+        assert data["html"] != ""
+        assert data["done"] is False
+
+    def test_events_poll_done_for_completed_task(self, tmp_path: Path) -> None:
+        """Returns done=True for completed tasks."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.complete_task("abc12345", success=True)
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/conversation/abc12345/events/poll")
+        data = json.loads(response.get_data(as_text=True))
+        assert data["done"] is True
+
+    def test_events_poll_etag_304(self, tmp_path: Path) -> None:
+        """Returns 304 when ETag matches and no new data."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        # First request to get offset
+        response = client.get("/api/conversation/abc12345/events/poll")
+        etag = response.headers.get("ETag")
+        assert etag is not None
+
+        # Second request with ETag should return 304
+        response = client.get(
+            "/api/conversation/abc12345/events/poll",
+            headers={"If-None-Match": etag},
+        )
+        assert response.status_code == 304
+
+    def test_events_poll_with_offset(self, tmp_path: Path) -> None:
+        """Respects offset parameter to skip already-seen data."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        # Write raw event JSON directly to the log file
+        events_file = conv_dir / "events.jsonl"
+        raw = {"type": "assistant", "subtype": "text", "message": "hello"}
+        events_file.write_text(json.dumps(raw) + "\n")
+        file_size = events_file.stat().st_size
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        # Polling from the end of existing data should return no html
+        response = client.get(
+            f"/api/conversation/abc12345/events/poll?offset={file_size}"
+        )
+        data = json.loads(response.get_data(as_text=True))
+        assert data["html"] == ""
+
+    def test_events_poll_invalid_offset(self, tmp_path: Path) -> None:
+        """Handles invalid offset parameter gracefully."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get(
+            "/api/conversation/abc12345/events/poll?offset=invalid"
+        )
+        assert response.status_code == 200
+
+    def test_events_poll_has_etag_header(self, tmp_path: Path) -> None:
+        """Response includes ETag header based on offset."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/conversation/abc12345/events/poll")
+        assert "ETag" in response.headers
+        assert response.headers["ETag"].startswith('"o')
+
+
+class TestNetworkLogPollEndpoint:
+    """Tests for the per-conversation network log polling endpoint."""
+
+    def test_network_poll_not_found(self) -> None:
+        """Returns 404 when conversation directory doesn't exist."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/conversation/nonexist/network/poll")
+        assert response.status_code == 404
+
+    def test_network_poll_empty_log(self, tmp_path: Path) -> None:
+        """Returns empty HTML and offset 0 for no network log."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/conversation/abc12345/network/poll")
+        assert response.status_code == 200
+
+        data = json.loads(response.get_data(as_text=True))
+        assert data["offset"] == 0
+        assert data["html"] == ""
+        assert data["done"] is False
+
+    def test_network_poll_with_data(self, tmp_path: Path) -> None:
+        """Returns rendered HTML for new network log lines."""
+        from lib.sandbox import NETWORK_LOG_FILENAME
+
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        log_path = conv_dir / NETWORK_LOG_FILENAME
+        log_path.write_text("allowed GET https://example.com -> 200\n")
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/conversation/abc12345/network/poll")
+        assert response.status_code == 200
+
+        data = json.loads(response.get_data(as_text=True))
+        assert data["offset"] > 0
+        assert "example.com" in data["html"]
+        assert data["done"] is False
+
+    def test_network_poll_done_for_completed_task(self, tmp_path: Path) -> None:
+        """Returns done=True for completed tasks."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.complete_task("abc12345", success=True)
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/conversation/abc12345/network/poll")
+        data = json.loads(response.get_data(as_text=True))
+        assert data["done"] is True
+
+    def test_network_poll_etag_304(self, tmp_path: Path) -> None:
+        """Returns 304 when ETag matches and no new data."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        # First request to get ETag
+        response = client.get("/api/conversation/abc12345/network/poll")
+        etag = response.headers.get("ETag")
+        assert etag is not None
+
+        # Second request with matching ETag returns 304
+        response = client.get(
+            "/api/conversation/abc12345/network/poll",
+            headers={"If-None-Match": etag},
+        )
+        assert response.status_code == 304
+
+    def test_network_poll_with_offset(self, tmp_path: Path) -> None:
+        """Respects offset parameter to skip already-seen data."""
+        from lib.sandbox import NETWORK_LOG_FILENAME
+
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        log_path = conv_dir / NETWORK_LOG_FILENAME
+        log_path.write_text("allowed GET https://example.com -> 200\n")
+        file_size = log_path.stat().st_size
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get(
+            f"/api/conversation/abc12345/network/poll?offset={file_size}"
+        )
+        data = json.loads(response.get_data(as_text=True))
+        assert data["html"] == ""
+
+    def test_network_poll_invalid_offset(self, tmp_path: Path) -> None:
+        """Handles invalid offset parameter gracefully."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get(
+            "/api/conversation/abc12345/network/poll?offset=xyz"
+        )
+        assert response.status_code == 200
+
+
+class TestPollingFallbackJS:
+    """Tests for polling fallback JavaScript in view pages."""
+
+    def test_actions_page_has_polling_fallback(self, tmp_path: Path) -> None:
+        """Actions page JS includes polling fallback for active tasks."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Task")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345/actions")
+        html = response.get_data(as_text=True)
+
+        assert "startEventsPolling" in html
+        assert "/events/poll" in html
+
+    def test_network_page_has_polling_fallback(self, tmp_path: Path) -> None:
+        """Network page JS includes polling fallback for active tasks."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Task")
+        tracker.start_task("abc12345")
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345/network")
+        html = response.get_data(as_text=True)
+
+        assert "startNetworkPolling" in html
+        assert "/network/poll" in html
+
+    def test_task_detail_has_polling_fallback(self) -> None:
+        """Task detail page JS includes polling fallback."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Task")
+        tracker.start_task("abc12345")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345")
+        html = response.get_data(as_text=True)
+
+        assert "startTaskPolling" in html
+        assert "/api/conversations" in html
+
+    def test_repo_detail_has_polling_fallback(self) -> None:
+        """Repo detail page JS includes polling fallback."""
+        from lib.dashboard.tracker import RepoState, RepoStatus
+        from lib.dashboard.versioned import VersionClock, VersionedStore
+
+        tracker = TaskTracker()
+        clock = VersionClock()
+        repo_states: tuple[RepoState, ...] = (
+            RepoState(
+                repo_id="test-repo",
+                status=RepoStatus.LIVE,
+                git_repo_url="https://github.com/test/repo",
+                imap_server="imap.example.com",
+                storage_dir="/storage/test",
+            ),
+        )
+        repos_store: VersionedStore[tuple[RepoState, ...]] = VersionedStore(
+            repo_states, clock
+        )
+
+        server = DashboardServer(tracker, repos_store=repos_store, clock=clock)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/repo/test-repo")
+        html = response.get_data(as_text=True)
+
+        assert "startRepoPolling" in html
+        assert "/api/repos" in html
+
+    def test_completed_actions_page_no_polling(self, tmp_path: Path) -> None:
+        """Completed tasks don't include polling fallback JS."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Task")
+        tracker.complete_task("abc12345", success=True)
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345/actions")
+        html = response.get_data(as_text=True)
+
+        assert "startEventsPolling" not in html
+
+    def test_completed_network_page_no_polling(self, tmp_path: Path) -> None:
+        """Completed tasks don't include polling fallback JS."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Task")
+        tracker.complete_task("abc12345", success=True)
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345/network")
+        html = response.get_data(as_text=True)
+
+        assert "startNetworkPolling" not in html

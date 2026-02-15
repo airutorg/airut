@@ -25,6 +25,8 @@ from lib.dashboard import views
 from lib.dashboard.formatters import VersionInfo
 from lib.dashboard.sse import (
     SSEConnectionManager,
+    render_events_html,
+    render_network_lines_html,
     sse_events_log_stream,
     sse_network_log_stream,
     sse_state_stream,
@@ -777,6 +779,106 @@ class RequestHandlers:
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
             },
+        )
+
+    def handle_api_events_poll(
+        self, request: Request, conversation_id: str
+    ) -> Response:
+        """Handle polling endpoint for a conversation's event log.
+
+        Returns new events since the given offset as pre-rendered HTML.
+        Supports ETag-based conditional requests using the byte offset.
+
+        Args:
+            request: Incoming request.
+            conversation_id: Conversation to poll events for.
+
+        Returns:
+            JSON response with ``{offset, html, done}``, or 304.
+        """
+        conversation_dir = self._find_conversation_dir(conversation_id)
+        if conversation_dir is None:
+            return Response(
+                json.dumps({"error": "Conversation not found"}),
+                status=404,
+                content_type="application/json",
+            )
+
+        client_offset = 0
+        offset_param = request.args.get("offset")
+        if offset_param is not None:
+            try:
+                client_offset = int(offset_param)
+            except ValueError:
+                pass
+
+        event_log = EventLog(conversation_dir)
+        events, new_offset = event_log.tail(client_offset)
+
+        etag = f'"o{new_offset}"'
+        if not events and request.headers.get("If-None-Match") == etag:
+            return Response(status=304, headers={"ETag": etag})
+
+        html = render_events_html(events) if events else ""
+
+        # Check if task is done
+        task = self.tracker.get_task(conversation_id)
+        done = task is None or task.status == TaskStatus.COMPLETED
+
+        return Response(
+            json.dumps({"offset": new_offset, "html": html, "done": done}),
+            content_type="application/json",
+            headers={"ETag": etag, "Cache-Control": "no-cache"},
+        )
+
+    def handle_api_network_poll(
+        self, request: Request, conversation_id: str
+    ) -> Response:
+        """Handle polling endpoint for a conversation's network log.
+
+        Returns new network log lines since the given offset as
+        pre-rendered HTML. Supports ETag-based conditional requests.
+
+        Args:
+            request: Incoming request.
+            conversation_id: Conversation to poll network logs for.
+
+        Returns:
+            JSON response with ``{offset, html, done}``, or 304.
+        """
+        conversation_dir = self._find_conversation_dir(conversation_id)
+        if conversation_dir is None:
+            return Response(
+                json.dumps({"error": "Conversation not found"}),
+                status=404,
+                content_type="application/json",
+            )
+
+        client_offset = 0
+        offset_param = request.args.get("offset")
+        if offset_param is not None:
+            try:
+                client_offset = int(offset_param)
+            except ValueError:
+                pass
+
+        network_log = NetworkLog(conversation_dir / NETWORK_LOG_FILENAME)
+        lines, new_offset = network_log.tail(client_offset)
+
+        etag = f'"o{new_offset}"'
+        if not lines and request.headers.get("If-None-Match") == etag:
+            return Response(status=304, headers={"ETag": etag})
+
+        html = render_network_lines_html(lines) if lines else ""
+
+        # Check if task is done
+        task = self.tracker.get_task(conversation_id)
+        done = task is None or task.status == TaskStatus.COMPLETED
+
+        return Response(
+            json.dumps({"offset": new_offset, "html": html, "done": done}),
+            content_type="application/json",
+            headers={"ETag": etag, "Cache-Control": "no-cache"},
         )
 
     def _get_clock_version(self) -> int:

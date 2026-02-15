@@ -128,8 +128,16 @@ class DashboardServer:
                     endpoint="events_log_stream",
                 ),
                 Rule(
+                    "/api/conversation/<conversation_id>/events/poll",
+                    endpoint="api_events_poll",
+                ),
+                Rule(
                     "/api/conversation/<conversation_id>/network/stream",
                     endpoint="network_log_stream",
+                ),
+                Rule(
+                    "/api/conversation/<conversation_id>/network/poll",
+                    endpoint="api_network_poll",
                 ),
                 Rule("/health", endpoint="health"),
             ]
@@ -151,7 +159,9 @@ class DashboardServer:
             "api_repos": self._handlers.handle_api_repos,
             "events_stream": self._handlers.handle_events_stream,
             "events_log_stream": (self._handlers.handle_events_log_stream),
+            "api_events_poll": self._handlers.handle_api_events_poll,
             "network_log_stream": (self._handlers.handle_network_log_stream),
+            "api_network_poll": self._handlers.handle_api_network_poll,
             "health": self._handlers.handle_health,
         }
 
