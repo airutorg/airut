@@ -275,6 +275,15 @@ REPLACEMENTS: list[Replacement] = [
         replacement="--cov=airut",
         description="Markdown: --cov=lib → --cov=airut",
     ),
+    # ── .gitignore ────────────────────────────────────────────────
+    #
+    # Build artifact path: lib/_version.py → airut/_version.py
+    Replacement(
+        glob=".gitignore",
+        pattern=r"lib/",
+        replacement="airut/",
+        description=".gitignore: lib/ → airut/",
+    ),
 ]
 
 # Directories to exclude from all replacements (relative to ROOT).
