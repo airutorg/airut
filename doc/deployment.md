@@ -420,13 +420,16 @@ service, applying the upgrade, and restarting the service automatically:
 airut update
 ```
 
-If the systemd service is installed, `airut update` will:
+If already up to date, the command exits without touching the service. When an
+upgrade is applied and the systemd service is installed, `airut update` will:
 
-1. Stop and uninstall the service
-2. Run `uv tool upgrade airut`
+1. Run `uv tool upgrade airut`
+2. Stop and uninstall the service
 3. Reinstall and start the service using the updated binary
 
-If the service is not installed, only the upgrade step is performed.
+If the service is not installed, only the upgrade step is performed. See
+[spec/cli.md](../spec/cli.md) for the full update workflow including task
+blocking (`--wait`, `--force`).
 
 The update channel is determined by how the tool was originally installed:
 
