@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from lib.gateway.service import EmailGatewayService, main
+from airut.gateway.service import EmailGatewayService, main
 
 from .conftest import make_message, make_service, update_global
 
@@ -28,7 +28,7 @@ class TestEmailGatewayServiceInit:
 
     def test_init_repo_root_default(self, email_config) -> None:
         """When repo_root=None, auto-detect from __file__."""
-        from lib.gateway.config import GlobalConfig, ServerConfig
+        from airut.gateway.config import GlobalConfig, ServerConfig
 
         global_config = GlobalConfig(dashboard_enabled=False)
         server_config = ServerConfig(
@@ -36,16 +36,16 @@ class TestEmailGatewayServiceInit:
         )
 
         with (
-            patch("lib.gateway.service.repo_handler.EmailListener"),
-            patch("lib.gateway.service.repo_handler.EmailResponder"),
-            patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
-            patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
-            patch("lib.gateway.service.repo_handler.ConversationManager"),
-            patch("lib.gateway.service.gateway.capture_version_info") as mv,
-            patch("lib.gateway.service.gateway.TaskTracker"),
-            patch("lib.gateway.service.gateway.Sandbox"),
+            patch("airut.gateway.service.repo_handler.EmailListener"),
+            patch("airut.gateway.service.repo_handler.EmailResponder"),
+            patch("airut.gateway.service.repo_handler.SenderAuthenticator"),
+            patch("airut.gateway.service.repo_handler.SenderAuthorizer"),
+            patch("airut.gateway.service.repo_handler.ConversationManager"),
+            patch("airut.gateway.service.gateway.capture_version_info") as mv,
+            patch("airut.gateway.service.gateway.TaskTracker"),
+            patch("airut.gateway.service.gateway.Sandbox"),
             patch(
-                "lib.gateway.service.gateway.get_system_resolver",
+                "airut.gateway.service.gateway.get_system_resolver",
                 return_value="127.0.0.53",
             ),
         ):
@@ -58,7 +58,7 @@ class TestEmailGatewayServiceInit:
         self, email_config, tmp_path: Path
     ) -> None:
         """Custom egress_network is passed to Sandbox."""
-        from lib.gateway.config import GlobalConfig, ServerConfig
+        from airut.gateway.config import GlobalConfig, ServerConfig
 
         global_config = GlobalConfig(dashboard_enabled=False)
         server_config = ServerConfig(
@@ -66,16 +66,16 @@ class TestEmailGatewayServiceInit:
         )
 
         with (
-            patch("lib.gateway.service.repo_handler.EmailListener"),
-            patch("lib.gateway.service.repo_handler.EmailResponder"),
-            patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
-            patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
-            patch("lib.gateway.service.repo_handler.ConversationManager"),
-            patch("lib.gateway.service.gateway.capture_version_info") as mv,
-            patch("lib.gateway.service.gateway.TaskTracker"),
-            patch("lib.gateway.service.gateway.Sandbox") as mock_sandbox,
+            patch("airut.gateway.service.repo_handler.EmailListener"),
+            patch("airut.gateway.service.repo_handler.EmailResponder"),
+            patch("airut.gateway.service.repo_handler.SenderAuthenticator"),
+            patch("airut.gateway.service.repo_handler.SenderAuthorizer"),
+            patch("airut.gateway.service.repo_handler.ConversationManager"),
+            patch("airut.gateway.service.gateway.capture_version_info") as mv,
+            patch("airut.gateway.service.gateway.TaskTracker"),
+            patch("airut.gateway.service.gateway.Sandbox") as mock_sandbox,
             patch(
-                "lib.gateway.service.gateway.get_system_resolver",
+                "airut.gateway.service.gateway.get_system_resolver",
                 return_value="127.0.0.53",
             ),
         ):
@@ -190,7 +190,7 @@ class TestProcessMessageWorker:
         msg = make_message(subject="No conv id")
 
         with patch(
-            "lib.gateway.service.gateway.process_message",
+            "airut.gateway.service.gateway.process_message",
             return_value=(True, "conv1"),
         ):
             svc._process_message_worker(msg, "new-123", handler)
@@ -205,7 +205,7 @@ class TestProcessMessageWorker:
         msg = make_message(subject="[ID:aabb1122] Test")
 
         with patch(
-            "lib.gateway.service.gateway.process_message",
+            "airut.gateway.service.gateway.process_message",
             return_value=(True, "conv1"),
         ):
             svc._process_message_worker(msg, "conv1", handler)
@@ -219,7 +219,7 @@ class TestProcessMessageWorker:
         msg = make_message(subject="Test")
 
         with patch(
-            "lib.gateway.service.gateway.process_message",
+            "airut.gateway.service.gateway.process_message",
             side_effect=RuntimeError("boom"),
         ):
             with pytest.raises(RuntimeError):
@@ -233,7 +233,7 @@ class TestProcessMessageWorker:
         msg = make_message(subject="New task")
 
         with patch(
-            "lib.gateway.service.gateway.process_message",
+            "airut.gateway.service.gateway.process_message",
             return_value=(False, "real-conv-id"),
         ):
             svc._process_message_worker(msg, "temp-123", handler)
@@ -247,7 +247,7 @@ class TestProcessMessageWorker:
         msg = make_message(subject="Test")
 
         with patch(
-            "lib.gateway.service.gateway.process_message",
+            "airut.gateway.service.gateway.process_message",
             return_value=(False, None),
         ):
             svc._process_message_worker(msg, "task1", handler)
@@ -280,7 +280,7 @@ class TestStartStop:
 
         with (
             patch.object(handler, "_listener_loop", side_effect=fake_loop),
-            patch("lib.gateway.service.gateway.DashboardServer") as mock_ds,
+            patch("airut.gateway.service.gateway.DashboardServer") as mock_ds,
         ):
             update_global(svc, dashboard_enabled=True)
             svc.start()
@@ -352,7 +352,7 @@ class TestRepoHandlerInitError:
         self, email_config, tmp_path: Path
     ) -> None:
         """RepoHandler.__init__ failure is recorded in _init_errors."""
-        from lib.gateway.config import GlobalConfig, ServerConfig
+        from airut.gateway.config import GlobalConfig, ServerConfig
 
         global_config = GlobalConfig(dashboard_enabled=False)
         server_config = ServerConfig(
@@ -361,19 +361,19 @@ class TestRepoHandlerInitError:
 
         # Make RepoHandler init fail by patching ConversationManager
         with (
-            patch("lib.gateway.service.repo_handler.EmailListener"),
-            patch("lib.gateway.service.repo_handler.EmailResponder"),
-            patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
-            patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
+            patch("airut.gateway.service.repo_handler.EmailListener"),
+            patch("airut.gateway.service.repo_handler.EmailResponder"),
+            patch("airut.gateway.service.repo_handler.SenderAuthenticator"),
+            patch("airut.gateway.service.repo_handler.SenderAuthorizer"),
             patch(
-                "lib.gateway.service.repo_handler.ConversationManager",
+                "airut.gateway.service.repo_handler.ConversationManager",
                 side_effect=RuntimeError("Git clone failed"),
             ),
-            patch("lib.gateway.service.gateway.capture_version_info") as mv,
-            patch("lib.gateway.service.gateway.TaskTracker"),
-            patch("lib.gateway.service.gateway.Sandbox"),
+            patch("airut.gateway.service.gateway.capture_version_info") as mv,
+            patch("airut.gateway.service.gateway.TaskTracker"),
+            patch("airut.gateway.service.gateway.Sandbox"),
             patch(
-                "lib.gateway.service.gateway.get_system_resolver",
+                "airut.gateway.service.gateway.get_system_resolver",
                 return_value="127.0.0.53",
             ),
         ):
@@ -392,8 +392,8 @@ class TestRepoHandlerInitError:
         """Init errors become FAILED repo_states when start() is called."""
         import pytest
 
-        from lib.dashboard.tracker import RepoStatus
-        from lib.gateway.config import GlobalConfig, ServerConfig
+        from airut.dashboard.tracker import RepoStatus
+        from airut.gateway.config import GlobalConfig, ServerConfig
 
         global_config = GlobalConfig(dashboard_enabled=False)
         server_config = ServerConfig(
@@ -401,19 +401,19 @@ class TestRepoHandlerInitError:
         )
 
         with (
-            patch("lib.gateway.service.repo_handler.EmailListener"),
-            patch("lib.gateway.service.repo_handler.EmailResponder"),
-            patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
-            patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
+            patch("airut.gateway.service.repo_handler.EmailListener"),
+            patch("airut.gateway.service.repo_handler.EmailResponder"),
+            patch("airut.gateway.service.repo_handler.SenderAuthenticator"),
+            patch("airut.gateway.service.repo_handler.SenderAuthorizer"),
             patch(
-                "lib.gateway.service.repo_handler.ConversationManager",
+                "airut.gateway.service.repo_handler.ConversationManager",
                 side_effect=RuntimeError("Git clone failed"),
             ),
-            patch("lib.gateway.service.gateway.capture_version_info") as mv,
-            patch("lib.gateway.service.gateway.TaskTracker"),
-            patch("lib.gateway.service.gateway.Sandbox"),
+            patch("airut.gateway.service.gateway.capture_version_info") as mv,
+            patch("airut.gateway.service.gateway.TaskTracker"),
+            patch("airut.gateway.service.gateway.Sandbox"),
             patch(
-                "lib.gateway.service.gateway.get_system_resolver",
+                "airut.gateway.service.gateway.get_system_resolver",
                 return_value="127.0.0.53",
             ),
         ):
@@ -438,7 +438,7 @@ class TestStartRepoInitFailure:
         """When a repo fails to init, error is recorded in repo_states."""
         import pytest
 
-        from lib.dashboard.tracker import RepoStatus
+        from airut.dashboard.tracker import RepoStatus
 
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_enabled=False)
@@ -479,7 +479,7 @@ class TestStartRepoInitFailure:
         self, email_config, tmp_path: Path
     ) -> None:
         """When some repos fail but at least one starts, service continues."""
-        from lib.gateway.service.repo_handler import RepoHandler
+        from airut.gateway.service.repo_handler import RepoHandler
 
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_enabled=False)
@@ -506,7 +506,7 @@ class TestStartRepoInitFailure:
         # Service should start with partial failure
         repo_states = {r.repo_id: r for r in svc._repos_store.get().value}
         assert len(repo_states) == 2
-        from lib.dashboard.tracker import RepoStatus
+        from airut.dashboard.tracker import RepoStatus
 
         assert repo_states["test"].status == RepoStatus.LIVE
         assert repo_states["repo2"].status == RepoStatus.FAILED
@@ -517,7 +517,7 @@ class TestBootState:
         self, email_config, tmp_path: Path
     ) -> None:
         """Boot state should be READY after successful start."""
-        from lib.dashboard.tracker import BootPhase
+        from airut.dashboard.tracker import BootPhase
 
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_enabled=False)
@@ -538,7 +538,7 @@ class TestBootState:
         """Boot state should be FAILED when boot raises."""
         import pytest
 
-        from lib.dashboard.tracker import BootPhase
+        from airut.dashboard.tracker import BootPhase
 
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_enabled=False)
@@ -561,7 +561,7 @@ class TestBootState:
         self, email_config, tmp_path: Path
     ) -> None:
         """Resilient mode should not raise on boot failure."""
-        from lib.dashboard.tracker import BootPhase
+        from airut.dashboard.tracker import BootPhase
 
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_enabled=False)
@@ -591,7 +591,7 @@ class TestBootState:
         handler.listener.connect.side_effect = RuntimeError("fail")
 
         with (
-            patch("lib.gateway.service.gateway.DashboardServer") as mock_ds,
+            patch("airut.gateway.service.gateway.DashboardServer") as mock_ds,
             pytest.raises(RuntimeError, match="All 1 repo"),
         ):
             svc.start()
@@ -619,7 +619,7 @@ class TestBootState:
 
         with (
             patch.object(handler, "_listener_loop", side_effect=lambda: None),
-            patch("lib.gateway.service.gateway.DashboardServer") as mock_ds,
+            patch("airut.gateway.service.gateway.DashboardServer") as mock_ds,
         ):
             svc._boot = check_dashboard_then_boot
             svc.start()
@@ -631,7 +631,7 @@ class TestBootState:
 class TestStateProviders:
     def test_get_repo_states(self, email_config, tmp_path: Path) -> None:
         """_get_repo_states returns dirs based on repos_store."""
-        from lib.dashboard.tracker import RepoState, RepoStatus
+        from airut.dashboard.tracker import RepoState, RepoStatus
 
         svc, _ = make_service(email_config, tmp_path)
         svc._repos_store.update(
@@ -651,7 +651,7 @@ class TestStateProviders:
 
     def test_get_work_dirs(self, email_config, tmp_path: Path) -> None:
         """_get_work_dirs returns dirs for live repos only."""
-        from lib.dashboard.tracker import RepoState, RepoStatus
+        from airut.dashboard.tracker import RepoState, RepoStatus
 
         svc, handler = make_service(email_config, tmp_path)
         svc._repos_store.update(
@@ -673,7 +673,7 @@ class TestStateProviders:
         self, email_config, tmp_path: Path
     ) -> None:
         """_get_work_dirs excludes repos that failed to start."""
-        from lib.dashboard.tracker import RepoState, RepoStatus
+        from airut.dashboard.tracker import RepoState, RepoStatus
 
         svc, _ = make_service(email_config, tmp_path)
         svc._repos_store.update(
@@ -776,12 +776,12 @@ class TestGarbageCollectorThread:
 class TestMain:
     def test_config_error(self) -> None:
         with (
-            patch("lib.gateway.service.gateway.configure_logging"),
+            patch("airut.gateway.service.gateway.configure_logging"),
             patch(
-                "lib.gateway.service.gateway.argparse.ArgumentParser"
+                "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "lib.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_yaml",
                 side_effect=ValueError("missing ENV"),
             ),
         ):
@@ -793,16 +793,16 @@ class TestMain:
     def test_init_failure(self) -> None:
         mock_config = MagicMock()
         with (
-            patch("lib.gateway.service.gateway.configure_logging"),
+            patch("airut.gateway.service.gateway.configure_logging"),
             patch(
-                "lib.gateway.service.gateway.argparse.ArgumentParser"
+                "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "lib.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_yaml",
                 return_value=mock_config,
             ),
             patch(
-                "lib.gateway.service.gateway.EmailGatewayService",
+                "airut.gateway.service.gateway.EmailGatewayService",
                 side_effect=RuntimeError("init fail"),
             ),
         ):
@@ -816,16 +816,16 @@ class TestMain:
         mock_svc = MagicMock()
         mock_svc.start.side_effect = RuntimeError("crash")
         with (
-            patch("lib.gateway.service.gateway.configure_logging"),
+            patch("airut.gateway.service.gateway.configure_logging"),
             patch(
-                "lib.gateway.service.gateway.argparse.ArgumentParser"
+                "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "lib.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_yaml",
                 return_value=mock_config,
             ),
             patch(
-                "lib.gateway.service.gateway.EmailGatewayService",
+                "airut.gateway.service.gateway.EmailGatewayService",
                 return_value=mock_svc,
             ),
             patch.dict("os.environ", {}, clear=False),
@@ -841,16 +841,16 @@ class TestMain:
         mock_svc = MagicMock()
         mock_svc.start.side_effect = KeyboardInterrupt
         with (
-            patch("lib.gateway.service.gateway.configure_logging"),
+            patch("airut.gateway.service.gateway.configure_logging"),
             patch(
-                "lib.gateway.service.gateway.argparse.ArgumentParser"
+                "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "lib.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_yaml",
                 return_value=mock_config,
             ),
             patch(
-                "lib.gateway.service.gateway.EmailGatewayService",
+                "airut.gateway.service.gateway.EmailGatewayService",
                 return_value=mock_svc,
             ),
             patch.dict("os.environ", {}, clear=False),
@@ -865,16 +865,16 @@ class TestMain:
         mock_config = MagicMock()
         mock_svc = MagicMock()
         with (
-            patch("lib.gateway.service.gateway.configure_logging"),
+            patch("airut.gateway.service.gateway.configure_logging"),
             patch(
-                "lib.gateway.service.gateway.argparse.ArgumentParser"
+                "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "lib.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_yaml",
                 return_value=mock_config,
             ),
             patch(
-                "lib.gateway.service.gateway.EmailGatewayService",
+                "airut.gateway.service.gateway.EmailGatewayService",
                 return_value=mock_svc,
             ),
             patch.dict("os.environ", {}, clear=False),
@@ -891,16 +891,16 @@ class TestMain:
         mock_config = MagicMock()
         mock_svc = MagicMock()
         with (
-            patch("lib.gateway.service.gateway.configure_logging") as mock_cl,
+            patch("airut.gateway.service.gateway.configure_logging") as mock_cl,
             patch(
-                "lib.gateway.service.gateway.argparse.ArgumentParser"
+                "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "lib.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_yaml",
                 return_value=mock_config,
             ),
             patch(
-                "lib.gateway.service.gateway.EmailGatewayService",
+                "airut.gateway.service.gateway.EmailGatewayService",
                 return_value=mock_svc,
             ),
             patch.dict("os.environ", {}, clear=False),
@@ -920,19 +920,19 @@ class TestMain:
         mock_config = MagicMock()
         mock_svc = MagicMock()
         with (
-            patch("lib.gateway.service.gateway.configure_logging"),
+            patch("airut.gateway.service.gateway.configure_logging"),
             patch(
-                "lib.gateway.service.gateway.argparse.ArgumentParser"
+                "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "lib.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_yaml",
                 return_value=mock_config,
             ),
             patch(
-                "lib.gateway.service.gateway.EmailGatewayService",
+                "airut.gateway.service.gateway.EmailGatewayService",
                 return_value=mock_svc,
             ),
-            patch("lib.gateway.service.gateway.signal.signal") as mock_sig,
+            patch("airut.gateway.service.gateway.signal.signal") as mock_sig,
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
@@ -958,20 +958,20 @@ class TestMain:
                 captured_handler = handler
 
         with (
-            patch("lib.gateway.service.gateway.configure_logging"),
+            patch("airut.gateway.service.gateway.configure_logging"),
             patch(
-                "lib.gateway.service.gateway.argparse.ArgumentParser"
+                "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "lib.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_yaml",
                 return_value=mock_config,
             ),
             patch(
-                "lib.gateway.service.gateway.EmailGatewayService",
+                "airut.gateway.service.gateway.EmailGatewayService",
                 return_value=mock_svc,
             ),
             patch(
-                "lib.gateway.service.gateway.signal.signal",
+                "airut.gateway.service.gateway.signal.signal",
                 side_effect=capture_signal,
             ),
             patch.dict("os.environ", {}, clear=False),
@@ -992,16 +992,16 @@ class TestMain:
         mock_config = MagicMock()
         mock_svc = MagicMock()
         with (
-            patch("lib.gateway.service.gateway.configure_logging"),
+            patch("airut.gateway.service.gateway.configure_logging"),
             patch(
-                "lib.gateway.service.gateway.argparse.ArgumentParser"
+                "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "lib.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_yaml",
                 return_value=mock_config,
             ),
             patch(
-                "lib.gateway.service.gateway.EmailGatewayService",
+                "airut.gateway.service.gateway.EmailGatewayService",
                 return_value=mock_svc,
             ),
             patch.dict("os.environ", {}, clear=False),
@@ -1020,7 +1020,7 @@ class TestUpstreamDnsResolution:
         self, email_config, tmp_path: Path
     ) -> None:
         """When upstream_dns is None, get_system_resolver() is called."""
-        from lib.gateway.config import GlobalConfig, ServerConfig
+        from airut.gateway.config import GlobalConfig, ServerConfig
 
         global_config = GlobalConfig(dashboard_enabled=False)
         assert global_config.upstream_dns is None
@@ -1030,16 +1030,16 @@ class TestUpstreamDnsResolution:
         )
 
         with (
-            patch("lib.gateway.service.repo_handler.EmailListener"),
-            patch("lib.gateway.service.repo_handler.EmailResponder"),
-            patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
-            patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
-            patch("lib.gateway.service.repo_handler.ConversationManager"),
-            patch("lib.gateway.service.gateway.capture_version_info") as mv,
-            patch("lib.gateway.service.gateway.TaskTracker"),
-            patch("lib.gateway.service.gateway.Sandbox") as mock_sandbox,
+            patch("airut.gateway.service.repo_handler.EmailListener"),
+            patch("airut.gateway.service.repo_handler.EmailResponder"),
+            patch("airut.gateway.service.repo_handler.SenderAuthenticator"),
+            patch("airut.gateway.service.repo_handler.SenderAuthorizer"),
+            patch("airut.gateway.service.repo_handler.ConversationManager"),
+            patch("airut.gateway.service.gateway.capture_version_info") as mv,
+            patch("airut.gateway.service.gateway.TaskTracker"),
+            patch("airut.gateway.service.gateway.Sandbox") as mock_sandbox,
             patch(
-                "lib.gateway.service.gateway.get_system_resolver",
+                "airut.gateway.service.gateway.get_system_resolver",
                 return_value="192.168.1.1",
             ) as mock_resolver,
         ):
@@ -1053,7 +1053,7 @@ class TestUpstreamDnsResolution:
         self, email_config, tmp_path: Path
     ) -> None:
         """Explicit upstream_dns skips get_system_resolver()."""
-        from lib.gateway.config import GlobalConfig, ServerConfig
+        from airut.gateway.config import GlobalConfig, ServerConfig
 
         global_config = GlobalConfig(
             dashboard_enabled=False, upstream_dns="8.8.8.8"
@@ -1063,16 +1063,16 @@ class TestUpstreamDnsResolution:
         )
 
         with (
-            patch("lib.gateway.service.repo_handler.EmailListener"),
-            patch("lib.gateway.service.repo_handler.EmailResponder"),
-            patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
-            patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
-            patch("lib.gateway.service.repo_handler.ConversationManager"),
-            patch("lib.gateway.service.gateway.capture_version_info") as mv,
-            patch("lib.gateway.service.gateway.TaskTracker"),
-            patch("lib.gateway.service.gateway.Sandbox") as mock_sandbox,
+            patch("airut.gateway.service.repo_handler.EmailListener"),
+            patch("airut.gateway.service.repo_handler.EmailResponder"),
+            patch("airut.gateway.service.repo_handler.SenderAuthenticator"),
+            patch("airut.gateway.service.repo_handler.SenderAuthorizer"),
+            patch("airut.gateway.service.repo_handler.ConversationManager"),
+            patch("airut.gateway.service.gateway.capture_version_info") as mv,
+            patch("airut.gateway.service.gateway.TaskTracker"),
+            patch("airut.gateway.service.gateway.Sandbox") as mock_sandbox,
             patch(
-                "lib.gateway.service.gateway.get_system_resolver",
+                "airut.gateway.service.gateway.get_system_resolver",
             ) as mock_resolver,
         ):
             mv.return_value = (MagicMock(git_sha="x"), MagicMock())
@@ -1085,8 +1085,8 @@ class TestUpstreamDnsResolution:
         self, email_config, tmp_path: Path
     ) -> None:
         """SystemResolverError propagates to caller."""
-        from lib.dns import SystemResolverError
-        from lib.gateway.config import GlobalConfig, ServerConfig
+        from airut.dns import SystemResolverError
+        from airut.gateway.config import GlobalConfig, ServerConfig
 
         global_config = GlobalConfig(dashboard_enabled=False)
         server_config = ServerConfig(
@@ -1094,16 +1094,16 @@ class TestUpstreamDnsResolution:
         )
 
         with (
-            patch("lib.gateway.service.repo_handler.EmailListener"),
-            patch("lib.gateway.service.repo_handler.EmailResponder"),
-            patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
-            patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
-            patch("lib.gateway.service.repo_handler.ConversationManager"),
-            patch("lib.gateway.service.gateway.capture_version_info") as mv,
-            patch("lib.gateway.service.gateway.TaskTracker"),
-            patch("lib.gateway.service.gateway.Sandbox"),
+            patch("airut.gateway.service.repo_handler.EmailListener"),
+            patch("airut.gateway.service.repo_handler.EmailResponder"),
+            patch("airut.gateway.service.repo_handler.SenderAuthenticator"),
+            patch("airut.gateway.service.repo_handler.SenderAuthorizer"),
+            patch("airut.gateway.service.repo_handler.ConversationManager"),
+            patch("airut.gateway.service.gateway.capture_version_info") as mv,
+            patch("airut.gateway.service.gateway.TaskTracker"),
+            patch("airut.gateway.service.gateway.Sandbox"),
             patch(
-                "lib.gateway.service.gateway.get_system_resolver",
+                "airut.gateway.service.gateway.get_system_resolver",
                 side_effect=SystemResolverError("No nameserver entries found"),
             ),
         ):

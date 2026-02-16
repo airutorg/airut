@@ -48,11 +48,11 @@ def _mock_proxy_infra(tmp_path: Path):
     storage_root = tmp_path / "storage"
     storage_root.mkdir(exist_ok=True)
     with (
-        patch("lib.sandbox._proxy.MITMPROXY_CONFDIR", confdir),
-        patch("lib.sandbox._network.MITMPROXY_CONFDIR", confdir),
+        patch("airut.sandbox._proxy.MITMPROXY_CONFDIR", confdir),
+        patch("airut.sandbox._network.MITMPROXY_CONFDIR", confdir),
         patch.dict(os.environ, {"MOCK_PODMAN_STATE_DIR": str(state_dir)}),
         patch(
-            "lib.gateway.config.user_state_path",
+            "airut.gateway.config.user_state_path",
             return_value=storage_root,
         ),
     ):

@@ -5,7 +5,7 @@
 
 """Tests for markdown to HTML conversion."""
 
-from lib.markdown import (
+from airut.markdown import (
     _convert_inline,
     _convert_line,
     _get_list_type,

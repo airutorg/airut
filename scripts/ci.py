@@ -85,7 +85,7 @@ STEPS: list[Step] = [
     ),
     Step(
         name="Test coverage",
-        command=("uv run pytest -n auto --cov=lib --cov-fail-under=100"),
+        command=("uv run pytest -n auto --cov=airut --cov-fail-under=100"),
         workflow="code",
     ),
     # Worktree clean check

@@ -13,7 +13,7 @@ the key functions directly.
 import hashlib
 from unittest.mock import patch
 
-from lib._bundled.proxy.aws_signing import (
+from airut._bundled.proxy.aws_signing import (
     ChunkedResigner,
     ParsedAuth,
     _uri_encode,
@@ -1145,11 +1145,11 @@ class TestSigV4AKeyDerivationExhaustion:
     def test_key_derivation_fails_after_254(self) -> None:
         """Raises RuntimeError if no valid key found."""
         # Always return a value > P256_ORDER - 2 to force all iterations to fail
-        from lib._bundled.proxy.aws_signing import _P256_ORDER
+        from airut._bundled.proxy.aws_signing import _P256_ORDER
 
         big = (_P256_ORDER - 1).to_bytes(32, "big")
         with patch(
-            "lib._bundled.proxy.aws_signing._hmac_sha256", return_value=big
+            "airut._bundled.proxy.aws_signing._hmac_sha256", return_value=big
         ):
             import pytest
 

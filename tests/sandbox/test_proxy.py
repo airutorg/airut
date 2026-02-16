@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lib.sandbox._proxy import (
+from airut.sandbox._proxy import (
     CA_CERT_FILENAME,
     CONTEXT_NETWORK_PREFIX,
     CONTEXT_PROXY_PREFIX,
@@ -205,7 +205,7 @@ class TestBuildImage:
             upstream_dns="1.1.1.1",
         )
 
-        with patch("lib.sandbox._proxy.subprocess.run") as mock_run:
+        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             pm._build_image()
 
@@ -236,7 +236,7 @@ class TestBuildImage:
             upstream_dns="1.1.1.1",
         )
 
-        with patch("lib.sandbox._proxy.subprocess.run") as mock_run:
+        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.CalledProcessError(
                 1, ["podman", "build"], stderr="build failed"
             )
@@ -254,7 +254,7 @@ class TestEnsureCaCert:
 
         pm = ProxyManager(upstream_dns="1.1.1.1")
 
-        with patch("lib.sandbox._proxy.MITMPROXY_CONFDIR", tmp_path):
+        with patch("airut.sandbox._proxy.MITMPROXY_CONFDIR", tmp_path):
             result = pm._ensure_ca_cert()
 
         assert result == cert
@@ -270,11 +270,11 @@ class TestEnsureCaCert:
         mock_proc.wait.return_value = None
 
         with (
-            patch("lib.sandbox._proxy.MITMPROXY_CONFDIR", tmp_path),
+            patch("airut.sandbox._proxy.MITMPROXY_CONFDIR", tmp_path),
             patch(
-                "lib.sandbox._proxy.subprocess.Popen", return_value=mock_proc
+                "airut.sandbox._proxy.subprocess.Popen", return_value=mock_proc
             ),
-            patch("lib.sandbox._proxy.time.sleep") as mock_sleep,
+            patch("airut.sandbox._proxy.time.sleep") as mock_sleep,
         ):
             # Simulate cert file appearing after a few polls
             call_count = 0
@@ -301,11 +301,11 @@ class TestEnsureCaCert:
         mock_proc.wait.return_value = None
 
         with (
-            patch("lib.sandbox._proxy.MITMPROXY_CONFDIR", tmp_path),
+            patch("airut.sandbox._proxy.MITMPROXY_CONFDIR", tmp_path),
             patch(
-                "lib.sandbox._proxy.subprocess.Popen", return_value=mock_proc
+                "airut.sandbox._proxy.subprocess.Popen", return_value=mock_proc
             ),
-            patch("lib.sandbox._proxy.time.sleep"),
+            patch("airut.sandbox._proxy.time.sleep"),
         ):
             with pytest.raises(
                 ProxyError, match="Failed to generate CA certificate"
@@ -327,11 +327,11 @@ class TestEnsureCaCert:
         mock_proc.kill.return_value = None
 
         with (
-            patch("lib.sandbox._proxy.MITMPROXY_CONFDIR", tmp_path),
+            patch("airut.sandbox._proxy.MITMPROXY_CONFDIR", tmp_path),
             patch(
-                "lib.sandbox._proxy.subprocess.Popen", return_value=mock_proc
+                "airut.sandbox._proxy.subprocess.Popen", return_value=mock_proc
             ),
-            patch("lib.sandbox._proxy.time.sleep") as mock_sleep,
+            patch("airut.sandbox._proxy.time.sleep") as mock_sleep,
         ):
             call_count = 0
 
@@ -448,7 +448,7 @@ class TestRunProxyContainer:
         allowlist_path = tmp_path / "allowlist.json"
         allowlist_path.write_text("[]")
 
-        with patch("lib.sandbox._proxy.subprocess.run") as mock_run:
+        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             pm._run_proxy_container(
                 "airut-proxy-task1",
@@ -475,7 +475,7 @@ class TestRunProxyContainer:
         replacement_path = tmp_path / "replacements.json"
         replacement_path.write_text("{}")
 
-        with patch("lib.sandbox._proxy.subprocess.run") as mock_run:
+        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             pm._run_proxy_container(
                 "airut-proxy-task1",
@@ -497,7 +497,7 @@ class TestRunProxyContainer:
         log_path = tmp_path / "network-sandbox.log"
         log_path.touch()
 
-        with patch("lib.sandbox._proxy.subprocess.run") as mock_run:
+        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             pm._run_proxy_container(
                 "airut-proxy-task1",
@@ -517,7 +517,7 @@ class TestRunProxyContainer:
         allowlist_path = tmp_path / "allowlist.json"
         allowlist_path.write_text("[]")
 
-        with patch("lib.sandbox._proxy.subprocess.run") as mock_run:
+        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.CalledProcessError(
                 1, ["podman", "run"], stderr="container start failed"
             )
@@ -539,7 +539,7 @@ class TestWaitForProxyReady:
         """Proxy ready on first probe."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
 
-        with patch("lib.sandbox._proxy.subprocess.run") as mock_run:
+        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             pm._wait_for_proxy_ready("airut-proxy-task1")
 
@@ -553,8 +553,8 @@ class TestWaitForProxyReady:
         pm = ProxyManager(upstream_dns="1.1.1.1")
 
         with (
-            patch("lib.sandbox._proxy.subprocess.run") as mock_run,
-            patch("lib.sandbox._proxy.time.sleep"),
+            patch("airut.sandbox._proxy.subprocess.run") as mock_run,
+            patch("airut.sandbox._proxy.time.sleep"),
         ):
             # Fail twice, then succeed
             mock_run.side_effect = [
@@ -571,9 +571,9 @@ class TestWaitForProxyReady:
         pm = ProxyManager(upstream_dns="1.1.1.1")
 
         with (
-            patch("lib.sandbox._proxy.subprocess.run") as mock_run,
-            patch("lib.sandbox._proxy.time.sleep"),
-            patch("lib.sandbox._proxy.time.monotonic") as mock_time,
+            patch("airut.sandbox._proxy.subprocess.run") as mock_run,
+            patch("airut.sandbox._proxy.time.sleep"),
+            patch("airut.sandbox._proxy.time.monotonic") as mock_time,
         ):
             # Simulate time progressing past deadline
             mock_time.side_effect = [0.0, 0.1, 6.0]
@@ -590,7 +590,7 @@ class TestRemoveContainer:
         """Removes container successfully."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
 
-        with patch("lib.sandbox._proxy.subprocess.run") as mock_run:
+        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             pm._remove_container("airut-proxy-task1")
 
@@ -605,7 +605,7 @@ class TestRemoveContainer:
         """Handles already-removed container (idempotent)."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
 
-        with patch("lib.sandbox._proxy.subprocess.run") as mock_run:
+        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.CalledProcessError(
                 1, ["podman", "rm"]
             )
@@ -619,7 +619,7 @@ class TestCreateInternalNetwork:
         """Creates internal network with correct args."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
 
-        with patch("lib.sandbox._proxy.subprocess.run") as mock_run:
+        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             pm._create_internal_network(
                 "airut-conv-task1",
@@ -642,7 +642,7 @@ class TestCreateInternalNetwork:
         """Raises ProxyError when network creation fails."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
 
-        with patch("lib.sandbox._proxy.subprocess.run") as mock_run:
+        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.CalledProcessError(
                 1, ["podman", "network", "create"], stderr="network exists"
             )
@@ -663,7 +663,7 @@ class TestCreateEgressNetwork:
         """Creates egress network with correct args."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
 
-        with patch("lib.sandbox._proxy.subprocess.run") as mock_run:
+        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             pm._create_egress_network()
 
@@ -679,7 +679,7 @@ class TestCreateEgressNetwork:
         """Raises ProxyError when egress network creation fails."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
 
-        with patch("lib.sandbox._proxy.subprocess.run") as mock_run:
+        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.CalledProcessError(
                 1, ["podman", "network", "create"], stderr="create failed"
             )
@@ -713,7 +713,7 @@ class TestRemoveNetwork:
         """Removes network successfully."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
 
-        with patch("lib.sandbox._proxy.subprocess.run") as mock_run:
+        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
             pm._remove_network("test-net")
 
@@ -728,7 +728,7 @@ class TestRemoveNetwork:
         """Handles already-removed network (idempotent)."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
 
-        with patch("lib.sandbox._proxy.subprocess.run") as mock_run:
+        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.CalledProcessError(
                 1, ["podman", "network", "rm"]
             )
@@ -742,7 +742,7 @@ class TestCleanupOrphans:
         """Removes orphaned containers and networks."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
 
-        with patch("lib.sandbox._proxy.subprocess.run") as mock_run:
+        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             # First call: list containers (returns two names)
             # Second call: remove first container
             # Third call: remove second container
@@ -770,7 +770,7 @@ class TestCleanupOrphans:
         """Handles empty container/network lists."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
 
-        with patch("lib.sandbox._proxy.subprocess.run") as mock_run:
+        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             empty_result = MagicMock()
             empty_result.stdout = ""
 
@@ -787,7 +787,7 @@ class TestCleanupOrphans:
         """Continues to network cleanup when container list fails."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
 
-        with patch("lib.sandbox._proxy.subprocess.run") as mock_run:
+        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             network_result = MagicMock()
             network_result.stdout = ""
 
@@ -804,7 +804,7 @@ class TestCleanupOrphans:
         """Handles failure in network listing."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
 
-        with patch("lib.sandbox._proxy.subprocess.run") as mock_run:
+        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             container_result = MagicMock()
             container_result.stdout = ""
 

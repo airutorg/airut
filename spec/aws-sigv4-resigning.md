@@ -688,7 +688,7 @@ replaced).
 
 ### Proxy Container
 
-The re-signing logic runs in `lib/_bundled/proxy/proxy_filter.py` inside the
+The re-signing logic runs in `airut/_bundled/proxy/proxy_filter.py` inside the
 proxy container. New dependencies:
 
 - **`hmac` + `hashlib`** (stdlib) — SigV4 signing key derivation and signature
@@ -699,7 +699,7 @@ proxy container. New dependencies:
 - **`urllib.parse`** (stdlib) — URL encoding for canonical request construction.
   Already available.
 
-The proxy Dockerfile (`lib/_bundled/proxy/proxy.dockerfile`) needs
+The proxy Dockerfile (`airut/_bundled/proxy/proxy.dockerfile`) needs
 `cryptography` added to its pip install.
 
 ### No SDK Dependency

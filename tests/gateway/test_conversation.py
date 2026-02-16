@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lib.gateway.conversation import (
+from airut.gateway.conversation import (
     ConversationError,
     ConversationManager,
     GitCloneError,
@@ -22,7 +22,7 @@ from lib.gateway.conversation import (
 @pytest.fixture(autouse=True)
 def mock_mirror(master_repo):
     """Mock GitMirrorCache to use real git clone for testing."""
-    with patch("lib.gateway.conversation.GitMirrorCache") as mock_cls:
+    with patch("airut.gateway.conversation.GitMirrorCache") as mock_cls:
         mock_instance = MagicMock()
         # Mock ensure_mirror_exists to do nothing
         mock_instance.ensure_mirror_exists.return_value = None

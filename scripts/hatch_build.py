@@ -13,12 +13,12 @@ This module provides two hatchling hooks that work together:
    from the nearest ``v*`` tag (e.g. ``v0.9.0`` → ``0.9.0``).
 
 2. **Build hook** (``GitVersionBuildHook``) — generates
-   ``lib/_version.py`` with the full version string, short SHA and full
+   ``airut/_version.py`` with the full version string, short SHA and full
    SHA so that the running service can display version info without
    needing git at runtime.
 
 When building from an sdist (no ``.git`` directory), both hooks fall
-back to reading the previously generated ``lib/_version.py``.
+back to reading the previously generated ``airut/_version.py``.
 """
 
 from __future__ import annotations
@@ -141,7 +141,7 @@ def _tag_to_pep440(tag: str) -> str:
 
 
 def _read_version_from_file(root: Path) -> str | None:
-    """Read VERSION from an existing ``lib/_version.py``.
+    """Read VERSION from an existing ``airut/_version.py``.
 
     Used as fallback when git is unavailable (e.g. building wheel from
     sdist).
@@ -150,7 +150,7 @@ def _read_version_from_file(root: Path) -> str | None:
         The version string (with ``v`` prefix stripped), or None if the
         file doesn't exist or can't be parsed.
     """
-    version_file = root / "lib" / "_version.py"
+    version_file = root / "airut" / "_version.py"
     if not version_file.exists():
         return None
 
@@ -186,7 +186,7 @@ class GitVersionMetadataHook(_MetaBase):
     Reads the version from ``git describe --tags --match v*`` and
     converts it to a PEP 440 version string.  When git is unavailable
     (e.g. building a wheel from an sdist), falls back to reading the
-    version from the previously generated ``lib/_version.py``.
+    version from the previously generated ``airut/_version.py``.
     """
 
     PLUGIN_NAME = "git-version"
@@ -222,7 +222,7 @@ class GitVersionBuildHook(_BuildBase):
         build_data: dict[str, Any],
     ) -> None:
         """Generate lib/_version.py with embedded version info."""
-        version_file = Path(self.root) / "lib" / "_version.py"
+        version_file = Path(self.root) / "airut" / "_version.py"
 
         try:
             ver, sha_short, sha_full = _get_build_version()
@@ -234,7 +234,7 @@ class GitVersionBuildHook(_BuildBase):
             if version_file.exists():
                 build_data.setdefault("force_include", {})[
                     str(version_file)
-                ] = "lib/_version.py"
+                ] = "airut/_version.py"
             return
 
         version_file.write_text(
@@ -246,7 +246,7 @@ class GitVersionBuildHook(_BuildBase):
         )
         # Ensure the file is included in the build
         build_data.setdefault("force_include", {})[str(version_file)] = (
-            "lib/_version.py"
+            "airut/_version.py"
         )
 
 

@@ -8,7 +8,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
-from lib.gateway.dotenv_loader import load_dotenv_once, reset_dotenv_state
+from airut.gateway.dotenv_loader import load_dotenv_once, reset_dotenv_state
 
 
 class TestLoadDotenvOnce:
@@ -26,7 +26,7 @@ class TestLoadDotenvOnce:
         with (
             patch("dotenv.load_dotenv", mock_ld),
             patch(
-                "lib.gateway.config.get_dotenv_path",
+                "airut.gateway.config.get_dotenv_path",
                 return_value=xdg_env,
             ),
         ):
@@ -43,10 +43,10 @@ class TestLoadDotenvOnce:
         with (
             patch("dotenv.load_dotenv", mock_ld),
             patch(
-                "lib.gateway.config.get_dotenv_path",
+                "airut.gateway.config.get_dotenv_path",
                 return_value=xdg_env,
             ),
-            patch("lib.gateway.dotenv_loader.Path") as mock_path_cls,
+            patch("airut.gateway.dotenv_loader.Path") as mock_path_cls,
         ):
             # CWD .env does not exist
             mock_cwd_env = MagicMock()
@@ -67,11 +67,11 @@ class TestLoadDotenvOnce:
         with (
             patch("dotenv.load_dotenv", mock_ld),
             patch(
-                "lib.gateway.config.get_dotenv_path",
+                "airut.gateway.config.get_dotenv_path",
                 return_value=xdg_env,
             ),
             patch(
-                "lib.gateway.dotenv_loader.Path.cwd",
+                "airut.gateway.dotenv_loader.Path.cwd",
                 return_value=cwd_env.parent,
             ),
         ):
@@ -90,11 +90,11 @@ class TestLoadDotenvOnce:
         with (
             patch("dotenv.load_dotenv", mock_ld),
             patch(
-                "lib.gateway.config.get_dotenv_path",
+                "airut.gateway.config.get_dotenv_path",
                 return_value=xdg_env,
             ),
             patch(
-                "lib.gateway.dotenv_loader.Path.cwd",
+                "airut.gateway.dotenv_loader.Path.cwd",
                 return_value=cwd_env.parent,
             ),
         ):
@@ -111,11 +111,11 @@ class TestLoadDotenvOnce:
         with (
             patch("dotenv.load_dotenv", mock_ld),
             patch(
-                "lib.gateway.config.get_dotenv_path",
+                "airut.gateway.config.get_dotenv_path",
                 return_value=xdg_env,
             ),
             patch(
-                "lib.gateway.dotenv_loader.Path.cwd",
+                "airut.gateway.dotenv_loader.Path.cwd",
                 return_value=tmp_path / "also_nonexistent",
             ),
         ):
@@ -130,7 +130,7 @@ class TestLoadDotenvOnce:
         with (
             patch("dotenv.load_dotenv", mock_ld),
             patch(
-                "lib.gateway.config.get_dotenv_path",
+                "airut.gateway.config.get_dotenv_path",
                 return_value=xdg_env,
             ),
         ):

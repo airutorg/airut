@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from lib.claude_output.types import Usage
-from lib.conversation.conversation_store import (
+from airut.claude_output.types import Usage
+from airut.conversation.conversation_store import (
     CONVERSATION_FILE_NAME,
     ConversationMetadata,
     ConversationStore,

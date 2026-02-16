@@ -37,7 +37,7 @@ dev = [
 ]
 
 [project.scripts]
-airut = "lib.airut:cli"
+airut = "airut.cli:cli"
 
 [project.urls]
 Homepage = "https://github.com/airutorg/airut"
@@ -51,12 +51,12 @@ path = "scripts/hatch_build.py"
 path = "scripts/hatch_build.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["lib"]
+packages = ["airut"]
 
 [tool.ruff]
 line-length = 80
 target-version = "py313"
-src = ["lib", "scripts"]
+src = ["airut", "scripts"]
 
 [tool.ruff.lint]
 select = [
@@ -82,7 +82,7 @@ indent-style = "space"
 docstring-code-format = true
 
 [tool.ruff.lint.isort]
-known-first-party = ["lib"]
+known-first-party = ["airut"]
 force-single-line = false
 lines-after-imports = 2
 
@@ -90,8 +90,8 @@ lines-after-imports = 2
 python-version = "3.13"
 
 [tool.ty.src]
-include = ["lib", "scripts", "tests"]
-exclude = ["lib/_bundled/proxy"]
+include = ["airut", "scripts", "tests"]
+exclude = ["airut/_bundled/proxy"]
 
 [tool.ty.terminal]
 error-on-warning = true

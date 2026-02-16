@@ -27,9 +27,9 @@ def _mock_sandbox(tmp_path: Path):
     storage_root = tmp_path / "state"
     storage_root.mkdir(exist_ok=True)
     with (
-        patch("lib.gateway.service.gateway.Sandbox", mock_sandbox_class),
+        patch("airut.gateway.service.gateway.Sandbox", mock_sandbox_class),
         patch(
-            "lib.gateway.config.user_state_path",
+            "airut.gateway.config.user_state_path",
             return_value=storage_root,
         ),
     ):
@@ -39,7 +39,7 @@ def _mock_sandbox(tmp_path: Path):
 @pytest.fixture
 def email_config(tmp_path: Path, master_repo: Path):
     """Test email service configuration."""
-    from lib.gateway.config import RepoServerConfig
+    from airut.gateway.config import RepoServerConfig
 
     return RepoServerConfig(
         repo_id="test",
@@ -63,9 +63,9 @@ def microsoft_oauth2_email_config(tmp_path: Path, master_repo: Path):
     Mocks MSAL ConfidentialClientApplication to prevent network requests
     during tests.
     """
-    from lib.gateway.config import RepoServerConfig
+    from airut.gateway.config import RepoServerConfig
 
-    with patch("lib.gateway.microsoft_oauth2.ConfidentialClientApplication"):
+    with patch("airut.gateway.microsoft_oauth2.ConfidentialClientApplication"):
         yield RepoServerConfig(
             repo_id="test",
             imap_server="outlook.office365.com",

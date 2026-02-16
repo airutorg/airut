@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from lib import install_services
+from airut import install_services
 
 
 @pytest.fixture
@@ -92,7 +92,7 @@ def test_uninstall_service_not_installed(mock_systemd_dir: Path) -> None:
     """Test uninstall_service when service is not installed."""
     unit_path = mock_systemd_dir / "test.service"
 
-    with patch("lib.install_services.systemctl_user") as mock_systemctl:
+    with patch("airut.install_services.systemctl_user") as mock_systemctl:
         install_services.uninstall_service("test.service", unit_path)
 
     mock_systemctl.assert_not_called()
@@ -103,7 +103,7 @@ def test_uninstall_service_success(mock_systemd_dir: Path) -> None:
     unit_path = mock_systemd_dir / "test.service"
     unit_path.touch()
 
-    with patch("lib.install_services.systemctl_user") as mock_systemctl:
+    with patch("airut.install_services.systemctl_user") as mock_systemctl:
         install_services.uninstall_service("test.service", unit_path)
 
     assert mock_systemctl.call_args_list == [
@@ -119,7 +119,7 @@ def test_uninstall_service_stop_fails(mock_systemd_dir: Path) -> None:
     unit_path = mock_systemd_dir / "test.service"
     unit_path.touch()
 
-    with patch("lib.install_services.systemctl_user") as mock_systemctl:
+    with patch("airut.install_services.systemctl_user") as mock_systemctl:
         mock_systemctl.side_effect = [
             RuntimeError("Not running"),
             None,
@@ -136,7 +136,7 @@ def test_uninstall_service_disable_fails(mock_systemd_dir: Path) -> None:
     unit_path = mock_systemd_dir / "test.service"
     unit_path.touch()
 
-    with patch("lib.install_services.systemctl_user") as mock_systemctl:
+    with patch("airut.install_services.systemctl_user") as mock_systemctl:
         mock_systemctl.side_effect = [
             None,  # stop succeeds
             RuntimeError("Not enabled"),  # disable fails
@@ -157,7 +157,7 @@ def test_uninstall_service_broken_symlink(mock_systemd_dir: Path) -> None:
     assert unit_path.is_symlink()
     assert not unit_path.exists()
 
-    with patch("lib.install_services.systemctl_user") as mock_systemctl:
+    with patch("airut.install_services.systemctl_user") as mock_systemctl:
         install_services.uninstall_service("test.service", unit_path)
 
     assert mock_systemctl.call_args_list == [
@@ -179,7 +179,7 @@ def test_uninstall_service_already_removed(mock_systemd_dir: Path) -> None:
             unit_path.unlink()
 
     with patch(
-        "lib.install_services.systemctl_user", side_effect=remove_on_disable
+        "airut.install_services.systemctl_user", side_effect=remove_on_disable
     ) as mock_systemctl:
         install_services.uninstall_service("test.service", unit_path)
 
@@ -209,7 +209,7 @@ def test_install_service_reinstall(mock_systemd_dir: Path) -> None:
 
     new_content = "[Unit]\nDescription=New\n"
 
-    with patch("lib.install_services.uninstall_service") as mock_uninstall:
+    with patch("airut.install_services.uninstall_service") as mock_uninstall:
         install_services.install_service(
             "test.service", new_content, mock_systemd_dir
         )
@@ -227,7 +227,7 @@ def test_install_service_broken_symlink_reinstall(
 
     new_content = "[Unit]\nDescription=New\n"
 
-    with patch("lib.install_services.systemctl_user"):
+    with patch("airut.install_services.systemctl_user"):
         install_services.install_service(
             "test.service", new_content, mock_systemd_dir
         )
@@ -241,7 +241,7 @@ def test_install_service_broken_symlink_reinstall(
 
 def test_enable_and_start_service() -> None:
     """Test enable_and_start_service enables and starts service."""
-    with patch("lib.install_services.systemctl_user") as mock_systemctl:
+    with patch("airut.install_services.systemctl_user") as mock_systemctl:
         install_services.enable_and_start_service("test.service")
 
     assert mock_systemctl.call_args_list == [
@@ -252,7 +252,7 @@ def test_enable_and_start_service() -> None:
 
 def test_enable_and_start_timer() -> None:
     """Test enable_and_start_service handles timer files."""
-    with patch("lib.install_services.systemctl_user") as mock_systemctl:
+    with patch("airut.install_services.systemctl_user") as mock_systemctl:
         install_services.enable_and_start_service("test.timer")
 
     assert mock_systemctl.call_args_list == [
@@ -263,7 +263,7 @@ def test_enable_and_start_timer() -> None:
 
 def test_enable_and_start_service_enable_fails() -> None:
     """Test enable_and_start_service continues if enable fails."""
-    with patch("lib.install_services.systemctl_user") as mock_systemctl:
+    with patch("airut.install_services.systemctl_user") as mock_systemctl:
         mock_systemctl.side_effect = [
             RuntimeError("Enable failed"),
             None,
@@ -276,7 +276,7 @@ def test_enable_and_start_service_enable_fails() -> None:
 
 def test_enable_and_start_service_start_fails() -> None:
     """Test enable_and_start_service continues if start fails."""
-    with patch("lib.install_services.systemctl_user") as mock_systemctl:
+    with patch("airut.install_services.systemctl_user") as mock_systemctl:
         mock_systemctl.side_effect = [
             None,  # enable succeeds
             RuntimeError("Start failed"),  # start fails
@@ -350,7 +350,7 @@ def test_check_linger_enabled(tmp_path: Path) -> None:
     with (
         patch.dict("os.environ", {"USER": "testuser"}),
         patch(
-            "lib.install_services.Path",
+            "airut.install_services.Path",
             side_effect=lambda p: (
                 tmp_path / "testuser" if "linger" in str(p) else Path(p)
             ),
@@ -370,13 +370,13 @@ def test_check_linger_not_enabled() -> None:
 
 def test_check_linger_enabled_via_file(tmp_path: Path) -> None:
     """Test check_linger succeeds when linger file exists."""
-    linger_dir = tmp_path / "var" / "lib" / "systemd" / "linger"
+    linger_dir = tmp_path / "var" / "airut" / "systemd" / "linger"
     linger_dir.mkdir(parents=True)
     (linger_dir / "testuser").touch()
 
     with (
         patch.dict("os.environ", {"USER": "testuser"}),
-        patch("lib.install_services.Path") as mock_path,
+        patch("airut.install_services.Path") as mock_path,
     ):
         mock_path.return_value = linger_dir / "testuser"
         install_services.check_linger()
@@ -421,15 +421,15 @@ def test_get_airut_path_not_on_path() -> None:
 def test_install_services() -> None:
     """Test install_services installs gateway service."""
     with (
-        patch("lib.install_services.check_linger"),
-        patch("lib.install_services.get_systemd_user_dir") as mock_get_dir,
+        patch("airut.install_services.check_linger"),
+        patch("airut.install_services.get_systemd_user_dir") as mock_get_dir,
         patch(
-            "lib.install_services.get_airut_path",
+            "airut.install_services.get_airut_path",
             return_value="/usr/local/bin/airut",
         ),
-        patch("lib.install_services.install_service") as mock_install,
-        patch("lib.install_services.systemctl_user") as mock_systemctl,
-        patch("lib.install_services.enable_and_start_service") as mock_enable,
+        patch("airut.install_services.install_service") as mock_install,
+        patch("airut.install_services.systemctl_user") as mock_systemctl,
+        patch("airut.install_services.enable_and_start_service") as mock_enable,
     ):
         mock_systemd = MagicMock()
         mock_get_dir.return_value = mock_systemd
@@ -444,7 +444,7 @@ def test_install_services() -> None:
 def test_install_services_linger_check_fails() -> None:
     """Test install_services aborts when linger is not enabled."""
     with patch(
-        "lib.install_services.check_linger",
+        "airut.install_services.check_linger",
         side_effect=RuntimeError("Linger is not enabled"),
     ):
         with pytest.raises(RuntimeError, match="Linger is not enabled"):
@@ -457,9 +457,9 @@ def test_install_services_linger_check_fails() -> None:
 def test_uninstall_services() -> None:
     """Test uninstall_services removes gateway service."""
     with (
-        patch("lib.install_services.get_systemd_user_dir") as mock_get_dir,
-        patch("lib.install_services.uninstall_service") as mock_uninstall,
-        patch("lib.install_services.systemctl_user") as mock_systemctl,
+        patch("airut.install_services.get_systemd_user_dir") as mock_get_dir,
+        patch("airut.install_services.uninstall_service") as mock_uninstall,
+        patch("airut.install_services.systemctl_user") as mock_systemctl,
     ):
         mock_systemd = MagicMock()
         mock_get_dir.return_value = mock_systemd

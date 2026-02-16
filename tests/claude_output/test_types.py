@@ -5,7 +5,7 @@
 
 """Tests for lib/claude_output/types.py."""
 
-from lib.claude_output.types import (
+from airut.claude_output.types import (
     EventType,
     ResultSummary,
     StreamEvent,

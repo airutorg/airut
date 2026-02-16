@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from lib.allowlist import (
+from airut.allowlist import (
     Allowlist,
     AllowlistDomain,
     AllowlistUrlPattern,

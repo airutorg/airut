@@ -9,7 +9,7 @@ import threading
 import time
 from dataclasses import dataclass
 
-from lib.dashboard.versioned import VersionClock, Versioned, VersionedStore
+from airut.dashboard.versioned import VersionClock, Versioned, VersionedStore
 
 
 class TestVersionClock:

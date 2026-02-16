@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
-from lib.conversation import CONVERSATION_FILE_NAME
+from airut.conversation import CONVERSATION_FILE_NAME
 
 from .conftest import get_message_text
 from .environment import IntegrationEnvironment

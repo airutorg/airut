@@ -103,9 +103,10 @@ Generation uses `secrets.choice()` (cryptographically secure).
 
 ## Replacement Map
 
-The replacement map is built by `prepare_secrets()` in `lib/sandbox/secrets.py`
-and passed to the proxy via `SecretReplacements` (an opaque container). The
-internal representation maps surrogate tokens to replacement entries:
+The replacement map is built by `prepare_secrets()` in
+`airut/sandbox/secrets.py` and passed to the proxy via `SecretReplacements` (an
+opaque container). The internal representation maps surrogate tokens to
+replacement entries:
 
 ```
 # Internal structure (not part of public API)
@@ -131,7 +132,7 @@ surrogate -> ReplacementEntry(real_value, scopes, headers)
 
 ## Proxy Replacement
 
-The proxy addon (`lib/_bundled/proxy/proxy_filter.py`) performs replacement in
+The proxy addon (`airut/_bundled/proxy/proxy_filter.py`) performs replacement in
 `request()`:
 
 1. Load replacement map from `/replacements.json` at startup
@@ -173,7 +174,7 @@ Gateway config resolution
     └─ Provide MaskedSecret / SigningCredential to sandbox
            │
            ▼
-prepare_secrets() (lib/sandbox/secrets.py)
+prepare_secrets() (airut/sandbox/secrets.py)
     │
     ├─ Generate surrogates for masked secrets
     ├─ Return PreparedSecrets (env_vars + SecretReplacements)

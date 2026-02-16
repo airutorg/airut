@@ -53,7 +53,7 @@ class TestPollingLoop:
     def test_reconnects_on_imap_error(
         self, email_config, tmp_path: Path
     ) -> None:
-        from lib.gateway import IMAPConnectionError
+        from airut.gateway import IMAPConnectionError
 
         svc, handler = make_service(email_config, tmp_path)
         call_count = 0
@@ -74,7 +74,7 @@ class TestPollingLoop:
         assert handler.listener.connect.call_count == 1
 
     def test_max_reconnect_attempts(self, email_config, tmp_path: Path) -> None:
-        from lib.gateway import IMAPConnectionError
+        from airut.gateway import IMAPConnectionError
 
         svc, handler = make_service(email_config, tmp_path)
         handler.listener.fetch_unread.side_effect = IMAPConnectionError("fail")
@@ -86,7 +86,7 @@ class TestPollingLoop:
         # The critical section logs the error and returns
 
     def test_reconnect_failure(self, email_config, tmp_path: Path) -> None:
-        from lib.gateway import IMAPConnectionError
+        from airut.gateway import IMAPConnectionError
 
         svc, handler = make_service(email_config, tmp_path)
         call_count = 0
@@ -282,7 +282,7 @@ class TestIdleLoop:
     def test_idle_error_forces_reconnect(
         self, email_config, tmp_path: Path
     ) -> None:
-        from lib.gateway import IMAPIdleError
+        from airut.gateway import IMAPIdleError
 
         svc, handler = make_service(email_config, tmp_path)
         update_repo(handler, idle_reconnect_interval_seconds=99999)
@@ -306,7 +306,7 @@ class TestIdleLoop:
     def test_imap_connection_error_reconnects(
         self, email_config, tmp_path: Path
     ) -> None:
-        from lib.gateway import IMAPConnectionError
+        from airut.gateway import IMAPConnectionError
 
         svc, handler = make_service(email_config, tmp_path)
         update_repo(handler, idle_reconnect_interval_seconds=99999)
@@ -328,7 +328,7 @@ class TestIdleLoop:
     def test_imap_max_reconnect_raises(
         self, email_config, tmp_path: Path
     ) -> None:
-        from lib.gateway import IMAPConnectionError
+        from airut.gateway import IMAPConnectionError
 
         svc, handler = make_service(email_config, tmp_path)
         update_repo(handler, idle_reconnect_interval_seconds=99999)
@@ -341,7 +341,7 @@ class TestIdleLoop:
         # The critical section logs the error and returns
 
     def test_imap_reconnect_failure(self, email_config, tmp_path: Path) -> None:
-        from lib.gateway import IMAPConnectionError
+        from airut.gateway import IMAPConnectionError
 
         svc, handler = make_service(email_config, tmp_path)
         update_repo(handler, idle_reconnect_interval_seconds=99999)

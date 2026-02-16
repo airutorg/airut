@@ -7,8 +7,8 @@
 
 from werkzeug.test import Client
 
-from lib.dashboard.server import DashboardServer
-from lib.dashboard.tracker import TaskTracker
+from airut.dashboard.server import DashboardServer
+from airut.dashboard.tracker import TaskTracker
 from tests.dashboard.conftest import DashboardHarness, result_event
 
 
@@ -257,8 +257,8 @@ class TestEventRendering:
         """Test rendering with reply but no events in event log."""
         from datetime import UTC, datetime
 
-        from lib.claude_output.types import Usage
-        from lib.conversation import ReplySummary
+        from airut.claude_output.types import Usage
+        from airut.conversation import ReplySummary
 
         reply = ReplySummary(
             session_id="",
@@ -1155,7 +1155,7 @@ class TestSSEServerSideRendering:
         Regression test: with offset=0, SSE re-sent ALL events as raw
         HTML fragments after the structured timeline, duplicating them.
         """
-        from lib.sandbox import EventLog
+        from airut.sandbox import EventLog
 
         # Write events to the event log
         harness.add_events(

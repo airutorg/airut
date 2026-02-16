@@ -12,12 +12,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lib.claude_output import StreamEvent, parse_stream_events
-from lib.claude_output.types import Usage
-from lib.gateway.config import RepoConfig
-from lib.gateway.service import build_recovery_prompt
-from lib.gateway.service.message_processing import process_message
-from lib.sandbox import ExecutionResult, Outcome
+from airut.claude_output import StreamEvent, parse_stream_events
+from airut.claude_output.types import Usage
+from airut.gateway.config import RepoConfig
+from airut.gateway.service import build_recovery_prompt
+from airut.gateway.service.message_processing import process_message
+from airut.sandbox import ExecutionResult, Outcome
 
 from .conftest import make_message, make_service, update_global
 
@@ -114,7 +114,7 @@ class TestProcessMessage:
         rc = _make_repo_config()
         # from_mirror now returns (RepoConfig, ReplacementMap) tuple
         with patch(
-            "lib.gateway.service.message_processing.RepoConfig.from_mirror",
+            "airut.gateway.service.message_processing.RepoConfig.from_mirror",
             return_value=(rc, {}),
         ) as mock_rc:
             self._mock_repo_config = mock_rc
@@ -180,7 +180,7 @@ class TestProcessMessage:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -252,7 +252,7 @@ class TestProcessMessage:
         )
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -268,7 +268,7 @@ class TestProcessMessage:
         msg = make_message(body="")
 
         with patch(
-            "lib.gateway.service.message_processing.extract_body",
+            "airut.gateway.service.message_processing.extract_body",
             return_value="",
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -295,7 +295,7 @@ class TestProcessMessage:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -310,14 +310,14 @@ class TestProcessMessage:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
         assert success is False
 
     def test_git_clone_error(self, email_config: Any, tmp_path: Path) -> None:
-        from lib.gateway import GitCloneError
+        from airut.gateway import GitCloneError
 
         svc, handler, _ = self._setup_svc(email_config, tmp_path)
         handler.conversation_manager.initialize_new.side_effect = GitCloneError(
@@ -334,7 +334,7 @@ class TestProcessMessage:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -353,7 +353,7 @@ class TestProcessMessage:
         msg = make_message(subject="[ID:aabb1122] Test", body="Continue")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "conv1", handler)
@@ -373,11 +373,11 @@ class TestProcessMessage:
 
         with (
             patch(
-                "lib.gateway.service.message_processing.ConversationStore",
+                "airut.gateway.service.message_processing.ConversationStore",
                 return_value=mock_cs,
             ),
             patch(
-                "lib.gateway.service.message_processing.extract_model_from_address",
+                "airut.gateway.service.message_processing.extract_model_from_address",
                 return_value="opus",
             ),
         ):
@@ -392,11 +392,11 @@ class TestProcessMessage:
 
         with (
             patch(
-                "lib.gateway.service.message_processing.ConversationStore",
+                "airut.gateway.service.message_processing.ConversationStore",
                 return_value=mock_cs,
             ),
             patch(
-                "lib.gateway.service.message_processing.extract_attachments",
+                "airut.gateway.service.message_processing.extract_attachments",
                 return_value=["report.pdf"],
             ),
         ):
@@ -412,7 +412,7 @@ class TestProcessMessage:
         msg = make_message(body="Check")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             process_message(svc, msg, "task1", handler)
@@ -429,7 +429,7 @@ class TestProcessMessage:
         msg = make_message(body="Do stuff")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             process_message(svc, msg, "task1", handler)
@@ -446,7 +446,7 @@ class TestProcessMessage:
         msg = make_message(body="Do stuff")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             process_message(svc, msg, "task1", handler)
@@ -471,11 +471,11 @@ class TestProcessMessage:
 
         with (
             patch(
-                "lib.gateway.service.message_processing.ConversationStore",
+                "airut.gateway.service.message_processing.ConversationStore",
                 return_value=mock_cs,
             ),
             patch(
-                "lib.gateway.service.message_processing.extract_model_from_address",
+                "airut.gateway.service.message_processing.extract_model_from_address",
                 return_value="opus",
             ),
         ):
@@ -491,7 +491,7 @@ class TestProcessMessage:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             process_message(svc, msg, "temp-123", handler)
@@ -506,7 +506,7 @@ class TestProcessMessage:
         msg = make_message(subject=long_subject, body="Do stuff")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             process_message(svc, msg, "task1", handler)
@@ -529,7 +529,7 @@ class TestProcessMessage:
         msg = make_message(body="Do stuff")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             process_message(svc, msg, "task1", handler)
@@ -549,7 +549,7 @@ class TestProcessMessage:
         msg = make_message(body="Do stuff")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             success, _ = process_message(svc, msg, "task1", handler)
@@ -571,11 +571,11 @@ class TestProcessMessage:
 
         with (
             patch(
-                "lib.gateway.service.message_processing.ConversationStore",
+                "airut.gateway.service.message_processing.ConversationStore",
                 return_value=mock_cs,
             ),
             patch(
-                "lib.gateway.service.message_processing.extract_error_summary",
+                "airut.gateway.service.message_processing.extract_error_summary",
                 return_value="Error summary text",
             ),
         ):
@@ -616,7 +616,7 @@ class TestProcessMessage:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -640,7 +640,7 @@ class TestProcessMessage:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -660,7 +660,7 @@ class TestProcessMessage:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -680,7 +680,7 @@ class TestProcessMessage:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -743,7 +743,7 @@ class TestProcessMessage:
         msg = make_message(subject="[ID:aabb1122] Test", body="Continue please")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -777,7 +777,7 @@ class TestProcessMessage:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -840,7 +840,7 @@ class TestProcessMessage:
         msg = make_message(subject="[ID:aabb1122] Test", body="Continue please")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -870,7 +870,7 @@ class TestProcessMessage:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -888,7 +888,7 @@ class TestBuildImageErrors:
         """Patch RepoConfig.from_mirror for all build image error tests."""
         rc = _make_repo_config()
         with patch(
-            "lib.gateway.service.message_processing.RepoConfig.from_mirror",
+            "airut.gateway.service.message_processing.RepoConfig.from_mirror",
             return_value=(rc, {}),
         ) as mock_rc:
             self._mock_repo_config = mock_rc
@@ -956,7 +956,7 @@ class TestBuildImageErrors:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_ss,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -985,7 +985,7 @@ class TestBuildImageErrors:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_ss,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -1014,7 +1014,7 @@ class TestBuildImageErrors:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_ss,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -1035,7 +1035,7 @@ class TestAllowlistParseError:
         """Patch RepoConfig.from_mirror with network sandbox enabled."""
         rc = _make_repo_config(network_sandbox_enabled=True)
         with patch(
-            "lib.gateway.service.message_processing.RepoConfig.from_mirror",
+            "airut.gateway.service.message_processing.RepoConfig.from_mirror",
             return_value=(rc, {}),
         ) as mock_rc:
             self._mock_repo_config = mock_rc
@@ -1099,7 +1099,7 @@ class TestAllowlistParseError:
         msg = make_message(body="Do something")
 
         with patch(
-            "lib.gateway.service.message_processing.ConversationStore",
+            "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_ss,
         ):
             success, conv_id = process_message(svc, msg, "task1", handler)
@@ -1168,7 +1168,10 @@ class TestConvertReplacementMap:
         self, email_config: Any, tmp_path: Path
     ) -> None:
         """ReplacementEntry and SigningCredentialEntry objects are converted."""
-        from lib.gateway.config import ReplacementEntry, SigningCredentialEntry
+        from airut.gateway.config import (
+            ReplacementEntry,
+            SigningCredentialEntry,
+        )
 
         svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
 
@@ -1191,11 +1194,11 @@ class TestConvertReplacementMap:
 
         with (
             patch(
-                "lib.gateway.service.message_processing.RepoConfig.from_mirror",
+                "airut.gateway.service.message_processing.RepoConfig.from_mirror",
                 return_value=(rc, replacement_map),
             ),
             patch(
-                "lib.gateway.service.message_processing.ConversationStore",
+                "airut.gateway.service.message_processing.ConversationStore",
                 return_value=mock_ss,
             ),
         ):

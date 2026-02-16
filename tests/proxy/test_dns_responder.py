@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lib._bundled.proxy.dns_responder import (
+from airut._bundled.proxy.dns_responder import (
     QCLASS_IN,
     QTYPE_A,
     TTL,
@@ -246,7 +246,7 @@ class TestRunDnsServer:
         mock_sock.sendto = MagicMock()
         return mock_sock
 
-    @patch("lib._bundled.proxy.dns_responder.socket.socket")
+    @patch("airut._bundled.proxy.dns_responder.socket.socket")
     def test_a_query_returns_proxy_ip(self, mock_socket_cls: MagicMock) -> None:
         """Any A query returns proxy IP response."""
         query_data = _build_query("api.github.com")
@@ -261,7 +261,7 @@ class TestRunDnsServer:
         # Response should contain the proxy IP
         assert b"\x0a\x00\x00\x01" in sent_data  # 10.0.0.1
 
-    @patch("lib._bundled.proxy.dns_responder.socket.socket")
+    @patch("airut._bundled.proxy.dns_responder.socket.socket")
     def test_unknown_domain_also_returns_proxy_ip(
         self, mock_socket_cls: MagicMock
     ) -> None:
@@ -286,7 +286,7 @@ class TestRunDnsServer:
         flags = struct.unpack("!H", sent_data[2:4])[0]
         assert flags & 0x000F == 0  # RCODE 0 (no error)
 
-    @patch("lib._bundled.proxy.dns_responder.socket.socket")
+    @patch("airut._bundled.proxy.dns_responder.socket.socket")
     def test_non_a_query_returns_notimp(
         self, mock_socket_cls: MagicMock
     ) -> None:
@@ -304,7 +304,7 @@ class TestRunDnsServer:
         flags = struct.unpack("!H", sent_data[2:4])[0]
         assert flags & 0x000F == 4  # RCODE NOTIMP
 
-    @patch("lib._bundled.proxy.dns_responder.socket.socket")
+    @patch("airut._bundled.proxy.dns_responder.socket.socket")
     def test_with_log_file(self, mock_socket_cls: MagicMock) -> None:
         """Log file receives messages for all resolved queries."""
         q1 = _build_query("api.github.com")
@@ -326,7 +326,7 @@ class TestRunDnsServer:
         assert "DNS A api.github.com -> 10.0.0.1" in log_content
         assert "DNS A evil.com -> 10.0.0.1" in log_content
 
-    @patch("lib._bundled.proxy.dns_responder.socket.socket")
+    @patch("airut._bundled.proxy.dns_responder.socket.socket")
     def test_notimp_logged(self, mock_socket_cls: MagicMock) -> None:
         """NOTIMP responses are logged."""
         query_data = _build_query("example.com", qtype=28)  # AAAA
@@ -340,7 +340,7 @@ class TestRunDnsServer:
         log_content = log_buf.getvalue()
         assert "DNS AAAA example.com -> NOTIMP" in log_content
 
-    @patch("lib._bundled.proxy.dns_responder.socket.socket")
+    @patch("airut._bundled.proxy.dns_responder.socket.socket")
     def test_exception_in_loop_continues(
         self, mock_socket_cls: MagicMock
     ) -> None:
@@ -356,7 +356,7 @@ class TestRunDnsServer:
         with pytest.raises(_StopServer):
             run_dns_server("10.0.0.1")
 
-    @patch("lib._bundled.proxy.dns_responder.socket.socket")
+    @patch("airut._bundled.proxy.dns_responder.socket.socket")
     def test_multiple_queries(self, mock_socket_cls: MagicMock) -> None:
         """Multiple queries are processed sequentially."""
         q1 = _build_query("allowed.com")
@@ -374,7 +374,7 @@ class TestRunDnsServer:
 
         assert mock_sock.sendto.call_count == 2
 
-    @patch("lib._bundled.proxy.dns_responder.socket.socket")
+    @patch("airut._bundled.proxy.dns_responder.socket.socket")
     def test_no_upstream_dns_resolution(
         self, mock_socket_cls: MagicMock
     ) -> None:
@@ -391,7 +391,7 @@ class TestRunDnsServer:
 
         with (
             patch(
-                "lib._bundled.proxy.dns_responder.socket.getaddrinfo"
+                "airut._bundled.proxy.dns_responder.socket.getaddrinfo"
             ) as mock_getaddrinfo,
             pytest.raises(_StopServer),
         ):
@@ -412,7 +412,7 @@ class TestRunDnsServer:
 class TestMain:
     """Tests for main() CLI entry point."""
 
-    @patch("lib._bundled.proxy.dns_responder.run_dns_server")
+    @patch("airut._bundled.proxy.dns_responder.run_dns_server")
     def test_with_explicit_ip(
         self,
         mock_run: MagicMock,
@@ -423,13 +423,13 @@ class TestMain:
         mock_run.assert_called_once()
         assert mock_run.call_args[0][0] == "10.0.0.1"
 
-    @patch("lib._bundled.proxy.dns_responder.run_dns_server")
+    @patch("airut._bundled.proxy.dns_responder.run_dns_server")
     @patch(
-        "lib._bundled.proxy.dns_responder.socket.gethostbyname",
+        "airut._bundled.proxy.dns_responder.socket.gethostbyname",
         return_value="172.17.0.2",
     )
     @patch(
-        "lib._bundled.proxy.dns_responder.socket.gethostname",
+        "airut._bundled.proxy.dns_responder.socket.gethostname",
         return_value="proxy-host",
     )
     def test_auto_detect_ip(
@@ -444,9 +444,10 @@ class TestMain:
         mock_run.assert_called_once()
         assert mock_run.call_args[0][0] == "172.17.0.2"
 
-    @patch("lib._bundled.proxy.dns_responder.run_dns_server")
+    @patch("airut._bundled.proxy.dns_responder.run_dns_server")
     @patch(
-        "lib._bundled.proxy.dns_responder._open_network_log", return_value=None
+        "airut._bundled.proxy.dns_responder._open_network_log",
+        return_value=None,
     )
     def test_no_log_file(
         self,
@@ -459,8 +460,8 @@ class TestMain:
         mock_run.assert_called_once()
         assert mock_run.call_args.kwargs.get("log_file") is None
 
-    @patch("lib._bundled.proxy.dns_responder.run_dns_server")
-    @patch("lib._bundled.proxy.dns_responder._open_network_log")
+    @patch("airut._bundled.proxy.dns_responder.run_dns_server")
+    @patch("airut._bundled.proxy.dns_responder._open_network_log")
     def test_with_log_file(
         self,
         mock_open_log: MagicMock,
@@ -485,7 +486,7 @@ class TestMainGuard:
 
     def test_main_guard_invokes_main(self) -> None:
         """``if __name__ == '__main__'`` calls main()."""
-        import lib._bundled.proxy.dns_responder as mod
+        import airut._bundled.proxy.dns_responder as mod
 
         with patch.object(mod, "main") as mock_main:
             # Simulate `python dns_responder.py` by exec'ing the guard

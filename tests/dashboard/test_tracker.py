@@ -9,7 +9,7 @@ import threading
 import time
 from unittest.mock import patch
 
-from lib.dashboard.tracker import (
+from airut.dashboard.tracker import (
     TaskState,
     TaskStatus,
     TaskTracker,
@@ -52,7 +52,7 @@ class TestTaskState:
         )
 
         # Time advances to 1060 (60 seconds in queue)
-        with patch("lib.dashboard.tracker.time.time", return_value=1060.0):
+        with patch("airut.dashboard.tracker.time.time", return_value=1060.0):
             assert task.queue_duration() == 60.0
 
     def test_queue_duration_started(self) -> None:
@@ -88,7 +88,7 @@ class TestTaskState:
             status=TaskStatus.IN_PROGRESS,
         )
 
-        with patch("lib.dashboard.tracker.time.time", return_value=1090.0):
+        with patch("airut.dashboard.tracker.time.time", return_value=1090.0):
             assert task.execution_duration() == 60.0
 
     def test_execution_duration_completed(self) -> None:
@@ -114,7 +114,7 @@ class TestTaskState:
             queued_at=1000.0,
         )
 
-        with patch("lib.dashboard.tracker.time.time", return_value=1120.0):
+        with patch("airut.dashboard.tracker.time.time", return_value=1120.0):
             assert task.total_duration() == 120.0
 
     def test_total_duration_completed(self) -> None:
@@ -208,7 +208,7 @@ class TestTaskTracker:
 
         # Advance time to ensure queued_at differs on resume
         with patch(
-            "lib.dashboard.tracker.time.time",
+            "airut.dashboard.tracker.time.time",
             return_value=first_queued_at + 1.0,
         ):
             # Resume (add again)

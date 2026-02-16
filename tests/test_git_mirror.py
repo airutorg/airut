@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from lib.git_mirror import GitMirrorCache, MirrorError
+from airut.git_mirror import GitMirrorCache, MirrorError
 
 
 @pytest.fixture

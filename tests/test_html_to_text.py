@@ -5,7 +5,7 @@
 
 """Tests for HTML to text conversion and HTML quote stripping."""
 
-from lib.html_to_text import html_to_text
+from airut.html_to_text import html_to_text
 
 
 def test_empty_input() -> None:

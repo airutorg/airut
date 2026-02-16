@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from lib.gateway.parsing import (
+from airut.gateway.parsing import (
     collect_outbox_files,
     decode_subject,
     extract_attachments,

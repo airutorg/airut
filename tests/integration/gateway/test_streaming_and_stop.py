@@ -21,8 +21,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
-from lib.conversation import ConversationStore
-from lib.sandbox.event_log import EventLog
+from airut.conversation import ConversationStore
+from airut.sandbox.event_log import EventLog
 
 from .conftest import get_message_text
 from .environment import IntegrationEnvironment

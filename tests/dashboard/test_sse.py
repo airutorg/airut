@@ -9,7 +9,7 @@ import json
 import threading
 from pathlib import Path
 
-from lib.dashboard.sse import (
+from airut.dashboard.sse import (
     SSEConnectionManager,
     _boot_state_to_dict,
     _repo_state_to_dict,
@@ -21,7 +21,7 @@ from lib.dashboard.sse import (
     sse_network_log_stream,
     sse_state_stream,
 )
-from lib.dashboard.tracker import (
+from airut.dashboard.tracker import (
     BootPhase,
     BootState,
     RepoState,
@@ -30,8 +30,8 @@ from lib.dashboard.tracker import (
     TaskStatus,
     TaskTracker,
 )
-from lib.dashboard.versioned import VersionClock, VersionedStore
-from lib.sandbox import EventLog, NetworkLog
+from airut.dashboard.versioned import VersionClock, VersionedStore
+from airut.sandbox import EventLog, NetworkLog
 
 
 class TestFormatSSEEvent:
@@ -506,7 +506,7 @@ class TestSSEEventsLogStream:
 
         # Write some events before starting stream
         event_log.start_new_reply()
-        from lib.claude_output import parse_stream_events
+        from airut.claude_output import parse_stream_events
 
         events = parse_stream_events(
             '{"type": "system", "subtype": "init", "session_id": "s1"}'
@@ -563,7 +563,7 @@ class TestSSEEventsLogStream:
         next(gen)
 
         # Write events while stream is running
-        from lib.claude_output import parse_stream_events
+        from airut.claude_output import parse_stream_events
 
         events = parse_stream_events(
             '{"type": "system", "subtype": "init", "session_id": "s1"}'
@@ -592,7 +592,7 @@ class TestSSEEventsLogStream:
         conv_dir.mkdir()
         event_log = EventLog(conv_dir)
 
-        from lib.claude_output import parse_stream_events
+        from airut.claude_output import parse_stream_events
 
         # Write events before starting the stream
         events = parse_stream_events(
@@ -644,7 +644,7 @@ class TestSSEEventsLogStream:
         conv_dir.mkdir()
         event_log = EventLog(conv_dir)
 
-        from lib.claude_output import parse_stream_events
+        from airut.claude_output import parse_stream_events
 
         gen = sse_events_log_stream(
             event_log, tracker, "t1", 0, poll_interval=0.01

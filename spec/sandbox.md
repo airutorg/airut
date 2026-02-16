@@ -1,6 +1,6 @@
 # Sandbox Library
 
-A standalone library (`lib/sandbox/`) for safe containerized execution of
+A standalone library (`airut/sandbox/`) for safe containerized execution of
 headless Claude Code. The sandbox owns container lifecycle, network isolation,
 event logging, and error detection. Protocol layers (email, Slack, automation)
 define what Claude sees (prompts, repos, files, mounts); the sandbox handles how
@@ -15,7 +15,7 @@ it runs safely.
    Claude session state (`.claude/`), and `network-sandbox.log` -- it creates,
    reads, and writes these files. Callers specify where to place them.
    Conversation metadata (`conversation.json`) is owned by the protocol layer
-   (`lib/conversation/ConversationStore`), not the sandbox.
+   (`airut/conversation/ConversationStore`), not the sandbox.
 3. **Typed interface**: No `Any` in the public API. Proper types for allowlists,
    secrets, environment variables, events, and errors.
 4. **Explicit lifecycle**: `Task` has an explicit lifecycle -- no context
@@ -119,7 +119,7 @@ The `claude/` subdirectory is created automatically inside
 the caller's mounts list.
 
 Conversation metadata (`conversation.json`) is **not** owned by the sandbox. It
-is managed by `lib/conversation/ConversationStore`, which the protocol layer
+is managed by `airut/conversation/ConversationStore`, which the protocol layer
 (e.g., the email gateway) is responsible for calling.
 
 ## Execution Flow
@@ -189,5 +189,5 @@ when reading back.
   Claude is still streaming, since appends do not modify existing content.
 - **Separation of concerns**: The event log stores raw streaming data. Summary
   metadata (session IDs, usage, cost, response text) is stored in
-  `conversation.json` by `lib/conversation/ConversationStore`, which is owned by
-  the protocol layer -- not the sandbox.
+  `conversation.json` by `airut/conversation/ConversationStore`, which is owned
+  by the protocol layer -- not the sandbox.

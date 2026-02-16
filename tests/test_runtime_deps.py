@@ -20,7 +20,7 @@ from pathlib import Path
 
 # Root of the project
 PROJECT_ROOT = Path(__file__).parent.parent
-LIB_DIR = PROJECT_ROOT / "lib"
+LIB_DIR = PROJECT_ROOT / "airut"
 
 # Directories excluded from runtime import scanning.
 # Proxy code runs inside its own container with independent deps.
@@ -102,7 +102,7 @@ def test_lib_imports_covered_by_runtime_deps() -> None:
     for name in imports:
         if name in stdlib:
             continue
-        if name == "lib":
+        if name == "airut":
             continue
         third_party.add(name)
 
@@ -124,7 +124,7 @@ def test_lib_imports_covered_by_runtime_deps() -> None:
             missing.append(f"{imp} (from {', '.join(dists)})")
 
     assert not missing, (
-        "lib/ imports third-party packages not declared as runtime "
+        "airut/ imports third-party packages not declared as runtime "
         "dependencies:\n"
         + "\n".join(f"  - {m}" for m in missing)
         + "\n\nAdd them to [project] dependencies in pyproject.toml."

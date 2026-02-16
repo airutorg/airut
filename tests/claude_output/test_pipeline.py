@@ -18,7 +18,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from lib.claude_output import (
+from airut.claude_output import (
     EventType,
     StreamEvent,
     TextBlock,
@@ -30,17 +30,17 @@ from lib.claude_output import (
     extract_session_id,
     parse_stream_events,
 )
-from lib.claude_output.types import Usage
-from lib.conversation import (
+from airut.claude_output.types import Usage
+from airut.conversation import (
     ConversationStore,
     ReplySummary,
 )
-from lib.dashboard.views.actions import (
+from airut.dashboard.views.actions import (
     render_actions_timeline,
     render_events_list,
     render_single_event,
 )
-from lib.sandbox import EventLog
+from airut.sandbox import EventLog
 
 
 def _build_stdout(*event_dicts: dict) -> str:

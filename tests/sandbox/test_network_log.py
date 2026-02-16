@@ -7,7 +7,7 @@
 
 from pathlib import Path
 
-from lib.sandbox.network_log import NetworkLog
+from airut.sandbox.network_log import NetworkLog
 
 
 class TestNetworkLogPath:

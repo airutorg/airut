@@ -5,7 +5,7 @@
 
 """Shared fixtures for proxy module tests.
 
-Installs mitmproxy mocks so ``lib._bundled.proxy.proxy_filter`` can be
+Installs mitmproxy mocks so ``airut._bundled.proxy.proxy_filter`` can be
 imported without the real mitmproxy package (which is only installed
 inside the proxy container).
 """
@@ -118,15 +118,16 @@ def _install_mitmproxy_mock() -> None:
 
 
 def _add_proxy_to_path() -> None:
-    """Add ``lib/_bundled/proxy/`` to sys.path for bare ``import aws_signing``.
+    """Add ``airut/_bundled/proxy/``.
 
+    to sys.path for bare ``import aws_signing``.
     Inside the container, ``aws_signing.py`` lives at ``/aws_signing.py``
     and is imported via bare ``from aws_signing import ...``.  In tests,
-    ``lib/_bundled/proxy/`` must be on sys.path for that import to work.
+    ``airut/_bundled/proxy/`` must be on sys.path for that import to work.
     """
     from importlib.resources import files
 
-    proxy_dir = str(files("lib._bundled.proxy"))
+    proxy_dir = str(files("airut._bundled.proxy"))
     if proxy_dir not in sys.path:
         sys.path.insert(0, proxy_dir)
 

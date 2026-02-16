@@ -5,7 +5,7 @@
 
 """Tests for lib/sandbox/_entrypoint.py -- container entrypoint generation."""
 
-from lib.sandbox._entrypoint import ENTRYPOINT_SCRIPT, get_entrypoint_content
+from airut.sandbox._entrypoint import ENTRYPOINT_SCRIPT, get_entrypoint_content
 
 
 class TestGetEntrypointContent:

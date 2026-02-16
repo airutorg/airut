@@ -12,16 +12,19 @@ from pathlib import Path
 import pytest
 from werkzeug.test import Client
 
-from lib.claude_output.extract import extract_result_summary, extract_session_id
-from lib.claude_output.types import Usage
-from lib.conversation import (
+from airut.claude_output.extract import (
+    extract_result_summary,
+    extract_session_id,
+)
+from airut.claude_output.types import Usage
+from airut.conversation import (
     CONVERSATION_FILE_NAME,
     ConversationStore,
     ReplySummary,
 )
-from lib.dashboard.server import DashboardServer
-from lib.dashboard.tracker import TaskState, TaskStatus, TaskTracker
-from lib.sandbox import EventLog
+from airut.dashboard.server import DashboardServer
+from airut.dashboard.tracker import TaskState, TaskStatus, TaskTracker
+from airut.sandbox import EventLog
 from tests.dashboard.conftest import parse_events as _parse_events
 
 
@@ -1709,11 +1712,11 @@ class TestSSELivePages:
 
     def test_repo_detail_no_meta_refresh(self) -> None:
         """Repo detail page no longer uses meta-refresh."""
-        from lib.dashboard.tracker import (
+        from airut.dashboard.tracker import (
             RepoState,
             RepoStatus,
         )
-        from lib.dashboard.versioned import VersionClock, VersionedStore
+        from airut.dashboard.versioned import VersionClock, VersionedStore
 
         tracker = TaskTracker()
         clock = VersionClock()
@@ -1836,7 +1839,7 @@ class TestSSELivePages:
         raw HTML fragments after the server-rendered content, duplicating
         the entire network log.
         """
-        from lib.sandbox import NetworkLog
+        from airut.sandbox import NetworkLog
 
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
@@ -2091,7 +2094,7 @@ class TestNetworkLogPollEndpoint:
 
     def test_network_poll_with_data(self, tmp_path: Path) -> None:
         """Returns rendered HTML for new network log lines."""
-        from lib.sandbox import NETWORK_LOG_FILENAME
+        from airut.sandbox import NETWORK_LOG_FILENAME
 
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
@@ -2156,7 +2159,7 @@ class TestNetworkLogPollEndpoint:
 
     def test_network_poll_with_offset(self, tmp_path: Path) -> None:
         """Respects offset parameter to skip already-seen data."""
-        from lib.sandbox import NETWORK_LOG_FILENAME
+        from airut.sandbox import NETWORK_LOG_FILENAME
 
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
@@ -2252,8 +2255,8 @@ class TestPollingFallbackJS:
 
     def test_repo_detail_has_polling_fallback(self) -> None:
         """Repo detail page JS includes polling fallback."""
-        from lib.dashboard.tracker import RepoState, RepoStatus
-        from lib.dashboard.versioned import VersionClock, VersionedStore
+        from airut.dashboard.tracker import RepoState, RepoStatus
+        from airut.dashboard.versioned import VersionClock, VersionedStore
 
         tracker = TaskTracker()
         clock = VersionClock()

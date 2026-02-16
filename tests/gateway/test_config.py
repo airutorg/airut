@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lib.gateway.config import (
+from airut.gateway.config import (
     SIGNING_TYPE_AWS_SIGV4,
     ConfigError,
     GlobalConfig,
@@ -40,7 +40,7 @@ from lib.gateway.config import (
     get_dotenv_path,
     get_storage_dir,
 )
-from lib.logging import SecretFilter
+from airut.logging import SecretFilter
 
 
 class TestRawResolve:
@@ -894,7 +894,7 @@ class TestFromYaml:
         yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
 
         with patch(
-            "lib.gateway.config.get_config_path",
+            "airut.gateway.config.get_config_path",
             return_value=yaml_path,
         ):
             config = ServerConfig.from_yaml()
@@ -956,7 +956,7 @@ class TestFromYaml:
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
 
-        with patch("lib.gateway.config.load_dotenv_once") as mock_dotenv:
+        with patch("airut.gateway.config.load_dotenv_once") as mock_dotenv:
             ServerConfig.from_yaml(yaml_path)
 
         mock_dotenv.assert_called_once()
@@ -1198,7 +1198,7 @@ class TestRepoConfigFromRaw:
     ) -> None:
         """Warning logged when server config disables sandbox."""
         raw: dict = {}
-        with caplog.at_level(logging.WARNING, logger="lib.gateway.config"):
+        with caplog.at_level(logging.WARNING, logger="airut.gateway.config"):
             RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=False)
         assert "sandbox disabled" in caplog.text.lower()
         assert "server=False" in caplog.text
@@ -1209,7 +1209,7 @@ class TestRepoConfigFromRaw:
     ) -> None:
         """Warning logged when repo config disables sandbox."""
         raw = {"network": {"sandbox_enabled": False}}
-        with caplog.at_level(logging.WARNING, logger="lib.gateway.config"):
+        with caplog.at_level(logging.WARNING, logger="airut.gateway.config"):
             RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=True)
         assert "sandbox disabled" in caplog.text.lower()
         assert "server=True" in caplog.text
@@ -1220,7 +1220,7 @@ class TestRepoConfigFromRaw:
     ) -> None:
         """Warning logged when both sides disable sandbox."""
         raw = {"network": {"sandbox_enabled": False}}
-        with caplog.at_level(logging.WARNING, logger="lib.gateway.config"):
+        with caplog.at_level(logging.WARNING, logger="airut.gateway.config"):
             RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=False)
         assert "sandbox disabled" in caplog.text.lower()
         assert "server=False" in caplog.text
@@ -1231,7 +1231,7 @@ class TestRepoConfigFromRaw:
     ) -> None:
         """No warning when sandbox is enabled."""
         raw: dict = {}
-        with caplog.at_level(logging.WARNING, logger="lib.gateway.config"):
+        with caplog.at_level(logging.WARNING, logger="airut.gateway.config"):
             RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=True)
         assert "sandbox disabled" not in caplog.text.lower()
 
@@ -1249,7 +1249,7 @@ class TestRepoConfigFromRaw:
         raw = {
             "container_env": {"GH_TOKEN": _SecretRef("GH_TOKEN")},
         }
-        with caplog.at_level(logging.WARNING, logger="lib.gateway.config"):
+        with caplog.at_level(logging.WARNING, logger="airut.gateway.config"):
             RepoConfig._from_raw(
                 raw, {}, masked_secrets, server_sandbox_enabled=False
             )
@@ -1269,7 +1269,7 @@ class TestRepoConfigFromRaw:
         raw = {
             "container_env": {"GH_TOKEN": _SecretRef("GH_TOKEN")},
         }
-        with caplog.at_level(logging.WARNING, logger="lib.gateway.config"):
+        with caplog.at_level(logging.WARNING, logger="airut.gateway.config"):
             RepoConfig._from_raw(
                 raw, {}, masked_secrets, server_sandbox_enabled=True
             )
@@ -2135,7 +2135,7 @@ class TestResolveSigningCredentials:
 
     def test_env_var_resolution(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """!env vars are resolved in signing credential field values."""
-        from lib.gateway.config import _EnvVar
+        from airut.gateway.config import _EnvVar
 
         monkeypatch.setenv("AWS_KEY", "AKIAIOSFODNN7EXAMPLE")
         monkeypatch.setenv("AWS_SECRET", "secretkey")

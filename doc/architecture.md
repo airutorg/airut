@@ -57,7 +57,7 @@ This section describes how the implementation realizes the concepts above.
 │  │       │                                   │                      │   │
 │  │       │           ConversationManager ◀───┘                      │   │
 │  │       │                   │                                      │   │
-│  │       │           Sandbox (lib/sandbox/) ◀────────────┐          │   │
+│  │       │           Sandbox (airut/sandbox/) ◀──────────┐          │   │
 │  │       │                   │                           │          │   │
 │  │       ▼                   ▼                           │          │   │
 │  │  EmailResponder ◀─── Task execution ◀─── ProxyManager (internal) │   │
@@ -77,7 +77,7 @@ each component's lifetime and what resources it can access.
 
 - **EmailGatewayService** — Top-level orchestrator that manages repo handlers,
   shared thread pool, dashboard, and graceful shutdown
-- **Sandbox** (`lib/sandbox/`) — Manages container execution, proxy
+- **Sandbox** (`airut/sandbox/`) — Manages container execution, proxy
   infrastructure, execution context state, and image builds
 - **ThreadPool** — Limits concurrent task execution across repositories
 - **TaskTracker** — Tracks task status for dashboard and monitoring
@@ -128,7 +128,7 @@ task completes:
 
 ### Sandbox Concept Mapping
 
-The sandbox library (`lib/sandbox/`) is protocol-agnostic — it knows nothing
+The sandbox library (`airut/sandbox/`) is protocol-agnostic — it knows nothing
 about email, conversations, or gateway-specific layouts. The gateway bridges its
 own concepts to the sandbox's neutral interface:
 
@@ -165,7 +165,7 @@ ConversationManager
     ├──▶ Clone workspace from git mirror (new) or reuse (resume)
     │
     ▼
-Sandbox (lib/sandbox/)
+Sandbox (airut/sandbox/)
     │
     ├──▶ Build container image (cached by content hash)
     │

@@ -117,7 +117,7 @@ Comments (2):
     <!-- books-diff -->
     ...
 
-  [2026-01-16 11:30] reviewer1 on lib/gh/ci.py:42:
+  [2026-01-16 11:30] reviewer1 on airut/gh/ci.py:42:
     Consider adding a docstring here
 ```
 
@@ -144,7 +144,7 @@ uv run scripts/pr.py review && echo "Ready to merge"
 ### Module Structure
 
 ```
-lib/gh/
+airut/gh/
 ├── __init__.py     # Public API exports
 ├── pr.py           # PR information (conflicts, behind-by)
 ├── ci.py           # CI status checking and log fetching

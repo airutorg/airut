@@ -7,13 +7,13 @@
 
 import json
 
-from lib.claude_output.types import Usage
-from lib.sandbox._output import (
+from airut.claude_output.types import Usage
+from airut.sandbox._output import (
     build_execution_result,
     classify_outcome,
     extract_error_summary,
 )
-from lib.sandbox.types import Outcome
+from airut.sandbox.types import Outcome
 
 
 class TestClassifyOutcome:

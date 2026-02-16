@@ -12,12 +12,12 @@ from unittest.mock import patch
 
 import pytest
 
-from lib.sandbox._network import (
+from airut.sandbox._network import (
     CA_CONTAINER_PATH,
     get_ca_cert_path,
     get_network_args,
 )
-from lib.sandbox._proxy import CA_CERT_FILENAME
+from airut.sandbox._proxy import CA_CERT_FILENAME
 
 
 class TestGetCaCertPath:
@@ -28,14 +28,14 @@ class TestGetCaCertPath:
         cert = tmp_path / CA_CERT_FILENAME
         cert.write_text("fake-cert")
 
-        with patch("lib.sandbox._network.MITMPROXY_CONFDIR", tmp_path):
+        with patch("airut.sandbox._network.MITMPROXY_CONFDIR", tmp_path):
             result = get_ca_cert_path()
 
         assert result == cert
 
     def test_raises_when_cert_missing(self, tmp_path: Path) -> None:
         """Raises RuntimeError when CA cert does not exist."""
-        with patch("lib.sandbox._network.MITMPROXY_CONFDIR", tmp_path):
+        with patch("airut.sandbox._network.MITMPROXY_CONFDIR", tmp_path):
             with pytest.raises(RuntimeError, match="CA certificate not found"):
                 get_ca_cert_path()
 
@@ -48,7 +48,7 @@ class TestGetNetworkArgs:
         cert = tmp_path / CA_CERT_FILENAME
         cert.write_text("fake-cert")
 
-        with patch("lib.sandbox._network.MITMPROXY_CONFDIR", tmp_path):
+        with patch("airut.sandbox._network.MITMPROXY_CONFDIR", tmp_path):
             args = get_network_args("task-net-123", "10.199.1.100")
 
         # --network
@@ -80,7 +80,7 @@ class TestGetNetworkArgs:
         cert = tmp_path / CA_CERT_FILENAME
         cert.write_text("fake-cert")
 
-        with patch("lib.sandbox._network.MITMPROXY_CONFDIR", tmp_path):
+        with patch("airut.sandbox._network.MITMPROXY_CONFDIR", tmp_path):
             args = get_network_args("task-net-123", "10.199.1.100")
 
         # Collect all env vars set via -e
@@ -96,6 +96,6 @@ class TestGetNetworkArgs:
 
     def test_raises_when_ca_cert_missing(self, tmp_path: Path) -> None:
         """Raises RuntimeError when CA cert is missing."""
-        with patch("lib.sandbox._network.MITMPROXY_CONFDIR", tmp_path):
+        with patch("airut.sandbox._network.MITMPROXY_CONFDIR", tmp_path):
             with pytest.raises(RuntimeError, match="CA certificate not found"):
                 get_network_args("task-net-123", "10.199.1.100")
