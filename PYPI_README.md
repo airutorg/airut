@@ -95,6 +95,57 @@ Agent: reads comments → fixes → updates PR → replies
 You: approve and merge
 ```
 
+## Sandbox Library
+
+The `airut.sandbox` module is a standalone library for safe containerized
+execution of headless Claude Code. It can be used independently of the email
+gateway to run Claude Code in isolated containers from any Python application —
+CI pipelines, automation scripts, custom integrations, or your own agent
+orchestrator.
+
+**Core capabilities:**
+
+- **Container lifecycle** — two-layer image build, execution, and cleanup via
+  Podman or Docker
+- **Network isolation** — transparent DNS-spoofing proxy enforcing a domain
+  allowlist, with no `HTTP_PROXY` env vars or `iptables` rules needed
+- **Secret masking** — surrogate credential injection so real secrets never
+  reach the container, with proxy-side replacement on egress
+- **Event streaming** — append-only log of Claude's streaming JSON output, safe
+  for concurrent reads during execution
+- **Outcome classification** — typed `Outcome` enum (success, timeout,
+  prompt-too-long, session-corrupted, container-failed) so callers match on
+  outcomes instead of parsing strings
+
+**Quick example:**
+
+```python
+from airut.sandbox import Sandbox, SandboxConfig, Mount, ContainerEnv, Outcome
+
+sandbox = Sandbox(SandboxConfig())
+sandbox.startup()
+
+image = sandbox.ensure_image(dockerfile, context_files)
+task = sandbox.create_task(
+    execution_context_id="my-run-1",
+    execution_context_dir=run_dir,
+    image_tag=image,
+    mounts=[Mount(host_path=repo, container_path="/workspace")],
+    env=ContainerEnv(variables={"ANTHROPIC_API_KEY": key}),
+    timeout_seconds=600,
+)
+result = task.execute("Fix the failing tests")
+
+if result.outcome == Outcome.SUCCESS:
+    print(result.response_text)
+
+sandbox.shutdown()
+```
+
+See the
+[sandbox spec](https://github.com/airutorg/airut/blob/main/spec/sandbox.md) for
+full architecture details and API reference.
+
 ## Documentation
 
 Full documentation is available on GitHub:
