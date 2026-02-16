@@ -39,6 +39,7 @@ from typing import Any, TextIO, TypedDict
 from aws_signing import (
     SIGNING_TYPE_AWS_SIGV4,
     ChunkedResigner,
+    ParsedAuth,
     ResignResult,
     canonical_uri,
     check_clock_skew,
@@ -58,6 +59,20 @@ class UrlPrefixEntry(TypedDict, total=False):
     host: str
     path: str
     methods: list[str]
+
+
+class _SigningContext(TypedDict):
+    """Internal context passed between signing preparation and execution."""
+
+    parsed: ParsedAuth
+    real_key_id: str
+    real_secret_key: str
+    real_session_token: str | None
+    surrogate_session_token: str | None
+    content_sha256: str
+    headers: dict[str, str]
+    url_path: str
+    query: str
 
 
 # Path to optional session log file (mounted by proxy container)
@@ -385,7 +400,7 @@ class ProxyFilter:
         flow: http.HTTPFlow,
         host: str,
         auth_value: str,
-    ) -> dict[str, Any] | None:
+    ) -> _SigningContext | None:
         """Look up signing credentials and prepare context for re-signing.
 
         Parses the Authorization header, looks up the key ID in the
@@ -498,7 +513,7 @@ class ProxyFilter:
     def _perform_resign(
         self,
         flow: http.HTTPFlow,
-        ctx_data: dict[str, Any],
+        ctx_data: _SigningContext,
     ) -> ResignResult | None:
         """Execute the actual re-signing with the given context."""
         parsed = ctx_data["parsed"]
@@ -584,7 +599,7 @@ class ProxyFilter:
     def _setup_chunked_resigner(
         self,
         flow: http.HTTPFlow,
-        parsed: Any,
+        parsed: ParsedAuth,
         real_key_id: str,
         real_secret_key: str,
         result: ResignResult,

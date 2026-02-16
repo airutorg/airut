@@ -12,6 +12,7 @@ result summaries) for a conversation.
 
 import html
 import json
+from collections.abc import Callable
 from typing import Any
 
 from airut.claude_output.types import (
@@ -746,7 +747,7 @@ def _render_tool_generic(tool_input: dict[str, Any]) -> str:
 
 
 # Map of tool names to their specialized renderers.
-_TOOL_RENDERERS: dict[str, Any] = {
+_TOOL_RENDERERS: dict[str, Callable[[dict[str, Any]], str]] = {
     "Bash": _render_tool_bash,
     "Read": _render_tool_read,
     "Write": _render_tool_write,

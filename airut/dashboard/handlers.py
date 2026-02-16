@@ -17,6 +17,7 @@ from typing import Any
 
 from werkzeug.wrappers import Request, Response
 
+from airut.claude_output.types import StreamEvent
 from airut.conversation import (
     ConversationMetadata,
     ConversationStore,
@@ -65,7 +66,7 @@ class RequestHandlers:
         tracker: TaskTracker,
         version_info: VersionInfo | None = None,
         work_dirs: Callable[[], list[Path]] | None = None,
-        stop_callback: Any = None,
+        stop_callback: Callable[[str], bool] | None = None,
         boot_store: VersionedStore[BootState] | None = None,
         repos_store: VersionedStore[tuple[RepoState, ...]] | None = None,
         clock: VersionClock | None = None,
@@ -1018,7 +1019,7 @@ class RequestHandlers:
         task: TaskState,
         include_conversation: bool = False,
         conversation: ConversationMetadata | None = None,
-        event_groups: list[list[Any]] | None = None,
+        event_groups: list[list[StreamEvent]] | None = None,
     ) -> dict[str, Any]:
         """Convert TaskState to JSON-serializable dict.
 

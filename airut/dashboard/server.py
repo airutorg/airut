@@ -21,13 +21,15 @@ if TYPE_CHECKING:
 
 from werkzeug.exceptions import NotFound
 from werkzeug.routing import Map, Rule
-from werkzeug.serving import make_server
+from werkzeug.serving import BaseWSGIServer, make_server
 from werkzeug.wrappers import Request, Response
 
+from airut.claude_output.types import StreamEvent
+from airut.conversation import ConversationMetadata
 from airut.dashboard.formatters import VersionInfo
 from airut.dashboard.handlers import RequestHandlers
 from airut.dashboard.sse import SSEConnectionManager
-from airut.dashboard.tracker import BootState, RepoState, TaskTracker
+from airut.dashboard.tracker import BootState, RepoState, TaskState, TaskTracker
 from airut.dashboard.versioned import VersionClock, VersionedStore
 from airut.version import GitVersionInfo
 
@@ -48,7 +50,7 @@ class DashboardServer:
         port: int = 5200,
         version_info: VersionInfo | None = None,
         work_dirs: Callable[[], list[Path]] | None = None,
-        stop_callback: Any = None,
+        stop_callback: Callable[[str], bool] | None = None,
         boot_store: VersionedStore[BootState] | None = None,
         repos_store: VersionedStore[tuple[RepoState, ...]] | None = None,
         clock: VersionClock | None = None,
@@ -75,7 +77,7 @@ class DashboardServer:
         self.port = port
         self.version_info = version_info
         self.stop_callback = stop_callback
-        self._server: Any = None
+        self._server: BaseWSGIServer | None = None
         self._thread: threading.Thread | None = None
         self._sse_manager = SSEConnectionManager()
 
@@ -232,10 +234,10 @@ class DashboardServer:
     # Expose internal methods for tests
     def _task_to_dict(
         self,
-        task: Any,
+        task: TaskState,
         include_conversation: bool = False,
-        conversation: Any = None,
-        event_groups: list[list[Any]] | None = None,
+        conversation: ConversationMetadata | None = None,
+        event_groups: list[list[StreamEvent]] | None = None,
     ) -> dict[str, Any]:
         """Convert TaskState to JSON-serializable dict.
 
@@ -252,7 +254,9 @@ class DashboardServer:
             task, include_conversation, conversation, event_groups
         )
 
-    def _load_conversation(self, conversation_id: str) -> Any:
+    def _load_conversation(
+        self, conversation_id: str
+    ) -> ConversationMetadata | None:
         """Load conversation metadata.
 
         Args:
@@ -265,7 +269,7 @@ class DashboardServer:
 
     def _load_task_from_disk(
         self, conversation_id: str
-    ) -> tuple[Any, Any] | None:
+    ) -> tuple[TaskState, ConversationMetadata] | None:
         """Load a task from disk when not in memory.
 
         Args:
@@ -279,7 +283,7 @@ class DashboardServer:
 
     def _load_task_with_conversation(
         self, conversation_id: str
-    ) -> tuple[Any, Any | None] | None:
+    ) -> tuple[TaskState, ConversationMetadata | None] | None:
         """Load task and conversation from memory or disk.
 
         Args:

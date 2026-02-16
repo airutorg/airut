@@ -17,6 +17,7 @@ import time
 from collections.abc import Generator
 from typing import Any
 
+from airut.claude_output.types import StreamEvent
 from airut.dashboard.tracker import (
     BootState,
     RepoState,
@@ -25,6 +26,8 @@ from airut.dashboard.tracker import (
     TaskTracker,
 )
 from airut.dashboard.versioned import VersionClock, VersionedStore
+from airut.sandbox.event_log import EventLog
+from airut.sandbox.network_log import NetworkLog
 
 
 logger = logging.getLogger(__name__)
@@ -275,7 +278,7 @@ def sse_state_stream(
         )
 
 
-def render_events_html(events: list[Any]) -> str:
+def render_events_html(events: list[StreamEvent]) -> str:
     """Render stream events to HTML fragments.
 
     Args:
@@ -293,7 +296,7 @@ def render_events_html(events: list[Any]) -> str:
 
 
 def sse_events_log_stream(
-    event_log: Any,
+    event_log: EventLog,
     tracker: TaskTracker,
     conversation_id: str,
     client_offset: int,
@@ -374,7 +377,7 @@ def render_network_lines_html(lines: list[str]) -> str:
 
 
 def sse_network_log_stream(
-    network_log: Any,
+    network_log: NetworkLog,
     tracker: TaskTracker,
     conversation_id: str,
     client_offset: int,
