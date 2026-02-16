@@ -455,7 +455,7 @@ class RequestHandlers:
                 "error_message": r.error_message,
                 "error_type": r.error_type,
                 "git_repo_url": r.git_repo_url,
-                "imap_server": r.imap_server,
+                "channel_info": r.channel_info,
                 "storage_dir": r.storage_dir,
                 "initialized_at": r.initialized_at,
             }

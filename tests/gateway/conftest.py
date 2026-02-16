@@ -39,20 +39,22 @@ def _mock_sandbox(tmp_path: Path):
 @pytest.fixture
 def email_config(tmp_path: Path, master_repo: Path):
     """Test email service configuration."""
-    from airut.gateway.config import RepoServerConfig
+    from airut.gateway.config import EmailChannelConfig, RepoServerConfig
 
     return RepoServerConfig(
         repo_id="test",
-        imap_server="imap.example.com",
-        imap_port=993,
-        smtp_server="smtp.example.com",
-        smtp_port=587,
-        email_username="test@example.com",
-        email_password="test_password",
-        email_from="Test Service <test@example.com>",
-        authorized_senders=["authorized@example.com"],
-        trusted_authserv_id="mx.example.com",
         git_repo_url=str(master_repo),
+        email=EmailChannelConfig(
+            imap_server="imap.example.com",
+            imap_port=993,
+            smtp_server="smtp.example.com",
+            smtp_port=587,
+            username="test@example.com",
+            password="test_password",
+            from_address="Test Service <test@example.com>",
+            authorized_senders=["authorized@example.com"],
+            trusted_authserv_id="mx.example.com",
+        ),
     )
 
 
@@ -63,24 +65,26 @@ def microsoft_oauth2_email_config(tmp_path: Path, master_repo: Path):
     Mocks MSAL ConfidentialClientApplication to prevent network requests
     during tests.
     """
-    from airut.gateway.config import RepoServerConfig
+    from airut.gateway.config import EmailChannelConfig, RepoServerConfig
 
     with patch(
         "airut.gateway.email.microsoft_oauth2.ConfidentialClientApplication"
     ):
         yield RepoServerConfig(
             repo_id="test",
-            imap_server="outlook.office365.com",
-            imap_port=993,
-            smtp_server="smtp.office365.com",
-            smtp_port=587,
-            email_username="test@company.com",
-            email_password="",
-            email_from="Test Service <test@company.com>",
-            authorized_senders=["authorized@company.com"],
-            trusted_authserv_id="mx.company.com",
             git_repo_url=str(master_repo),
-            microsoft_oauth2_tenant_id="test-tenant-id",
-            microsoft_oauth2_client_id="test-client-id",
-            microsoft_oauth2_client_secret="test-client-secret",
+            email=EmailChannelConfig(
+                imap_server="outlook.office365.com",
+                imap_port=993,
+                smtp_server="smtp.office365.com",
+                smtp_port=587,
+                username="test@company.com",
+                password="",
+                from_address="Test Service <test@company.com>",
+                authorized_senders=["authorized@company.com"],
+                trusted_authserv_id="mx.company.com",
+                microsoft_oauth2_tenant_id="test-tenant-id",
+                microsoft_oauth2_client_id="test-client-id",
+                microsoft_oauth2_client_secret="test-client-secret",
+            ),
         )

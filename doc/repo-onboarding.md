@@ -208,18 +208,15 @@ repos:
       username: your-repo-bot
       password: !env YOUR_REPO_EMAIL_PASSWORD
       from: "Your Repo Bot <your-repo-bot@example.com>"
-
-    authorized_senders:
-      - you@example.com
-      - *@your-company.com
-
-    trusted_authserv_id: mail.example.com
+      authorized_senders:
+        - you@example.com
+        - *@your-company.com
+      trusted_authserv_id: mail.example.com
+      imap:
+        use_idle: true
 
     git:
       repo_url: https://github.com/your-org/your-repo.git
-
-    imap:
-      use_idle: true
 
     # Plain secrets (injected directly into container)
     secrets:

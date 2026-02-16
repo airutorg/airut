@@ -18,7 +18,7 @@ from email.message import Message
 from pathlib import Path
 
 from airut.gateway.channel import AuthenticationError, ParsedMessage
-from airut.gateway.config import RepoServerConfig
+from airut.gateway.config import EmailChannelConfig
 from airut.gateway.email.listener import EmailListener
 from airut.gateway.email.parsing import (
     collect_outbox_files,
@@ -74,27 +74,33 @@ class EmailChannelAdapter:
 
     def __init__(
         self,
-        config: RepoServerConfig,
+        config: EmailChannelConfig,
         authenticator: SenderAuthenticator,
         authorizer: SenderAuthorizer,
         responder: EmailResponder,
         listener: EmailListener | None = None,
+        *,
+        repo_id: str = "",
     ) -> None:
         self._config = config
+        self._repo_id = repo_id
         self._authenticator = authenticator
         self._authorizer = authorizer
         self._responder = responder
         self._listener = listener
 
     @classmethod
-    def from_config(cls, config: RepoServerConfig) -> EmailChannelAdapter:
+    def from_config(
+        cls, config: EmailChannelConfig, *, repo_id: str = ""
+    ) -> EmailChannelAdapter:
         """Create an adapter with all email components from config.
 
         Constructs the authenticator, authorizer, responder, and listener
         internally. This is the primary factory for production use.
 
         Args:
-            config: Per-repo server-side configuration.
+            config: Email channel configuration.
+            repo_id: Repository identifier (used for log messages).
 
         Returns:
             Fully configured EmailChannelAdapter.
@@ -110,6 +116,7 @@ class EmailChannelAdapter:
             authorizer=SenderAuthorizer(config.authorized_senders),
             responder=EmailResponder(config),
             listener=EmailListener(config),
+            repo_id=repo_id,
         )
 
     @property
@@ -145,7 +152,7 @@ class EmailChannelAdapter:
         """
         sender = raw_message.get("From", "")
         message_id = raw_message.get("Message-ID", "")
-        repo_id = self._config.repo_id
+        repo_id = self._repo_id
 
         # Authentication: verify DMARC from trusted server
         authenticated_sender = self._authenticator.authenticate(raw_message)
@@ -269,7 +276,7 @@ class EmailChannelAdapter:
             html_body = "I've started working on this and will reply shortly."
 
         outgoing_message_id = generate_message_id(
-            conversation_id, self._config.email_from
+            conversation_id, self._config.from_address
         )
 
         try:
@@ -311,7 +318,7 @@ class EmailChannelAdapter:
             body = f"{response_text}\n\n*{usage_footer}*"
 
         outgoing_message_id = generate_message_id(
-            conversation_id, self._config.email_from
+            conversation_id, self._config.from_address
         )
 
         # Collect attachments from outbox directory
@@ -437,7 +444,7 @@ class EmailChannelAdapter:
             )
 
         outgoing_message_id = generate_message_id(
-            conversation_id, self._config.email_from
+            conversation_id, self._config.from_address
         )
 
         try:

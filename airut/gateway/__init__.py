@@ -18,6 +18,7 @@ from airut.gateway.channel import (
 )
 from airut.gateway.config import (
     ConfigError,
+    EmailChannelConfig,
     GlobalConfig,
     RepoConfig,
     RepoServerConfig,
@@ -59,6 +60,7 @@ __all__ = [
     "ParsedMessage",
     # config
     "ConfigError",
+    "EmailChannelConfig",
     "GlobalConfig",
     "RepoConfig",
     "RepoServerConfig",

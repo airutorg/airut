@@ -665,7 +665,7 @@ class TestStartRepoInitFailure:
         mock_handler2.config = MagicMock()
         mock_handler2.config.repo_id = "repo2"
         mock_handler2.config.git_repo_url = "https://example.com/repo2"
-        mock_handler2.config.imap_server = "imap2.example.com"
+        mock_handler2.config.email.imap_server = "imap2.example.com"
         mock_handler2.config.storage_dir = tmp_path / "s2"
         mock_handler2.start_listener.side_effect = RuntimeError("Auth failed")
         svc.repo_handlers["repo2"] = mock_handler2
@@ -816,7 +816,7 @@ class TestStateProviders:
                     repo_id="r1",
                     status=RepoStatus.LIVE,
                     git_repo_url="https://example.com/r1",
-                    imap_server="imap.example.com",
+                    channel_info="imap.example.com",
                     storage_dir="/s/r1",
                 ),
             )
@@ -836,7 +836,7 @@ class TestStateProviders:
                     repo_id="test",
                     status=RepoStatus.LIVE,
                     git_repo_url="https://example.com/r1",
-                    imap_server="imap.example.com",
+                    channel_info="imap.example.com",
                     storage_dir="/s/test",
                 ),
             )
@@ -858,7 +858,7 @@ class TestStateProviders:
                     repo_id="test",
                     status=RepoStatus.FAILED,
                     git_repo_url="https://example.com/r1",
-                    imap_server="imap.example.com",
+                    channel_info="imap.example.com",
                     storage_dir="/s/test",
                 ),
             )

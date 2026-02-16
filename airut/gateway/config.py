@@ -3,7 +3,7 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Configuration for email gateway service.
+"""Configuration for gateway service.
 
 Server configuration is loaded from a YAML file.  The default location
 follows the XDG Base Directory Specification:
@@ -14,7 +14,7 @@ follows the XDG Base Directory Specification:
 ``!env`` tags resolve values from environment variables.
 
 The server config defines global settings (execution limits, dashboard) and
-per-repo settings (email credentials, authorization, secrets).  Each repo
+per-repo settings (channel credentials, authorization, secrets).  Each repo
 entry under ``repos:`` becomes a ``RepoServerConfig``.
 
 Repo configuration (behaviour) is loaded from ``.airut/airut.yaml`` in each
@@ -22,7 +22,7 @@ repo's git mirror with support for ``!secret`` tags resolved against the
 per-repo secrets pool.  ``!env`` is **not** allowed in repo config.
 
 The module is self-contained (no dependency on ``airut/config.py``) so the
-email gateway can be deployed independently.
+gateway can be deployed independently.
 """
 
 import logging
@@ -615,26 +615,20 @@ class GlobalConfig:
 
 
 @dataclass(frozen=True)
-class RepoServerConfig:
-    """Per-repo server-side configuration.
+class EmailChannelConfig:
+    """Email channel configuration (IMAP + SMTP).
 
-    Contains email credentials, authorization, and secrets for a single
-    repository.  Loaded from the ``repos.<name>`` section of the server
-    config file.
-
-    Storage location is determined by ``get_storage_dir(repo_id)`` using
-    XDG state directory conventions.
+    Contains all settings specific to the email channel: mail server
+    connectivity, credentials, sender authorization, and polling behaviour.
 
     Attributes:
-        repo_id: Repository identifier (key from ``repos`` mapping).
-        git_repo_url: Git repository URL to clone from.
         imap_server: IMAP server hostname.
         imap_port: IMAP port.
         smtp_server: SMTP server hostname.
         smtp_port: SMTP port.
-        email_username: Email account username.
-        email_password: Email account password (auto-redacted in logs).
-        email_from: From address for outgoing emails.
+        username: Email account username.
+        password: Email account password (auto-redacted in logs).
+        from_address: From address for outgoing emails.
         authorized_senders: List of email patterns allowed to send commands.
             Supports wildcards (e.g., ``*@company.com``).
         trusted_authserv_id: The authserv-id to trust in
@@ -644,11 +638,6 @@ class RepoServerConfig:
         use_imap_idle: Whether to use IMAP IDLE instead of polling.
         idle_reconnect_interval_seconds: Reconnect interval for IDLE mode.
         smtp_require_auth: Whether SMTP requires authentication.
-        secrets: Per-repo secrets pool for ``!secret`` resolution.
-        masked_secrets: Secrets with scope restrictions for proxy replacement.
-        network_sandbox_enabled: Server-side override for the network sandbox.
-            Effective sandbox state is the logical AND of this value and the
-            repo config's ``network.sandbox_enabled``.  Defaults to ``True``.
         microsoft_internal_auth_fallback: When True and no
             ``Authentication-Results`` header is present, accept
             messages with ``X-MS-Exchange-Organization-AuthAs: Internal``
@@ -662,39 +651,31 @@ class RepoServerConfig:
             (auto-redacted in logs).
     """
 
-    repo_id: str
-    git_repo_url: str
     imap_server: str
     imap_port: int
     smtp_server: str
     smtp_port: int
-    email_username: str
-    email_password: str
-    email_from: str
+    username: str
+    password: str
+    from_address: str
     authorized_senders: list[str]
     trusted_authserv_id: str
     poll_interval_seconds: int = 60
     use_imap_idle: bool = True
     idle_reconnect_interval_seconds: int = 29 * 60
     smtp_require_auth: bool = True
-    secrets: dict[str, str] = field(default_factory=dict)
-    masked_secrets: dict[str, MaskedSecret] = field(default_factory=dict)
-    signing_credentials: dict[str, SigningCredential] = field(
-        default_factory=dict
-    )
-    network_sandbox_enabled: bool = True
     microsoft_internal_auth_fallback: bool = False
     microsoft_oauth2_tenant_id: str | None = None
     microsoft_oauth2_client_id: str | None = None
     microsoft_oauth2_client_secret: str | None = None
 
     def __post_init__(self) -> None:
-        """Validate configuration and register secrets.
+        """Validate email configuration and register secrets.
 
         Raises:
             ValueError: If configuration is invalid.
         """
-        SecretFilter.register_secret(self.email_password)
+        SecretFilter.register_secret(self.password)
 
         # Register Microsoft OAuth2 client secret for log redaction
         if self.microsoft_oauth2_client_secret:
@@ -709,10 +690,64 @@ class RepoServerConfig:
         oauth2_set = [f for f in oauth2_fields if f is not None]
         if 0 < len(oauth2_set) < 3:
             raise ValueError(
-                f"Repo '{self.repo_id}': microsoft_oauth2 requires all three "
-                f"fields (tenant_id, client_id, client_secret) to be set"
+                "microsoft_oauth2 requires all three "
+                "fields (tenant_id, client_id, client_secret) to be set"
             )
 
+        if not (1 <= self.imap_port <= 65535):
+            raise ValueError(f"Invalid IMAP port: {self.imap_port}")
+        if not (1 <= self.smtp_port <= 65535):
+            raise ValueError(f"Invalid SMTP port: {self.smtp_port}")
+        if self.poll_interval_seconds < 1:
+            raise ValueError(
+                f"Poll interval must be >= 1s: {self.poll_interval_seconds}"
+            )
+        if self.idle_reconnect_interval_seconds < 60:
+            raise ValueError(
+                f"IDLE reconnect interval must be >= 60s: "
+                f"{self.idle_reconnect_interval_seconds}"
+            )
+
+
+@dataclass(frozen=True)
+class RepoServerConfig:
+    """Per-repo server-side configuration.
+
+    Contains the channel configuration, secrets, and shared settings for a
+    single repository.  Loaded from the ``repos.<name>`` section of the
+    server config file.
+
+    Storage location is determined by ``get_storage_dir(repo_id)`` using
+    XDG state directory conventions.
+
+    Attributes:
+        repo_id: Repository identifier (key from ``repos`` mapping).
+        git_repo_url: Git repository URL to clone from.
+        email: Email channel configuration.
+        secrets: Per-repo secrets pool for ``!secret`` resolution.
+        masked_secrets: Secrets with scope restrictions for proxy replacement.
+        signing_credentials: Signing credentials for proxy re-signing.
+        network_sandbox_enabled: Server-side override for the network sandbox.
+            Effective sandbox state is the logical AND of this value and the
+            repo config's ``network.sandbox_enabled``.  Defaults to ``True``.
+    """
+
+    repo_id: str
+    git_repo_url: str
+    email: EmailChannelConfig
+    secrets: dict[str, str] = field(default_factory=dict)
+    masked_secrets: dict[str, MaskedSecret] = field(default_factory=dict)
+    signing_credentials: dict[str, SigningCredential] = field(
+        default_factory=dict
+    )
+    network_sandbox_enabled: bool = True
+
+    def __post_init__(self) -> None:
+        """Validate configuration and register secrets.
+
+        Raises:
+            ValueError: If configuration is invalid.
+        """
         for value in self.secrets.values():
             if value:
                 SecretFilter.register_secret(value)
@@ -733,33 +768,15 @@ class RepoServerConfig:
             raise ValueError(
                 f"Repo '{self.repo_id}': git.repo_url cannot be empty"
             )
-        if not (1 <= self.imap_port <= 65535):
-            raise ValueError(
-                f"Repo '{self.repo_id}': invalid IMAP port: {self.imap_port}"
-            )
-        if not (1 <= self.smtp_port <= 65535):
-            raise ValueError(
-                f"Repo '{self.repo_id}': invalid SMTP port: {self.smtp_port}"
-            )
-        if self.poll_interval_seconds < 1:
-            raise ValueError(
-                f"Repo '{self.repo_id}': poll interval must be >= 1s: "
-                f"{self.poll_interval_seconds}"
-            )
-        if self.idle_reconnect_interval_seconds < 60:
-            raise ValueError(
-                f"Repo '{self.repo_id}': IDLE reconnect interval must be "
-                f">= 60s: {self.idle_reconnect_interval_seconds}"
-            )
 
         logger.info(
             "Repo '%s' config loaded: imap=%s:%d, smtp=%s:%d, authorized=%s",
             self.repo_id,
-            self.imap_server,
-            self.imap_port,
-            self.smtp_server,
-            self.smtp_port,
-            self.authorized_senders,
+            self.email.imap_server,
+            self.email.imap_port,
+            self.email.smtp_server,
+            self.email.smtp_port,
+            self.email.authorized_senders,
         )
 
     @property
@@ -794,12 +811,15 @@ class ServerConfig:
         # Validate no duplicate IMAP inboxes
         seen_inboxes: dict[tuple[str, str], str] = {}
         for repo_id, repo in self.repos.items():
-            inbox_key = (repo.imap_server.lower(), repo.email_username.lower())
+            inbox_key = (
+                repo.email.imap_server.lower(),
+                repo.email.username.lower(),
+            )
             if inbox_key in seen_inboxes:
                 raise ConfigError(
                     f"Repo '{repo_id}' and repo '{seen_inboxes[inbox_key]}' "
                     f"share the same IMAP inbox "
-                    f"({repo.imap_server}/{repo.email_username}). "
+                    f"({repo.email.imap_server}/{repo.email.username}). "
                     f"Each repo must have its own inbox."
                 )
             seen_inboxes[inbox_key] = repo_id
@@ -893,6 +913,19 @@ class ServerConfig:
         return cls(global_config=global_config, repos=repos)
 
 
+#: Email-specific fields that must be nested under ``email:``.
+#: If found at the repo level, the config parser raises ``ConfigError``
+#: with migration instructions.  This is security-critical: silently
+#: ignoring a stale ``authorized_senders`` at the repo level could start
+#: the gateway with an empty allowlist under ``email:``.
+_LEGACY_EMAIL_FIELDS = {
+    "authorized_senders",
+    "trusted_authserv_id",
+    "microsoft_internal_auth_fallback",
+    "imap",
+}
+
+
 def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
     """Parse a single repo's server-side configuration.
 
@@ -902,11 +935,38 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
 
     Returns:
         RepoServerConfig instance.
+
+    Raises:
+        ConfigError: If email-specific fields are at the repo level instead
+            of under ``email:``, or if no channel is configured.
     """
-    email = raw.get("email", {})
-    imap = raw.get("imap", {})
-    network = raw.get("network", {})
     prefix = f"repos.{repo_id}"
+
+    # Detect legacy field placement (security-critical).
+    # Report all misplaced fields at once so the user can fix them
+    # in a single pass (important for the airut-update → check flow).
+    legacy_found = sorted(_LEGACY_EMAIL_FIELDS & raw.keys())
+    if legacy_found:
+        listed = ", ".join(f"'{k}'" for k in legacy_found)
+        moves = "; ".join(f"'{k}' → {prefix}.email.{k}" for k in legacy_found)
+        raise ConfigError(
+            f"{prefix}: {listed} must be nested under 'email:'. "
+            f"Move: {moves}. "
+            f"See config/airut.example.yaml for the current format."
+        )
+
+    # Channel selection: exactly one channel block must be present.
+    # Currently only email is supported.
+    if "email" not in raw:
+        raise ConfigError(
+            f"{prefix}: no channel configuration found. "
+            f"Add an 'email:' block with IMAP/SMTP settings. "
+            f"See config/airut.example.yaml for the current format."
+        )
+
+    email = raw.get("email", {})
+    imap = email.get("imap", {})
+    network = raw.get("network", {})
 
     # Resolve per-repo secrets
     raw_secrets = raw.get("secrets", {})
@@ -934,13 +994,7 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
     raw_signing = raw.get("signing_credentials", {})
     signing_credentials = _resolve_signing_credentials(raw_signing, prefix)
 
-    return RepoServerConfig(
-        repo_id=repo_id,
-        git_repo_url=_resolve(
-            raw.get("git", {}).get("repo_url"),
-            str,
-            required=f"{prefix}.git.repo_url",
-        ),
+    email_config = EmailChannelConfig(
         imap_server=_resolve(
             email.get("imap_server"),
             str,
@@ -953,13 +1007,13 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
             required=f"{prefix}.email.smtp_server",
         ),
         smtp_port=_resolve(email.get("smtp_port"), int, default=587),
-        email_username=_resolve(
+        username=_resolve(
             email.get("username"),
             str,
             required=f"{prefix}.email.username",
         ),
         # email.password is required only when OAuth2 is not configured
-        email_password=(
+        password=(
             _resolve(email.get("password"), str, default="")
             if has_oauth2
             else _resolve(
@@ -968,17 +1022,17 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
                 required=f"{prefix}.email.password",
             )
         ),
-        email_from=_resolve(
+        from_address=_resolve(
             email.get("from"), str, required=f"{prefix}.email.from"
         ),
         authorized_senders=_resolve_string_list(
-            raw.get("authorized_senders"),
-            required=f"{prefix}.authorized_senders",
+            email.get("authorized_senders"),
+            required=f"{prefix}.email.authorized_senders",
         ),
         trusted_authserv_id=_resolve(
-            raw.get("trusted_authserv_id"),
+            email.get("trusted_authserv_id"),
             str,
-            required=f"{prefix}.trusted_authserv_id",
+            required=f"{prefix}.email.trusted_authserv_id",
         ),
         poll_interval_seconds=_resolve(
             imap.get("poll_interval"), int, default=60
@@ -987,18 +1041,28 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
         idle_reconnect_interval_seconds=_resolve(
             imap.get("idle_reconnect_interval"), int, default=29 * 60
         ),
+        microsoft_internal_auth_fallback=_resolve(
+            email.get("microsoft_internal_auth_fallback"), bool, default=False
+        ),
+        microsoft_oauth2_tenant_id=ms_tenant_id,
+        microsoft_oauth2_client_id=ms_client_id,
+        microsoft_oauth2_client_secret=ms_client_secret,
+    )
+
+    return RepoServerConfig(
+        repo_id=repo_id,
+        git_repo_url=_resolve(
+            raw.get("git", {}).get("repo_url"),
+            str,
+            required=f"{prefix}.git.repo_url",
+        ),
+        email=email_config,
         secrets=secrets,
         masked_secrets=masked_secrets,
         signing_credentials=signing_credentials,
         network_sandbox_enabled=_resolve(
             network.get("sandbox_enabled"), bool, default=True
         ),
-        microsoft_internal_auth_fallback=_resolve(
-            raw.get("microsoft_internal_auth_fallback"), bool, default=False
-        ),
-        microsoft_oauth2_tenant_id=ms_tenant_id,
-        microsoft_oauth2_client_id=ms_client_id,
-        microsoft_oauth2_client_secret=ms_client_secret,
     )
 
 

@@ -219,19 +219,16 @@ repos:
       username: airut
       password: !env EMAIL_PASSWORD
       from: "Airut <airut@example.com>"
-
-    authorized_senders:
-      - you@example.com
-
-    trusted_authserv_id: mail.example.com
+      authorized_senders:
+        - you@example.com
+      trusted_authserv_id: mail.example.com
+      imap:
+        poll_interval: 30
+        use_idle: true
+        idle_reconnect_interval: 1740
 
     git:
       repo_url: https://github.com/your-org/repo.git
-
-    imap:
-      poll_interval: 30
-      use_idle: true
-      idle_reconnect_interval: 1740
 
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY

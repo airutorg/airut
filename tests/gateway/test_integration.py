@@ -29,6 +29,7 @@ from airut.gateway import (
     SMTPSendError,
 )
 from airut.gateway.config import (
+    EmailChannelConfig,
     GlobalConfig,
     RepoServerConfig,
     ServerConfig,
@@ -56,14 +57,16 @@ class TestEndToEndFlow:
             repo_url=str(master_repo),
             storage_dir=email_config.storage_dir,
         )
-        authenticator = SenderAuthenticator(email_config.trusted_authserv_id)
-        authorizer = SenderAuthorizer(email_config.authorized_senders)
-        responder = EmailResponder(email_config)
+        authenticator = SenderAuthenticator(
+            email_config.email.trusted_authserv_id
+        )
+        authorizer = SenderAuthorizer(email_config.email.authorized_senders)
+        responder = EmailResponder(email_config.email)
 
         # Mock email message with new conversation
         message = sample_email_message
         message.replace_header("Subject", "Please help with task")
-        message.replace_header("From", email_config.authorized_senders[0])
+        message.replace_header("From", email_config.email.authorized_senders[0])
 
         # Validate authentication and authorization
         sender = authenticator.authenticate(message)
@@ -142,8 +145,10 @@ class TestEndToEndFlow:
         self, email_config: RepoServerConfig, sample_email_message
     ):
         """Test that unauthorized senders are rejected."""
-        authenticator = SenderAuthenticator(email_config.trusted_authserv_id)
-        authorizer = SenderAuthorizer(email_config.authorized_senders)
+        authenticator = SenderAuthenticator(
+            email_config.email.trusted_authserv_id
+        )
+        authorizer = SenderAuthorizer(email_config.email.authorized_senders)
 
         # Modify message to have unauthorized sender
         message = sample_email_message
@@ -186,7 +191,7 @@ class TestEndToEndFlow:
 
         # Create email with attachment
         msg = MIMEMultipart()
-        msg["From"] = email_config.authorized_senders[0]
+        msg["From"] = email_config.email.authorized_senders[0]
         msg["To"] = "claude@example.com"
         msg["Subject"] = "Please process this file"
         msg["Message-ID"] = "<attach123@example.com>"
@@ -212,8 +217,10 @@ class TestEndToEndFlow:
             repo_url=str(master_repo),
             storage_dir=email_config.storage_dir,
         )
-        authenticator = SenderAuthenticator(email_config.trusted_authserv_id)
-        authorizer = SenderAuthorizer(email_config.authorized_senders)
+        authenticator = SenderAuthenticator(
+            email_config.email.trusted_authserv_id
+        )
+        authorizer = SenderAuthorizer(email_config.email.authorized_senders)
 
         # Validate authentication and authorization
         sender = authenticator.authenticate(msg)
@@ -251,7 +258,7 @@ class TestErrorRecovery:
         """Test SMTP send retry on failure."""
         from smtplib import SMTPException
 
-        responder = EmailResponder(email_config)
+        responder = EmailResponder(email_config.email)
 
         # Mock SMTP to fail
         with patch(
@@ -351,18 +358,20 @@ class TestComponentIntegration:
     ):
         """Test that config properly initializes all components."""
         # Create all components from config
-        listener = EmailListener(email_config)
-        responder = EmailResponder(email_config)
-        authenticator = SenderAuthenticator(email_config.trusted_authserv_id)
-        authorizer = SenderAuthorizer(email_config.authorized_senders)
+        listener = EmailListener(email_config.email)
+        responder = EmailResponder(email_config.email)
+        authenticator = SenderAuthenticator(
+            email_config.email.trusted_authserv_id
+        )
+        authorizer = SenderAuthorizer(email_config.email.authorized_senders)
         conversation_manager = ConversationManager(
             repo_url=email_config.git_repo_url,
             storage_dir=email_config.storage_dir,
         )
 
         # Verify components initialized
-        assert listener.config == email_config
-        assert responder.config == email_config
+        assert listener.config == email_config.email
+        assert responder.config == email_config.email
         assert authenticator.trusted_authserv_id == "mx.example.com"
         # Verify authorizer patterns match config
         assert authorizer.is_authorized("authorized@example.com") is True
@@ -674,7 +683,7 @@ class TestParallelExecution:
 
         message = sample_email_message
         message.replace_header("Subject", "New request without ID")
-        message.replace_header("From", email_config.authorized_senders[0])
+        message.replace_header("From", email_config.email.authorized_senders[0])
 
         parsed = ParsedMessage(
             sender="user@example.com",
@@ -728,7 +737,7 @@ class TestParallelExecution:
 
         message = sample_email_message
         message.replace_header("Subject", f"Re: [ID:{conv_id}] Follow-up")
-        message.replace_header("From", email_config.authorized_senders[0])
+        message.replace_header("From", email_config.email.authorized_senders[0])
 
         parsed = ParsedMessage(
             sender="user@example.com",
@@ -772,14 +781,14 @@ class TestAcknowledgmentReply:
 
         responder = MagicMock()
         adapter = EmailChannelAdapter(
-            config=email_config,
+            config=email_config.email,
             authenticator=MagicMock(),
             authorizer=MagicMock(),
             responder=responder,
         )
 
         parsed = EmailParsedMessage(
-            sender=email_config.authorized_senders[0],
+            sender=email_config.email.authorized_senders[0],
             body="New request",
             conversation_id=None,
             model_hint=None,
@@ -792,7 +801,7 @@ class TestAcknowledgmentReply:
 
         responder.send_reply.assert_called_once()
         call_kwargs = responder.send_reply.call_args[1]
-        assert call_kwargs["to"] == email_config.authorized_senders[0]
+        assert call_kwargs["to"] == email_config.email.authorized_senders[0]
         assert f"[ID:{conv_id}]" in call_kwargs["subject"]
         assert "Re:" in call_kwargs["subject"]
         assert "started working" in call_kwargs["body"]
@@ -812,7 +821,7 @@ class TestAcknowledgmentReply:
 
         responder = MagicMock()
         adapter = EmailChannelAdapter(
-            config=email_config,
+            config=email_config.email,
             authenticator=MagicMock(),
             authorizer=MagicMock(),
             responder=responder,
@@ -820,7 +829,7 @@ class TestAcknowledgmentReply:
 
         conv_id = "xyz98765"
         parsed = EmailParsedMessage(
-            sender=email_config.authorized_senders[0],
+            sender=email_config.email.authorized_senders[0],
             body="Follow-up",
             conversation_id=conv_id,
             model_hint=None,
@@ -848,14 +857,14 @@ class TestAcknowledgmentReply:
         responder = MagicMock()
         responder.send_reply.side_effect = SMTPSendError("Send failed")
         adapter = EmailChannelAdapter(
-            config=email_config,
+            config=email_config.email,
             authenticator=MagicMock(),
             authorizer=MagicMock(),
             responder=responder,
         )
 
         parsed = EmailParsedMessage(
-            sender=email_config.authorized_senders[0],
+            sender=email_config.email.authorized_senders[0],
             body="Request",
             conversation_id=None,
             model_hint=None,
@@ -878,7 +887,7 @@ class TestAcknowledgmentReply:
 
         responder = MagicMock()
         adapter = EmailChannelAdapter(
-            config=email_config,
+            config=email_config.email,
             authenticator=MagicMock(),
             authorizer=MagicMock(),
             responder=responder,
@@ -964,7 +973,7 @@ class TestAcknowledgmentReply:
         adapter.save_attachments.return_value = []
 
         parsed = ParsedMessage(
-            sender=email_config.authorized_senders[0],
+            sender=email_config.email.authorized_senders[0],
             body="New request",
             conversation_id=None,
             model_hint=None,
@@ -1049,7 +1058,7 @@ class TestAcknowledgmentReply:
         adapter.save_attachments.return_value = []
 
         parsed = ParsedMessage(
-            sender=email_config.authorized_senders[0],
+            sender=email_config.email.authorized_senders[0],
             body="New request without ID",
             conversation_id=None,
             model_hint=None,
@@ -1079,18 +1088,16 @@ class TestAcknowledgmentReply:
 
         responder = MagicMock()
         adapter = EmailChannelAdapter(
-            config=RepoServerConfig(
-                repo_id="test",
+            config=EmailChannelConfig(
                 imap_server="imap.example.com",
                 imap_port=993,
                 smtp_server="smtp.example.com",
                 smtp_port=587,
-                email_username="test@example.com",
-                email_password="test_password",
-                email_from="Test Service <test@example.com>",
+                username="test@example.com",
+                password="test_password",
+                from_address="Test Service <test@example.com>",
                 authorized_senders=["authorized@example.com"],
                 trusted_authserv_id="mx.example.com",
-                git_repo_url=str(master_repo),
             ),
             authenticator=MagicMock(),
             authorizer=MagicMock(),
@@ -1131,14 +1138,14 @@ class TestAcknowledgmentReply:
 
         responder = MagicMock()
         adapter = EmailChannelAdapter(
-            config=email_config,
+            config=email_config.email,
             authenticator=MagicMock(),
             authorizer=MagicMock(),
             responder=responder,
         )
 
         parsed = EmailParsedMessage(
-            sender=email_config.authorized_senders[0],
+            sender=email_config.email.authorized_senders[0],
             body="New request",
             conversation_id=None,
             model_hint=None,
@@ -1204,7 +1211,7 @@ class TestAcknowledgmentReply:
         adapter.save_attachments.return_value = []
 
         parsed = ParsedMessage(
-            sender=email_config.authorized_senders[0],
+            sender=email_config.email.authorized_senders[0],
             body="Follow-up",
             conversation_id=conv_id,
             model_hint=None,
@@ -1345,7 +1352,7 @@ class TestTaskIdTracking:
 
         message = sample_email_message
         message.replace_header("Subject", "New request without ID")
-        message.replace_header("From", email_config.authorized_senders[0])
+        message.replace_header("From", email_config.email.authorized_senders[0])
 
         parsed = ParsedMessage(
             sender="user@example.com",
@@ -1403,7 +1410,7 @@ class TestTaskIdTracking:
 
         message = sample_email_message
         message.replace_header("Subject", "New request")
-        message.replace_header("From", email_config.authorized_senders[0])
+        message.replace_header("From", email_config.email.authorized_senders[0])
 
         parsed = ParsedMessage(
             sender="user@example.com",
@@ -1460,7 +1467,7 @@ class TestDuplicateMessageRejection:
 
         # Worker receives raw msg; adapter returns parsed with same conv_id
         parsed = ParsedMessage(
-            sender=email_config.authorized_senders[0],
+            sender=email_config.email.authorized_senders[0],
             body="Follow-up",
             conversation_id=conv_id,
             model_hint=None,
@@ -1511,7 +1518,7 @@ class TestDuplicateMessageRejection:
 
         # Worker receives raw msg; adapter returns parsed with same conv_id
         parsed = ParsedMessage(
-            sender=email_config.authorized_senders[0],
+            sender=email_config.email.authorized_senders[0],
             body="Follow-up",
             conversation_id=conv_id,
             model_hint=None,
@@ -1559,7 +1566,7 @@ class TestDuplicateMessageRejection:
 
         # Worker receives a raw message; adapter returns parsed with no conv_id
         parsed = ParsedMessage(
-            sender=email_config.authorized_senders[0],
+            sender=email_config.email.authorized_senders[0],
             body="Brand new request",
             conversation_id=None,
             model_hint=None,
@@ -1610,14 +1617,14 @@ class TestRejectionReply:
 
         responder = MagicMock()
         adapter = EmailChannelAdapter(
-            config=email_config,
+            config=email_config.email,
             authenticator=MagicMock(),
             authorizer=MagicMock(),
             responder=responder,
         )
 
         parsed = EmailParsedMessage(
-            sender=email_config.authorized_senders[0],
+            sender=email_config.email.authorized_senders[0],
             body="Original request",
             conversation_id=None,
             model_hint=None,
@@ -1649,21 +1656,19 @@ class TestRejectionReply:
         )
 
         responder = MagicMock()
-        repo_config = RepoServerConfig(
-            repo_id="test",
+        email_channel_config = EmailChannelConfig(
             imap_server="imap.example.com",
             imap_port=993,
             smtp_server="smtp.example.com",
             smtp_port=587,
-            email_username="test@example.com",
-            email_password="test_password",
-            email_from="Test Service <test@example.com>",
+            username="test@example.com",
+            password="test_password",
+            from_address="Test Service <test@example.com>",
             authorized_senders=["authorized@example.com"],
             trusted_authserv_id="mx.example.com",
-            git_repo_url=str(master_repo),
         )
         adapter = EmailChannelAdapter(
-            config=repo_config,
+            config=email_channel_config,
             authenticator=MagicMock(),
             authorizer=MagicMock(),
             responder=responder,
@@ -1702,14 +1707,14 @@ class TestRejectionReply:
         responder = MagicMock()
         responder.send_reply.side_effect = SMTPSendError("Send failed")
         adapter = EmailChannelAdapter(
-            config=email_config,
+            config=email_config.email,
             authenticator=MagicMock(),
             authorizer=MagicMock(),
             responder=responder,
         )
 
         parsed = EmailParsedMessage(
-            sender=email_config.authorized_senders[0],
+            sender=email_config.email.authorized_senders[0],
             body="Request",
             conversation_id=None,
             model_hint=None,
@@ -2132,7 +2137,7 @@ class TestUnauthorizedSenderTracking:
         mock_authorizer.is_authorized.return_value = False
 
         adapter = EmailChannelAdapter(
-            config=email_config,
+            config=email_config.email,
             authenticator=mock_authenticator,
             authorizer=mock_authorizer,
             responder=MagicMock(),
@@ -2183,7 +2188,7 @@ class TestUnauthorizedSenderTracking:
         mock_authenticator.authenticate.return_value = None
 
         adapter = EmailChannelAdapter(
-            config=email_config,
+            config=email_config.email,
             authenticator=mock_authenticator,
             authorizer=MagicMock(),
             responder=MagicMock(),

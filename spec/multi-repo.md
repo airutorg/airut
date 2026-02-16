@@ -60,15 +60,13 @@ repos:
       username: airut
       password: !env EMAIL_PASSWORD_AIRUT
       from: "Airut <airut@example.com>"
-
-    authorized_senders:
-      - admin@example.com
-    trusted_authserv_id: mail.example.com
-
-    imap:
-      poll_interval: 30
-      use_idle: true
-      idle_reconnect_interval: 1740
+      authorized_senders:
+        - admin@example.com
+      trusted_authserv_id: mail.example.com
+      imap:
+        poll_interval: 30
+        use_idle: true
+        idle_reconnect_interval: 1740
 
     # Per-repo secrets pool
     secrets:
@@ -87,11 +85,11 @@ repos:
       username: bot
       password: !env EMAIL_PASSWORD_OTHER
       from: "Bot <bot@example.com>"
-    authorized_senders:
-      - someone@example.com
-    trusted_authserv_id: mail.example.com
-    imap:
-      use_idle: true
+      authorized_senders:
+        - someone@example.com
+      trusted_authserv_id: mail.example.com
+      imap:
+        use_idle: true
     secrets:
       GH_TOKEN: !env GH_TOKEN_OTHER
 ```
@@ -104,9 +102,11 @@ repos:
   `secrets`, `masked_secrets`, and `signing_credentials` alike.
 - **SMTP is per-repo.** Replies come from the same email address that receives
   tasks for that repo.
-- **`authorized_senders` is a list** supporting multiple senders per repo with
-  optional domain wildcards (e.g., `*@company.com`). Each repo is independent.
-- **`trusted_authserv_id` is per-repo** since email settings differ per repo.
+- **`email.authorized_senders` is a list** supporting multiple senders per repo
+  with optional domain wildcards (e.g., `*@company.com`). Each repo is
+  independent.
+- **`email.trusted_authserv_id` is per-repo** since email settings differ per
+  repo.
 
 ### Validation Rules
 
@@ -245,27 +245,39 @@ class GlobalConfig:
 
 
 @dataclass(frozen=True)
+class EmailChannelConfig:
+    """Email channel configuration (nested under email: in YAML)."""
+
+    imap_server: str
+    smtp_server: str
+    username: str
+    password: str
+    from_address: str
+    authorized_senders: list[str]
+    trusted_authserv_id: str
+    imap_port: int = 993
+    smtp_port: int = 587
+    poll_interval_seconds: int = 60
+    use_imap_idle: bool = True
+    idle_reconnect_interval_seconds: int = 29 * 60
+    smtp_require_auth: bool = True
+    microsoft_internal_auth_fallback: bool = False
+    microsoft_oauth2_tenant_id: str | None = None
+    microsoft_oauth2_client_id: str | None = None
+    microsoft_oauth2_client_secret: str | None = None
+
+
+@dataclass(frozen=True)
 class RepoServerConfig:
     """Per-repo server-side configuration."""
 
     repo_id: str
     git_repo_url: str
-    imap_server: str
-    imap_port: int
-    smtp_server: str
-    smtp_port: int
-    email_username: str
-    email_password: str
-    email_from: str
-    authorized_senders: list[str]
-    trusted_authserv_id: str
-    poll_interval_seconds: int
-    use_imap_idle: bool
-    idle_reconnect_interval_seconds: int
-    smtp_require_auth: bool
+    email: EmailChannelConfig
     secrets: dict[str, str]
     masked_secrets: dict[str, MaskedSecret]
     signing_credentials: dict[str, SigningCredential]
+    network_sandbox_enabled: bool = True
 
 
 @dataclass(frozen=True)
