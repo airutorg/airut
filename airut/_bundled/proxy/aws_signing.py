@@ -23,7 +23,10 @@ import hmac
 import re
 import urllib.parse
 from datetime import UTC, datetime
-from typing import Any
+
+from cryptography.hazmat.primitives.asymmetric.ec import (
+    EllipticCurvePrivateKey,
+)
 
 
 # P-256 curve order for SigV4A key derivation
@@ -403,7 +406,9 @@ def build_sigv4_string_to_sign(
 # ---------------------------------------------------------------------------
 
 
-def derive_sigv4a_key(secret_key: str, access_key_id: str) -> Any:
+def derive_sigv4a_key(
+    secret_key: str, access_key_id: str
+) -> EllipticCurvePrivateKey:
     """Derive the ECDSA P-256 private key for SigV4A.
 
     Uses the AWS key derivation algorithm:
@@ -442,7 +447,9 @@ def derive_sigv4a_key(secret_key: str, access_key_id: str) -> Any:
     raise RuntimeError("SigV4A key derivation failed after 254 iterations")
 
 
-def sigv4a_sign(private_key: Any, string_to_sign: str) -> str:
+def sigv4a_sign(
+    private_key: EllipticCurvePrivateKey, string_to_sign: str
+) -> str:
     """Compute SigV4A ECDSA signature.
 
     Args:
@@ -762,7 +769,7 @@ class ChunkedResigner:
         self,
         *,
         signing_key: bytes | None,
-        ecdsa_key: Any | None,
+        ecdsa_key: EllipticCurvePrivateKey | None,
         seed_signature: str,
         timestamp: str,
         scope: str,
