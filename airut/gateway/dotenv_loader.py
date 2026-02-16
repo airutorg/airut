@@ -42,27 +42,23 @@ def load_dotenv_once() -> None:
     if _dotenv_loaded:
         return
 
-    try:
-        from dotenv import load_dotenv
+    from dotenv import load_dotenv
 
-        from airut.gateway.config import get_dotenv_path
+    from airut.gateway.config import get_dotenv_path
 
-        # 1. XDG config directory (.env next to airut.yaml)
-        xdg_env = get_dotenv_path()
-        if xdg_env.exists():
-            load_dotenv(xdg_env)
-            logger.debug("Loaded .env from %s", xdg_env)
+    # 1. XDG config directory (.env next to airut.yaml)
+    xdg_env = get_dotenv_path()
+    if xdg_env.exists():
+        load_dotenv(xdg_env)
+        logger.debug("Loaded .env from %s", xdg_env)
 
-        # 2. Current working directory (override / development use)
-        cwd_env = Path.cwd() / ".env"
-        if cwd_env.exists():
-            load_dotenv(cwd_env)
-            logger.debug("Loaded .env from %s", cwd_env)
+    # 2. Current working directory (override / development use)
+    cwd_env = Path.cwd() / ".env"
+    if cwd_env.exists():
+        load_dotenv(cwd_env)
+        logger.debug("Loaded .env from %s", cwd_env)
 
-        _dotenv_loaded = True
-    except ImportError:  # pragma: no cover
-        logger.debug("dotenv not available, using env vars only")
-        _dotenv_loaded = True
+    _dotenv_loaded = True
 
 
 def reset_dotenv_state() -> None:

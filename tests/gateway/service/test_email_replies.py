@@ -6,10 +6,12 @@
 """Tests for email_replies module."""
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from airut.gateway.service.email_replies import (
+    _clean_outbox,
     send_acknowledgment,
     send_error_reply,
     send_rejection_reply,
@@ -367,3 +369,24 @@ class TestStructuredMessageId:
         ]
         assert first_mid == second_mid
         assert first_mid.startswith("<airut.aabb1122.")
+
+
+class TestCleanOutbox:
+    """Tests for _clean_outbox helper."""
+
+    def test_unlink_oserror_logged(self, tmp_path: Path) -> None:
+        """OSError on unlink is logged as warning, not raised."""
+        outbox = tmp_path / "outbox"
+        outbox.mkdir()
+        (outbox / "file.txt").write_bytes(b"data")
+        attachments = [("file.txt", b"data")]
+
+        with (
+            patch.object(
+                Path, "unlink", side_effect=OSError("Permission denied")
+            ),
+            patch("airut.gateway.service.email_replies.logger") as mock_logger,
+        ):
+            _clean_outbox(attachments, outbox)
+            mock_logger.warning.assert_called_once()
+            assert "Permission denied" in str(mock_logger.warning.call_args)

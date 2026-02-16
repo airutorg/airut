@@ -138,7 +138,7 @@ def _clean_outbox(
         if filepath.is_file():
             try:
                 filepath.unlink()
-            except OSError as e:  # pragma: no cover
+            except OSError as e:
                 logger.warning(
                     "Failed to delete outbox file %s: %s",
                     filepath,
