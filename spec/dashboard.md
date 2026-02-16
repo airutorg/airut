@@ -116,23 +116,71 @@ credential problems) while others continue processing emails.
 
 ### HTTP Endpoints
 
-| Route                                   | Method | Description                           |
-| --------------------------------------- | ------ | ------------------------------------- |
-| `/`                                     | GET    | Main dashboard with task lists        |
-| `/version`                              | GET    | Structured version info (JSON)        |
-| `/update`                               | GET    | Upstream update check (JSON)          |
-| `/repo/{repo_id}`                       | GET    | Repository detail view                |
-| `/conversation/{conv_id}`               | GET    | Task detail view                      |
-| `/conversation/{conv_id}/actions`       | GET    | Actions timeline viewer               |
-| `/conversation/{conv_id}/network`       | GET    | Network logs viewer                   |
-| `/api/repos`                            | GET    | JSON API for repository status (ETag) |
-| `/api/conversations`                    | GET    | JSON API for task list (ETag)         |
-| `/api/conversation/{id}`                | GET    | JSON API for single task              |
-| `/api/conversation/{id}/stop`           | POST   | Stop a running task                   |
-| `/api/events/stream`                    | GET    | SSE state stream (real-time updates)  |
-| `/api/conversation/{id}/events/stream`  | GET    | SSE event log stream (per-task)       |
-| `/api/conversation/{id}/network/stream` | GET    | SSE network log stream (per-task)     |
-| `/health`                               | GET    | Health check endpoint (ETag)          |
+| Route                                   | Method | Description                            |
+| --------------------------------------- | ------ | -------------------------------------- |
+| `/`                                     | GET    | Main dashboard with task lists         |
+| `/version`                              | GET    | Structured version info (JSON)         |
+| `/update`                               | GET    | Upstream update check (JSON)           |
+| `/repo/{repo_id}`                       | GET    | Repository detail view                 |
+| `/conversation/{conv_id}`               | GET    | Task detail view                       |
+| `/conversation/{conv_id}/actions`       | GET    | Actions timeline viewer                |
+| `/conversation/{conv_id}/network`       | GET    | Network logs viewer                    |
+| `/api/repos`                            | GET    | JSON API for repository status (ETag)  |
+| `/api/conversations`                    | GET    | JSON API for task list (ETag)          |
+| `/api/conversation/{id}`                | GET    | JSON API for single task               |
+| `/api/conversation/{id}/stop`           | POST   | Stop a running task                    |
+| `/api/tracker`                          | GET    | JSON API for full tracker state (ETag) |
+| `/api/events/stream`                    | GET    | SSE state stream (real-time updates)   |
+| `/api/conversation/{id}/events/stream`  | GET    | SSE event log stream (per-task)        |
+| `/api/conversation/{id}/network/stream` | GET    | SSE network log stream (per-task)      |
+| `/health`                               | GET    | Health check endpoint (ETag)           |
+
+### `GET /api/tracker`
+
+Returns an atomic snapshot of the full task tracker state. Designed for
+integration tests and monitoring tools that need a single request to retrieve
+all task data with status counts.
+
+**Response** (`application/json`):
+
+```json
+{
+  "version": 42,
+  "counts": {
+    "queued": 1,
+    "in_progress": 2,
+    "completed": 10
+  },
+  "tasks": [
+    {
+      "conversation_id": "a1b2c3d4",
+      "subject": "Help with task",
+      "repo_id": "my-repo",
+      "sender": "user@example.com",
+      "status": "completed",
+      "queued_at": 1700000000.0,
+      "started_at": 1700000001.0,
+      "completed_at": 1700000060.0,
+      "success": true,
+      "message_count": 1,
+      "model": "sonnet"
+    }
+  ]
+}
+```
+
+| Field             | Type             | Description                                                                |
+| ----------------- | ---------------- | -------------------------------------------------------------------------- |
+| `version`         | `int`            | Monotonic version clock value at time of snapshot                          |
+| `counts`          | `dict`           | Task counts keyed by status (`queued`, `in_progress`, `completed`)         |
+| `tasks`           | `list[object]`   | All tracked tasks (active + completed history)                             |
+| `tasks[].status`  | `string`         | One of `queued`, `in_progress`, `completed`                                |
+| `tasks[].success` | `bool \| null`   | `null` while not completed; `true`/`false` when done                       |
+| `tasks[].model`   | `string \| null` | Claude model used (e.g., `"sonnet"`, `"opus"`), or `null` if not yet known |
+
+Supports `ETag` / `If-None-Match` conditional requests — returns
+`304 Not Modified` when the version clock has not advanced since the client's
+last request.
 
 ## Configuration
 

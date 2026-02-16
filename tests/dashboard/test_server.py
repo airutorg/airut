@@ -205,6 +205,71 @@ class TestDashboardServer:
         assert response.status_code == 404
         assert response.content_type == "application/json"
 
+    def test_api_tracker_endpoint(self) -> None:
+        """Test /api/tracker endpoint returns full tracker state."""
+        tracker = TaskTracker()
+        tracker.add_task(
+            "t1", "Task One", repo_id="repo-a", sender="alice@test.local"
+        )
+        tracker.start_task("t1")
+        tracker.add_task("t2", "Task Two", repo_id="repo-b")
+        tracker.complete_task("t2", success=True)
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/tracker")
+        assert response.status_code == 200
+        assert response.content_type == "application/json"
+
+        data = json.loads(response.get_data(as_text=True))
+
+        # Check top-level structure
+        assert "version" in data
+        assert isinstance(data["version"], int)
+        assert "counts" in data
+        assert "tasks" in data
+
+        # Check counts
+        assert data["counts"]["queued"] == 0
+        assert data["counts"]["in_progress"] == 1
+        assert data["counts"]["completed"] == 1
+
+        # Check tasks (sorted newest first by queued_at)
+        assert len(data["tasks"]) == 2
+        # Find t1 in results
+        t1 = next(t for t in data["tasks"] if t["conversation_id"] == "t1")
+        assert t1["subject"] == "Task One"
+        assert t1["repo_id"] == "repo-a"
+        assert t1["sender"] == "alice@test.local"
+        assert t1["status"] == "in_progress"
+        assert t1["started_at"] is not None
+        assert t1["model"] is None
+
+    def test_api_tracker_etag(self) -> None:
+        """Test /api/tracker supports ETag conditional requests."""
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        server = DashboardServer(tracker, clock=clock)
+        client = Client(server._wsgi_app)
+
+        # First request
+        response = client.get("/api/tracker")
+        assert response.status_code == 200
+        etag = response.headers.get("ETag")
+        assert etag is not None
+
+        # Second request with matching ETag
+        response = client.get("/api/tracker", headers={"If-None-Match": etag})
+        assert response.status_code == 304
+
+        # Mutate state
+        tracker.add_task("t1", "New Task")
+
+        # Third request with old ETag
+        response = client.get("/api/tracker", headers={"If-None-Match": etag})
+        assert response.status_code == 200
+
     def test_api_repos_endpoint(self) -> None:
         """Test /api/repos endpoint."""
         tracker = TaskTracker()
