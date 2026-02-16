@@ -1287,27 +1287,31 @@ repos:
 
 class TestCmdUpdate:
     @patch("airut.cli.subprocess.run")
+    @patch(
+        "airut.install_services.get_airut_path", return_value="/usr/bin/airut"
+    )
     @patch("airut.cli._is_service_installed", return_value=False)
     @patch("airut.cli._use_color", return_value=False)
     def test_no_service_upgrade_only(
         self,
         _color: MagicMock,
         _installed: MagicMock,
+        _airut_path: MagicMock,
         mock_run: MagicMock,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """Runs uv upgrade without service management."""
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="Updated airut v0.8.0 -> v0.9.0", stderr=""
-        )
+        """Runs uv upgrade and check without service management."""
+        mock_run.side_effect = [
+            MagicMock(
+                returncode=0,
+                stdout="Updated airut v0.8.0 -> v0.9.0",
+                stderr="",
+            ),  # uv upgrade
+            MagicMock(returncode=0, stdout="All checks passed.", stderr=""),
+        ]  # check
         result = cmd_update([])
         assert result == 0
-        mock_run.assert_called_once_with(
-            ["uv", "tool", "upgrade", "airut"],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
+        assert mock_run.call_count == 2
         out = capsys.readouterr().out
         assert "Update complete." in out
         assert "Stopping" not in out
@@ -1331,15 +1335,17 @@ class TestCmdUpdate:
         mock_run: MagicMock,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """Full cycle: upgrade, uninstall, reinstall."""
+        """Full cycle: upgrade, check, uninstall, reinstall."""
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout="Updated", stderr=""),  # uv upgrade
+            MagicMock(returncode=0, stdout="", stderr=""),  # check
             MagicMock(returncode=0, stdout="", stderr=""),  # install-service
         ]
         result = cmd_update([])
         assert result == 0
         mock_uninstall.assert_called_once()
         out = capsys.readouterr().out
+        assert "Running readiness check" in out
         assert "Stopping and uninstalling" in out
         assert "Reinstalling" in out
         assert "Update complete." in out
@@ -1381,6 +1387,9 @@ class TestCmdUpdate:
 
     @patch("airut.cli.subprocess.run")
     @patch(
+        "airut.install_services.get_airut_path", return_value="/usr/bin/airut"
+    )
+    @patch(
         "airut.install_services.uninstall_services",
         side_effect=RuntimeError("fail"),
     )
@@ -1393,13 +1402,15 @@ class TestCmdUpdate:
         _installed: MagicMock,
         _running: MagicMock,
         _uninstall: MagicMock,
+        _airut_path: MagicMock,
         mock_run: MagicMock,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Returns 1 when uninstall_services raises RuntimeError."""
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout="Updated", stderr=""
-        )
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="Updated", stderr=""),  # uv upgrade
+            MagicMock(returncode=0, stdout="", stderr=""),  # check
+        ]
         result = cmd_update([])
         assert result == 1
         out = capsys.readouterr().out
@@ -1426,6 +1437,7 @@ class TestCmdUpdate:
         """Returns 1 when reinstalling service fails."""
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout="Updated", stderr=""),  # upgrade
+            MagicMock(returncode=0, stdout="", stderr=""),  # check
             MagicMock(
                 returncode=1, stdout="", stderr="linger error"
             ),  # install
@@ -1457,6 +1469,7 @@ class TestCmdUpdate:
         """Returns 1 when updated airut binary is not found."""
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout="Updated", stderr=""),  # upgrade
+            MagicMock(returncode=0, stdout="", stderr=""),  # check
             FileNotFoundError("not found"),  # install-service
         ]
         result = cmd_update([])
@@ -1484,17 +1497,24 @@ class TestCmdUpdate:
         assert "timed out" in out
 
     @patch("airut.cli.subprocess.run")
+    @patch(
+        "airut.install_services.get_airut_path", return_value="/usr/bin/airut"
+    )
     @patch("airut.cli._is_service_installed", return_value=False)
     @patch("airut.cli._use_color", return_value=False)
     def test_no_output_from_upgrade(
         self,
         _color: MagicMock,
         _installed: MagicMock,
+        _airut_path: MagicMock,
         mock_run: MagicMock,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Succeeds even when uv produces no output."""
-        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="", stderr=""),  # uv upgrade
+            MagicMock(returncode=0, stdout="", stderr=""),  # check
+        ]
         result = cmd_update([])
         assert result == 0
         out = capsys.readouterr().out
@@ -1569,6 +1589,7 @@ class TestCmdUpdate:
             MagicMock(
                 returncode=0, stdout="Nothing to upgrade", stderr=""
             ),  # uv upgrade
+            MagicMock(returncode=0, stdout="", stderr=""),  # check
             MagicMock(returncode=0, stdout="", stderr=""),  # install-service
         ]
         result = cmd_update([])
@@ -1576,6 +1597,7 @@ class TestCmdUpdate:
         mock_uninstall.assert_called_once()
         out = capsys.readouterr().out
         assert "running service needs a restart" in out
+        assert "Running readiness check" in out
         assert "Stopping and uninstalling" in out
         assert "Reinstalling" in out
         assert "Update complete." in out
@@ -1633,7 +1655,7 @@ class TestCmdUpdate:
     @patch("airut.cli._is_service_running", return_value=True)
     @patch("airut.cli._is_service_installed", return_value=True)
     @patch("airut.cli._use_color", return_value=False)
-    def test_force_bypasses_check(
+    def test_force_bypasses_task_check(
         self,
         _color: MagicMock,
         _installed: MagicMock,
@@ -1645,6 +1667,7 @@ class TestCmdUpdate:
         """--force bypasses the in-flight task check."""
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout="Updated", stderr=""),  # uv upgrade
+            MagicMock(returncode=0, stdout="", stderr=""),  # check
             MagicMock(returncode=0, stdout="", stderr=""),  # install-service
         ]
         with patch("airut.install_services.uninstall_services"):
@@ -1688,6 +1711,7 @@ class TestCmdUpdate:
                 MagicMock(
                     returncode=0, stdout="Updated", stderr=""
                 ),  # uv upgrade
+                MagicMock(returncode=0, stdout="", stderr=""),  # check
                 MagicMock(returncode=0, stdout="", stderr=""),  # install
             ]
             result = cmd_update(["--wait"])
@@ -1729,6 +1753,7 @@ class TestCmdUpdate:
                 MagicMock(
                     returncode=0, stdout="Updated", stderr=""
                 ),  # uv upgrade
+                MagicMock(returncode=0, stdout="", stderr=""),  # check
                 MagicMock(returncode=0, stdout="", stderr=""),  # install
             ]
             result = cmd_update(["--wait"])
@@ -1752,6 +1777,7 @@ class TestCmdUpdate:
         """Proceeds when service is running but no tasks in flight."""
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout="Updated", stderr=""),  # uv upgrade
+            MagicMock(returncode=0, stdout="", stderr=""),  # check
             MagicMock(returncode=0, stdout="", stderr=""),  # install-service
         ]
         with patch("airut.install_services.uninstall_services"):
@@ -1782,6 +1808,7 @@ class TestCmdUpdate:
         """Proceeds when health endpoint is unreachable (fail open)."""
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout="Updated", stderr=""),  # uv upgrade
+            MagicMock(returncode=0, stdout="", stderr=""),  # check
             MagicMock(returncode=0, stdout="", stderr=""),  # install-service
         ]
         with patch("airut.install_services.uninstall_services"):
@@ -1798,7 +1825,7 @@ class TestCmdUpdate:
     @patch("airut.cli._is_service_running", return_value=False)
     @patch("airut.cli._is_service_installed", return_value=True)
     @patch("airut.cli._use_color", return_value=False)
-    def test_service_not_running_skips_check(
+    def test_service_not_running_skips_task_check(
         self,
         _color: MagicMock,
         _installed: MagicMock,
@@ -1809,6 +1836,7 @@ class TestCmdUpdate:
         """Skips task check when service is installed but not running."""
         mock_run.side_effect = [
             MagicMock(returncode=0, stdout="Updated", stderr=""),  # uv upgrade
+            MagicMock(returncode=0, stdout="", stderr=""),  # check
             MagicMock(returncode=0, stdout="", stderr=""),  # install-service
         ]
         with patch("airut.install_services.uninstall_services"):
@@ -1821,6 +1849,153 @@ class TestCmdUpdate:
         out = capsys.readouterr().out
         assert "Cannot update:" not in out
         assert "Update complete." in out
+
+    @patch("airut.cli.subprocess.run")
+    @patch(
+        "airut.install_services.get_airut_path", return_value="/usr/bin/airut"
+    )
+    @patch("airut.cli._is_service_installed", return_value=True)
+    @patch("airut.cli._is_service_running", return_value=False)
+    @patch("airut.cli._use_color", return_value=False)
+    def test_readiness_check_failure_skips_service_restart(
+        self,
+        _color: MagicMock,
+        _running: MagicMock,
+        _installed: MagicMock,
+        _airut_path: MagicMock,
+        mock_run: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Returns 1 and skips service restart when readiness check fails."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="Updated", stderr=""),  # uv upgrade
+            MagicMock(
+                returncode=1,
+                stdout="Configuration\n  Status: error — missing field\n"
+                "Some checks failed.",
+                stderr="",
+            ),  # check fails
+        ]
+        result = cmd_update([])
+        assert result == 1
+        # Only 2 subprocess calls: upgrade + check (no install-service)
+        assert mock_run.call_count == 2
+        out = capsys.readouterr().out
+        assert "Readiness check failed" in out
+        assert "missing field" in out
+        assert "Skipping service restart" in out
+        assert "airut install-service" in out
+        assert "Stopping and uninstalling" not in out
+        assert "Reinstalling" not in out
+
+    @patch("airut.cli.subprocess.run")
+    @patch(
+        "airut.install_services.get_airut_path", return_value="/usr/bin/airut"
+    )
+    @patch("airut.cli._is_service_installed", return_value=False)
+    @patch("airut.cli._use_color", return_value=False)
+    def test_readiness_check_failure_no_service(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _airut_path: MagicMock,
+        mock_run: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Returns 1 when readiness check fails even without service."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="Updated", stderr=""),  # uv upgrade
+            MagicMock(
+                returncode=1,
+                stdout="Dependencies\n  ✗ podman: not found\n"
+                "Some checks failed.",
+                stderr="",
+            ),  # check fails
+        ]
+        result = cmd_update([])
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "Readiness check failed" in out
+        assert "podman" in out
+        assert "airut install-service" in out
+
+    @patch("airut.cli.subprocess.run")
+    @patch(
+        "airut.install_services.get_airut_path", return_value="/usr/bin/airut"
+    )
+    @patch("airut.cli._is_service_installed", return_value=False)
+    @patch("airut.cli._use_color", return_value=False)
+    def test_readiness_check_timeout(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _airut_path: MagicMock,
+        mock_run: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Returns 1 when readiness check subprocess times out."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="Updated", stderr=""),  # uv upgrade
+            subprocess.TimeoutExpired(cmd="airut", timeout=30),  # check
+        ]
+        result = cmd_update([])
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "Readiness check failed" in out
+        assert "airut install-service" in out
+
+    @patch("airut.cli.subprocess.run")
+    @patch(
+        "airut.install_services.get_airut_path",
+        return_value="/nonexistent/airut",
+    )
+    @patch("airut.cli._is_service_installed", return_value=False)
+    @patch("airut.cli._use_color", return_value=False)
+    def test_readiness_check_binary_not_found(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _airut_path: MagicMock,
+        mock_run: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Returns 1 when airut binary not found for readiness check."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="Updated", stderr=""),  # uv upgrade
+            FileNotFoundError("not found"),  # check
+        ]
+        result = cmd_update([])
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "Readiness check failed" in out
+        assert "airut install-service" in out
+
+    @patch("airut.cli.subprocess.run")
+    @patch(
+        "airut.install_services.get_airut_path", return_value="/usr/bin/airut"
+    )
+    @patch("airut.cli._is_service_installed", return_value=False)
+    @patch("airut.cli._use_color", return_value=False)
+    def test_readiness_check_failure_stderr_output(
+        self,
+        _color: MagicMock,
+        _installed: MagicMock,
+        _airut_path: MagicMock,
+        mock_run: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Shows stderr when check fails with stderr only."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="Updated", stderr=""),  # uv upgrade
+            MagicMock(
+                returncode=1, stdout="", stderr="Traceback: import error"
+            ),  # check
+        ]
+        result = cmd_update([])
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "Readiness check failed" in out
+        assert "Traceback: import error" in out
 
 
 # ── cmd_run_gateway ─────────────────────────────────────────────────

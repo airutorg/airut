@@ -561,9 +561,15 @@ _WAIT_POLL_SECONDS = 10
 def cmd_update(argv: list[str]) -> int:
     """Update airut to the latest version.
 
-    Runs ``uv tool upgrade airut``.  When the binary was actually
-    updated and the systemd service is installed, stops and uninstalls
-    the service, then reinstalls it using the new binary.
+    Runs ``uv tool upgrade airut``.  After upgrading, runs
+    ``airut check`` to verify configuration and dependencies are still
+    valid.  If the check fails, prints the output and stops without
+    restarting the service, instructing the user to fix issues and run
+    ``airut install-service`` manually.
+
+    When the binary was actually updated and the systemd service is
+    installed, stops and uninstalls the service, then reinstalls it
+    using the new binary.
 
     If the upgrade is a no-op (already up to date) but the running
     service has a different version than the installed binary, restarts
@@ -680,6 +686,43 @@ def cmd_update(argv: list[str]) -> int:
             print(f"  {s.green('Already up to date.')}")
             return 0
 
+    # ── Run readiness check with the updated binary ────────────
+    from airut.install_services import get_airut_path
+
+    airut_path = get_airut_path()
+    print(f"  {s.dim('Running readiness check...')}")
+    try:
+        check_result = subprocess.run(
+            [airut_path, "check"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        print(f"  {s.red('Readiness check failed:')} {e}")
+        print(
+            f"  {s.yellow('Skipping service restart.')} "
+            f"Fix the issues above, then run "
+            f"{s.cyan('airut install-service')} to complete the update."
+        )
+        return 1
+
+    if check_result.returncode != 0:
+        check_output = (
+            check_result.stdout.strip() or check_result.stderr.strip()
+        )
+        print(f"  {s.red('Readiness check failed:')}")
+        if check_output:
+            for line in check_output.splitlines():
+                print(f"    {line}")
+        print()
+        print(
+            f"  {s.yellow('Skipping service restart.')} "
+            f"Fix the issues above, then run "
+            f"{s.cyan('airut install-service')} to complete the update."
+        )
+        return 1
+
     # ── Restart service with the updated binary ───────────────
     if service_was_installed:
         print(f"  {s.dim('Stopping and uninstalling service...')}")
@@ -692,9 +735,6 @@ def cmd_update(argv: list[str]) -> int:
             return 1
 
         print(f"  {s.dim('Reinstalling service...')}")
-        from airut.install_services import get_airut_path
-
-        airut_path = get_airut_path()
         try:
             result = subprocess.run(
                 [airut_path, "install-service"],
