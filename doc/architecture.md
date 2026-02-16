@@ -1,20 +1,20 @@
 # Architecture
 
 Airut is a protocol-agnostic gateway for headless Claude Code interaction. It
-currently supports email as a channel — send instructions, receive results,
-reply to continue the conversation. The architecture separates channel-specific
-protocol handling from the core orchestration to support future channels.
+supports email and Slack as channels — send instructions, receive results, reply
+to continue the conversation. The architecture separates channel-specific
+protocol handling from the core orchestration via the `ChannelAdapter` protocol.
 
 ## Concepts
 
 Airut organizes work around three concepts:
 
-- **Conversation** — an email thread. One email thread = one conversation,
-  identified by an 8-character hex ID. A conversation owns a git workspace,
-  persistent Claude session state, and a sandboxed execution environment. Tasks
-  within a conversation execute serially — only one task runs at a time.
-  Parallelism occurs across different conversations, not within one.
-- **Task** — an individual execution within a conversation. Each inbound email
+- **Conversation** — a message thread (email thread or Slack thread). One thread
+  = one conversation, identified by an 8-character hex ID. A conversation owns a
+  git workspace, persistent Claude session state, and a sandboxed execution
+  environment. Tasks within a conversation execute serially — only one task runs
+  at a time. Parallelism occurs across different conversations, not within one.
+- **Task** — an individual execution within a conversation. Each inbound message
   triggers one task. A conversation contains one or more tasks, executed one at
   a time in the order received.
 - **Session** — Claude Code's persistent context, identified by a `session_id`
@@ -38,8 +38,9 @@ Airut organizes work around three concepts:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-Reply to continue the conversation. The agent picks up where it left off with
-full context of previous work.
+Reply (email) or send another message in the thread (Slack) to continue the
+conversation. The agent picks up where it left off with full context of previous
+work.
 
 ## Technical Architecture
 
@@ -91,16 +92,18 @@ each component's lifetime and what resources it can access.
   components below
 - **ChannelAdapter** — Protocol-specific message handling (authentication,
   parsing, replies). For email: `EmailChannelAdapter` wraps the listener,
-  authenticator, authorizer, and responder.
+  authenticator, authorizer, and responder. For Slack: `SlackChannelAdapter`
+  wraps the authorizer and thread store.
 - **EmailListener** — Polls IMAP inbox (or uses IDLE) for incoming messages
+- **SlackListener** — Socket Mode (WebSocket) event handler for Slack DM threads
 - **ConversationManager** — Creates/resumes conversations, manages git mirror
   and workspaces
 - **Sandbox Task** — Per-execution task created by the Sandbox; runs Claude Code
   in a container with proxy, mounts, and execution context management
 - **GitMirrorCache** — Bare mirror repository for fast local clones
 
-**Conversation-scoped** — created when a new email thread starts, persists
-across all tasks in that conversation:
+**Conversation-scoped** — created when a new thread starts, persists across all
+tasks in that conversation:
 
 - **Conversation directory** — Contains workspace, Claude state, inbox/outbox
 - **Git workspace** — Full clone from the git mirror
@@ -262,6 +265,23 @@ EmailListener
     └──▶ Delete original message from IMAP inbox (expunge)
 ```
 
+### Slack Channel
+
+The Slack channel (`gateway/slack/`) implements `ChannelAdapter` as
+`SlackChannelAdapter`, using Slack's Agents & AI Apps platform with Socket Mode:
+
+- **SlackListener** — WebSocket connection via Bolt for Python. No public HTTP
+  endpoints needed.
+- **SlackAuthorizer** — Configurable authorization rules: workspace membership,
+  user group membership, or individual user IDs.
+- **SlackThreadStore** — File-backed JSON mapping of Slack threads to
+  conversation IDs.
+
+**Slack lifecycle:** Each DM thread maps to one conversation. The `Assistant`
+middleware handles `thread_started`, `thread_context_changed`, and
+`user_message` events. Messages are dispatched to the core via the same
+`submit_message()` flow as email.
+
 ### Storage Structure
 
 Each conversation maps to a directory under the XDG state dir
@@ -292,13 +312,13 @@ Workspaces are full clones (no shared objects) for isolation.
 
 A single server manages multiple repositories with per-repo isolation:
 
-| Per-Repository             | Shared Across Repos            |
-| -------------------------- | ------------------------------ |
-| Email inbox (IMAP account) | Thread pool (`max_concurrent`) |
-| Authorized senders         | Dashboard                      |
-| Secrets pool               | Proxy infrastructure           |
-| Storage directory          |                                |
-| Git mirror                 |                                |
+| Per-Repository                     | Shared Across Repos            |
+| ---------------------------------- | ------------------------------ |
+| Channel (email inbox or Slack app) | Thread pool (`max_concurrent`) |
+| Authorization rules                | Dashboard                      |
+| Secrets pool                       | Proxy infrastructure           |
+| Storage directory                  |                                |
+| Git mirror                         |                                |
 
 Each repository has its own `RepoHandler` with isolated components.
 
@@ -309,8 +329,8 @@ Airut uses a two-layer configuration model:
 **Server config** (`~/.config/airut/airut.yaml`) — deployment infrastructure
 managed by the operator:
 
-- Email credentials (IMAP/SMTP)
-- Authorized senders and trusted auth servers
+- Channel credentials (email IMAP/SMTP or Slack bot/app tokens)
+- Authorization rules (email sender allowlist or Slack user rules)
 - Repository URL and storage paths
 - Secrets pool (values repos can reference)
 - Concurrency limits and dashboard settings
@@ -330,11 +350,12 @@ See [spec/repo-config.md](../spec/repo-config.md) for the full schema.
 
 ## Key Design Decisions
 
-### Email as Interface
+### Messaging Channels as Interface
 
-Email provides natural conversation threading, works from any device, requires
-no custom client, and handles the asynchronous nature of agent work. The
-`[ID:xyz123]` tag in subject lines tracks conversation state.
+Email and Slack provide natural conversation threading, work from any device,
+require no custom client, and handle the asynchronous nature of agent work.
+Email uses `[ID:xyz123]` subject tags and `Message-ID` headers for threading;
+Slack uses native thread semantics.
 
 ### Container Isolation
 
@@ -355,9 +376,9 @@ attachments. This keeps the system simple and inspectable.
 
 ### Multi-Repository Support
 
-A single server can manage multiple repositories. Each gets its own email inbox,
-authorized senders, secrets, and storage. Tasks across repos share a global
-concurrency limit.
+A single server can manage multiple repositories. Each gets its own channel
+(email inbox or Slack app), authorization rules, secrets, and storage. Tasks
+across repos share a global concurrency limit.
 
 ## Limitations
 
@@ -365,7 +386,7 @@ Airut is designed for **small-scale deployments**:
 
 - Single operator managing a few repositories
 - Not multi-tenant — all repos share one server
-- No web UI for task submission (email only)
+- No web UI for task submission (messaging channels only)
 
 **Claude Code only** — no support for other agentic frameworks. The container
 runs Claude Code with `--dangerously-skip-permissions` in sandbox mode.

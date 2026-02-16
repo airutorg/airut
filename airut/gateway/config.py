@@ -40,6 +40,7 @@ from airut.logging import SecretFilter
 
 
 if TYPE_CHECKING:
+    from airut.gateway.slack.config import SlackChannelConfig
     from airut.git_mirror import GitMirrorCache
 
 
@@ -720,10 +721,13 @@ class RepoServerConfig:
     Storage location is determined by ``get_storage_dir(repo_id)`` using
     XDG state directory conventions.
 
+    Exactly one of ``email`` or ``slack`` must be configured.
+
     Attributes:
         repo_id: Repository identifier (key from ``repos`` mapping).
         git_repo_url: Git repository URL to clone from.
-        email: Email channel configuration.
+        email: Email channel configuration (mutually exclusive with slack).
+        slack: Slack channel configuration (mutually exclusive with email).
         secrets: Per-repo secrets pool for ``!secret`` resolution.
         masked_secrets: Secrets with scope restrictions for proxy replacement.
         signing_credentials: Signing credentials for proxy re-signing.
@@ -734,7 +738,8 @@ class RepoServerConfig:
 
     repo_id: str
     git_repo_url: str
-    email: EmailChannelConfig
+    email: EmailChannelConfig | None = None
+    slack: "SlackChannelConfig | None" = None
     secrets: dict[str, str] = field(default_factory=dict)
     masked_secrets: dict[str, MaskedSecret] = field(default_factory=dict)
     signing_credentials: dict[str, SigningCredential] = field(
@@ -769,15 +774,39 @@ class RepoServerConfig:
                 f"Repo '{self.repo_id}': git.repo_url cannot be empty"
             )
 
-        logger.info(
-            "Repo '%s' config loaded: imap=%s:%d, smtp=%s:%d, authorized=%s",
-            self.repo_id,
-            self.email.imap_server,
-            self.email.imap_port,
-            self.email.smtp_server,
-            self.email.smtp_port,
-            self.email.authorized_senders,
-        )
+        if self.email is not None:
+            logger.info(
+                "Repo '%s' config loaded: channel=email, "
+                "imap=%s:%d, smtp=%s:%d, authorized=%s",
+                self.repo_id,
+                self.email.imap_server,
+                self.email.imap_port,
+                self.email.smtp_server,
+                self.email.smtp_port,
+                self.email.authorized_senders,
+            )
+        elif self.slack is not None:
+            logger.info(
+                "Repo '%s' config loaded: channel=slack, authorized_rules=%d",
+                self.repo_id,
+                len(self.slack.authorized),
+            )
+
+    @property
+    def channel_type(self) -> str:
+        """Return the channel type string ('email' or 'slack')."""
+        if self.slack is not None:
+            return "slack"
+        return "email"
+
+    @property
+    def channel_info(self) -> str:
+        """Return a short description of the channel for dashboard display."""
+        if self.email is not None:
+            return self.email.imap_server
+        if self.slack is not None:
+            return "Slack (Socket Mode)"
+        return "unknown"
 
     @property
     def storage_dir(self) -> Path:
@@ -808,9 +837,11 @@ class ServerConfig:
         if not self.repos:
             raise ConfigError("At least one repo must be configured")
 
-        # Validate no duplicate IMAP inboxes
+        # Validate no duplicate IMAP inboxes (for email-channel repos)
         seen_inboxes: dict[tuple[str, str], str] = {}
         for repo_id, repo in self.repos.items():
+            if repo.email is None:
+                continue
             inbox_key = (
                 repo.email.imap_server.lower(),
                 repo.email.username.lower(),
@@ -955,14 +986,24 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
             f"See config/airut.example.yaml for the current format."
         )
 
-    # Channel selection: exactly one channel block must be present.
-    # Currently only email is supported.
-    if "email" not in raw:
+    # Channel selection: exactly one of email or slack must be present.
+    has_email = "email" in raw
+    has_slack = "slack" in raw
+    if has_email and has_slack:
+        raise ConfigError(
+            f"{prefix}: both 'email:' and 'slack:' blocks found. "
+            f"Each repo must have exactly one channel."
+        )
+    if not has_email and not has_slack:
         raise ConfigError(
             f"{prefix}: no channel configuration found. "
-            f"Add an 'email:' block with IMAP/SMTP settings. "
+            f"Add an 'email:' or 'slack:' block. "
             f"See config/airut.example.yaml for the current format."
         )
+
+    # Parse Slack channel if configured
+    if has_slack:
+        return _parse_repo_server_config_slack(repo_id, raw, prefix)
 
     email = raw.get("email", {})
     imap = email.get("imap", {})
@@ -1057,6 +1098,102 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
             required=f"{prefix}.git.repo_url",
         ),
         email=email_config,
+        secrets=secrets,
+        masked_secrets=masked_secrets,
+        signing_credentials=signing_credentials,
+        network_sandbox_enabled=_resolve(
+            network.get("sandbox_enabled"), bool, default=True
+        ),
+    )
+
+
+def _parse_repo_server_config_slack(
+    repo_id: str,
+    raw: dict,
+    prefix: str,
+) -> RepoServerConfig:
+    """Parse a repo configured with a Slack channel.
+
+    Args:
+        repo_id: Repository identifier.
+        raw: Raw YAML dict for this repo.
+        prefix: Config path prefix for error messages.
+
+    Returns:
+        RepoServerConfig with Slack channel.
+
+    Raises:
+        ConfigError: If required fields are missing.
+    """
+    from airut.gateway.slack.config import SlackChannelConfig
+
+    slack = raw.get("slack", {})
+    network = raw.get("network", {})
+
+    raw_secrets = raw.get("secrets", {})
+    secrets = _resolve_secrets(raw_secrets)
+
+    raw_masked = raw.get("masked_secrets", {})
+    masked_secrets = _resolve_masked_secrets(raw_masked, prefix)
+
+    raw_signing = raw.get("signing_credentials", {})
+    signing_credentials = _resolve_signing_credentials(raw_signing, prefix)
+
+    # Parse authorization rules
+    raw_authorized = slack.get("authorized")
+    if raw_authorized is None:
+        raise ConfigError(
+            f"{prefix}.slack.authorized is required "
+            f"(list of authorization rules)"
+        )
+    if not isinstance(raw_authorized, list):
+        raise ConfigError(f"{prefix}.slack.authorized must be a list")
+
+    authorized: list[dict[str, str | bool]] = []
+    for i, rule_raw in enumerate(raw_authorized):
+        if not isinstance(rule_raw, dict):
+            raise ConfigError(
+                f"{prefix}.slack.authorized[{i}] must be a mapping"
+            )
+        rule: dict[str, str | bool] = {}
+        for k, v in rule_raw.items():
+            resolved = _raw_resolve(v)
+            if resolved is None:
+                continue
+            if k == "workspace_members":
+                rule[str(k)] = _coerce_bool(v)
+            else:
+                rule[str(k)] = str(resolved)
+        if rule:
+            authorized.append(rule)
+
+    if not authorized:
+        raise ConfigError(
+            f"{prefix}.slack.authorized must have at least one rule"
+        )
+
+    slack_config = SlackChannelConfig(
+        bot_token=_resolve(
+            slack.get("bot_token"),
+            str,
+            required=f"{prefix}.slack.bot_token",
+        ),
+        app_token=_resolve(
+            slack.get("app_token"),
+            str,
+            required=f"{prefix}.slack.app_token",
+        ),
+        authorized=authorized,
+    )
+
+    return RepoServerConfig(
+        repo_id=repo_id,
+        git_repo_url=_resolve(
+            raw.get("git", {}).get("repo_url"),
+            str,
+            required=f"{prefix}.git.repo_url",
+        ),
+        slack=slack_config,
         secrets=secrets,
         masked_secrets=masked_secrets,
         signing_credentials=signing_credentials,

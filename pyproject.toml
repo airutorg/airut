@@ -18,6 +18,9 @@ dependencies = [
     "werkzeug>=3.1.5",
 ]
 
+[project.optional-dependencies]
+slack = ["slack-bolt>=1.20"]
+
 [dependency-groups]
 dev = [
     "aiosmtpd>=1.4.6",
@@ -91,7 +94,7 @@ python-version = "3.14"
 
 [tool.ty.src]
 include = ["airut", "scripts", "tests"]
-exclude = ["airut/_bundled/proxy"]
+exclude = ["airut/_bundled/proxy", "airut/gateway/slack"]
 
 [tool.ty.terminal]
 error-on-warning = true

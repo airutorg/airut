@@ -402,6 +402,7 @@ def test_repo_server_config_defaults(master_repo: Path, tmp_path: Path) -> None:
     """Test creating valid repo server configuration with defaults."""
     config = _make_repo_server_config(master_repo, tmp_path)
 
+    assert config.email is not None
     assert config.repo_id == "test"
     assert config.email.imap_server == "imap.example.com"
     assert config.email.imap_port == 993
@@ -430,6 +431,7 @@ def test_repo_server_config_with_custom_defaults(
         idle_reconnect_interval_seconds=1800,
     )
 
+    assert config.email is not None
     assert config.email.poll_interval_seconds == 30
     assert config.email.use_imap_idle is False
     assert config.email.idle_reconnect_interval_seconds == 1800
@@ -557,6 +559,7 @@ def test_repo_server_config_oauth2_defaults(
 ) -> None:
     """Microsoft OAuth2 fields default to None."""
     config = _make_repo_server_config(master_repo, tmp_path)
+    assert config.email is not None
     assert config.email.microsoft_oauth2_tenant_id is None
     assert config.email.microsoft_oauth2_client_id is None
     assert config.email.microsoft_oauth2_client_secret is None
@@ -573,6 +576,7 @@ def test_repo_server_config_oauth2_all_set(
         microsoft_oauth2_client_id="client-456",
         microsoft_oauth2_client_secret="secret-789",
     )
+    assert config.email is not None
     assert config.email.microsoft_oauth2_tenant_id == "tenant-123"
     assert config.email.microsoft_oauth2_client_id == "client-456"
     assert config.email.microsoft_oauth2_client_secret == "secret-789"
@@ -628,6 +632,7 @@ def test_repo_server_config_internal_auth_fallback_default(
 ) -> None:
     """microsoft_internal_auth_fallback defaults to False."""
     config = _make_repo_server_config(master_repo, tmp_path)
+    assert config.email is not None
     assert config.email.microsoft_internal_auth_fallback is False
 
 
@@ -640,6 +645,7 @@ def test_repo_server_config_internal_auth_fallback_enabled(
         tmp_path,
         microsoft_internal_auth_fallback=True,
     )
+    assert config.email is not None
     assert config.email.microsoft_internal_auth_fallback is True
 
 
@@ -781,6 +787,8 @@ class TestFromYaml:
         config = ServerConfig.from_yaml(yaml_path)
         repo = config.repos["test"]
 
+        assert repo.email is not None
+
         # Global config defaults
         assert config.global_config.max_concurrent_executions == 3
         assert config.global_config.shutdown_timeout_seconds == 60
@@ -812,6 +820,8 @@ class TestFromYaml:
             config = ServerConfig.from_yaml(yaml_path)
 
         repo = config.repos["test"]
+
+        assert repo.email is not None
 
         # Global config
         assert config.global_config.max_concurrent_executions == 5
@@ -940,6 +950,7 @@ class TestFromYaml:
         ):
             config = ServerConfig.from_yaml()
 
+        assert config.repos["test"].email is not None
         assert config.repos["test"].email.imap_server == "imap.test.com"
 
     def test_env_override_bool_field(
@@ -957,6 +968,7 @@ class TestFromYaml:
         with patch.dict("os.environ", {"USE_IDLE": "false"}):
             config = ServerConfig.from_yaml(yaml_path)
 
+        assert config.repos["test"].email is not None
         assert config.repos["test"].email.use_imap_idle is False
 
     def test_env_override_int_field(
@@ -974,6 +986,7 @@ class TestFromYaml:
         with patch.dict("os.environ", {"POLL_INTERVAL": "120"}):
             config = ServerConfig.from_yaml(yaml_path)
 
+        assert config.repos["test"].email is not None
         assert config.repos["test"].email.poll_interval_seconds == 120
 
     def test_repos_not_a_mapping(self, tmp_path: Path) -> None:
@@ -1027,6 +1040,7 @@ class TestFromYaml:
         config = ServerConfig.from_yaml(yaml_path)
         repo = config.repos["test"]
 
+        assert repo.email is not None
         assert repo.email.microsoft_oauth2_tenant_id == "my-tenant"
         assert repo.email.microsoft_oauth2_client_id == "my-client"
         assert repo.email.microsoft_oauth2_client_secret == "my-secret"
@@ -1060,6 +1074,7 @@ class TestFromYaml:
             config = ServerConfig.from_yaml(yaml_path)
 
         repo = config.repos["test"]
+        assert repo.email is not None
         assert repo.email.microsoft_oauth2_tenant_id == "env-tenant"
         assert repo.email.microsoft_oauth2_client_id == "env-client"
         assert repo.email.microsoft_oauth2_client_secret == "env-secret"
@@ -1088,6 +1103,7 @@ class TestFromYaml:
         config = ServerConfig.from_yaml(yaml_path)
         repo = config.repos["test"]
 
+        assert repo.email is not None
         assert repo.email.password == ""
         assert repo.email.microsoft_oauth2_tenant_id == "my-tenant"
 
@@ -1101,6 +1117,7 @@ class TestFromYaml:
         config = ServerConfig.from_yaml(yaml_path)
         repo = config.repos["test"]
 
+        assert repo.email is not None
         assert repo.email.microsoft_oauth2_tenant_id is None
         assert repo.email.microsoft_oauth2_client_id is None
         assert repo.email.microsoft_oauth2_client_secret is None
@@ -1120,6 +1137,7 @@ class TestFromYaml:
 
         config = ServerConfig.from_yaml(yaml_path)
         repo = config.repos["test"]
+        assert repo.email is not None
         assert repo.email.microsoft_internal_auth_fallback is True
 
     def test_internal_auth_fallback_default_false(
@@ -1131,6 +1149,7 @@ class TestFromYaml:
 
         config = ServerConfig.from_yaml(yaml_path)
         repo = config.repos["test"]
+        assert repo.email is not None
         assert repo.email.microsoft_internal_auth_fallback is False
 
     def test_legacy_field_at_repo_level_rejected(
@@ -2544,3 +2563,240 @@ class TestRepoServerConfigSigningCredentials:
 
         assert "AKIAIOSFODNN7EXAMPLE" in SecretFilter._secrets
         assert "wJalrXUtnFEMI" in SecretFilter._secrets
+
+
+# ── Slack channel config from YAML ──────────────────────────────────────
+
+
+_SLACK_YAML = """\
+repos:
+  test:
+    slack:
+      bot_token: xoxb-test-token
+      app_token: xapp-test-token
+      authorized:
+        - workspace_members: true
+    git:
+      repo_url: {repo_url}
+"""
+
+
+class TestSlackConfigFromYaml:
+    """Tests for Slack channel config parsing from YAML."""
+
+    def test_slack_config_from_yaml(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Load Slack YAML config and verify fields."""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(_SLACK_YAML.format(repo_url=master_repo))
+
+        config = ServerConfig.from_yaml(yaml_path)
+        repo = config.repos["test"]
+
+        assert repo.slack is not None
+        assert repo.email is None
+        assert repo.slack.bot_token == "xoxb-test-token"
+        assert repo.slack.app_token == "xapp-test-token"
+        assert len(repo.slack.authorized) == 1
+
+    def test_slack_config_channel_type(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Slack config returns 'slack' channel type."""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(_SLACK_YAML.format(repo_url=master_repo))
+
+        config = ServerConfig.from_yaml(yaml_path)
+        repo = config.repos["test"]
+        assert repo.channel_type == "slack"
+
+    def test_slack_config_channel_info(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Slack config returns proper channel_info."""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(_SLACK_YAML.format(repo_url=master_repo))
+
+        config = ServerConfig.from_yaml(yaml_path)
+        repo = config.repos["test"]
+        assert repo.channel_info == "Slack (Socket Mode)"
+
+    def test_slack_multiple_rules(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Slack config with multiple authorization rules."""
+        yaml_content = f"""\
+repos:
+  test:
+    slack:
+      bot_token: xoxb-test-token
+      app_token: xapp-test-token
+      authorized:
+        - user_group: engineering
+        - user_id: U12345678
+    git:
+      repo_url: {master_repo}
+"""
+
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+
+        config = ServerConfig.from_yaml(yaml_path)
+        repo = config.repos["test"]
+        assert repo.slack is not None
+        assert len(repo.slack.authorized) == 2
+
+    def test_both_email_and_slack_rejected(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Having both email and slack blocks is rejected."""
+        yaml_content = f"""\
+repos:
+  test:
+    email:
+      imap_server: imap.test.com
+      smtp_server: smtp.test.com
+      username: user@test.com
+      password: pass
+      from: "Test <test@test.com>"
+      authorized_senders:
+        - auth@test.com
+      trusted_authserv_id: mx.test.com
+    slack:
+      bot_token: xoxb-test-token
+      app_token: xapp-test-token
+      authorized:
+        - workspace_members: true
+    git:
+      repo_url: {master_repo}
+"""
+
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+
+        with pytest.raises(ConfigError, match="both.*email.*slack"):
+            ServerConfig.from_yaml(yaml_path)
+
+    def test_missing_authorized_raises(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Missing authorized field is rejected."""
+        yaml_content = f"""\
+repos:
+  test:
+    slack:
+      bot_token: xoxb-test-token
+      app_token: xapp-test-token
+    git:
+      repo_url: {master_repo}
+"""
+
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+
+        with pytest.raises(ConfigError, match="authorized is required"):
+            ServerConfig.from_yaml(yaml_path)
+
+    def test_authorized_not_list_raises(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Non-list authorized field is rejected."""
+        yaml_content = f"""\
+repos:
+  test:
+    slack:
+      bot_token: xoxb-test-token
+      app_token: xapp-test-token
+      authorized: true
+    git:
+      repo_url: {master_repo}
+"""
+
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+
+        with pytest.raises(ConfigError, match="must be a list"):
+            ServerConfig.from_yaml(yaml_path)
+
+    def test_authorized_rule_not_dict_raises(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Non-dict rule in authorized is rejected."""
+        yaml_content = f"""\
+repos:
+  test:
+    slack:
+      bot_token: xoxb-test-token
+      app_token: xapp-test-token
+      authorized:
+        - just_a_string
+    git:
+      repo_url: {master_repo}
+"""
+
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+
+        with pytest.raises(ConfigError, match="must be a mapping"):
+            ServerConfig.from_yaml(yaml_path)
+
+    def test_empty_authorized_raises(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Empty authorized list is rejected."""
+        yaml_content = f"""\
+repos:
+  test:
+    slack:
+      bot_token: xoxb-test-token
+      app_token: xapp-test-token
+      authorized: []
+    git:
+      repo_url: {master_repo}
+"""
+
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+
+        with pytest.raises(ConfigError, match="at least one rule"):
+            ServerConfig.from_yaml(yaml_path)
+
+    def test_channel_info_unknown_fallback(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """channel_info returns 'unknown' when neither channel is set."""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(_SLACK_YAML.format(repo_url=master_repo))
+
+        config = ServerConfig.from_yaml(yaml_path)
+        repo = config.repos["test"]
+        # Force both to None for defensive fallback
+        object.__setattr__(repo, "email", None)
+        object.__setattr__(repo, "slack", None)
+        assert repo.channel_info == "unknown"
+
+    def test_rule_value_from_unset_env_var_skipped(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Rule value resolving to None (unset env var) is skipped."""
+        yaml_content = f"""\
+repos:
+  test:
+    slack:
+      bot_token: xoxb-test-token
+      app_token: xapp-test-token
+      authorized:
+        - workspace_members: !env UNSET_SLACK_ENV_VAR_FOR_TEST
+        - workspace_members: true
+    git:
+      repo_url: {master_repo}
+"""
+
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+
+        config = ServerConfig.from_yaml(yaml_path)
+        repo = config.repos["test"]
+        assert repo.slack is not None
+        assert len(repo.slack.authorized) == 1

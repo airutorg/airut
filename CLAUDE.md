@@ -3,8 +3,7 @@
 ## Project Overview
 
 Airut is a protocol-agnostic gateway for headless Claude Code interaction.
-Currently supports email as a channel; designed for future channels (Slack,
-etc.). Named "Airut" (Finnish: herald/messenger).
+Supports email and Slack as channels. Named "Airut" (Finnish: herald/messenger).
 
 Network requests from containers are sandboxed; if requests fail, check
 `.airut/network-allowlist.yaml`. See `doc/network-sandbox.md` for details.
@@ -66,8 +65,10 @@ infrastructure. See `spec/repo-config.md` for the full schema.
 
 - **Email authentication** — DMARC verification on trusted
   `Authentication-Results` headers
+- **Slack authorization** — configurable rules (workspace members, user groups,
+  user IDs)
 - **Sender authorization** — allowlist with exact addresses or `*@domain`
-  wildcards
+  wildcards (email)
 - **Container isolation** — each conversation has isolated workspace, Claude
   session, inbox/outbox
 - **Network sandbox** — all HTTP(S) routed through mitmproxy enforcing allowlist
@@ -240,6 +241,7 @@ airut/                        - Library code
   gateway/                  - Protocol-agnostic gateway service
     channel.py              - ChannelAdapter protocol + ParsedMessage
     email/                  - Email channel implementation
+    slack/                  - Slack channel implementation (optional dep)
     service/                - Core orchestration (GatewayService, RepoHandler)
   gh/                       - GitHub API wrappers
   git_mirror.py             - Git mirror cache
@@ -263,6 +265,7 @@ tests/                      - Unit tests (100% coverage required)
   dashboard/                - Dashboard tests
   gateway/                  - Gateway tests
     email/                  - Email channel tests
+    slack/                  - Slack channel tests
     service/                - Core service tests
 workflows/                  - Step-by-step operational guides
 ```

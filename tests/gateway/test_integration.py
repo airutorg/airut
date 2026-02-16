@@ -52,6 +52,7 @@ class TestEndToEndFlow:
         sample_email_message,
     ):
         """Test processing new conversation from start to finish."""
+        assert email_config.email is not None
         # Initialize components
         conversation_manager = ConversationManager(
             repo_url=str(master_repo),
@@ -145,6 +146,7 @@ class TestEndToEndFlow:
         self, email_config: RepoServerConfig, sample_email_message
     ):
         """Test that unauthorized senders are rejected."""
+        assert email_config.email is not None
         authenticator = SenderAuthenticator(
             email_config.email.trusted_authserv_id
         )
@@ -184,6 +186,7 @@ class TestEndToEndFlow:
         self, email_config: RepoServerConfig, master_repo: Path
     ):
         """Test full pipeline with email attachments."""
+        assert email_config.email is not None
         from email import encoders
         from email.mime.base import MIMEBase
         from email.mime.multipart import MIMEMultipart
@@ -256,6 +259,7 @@ class TestErrorRecovery:
 
     def test_smtp_send_retry(self, email_config: RepoServerConfig):
         """Test SMTP send retry on failure."""
+        assert email_config.email is not None
         from smtplib import SMTPException
 
         responder = EmailResponder(email_config.email)
@@ -357,6 +361,7 @@ class TestComponentIntegration:
         master_repo: Path,
     ):
         """Test that config properly initializes all components."""
+        assert email_config.email is not None
         # Create all components from config
         listener = EmailListener(email_config.email)
         responder = EmailResponder(email_config.email)
@@ -668,6 +673,7 @@ class TestParallelExecution:
         self, email_config: RepoServerConfig, sample_email_message
     ) -> None:
         """Test _process_message_worker doesn't lock new conversations."""
+        assert email_config.email is not None
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -719,6 +725,7 @@ class TestParallelExecution:
         master_repo,
     ) -> None:
         """Test _process_message_worker locks existing conversations."""
+        assert email_config.email is not None
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -772,6 +779,7 @@ class TestAcknowledgmentReply:
         self, email_config: RepoServerConfig, sample_email_message
     ) -> None:
         """Test acknowledgment reply includes conversation ID for new conv."""
+        assert email_config.email is not None
         from unittest.mock import MagicMock
 
         from airut.gateway.email.adapter import (
@@ -812,6 +820,7 @@ class TestAcknowledgmentReply:
         self, email_config: RepoServerConfig, sample_email_message
     ) -> None:
         """Test acknowledgment reply preserves existing conversation ID."""
+        assert email_config.email is not None
         from unittest.mock import MagicMock
 
         from airut.gateway.email.adapter import (
@@ -847,6 +856,7 @@ class TestAcknowledgmentReply:
         self, email_config: RepoServerConfig, sample_email_message
     ) -> None:
         """Test acknowledgment SMTP failure doesn't raise exception."""
+        assert email_config.email is not None
         from unittest.mock import MagicMock
 
         from airut.gateway.email.adapter import (
@@ -878,6 +888,7 @@ class TestAcknowledgmentReply:
         self, email_config: RepoServerConfig
     ) -> None:
         """Test acknowledgment reply has correct threading headers."""
+        assert email_config.email is not None
         from unittest.mock import MagicMock
 
         from airut.gateway.email.adapter import (
@@ -923,6 +934,7 @@ class TestAcknowledgmentReply:
         master_repo: Path,
     ) -> None:
         """Test acknowledgment is sent before Claude execution starts."""
+        assert email_config.email is not None
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -1006,6 +1018,7 @@ class TestAcknowledgmentReply:
         immediately, even for new conversations where a temporary "new-..."
         ID is initially assigned.
         """
+        assert email_config.email is not None
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -1129,6 +1142,7 @@ class TestAcknowledgmentReply:
         self, email_config: RepoServerConfig, sample_email_message
     ) -> None:
         """Test acknowledgment omits dashboard link when not configured."""
+        assert email_config.email is not None
         from unittest.mock import MagicMock
 
         from airut.gateway.email.adapter import (
@@ -1165,6 +1179,7 @@ class TestAcknowledgmentReply:
         master_repo: Path,
     ) -> None:
         """Test acknowledgment is NOT sent for follow-up messages."""
+        assert email_config.email is not None
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -1337,6 +1352,7 @@ class TestTaskIdTracking:
         master_repo: Path,
     ) -> None:
         """Test task ID is updated when new conversation created."""
+        assert email_config.email is not None
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -1395,6 +1411,7 @@ class TestTaskIdTracking:
         sample_email_message,
     ) -> None:
         """Test task ID unchanged when conv_id is None (e.g., auth failure)."""
+        assert email_config.email is not None
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -1449,6 +1466,7 @@ class TestDuplicateMessageRejection:
         sample_email_message,
     ) -> None:
         """Test duplicate message is rejected when task is active."""
+        assert email_config.email is not None
         from airut.gateway.channel import ParsedMessage
         from airut.gateway.service import GatewayService
 
@@ -1499,6 +1517,7 @@ class TestDuplicateMessageRejection:
         sample_email_message,
     ) -> None:
         """Test message accepted when previous task is completed."""
+        assert email_config.email is not None
         from airut.gateway.channel import ParsedMessage
         from airut.gateway.service import GatewayService
 
@@ -1554,6 +1573,7 @@ class TestDuplicateMessageRejection:
         sample_email_message,
     ) -> None:
         """Test new conversation message is always accepted."""
+        assert email_config.email is not None
         from airut.gateway.channel import ParsedMessage
         from airut.gateway.service import GatewayService
 
@@ -1615,6 +1635,7 @@ class TestRejectionReply:
             EmailParsedMessage,
         )
 
+        assert email_config.email is not None
         responder = MagicMock()
         adapter = EmailChannelAdapter(
             config=email_config.email,
@@ -1704,6 +1725,7 @@ class TestRejectionReply:
             EmailParsedMessage,
         )
 
+        assert email_config.email is not None
         responder = MagicMock()
         responder.send_reply.side_effect = SMTPSendError("Send failed")
         adapter = EmailChannelAdapter(
@@ -2136,6 +2158,7 @@ class TestUnauthorizedSenderTracking:
         mock_authorizer = MagicMock()
         mock_authorizer.is_authorized.return_value = False
 
+        assert email_config.email is not None
         adapter = EmailChannelAdapter(
             config=email_config.email,
             authenticator=mock_authenticator,
@@ -2187,6 +2210,7 @@ class TestUnauthorizedSenderTracking:
         mock_authenticator = MagicMock()
         mock_authenticator.authenticate.return_value = None
 
+        assert email_config.email is not None
         adapter = EmailChannelAdapter(
             config=email_config.email,
             authenticator=mock_authenticator,

@@ -7,8 +7,9 @@ regular user (not root) using systemd user services and rootless Podman.
 
 - **Linux** (dedicated VM recommended, Debian 13 tested)
 - **[uv](https://docs.astral.sh/uv/)**, **Git**, and **Podman** (rootless)
-- **Dedicated email account** with IMAP/SMTP access — one per repository (see
-  [Email Setup](#email-setup) for details)
+- **Channel credentials** — either a dedicated email account with IMAP/SMTP
+  access (see [Email Setup](#email-setup)) or a Slack app with Socket Mode
+  enabled (bot token + app token) — one channel per repository
 - **Git credentials** for fetching configured repositories (see below)
 
 ## Installation Steps

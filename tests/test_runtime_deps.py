@@ -24,7 +24,11 @@ LIB_DIR = PROJECT_ROOT / "airut"
 
 # Directories excluded from runtime import scanning.
 # Proxy code runs inside its own container with independent deps.
-EXCLUDED_DIRS = {LIB_DIR / "_bundled" / "proxy"}
+# Slack channel code depends on optional ``slack`` extras.
+EXCLUDED_DIRS = {
+    LIB_DIR / "_bundled" / "proxy",
+    LIB_DIR / "gateway" / "slack",
+}
 
 
 def _collect_imports(source_dir: Path) -> set[str]:

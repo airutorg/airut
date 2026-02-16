@@ -5,10 +5,68 @@
 
 """Tests for repo_handler module."""
 
+import sys
+import threading
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from .conftest import make_message, make_service, update_repo
+
+
+def _make_slack_config(tmp_path: Path) -> Any:
+    """Create a RepoServerConfig with slack channel for testing."""
+    from airut.gateway.config import RepoServerConfig
+    from airut.gateway.slack.config import SlackChannelConfig
+
+    slack_config = SlackChannelConfig(
+        bot_token="xoxb-test-token",
+        app_token="xapp-test-token",
+        authorized=[{"workspace_members": True}],
+    )
+    return RepoServerConfig(
+        repo_id="test-slack",
+        git_repo_url=str(tmp_path / "repo"),
+        slack=slack_config,
+    )
+
+
+def _make_slack_handler(tmp_path: Path) -> tuple[Any, Any]:
+    """Create a RepoHandler with Slack config, mocking Slack deps."""
+    from airut.gateway.config import GlobalConfig, ServerConfig
+    from airut.gateway.service import GatewayService
+
+    slack_config = _make_slack_config(tmp_path)
+
+    global_config = GlobalConfig(dashboard_enabled=False)
+    server_config = ServerConfig(
+        global_config=global_config, repos={"test-slack": slack_config}
+    )
+
+    from airut.gateway.slack.adapter import SlackChannelAdapter
+
+    mock_slack_adapter = MagicMock(spec=SlackChannelAdapter)
+    with (
+        patch(
+            "airut.gateway.slack.adapter.SlackChannelAdapter.from_config",
+            return_value=mock_slack_adapter,
+        ),
+        patch("airut.gateway.service.repo_handler.ConversationManager"),
+        patch(
+            "airut.gateway.service.gateway.capture_version_info",
+            return_value=(MagicMock(git_sha="abc1234"), MagicMock()),
+        ),
+        patch("airut.gateway.service.gateway.TaskTracker"),
+        patch("airut.gateway.service.gateway.Sandbox"),
+        patch(
+            "airut.gateway.service.gateway.get_system_resolver",
+            return_value="127.0.0.53",
+        ),
+    ):
+        svc = GatewayService(server_config, repo_root=tmp_path)
+
+    handler = svc.repo_handlers["test-slack"]
+    return svc, handler
 
 
 class TestSubmitMessage:
@@ -431,3 +489,82 @@ class TestIdleLoop:
         # Always return a time far past reconnect interval -> idle_timeout = 0
         with patch("time.time", return_value=99999):
             handler._idle_loop()
+
+
+class TestSlackPaths:
+    """Tests for Slack-specific paths in RepoHandler."""
+
+    def test_create_adapter_slack(self, tmp_path: Path) -> None:
+        """_create_adapter creates SlackChannelAdapter for Slack config."""
+        svc, handler = _make_slack_handler(tmp_path)
+        assert handler._is_slack is True
+        assert handler._email_adapter is None
+
+    def test_start_listener_dispatches_to_slack(self, tmp_path: Path) -> None:
+        """start_listener calls _start_slack_listener for Slack config."""
+        svc, handler = _make_slack_handler(tmp_path)
+
+        mock_modules = {
+            "slack_bolt": MagicMock(),
+            "slack_bolt.adapter": MagicMock(),
+            "slack_bolt.adapter.socket_mode": MagicMock(),
+            "slack_bolt.context": MagicMock(),
+            "slack_bolt.context.assistant": MagicMock(),
+            "slack_bolt.middleware": MagicMock(),
+            "slack_bolt.middleware.assistant": MagicMock(),
+        }
+
+        captured_callback = None
+
+        def capture_listener(config, submit_callback=None):
+            nonlocal captured_callback
+            captured_callback = submit_callback
+            return MagicMock()
+
+        with (
+            patch.dict(sys.modules, mock_modules),
+            patch(
+                "airut.gateway.slack.listener.SlackListener",
+                side_effect=capture_listener,
+            ),
+            patch.object(handler.conversation_manager.mirror, "update_mirror"),
+        ):
+            thread = handler.start_listener()
+
+        assert isinstance(thread, threading.Thread)
+        assert thread.daemon is True
+
+        # Invoke the captured submit_callback to cover line 174
+        assert captured_callback is not None
+        svc.submit_message = MagicMock(return_value=True)
+        captured_callback({"text": "hello", "user": "U123"})
+        svc.submit_message.assert_called_once()
+
+        # Clean up
+        svc.running = False
+        thread.join(timeout=2)
+
+    def test_slack_keep_alive_exits_on_stop(self, tmp_path: Path) -> None:
+        """_slack_keep_alive exits when service.running is False."""
+        svc, handler = _make_slack_handler(tmp_path)
+        svc.running = False
+        # Should return immediately
+        handler._slack_keep_alive()
+
+    def test_stop_slack_listener(self, tmp_path: Path) -> None:
+        """stop() calls _slack_listener.close() for Slack channel."""
+        svc, handler = _make_slack_handler(tmp_path)
+        mock_listener = MagicMock()
+        handler._slack_listener = mock_listener
+
+        handler.stop()
+        mock_listener.close.assert_called_once()
+
+    def test_submit_message_dict(self, tmp_path: Path) -> None:
+        """Slack payload (dict) can be submitted."""
+        svc, handler = _make_slack_handler(tmp_path)
+        svc.submit_message = MagicMock(return_value=True)
+
+        payload = {"text": "hello", "user": "U123"}
+        assert handler._submit_message(payload) is True
+        svc.submit_message.assert_called_once_with(payload, handler)

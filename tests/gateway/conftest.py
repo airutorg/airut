@@ -38,10 +38,15 @@ def _mock_sandbox(tmp_path: Path):
 
 @pytest.fixture
 def email_config(tmp_path: Path, master_repo: Path):
-    """Test email service configuration."""
+    """Test email service configuration.
+
+    The returned config always has ``email`` set (never None).
+    Test code can safely access ``email_config.email.*`` without
+    type narrowing.
+    """
     from airut.gateway.config import EmailChannelConfig, RepoServerConfig
 
-    return RepoServerConfig(
+    config = RepoServerConfig(
         repo_id="test",
         git_repo_url=str(master_repo),
         email=EmailChannelConfig(
@@ -56,6 +61,8 @@ def email_config(tmp_path: Path, master_repo: Path):
             trusted_authserv_id="mx.example.com",
         ),
     )
+    assert config.email is not None
+    return config
 
 
 @pytest.fixture

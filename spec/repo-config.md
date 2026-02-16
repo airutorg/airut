@@ -78,11 +78,39 @@ settings. Per-repo config is nested under `repos.<repo_id>`:
 - `dashboard.*` — Web UI configuration
 - `container_command` — Container runtime (podman/docker)
 
-**Important:** All email-specific fields (`authorized_senders`,
-`trusted_authserv_id`, `microsoft_internal_auth_fallback`, `imap`) must be
-nested under `email:`. Placing them at the repo level is a hard error with a
-migration hint. A repo must have an `email:` block (the only currently supported
-channel).
+**Channel selection:** Each repo must have exactly one channel block — either
+`email:` or `slack:`. Having both is a hard error. All email-specific fields
+(`authorized_senders`, `trusted_authserv_id`,
+`microsoft_internal_auth_fallback`, `imap`) must be nested under `email:`.
+Placing them at the repo level is a hard error with a migration hint.
+
+- `slack.*` — Channel-specific Slack settings nested under `slack:`:
+  - `slack.bot_token` — Bot user OAuth token (`xoxb-...`)
+  - `slack.app_token` — App-level token for Socket Mode (`xapp-...`)
+  - `slack.authorized` — List of authorization rules (see below)
+
+**Slack authorization rules** are defined as a list of single-key dicts:
+
+```yaml
+slack:
+  bot_token: !env SLACK_BOT_TOKEN
+  app_token: !env SLACK_APP_TOKEN
+  authorized:
+    - workspace_members: true          # All workspace members
+    - user_group: engineering          # Members of a user group
+    - user_id: U12345678               # Specific user ID
+```
+
+Each rule must have exactly one key. Supported keys:
+
+| Key                 | Value type | Description                                       |
+| ------------------- | ---------- | ------------------------------------------------- |
+| `workspace_members` | bool       | Allow all non-bot, non-external workspace members |
+| `user_group`        | string     | Allow members of a Slack user group (by handle)   |
+| `user_id`           | string     | Allow a specific Slack user by ID                 |
+
+At least one authorization rule is required. Values support `!env` tags for
+environment variable resolution.
 
 The `container_env` block is replaced by `secrets` — a named pool of values that
 repos can reference via `!secret`:
@@ -120,9 +148,8 @@ for details and
 ## Multi-Repo Support
 
 The server supports multiple repositories. Each repo is defined under `repos:`
-in the server config with its own `email:` block (IMAP/SMTP, authorized senders,
-auth settings), storage directory, and secrets pool. See `multi-repo.md` for the
-full design.
+in the server config with its own channel block (`email:` or `slack:`), storage
+directory, and secrets pool. See `multi-repo.md` for the full design.
 
 ## Proxy Manager Lifecycle
 

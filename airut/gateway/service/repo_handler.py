@@ -6,7 +6,7 @@
 """Per-repository handler for the gateway service.
 
 This module contains the RepoHandler class that manages:
-- Channel adapter lifecycle (email listener, authentication, responder)
+- Channel adapter lifecycle (email/Slack listener, authentication, responder)
 - Conversation management for a single repository
 - Container executor for Claude Code
 """
@@ -17,8 +17,9 @@ import logging
 import threading
 import time
 from email.message import Message
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from airut.gateway.channel import ChannelAdapter
 from airut.gateway.config import RepoServerConfig
 from airut.gateway.conversation import ConversationManager
 from airut.gateway.email.adapter import EmailChannelAdapter
@@ -67,8 +68,10 @@ class RepoHandler:
         self.config = config
         self.service = service
 
-        self.adapter = EmailChannelAdapter.from_config(
-            config.email, repo_id=config.repo_id
+        self.adapter: ChannelAdapter = self._create_adapter(config)
+        # Keep a typed reference for email-specific listener operations.
+        self._email_adapter: EmailChannelAdapter | None = (
+            self.adapter if config.email is not None else None
         )
         self.conversation_manager = ConversationManager(
             repo_url=config.git_repo_url,
@@ -76,11 +79,43 @@ class RepoHandler:
         )
 
         self._listener_thread: threading.Thread | None = None
+        self._is_slack = config.slack is not None
 
-        logger.info("RepoHandler initialized for '%s'", config.repo_id)
+        logger.info(
+            "RepoHandler initialized for '%s' (channel=%s)",
+            config.repo_id,
+            config.channel_type,
+        )
+
+    @staticmethod
+    def _create_adapter(config: RepoServerConfig) -> ChannelAdapter:
+        """Create the appropriate channel adapter from config.
+
+        Args:
+            config: Per-repo server configuration.
+
+        Returns:
+            ChannelAdapter implementation (email or Slack).
+        """
+        if config.slack is not None:
+            from airut.gateway.slack.adapter import SlackChannelAdapter
+
+            return SlackChannelAdapter.from_config(
+                config.slack,
+                repo_id=config.repo_id,
+                storage_dir=config.storage_dir,
+            )
+
+        assert config.email is not None
+        return EmailChannelAdapter.from_config(
+            config.email, repo_id=config.repo_id
+        )
 
     def start_listener(self) -> threading.Thread:
         """Start the listener in a daemon thread.
+
+        For email: connects to IMAP and starts polling/IDLE loop.
+        For Slack: connects via Socket Mode (non-blocking).
 
         Returns:
             The listener thread.
@@ -93,14 +128,22 @@ class RepoHandler:
         )
         self.conversation_manager.mirror.update_mirror()
 
-        # Connect to IMAP
+        if self._is_slack:
+            return self._start_slack_listener()
+        return self._start_email_listener()
+
+    def _start_email_listener(self) -> threading.Thread:
+        """Start IMAP email listener."""
+        assert self.config.email is not None
+        assert self._email_adapter is not None
+
         logger.info(
             "Repo '%s': connecting to IMAP %s:%d",
             self.config.repo_id,
             self.config.email.imap_server,
             self.config.email.imap_port,
         )
-        self.adapter.listener.connect(max_retries=3)
+        self._email_adapter.listener.connect(max_retries=3)
 
         self._listener_thread = threading.Thread(
             target=self._listener_loop,
@@ -116,8 +159,50 @@ class RepoHandler:
         )
         return self._listener_thread
 
+    def _start_slack_listener(self) -> threading.Thread:
+        """Start Slack Socket Mode listener."""
+        from airut.gateway.slack.adapter import SlackChannelAdapter
+        from airut.gateway.slack.listener import SlackListener
+
+        assert isinstance(self.adapter, SlackChannelAdapter)
+        assert self.config.slack is not None
+
+        def submit_callback(payload: dict) -> None:
+            """Submit Slack event payload for processing."""
+            self._submit_message(payload)
+
+        self._slack_listener = SlackListener(
+            self.config.slack,
+            submit_callback=submit_callback,
+        )
+        self._slack_listener.connect()
+
+        # Slack listener runs in the SDK's background thread.
+        # Create a keep-alive thread for consistency with the email path.
+        self._listener_thread = threading.Thread(
+            target=self._slack_keep_alive,
+            daemon=True,
+            name=f"Listener-{self.config.repo_id}",
+        )
+        self._listener_thread.start()
+
+        logger.info(
+            "Repo '%s': Slack listener started (Socket Mode)",
+            self.config.repo_id,
+        )
+        return self._listener_thread
+
+    def _slack_keep_alive(self) -> None:
+        """Keep-alive loop for Slack listener thread."""
+        while self.service.running:
+            time.sleep(1)
+
     def _listener_loop(self) -> None:
-        """Main listener loop, dispatching to IDLE or polling mode."""
+        """Main listener loop, dispatching to IDLE or polling mode.
+
+        Only called for email-channel repos.
+        """
+        assert self.config.email is not None
         if self.config.email.use_imap_idle:
             self._idle_loop()
         else:
@@ -165,9 +250,10 @@ class RepoHandler:
         logger.info("Repo '%s': reconnecting in %ds...", repo_id, backoff)
         time.sleep(backoff)
 
+        assert self._email_adapter is not None
         try:
-            self.adapter.listener.disconnect()
-            self.adapter.listener.connect(max_retries=3)
+            self._email_adapter.listener.disconnect()
+            self._email_adapter.listener.connect(max_retries=3)
             logger.info("Repo '%s': reconnected to IMAP", repo_id)
         except IMAPConnectionError as reconnect_error:
             logger.error(
@@ -180,13 +266,16 @@ class RepoHandler:
 
     def _polling_loop(self) -> None:
         """Polling-based message loop."""
+        assert self._email_adapter is not None
+        assert self.config.email is not None
         reconnect_attempts = 0
         max_reconnect_attempts = 5
         repo_id = self.config.repo_id
+        listener = self._email_adapter.listener
 
         while self.service.running:
             try:
-                messages = self.adapter.listener.fetch_unread()
+                messages = listener.fetch_unread()
 
                 if messages:
                     logger.info(
@@ -199,7 +288,7 @@ class RepoHandler:
 
                 for msg_id, message in messages:
                     try:
-                        self.adapter.listener.delete_message(msg_id)
+                        listener.delete_message(msg_id)
                         self._submit_message(message)
                     except Exception as e:
                         logger.exception(
@@ -220,11 +309,14 @@ class RepoHandler:
 
     def _idle_loop(self) -> None:
         """IDLE-based message loop."""
+        assert self._email_adapter is not None
+        assert self.config.email is not None
         reconnect_attempts = 0
         max_reconnect_attempts = 5
         last_reconnect = time.time()
         reconnect_interval = self.config.email.idle_reconnect_interval_seconds
         repo_id = self.config.repo_id
+        listener = self._email_adapter.listener
 
         while self.service.running:
             try:
@@ -234,11 +326,11 @@ class RepoHandler:
                         repo_id,
                         reconnect_interval,
                     )
-                    self.adapter.listener.disconnect()
-                    self.adapter.listener.connect(max_retries=3)
+                    listener.disconnect()
+                    listener.connect(max_retries=3)
                     last_reconnect = time.time()
 
-                messages = self.adapter.listener.fetch_unread()
+                messages = listener.fetch_unread()
 
                 if messages:
                     logger.info(
@@ -251,7 +343,7 @@ class RepoHandler:
 
                 for msg_id, message in messages:
                     try:
-                        self.adapter.listener.delete_message(msg_id)
+                        listener.delete_message(msg_id)
                         self._submit_message(message)
                     except Exception as e:
                         logger.exception(
@@ -264,19 +356,18 @@ class RepoHandler:
                     continue
 
                 try:
-                    has_pending = self.adapter.listener.idle_start()
+                    has_pending = listener.idle_start()
                     if has_pending:
                         continue
 
                     time_until_reconnect = max(
-                        0, reconnect_interval - (time.time() - last_reconnect)
+                        0,
+                        reconnect_interval - (time.time() - last_reconnect),
                     )
                     idle_timeout = min(time_until_reconnect, 29 * 60)
 
                     if idle_timeout > 0:
-                        got_notification = self.adapter.listener.idle_wait(
-                            idle_timeout
-                        )
+                        got_notification = listener.idle_wait(idle_timeout)
 
                         if got_notification:
                             logger.debug(
@@ -287,7 +378,7 @@ class RepoHandler:
                     if not self.service.running:
                         break
 
-                    self.adapter.listener.idle_done()
+                    listener.idle_done()
 
                 except IMAPIdleError as e:
                     logger.warning(
@@ -306,13 +397,13 @@ class RepoHandler:
                 except _ReconnectFailedError:
                     return
 
-    def _submit_message(self, message: Message) -> bool:
+    def _submit_message(self, message: Message | dict[str, Any]) -> bool:
         """Submit a raw message for authentication and processing.
 
         Authentication happens in the worker thread, not here.
 
         Args:
-            message: Raw email message to process.
+            message: Raw email message or Slack event payload dict.
 
         Returns:
             True if message was submitted, False if pool not ready.
@@ -321,6 +412,10 @@ class RepoHandler:
 
     def stop(self) -> None:
         """Stop listener and close resources."""
-        self.adapter.listener.interrupt()
-        self.adapter.listener.close()
+        if self._is_slack:
+            if hasattr(self, "_slack_listener"):
+                self._slack_listener.close()
+        elif self._email_adapter is not None:
+            self._email_adapter.listener.interrupt()
+            self._email_adapter.listener.close()
         logger.info("Repo '%s': listener stopped", self.config.repo_id)

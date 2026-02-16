@@ -2,16 +2,16 @@
 
 ## Motivation
 
-Airut enables headless Claude Code interaction over email, allowing users to
-delegate software engineering tasks to an AI agent. This shifts human feedback
-from reviewing individual agent actions (file edits, shell commands) to
-higher-level artifacts like pull requests.
+Airut enables headless Claude Code interaction over messaging channels (email,
+Slack), allowing users to delegate software engineering tasks to an AI agent.
+This shifts human feedback from reviewing individual agent actions (file edits,
+shell commands) to higher-level artifacts like pull requests.
 
 Running Claude Code with `--dangerously-skip-permissions` is necessary because
-interactive approval isn't feasible over email. This creates two security
-challenges:
+interactive approval isn't feasible over asynchronous messaging. This creates
+two security challenges:
 
-1. **Request authorization** — How do we verify that incoming emails are from
+1. **Request authorization** — How do we verify that incoming messages are from
    trusted senders, not spoofed messages that could trigger unauthorized code
    execution?
 
@@ -19,8 +19,9 @@ challenges:
    executes arbitrary code, preventing credential theft, data exfiltration, or
    host compromise?
 
-The security model addresses these through email-native authentication (DMARC)
-and multi-layer sandboxing (container isolation, network allowlist).
+The security model addresses these through channel-native authentication (DMARC
+for email, Slack platform auth + authorization rules for Slack) and multi-layer
+sandboxing (container isolation, network allowlist).
 
 ## Core Principles
 
@@ -32,16 +33,18 @@ credentials). All network traffic routes through a proxy that enforces an
 allowlist, preventing data exfiltration even if the agent is compromised via
 prompt injection.
 
-**Email-native authentication (DMARC)** — Rather than inventing a custom
-authentication scheme, Airut leverages DMARC — the standard email authentication
-protocol that major providers already implement. This provides cryptographic
-verification of sender identity without requiring users to manage API keys or
-tokens.
+**Channel-native authentication** — Rather than inventing a custom
+authentication scheme, Airut leverages each channel's native auth mechanisms.
+Email uses DMARC — the standard email authentication protocol that major
+providers already implement. Slack relies on the platform's own user
+authentication combined with configurable authorization rules. This provides
+identity verification without requiring users to manage API keys or tokens.
 
 **Defense in depth** — Multiple independent security layers ensure that failure
-of any single control doesn't compromise the system. Email authentication +
-sender allowlist, container isolation + network sandbox, surrogate credentials +
-environment-only injection — each layer catches threats the others might miss.
+of any single control doesn't compromise the system. Channel authentication +
+authorization rules, container isolation + network sandbox, surrogate
+credentials + environment-only injection — each layer catches threats the others
+might miss.
 
 ## Security Layers
 
@@ -49,9 +52,10 @@ The following diagram shows the security controls at each layer:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         Email Layer                                 │
+│                       Channel Layer                                 │
 │  ┌─────────────────────┐  ┌─────────────────────────────────────┐   │
-│  │ DMARC Authentication│  │ Sender Authorization (allowlist)    │   │
+│  │ Authentication      │  │ Authorization                       │   │
+│  │ (DMARC / Slack)     │  │ (allowlist / rules)                 │   │
 │  └─────────────────────┘  └─────────────────────────────────────┘   │
 ├─────────────────────────────────────────────────────────────────────┤
 │                       Execution Layer                               │
@@ -78,7 +82,11 @@ The following diagram shows the security controls at each layer:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-## Email Authentication
+## Channel Authentication
+
+Each channel implements authentication and authorization differently:
+
+### Email Authentication
 
 Airut verifies sender identity via DMARC before processing any message. This
 prevents spoofed emails from triggering code execution.
@@ -95,6 +103,20 @@ rejected.
 See [spec/authentication.md](../spec/authentication.md) for the full
 verification flow, From header parsing, Microsoft 365 quirks, and authorization
 details.
+
+### Slack Authorization
+
+Slack authentication is handled by the Slack platform itself — the bot only
+receives events from authenticated Slack users. Airut adds an authorization
+layer via configurable rules:
+
+- **`workspace_members`** — Allow all non-bot, non-external workspace members
+- **`user_group`** — Allow members of a specific Slack user group
+- **`user_id`** — Allow a specific user by Slack user ID
+
+Baseline checks always reject bot users, deactivated users, and ultra-restricted
+(external) users before evaluating rules. At least one authorization rule must
+be configured.
 
 ## Execution Isolation
 
@@ -236,17 +258,17 @@ This is acceptable for a single-user system behind authentication.
 
 ## Attack Surface Analysis
 
-| Risk                  | Mitigation                                      |
-| --------------------- | ----------------------------------------------- |
-| Email spoofing        | DMARC verification on trusted headers           |
-| Unauthorized access   | Sender allowlist after authentication           |
-| Code execution escape | Podman container isolation                      |
-| Data exfiltration     | Network allowlist via proxy                     |
-| Credential theft      | Environment-only secrets, no host mounts        |
-| Cross-session attack  | Per-conversation isolation (workspace, network) |
-| Resource exhaustion   | Timeout, conversation limit, garbage collection |
-| Log leakage           | Automatic secret redaction                      |
-| Dashboard access      | Localhost binding, reverse proxy auth           |
+| Risk                  | Mitigation                                          |
+| --------------------- | --------------------------------------------------- |
+| Email spoofing        | DMARC verification on trusted headers               |
+| Unauthorized access   | Email: sender allowlist; Slack: authorization rules |
+| Code execution escape | Podman container isolation                          |
+| Data exfiltration     | Network allowlist via proxy                         |
+| Credential theft      | Environment-only secrets, no host mounts            |
+| Cross-session attack  | Per-conversation isolation (workspace, network)     |
+| Resource exhaustion   | Timeout, conversation limit, garbage collection     |
+| Log leakage           | Automatic secret redaction                          |
+| Dashboard access      | Localhost binding, reverse proxy auth               |
 
 ## Configuration Security
 
@@ -287,8 +309,9 @@ repos declare what they need, the server controls what's actually available.
 
 ## Fail-Secure Defaults
 
-- Missing `trusted_authserv_id`: Authentication fails (reject all)
-- Empty `authorized_senders`: Authorization fails (reject all)
+- Missing `trusted_authserv_id` (email): Authentication fails (reject all)
+- Empty `authorized_senders` (email): Authorization fails (reject all)
+- Empty `authorized` rules (Slack): Configuration rejected at startup
 - Proxy startup failure: Task aborts (no unproxied execution)
 - Secret resolution failure: Task aborts (no missing credentials)
 - DMARC check failure: Message rejected (no processing)

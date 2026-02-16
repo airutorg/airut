@@ -11,7 +11,7 @@ For implementation-level specifications, see [spec/](../spec/).
 ## Architecture
 
 - [architecture.md](architecture.md) — System architecture and data flow
-- [security.md](security.md) — Security model (email auth, isolation,
+- [security.md](security.md) — Security model (channel auth, isolation,
   credentials)
 - [execution-sandbox.md](execution-sandbox.md) — Container isolation and
   resource limits

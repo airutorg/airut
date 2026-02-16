@@ -310,7 +310,7 @@ class GatewayService:
                 error_message=error_msg,
                 error_type=error_type,
                 git_repo_url=repo_config.git_repo_url,
-                channel_info=repo_config.email.imap_server,
+                channel_info=repo_config.channel_info,
                 storage_dir=str(repo_config.storage_dir),
             )
 
@@ -332,7 +332,7 @@ class GatewayService:
                     repo_id=repo_id,
                     status=RepoStatus.LIVE,
                     git_repo_url=config.git_repo_url,
-                    channel_info=config.email.imap_server,
+                    channel_info=config.channel_info,
                     storage_dir=str(config.storage_dir),
                 )
                 logger.info("Repo '%s': started successfully", repo_id)
@@ -345,7 +345,7 @@ class GatewayService:
                     error_message=error_msg,
                     error_type=error_type,
                     git_repo_url=config.git_repo_url,
-                    channel_info=config.email.imap_server,
+                    channel_info=config.channel_info,
                     storage_dir=str(config.storage_dir),
                 )
                 logger.error(
