@@ -122,3 +122,17 @@ class ChannelAdapter(Protocol):
     ) -> None:
         """Send an error notification to the user."""
         ...
+
+    def send_rejection(
+        self,
+        parsed: ParsedMessage,
+        conversation_id: str,
+        reason: str,
+        dashboard_url: str | None,
+    ) -> None:
+        """Send a rejection notification when a message cannot be processed.
+
+        Called when a duplicate message arrives for a conversation that
+        already has an active task.
+        """
+        ...

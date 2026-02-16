@@ -109,7 +109,7 @@ class TestMultipleSendersAuthorization:
 
             finally:
                 service.running = False
-                service.repo_handlers["test"].listener.interrupt()
+                service.repo_handlers["test"].adapter.listener.interrupt()
                 service_thread.join(timeout=10.0)
         finally:
             env.cleanup()
@@ -148,7 +148,7 @@ class TestMultipleSendersAuthorization:
 
             finally:
                 service.running = False
-                service.repo_handlers["test"].listener.interrupt()
+                service.repo_handlers["test"].adapter.listener.interrupt()
                 service_thread.join(timeout=10.0)
         finally:
             env.cleanup()
@@ -194,7 +194,7 @@ class TestMultipleSendersAuthorization:
 
             finally:
                 service.running = False
-                service.repo_handlers["test"].listener.interrupt()
+                service.repo_handlers["test"].adapter.listener.interrupt()
                 service_thread.join(timeout=10.0)
         finally:
             env.cleanup()
@@ -237,7 +237,7 @@ class TestMultipleSendersAuthorization:
 
             finally:
                 service.running = False
-                service.repo_handlers["test"].listener.interrupt()
+                service.repo_handlers["test"].adapter.listener.interrupt()
                 service_thread.join(timeout=10.0)
         finally:
             env.cleanup()
@@ -330,7 +330,7 @@ class TestMultipleSendersAuthorization:
 
             finally:
                 service.running = False
-                service.repo_handlers["test"].listener.interrupt()
+                service.repo_handlers["test"].adapter.listener.interrupt()
                 service_thread.join(timeout=10.0)
         finally:
             env.cleanup()

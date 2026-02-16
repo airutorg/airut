@@ -23,12 +23,9 @@ from airut.gateway.config import RepoServerConfig
 from airut.gateway.conversation import ConversationManager
 from airut.gateway.email.adapter import EmailChannelAdapter
 from airut.gateway.email.listener import (
-    EmailListener,
     IMAPConnectionError,
     IMAPIdleError,
 )
-from airut.gateway.email.responder import EmailResponder
-from airut.gateway.email.security import SenderAuthenticator, SenderAuthorizer
 
 
 if TYPE_CHECKING:
@@ -70,24 +67,10 @@ class RepoHandler:
         self.config = config
         self.service = service
 
-        self.listener = EmailListener(config)
-        self.responder = EmailResponder(config)
-        self.authenticator = SenderAuthenticator(
-            config.trusted_authserv_id,
-            allow_internal_auth_fallback=config.microsoft_internal_auth_fallback,
-        )
-        self.authorizer = SenderAuthorizer(config.authorized_senders)
+        self.adapter = EmailChannelAdapter.from_config(config)
         self.conversation_manager = ConversationManager(
             repo_url=config.git_repo_url,
             storage_dir=config.storage_dir,
-        )
-
-        # Build channel adapter
-        self.adapter = EmailChannelAdapter(
-            config=config,
-            authenticator=self.authenticator,
-            authorizer=self.authorizer,
-            responder=self.responder,
         )
 
         self._listener_thread: threading.Thread | None = None
@@ -115,7 +98,7 @@ class RepoHandler:
             self.config.imap_server,
             self.config.imap_port,
         )
-        self.listener.connect(max_retries=3)
+        self.adapter.listener.connect(max_retries=3)
 
         self._listener_thread = threading.Thread(
             target=self._listener_loop,
@@ -181,8 +164,8 @@ class RepoHandler:
         time.sleep(backoff)
 
         try:
-            self.listener.disconnect()
-            self.listener.connect(max_retries=3)
+            self.adapter.listener.disconnect()
+            self.adapter.listener.connect(max_retries=3)
             logger.info("Repo '%s': reconnected to IMAP", repo_id)
         except IMAPConnectionError as reconnect_error:
             logger.error(
@@ -201,7 +184,7 @@ class RepoHandler:
 
         while self.service.running:
             try:
-                messages = self.listener.fetch_unread()
+                messages = self.adapter.listener.fetch_unread()
 
                 if messages:
                     logger.info(
@@ -214,7 +197,7 @@ class RepoHandler:
 
                 for msg_id, message in messages:
                     try:
-                        self.listener.delete_message(msg_id)
+                        self.adapter.listener.delete_message(msg_id)
                         self._submit_message(message)
                     except Exception as e:
                         logger.exception(
@@ -249,11 +232,11 @@ class RepoHandler:
                         repo_id,
                         reconnect_interval,
                     )
-                    self.listener.disconnect()
-                    self.listener.connect(max_retries=3)
+                    self.adapter.listener.disconnect()
+                    self.adapter.listener.connect(max_retries=3)
                     last_reconnect = time.time()
 
-                messages = self.listener.fetch_unread()
+                messages = self.adapter.listener.fetch_unread()
 
                 if messages:
                     logger.info(
@@ -266,7 +249,7 @@ class RepoHandler:
 
                 for msg_id, message in messages:
                     try:
-                        self.listener.delete_message(msg_id)
+                        self.adapter.listener.delete_message(msg_id)
                         self._submit_message(message)
                     except Exception as e:
                         logger.exception(
@@ -279,7 +262,7 @@ class RepoHandler:
                     continue
 
                 try:
-                    has_pending = self.listener.idle_start()
+                    has_pending = self.adapter.listener.idle_start()
                     if has_pending:
                         continue
 
@@ -289,7 +272,9 @@ class RepoHandler:
                     idle_timeout = min(time_until_reconnect, 29 * 60)
 
                     if idle_timeout > 0:
-                        got_notification = self.listener.idle_wait(idle_timeout)
+                        got_notification = self.adapter.listener.idle_wait(
+                            idle_timeout
+                        )
 
                         if got_notification:
                             logger.debug(
@@ -300,7 +285,7 @@ class RepoHandler:
                     if not self.service.running:
                         break
 
-                    self.listener.idle_done()
+                    self.adapter.listener.idle_done()
 
                 except IMAPIdleError as e:
                     logger.warning(
@@ -320,18 +305,20 @@ class RepoHandler:
                     return
 
     def _submit_message(self, message: Message) -> bool:
-        """Submit message to the shared executor pool.
+        """Submit a raw message for authentication and processing.
+
+        Authentication happens in the worker thread, not here.
 
         Args:
-            message: Email message to process.
+            message: Raw email message to process.
 
         Returns:
-            True if message was submitted, False if rejected.
+            True if message was submitted, False if pool not ready.
         """
         return self.service.submit_message(message, self)
 
     def stop(self) -> None:
         """Stop listener and close resources."""
-        self.listener.interrupt()
-        self.listener.close()
+        self.adapter.listener.interrupt()
+        self.adapter.listener.close()
         logger.info("Repo '%s': listener stopped", self.config.repo_id)
