@@ -111,17 +111,19 @@ Update airut to the latest version via `uv tool upgrade airut`.
 2. **Upgrade** — Run `uv tool upgrade airut` (120-second timeout). If the output
    contains "Nothing to upgrade" (case-insensitive), print "Already up to date."
    and return 0 without touching the service.
-3. **Readiness check** — Run `airut check` via subprocess (30-second timeout)
+3. **Stop service** — When the binary was actually updated and the service was
+   previously installed, stop and uninstall the service immediately. This
+   prevents a stale process from running old code while the readiness check and
+   reinstall proceed. From this point on, the service is down regardless of
+   whether subsequent steps succeed or fail.
+4. **Readiness check** — Run `airut check` via subprocess (30-second timeout)
    using the updated binary. If the check fails (non-zero exit), print the check
-   output, skip the service restart, and instruct the user to fix the issues and
-   run `airut install-service` to complete the update. This catches problems
-   like invalid configuration (e.g., format changes) or missing dependencies
-   before the service is restarted, preventing silent crash loops.
-4. **Service restart** — Only when the binary was actually updated and the
-   service was previously installed:
-   - Uninstall the service (stop, disable, remove unit, daemon-reload)
-   - Reinstall using the new binary (`airut install-service` via subprocess,
-     30-second timeout)
+   output and instruct the user to fix the issues and run
+   `airut install-service` to start the service. The service is already stopped
+   at this point, so there is no stale process running old code.
+5. **Reinstall service** — Only when the readiness check passes and the service
+   was previously installed, reinstall using the new binary
+   (`airut install-service` via subprocess, 30-second timeout).
 
 **Options:**
 
