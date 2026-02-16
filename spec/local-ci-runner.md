@@ -57,8 +57,8 @@ Example failure output:
 Type check failed:
 Command: uv run ty check .
 ────────────────────────────────────────────────────────
-lib/foo.py:42:1 - error: Argument of type "str" cannot be assigned
-lib/bar.py:17:5 - error: Cannot access member "xyz" for type "None"
+airut/foo.py:42:1 - error: Argument of type "str" cannot be assigned
+airut/bar.py:17:5 - error: Cannot access member "xyz" for type "None"
 ────────────────────────────────────────────────────────
 2 errors found
 
@@ -74,14 +74,14 @@ The script derives steps from workflow files but filters for local relevance:
 
 #### From `code.yml`
 
-| Step            | Command                                        | Include |
-| --------------- | ---------------------------------------------- | ------- |
-| Lint            | `uv run ruff check .`                          | Yes     |
-| Format check    | `uv run ruff format --check .`                 | Yes     |
-| Type check      | `uv run ty check .`                            | Yes     |
-| Markdown format | `uv run mdformat --check .`                    | Yes     |
-| Test coverage   | `uv run pytest --cov=lib --cov-fail-under=100` | Yes     |
-| Worktree clean  | `git status --porcelain`                       | Yes     |
+| Step            | Command                                          | Include |
+| --------------- | ------------------------------------------------ | ------- |
+| Lint            | `uv run ruff check .`                            | Yes     |
+| Format check    | `uv run ruff format --check .`                   | Yes     |
+| Type check      | `uv run ty check .`                              | Yes     |
+| Markdown format | `uv run mdformat --check .`                      | Yes     |
+| Test coverage   | `uv run pytest --cov=airut --cov-fail-under=100` | Yes     |
+| Worktree clean  | `git status --porcelain`                         | Yes     |
 
 #### From `security.yml`
 

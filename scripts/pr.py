@@ -29,7 +29,7 @@ from pathlib import Path
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from lib.gh import (  # noqa: E402
+from airut.gh import (  # noqa: E402
     CheckConclusion,
     CheckStatus,
     CIStatus,
@@ -228,7 +228,7 @@ def cmd_ci(args: argparse.Namespace) -> int:
     Returns:
         Exit code.
     """
-    from lib.gh.pr import get_current_pr, get_pr_info
+    from airut.gh.pr import get_current_pr, get_pr_info
 
     try:
         status = check_ci_status(
@@ -294,7 +294,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     Returns:
         Exit code.
     """
-    from lib.gh.pr import get_current_pr, get_pr_info
+    from airut.gh.pr import get_current_pr, get_pr_info
 
     try:
         status = get_review_status(pr_number=args.pr)

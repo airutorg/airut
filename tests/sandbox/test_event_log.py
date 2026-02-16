@@ -8,8 +8,8 @@
 import json
 from pathlib import Path
 
-from lib.claude_output import StreamEvent, parse_event
-from lib.sandbox.event_log import EVENTS_FILE_NAME, EventLog
+from airut.claude_output import StreamEvent, parse_event
+from airut.sandbox.event_log import EVENTS_FILE_NAME, EventLog
 
 
 # ── Helpers ──────────────────────────────────────────────────────────

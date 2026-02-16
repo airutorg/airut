@@ -16,7 +16,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from lib.gateway.config import (
+from airut.gateway.config import (
     GlobalConfig,
     RepoServerConfig,
     ServerConfig,
@@ -340,7 +340,7 @@ class IntegrationEnvironment:
 
     def create_service(self):
         """Create an EmailGatewayService with this environment's config."""
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         return EmailGatewayService(
             self.config,

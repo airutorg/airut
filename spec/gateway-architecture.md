@@ -20,7 +20,7 @@ conversation isolation and container-based execution for security.
 - **EmailListener** - IMAP polling loop with authentication and quote stripping
 - **ConversationManager** - Git checkout management and state persistence
 - **Sandbox** - Container lifecycle, network isolation, and execution
-  (`lib/sandbox/`)
+  (`airut/sandbox/`)
 - **EmailResponder** - SMTP reply construction with threading support
 - **SenderAuthenticator** - DMARC verification on trusted headers
 - **SenderAuthorizer** - Sender allowlist checking
@@ -76,11 +76,11 @@ Storage uses XDG state directory: `~/.local/state/airut/<repo_id>/`.
 
 - `conversation.json` stores conversation metadata (session IDs, reply
   summaries, model) **outside the workspace**. Owned by `ConversationStore`
-  (`lib/conversation/`), written at state transitions only (not during
+  (`airut/conversation/`), written at state transitions only (not during
   streaming).
 - `events.jsonl` stores raw streaming JSON events as an append-only
   newline-delimited log **outside the workspace**. Owned by `EventLog`
-  (`lib/sandbox/`), written during streaming. Reply groups are separated by
+  (`airut/sandbox/`), written during streaming. Reply groups are separated by
   blank lines.
 - Session directories (claude, inbox, outbox, storage) are mounted separately
   from the workspace to keep the git repo clean
@@ -162,7 +162,7 @@ Conversations are identified using a two-layer approach:
 - Decode using the charset declared in the MIME part headers (e.g. `big5`,
   `iso-8859-1`), falling back to UTF-8 when no charset is declared
 - HTML is converted to plain text with markdown-like formatting (bold, italic,
-  links, tables, lists, headings, code blocks) via `lib/html_to_text`
+  links, tables, lists, headings, code blocks) via `airut/html_to_text`
 - Non-multipart messages use the content type to decide: `text/html` is
   converted, everything else is used as-is
 
@@ -295,7 +295,7 @@ conversation directory (`{STORAGE}/conversations/{ID}/conversation.json`),
 outside the container workspace. This file contains the conversation_id, model,
 and an ordered list of reply summaries (each with session_id, timestamp,
 duration_ms, total_cost_usd, num_turns, is_error, usage, request_text,
-response_text). It is managed by `ConversationStore` (`lib/conversation/`) and
+response_text). It is managed by `ConversationStore` (`airut/conversation/`) and
 written only at state transitions.
 
 **Resumption flow**:
@@ -317,7 +317,7 @@ about the context loss. Two classes of errors trigger this recovery:
   from mismatched `tool_use_id`/`tool_result` pairs) indicating the session
   state is invalid and cannot be resumed
 
-See `lib/conversation/conversation_store.py` for the `ConversationStore` and
+See `airut/conversation/conversation_store.py` for the `ConversationStore` and
 `ConversationMetadata` data model.
 
 ### Actions History
@@ -325,7 +325,7 @@ See `lib/conversation/conversation_store.py` for the `ConversationStore` and
 The service captures Claude's full actions history using streaming JSON output
 (`--output-format stream-json --verbose`). Events are stored in `events.jsonl`
 as an append-only newline-delimited JSON stream, managed by `EventLog`
-(`lib/sandbox/event_log.py`). Each event is written as a single line during
+(`airut/sandbox/event_log.py`). Each event is written as a single line during
 streaming, and reply groups are separated by blank lines. Events are displayed
 in the dashboard's actions viewer (`/conversation/{id}/actions`).
 

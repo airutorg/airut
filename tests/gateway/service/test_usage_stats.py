@@ -8,17 +8,17 @@
 import json
 from unittest.mock import patch
 
-from lib.claude_output import (
+from airut.claude_output import (
     StreamEvent,
     extract_response_text,
     parse_stream_events,
 )
-from lib.gateway.service import (
+from airut.gateway.service import (
     UsageStats,
     capture_version_info,
     extract_usage_stats,
 )
-from lib.version import GitVersionInfo
+from airut.version import GitVersionInfo
 
 
 def _parse(*raw_events: dict) -> list[StreamEvent]:
@@ -40,7 +40,7 @@ class TestCaptureVersionInfo:
 
         with (
             patch(
-                "lib.gateway.service.gateway.get_git_version_info"
+                "airut.gateway.service.gateway.get_git_version_info"
             ) as mock_get_version,
             patch("time.time", return_value=1000.0),
         ):
@@ -65,7 +65,7 @@ class TestCaptureVersionInfo:
 
         with (
             patch(
-                "lib.gateway.service.gateway.get_git_version_info"
+                "airut.gateway.service.gateway.get_git_version_info"
             ) as mock_get_version,
             patch("time.time", return_value=2000.0),
         ):

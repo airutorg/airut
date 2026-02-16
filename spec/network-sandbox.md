@@ -52,20 +52,20 @@ attacker-controlled nameservers). The proxy handles all access control.
 
 ## Components
 
-| Component                                | Purpose                                               |
-| ---------------------------------------- | ----------------------------------------------------- |
-| `.airut/network-allowlist.yaml`          | Allowlist configuration (domains + URLs + methods)    |
-| `lib/_bundled/proxy/proxy.dockerfile`    | Proxy container image (slim + mitmproxy)              |
-| `lib/_bundled/proxy/proxy-entrypoint.sh` | Starts DNS responder + mitmproxy in regular mode      |
-| `lib/_bundled/proxy/dns_responder.py`    | DNS server: returns proxy IP for all A queries        |
-| `lib/_bundled/proxy/proxy_filter.py`     | mitmproxy addon: allowlist, token masking, re-signing |
-| `lib/_bundled/proxy/aws_signing.py`      | AWS SigV4/SigV4A request re-signing                   |
-| `lib/sandbox/_network.py`                | Podman args for sandbox integration (--dns, CA cert)  |
-| `lib/sandbox/_proxy.py`                  | Per-task proxy lifecycle management                   |
+| Component                                  | Purpose                                               |
+| ------------------------------------------ | ----------------------------------------------------- |
+| `.airut/network-allowlist.yaml`            | Allowlist configuration (domains + URLs + methods)    |
+| `airut/_bundled/proxy/proxy.dockerfile`    | Proxy container image (slim + mitmproxy)              |
+| `airut/_bundled/proxy/proxy-entrypoint.sh` | Starts DNS responder + mitmproxy in regular mode      |
+| `airut/_bundled/proxy/dns_responder.py`    | DNS server: returns proxy IP for all A queries        |
+| `airut/_bundled/proxy/proxy_filter.py`     | mitmproxy addon: allowlist, token masking, re-signing |
+| `airut/_bundled/proxy/aws_signing.py`      | AWS SigV4/SigV4A request re-signing                   |
+| `airut/sandbox/_network.py`                | Podman args for sandbox integration (--dns, CA cert)  |
+| `airut/sandbox/_proxy.py`                  | Per-task proxy lifecycle management                   |
 
 ## Proxy Lifecycle
 
-The proxy is managed by `ProxyManager` in `lib/sandbox/_proxy.py`:
+The proxy is managed by `ProxyManager` in `airut/sandbox/_proxy.py`:
 
 **Gateway lifecycle** (shared resources):
 

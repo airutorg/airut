@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lib.sandbox._image import (
+from airut.sandbox._image import (
     ImageBuildError,
     _content_hash,
     _ImageInfo,
@@ -85,7 +85,7 @@ class TestIsImageFresh:
 class TestBuildRepoImage:
     """Tests for build_repo_image function."""
 
-    @patch("lib.sandbox._image.subprocess.run")
+    @patch("airut.sandbox._image.subprocess.run")
     def test_builds_and_returns_tag(self, mock_run: MagicMock) -> None:
         """Builds repo image and returns tagged image name."""
         mock_run.return_value = MagicMock(returncode=0)
@@ -103,7 +103,7 @@ class TestBuildRepoImage:
         assert "-t" in cmd
         assert tag in cmd
 
-    @patch("lib.sandbox._image.subprocess.run")
+    @patch("airut.sandbox._image.subprocess.run")
     def test_caches_on_second_call(self, mock_run: MagicMock) -> None:
         """Reuses cached image on second call with same content."""
         mock_run.return_value = MagicMock(returncode=0)
@@ -116,7 +116,7 @@ class TestBuildRepoImage:
         assert tag1 == tag2
         mock_run.assert_called_once()
 
-    @patch("lib.sandbox._image.subprocess.run")
+    @patch("airut.sandbox._image.subprocess.run")
     def test_rebuilds_when_stale(self, mock_run: MagicMock) -> None:
         """Rebuilds image when cached version is stale."""
         mock_run.return_value = MagicMock(returncode=0)
@@ -133,7 +133,7 @@ class TestBuildRepoImage:
         build_repo_image("podman", dockerfile, {}, repo_images, 24)
         mock_run.assert_called_once()
 
-    @patch("lib.sandbox._image.subprocess.run")
+    @patch("airut.sandbox._image.subprocess.run")
     def test_context_files_included_in_hash(self, mock_run: MagicMock) -> None:
         """Context files affect the content hash."""
         mock_run.return_value = MagicMock(returncode=0)
@@ -154,7 +154,7 @@ class TestBuildRepoImage:
 
         assert tag1 != tag2
 
-    @patch("lib.sandbox._image.subprocess.run")
+    @patch("airut.sandbox._image.subprocess.run")
     def test_context_files_written_to_build_dir(
         self, mock_run: MagicMock
     ) -> None:
@@ -175,7 +175,7 @@ class TestBuildRepoImage:
         assert cmd[0] == "podman"
         assert cmd[1] == "build"
 
-    @patch("lib.sandbox._image.subprocess.run")
+    @patch("airut.sandbox._image.subprocess.run")
     def test_build_failure_raises_error(self, mock_run: MagicMock) -> None:
         """Raises ImageBuildError when build command fails."""
         mock_run.side_effect = subprocess.CalledProcessError(
@@ -188,7 +188,7 @@ class TestBuildRepoImage:
                 "podman", b"FROM ubuntu:24.04\n", {}, repo_images, 24
             )
 
-    @patch("lib.sandbox._image.subprocess.run")
+    @patch("airut.sandbox._image.subprocess.run")
     def test_build_failure_no_stderr(self, mock_run: MagicMock) -> None:
         """Handles build failure with no stderr output."""
         mock_run.side_effect = subprocess.CalledProcessError(
@@ -201,7 +201,7 @@ class TestBuildRepoImage:
                 "podman", b"FROM ubuntu:24.04\n", {}, repo_images, 24
             )
 
-    @patch("lib.sandbox._image.subprocess.run")
+    @patch("airut.sandbox._image.subprocess.run")
     def test_custom_container_command(self, mock_run: MagicMock) -> None:
         """Uses specified container command instead of default."""
         mock_run.return_value = MagicMock(returncode=0)
@@ -212,7 +212,7 @@ class TestBuildRepoImage:
         cmd = mock_run.call_args[0][0]
         assert cmd[0] == "docker"
 
-    @patch("lib.sandbox._image.subprocess.run")
+    @patch("airut.sandbox._image.subprocess.run")
     def test_stores_in_cache_after_build(self, mock_run: MagicMock) -> None:
         """Stores built image info in the repo_images cache dict."""
         mock_run.return_value = MagicMock(returncode=0)
@@ -230,8 +230,8 @@ class TestBuildRepoImage:
 class TestBuildOverlayImage:
     """Tests for build_overlay_image function."""
 
-    @patch("lib.sandbox._image.get_entrypoint_content")
-    @patch("lib.sandbox._image.subprocess.run")
+    @patch("airut.sandbox._image.get_entrypoint_content")
+    @patch("airut.sandbox._image.subprocess.run")
     def test_builds_overlay(
         self, mock_run: MagicMock, mock_entrypoint: MagicMock
     ) -> None:
@@ -247,8 +247,8 @@ class TestBuildOverlayImage:
         assert tag.startswith("airut:")
         mock_run.assert_called_once()
 
-    @patch("lib.sandbox._image.get_entrypoint_content")
-    @patch("lib.sandbox._image.subprocess.run")
+    @patch("airut.sandbox._image.get_entrypoint_content")
+    @patch("airut.sandbox._image.subprocess.run")
     def test_overlay_caches(
         self, mock_run: MagicMock, mock_entrypoint: MagicMock
     ) -> None:
@@ -267,8 +267,8 @@ class TestBuildOverlayImage:
         assert tag1 == tag2
         mock_run.assert_called_once()
 
-    @patch("lib.sandbox._image.get_entrypoint_content")
-    @patch("lib.sandbox._image.subprocess.run")
+    @patch("airut.sandbox._image.get_entrypoint_content")
+    @patch("airut.sandbox._image.subprocess.run")
     def test_overlay_rebuilds_when_stale(
         self, mock_run: MagicMock, mock_entrypoint: MagicMock
     ) -> None:
@@ -290,8 +290,8 @@ class TestBuildOverlayImage:
         build_overlay_image("podman", repo_tag, overlay_images, 24)
         mock_run.assert_called_once()
 
-    @patch("lib.sandbox._image.get_entrypoint_content")
-    @patch("lib.sandbox._image.subprocess.run")
+    @patch("airut.sandbox._image.get_entrypoint_content")
+    @patch("airut.sandbox._image.subprocess.run")
     def test_overlay_failure_raises_error(
         self, mock_run: MagicMock, mock_entrypoint: MagicMock
     ) -> None:
@@ -307,8 +307,8 @@ class TestBuildOverlayImage:
                 "podman", "airut-repo:abc123", overlay_images, 24
             )
 
-    @patch("lib.sandbox._image.get_entrypoint_content")
-    @patch("lib.sandbox._image.subprocess.run")
+    @patch("airut.sandbox._image.get_entrypoint_content")
+    @patch("airut.sandbox._image.subprocess.run")
     def test_overlay_failure_no_stderr(
         self, mock_run: MagicMock, mock_entrypoint: MagicMock
     ) -> None:
@@ -324,8 +324,8 @@ class TestBuildOverlayImage:
                 "podman", "airut-repo:abc123", overlay_images, 24
             )
 
-    @patch("lib.sandbox._image.get_entrypoint_content")
-    @patch("lib.sandbox._image.subprocess.run")
+    @patch("airut.sandbox._image.get_entrypoint_content")
+    @patch("airut.sandbox._image.subprocess.run")
     def test_different_repo_tag_produces_different_overlay(
         self, mock_run: MagicMock, mock_entrypoint: MagicMock
     ) -> None:
@@ -341,8 +341,8 @@ class TestBuildOverlayImage:
 
         assert tag1 != tag2
 
-    @patch("lib.sandbox._image.get_entrypoint_content")
-    @patch("lib.sandbox._image.subprocess.run")
+    @patch("airut.sandbox._image.get_entrypoint_content")
+    @patch("airut.sandbox._image.subprocess.run")
     def test_stores_in_cache_after_build(
         self, mock_run: MagicMock, mock_entrypoint: MagicMock
     ) -> None:

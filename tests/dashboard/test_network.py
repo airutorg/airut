@@ -7,8 +7,8 @@
 
 from werkzeug.test import Client
 
-from lib.dashboard.server import DashboardServer
-from lib.dashboard.tracker import TaskTracker
+from airut.dashboard.server import DashboardServer
+from airut.dashboard.tracker import TaskTracker
 from tests.dashboard.conftest import DashboardHarness, result_event
 
 
@@ -172,7 +172,7 @@ class TestNetworkLogLineStyling:
         assert "api.example.com" in html
         # Count rendered log divs within the terminal container
         # (excluding JS template strings in SSE script)
-        from lib.dashboard.views.network import render_network_log_lines
+        from airut.dashboard.views.network import render_network_log_lines
 
         rendered = render_network_log_lines(
             "allowed GET https://api.github.com -> 200\n"

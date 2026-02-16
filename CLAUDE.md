@@ -218,7 +218,7 @@ is created AND GitHub CI passes (step 3).
 
 **All checks are mandatory. No workarounds or exceptions.**
 
-- **100% test coverage** - every line in `lib/` must be tested
+- **100% test coverage** - every line in `airut/` must be tested
 - **No `pytest.skip()`** - write proper mocks instead
 - **No `# type: ignore`** without specific error code and justification
 - **No `# noqa`** without specific code and justification
@@ -229,21 +229,21 @@ is created AND GitHub CI passes (step 3).
 ```
 .airut/                     - Repo-specific Airut configuration
 config/                     - Server configuration templates
-lib/                        - Library code
+airut/                        - Library code
   _bundled/                 - Static resources bundled into wheel
     assets/                 - Logo SVG
     proxy/                  - Network sandbox (proxy filter, DNS, AWS signing)
   claude_output/            - Typed Claude streaming JSON output parser
   conversation/             - Conversation directory layout and preparation
-  sandbox/                  - Sandboxed execution (container, proxy, session, image)
   dashboard/                - Web dashboard server
   gateway/                  - Email gateway service
   gh/                       - GitHub API wrappers
   git_mirror.py             - Git mirror cache
-  markdown.py               - Markdown-to-HTML conversion
-  logging.py                - Logging utilities
-  version.py                - Version info, install source, upstream updates
   install_services.py       - Service installation logic
+  logging.py                - Logging utilities
+  markdown.py               - Markdown-to-HTML conversion
+  sandbox/                  - Sandboxed execution (container, proxy, session, image)
+  version.py                - Version info, install source, upstream updates
 scripts/                    - CLI tools
   airut.py                  - Email gateway entry point (uv run airut)
   ci.py, pr.py              - CI/PR tools

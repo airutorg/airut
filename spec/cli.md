@@ -20,10 +20,10 @@ on email processing.
 
 ```
 [project.scripts]
-airut = "lib.airut:cli"
+airut = "airut.cli:cli"
 ```
 
-The `cli()` function in `lib/airut.py` dispatches to subcommand handlers. When
+The `cli()` function in `airut/cli.py` dispatches to subcommand handlers. When
 invoked with no arguments or `--help`, it prints version information and usage.
 Unknown commands exit with code 2.
 
@@ -47,7 +47,7 @@ Create a stub server config at `~/.config/airut/airut.yaml`.
 - Writes a commented YAML template with placeholder values
 - Prints links to deployment and repo-onboarding guides on GitHub
 
-**Config path:** Determined by `get_config_path()` in `lib/gateway/config.py`,
+**Config path:** Determined by `get_config_path()` in `airut/gateway/config.py`,
 which returns `~/.config/airut/airut.yaml`.
 
 **Stub template:** Contains commented-out `execution`, `dashboard`, and
@@ -74,10 +74,10 @@ all critical checks pass, 1 otherwise.
 | Dependencies  | git (>= 2.25), podman (>= 4.0) installed and version met | Yes               |
 | Service       | Unit file exists, service running, version mismatch      | No                |
 
-**Version checking** uses `check_upstream_version()` from `lib/version.py`. For
-PyPI installs, it queries the PyPI JSON API. For VCS (GitHub) installs, it
+**Version checking** uses `check_upstream_version()` from `airut/version.py`.
+For PyPI installs, it queries the PyPI JSON API. For VCS (GitHub) installs, it
 queries the GitHub API for the latest commit. Editable and local-dir installs
-skip the check. See `lib/version.py` for the `InstallSource` detection via PEP
+skip the check. See `airut/version.py` for the `InstallSource` detection via PEP
 610 `direct_url.json`.
 
 **Dependency checking** uses `shutil.which()` to locate binaries and runs their
@@ -171,10 +171,10 @@ WantedBy=default.target
 ```
 
 The service runs `airut run-gateway --resilient`, which delegates to
-`lib.gateway.service:main()`. `Restart=always` with 10-second backoff ensures
+`airut.gateway.service:main()`. `Restart=always` with 10-second backoff ensures
 the gateway recovers from transient failures.
 
-**Implementation:** `lib/install_services.py` contains the service management
+**Implementation:** `airut/install_services.py` contains the service management
 logic. The CLI command (`cmd_install_service`) sets up logging and delegates to
 `install_services()`.
 
@@ -201,7 +201,7 @@ airut run-gateway [--resilient] [--debug]
 
 Start the email gateway service. Normally invoked by systemd, not run directly.
 
-Delegates immediately to `lib.gateway.service:main()` with the remaining
+Delegates immediately to `airut.gateway.service:main()` with the remaining
 arguments. See [gateway-architecture.md](gateway-architecture.md) for the
 gateway design.
 
@@ -210,8 +210,8 @@ gateway design.
 ### Module Structure
 
 ```
-lib/
-├── airut.py              # CLI entry point, subcommand dispatch, check/update
+airut/
+├── cli.py                # CLI entry point, subcommand dispatch, check/update
 ├── install_services.py   # Systemd user service management
 └── version.py            # Version detection (embedded + git fallback)
 

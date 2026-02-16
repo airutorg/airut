@@ -22,8 +22,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 
-from lib.dashboard.tracker import RepoStatus
-from lib.gateway.config import GlobalConfig, RepoServerConfig, ServerConfig
+from airut.dashboard.tracker import RepoStatus
+from airut.gateway.config import GlobalConfig, RepoServerConfig, ServerConfig
 
 from .conftest import MOCK_CONTAINER_COMMAND
 from .environment import IntegrationEnvironment, create_test_repo
@@ -75,7 +75,7 @@ class TestImapConnectionFailures:
             repos={"test": repo_config},
         )
 
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         service = EmailGatewayService(config, repo_root=tmp_path)
 
@@ -136,7 +136,7 @@ class TestImapConnectionFailures:
             repos={"unreachable": repo_config},
         )
 
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         service = EmailGatewayService(config, repo_root=tmp_path)
 
@@ -190,7 +190,7 @@ class TestGitCloneFailures:
             repos={"bad-git": repo_config},
         )
 
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         service = EmailGatewayService(config, repo_root=tmp_path)
 

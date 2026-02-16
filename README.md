@@ -175,15 +175,15 @@ airut/
 ├── spec/                  # Implementation specifications
 ├── .airut/                # Repo-specific Airut configuration
 ├── config/                # Server configuration templates
-├── lib/                   # Library code
+├── airut/                   # Library code
 │   ├── _bundled/          # Static resources bundled into wheel
 │   │   ├── assets/        # Logo SVG
 │   │   └── proxy/         # Network sandbox (proxy filter, DNS, AWS signing)
-│   ├── sandbox/           # Sandboxed execution (container, proxy, session, image)
 │   ├── conversation/      # Conversation directory layout and preparation
 │   ├── dashboard/         # Web dashboard server
 │   ├── gateway/           # Email gateway service
-│   └── gh/                # GitHub API wrappers
+│   ├── gh/                # GitHub API wrappers
+│   └── sandbox/           # Sandboxed execution (container, proxy, session, image)
 ├── scripts/               # CLI tools
 │   ├── airut.py           # CLI entry point (uv run airut)
 │   ├── ci.py              # Local CI runner

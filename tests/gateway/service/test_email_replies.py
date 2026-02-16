@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from lib.gateway.service.email_replies import (
+from airut.gateway.service.email_replies import (
     send_acknowledgment,
     send_error_reply,
     send_rejection_reply,
@@ -31,7 +31,7 @@ class TestSendErrorReply:
         assert call_kwargs["references"] == ["<m1@ex.com>"]
 
     def test_smtp_error_logged(self, email_config, tmp_path: Path) -> None:
-        from lib.gateway import SMTPSendError
+        from airut.gateway import SMTPSendError
 
         svc, handler = make_service(email_config, tmp_path)
         handler.responder.send_reply.side_effect = SMTPSendError("fail")
@@ -103,7 +103,7 @@ class TestSendAcknowledgment:
         assert call_kwargs["subject"] == "Re: [ID:conv1] Hello"
 
     def test_smtp_error_non_fatal(self, email_config, tmp_path: Path) -> None:
-        from lib.gateway import SMTPSendError
+        from airut.gateway import SMTPSendError
 
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_base_url=None)
@@ -186,7 +186,7 @@ class TestSendRejectionReply:
         assert call_kwargs["subject"] == "Re: [ID:aabb1122] Hello"
 
     def test_smtp_error_non_fatal(self, email_config, tmp_path: Path) -> None:
-        from lib.gateway import SMTPSendError
+        from airut.gateway import SMTPSendError
 
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_base_url=None)
@@ -227,7 +227,7 @@ class TestSendReply:
     def test_outbox_cleanup_on_retry(
         self, email_config, tmp_path: Path
     ) -> None:
-        from lib.gateway import SMTPSendError
+        from airut.gateway import SMTPSendError
 
         svc, handler = make_service(email_config, tmp_path)
         conversation_dir = tmp_path / "conversations" / "conv1"
@@ -251,7 +251,7 @@ class TestSendReply:
         assert not (outbox / "file.txt").exists()
 
     def test_retry_failure_raises(self, email_config, tmp_path: Path) -> None:
-        from lib.gateway import SMTPSendError
+        from airut.gateway import SMTPSendError
 
         svc, handler = make_service(email_config, tmp_path)
         handler.conversation_manager.get_workspace_path.return_value = tmp_path
@@ -345,7 +345,7 @@ class TestStructuredMessageId:
         self, email_config, tmp_path: Path
     ) -> None:
         """Test that SMTP retry uses the same Message-ID."""
-        from lib.gateway import SMTPSendError
+        from airut.gateway import SMTPSendError
 
         svc, handler = make_service(email_config, tmp_path)
         handler.conversation_manager.get_workspace_path.return_value = tmp_path

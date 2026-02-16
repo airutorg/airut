@@ -13,12 +13,15 @@ from typing import Any
 import pytest
 from werkzeug.test import Client
 
-from lib.claude_output import StreamEvent, parse_stream_events
-from lib.claude_output.extract import extract_result_summary, extract_session_id
-from lib.conversation import ConversationStore, ReplySummary
-from lib.dashboard.server import DashboardServer
-from lib.dashboard.tracker import TaskTracker
-from lib.sandbox import EventLog
+from airut.claude_output import StreamEvent, parse_stream_events
+from airut.claude_output.extract import (
+    extract_result_summary,
+    extract_session_id,
+)
+from airut.conversation import ConversationStore, ReplySummary
+from airut.dashboard.server import DashboardServer
+from airut.dashboard.tracker import TaskTracker
+from airut.sandbox import EventLog
 
 
 def parse_events(*raw_events: dict[str, Any]) -> list[StreamEvent]:
@@ -116,7 +119,7 @@ class DashboardHarness:
         """Parse raw event dicts, write to event log, and add reply."""
         from datetime import datetime
 
-        from lib.claude_output.types import Usage
+        from airut.claude_output.types import Usage
 
         events = parse_events(*raw_events)
 

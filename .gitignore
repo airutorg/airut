@@ -7,5 +7,5 @@ __pycache__/
 .env
 .update.lock
 .gitconfig
-lib/_version.py
+airut/_version.py
 /config/airut.yaml

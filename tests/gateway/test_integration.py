@@ -19,8 +19,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lib.claude_output import StreamEvent, parse_stream_events
-from lib.gateway import (
+from airut.claude_output import StreamEvent, parse_stream_events
+from airut.gateway import (
     ConversationManager,
     EmailListener,
     EmailResponder,
@@ -28,17 +28,17 @@ from lib.gateway import (
     SenderAuthorizer,
     SMTPSendError,
 )
-from lib.gateway.config import (
+from airut.gateway.config import (
     GlobalConfig,
     RepoServerConfig,
     ServerConfig,
 )
-from lib.gateway.parsing import (
+from airut.gateway.parsing import (
     extract_attachments,
     extract_body,
     extract_conversation_id,
 )
-from lib.gateway.service.usage_stats import extract_usage_stats
+from airut.gateway.service.usage_stats import extract_usage_stats
 
 
 class TestEndToEndFlow:
@@ -254,7 +254,7 @@ class TestErrorRecovery:
         responder = EmailResponder(email_config)
 
         # Mock SMTP to fail
-        with patch("lib.gateway.responder.smtplib.SMTP") as mock_smtp_class:
+        with patch("airut.gateway.responder.smtplib.SMTP") as mock_smtp_class:
             # Create mock that raises exception in send_message
             mock_smtp = MagicMock()
             mock_smtp.__enter__.return_value.send_message.side_effect = (
@@ -271,7 +271,7 @@ class TestErrorRecovery:
                 )
 
         # Now test successful send
-        with patch("lib.gateway.responder.smtplib.SMTP") as mock_smtp_class:
+        with patch("airut.gateway.responder.smtplib.SMTP") as mock_smtp_class:
             mock_smtp = MagicMock()
             mock_smtp.__enter__.return_value.send_message.return_value = {}
             mock_smtp_class.return_value = mock_smtp
@@ -438,7 +438,7 @@ class TestParallelExecution:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -458,7 +458,7 @@ class TestParallelExecution:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -487,7 +487,7 @@ class TestParallelExecution:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -514,7 +514,7 @@ class TestParallelExecution:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -541,7 +541,7 @@ class TestParallelExecution:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -568,7 +568,7 @@ class TestParallelExecution:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -592,7 +592,7 @@ class TestParallelExecution:
         from concurrent.futures import ThreadPoolExecutor
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -625,7 +625,7 @@ class TestParallelExecution:
         from concurrent.futures import ThreadPoolExecutor
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         # Create config with very short timeout
         global_config = GlobalConfig(
@@ -661,7 +661,7 @@ class TestParallelExecution:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -676,7 +676,7 @@ class TestParallelExecution:
 
         # Mock process_message to track calls
         with patch(
-            "lib.gateway.service.gateway.process_message",
+            "airut.gateway.service.gateway.process_message",
             return_value=(True, None),
         ) as mock_process:
             service._process_message_worker(message, "test-task-id", handler)
@@ -697,7 +697,7 @@ class TestParallelExecution:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -715,7 +715,7 @@ class TestParallelExecution:
 
         # Mock process_message to track calls
         with patch(
-            "lib.gateway.service.gateway.process_message",
+            "airut.gateway.service.gateway.process_message",
             return_value=(True, conv_id),
         ) as mock_process:
             service._process_message_worker(message, "test-task-id", handler)
@@ -737,7 +737,7 @@ class TestAcknowledgmentReply:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -756,7 +756,7 @@ class TestAcknowledgmentReply:
         model = "sonnet"
 
         # Mock responder.send_reply
-        from lib.gateway.service.email_replies import send_acknowledgment
+        from airut.gateway.service.email_replies import send_acknowledgment
 
         with patch.object(handler.responder, "send_reply") as mock_send:
             send_acknowledgment(
@@ -782,7 +782,7 @@ class TestAcknowledgmentReply:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -801,7 +801,7 @@ class TestAcknowledgmentReply:
         message.replace_header("Message-ID", "<followup456@example.com>")
         message.replace_header("From", email_config.authorized_senders[0])
 
-        from lib.gateway.service.email_replies import send_acknowledgment
+        from airut.gateway.service.email_replies import send_acknowledgment
 
         with patch.object(handler.responder, "send_reply") as mock_send:
             send_acknowledgment(
@@ -820,7 +820,7 @@ class TestAcknowledgmentReply:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -830,7 +830,7 @@ class TestAcknowledgmentReply:
         handler = service.repo_handlers["test"]
         message = sample_email_message
 
-        from lib.gateway.service.email_replies import send_acknowledgment
+        from airut.gateway.service.email_replies import send_acknowledgment
 
         # Mock responder to raise SMTPSendError
         with patch.object(
@@ -851,7 +851,7 @@ class TestAcknowledgmentReply:
         from email.parser import BytesParser
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -874,7 +874,7 @@ Please help.
 
         conv_id = "thread123"
 
-        from lib.gateway.service.email_replies import send_acknowledgment
+        from airut.gateway.service.email_replies import send_acknowledgment
 
         with patch.object(handler.responder, "send_reply") as mock_send:
             send_acknowledgment(
@@ -899,7 +899,7 @@ Please help.
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -919,8 +919,8 @@ Please help.
 
         def track_execute(prompt, **kwargs):
             call_order.append("execute")
-            from lib.claude_output.types import Usage
-            from lib.sandbox import ExecutionResult, Outcome
+            from airut.claude_output.types import Usage
+            from airut.sandbox import ExecutionResult, Outcome
 
             return ExecutionResult(
                 outcome=Outcome.SUCCESS,
@@ -952,11 +952,11 @@ Please help.
             ),
             # Patch the module-level function that process_message calls
             patch(
-                "lib.gateway.service.message_processing.send_acknowledgment",
+                "airut.gateway.service.message_processing.send_acknowledgment",
                 side_effect=track_ack,
             ),
         ):
-            from lib.gateway.service.message_processing import process_message
+            from airut.gateway.service.message_processing import process_message
 
             process_message(service, message, "test-task-id", handler)
 
@@ -984,7 +984,7 @@ Please help.
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -1011,8 +1011,8 @@ Please help.
             # Don't actually send
 
         # Create mock task
-        from lib.claude_output.types import Usage
-        from lib.sandbox import ExecutionResult, Outcome
+        from airut.claude_output.types import Usage
+        from airut.sandbox import ExecutionResult, Outcome
 
         mock_task = MagicMock()
         mock_task.execute.return_value = ExecutionResult(
@@ -1034,12 +1034,12 @@ Please help.
 
         with (
             patch(
-                "lib.gateway.service.message_processing.send_acknowledgment",
+                "airut.gateway.service.message_processing.send_acknowledgment",
                 side_effect=track_task_id_at_ack,
             ),
             patch.object(handler.responder, "send_reply"),
         ):
-            from lib.gateway.service.message_processing import process_message
+            from airut.gateway.service.message_processing import process_message
 
             process_message(service, message, temp_task_id, handler)
 
@@ -1055,7 +1055,7 @@ Please help.
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         work_dir = tmp_path / "conversations"
         work_dir.mkdir()
@@ -1091,7 +1091,7 @@ Please help.
 
         conv_id = "abc12345"
 
-        from lib.gateway.service.email_replies import send_acknowledgment
+        from airut.gateway.service.email_replies import send_acknowledgment
 
         with patch.object(handler.responder, "send_reply") as mock_send:
             send_acknowledgment(
@@ -1115,7 +1115,7 @@ Please help.
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         # Default config has dashboard_base_url=None
         config = ServerConfig(
@@ -1130,7 +1130,7 @@ Please help.
 
         conv_id = "abc12345"
 
-        from lib.gateway.service.email_replies import send_acknowledgment
+        from airut.gateway.service.email_replies import send_acknowledgment
 
         with patch.object(handler.responder, "send_reply") as mock_send:
             send_acknowledgment(
@@ -1151,7 +1151,7 @@ Please help.
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -1169,9 +1169,9 @@ Please help.
         message.replace_header("From", email_config.authorized_senders[0])
 
         # Create mock task
-        from lib.claude_output.types import Usage
-        from lib.gateway.service.message_processing import process_message
-        from lib.sandbox import ExecutionResult, Outcome
+        from airut.claude_output.types import Usage
+        from airut.gateway.service.message_processing import process_message
+        from airut.sandbox import ExecutionResult, Outcome
 
         mock_task = MagicMock()
         mock_task.execute.return_value = ExecutionResult(
@@ -1193,7 +1193,7 @@ Please help.
 
         with (
             patch(
-                "lib.gateway.service.message_processing.send_acknowledgment"
+                "airut.gateway.service.message_processing.send_acknowledgment"
             ) as mock_ack,
             patch.object(handler.responder, "send_reply"),
         ):
@@ -1320,7 +1320,7 @@ class TestTaskIdTracking:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -1346,7 +1346,7 @@ class TestTaskIdTracking:
             return (True, new_conv_id)
 
         with patch(
-            "lib.gateway.service.gateway.process_message",
+            "airut.gateway.service.gateway.process_message",
             side_effect=mock_process_message,
         ):
             service._process_message_worker(message, temp_task_id, handler)
@@ -1367,7 +1367,7 @@ class TestTaskIdTracking:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -1384,7 +1384,7 @@ class TestTaskIdTracking:
 
         # Mock process_message to return failure with no conv_id
         with patch(
-            "lib.gateway.service.gateway.process_message",
+            "airut.gateway.service.gateway.process_message",
             return_value=(False, None),
         ):
             service._process_message_worker(message, temp_task_id, handler)
@@ -1409,7 +1409,7 @@ class TestDuplicateEmailRejection:
         from concurrent.futures import ThreadPoolExecutor
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -1432,7 +1432,7 @@ class TestDuplicateEmailRejection:
 
         # Mock send_rejection_reply (module-level function)
         with patch(
-            "lib.gateway.service.gateway.send_rejection_reply"
+            "airut.gateway.service.gateway.send_rejection_reply"
         ) as mock_reject:
             result = service.submit_message(message, handler)
 
@@ -1458,7 +1458,7 @@ class TestDuplicateEmailRejection:
         from concurrent.futures import ThreadPoolExecutor
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -1500,7 +1500,7 @@ class TestDuplicateEmailRejection:
         from concurrent.futures import ThreadPoolExecutor
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -1536,7 +1536,7 @@ class TestRejectionReply:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -1553,7 +1553,7 @@ class TestRejectionReply:
         conv_id = "def45678"
         reason = "Task already in progress"
 
-        from lib.gateway.service.email_replies import send_rejection_reply
+        from airut.gateway.service.email_replies import send_rejection_reply
 
         with patch.object(handler.responder, "send_reply") as mock_send:
             send_rejection_reply(
@@ -1574,7 +1574,7 @@ class TestRejectionReply:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         work_dir = tmp_path / "conversations"
         work_dir.mkdir()
@@ -1608,7 +1608,7 @@ class TestRejectionReply:
 
         conv_id = "link1234"
 
-        from lib.gateway.service.email_replies import send_rejection_reply
+        from airut.gateway.service.email_replies import send_rejection_reply
 
         with patch.object(handler.responder, "send_reply") as mock_send:
             send_rejection_reply(
@@ -1633,7 +1633,7 @@ class TestRejectionReply:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from lib.gateway.service import EmailGatewayService
+        from airut.gateway.service import EmailGatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -1643,7 +1643,7 @@ class TestRejectionReply:
         handler = service.repo_handlers["test"]
         message = sample_email_message
 
-        from lib.gateway.service.email_replies import send_rejection_reply
+        from airut.gateway.service.email_replies import send_rejection_reply
 
         with patch.object(
             handler.responder,

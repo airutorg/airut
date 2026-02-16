@@ -132,7 +132,7 @@ class TestReadVersionFromFile:
 
     def test_reads_version(self, tmp_path: Path) -> None:
         """Should read and convert VERSION from _version.py."""
-        lib_dir = tmp_path / "lib"
+        lib_dir = tmp_path / "airut"
         lib_dir.mkdir()
         (lib_dir / "_version.py").write_text("VERSION = 'v0.8.0'\n")
         result = _read_version_from_file(tmp_path)
@@ -145,7 +145,7 @@ class TestReadVersionFromFile:
 
     def test_returns_none_when_no_version(self, tmp_path: Path) -> None:
         """Should return None if VERSION line not found."""
-        lib_dir = tmp_path / "lib"
+        lib_dir = tmp_path / "airut"
         lib_dir.mkdir()
         (lib_dir / "_version.py").write_text("# empty\n")
         result = _read_version_from_file(tmp_path)
@@ -153,7 +153,7 @@ class TestReadVersionFromFile:
 
     def test_handles_dev_version(self, tmp_path: Path) -> None:
         """Should convert dev version tags correctly."""
-        lib_dir = tmp_path / "lib"
+        lib_dir = tmp_path / "airut"
         lib_dir.mkdir()
         (lib_dir / "_version.py").write_text("VERSION = 'v0.8.0-3-gabc1234'\n")
         result = _read_version_from_file(tmp_path)
@@ -231,7 +231,7 @@ class TestGitVersionMetadataHook:
 
     def test_fallback_to_version_file(self, tmp_path: Path) -> None:
         """Should read version from _version.py when git unavailable."""
-        lib_dir = tmp_path / "lib"
+        lib_dir = tmp_path / "airut"
         lib_dir.mkdir()
         (lib_dir / "_version.py").write_text("VERSION = 'v0.8.0'\n")
 
@@ -261,7 +261,7 @@ class TestGitVersionBuildHook:
 
     def test_generates_version_file(self, tmp_path: Path) -> None:
         """Should generate lib/_version.py in the build root."""
-        lib_dir = tmp_path / "lib"
+        lib_dir = tmp_path / "airut"
         lib_dir.mkdir()
 
         hook = _make_build_hook(str(tmp_path))
@@ -285,7 +285,7 @@ class TestGitVersionBuildHook:
         self, tmp_path: Path
     ) -> None:
         """Should skip generation when git unavailable and no _version.py."""
-        lib_dir = tmp_path / "lib"
+        lib_dir = tmp_path / "airut"
         lib_dir.mkdir()
 
         hook = _make_build_hook(str(tmp_path))
@@ -311,7 +311,7 @@ class TestGitVersionBuildHook:
         available.  The hook must still add it to force_include so
         hatchling doesn't exclude it via .gitignore patterns.
         """
-        lib_dir = tmp_path / "lib"
+        lib_dir = tmp_path / "airut"
         lib_dir.mkdir()
 
         # Simulate _version.py already existing (e.g. from sdist)
@@ -336,11 +336,11 @@ class TestGitVersionBuildHook:
         assert version_file.exists()
         # And it must be in force_include so hatch doesn't skip it
         assert "force_include" in build_data
-        assert "lib/_version.py" in build_data["force_include"].values()
+        assert "airut/_version.py" in build_data["force_include"].values()
 
     def test_force_include_in_build_data(self, tmp_path: Path) -> None:
         """Should add version file to force_include in build_data."""
-        lib_dir = tmp_path / "lib"
+        lib_dir = tmp_path / "airut"
         lib_dir.mkdir()
 
         hook = _make_build_hook(str(tmp_path))
@@ -353,7 +353,7 @@ class TestGitVersionBuildHook:
             hook.initialize("0.0.0", build_data)
 
         assert "force_include" in build_data
-        assert "lib/_version.py" in build_data["force_include"].values()
+        assert "airut/_version.py" in build_data["force_include"].values()
 
 
 class TestDisambiguators:

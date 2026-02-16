@@ -10,7 +10,7 @@ import subprocess
 
 import pytest
 
-from lib.claude_output import StreamEvent, parse_stream_events
+from airut.claude_output import StreamEvent, parse_stream_events
 
 
 def create_mock_popen(

@@ -11,7 +11,7 @@ from email.parser import BytesParser
 
 import pytest
 
-from lib.gateway.security import (
+from airut.gateway.security import (
     SenderAuthenticator,
     SenderAuthorizer,
     _extract_email,
@@ -268,7 +268,7 @@ class TestAuthservIdMismatchLogging:
         auth = SenderAuthenticator(TRUSTED)
         header = "wrong.server.com; dmarc=pass; spf=pass"
         msg = _msg(auth_results=header)
-        with caplog.at_level(logging.WARNING, logger="lib.gateway.security"):
+        with caplog.at_level(logging.WARNING, logger="airut.gateway.security"):
             auth.authenticate(msg)
         assert len(caplog.records) == 1
         record = caplog.records[0]

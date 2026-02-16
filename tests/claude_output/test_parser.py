@@ -7,12 +7,12 @@
 
 import json
 
-from lib.claude_output.parser import (
+from airut.claude_output.parser import (
     parse_event,
     parse_event_dict,
     parse_stream_events,
 )
-from lib.claude_output.types import (
+from airut.claude_output.types import (
     EventType,
     TextBlock,
     ToolResultBlock,

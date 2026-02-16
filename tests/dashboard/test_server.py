@@ -10,9 +10,9 @@ from unittest.mock import MagicMock, patch
 
 from werkzeug.test import Client
 
-from lib.dashboard.formatters import VersionInfo
-from lib.dashboard.server import DashboardServer
-from lib.dashboard.tracker import (
+from airut.dashboard.formatters import VersionInfo
+from airut.dashboard.server import DashboardServer
+from airut.dashboard.tracker import (
     BootPhase,
     BootState,
     RepoState,
@@ -21,7 +21,7 @@ from lib.dashboard.tracker import (
     TaskStatus,
     TaskTracker,
 )
-from lib.dashboard.versioned import VersionClock, VersionedStore
+from airut.dashboard.versioned import VersionClock, VersionedStore
 
 
 class TestDashboardServer:
@@ -622,7 +622,7 @@ class TestDashboardServer:
 
         server = DashboardServer(tracker)
 
-        with patch("lib.dashboard.tracker.time.time", return_value=1090.0):
+        with patch("airut.dashboard.tracker.time.time", return_value=1090.0):
             result = server._task_to_dict(task)
 
         assert result["conversation_id"] == "abc12345"
@@ -1167,7 +1167,7 @@ class TestDashboardServerStartStop:
         # Mock make_server to avoid actual socket usage
         mock_wsgi_server = MagicMock()
         with patch(
-            "lib.dashboard.server.make_server",
+            "airut.dashboard.server.make_server",
             return_value=mock_wsgi_server,
         ):
             server.start()
@@ -1205,10 +1205,10 @@ class TestDashboardServerStartStop:
 class TestUpdateEndpoint:
     """Tests for /update endpoint."""
 
-    @patch("lib.dashboard.handlers.check_upstream_version")
+    @patch("airut.dashboard.handlers.check_upstream_version")
     def test_update_available(self, mock_check: MagicMock) -> None:
         """Test /update endpoint when update is available."""
-        from lib.version import GitVersionInfo, UpstreamVersion
+        from airut.version import GitVersionInfo, UpstreamVersion
 
         git_info = GitVersionInfo(
             version="v0.8.0",
@@ -1240,10 +1240,10 @@ class TestUpdateEndpoint:
             "https://github.com/airutorg/airut/releases/tag/v0.9.0"
         )
 
-    @patch("lib.dashboard.handlers.check_upstream_version")
+    @patch("airut.dashboard.handlers.check_upstream_version")
     def test_up_to_date(self, mock_check: MagicMock) -> None:
         """Test /update endpoint when up to date."""
-        from lib.version import GitVersionInfo, UpstreamVersion
+        from airut.version import GitVersionInfo, UpstreamVersion
 
         git_info = GitVersionInfo(
             version="v0.8.0",
@@ -1271,10 +1271,10 @@ class TestUpdateEndpoint:
         assert data["update_available"] is False
         assert data["release_url"] is None
 
-    @patch("lib.dashboard.handlers.check_upstream_version")
+    @patch("airut.dashboard.handlers.check_upstream_version")
     def test_upstream_check_not_applicable(self, mock_check: MagicMock) -> None:
         """Test /update when upstream check returns None."""
-        from lib.version import GitVersionInfo
+        from airut.version import GitVersionInfo
 
         git_info = GitVersionInfo(
             version="v0.8.0",
@@ -1306,10 +1306,10 @@ class TestUpdateEndpoint:
         response = client.get("/update")
         assert response.status_code == 404
 
-    @patch("lib.dashboard.handlers.check_upstream_version")
+    @patch("airut.dashboard.handlers.check_upstream_version")
     def test_current_falls_back_to_sha(self, mock_check: MagicMock) -> None:
         """Test /update uses sha_short when version is empty."""
-        from lib.version import GitVersionInfo
+        from airut.version import GitVersionInfo
 
         git_info = GitVersionInfo(
             version="",
@@ -1327,10 +1327,10 @@ class TestUpdateEndpoint:
         data = json.loads(response.get_data(as_text=True))
         assert data["current"] == "abc1234"
 
-    @patch("lib.dashboard.handlers.check_upstream_version")
+    @patch("airut.dashboard.handlers.check_upstream_version")
     def test_release_url_github_source(self, mock_check: MagicMock) -> None:
         """Test /update returns commit URL for GitHub source updates."""
-        from lib.version import GitVersionInfo, UpstreamVersion
+        from airut.version import GitVersionInfo, UpstreamVersion
 
         git_info = GitVersionInfo(
             version="",

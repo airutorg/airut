@@ -5,7 +5,7 @@
 
 """Tests for dashboard formatters module."""
 
-from lib.dashboard.formatters import (
+from airut.dashboard.formatters import (
     VersionInfo,
     format_duration,
     format_timestamp,

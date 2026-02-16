@@ -5,7 +5,7 @@
 
 """Tests for secret masking and surrogate generation."""
 
-from lib.sandbox.secrets import (
+from airut.sandbox.secrets import (
     _SESSION_TOKEN_SURROGATE_LENGTH,
     _TOKEN_PREFIXES,
     MaskedSecret,

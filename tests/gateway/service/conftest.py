@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lib.gateway.service import EmailGatewayService
+from airut.gateway.service import EmailGatewayService
 
 
 def make_message(
@@ -63,7 +63,7 @@ def make_service(
     """
     from dataclasses import fields
 
-    from lib.gateway.config import GlobalConfig, ServerConfig
+    from airut.gateway.config import GlobalConfig, ServerConfig
 
     # Split overrides into global vs per-repo
     global_field_names = {f.name for f in fields(GlobalConfig)}
@@ -85,16 +85,16 @@ def make_service(
     )
 
     with (
-        patch("lib.gateway.service.repo_handler.EmailListener"),
-        patch("lib.gateway.service.repo_handler.EmailResponder"),
-        patch("lib.gateway.service.repo_handler.SenderAuthenticator"),
-        patch("lib.gateway.service.repo_handler.SenderAuthorizer"),
-        patch("lib.gateway.service.repo_handler.ConversationManager"),
-        patch("lib.gateway.service.gateway.capture_version_info") as mock_ver,
-        patch("lib.gateway.service.gateway.TaskTracker"),
-        patch("lib.gateway.service.gateway.Sandbox"),
+        patch("airut.gateway.service.repo_handler.EmailListener"),
+        patch("airut.gateway.service.repo_handler.EmailResponder"),
+        patch("airut.gateway.service.repo_handler.SenderAuthenticator"),
+        patch("airut.gateway.service.repo_handler.SenderAuthorizer"),
+        patch("airut.gateway.service.repo_handler.ConversationManager"),
+        patch("airut.gateway.service.gateway.capture_version_info") as mock_ver,
+        patch("airut.gateway.service.gateway.TaskTracker"),
+        patch("airut.gateway.service.gateway.Sandbox"),
         patch(
-            "lib.gateway.service.gateway.get_system_resolver",
+            "airut.gateway.service.gateway.get_system_resolver",
             return_value="127.0.0.53",
         ),
     ):

@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from lib.gateway.listener import (
+from airut.gateway.listener import (
     EmailListener,
     IMAPConnectionError,
     IMAPIdleError,
@@ -574,7 +574,7 @@ def test_idle_wait_notification_received(email_config):
     mock_conn.socket.return_value = mock_sock
     mock_conn.readline.return_value = b"* 1 EXISTS\r\n"
 
-    with patch("lib.gateway.listener.select.select") as mock_select:
+    with patch("airut.gateway.listener.select.select") as mock_select:
         # Simulate socket becoming readable
         mock_select.return_value = ([mock_sock], [], [])
 
@@ -598,7 +598,7 @@ def test_idle_wait_timeout(email_config):
     mock_sock = MagicMock()
     mock_conn.socket.return_value = mock_sock
 
-    with patch("lib.gateway.listener.select.select") as mock_select:
+    with patch("airut.gateway.listener.select.select") as mock_select:
         # Simulate timeout (no readable sockets)
         mock_select.return_value = ([], [], [])
 
@@ -630,7 +630,7 @@ def test_idle_wait_oserror(email_config):
     mock_sock = MagicMock()
     mock_conn.socket.return_value = mock_sock
 
-    with patch("lib.gateway.listener.select.select") as mock_select:
+    with patch("airut.gateway.listener.select.select") as mock_select:
         mock_select.side_effect = OSError("Socket error")
 
         with pytest.raises(IMAPIdleError, match="IDLE wait error"):
@@ -921,7 +921,7 @@ def test_idle_wait_interrupted_by_signal(email_config):
     assert listener._interrupt_read is not None
     assert listener._interrupt_write is not None
 
-    with patch("lib.gateway.listener.select.select") as mock_select:
+    with patch("airut.gateway.listener.select.select") as mock_select:
         # Simulate interrupt pipe becoming readable
         mock_select.return_value = ([listener._interrupt_read], [], [])
 
@@ -947,7 +947,7 @@ def test_idle_wait_with_both_fds_readable(email_config):
     assert listener._interrupt_read is not None
     assert listener._interrupt_write is not None
 
-    with patch("lib.gateway.listener.select.select") as mock_select:
+    with patch("airut.gateway.listener.select.select") as mock_select:
         # Both fds readable - interrupt should take priority
         mock_select.return_value = (
             [listener._interrupt_read, mock_sock],
@@ -984,7 +984,7 @@ def test_idle_wait_without_interrupt_pipe(email_config):
     mock_conn.socket.return_value = mock_sock
     mock_conn.readline.return_value = b"* 1 EXISTS\r\n"
 
-    with patch("lib.gateway.listener.select.select") as mock_select:
+    with patch("airut.gateway.listener.select.select") as mock_select:
         mock_select.return_value = ([mock_sock], [], [])
 
         result = listener.idle_wait(timeout=60)
@@ -1047,13 +1047,13 @@ def test_idle_wait_oserror_draining_interrupt_pipe(email_config):
     assert listener._interrupt_write is not None
     read_fd = listener._interrupt_read
 
-    with patch("lib.gateway.listener.select.select") as mock_select:
+    with patch("airut.gateway.listener.select.select") as mock_select:
         # Simulate interrupt pipe becoming readable
         mock_select.return_value = ([read_fd], [], [])
 
         # Close the read fd before os.read is called to cause OSError
         # We need to patch os.read since it's called after select
-        with patch("lib.gateway.listener.os.read") as mock_read:
+        with patch("airut.gateway.listener.os.read") as mock_read:
             mock_read.side_effect = OSError("fd already closed")
 
             result = listener.idle_wait(timeout=60)
@@ -1198,7 +1198,7 @@ def test_disconnect_no_warning_when_interrupted_with_error(
 
 def test_connect_oauth2_token_error_retries(microsoft_oauth2_email_config):
     """Test OAuth2 token errors are retried in connect()."""
-    from lib.gateway.microsoft_oauth2 import MicrosoftOAuth2TokenError
+    from airut.gateway.microsoft_oauth2 import MicrosoftOAuth2TokenError
 
     listener = EmailListener(microsoft_oauth2_email_config)
     assert listener._token_provider is not None
@@ -1226,7 +1226,7 @@ def test_connect_oauth2_token_error_retries(microsoft_oauth2_email_config):
 
 def test_connect_oauth2_token_error_exhausted(microsoft_oauth2_email_config):
     """Test OAuth2 token errors raise IMAPConnectionError after retries."""
-    from lib.gateway.microsoft_oauth2 import MicrosoftOAuth2TokenError
+    from airut.gateway.microsoft_oauth2 import MicrosoftOAuth2TokenError
 
     listener = EmailListener(microsoft_oauth2_email_config)
     assert listener._token_provider is not None

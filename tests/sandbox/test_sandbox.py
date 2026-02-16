@@ -8,9 +8,9 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from lib.sandbox.sandbox import Sandbox, SandboxConfig
-from lib.sandbox.task import Task
-from lib.sandbox.types import ContainerEnv, Mount
+from airut.sandbox.sandbox import Sandbox, SandboxConfig
+from airut.sandbox.task import Task
+from airut.sandbox.types import ContainerEnv, Mount
 
 
 class TestSandboxConfig:
@@ -42,7 +42,7 @@ class TestSandboxConfig:
 class TestSandboxInit:
     """Tests for Sandbox initialization."""
 
-    @patch("lib.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ProxyManager")
     def test_init_defaults(self, mock_pm_class: MagicMock) -> None:
         """Sandbox initializes with default config."""
         config = SandboxConfig()
@@ -52,7 +52,7 @@ class TestSandboxInit:
         assert sandbox._repo_images == {}
         assert sandbox._overlay_images == {}
 
-    @patch("lib.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ProxyManager")
     def test_init_with_egress_network(self, mock_pm_class: MagicMock) -> None:
         """Sandbox passes egress_network override to ProxyManager."""
         config = SandboxConfig()
@@ -62,7 +62,7 @@ class TestSandboxInit:
         call_kwargs = mock_pm_class.call_args.kwargs
         assert call_kwargs.get("egress_network") == "custom-egress"
 
-    @patch("lib.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ProxyManager")
     def test_proxy_manager_property(self, mock_pm_class: MagicMock) -> None:
         """proxy_manager property returns ProxyManager."""
         config = SandboxConfig()
@@ -73,7 +73,7 @@ class TestSandboxInit:
 class TestSandboxStartupShutdown:
     """Tests for Sandbox.startup() and shutdown()."""
 
-    @patch("lib.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ProxyManager")
     def test_startup_delegates_to_proxy(self, mock_pm_class: MagicMock) -> None:
         """startup() delegates to ProxyManager.startup()."""
         mock_pm = MagicMock()
@@ -85,7 +85,7 @@ class TestSandboxStartupShutdown:
 
         mock_pm.startup.assert_called_once()
 
-    @patch("lib.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ProxyManager")
     def test_shutdown_delegates_to_proxy(
         self, mock_pm_class: MagicMock
     ) -> None:
@@ -103,9 +103,9 @@ class TestSandboxStartupShutdown:
 class TestSandboxEnsureImage:
     """Tests for Sandbox.ensure_image()."""
 
-    @patch("lib.sandbox.sandbox.build_overlay_image")
-    @patch("lib.sandbox.sandbox.build_repo_image")
-    @patch("lib.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.build_overlay_image")
+    @patch("airut.sandbox.sandbox.build_repo_image")
+    @patch("airut.sandbox.sandbox.ProxyManager")
     def test_builds_both_layers(
         self,
         mock_pm_class: MagicMock,
@@ -136,9 +136,9 @@ class TestSandboxEnsureImage:
             24,
         )
 
-    @patch("lib.sandbox.sandbox.build_overlay_image")
-    @patch("lib.sandbox.sandbox.build_repo_image")
-    @patch("lib.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.build_overlay_image")
+    @patch("airut.sandbox.sandbox.build_repo_image")
+    @patch("airut.sandbox.sandbox.ProxyManager")
     def test_caching_reuses_images(
         self,
         mock_pm_class: MagicMock,
@@ -161,9 +161,9 @@ class TestSandboxEnsureImage:
         assert mock_build_repo.call_count == 2
         assert mock_build_overlay.call_count == 2
 
-    @patch("lib.sandbox.sandbox.build_overlay_image")
-    @patch("lib.sandbox.sandbox.build_repo_image")
-    @patch("lib.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.build_overlay_image")
+    @patch("airut.sandbox.sandbox.build_repo_image")
+    @patch("airut.sandbox.sandbox.ProxyManager")
     def test_passes_context_files(
         self,
         mock_pm_class: MagicMock,
@@ -187,7 +187,7 @@ class TestSandboxEnsureImage:
 class TestSandboxCreateTask:
     """Tests for Sandbox.create_task()."""
 
-    @patch("lib.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ProxyManager")
     def test_returns_task(
         self, mock_pm_class: MagicMock, tmp_path: Path
     ) -> None:
@@ -209,7 +209,7 @@ class TestSandboxCreateTask:
         assert isinstance(task, Task)
         assert task.execution_context_id == "task-123"
 
-    @patch("lib.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ProxyManager")
     def test_passes_mounts_and_env(
         self, mock_pm_class: MagicMock, tmp_path: Path
     ) -> None:
@@ -239,7 +239,7 @@ class TestSandboxCreateTask:
         assert task._mounts == mounts
         assert task._env == env
 
-    @patch("lib.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ProxyManager")
     def test_no_proxy_manager_without_network_sandbox(
         self, mock_pm_class: MagicMock, tmp_path: Path
     ) -> None:
@@ -260,14 +260,14 @@ class TestSandboxCreateTask:
 
         assert task._proxy_manager is None
 
-    @patch("lib.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ProxyManager")
     def test_passes_proxy_manager_with_network_sandbox(
         self, mock_pm_class: MagicMock, tmp_path: Path
     ) -> None:
         """create_task() passes proxy_manager when network_sandbox is set."""
-        from lib.allowlist import Allowlist
-        from lib.sandbox.secrets import SecretReplacements
-        from lib.sandbox.task import NetworkSandboxConfig
+        from airut.allowlist import Allowlist
+        from airut.sandbox.secrets import SecretReplacements
+        from airut.sandbox.task import NetworkSandboxConfig
 
         config = SandboxConfig()
         sandbox = Sandbox(config)
@@ -290,7 +290,7 @@ class TestSandboxCreateTask:
 
         assert task._proxy_manager is not None
 
-    @patch("lib.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ProxyManager")
     def test_custom_timeout(
         self, mock_pm_class: MagicMock, tmp_path: Path
     ) -> None:
@@ -312,7 +312,7 @@ class TestSandboxCreateTask:
 
         assert task._timeout_seconds == 600
 
-    @patch("lib.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ProxyManager")
     def test_network_log_dir(
         self, mock_pm_class: MagicMock, tmp_path: Path
     ) -> None:

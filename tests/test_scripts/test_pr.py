@@ -18,7 +18,7 @@ from scripts.pr import (
     main,
 )
 
-from lib.gh import (
+from airut.gh import (
     CheckConclusion,
     CheckStatus,
     CICheckResult,
@@ -517,7 +517,7 @@ class TestCmdCI:
 
         with (
             patch("scripts.pr.check_ci_status", return_value=status),
-            patch("lib.gh.pr.get_pr_info", return_value=pr_info),
+            patch("airut.gh.pr.get_pr_info", return_value=pr_info),
         ):
             args = make_ci_args()
             cmd_ci(args)
@@ -544,7 +544,7 @@ class TestCmdCI:
         with (
             patch("scripts.pr.check_ci_status", return_value=status),
             patch(
-                "lib.gh.pr.get_pr_info",
+                "airut.gh.pr.get_pr_info",
                 side_effect=RuntimeError("PR not found"),
             ),
         ):
@@ -641,7 +641,7 @@ class TestCmdReview:
 
         with (
             patch("scripts.pr.get_review_status", return_value=status),
-            patch("lib.gh.pr.get_pr_info", return_value=pr_info),
+            patch("airut.gh.pr.get_pr_info", return_value=pr_info),
         ):
             args = make_review_args()
             cmd_review(args)
@@ -661,7 +661,7 @@ class TestCmdReview:
         with (
             patch("scripts.pr.get_review_status", return_value=status),
             patch(
-                "lib.gh.pr.get_pr_info",
+                "airut.gh.pr.get_pr_info",
                 side_effect=RuntimeError("PR not found"),
             ),
         ):

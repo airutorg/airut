@@ -6,7 +6,7 @@
 
 """Airut Email Gateway Service — script entry point.
 
-Delegates to :func:`lib.airut.cli`.  Equivalent to ``uv run airut``.
+Delegates to :func:`airut.cli.cli`.  Equivalent to ``uv run airut``.
 """
 
 import sys
@@ -16,7 +16,7 @@ from pathlib import Path
 # Add project root to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from lib.airut import cli
+from airut.cli import cli
 
 
 if __name__ == "__main__":

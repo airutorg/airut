@@ -7,14 +7,14 @@
 
 import json
 
-from lib.claude_output.extract import (
+from airut.claude_output.extract import (
     extract_error_summary,
     extract_response_text,
     extract_result_summary,
     extract_session_id,
 )
-from lib.claude_output.parser import parse_stream_events
-from lib.claude_output.types import Usage
+from airut.claude_output.parser import parse_stream_events
+from airut.claude_output.types import Usage
 
 
 def _make_system_event(session_id: str = "sess-123") -> dict:

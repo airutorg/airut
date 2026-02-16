@@ -35,7 +35,7 @@ tasks).
 
 ### Components
 
-The dashboard consists of these components in `lib/dashboard/`:
+The dashboard consists of these components in `airut/dashboard/`:
 
 - **VersionClock + VersionedStore** (`versioned.py`): Global monotonic version
   counter and thread-safe versioned state containers. Every state mutation ticks

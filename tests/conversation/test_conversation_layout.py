@@ -7,7 +7,7 @@
 
 from pathlib import Path
 
-from lib.conversation import (
+from airut.conversation import (
     ConversationLayout,
     create_conversation_layout,
     get_container_mounts,
