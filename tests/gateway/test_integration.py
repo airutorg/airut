@@ -1718,3 +1718,524 @@ class TestRejectionReply:
 
         # Should not raise
         adapter.send_rejection(parsed, "conv123", "Test reason", None)
+
+
+class TestConversationResumeTaskTracking:
+    """Tests for task tracker state during conversation resume.
+
+    Regression: d0bfb11 moved authentication to worker thread and uses
+    temporary ``new-XXXX`` task IDs. For resumed conversations,
+    ``process_message`` does NOT call ``update_task_id`` (only new
+    conversations do). This left the temp task stuck in IN_PROGRESS
+    while ``complete_task`` updated the old completed task.
+    """
+
+    def test_resume_updates_task_id_from_temp_to_real(
+        self,
+        email_config: RepoServerConfig,
+        sample_email_message,
+    ) -> None:
+        """Task ID updates from new-XX to conv_id when resuming conversation."""
+        from airut.gateway.channel import ParsedMessage
+        from airut.gateway.service import GatewayService
+
+        config = ServerConfig(
+            global_config=GlobalConfig(),
+            repos={"test": email_config},
+        )
+        service = GatewayService(config)
+        handler = service.repo_handlers["test"]
+
+        conv_id = "aabb1122"
+
+        # Simulate a previously completed conversation
+        service.tracker.add_task(conv_id, "Original request")
+        service.tracker.start_task(conv_id)
+        service.tracker.complete_task(conv_id, success=True)
+        task = service.tracker.get_task(conv_id)
+        assert task is not None
+        assert task.status.value == "completed"
+
+        # New message arrives for the same conversation
+        parsed = ParsedMessage(
+            sender="user@example.com",
+            body="Follow-up message",
+            conversation_id=conv_id,
+            model_hint=None,
+            subject="Re: [ID:aabb1122] Follow-up",
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.authenticate_and_parse.return_value = parsed
+        handler.adapter = mock_adapter
+
+        temp_task_id = "new-deadbeef"
+        service.tracker.add_task(temp_task_id, "(authenticating)")
+
+        # Mock process_message — it returns conv_id but does NOT call
+        # update_task_id (because this is an existing conversation).
+        # Also patch exists() to simulate the conversation existing.
+        with (
+            patch(
+                "airut.gateway.service.gateway.process_message",
+                return_value=(True, conv_id),
+            ),
+            patch.object(
+                handler.conversation_manager, "exists", return_value=True
+            ),
+        ):
+            service._process_message_worker(
+                sample_email_message, temp_task_id, handler
+            )
+
+        # The temporary task should be gone
+        assert service.tracker.get_task(temp_task_id) is None
+
+        # The real conv_id task should be completed and successful
+        task = service.tracker.get_task(conv_id)
+        assert task is not None
+        assert task.status.value == "completed"
+        assert task.success is True
+
+    def test_resume_task_shows_in_progress_during_execution(
+        self,
+        email_config: RepoServerConfig,
+        sample_email_message,
+    ) -> None:
+        """While executing a resumed conversation, dashboard shows IN_PROGRESS.
+
+        The user should see the task as in_progress under the real conv_id
+        during execution, not as completed (stale) or under a temp ID.
+        """
+        from airut.dashboard.tracker import TaskStatus
+        from airut.gateway.channel import ParsedMessage
+        from airut.gateway.service import GatewayService
+
+        config = ServerConfig(
+            global_config=GlobalConfig(),
+            repos={"test": email_config},
+        )
+        service = GatewayService(config)
+        handler = service.repo_handlers["test"]
+
+        conv_id = "ccdd4455"
+
+        # Previously completed
+        service.tracker.add_task(conv_id, "First request")
+        service.tracker.start_task(conv_id)
+        service.tracker.complete_task(conv_id, success=True)
+
+        # New message for same conversation
+        parsed = ParsedMessage(
+            sender="user@example.com",
+            body="Another message",
+            conversation_id=conv_id,
+            model_hint=None,
+            subject="Re: [ID:ccdd4455] Another message",
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.authenticate_and_parse.return_value = parsed
+        handler.adapter = mock_adapter
+
+        temp_task_id = "new-baadf00d"
+        service.tracker.add_task(temp_task_id, "(authenticating)")
+
+        # Capture task state during process_message execution
+        task_state_during_execution = {}
+
+        def mock_process(svc, p, task_id, rh, adapter):
+            # During execution, check the tracker state
+            conv_task = service.tracker.get_task(conv_id)
+            temp_task = service.tracker.get_task(temp_task_id)
+            task_state_during_execution["conv_task_status"] = (
+                conv_task.status if conv_task else None
+            )
+            task_state_during_execution["temp_task_exists"] = (
+                temp_task is not None
+            )
+            return (True, conv_id)
+
+        with (
+            patch(
+                "airut.gateway.service.gateway.process_message",
+                side_effect=mock_process,
+            ),
+            patch.object(
+                handler.conversation_manager, "exists", return_value=True
+            ),
+        ):
+            service._process_message_worker(
+                sample_email_message, temp_task_id, handler
+            )
+
+        # During execution, conv_id task should have been IN_PROGRESS
+        assert (
+            task_state_during_execution["conv_task_status"]
+            == TaskStatus.IN_PROGRESS
+        )
+        # The temp task should have been merged (not exist separately)
+        assert task_state_during_execution["temp_task_exists"] is False
+
+    def test_resume_failure_marks_conv_id_task_failed(
+        self,
+        email_config: RepoServerConfig,
+        sample_email_message,
+    ) -> None:
+        """When resumed conversation fails, the conv_id task shows failed."""
+        from airut.gateway.channel import ParsedMessage
+        from airut.gateway.service import GatewayService
+
+        config = ServerConfig(
+            global_config=GlobalConfig(),
+            repos={"test": email_config},
+        )
+        service = GatewayService(config)
+        handler = service.repo_handlers["test"]
+
+        conv_id = "eeff6677"
+
+        service.tracker.add_task(conv_id, "Original")
+        service.tracker.start_task(conv_id)
+        service.tracker.complete_task(conv_id, success=True)
+
+        parsed = ParsedMessage(
+            sender="user@example.com",
+            body="Resume me",
+            conversation_id=conv_id,
+            model_hint=None,
+            subject="Re: [ID:eeff6677] Resume",
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.authenticate_and_parse.return_value = parsed
+        handler.adapter = mock_adapter
+
+        temp_task_id = "new-cafebabe"
+        service.tracker.add_task(temp_task_id, "(authenticating)")
+
+        with (
+            patch(
+                "airut.gateway.service.gateway.process_message",
+                return_value=(False, conv_id),
+            ),
+            patch.object(
+                handler.conversation_manager, "exists", return_value=True
+            ),
+        ):
+            service._process_message_worker(
+                sample_email_message, temp_task_id, handler
+            )
+
+        # Temp task should be gone
+        assert service.tracker.get_task(temp_task_id) is None
+
+        # Conv task should show failure
+        task = service.tracker.get_task(conv_id)
+        assert task is not None
+        assert task.status.value == "completed"
+        assert task.success is False
+
+    def test_resume_exception_marks_conv_id_task_failed(
+        self,
+        email_config: RepoServerConfig,
+        sample_email_message,
+    ) -> None:
+        """Task is completed even when process_message raises on resume."""
+        from airut.gateway.channel import ParsedMessage
+        from airut.gateway.service import GatewayService
+
+        config = ServerConfig(
+            global_config=GlobalConfig(),
+            repos={"test": email_config},
+        )
+        service = GatewayService(config)
+        handler = service.repo_handlers["test"]
+
+        conv_id = "11223344"
+
+        service.tracker.add_task(conv_id, "Original")
+        service.tracker.start_task(conv_id)
+        service.tracker.complete_task(conv_id, success=True)
+
+        parsed = ParsedMessage(
+            sender="user@example.com",
+            body="Resume me",
+            conversation_id=conv_id,
+            model_hint=None,
+            subject="Re: [ID:11223344] Resume",
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.authenticate_and_parse.return_value = parsed
+        handler.adapter = mock_adapter
+
+        temp_task_id = "new-d00dd00d"
+        service.tracker.add_task(temp_task_id, "(authenticating)")
+
+        with (
+            patch(
+                "airut.gateway.service.gateway.process_message",
+                side_effect=RuntimeError("sandbox crash"),
+            ),
+            patch.object(
+                handler.conversation_manager, "exists", return_value=True
+            ),
+        ):
+            service._process_message_worker(
+                sample_email_message, temp_task_id, handler
+            )
+
+        # Temp task should be gone
+        assert service.tracker.get_task(temp_task_id) is None
+
+        # Conv task should be completed (failed), not stuck in_progress
+        task = service.tracker.get_task(conv_id)
+        assert task is not None
+        assert task.status.value == "completed"
+        assert task.success is False
+
+    def test_resume_updates_subject_and_sender(
+        self,
+        email_config: RepoServerConfig,
+        sample_email_message,
+    ) -> None:
+        """Resumed conversation updates subject from (authenticating)."""
+        from airut.gateway.channel import ParsedMessage
+        from airut.gateway.service import GatewayService
+
+        config = ServerConfig(
+            global_config=GlobalConfig(),
+            repos={"test": email_config},
+        )
+        service = GatewayService(config)
+        handler = service.repo_handlers["test"]
+
+        conv_id = "55667788"
+
+        service.tracker.add_task(conv_id, "Original subject")
+        service.tracker.start_task(conv_id)
+        service.tracker.complete_task(conv_id, success=True)
+
+        parsed = ParsedMessage(
+            sender="alice@example.com",
+            body="Follow-up",
+            conversation_id=conv_id,
+            model_hint=None,
+            subject="Re: [ID:55667788] Original subject",
+        )
+        mock_adapter = MagicMock()
+        mock_adapter.authenticate_and_parse.return_value = parsed
+        handler.adapter = mock_adapter
+
+        temp_task_id = "new-abcdef01"
+        service.tracker.add_task(temp_task_id, "(authenticating)")
+
+        with (
+            patch(
+                "airut.gateway.service.gateway.process_message",
+                return_value=(True, conv_id),
+            ),
+            patch.object(
+                handler.conversation_manager, "exists", return_value=True
+            ),
+        ):
+            service._process_message_worker(
+                sample_email_message, temp_task_id, handler
+            )
+
+        task = service.tracker.get_task(conv_id)
+        assert task is not None
+        # Subject should be the real subject, not "(authenticating)"
+        assert task.subject == "Re: [ID:55667788] Original subject"
+        assert task.sender == "alice@example.com"
+
+
+class TestUnauthorizedSenderTracking:
+    """Tests for task tracker visibility when sender is not authorized.
+
+    Regression: when authenticate_and_parse returns None (unauthorized),
+    the task subject stayed as ``(authenticating)`` and the sender was
+    never recorded. This made it impossible to see who sent the rejected
+    message in the dashboard.
+    """
+
+    def test_unauthorized_shows_not_authorized_subject(
+        self,
+        email_config: RepoServerConfig,
+        sample_email_message,
+    ) -> None:
+        """Unauthorized message updates subject to '(not authorized)'."""
+        from airut.gateway.channel import AuthenticationError
+        from airut.gateway.service import GatewayService
+
+        config = ServerConfig(
+            global_config=GlobalConfig(),
+            repos={"test": email_config},
+        )
+        service = GatewayService(config)
+        handler = service.repo_handlers["test"]
+
+        # Adapter raises AuthenticationError (auth failed)
+        mock_adapter = MagicMock()
+        mock_adapter.authenticate_and_parse.side_effect = AuthenticationError(
+            sender="bad@example.com",
+            reason="sender not authorized",
+        )
+        handler.adapter = mock_adapter
+
+        temp_task_id = "new-unauth01"
+        service.tracker.add_task(temp_task_id, "(authenticating)")
+
+        service._process_message_worker(
+            sample_email_message, temp_task_id, handler
+        )
+
+        task = service.tracker.get_task(temp_task_id)
+        assert task is not None
+        assert task.status.value == "completed"
+        assert task.success is False
+        # Subject should NOT remain "(authenticating)"
+        assert task.subject != "(authenticating)"
+        assert "(not authorized)" in task.subject
+        assert task.sender == "bad@example.com"
+
+    def test_unauthorized_records_sender_from_raw_email(
+        self,
+        email_config: RepoServerConfig,
+    ) -> None:
+        """Unauthorized email records the sender address for visibility."""
+        from email.parser import BytesParser
+
+        from airut.gateway.email.adapter import EmailChannelAdapter
+        from airut.gateway.service import GatewayService
+
+        config = ServerConfig(
+            global_config=GlobalConfig(),
+            repos={"test": email_config},
+        )
+        service = GatewayService(config)
+        handler = service.repo_handlers["test"]
+
+        # Build a raw email with a specific From address
+        raw_bytes = (
+            b"From: hacker@malicious.com\r\n"
+            b"To: claude@example.com\r\n"
+            b"Subject: Please do something\r\n"
+            b"Message-ID: <unauth@example.com>\r\n"
+            b"Authentication-Results: mx.example.com; dmarc=pass\r\n"
+            b"\r\n"
+            b"I want access.\r\n"
+        )
+        email_msg = BytesParser().parsebytes(raw_bytes)
+
+        # Auth passes DMARC but fails authorization
+        mock_authenticator = MagicMock()
+        mock_authenticator.authenticate.return_value = "hacker@malicious.com"
+        mock_authorizer = MagicMock()
+        mock_authorizer.is_authorized.return_value = False
+
+        adapter = EmailChannelAdapter(
+            config=email_config,
+            authenticator=mock_authenticator,
+            authorizer=mock_authorizer,
+            responder=MagicMock(),
+        )
+        handler.adapter = adapter
+
+        temp_task_id = "new-unauth02"
+        service.tracker.add_task(temp_task_id, "(authenticating)")
+
+        service._process_message_worker(email_msg, temp_task_id, handler)
+
+        task = service.tracker.get_task(temp_task_id)
+        assert task is not None
+        assert task.success is False
+        # Sender should be recorded even though auth failed
+        assert "hacker@malicious.com" in task.sender
+
+    def test_unauthenticated_dmarc_records_sender(
+        self,
+        email_config: RepoServerConfig,
+    ) -> None:
+        """Failed DMARC authentication still records sender for visibility."""
+        from email.parser import BytesParser
+
+        from airut.gateway.email.adapter import EmailChannelAdapter
+        from airut.gateway.service import GatewayService
+
+        config = ServerConfig(
+            global_config=GlobalConfig(),
+            repos={"test": email_config},
+        )
+        service = GatewayService(config)
+        handler = service.repo_handlers["test"]
+
+        raw_bytes = (
+            b"From: spoofed@evil.com\r\n"
+            b"To: claude@example.com\r\n"
+            b"Subject: Spoofed message\r\n"
+            b"Message-ID: <spoof@evil.com>\r\n"
+            b"Authentication-Results: mx.example.com; dmarc=fail\r\n"
+            b"\r\n"
+            b"Spoofed content.\r\n"
+        )
+        email_msg = BytesParser().parsebytes(raw_bytes)
+
+        # DMARC fails
+        mock_authenticator = MagicMock()
+        mock_authenticator.authenticate.return_value = None
+
+        adapter = EmailChannelAdapter(
+            config=email_config,
+            authenticator=mock_authenticator,
+            authorizer=MagicMock(),
+            responder=MagicMock(),
+        )
+        handler.adapter = adapter
+
+        temp_task_id = "new-unauth03"
+        service.tracker.add_task(temp_task_id, "(authenticating)")
+
+        service._process_message_worker(email_msg, temp_task_id, handler)
+
+        task = service.tracker.get_task(temp_task_id)
+        assert task is not None
+        assert task.success is False
+        assert "(not authorized)" in task.subject
+        assert "spoofed@evil.com" in task.sender
+
+    def test_generic_exception_completes_task(
+        self,
+        email_config: RepoServerConfig,
+        sample_email_message,
+    ) -> None:
+        """Non-auth exception completes task but doesn't change subject.
+
+        A generic RuntimeError (e.g. IMAP disconnect) is different from
+        an AuthenticationError: we don't know the sender identity, so
+        the subject stays as-is and the task is marked failed.
+        """
+        from airut.gateway.service import GatewayService
+
+        config = ServerConfig(
+            global_config=GlobalConfig(),
+            repos={"test": email_config},
+        )
+        service = GatewayService(config)
+        handler = service.repo_handlers["test"]
+
+        mock_adapter = MagicMock()
+        mock_adapter.authenticate_and_parse.side_effect = RuntimeError(
+            "IMAP disconnect"
+        )
+        handler.adapter = mock_adapter
+
+        temp_task_id = "new-crash04"
+        service.tracker.add_task(temp_task_id, "(authenticating)")
+
+        service._process_message_worker(
+            sample_email_message, temp_task_id, handler
+        )
+
+        task = service.tracker.get_task(temp_task_id)
+        assert task is not None
+        assert task.success is False
+        # Subject stays as-is — we don't know who sent it
+        assert task.subject == "(authenticating)"

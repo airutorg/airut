@@ -34,6 +34,7 @@ from airut.dashboard import (
 from airut.dashboard.tracker import BootPhase, BootState, RepoState, RepoStatus
 from airut.dashboard.versioned import VersionClock, VersionedStore
 from airut.dns import get_system_resolver
+from airut.gateway.channel import AuthenticationError
 from airut.gateway.config import ServerConfig
 from airut.gateway.service.message_processing import (
     process_message,
@@ -573,10 +574,9 @@ class GatewayService:
         success = False
         final_task_id = task_id
         try:
-            # Authenticate and parse through the channel adapter
+            # Authenticate and parse through the channel adapter.
+            # AuthenticationError carries sender/reason for dashboard.
             parsed = adapter.authenticate_and_parse(raw_message)
-            if parsed is None:
-                return
 
             # Update task title from "(authenticating)" to real subject
             self.tracker.update_task_subject(
@@ -607,20 +607,34 @@ class GatewayService:
                 )
                 return
 
+            # Move the temp task to the real conv_id so the dashboard
+            # tracks it under the correct ID during execution and after
+            # completion.  For resumed conversations the conv_id task
+            # already exists (completed); reassign_task merges state.
+            if conv_id and conv_id != task_id:
+                self.tracker.reassign_task(task_id, conv_id)
+                final_task_id = conv_id
+
             if conv_id and repo_handler.conversation_manager.exists(conv_id):
                 lock = self._get_conversation_lock(conv_id)
                 with lock:
                     success, final_conv_id = process_message(
-                        self, parsed, task_id, repo_handler, adapter
+                        self, parsed, final_task_id, repo_handler, adapter
                     )
                     if final_conv_id:
                         final_task_id = final_conv_id
             else:
                 success, final_conv_id = process_message(
-                    self, parsed, task_id, repo_handler, adapter
+                    self, parsed, final_task_id, repo_handler, adapter
                 )
                 if final_conv_id:
                     final_task_id = final_conv_id
+        except AuthenticationError as auth_err:
+            self.tracker.update_task_subject(
+                final_task_id,
+                "(not authorized)",
+                sender=auth_err.sender,
+            )
         except Exception:
             logger.exception("Error processing message (task %s)", task_id)
         finally:

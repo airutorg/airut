@@ -16,6 +16,26 @@ from pathlib import Path
 from typing import Any, Protocol
 
 
+class AuthenticationError(Exception):
+    """Raised when authentication or authorization fails.
+
+    Carries structured information about the failure so the gateway
+    core can update the task tracker without protocol-specific knowledge.
+
+    Attributes:
+        sender: Raw sender identifier (e.g. email From header) for
+            dashboard visibility.  May be empty if the sender could
+            not be determined.
+        reason: Human-readable rejection reason (e.g. "DMARC
+            verification failed", "sender not authorized").
+    """
+
+    def __init__(self, *, sender: str = "", reason: str = "") -> None:
+        self.sender = sender
+        self.reason = reason
+        super().__init__(reason or "authentication failed")
+
+
 @dataclass
 class ParsedMessage:
     """Protocol-agnostic parsed message.
@@ -67,16 +87,23 @@ class ChannelAdapter(Protocol):
     for a specific messaging protocol (email, Slack, etc.).
     """
 
-    def authenticate_and_parse(self, raw_message: Any) -> ParsedMessage | None:
+    def authenticate_and_parse(self, raw_message: Any) -> ParsedMessage:
         """Authenticate the sender and parse the message.
 
-        Returns a ParsedMessage if authentication and authorization succeed,
-        or None if the message should be rejected (with appropriate logging).
+        Returns a ParsedMessage if authentication and authorization
+        succeed.
 
-        This combines authentication, authorization, and parsing into a single
-        call because the details are deeply protocol-specific (DMARC headers,
-        MIME structure, Slack request signatures, etc.) and there's no benefit
-        to the core knowing about these intermediate steps.
+        Raises:
+            AuthenticationError: If authentication or authorization
+                fails. The exception carries ``sender`` (raw sender
+                identity for dashboard visibility) and ``reason``
+                (human-readable rejection reason).
+
+        This combines authentication, authorization, and parsing into
+        a single call because the details are deeply protocol-specific
+        (DMARC headers, MIME structure, Slack request signatures, etc.)
+        and there's no benefit to the core knowing about these
+        intermediate steps.
         """
         ...
 

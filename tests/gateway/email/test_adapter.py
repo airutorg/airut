@@ -99,22 +99,30 @@ class TestAuthenticateAndParse:
         assert result.original_message_id == "<msg1@example.com>"
         assert result._raw_message is msg
 
-    def test_unauthenticated_returns_none(self) -> None:
+    def test_unauthenticated_raises(self) -> None:
+        from airut.gateway.channel import AuthenticationError
+
         adapter, auth, _, _ = _make_adapter()
         auth.authenticate.return_value = None
         msg = _make_email()
 
-        result = adapter.authenticate_and_parse(msg)
-        assert result is None
+        with pytest.raises(AuthenticationError) as exc_info:
+            adapter.authenticate_and_parse(msg)
+        assert exc_info.value.sender == "user@example.com"
+        assert "DMARC" in exc_info.value.reason
 
-    def test_unauthorized_returns_none(self) -> None:
+    def test_unauthorized_raises(self) -> None:
+        from airut.gateway.channel import AuthenticationError
+
         adapter, auth, authz, _ = _make_adapter()
         auth.authenticate.return_value = "user@example.com"
         authz.is_authorized.return_value = False
         msg = _make_email()
 
-        result = adapter.authenticate_and_parse(msg)
-        assert result is None
+        with pytest.raises(AuthenticationError) as exc_info:
+            adapter.authenticate_and_parse(msg)
+        assert exc_info.value.sender == "user@example.com"
+        assert "not authorized" in exc_info.value.reason
 
     def test_extracts_conversation_id_from_subject(self) -> None:
         adapter, auth, authz, _ = _make_adapter()

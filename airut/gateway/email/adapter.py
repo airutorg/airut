@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from email.message import Message
 from pathlib import Path
 
-from airut.gateway.channel import ParsedMessage
+from airut.gateway.channel import AuthenticationError, ParsedMessage
 from airut.gateway.config import RepoServerConfig
 from airut.gateway.email.listener import EmailListener
 from airut.gateway.email.parsing import (
@@ -130,14 +130,18 @@ class EmailChannelAdapter:
 
     def authenticate_and_parse(
         self, raw_message: Message
-    ) -> EmailParsedMessage | None:
+    ) -> EmailParsedMessage:
         """Authenticate sender via DMARC and parse the email.
 
         Args:
             raw_message: Raw email.message.Message from IMAP.
 
         Returns:
-            EmailParsedMessage if authenticated and authorized, None otherwise.
+            EmailParsedMessage if authenticated and authorized.
+
+        Raises:
+            AuthenticationError: If DMARC verification or sender
+                authorization fails.
         """
         sender = raw_message.get("From", "")
         message_id = raw_message.get("Message-ID", "")
@@ -153,7 +157,10 @@ class EmailChannelAdapter:
                 sender,
                 message_id,
             )
-            return None
+            raise AuthenticationError(
+                sender=sender,
+                reason="DMARC verification failed",
+            )
 
         # Authorization: check sender is allowed
         if not self._authorizer.is_authorized(authenticated_sender):
@@ -164,7 +171,10 @@ class EmailChannelAdapter:
                 sender,
                 message_id,
             )
-            return None
+            raise AuthenticationError(
+                sender=sender,
+                reason="sender not authorized",
+            )
 
         # Extract conversation ID: headers first, then subject fallback
         subject = decode_subject(raw_message)
