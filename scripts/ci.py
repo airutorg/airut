@@ -85,7 +85,11 @@ STEPS: list[Step] = [
     ),
     Step(
         name="Test coverage",
-        command=("uv run pytest -n auto --cov=airut --cov-fail-under=100"),
+        command=(
+            "uv run pytest -n auto"
+            " --cov=airut --cov=scripts"
+            " --cov-fail-under=100"
+        ),
         workflow="code",
     ),
     # Worktree clean check
@@ -312,5 +316,5 @@ def main() -> int:
     )
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     sys.exit(main())

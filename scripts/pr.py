@@ -388,12 +388,9 @@ def main() -> int:
 
     if args.command == "ci":
         return cmd_ci(args)
-    elif args.command == "review":
-        return cmd_review(args)
     else:
-        parser.print_help()
-        return 2
+        return cmd_review(args)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     sys.exit(main())

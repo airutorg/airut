@@ -5,6 +5,7 @@
 
 """Tests for scripts/ci.py."""
 
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -139,6 +140,20 @@ class TestRunStep:
             )
             assert success is False
             assert "Uncommitted changes" in output
+
+    def test_timeout_returns_failure(self) -> None:
+        """Returns failure when command times out."""
+        step = ci.Step(name="Test", command="sleep 999", workflow="code")
+        with patch("ci.subprocess.run") as mock_run:
+            mock_run.side_effect = subprocess.TimeoutExpired(
+                cmd="sleep 999", timeout=300
+            )
+            success, output = ci.run_step(
+                step, fix_mode=False, verbose=False, step_timeout=300
+            )
+            assert success is False
+            assert "timed out after 300 seconds" in output
+            assert "ci.py --step-timeout 600" in output
 
     def test_worktree_clean_check_clean(self) -> None:
         """Worktree clean check succeeds with clean worktree."""
