@@ -23,7 +23,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 
 from airut.dashboard.tracker import RepoStatus
-from airut.gateway.config import GlobalConfig, RepoServerConfig, ServerConfig
+from airut.gateway.config import (
+    EmailChannelConfig,
+    GlobalConfig,
+    RepoServerConfig,
+    ServerConfig,
+)
 
 from .conftest import MOCK_CONTAINER_COMMAND
 from .environment import IntegrationEnvironment, create_test_repo
@@ -57,18 +62,20 @@ class TestImapConnectionFailures:
         )
         repo_config = RepoServerConfig(
             repo_id="test",
-            imap_server="127.0.0.1",
-            imap_port=9999,  # No server listening on this port
-            smtp_server="127.0.0.1",
-            smtp_port=25,
-            email_username="test",
-            email_password="test",
-            email_from="test@test.local",
-            authorized_senders=["user@test.local"],
-            trusted_authserv_id="test.local",
             git_repo_url=str(master_repo),
-            use_imap_idle=False,
-            poll_interval_seconds=1,
+            email=EmailChannelConfig(
+                imap_server="127.0.0.1",
+                imap_port=9999,  # No server listening on this port
+                smtp_server="127.0.0.1",
+                smtp_port=25,
+                username="test",
+                password="test",
+                from_address="test@test.local",
+                authorized_senders=["user@test.local"],
+                trusted_authserv_id="test.local",
+                use_imap_idle=False,
+                poll_interval_seconds=1,
+            ),
         )
         config = ServerConfig(
             global_config=global_config,
@@ -118,18 +125,20 @@ class TestImapConnectionFailures:
         )
         repo_config = RepoServerConfig(
             repo_id="unreachable",
-            imap_server="127.0.0.1",  # Connection refused instantly on port 1
-            imap_port=1,  # Privileged port - immediate refusal
-            smtp_server="127.0.0.1",
-            smtp_port=25,
-            email_username="test",
-            email_password="test",
-            email_from="test@test.local",
-            authorized_senders=["user@test.local"],
-            trusted_authserv_id="test.local",
             git_repo_url=str(master_repo),
-            use_imap_idle=False,
-            poll_interval_seconds=1,
+            email=EmailChannelConfig(
+                imap_server="127.0.0.1",  # Refused on port 1
+                imap_port=1,  # Privileged port - immediate refusal
+                smtp_server="127.0.0.1",
+                smtp_port=25,
+                username="test",
+                password="test",
+                from_address="test@test.local",
+                authorized_senders=["user@test.local"],
+                trusted_authserv_id="test.local",
+                use_imap_idle=False,
+                poll_interval_seconds=1,
+            ),
         )
         config = ServerConfig(
             global_config=global_config,
@@ -172,18 +181,20 @@ class TestGitCloneFailures:
         )
         repo_config = RepoServerConfig(
             repo_id="bad-git",
-            imap_server="127.0.0.1",
-            imap_port=9999,  # No server listening
-            smtp_server="127.0.0.1",
-            smtp_port=25,
-            email_username="test",
-            email_password="test",
-            email_from="test@test.local",
-            authorized_senders=["user@test.local"],
-            trusted_authserv_id="test.local",
             git_repo_url="/nonexistent/path/that/does/not/exist",
-            use_imap_idle=False,
-            poll_interval_seconds=1,
+            email=EmailChannelConfig(
+                imap_server="127.0.0.1",
+                imap_port=9999,  # No server listening
+                smtp_server="127.0.0.1",
+                smtp_port=25,
+                username="test",
+                password="test",
+                from_address="test@test.local",
+                authorized_senders=["user@test.local"],
+                trusted_authserv_id="test.local",
+                use_imap_idle=False,
+                poll_interval_seconds=1,
+            ),
         )
         config = ServerConfig(
             global_config=global_config,

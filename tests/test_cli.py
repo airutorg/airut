@@ -798,9 +798,9 @@ repos:
       username: user@test.com
       password: secret
       from: "Test <test@example.com>"
-    authorized_senders:
-      - auth@test.com
-    trusted_authserv_id: mx.test.com
+      authorized_senders:
+        - auth@test.com
+      trusted_authserv_id: mx.test.com
     git:
       repo_url: https://example.com/repo.git
 """
@@ -958,9 +958,9 @@ repos:
       username: alpha@test.com
       password: secret
       from: "Alpha <alpha@example.com>"
-    authorized_senders:
-      - auth@test.com
-    trusted_authserv_id: mx.test.com
+      authorized_senders:
+        - auth@test.com
+      trusted_authserv_id: mx.test.com
     git:
       repo_url: https://example.com/alpha.git
   beta:
@@ -970,9 +970,9 @@ repos:
       username: beta@test.com
       password: secret
       from: "Beta <beta@example.com>"
-    authorized_senders:
-      - auth@test.com
-    trusted_authserv_id: mx.test.com
+      authorized_senders:
+        - auth@test.com
+      trusted_authserv_id: mx.test.com
     git:
       repo_url: https://example.com/beta.git
 """

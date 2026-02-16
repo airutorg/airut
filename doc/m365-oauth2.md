@@ -147,16 +147,16 @@ repos:
         client_id: !env AZURE_CLIENT_ID
         client_secret: !env AZURE_CLIENT_SECRET
 
-    # Microsoft 365 omits authserv-id from Authentication-Results
-    # headers — set to empty string to skip the authserv-id check
-    trusted_authserv_id: ""
+      # Microsoft 365 omits authserv-id from Authentication-Results
+      # headers — set to empty string to skip the authserv-id check
+      trusted_authserv_id: ""
 
-    # Accept X-MS-Exchange-Organization-AuthAs: Internal for intra-org
-    # email where Microsoft 365 omits Authentication-Results entirely
-    microsoft_internal_auth_fallback: true
+      # Accept X-MS-Exchange-Organization-AuthAs: Internal for intra-org
+      # email where Microsoft 365 omits Authentication-Results entirely
+      microsoft_internal_auth_fallback: true
 
-    authorized_senders:
-      - you@company.com
+      authorized_senders:
+        - you@company.com
 ```
 
 Add the corresponding values to `~/.config/airut/.env`:

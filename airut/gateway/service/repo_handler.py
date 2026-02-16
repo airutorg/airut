@@ -67,7 +67,9 @@ class RepoHandler:
         self.config = config
         self.service = service
 
-        self.adapter = EmailChannelAdapter.from_config(config)
+        self.adapter = EmailChannelAdapter.from_config(
+            config.email, repo_id=config.repo_id
+        )
         self.conversation_manager = ConversationManager(
             repo_url=config.git_repo_url,
             storage_dir=config.storage_dir,
@@ -95,8 +97,8 @@ class RepoHandler:
         logger.info(
             "Repo '%s': connecting to IMAP %s:%d",
             self.config.repo_id,
-            self.config.imap_server,
-            self.config.imap_port,
+            self.config.email.imap_server,
+            self.config.email.imap_port,
         )
         self.adapter.listener.connect(max_retries=3)
 
@@ -110,13 +112,13 @@ class RepoHandler:
         logger.info(
             "Repo '%s': listener started (%s mode)",
             self.config.repo_id,
-            "IDLE" if self.config.use_imap_idle else "polling",
+            "IDLE" if self.config.email.use_imap_idle else "polling",
         )
         return self._listener_thread
 
     def _listener_loop(self) -> None:
         """Main listener loop, dispatching to IDLE or polling mode."""
-        if self.config.use_imap_idle:
+        if self.config.email.use_imap_idle:
             self._idle_loop()
         else:
             self._polling_loop()
@@ -206,7 +208,7 @@ class RepoHandler:
                             e,
                         )
 
-                time.sleep(self.config.poll_interval_seconds)
+                time.sleep(self.config.email.poll_interval_seconds)
 
             except IMAPConnectionError as e:
                 try:
@@ -221,7 +223,7 @@ class RepoHandler:
         reconnect_attempts = 0
         max_reconnect_attempts = 5
         last_reconnect = time.time()
-        reconnect_interval = self.config.idle_reconnect_interval_seconds
+        reconnect_interval = self.config.email.idle_reconnect_interval_seconds
         repo_id = self.config.repo_id
 
         while self.service.running:

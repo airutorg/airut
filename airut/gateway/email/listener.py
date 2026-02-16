@@ -19,7 +19,7 @@ import time
 from email.message import Message
 from email.parser import BytesParser
 
-from airut.gateway.config import RepoServerConfig
+from airut.gateway.config import EmailChannelConfig
 from airut.gateway.email.microsoft_oauth2 import (
     MicrosoftOAuth2TokenError,
     MicrosoftOAuth2TokenProvider,
@@ -41,15 +41,15 @@ class EmailListener:
     """IMAP email listener with polling and retry logic.
 
     Attributes:
-        config: Email service configuration.
+        config: Email channel configuration.
         connection: Active IMAP connection (None when disconnected).
     """
 
-    def __init__(self, config: RepoServerConfig) -> None:
+    def __init__(self, config: EmailChannelConfig) -> None:
         """Initialize email listener.
 
         Args:
-            config: Email service configuration.
+            config: Email channel configuration.
         """
         self.config = config
         self.connection: imaplib.IMAP4_SSL | None = None
@@ -111,7 +111,7 @@ class EmailListener:
                 if self._token_provider:
                     # Microsoft OAuth2: XOAUTH2 SASL mechanism
                     auth_string = self._token_provider.generate_xoauth2_string(
-                        self.config.email_username
+                        self.config.username
                     ).encode("utf-8")
 
                     def _xoauth2_callback(challenge: bytes) -> bytes:
@@ -126,7 +126,7 @@ class EmailListener:
                     self.connection.authenticate("XOAUTH2", _xoauth2_callback)
                 else:
                     self.connection.login(
-                        self.config.email_username, self.config.email_password
+                        self.config.username, self.config.password
                     )
 
                 logger.info(

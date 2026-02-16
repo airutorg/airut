@@ -754,14 +754,14 @@ class TestMultiRepoInteractions:
                     repo_id="test",
                     status=RepoStatus.LIVE,
                     git_repo_url="https://example.com/r1",
-                    imap_server="imap.example.com",
+                    channel_info="imap.example.com",
                     storage_dir="/s/test",
                 ),
                 RepoState(
                     repo_id="failed-repo",
                     status=RepoStatus.FAILED,
                     git_repo_url="https://example.com/r2",
-                    imap_server="imap2.example.com",
+                    channel_info="imap2.example.com",
                     storage_dir="/s/failed",
                 ),
             )

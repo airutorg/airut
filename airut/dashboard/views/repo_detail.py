@@ -37,7 +37,7 @@ def render_repo_detail(repo: RepoState) -> str:
 
     escaped_repo_id = html.escape(repo.repo_id)
     escaped_git_url = html.escape(repo.git_repo_url)
-    escaped_imap = html.escape(repo.imap_server)
+    escaped_channel = html.escape(repo.channel_info)
     escaped_storage = html.escape(repo.storage_dir)
 
     return f"""<!DOCTYPE html>
@@ -65,8 +65,8 @@ def render_repo_detail(repo: RepoState) -> str:
             <div class="detail-value mono">{escaped_git_url}</div>
         </div>
         <div class="detail-section">
-            <div class="detail-label">IMAP Server</div>
-            <div class="detail-value mono">{escaped_imap}</div>
+            <div class="detail-label">Channel</div>
+            <div class="detail-value mono">{escaped_channel}</div>
         </div>
         <div class="detail-section">
             <div class="detail-label">Storage Directory</div>

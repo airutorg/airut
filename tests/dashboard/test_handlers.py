@@ -1725,7 +1725,7 @@ class TestSSELivePages:
                 repo_id="test-repo",
                 status=RepoStatus.LIVE,
                 git_repo_url="https://github.com/test/repo",
-                imap_server="imap.example.com",
+                channel_info="imap.example.com",
                 storage_dir="/storage/test",
             ),
         )
@@ -2265,7 +2265,7 @@ class TestPollingFallbackJS:
                 repo_id="test-repo",
                 status=RepoStatus.LIVE,
                 git_repo_url="https://github.com/test/repo",
-                imap_server="imap.example.com",
+                channel_info="imap.example.com",
                 storage_dir="/storage/test",
             ),
         )

@@ -128,6 +128,8 @@ succeeds if the sender matches any pattern:
 
 ### Example Configuration
 
+Within the `email:` block of a repo's server config:
+
 ```yaml
 authorized_senders:
   - admin@company.com        # Exact match

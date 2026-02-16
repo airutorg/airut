@@ -85,7 +85,7 @@ class RepoState:
         error_message: Human-readable error message if failed, None if live.
         error_type: Exception type name if failed, None if live.
         git_repo_url: URL of the git repository.
-        imap_server: IMAP server hostname.
+        channel_info: Channel-specific connection info (e.g. IMAP server).
         storage_dir: Path to storage directory.
         initialized_at: Unix timestamp when status was recorded.
     """
@@ -95,7 +95,7 @@ class RepoState:
     error_message: str | None = None
     error_type: str | None = None
     git_repo_url: str = ""
-    imap_server: str = ""
+    channel_info: str = ""
     storage_dir: str = ""
     initialized_at: float = field(default_factory=time.time)
 

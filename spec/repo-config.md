@@ -59,20 +59,30 @@ resolved values are registered for log redaction.
 ## Server Config Changes
 
 The server config (`~/.config/airut/airut.yaml`) retains deployment-specific
-settings:
+settings. Per-repo config is nested under `repos.<repo_id>`:
 
-- `email.*` — Mail server connectivity and credentials
-- `email.microsoft_oauth2.*` — Microsoft OAuth2 Client Credentials for M365
-  (tenant_id, client_id, client_secret). When configured, XOAUTH2 SASL is used
-  for both IMAP and SMTP instead of password auth. The `email.password` field
-  becomes optional when OAuth2 is configured.
-- `authorized_senders`, `trusted_authserv_id` — Access control
+- `email.*` — Channel-specific email settings nested under `email:`:
+  - `email.imap_server`, `email.smtp_server` — Mail server connectivity
+  - `email.username`, `email.password` — Credentials
+  - `email.from` — Sender address
+  - `email.authorized_senders`, `email.trusted_authserv_id` — Access control
+  - `email.microsoft_oauth2.*` — Microsoft OAuth2 Client Credentials for M365
+    (tenant_id, client_id, client_secret). When configured, XOAUTH2 SASL is used
+    for both IMAP and SMTP instead of password auth. The `email.password` field
+    becomes optional when OAuth2 is configured.
+  - `email.microsoft_internal_auth_fallback` — Fallback auth for internal M365
+  - `email.imap.*` — Polling and idle configuration
 - `git.repo_url` — Repository to clone
-- `imap.*` — Polling configuration
 - `execution.*` — `max_concurrent`, `shutdown_timeout`,
   `conversation_max_age_days`
 - `dashboard.*` — Web UI configuration
 - `container_command` — Container runtime (podman/docker)
+
+**Important:** All email-specific fields (`authorized_senders`,
+`trusted_authserv_id`, `microsoft_internal_auth_fallback`, `imap`) must be
+nested under `email:`. Placing them at the repo level is a hard error with a
+migration hint. A repo must have an `email:` block (the only currently supported
+channel).
 
 The `container_env` block is replaced by `secrets` — a named pool of values that
 repos can reference via `!secret`:
@@ -110,8 +120,9 @@ for details and
 ## Multi-Repo Support
 
 The server supports multiple repositories. Each repo is defined under `repos:`
-in the server config with its own IMAP/SMTP, authorized sender, storage
-directory, and secrets pool. See `multi-repo.md` for the full design.
+in the server config with its own `email:` block (IMAP/SMTP, authorized senders,
+auth settings), storage directory, and secrets pool. See `multi-repo.md` for the
+full design.
 
 ## Proxy Manager Lifecycle
 

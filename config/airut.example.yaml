@@ -73,6 +73,34 @@ repos:
       # From address for outgoing emails (display name + address).
       from: "Airut <airut@example.com>"
 
+      # Only emails from these addresses/patterns (with passing DMARC) are
+      # accepted. Supports wildcards for domain matching (e.g., *@company.com).
+      authorized_senders:
+        - you@example.com
+        # - *@company.com  # Uncomment to allow any sender from company.com
+
+      # The authserv-id to trust in Authentication-Results headers.
+      # Typically the hostname of your MX server (e.g., mail.example.com).
+      # Set to empty string "" for Microsoft 365/EOP, which omits the
+      # authserv-id from Authentication-Results headers.
+      trusted_authserv_id: mail.example.com
+
+      # Accept X-MS-Exchange-Organization-AuthAs: Internal as authentication
+      # proof for intra-org email in Microsoft 365 (where EOP omits
+      # Authentication-Results entirely).  Only used when no
+      # Authentication-Results header is present.  Default: false.
+      # microsoft_internal_auth_fallback: true
+
+      imap:
+        # Seconds between IMAP polls (only used when use_idle is false).
+        poll_interval: 30
+
+        # Use IMAP IDLE for efficient push-based notifications (recommended).
+        use_idle: true
+
+        # Reconnect interval for IDLE mode in seconds (keep below 29 min).
+        idle_reconnect_interval: 1740
+
       # Microsoft OAuth2 Client Credentials (for M365 / Azure AD).
       # When configured, XOAUTH2 is used instead of password auth for
       # both IMAP and SMTP.  Requires Azure AD app registration with
@@ -84,37 +112,9 @@ repos:
       #   client_id: !env AZURE_CLIENT_ID
       #   client_secret: !env AZURE_CLIENT_SECRET
 
-    # Only emails from these addresses/patterns (with passing DMARC) are
-    # accepted. Supports wildcards for domain matching (e.g., *@company.com).
-    authorized_senders:
-      - you@example.com
-      # - *@company.com  # Uncomment to allow any sender from company.com
-
-    # The authserv-id to trust in Authentication-Results headers.
-    # Typically the hostname of your MX server (e.g., mail.example.com).
-    # Set to empty string "" for Microsoft 365/EOP, which omits the
-    # authserv-id from Authentication-Results headers.
-    trusted_authserv_id: mail.example.com
-
-    # Accept X-MS-Exchange-Organization-AuthAs: Internal as authentication
-    # proof for intra-org email in Microsoft 365 (where EOP omits
-    # Authentication-Results entirely).  Only used when no
-    # Authentication-Results header is present.  Default: false.
-    # microsoft_internal_auth_fallback: true
-
     git:
       # Repository URL cloned into each conversation workspace.
       repo_url: https://github.com/you/my-project.git
-
-    imap:
-      # Seconds between IMAP polls (only used when use_idle is false).
-      poll_interval: 30
-
-      # Use IMAP IDLE for efficient push-based notifications (recommended).
-      use_idle: true
-
-      # Reconnect interval for IDLE mode in seconds (keep below 29 min).
-      idle_reconnect_interval: 1740
 
     # Named pool of secrets available for this repo to reference via !secret
     # and !secret? tags in .airut/airut.yaml.  Keys are logical names; values
@@ -189,9 +189,9 @@ repos:
   #     username: airut-other
   #     password: !env OTHER_EMAIL_PASSWORD
   #     from: "Airut <airut-other@example.com>"
-  #   authorized_senders:
-  #     - you@example.com
-  #   trusted_authserv_id: mail.example.com
+  #     authorized_senders:
+  #       - you@example.com
+  #     trusted_authserv_id: mail.example.com
   #   git:
   #     repo_url: https://github.com/you/another-repo.git
   #   secrets:

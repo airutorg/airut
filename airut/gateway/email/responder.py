@@ -20,7 +20,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import parseaddr
 
-from airut.gateway.config import RepoServerConfig
+from airut.gateway.config import EmailChannelConfig
 from airut.gateway.email.microsoft_oauth2 import (
     MicrosoftOAuth2TokenError,
     MicrosoftOAuth2TokenProvider,
@@ -85,14 +85,14 @@ class EmailResponder:
     """SMTP email responder with threading support.
 
     Attributes:
-        config: Email service configuration.
+        config: Email channel configuration.
     """
 
-    def __init__(self, config: RepoServerConfig) -> None:
+    def __init__(self, config: EmailChannelConfig) -> None:
         """Initialize email responder.
 
         Args:
-            config: Email service configuration.
+            config: Email channel configuration.
         """
         self.config = config
 
@@ -153,7 +153,7 @@ class EmailResponder:
             else:
                 msg = MIMEMultipart("alternative")
 
-            msg["From"] = self.config.email_from
+            msg["From"] = self.config.from_address
             msg["To"] = to
             msg["Subject"] = subject
 
@@ -227,7 +227,7 @@ class EmailResponder:
                         # Microsoft OAuth2: XOAUTH2 SASL mechanism
                         auth_string = (
                             self._token_provider.generate_xoauth2_string(
-                                self.config.email_username
+                                self.config.username
                             )
                         )
 
@@ -239,8 +239,8 @@ class EmailResponder:
                         server.auth("XOAUTH2", _xoauth2_authobject)
                     else:
                         server.login(
-                            self.config.email_username,
-                            self.config.email_password,
+                            self.config.username,
+                            self.config.password,
                         )
                 server.send_message(msg)
 

@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from airut.gateway.config import RepoServerConfig
+from airut.gateway.config import EmailChannelConfig
 from airut.gateway.email.adapter import (
     EmailChannelAdapter,
     EmailParsedMessage,
@@ -20,19 +20,17 @@ from airut.gateway.email.adapter import (
 from airut.gateway.email.responder import SMTPSendError
 
 
-def _make_config() -> RepoServerConfig:
-    return RepoServerConfig(
-        repo_id="test",
+def _make_config() -> EmailChannelConfig:
+    return EmailChannelConfig(
         imap_server="imap.example.com",
         imap_port=993,
         smtp_server="smtp.example.com",
         smtp_port=587,
-        email_username="test@example.com",
-        email_password="pass",
-        email_from="Bot <bot@example.com>",
+        username="test@example.com",
+        password="pass",
+        from_address="Bot <bot@example.com>",
         authorized_senders=["user@example.com"],
         trusted_authserv_id="mx.example.com",
-        git_repo_url="https://github.com/test/repo",
     )
 
 
@@ -61,7 +59,7 @@ def _make_email(
 
 
 def _make_adapter(
-    config: RepoServerConfig | None = None,
+    config: EmailChannelConfig | None = None,
 ) -> tuple[
     EmailChannelAdapter,
     MagicMock,

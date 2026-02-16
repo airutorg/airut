@@ -47,10 +47,34 @@ def update_global(svc: Any, **overrides: Any) -> None:
         object.__setattr__(svc.global_config, key, value)
 
 
+_EMAIL_FIELDS = {
+    "imap_server",
+    "imap_port",
+    "smtp_server",
+    "smtp_port",
+    "username",
+    "password",
+    "from_address",
+    "authorized_senders",
+    "trusted_authserv_id",
+    "poll_interval_seconds",
+    "use_imap_idle",
+    "idle_reconnect_interval_seconds",
+    "smtp_require_auth",
+    "microsoft_internal_auth_fallback",
+    "microsoft_oauth2_tenant_id",
+    "microsoft_oauth2_client_id",
+    "microsoft_oauth2_client_secret",
+}
+
+
 def update_repo(handler: Any, **overrides: Any) -> None:
     """Update repo config with new values (frozen dataclass)."""
     for key, value in overrides.items():
-        object.__setattr__(handler.config, key, value)
+        if key in _EMAIL_FIELDS:
+            object.__setattr__(handler.config.email, key, value)
+        else:
+            object.__setattr__(handler.config, key, value)
 
 
 def make_service(

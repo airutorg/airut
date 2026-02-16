@@ -156,17 +156,14 @@ repos:
       username: my-project-bot
       password: !env MY_PROJECT_EMAIL_PASSWORD
       from: "My Project Bot <my-project-bot@example.com>"
-
-    authorized_senders:
-      - you@example.com
-
-    trusted_authserv_id: mail.example.com
+      authorized_senders:
+        - you@example.com
+      trusted_authserv_id: mail.example.com
+      imap:
+        use_idle: true
 
     git:
       repo_url: https://gerrit.example.com/a/my-project
-
-    imap:
-      use_idle: true
 
     # Plain secrets (injected directly into container)
     secrets:
