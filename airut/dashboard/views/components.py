@@ -518,7 +518,7 @@ ${conversation.total_cost_usd:.4f}</div>
 
 
 def update_check_script() -> str:
-    """JavaScript snippet that fetches /update and shows version status.
+    """JavaScript snippet that fetches /api/update and shows version status.
 
     Returns:
         HTML <script> tag with update check logic.
@@ -528,7 +528,7 @@ def update_check_script() -> str:
         (function() {
             var el = document.getElementById('update-status');
             if (!el) return;
-            fetch('/update')
+            fetch('/api/update')
                 .then(function(resp) {
                     if (!resp.ok) throw new Error('HTTP ' + resp.status);
                     return resp.json();

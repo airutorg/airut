@@ -90,7 +90,7 @@ The main dashboard receives real-time updates via Server-Sent Events (SSE). When
 SSE is unavailable, it falls back to ETag-based polling (5-second interval). See
 `spec/live-dashboard.md` for the full SSE specification.
 
-The `/health` endpoint reflects boot state: `"booting"` during startup,
+The `/api/health` endpoint reflects boot state: `"booting"` during startup,
 `"error"` on boot failure, `"ok"` when running with live repos, `"degraded"`
 when no repos are live.
 
@@ -119,8 +119,8 @@ credential problems) while others continue processing emails.
 | Route                                   | Method | Description                            |
 | --------------------------------------- | ------ | -------------------------------------- |
 | `/`                                     | GET    | Main dashboard with task lists         |
-| `/version`                              | GET    | Structured version info (JSON)         |
-| `/update`                               | GET    | Upstream update check (JSON)           |
+| `/api/version`                          | GET    | Structured version info (JSON)         |
+| `/api/update`                           | GET    | Upstream update check (JSON)           |
 | `/repo/{repo_id}`                       | GET    | Repository detail view                 |
 | `/conversation/{conv_id}`               | GET    | Task detail view                       |
 | `/conversation/{conv_id}/actions`       | GET    | Actions timeline viewer                |
@@ -133,7 +133,7 @@ credential problems) while others continue processing emails.
 | `/api/events/stream`                    | GET    | SSE state stream (real-time updates)   |
 | `/api/conversation/{id}/events/stream`  | GET    | SSE event log stream (per-task)        |
 | `/api/conversation/{id}/network/stream` | GET    | SSE network log stream (per-task)      |
-| `/health`                               | GET    | Health check endpoint (ETag)           |
+| `/api/health`                           | GET    | Health check endpoint (ETag)           |
 
 ### `GET /api/tracker`
 
@@ -217,9 +217,9 @@ Three-column layout showing queued, in-progress, and completed tasks.
 
 **Header** displays version information:
 
-- Git commit SHA or version tag (monospace, links to `/version` JSON)
+- Git commit SHA or version tag (monospace, links to GitHub release/commit page)
 - Update status badge: green "up to date" or yellow "update available" (fetched
-  asynchronously from `/update` to avoid blocking page load). Hover shows
+  asynchronously from `/api/update` to avoid blocking page load). Hover shows
   current and latest version.
 - Service start timestamp
 

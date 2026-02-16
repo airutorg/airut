@@ -638,7 +638,7 @@ class TestFetchHealth:
         _fetch_health("http://127.0.0.1:5200/")
         call_args = mock_urlopen.call_args
         req = call_args[0][0]
-        assert req.full_url == "http://127.0.0.1:5200/health"
+        assert req.full_url == "http://127.0.0.1:5200/api/health"
 
 
 # ── _get_active_task_counts ────────────────────────────────────────

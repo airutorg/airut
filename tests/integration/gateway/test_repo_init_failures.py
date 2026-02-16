@@ -388,8 +388,8 @@ class TestDashboardRepoStatus:
                 assert data[0]["repo_id"] == "test"
                 assert data[0]["status"] == "live"
 
-                # Check /health includes repo info
-                health_resp = client.get("/health")
+                # Check /api/health includes repo info
+                health_resp = client.get("/api/health")
                 assert health_resp.status_code == 200
 
                 health_data = json.loads(health_resp.get_data(as_text=True))

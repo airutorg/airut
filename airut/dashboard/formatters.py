@@ -22,7 +22,7 @@ class VersionInfo:
             Empty string when no version tag is available.
         git_sha: Short git commit SHA (7-8 characters).
         git_sha_full: Full 40-character git commit SHA.
-        full_status: Full git status output for /version endpoint.
+        full_status: Full git status output for /api/version endpoint.
         started_at: Unix timestamp when service started.
     """
 

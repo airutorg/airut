@@ -312,7 +312,7 @@ def _fetch_running_version(
         Parsed JSON dict with ``version``, ``sha_short``, ``sha_full``
         keys, or None if the request fails.
     """
-    url = f"{base_url.rstrip('/')}/version"
+    url = f"{base_url.rstrip('/')}/api/version"
     try:
         req = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(req, timeout=3) as resp:
@@ -339,7 +339,7 @@ def _fetch_health(
         Parsed JSON dict with ``status``, ``tasks``, ``repos`` keys,
         or None if the request fails.
     """
-    url = f"{base_url.rstrip('/')}/health"
+    url = f"{base_url.rstrip('/')}/api/health"
     try:
         req = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(req, timeout=3) as resp:
@@ -491,7 +491,7 @@ def _get_active_task_counts() -> tuple[int, int] | None:
     """Query the running gateway for active task counts.
 
     Loads the server config to determine the local dashboard address,
-    then fetches ``/health`` to get task counts.
+    then fetches ``/api/health`` to get task counts.
 
     Returns:
         ``(in_progress, queued)`` tuple, or None if the service is not
@@ -527,7 +527,7 @@ def _has_version_mismatch() -> bool:
     """Check if the running service version differs from the installed one.
 
     Loads the server config, fetches the running version from the
-    dashboard ``/version`` endpoint, and compares SHA hashes.
+    dashboard ``/api/version`` endpoint, and compares SHA hashes.
 
     Returns:
         True if the running service has a different SHA than the

@@ -193,7 +193,7 @@ class RequestHandlers:
 
         Returns the current version and the latest upstream version.
         The upstream check may involve an HTTP request to PyPI or GitHub,
-        so this endpoint is separate from /version to avoid blocking
+        so this endpoint is separate from /api/version to avoid blocking
         dashboard load.
 
         Args:

@@ -92,7 +92,7 @@ version commands with a 10-second timeout. Version strings are parsed tolerantly
 
 - Checks if `~/.config/systemd/user/airut.service` exists
 - Queries `systemctl --user is-active airut.service`
-- When running and config is available, fetches `/version` from the local
+- When running and config is available, fetches `/api/version` from the local
   dashboard to detect version mismatch between running and installed binaries
 
 ### update
@@ -106,7 +106,7 @@ Update airut to the latest version via `uv tool upgrade airut`.
 **Workflow:**
 
 1. **Pre-flight** — If the service is running (and neither `--force` nor
-   `--wait` is set), query `/health` on the local dashboard for active task
+   `--wait` is set), query `/api/health` on the local dashboard for active task
    counts. Block if tasks are in flight.
 2. **Upgrade** — Run `uv tool upgrade airut` (120-second timeout). If the output
    contains "Nothing to upgrade" (case-insensitive), print "Already up to date."
