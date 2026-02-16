@@ -882,6 +882,60 @@ class RequestHandlers:
             headers={"ETag": etag, "Cache-Control": "no-cache"},
         )
 
+    def handle_api_tracker(self, request: Request) -> Response:
+        """Handle JSON API for full task tracker state.
+
+        Returns the complete tracker state including all tasks with their
+        full details, counts by status, and version clock value.  Designed
+        for integration tests and monitoring tools that need a single
+        atomic snapshot of the tracker.
+
+        Supports ETag-based conditional requests.
+
+        Args:
+            request: Incoming request.
+
+        Returns:
+            JSON response with tracker snapshot, or 304 if unchanged.
+        """
+        version = self._get_clock_version()
+        etag = f'"v{version}"'
+
+        if request.headers.get("If-None-Match") == etag:
+            return Response(status=304, headers={"ETag": etag})
+
+        snapshot = self.tracker.get_snapshot()
+        tasks_data = [
+            {
+                "conversation_id": t.conversation_id,
+                "subject": t.subject,
+                "repo_id": t.repo_id,
+                "sender": t.sender,
+                "status": t.status.value,
+                "queued_at": t.queued_at,
+                "started_at": t.started_at,
+                "completed_at": t.completed_at,
+                "success": t.success,
+                "message_count": t.message_count,
+                "model": t.model,
+            }
+            for t in snapshot.value
+        ]
+
+        counts = self.tracker.get_counts()
+
+        data = {
+            "version": snapshot.version,
+            "counts": counts,
+            "tasks": tasks_data,
+        }
+
+        return Response(
+            json.dumps(data),
+            content_type="application/json",
+            headers={"ETag": etag, "Cache-Control": "no-cache"},
+        )
+
     def _get_clock_version(self) -> int:
         """Get the current version clock value.
 

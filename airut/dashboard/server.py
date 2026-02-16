@@ -142,6 +142,7 @@ class DashboardServer:
                     endpoint="api_network_poll",
                 ),
                 Rule("/health", endpoint="health"),
+                Rule("/api/tracker", endpoint="api_tracker"),
             ]
         )
 
@@ -165,6 +166,7 @@ class DashboardServer:
             "network_log_stream": (self._handlers.handle_network_log_stream),
             "api_network_poll": self._handlers.handle_api_network_poll,
             "health": self._handlers.handle_health,
+            "api_tracker": self._handlers.handle_api_tracker,
         }
 
     def start(self) -> None:
