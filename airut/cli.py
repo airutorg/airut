@@ -561,15 +561,13 @@ _WAIT_POLL_SECONDS = 10
 def cmd_update(argv: list[str]) -> int:
     """Update airut to the latest version.
 
-    Runs ``uv tool upgrade airut``.  After upgrading, runs
-    ``airut check`` to verify configuration and dependencies are still
-    valid.  If the check fails, prints the output and stops without
-    restarting the service, instructing the user to fix issues and run
+    Runs ``uv tool upgrade airut``.  When the binary is actually updated
+    and the service was installed, stops the service immediately after
+    upgrade to prevent a stale process from running old code.  Then runs
+    ``airut check`` to verify configuration and dependencies.  If the
+    check passes, reinstalls the service.  If it fails, leaves the
+    service stopped and instructs the user to fix the issues and run
     ``airut install-service`` manually.
-
-    When the binary was actually updated and the systemd service is
-    installed, stops and uninstalls the service, then reinstalls it
-    using the new binary.
 
     If the upgrade is a no-op (already up to date) but the running
     service has a different version than the installed binary, restarts
@@ -686,6 +684,23 @@ def cmd_update(argv: list[str]) -> int:
             print(f"  {s.green('Already up to date.')}")
             return 0
 
+    # ── Stop service before readiness check ──────────────────
+    #
+    # Once the binary has been replaced, the running service is stale.
+    # Stop it now so there is no window where old code keeps running.
+    # If the readiness check fails, the service stays stopped (no stale
+    # process) and the user is told to run ``airut install-service``
+    # after fixing the issue.
+    if service_was_installed:
+        print(f"  {s.dim('Stopping service...')}")
+        from airut.install_services import uninstall_services
+
+        try:
+            uninstall_services()
+        except RuntimeError as e:
+            print(f"  {s.red('Error stopping service:')} {e}")
+            return 1
+
     # ── Run readiness check with the updated binary ────────────
     from airut.install_services import get_airut_path
 
@@ -700,11 +715,17 @@ def cmd_update(argv: list[str]) -> int:
         )
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         print(f"  {s.red('Readiness check failed:')} {e}")
-        print(
-            f"  {s.yellow('Skipping service restart.')} "
-            f"Fix the issues above, then run "
-            f"{s.cyan('airut install-service')} to complete the update."
-        )
+        if service_was_installed:
+            print(
+                f"  {s.yellow('Service is stopped.')} "
+                f"Fix the issues above, then run "
+                f"{s.cyan('airut install-service')} to start the service."
+            )
+        else:
+            print(
+                f"  Fix the issues above, then run "
+                f"{s.cyan('airut install-service')} to start the service."
+            )
         return 1
 
     if check_result.returncode != 0:
@@ -716,24 +737,21 @@ def cmd_update(argv: list[str]) -> int:
             for line in check_output.splitlines():
                 print(f"    {line}")
         print()
-        print(
-            f"  {s.yellow('Skipping service restart.')} "
-            f"Fix the issues above, then run "
-            f"{s.cyan('airut install-service')} to complete the update."
-        )
+        if service_was_installed:
+            print(
+                f"  {s.yellow('Service is stopped.')} "
+                f"Fix the issues above, then run "
+                f"{s.cyan('airut install-service')} to start the service."
+            )
+        else:
+            print(
+                f"  Fix the issues above, then run "
+                f"{s.cyan('airut install-service')} to start the service."
+            )
         return 1
 
-    # ── Restart service with the updated binary ───────────────
+    # ── Reinstall service with the updated binary ─────────────
     if service_was_installed:
-        print(f"  {s.dim('Stopping and uninstalling service...')}")
-        from airut.install_services import uninstall_services
-
-        try:
-            uninstall_services()
-        except RuntimeError as e:
-            print(f"  {s.red('Error uninstalling service:')} {e}")
-            return 1
-
         print(f"  {s.dim('Reinstalling service...')}")
         try:
             result = subprocess.run(
