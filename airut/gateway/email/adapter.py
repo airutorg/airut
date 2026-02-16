@@ -19,6 +19,7 @@ from pathlib import Path
 
 from airut.gateway.channel import ParsedMessage
 from airut.gateway.config import RepoServerConfig
+from airut.gateway.email.listener import EmailListener
 from airut.gateway.email.parsing import (
     collect_outbox_files,
     decode_subject,
@@ -68,7 +69,7 @@ class EmailChannelAdapter:
     """ChannelAdapter implementation for email (IMAP/SMTP).
 
     Wraps SenderAuthenticator, SenderAuthorizer, email parsing functions,
-    and EmailResponder behind the ChannelAdapter interface.
+    EmailListener, and EmailResponder behind the ChannelAdapter interface.
     """
 
     def __init__(
@@ -77,15 +78,54 @@ class EmailChannelAdapter:
         authenticator: SenderAuthenticator,
         authorizer: SenderAuthorizer,
         responder: EmailResponder,
+        listener: EmailListener | None = None,
     ) -> None:
         self._config = config
         self._authenticator = authenticator
         self._authorizer = authorizer
         self._responder = responder
+        self._listener = listener
+
+    @classmethod
+    def from_config(cls, config: RepoServerConfig) -> EmailChannelAdapter:
+        """Create an adapter with all email components from config.
+
+        Constructs the authenticator, authorizer, responder, and listener
+        internally. This is the primary factory for production use.
+
+        Args:
+            config: Per-repo server-side configuration.
+
+        Returns:
+            Fully configured EmailChannelAdapter.
+        """
+        return cls(
+            config=config,
+            authenticator=SenderAuthenticator(
+                config.trusted_authserv_id,
+                allow_internal_auth_fallback=(
+                    config.microsoft_internal_auth_fallback
+                ),
+            ),
+            authorizer=SenderAuthorizer(config.authorized_senders),
+            responder=EmailResponder(config),
+            listener=EmailListener(config),
+        )
+
+    @property
+    def listener(self) -> EmailListener:
+        """Email listener for IMAP lifecycle management.
+
+        Raises:
+            RuntimeError: If adapter was created without a listener.
+        """
+        if self._listener is None:
+            raise RuntimeError("EmailChannelAdapter created without a listener")
+        return self._listener
 
     @property
     def responder(self) -> EmailResponder:
-        """Expose responder for rejection replies in gateway service."""
+        """Expose responder for low-level SMTP access."""
         return self._responder
 
     def authenticate_and_parse(

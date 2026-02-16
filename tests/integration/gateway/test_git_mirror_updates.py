@@ -84,7 +84,7 @@ class TestGitMirrorUpdates:
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)
 
     def test_new_conversation_gets_latest_code(
@@ -159,7 +159,7 @@ events = [
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)
 
     def test_subsequent_conversation_sees_updated_code(
@@ -306,7 +306,7 @@ events = [
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)
 
     def test_mirror_reflects_master_branch_updates(
@@ -409,7 +409,7 @@ events = [
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)
 
     def test_mirror_updated_between_conversations(
@@ -567,5 +567,5 @@ events = [
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)

@@ -103,7 +103,7 @@ events = [
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)
 
     def test_multiple_outbox_files_attached(
@@ -172,7 +172,7 @@ events = [
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)
 
     def test_binary_outbox_file_preserved(
@@ -234,7 +234,7 @@ events = [
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)
 
     def test_email_without_outbox_files(
@@ -287,7 +287,7 @@ events = [
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)
 
     def test_inbox_and_outbox_together(
@@ -354,7 +354,7 @@ events = [
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)
 
     def test_email_context_in_prompt(
@@ -406,7 +406,7 @@ events = [
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)
 
     def test_outbox_cleanup_after_send(
@@ -493,5 +493,5 @@ events = [
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)

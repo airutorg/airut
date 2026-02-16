@@ -6,9 +6,30 @@
 """Tests for repo_handler module."""
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from .conftest import make_message, make_service, update_repo
+
+
+class TestSubmitMessage:
+    def test_forwards_to_service(self, email_config, tmp_path: Path) -> None:
+        """Raw message is forwarded to service.submit_message."""
+        svc, handler = make_service(email_config, tmp_path)
+        svc.submit_message = MagicMock(return_value=True)
+
+        msg = make_message()
+        assert handler._submit_message(msg) is True
+        svc.submit_message.assert_called_once_with(msg, handler)
+
+    def test_returns_false_when_pool_not_ready(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """Returns False when service.submit_message returns False."""
+        svc, handler = make_service(email_config, tmp_path)
+        svc.submit_message = MagicMock(return_value=False)
+
+        msg = make_message()
+        assert handler._submit_message(msg) is False
 
 
 class TestPollLoop:
@@ -41,14 +62,14 @@ class TestPollingLoop:
             svc.running = False
             return []
 
-        handler.listener.fetch_unread.side_effect = fake_fetch
+        handler.adapter.listener.fetch_unread.side_effect = fake_fetch
 
         with (
             patch.object(handler, "_submit_message"),
             patch("time.sleep"),
         ):
             handler._polling_loop()
-        handler.listener.delete_message.assert_called_once_with("1")
+        handler.adapter.listener.delete_message.assert_called_once_with("1")
 
     def test_reconnects_on_imap_error(
         self, email_config, tmp_path: Path
@@ -66,18 +87,20 @@ class TestPollingLoop:
             svc.running = False
             return []
 
-        handler.listener.fetch_unread.side_effect = fake_fetch
+        handler.adapter.listener.fetch_unread.side_effect = fake_fetch
 
         with patch("time.sleep"):
             handler._polling_loop()
-        handler.listener.disconnect.assert_called_once()
-        assert handler.listener.connect.call_count == 1
+        handler.adapter.listener.disconnect.assert_called_once()
+        assert handler.adapter.listener.connect.call_count == 1
 
     def test_max_reconnect_attempts(self, email_config, tmp_path: Path) -> None:
         from airut.gateway import IMAPConnectionError
 
         svc, handler = make_service(email_config, tmp_path)
-        handler.listener.fetch_unread.side_effect = IMAPConnectionError("fail")
+        handler.adapter.listener.fetch_unread.side_effect = IMAPConnectionError(
+            "fail"
+        )
 
         with patch("time.sleep"):
             handler._polling_loop()
@@ -99,8 +122,8 @@ class TestPollingLoop:
             svc.running = False
             return []
 
-        handler.listener.fetch_unread.side_effect = fake_fetch
-        handler.listener.connect.side_effect = [
+        handler.adapter.listener.fetch_unread.side_effect = fake_fetch
+        handler.adapter.listener.connect.side_effect = [
             IMAPConnectionError("reconnect fail"),
             None,
         ]
@@ -124,8 +147,8 @@ class TestPollingLoop:
             svc.running = False
             return []
 
-        handler.listener.fetch_unread.side_effect = fake_fetch
-        handler.listener.delete_message.side_effect = [
+        handler.adapter.listener.fetch_unread.side_effect = fake_fetch
+        handler.adapter.listener.delete_message.side_effect = [
             RuntimeError("fail"),
             None,
         ]
@@ -148,7 +171,7 @@ class TestIdleLoop:
             svc.running = False
             return []
 
-        handler.listener.fetch_unread.side_effect = fake_fetch
+        handler.adapter.listener.fetch_unread.side_effect = fake_fetch
 
         with patch.object(handler, "_submit_message"):
             handler._idle_loop()
@@ -165,13 +188,15 @@ class TestIdleLoop:
                 svc.running = False
             return []
 
-        handler.listener.fetch_unread.side_effect = fake_fetch
-        handler.listener.idle_start.return_value = False  # entered IDLE
-        handler.listener.idle_wait.return_value = True  # got notification
+        handler.adapter.listener.fetch_unread.side_effect = fake_fetch
+        handler.adapter.listener.idle_start.return_value = False  # entered IDLE
+        handler.adapter.listener.idle_wait.return_value = (
+            True  # got notification
+        )
 
         handler._idle_loop()
-        handler.listener.idle_start.assert_called()
-        handler.listener.idle_done.assert_called()
+        handler.adapter.listener.idle_start.assert_called()
+        handler.adapter.listener.idle_done.assert_called()
 
     def test_idle_timeout(self, email_config, tmp_path: Path) -> None:
         svc, handler = make_service(email_config, tmp_path)
@@ -185,9 +210,9 @@ class TestIdleLoop:
                 svc.running = False
             return []
 
-        handler.listener.fetch_unread.side_effect = fake_fetch
-        handler.listener.idle_start.return_value = False  # entered IDLE
-        handler.listener.idle_wait.return_value = False  # timeout
+        handler.adapter.listener.fetch_unread.side_effect = fake_fetch
+        handler.adapter.listener.idle_start.return_value = False  # entered IDLE
+        handler.adapter.listener.idle_wait.return_value = False  # timeout
 
         handler._idle_loop()
 
@@ -199,7 +224,7 @@ class TestIdleLoop:
             svc.running = False
             return []
 
-        handler.listener.fetch_unread.side_effect = fake_fetch
+        handler.adapter.listener.fetch_unread.side_effect = fake_fetch
 
         # Manipulate last_reconnect directly to trigger reconnect check
         # The idle loop initializes last_reconnect = time.time() at start
@@ -215,7 +240,7 @@ class TestIdleLoop:
 
         with patch("time.time", side_effect=fake_time):
             handler._idle_loop()
-        handler.listener.disconnect.assert_called()
+        handler.adapter.listener.disconnect.assert_called()
 
     def test_submit_exception_continues(
         self, email_config, tmp_path: Path
@@ -232,8 +257,10 @@ class TestIdleLoop:
             svc.running = False
             return []
 
-        handler.listener.fetch_unread.side_effect = fake_fetch
-        handler.listener.delete_message.side_effect = RuntimeError("fail")
+        handler.adapter.listener.fetch_unread.side_effect = fake_fetch
+        handler.adapter.listener.delete_message.side_effect = RuntimeError(
+            "fail"
+        )
 
         with patch.object(handler, "_submit_message"):
             handler._idle_loop()
@@ -264,20 +291,20 @@ class TestIdleLoop:
             svc.running = False
             return []
 
-        handler.listener.fetch_unread.side_effect = fake_fetch
+        handler.adapter.listener.fetch_unread.side_effect = fake_fetch
         # First idle_start: detects pending message, returns True
         # Second idle_start: no pending, enters IDLE normally
-        handler.listener.idle_start.side_effect = [True, False]
-        handler.listener.idle_wait.return_value = False
+        handler.adapter.listener.idle_start.side_effect = [True, False]
+        handler.adapter.listener.idle_wait.return_value = False
 
         with patch.object(handler, "_submit_message") as mock_submit:
             handler._idle_loop()
 
         # Message should have been processed
         mock_submit.assert_called_once()
-        handler.listener.delete_message.assert_called_once_with("1")
+        handler.adapter.listener.delete_message.assert_called_once_with("1")
         # idle_wait should only be called once (second idle_start entered IDLE)
-        handler.listener.idle_wait.assert_called_once()
+        handler.adapter.listener.idle_wait.assert_called_once()
 
     def test_idle_error_forces_reconnect(
         self, email_config, tmp_path: Path
@@ -295,8 +322,8 @@ class TestIdleLoop:
                 svc.running = False
             return []
 
-        handler.listener.fetch_unread.side_effect = fake_fetch
-        handler.listener.idle_start.side_effect = [
+        handler.adapter.listener.fetch_unread.side_effect = fake_fetch
+        handler.adapter.listener.idle_start.side_effect = [
             IMAPIdleError("idle broken"),
             False,
         ]
@@ -320,7 +347,7 @@ class TestIdleLoop:
             svc.running = False
             return []
 
-        handler.listener.fetch_unread.side_effect = fake_fetch
+        handler.adapter.listener.fetch_unread.side_effect = fake_fetch
 
         with patch("time.sleep"):
             handler._idle_loop()
@@ -332,7 +359,9 @@ class TestIdleLoop:
 
         svc, handler = make_service(email_config, tmp_path)
         update_repo(handler, idle_reconnect_interval_seconds=99999)
-        handler.listener.fetch_unread.side_effect = IMAPConnectionError("fail")
+        handler.adapter.listener.fetch_unread.side_effect = IMAPConnectionError(
+            "fail"
+        )
 
         with patch("time.sleep"):
             handler._idle_loop()
@@ -355,8 +384,8 @@ class TestIdleLoop:
             svc.running = False
             return []
 
-        handler.listener.fetch_unread.side_effect = fake_fetch
-        handler.listener.connect.side_effect = [
+        handler.adapter.listener.fetch_unread.side_effect = fake_fetch
+        handler.adapter.listener.connect.side_effect = [
             IMAPConnectionError("reconnect fail"),
             None,
         ]
@@ -371,17 +400,17 @@ class TestIdleLoop:
         svc, handler = make_service(email_config, tmp_path)
         update_repo(handler, idle_reconnect_interval_seconds=99999)
 
-        handler.listener.fetch_unread.return_value = []
-        handler.listener.idle_start.return_value = False  # entered IDLE
+        handler.adapter.listener.fetch_unread.return_value = []
+        handler.adapter.listener.idle_start.return_value = False  # entered IDLE
 
         def stop_during_wait(timeout):
             svc.running = False
             return False
 
-        handler.listener.idle_wait.side_effect = stop_during_wait
+        handler.adapter.listener.idle_wait.side_effect = stop_during_wait
 
         handler._idle_loop()
-        handler.listener.idle_done.assert_not_called()
+        handler.adapter.listener.idle_done.assert_not_called()
 
     def test_idle_timeout_zero(self, email_config, tmp_path: Path) -> None:
         """When time_until_reconnect is 0, idle_timeout is 0 -> skip wait."""
@@ -396,8 +425,8 @@ class TestIdleLoop:
                 svc.running = False
             return []
 
-        handler.listener.fetch_unread.side_effect = fake_fetch
-        handler.listener.idle_start.return_value = False  # entered IDLE
+        handler.adapter.listener.fetch_unread.side_effect = fake_fetch
+        handler.adapter.listener.idle_start.return_value = False  # entered IDLE
 
         # Always return a time far past reconnect interval -> idle_timeout = 0
         with patch("time.time", return_value=99999):

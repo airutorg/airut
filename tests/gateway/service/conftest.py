@@ -85,10 +85,9 @@ def make_service(
     )
 
     with (
-        patch("airut.gateway.service.repo_handler.EmailListener"),
-        patch("airut.gateway.service.repo_handler.EmailResponder"),
-        patch("airut.gateway.service.repo_handler.SenderAuthenticator"),
-        patch("airut.gateway.service.repo_handler.SenderAuthorizer"),
+        patch(
+            "airut.gateway.service.repo_handler.EmailChannelAdapter.from_config"
+        ) as mock_from_config,
         patch("airut.gateway.service.repo_handler.ConversationManager"),
         patch("airut.gateway.service.gateway.capture_version_info") as mock_ver,
         patch("airut.gateway.service.gateway.TaskTracker"),
@@ -98,6 +97,8 @@ def make_service(
             return_value="127.0.0.53",
         ),
     ):
+        mock_adapter = MagicMock()
+        mock_from_config.return_value = mock_adapter
         mock_ver.return_value = (MagicMock(git_sha="abc1234"), MagicMock())
         svc = GatewayService(server_config, repo_root=tmp_path)
 

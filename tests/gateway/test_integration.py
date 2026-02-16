@@ -582,10 +582,7 @@ class TestParallelExecution:
         handler = service.repo_handlers["test"]
         assert service._executor_pool is None
 
-        # Should not raise, just return early
         result = service.submit_message(sample_email_message, handler)
-
-        # Should return False
         assert result is False
 
     def test_stop_waits_for_pending_futures(
@@ -665,6 +662,7 @@ class TestParallelExecution:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from airut.gateway.channel import ParsedMessage
         from airut.gateway.service import GatewayService
 
         config = ServerConfig(
@@ -674,10 +672,14 @@ class TestParallelExecution:
         service = GatewayService(config)
         handler = service.repo_handlers["test"]
 
-        # Set up message without conversation ID (new conversation)
         message = sample_email_message
         message.replace_header("Subject", "New request without ID")
         message.replace_header("From", email_config.authorized_senders[0])
+
+        mock_parsed = MagicMock(spec=ParsedMessage, conversation_id=None)
+        mock_adapter = MagicMock()
+        mock_adapter.authenticate_and_parse.return_value = mock_parsed
+        handler.adapter = mock_adapter
 
         # Mock process_message to track calls
         with patch(
@@ -686,9 +688,9 @@ class TestParallelExecution:
         ) as mock_process:
             service._process_message_worker(message, "test-task-id", handler)
             mock_process.assert_called_once()
-            # Verify key args: service, parsed msg, task_id
             call_args = mock_process.call_args
             assert call_args[0][0] is service
+            assert call_args[0][1] is mock_parsed
             assert call_args[0][2] == "test-task-id"
             assert call_args[0][3] is handler
 
@@ -705,6 +707,7 @@ class TestParallelExecution:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from airut.gateway.channel import ParsedMessage
         from airut.gateway.service import GatewayService
 
         config = ServerConfig(
@@ -717,12 +720,15 @@ class TestParallelExecution:
         # Create an existing conversation
         conv_id, _ = handler.conversation_manager.initialize_new()
 
-        # Set up message with existing conversation ID
         message = sample_email_message
         message.replace_header("Subject", f"Re: [ID:{conv_id}] Follow-up")
         message.replace_header("From", email_config.authorized_senders[0])
 
-        # Mock process_message to track calls
+        mock_parsed = MagicMock(spec=ParsedMessage, conversation_id=conv_id)
+        mock_adapter = MagicMock()
+        mock_adapter.authenticate_and_parse.return_value = mock_parsed
+        handler.adapter = mock_adapter
+
         with patch(
             "airut.gateway.service.gateway.process_message",
             return_value=(True, conv_id),
@@ -735,166 +741,159 @@ class TestParallelExecution:
 
 
 class TestAcknowledgmentReply:
-    """Tests for acknowledgment reply functionality."""
+    """Tests for acknowledgment reply functionality.
+
+    Tests the EmailChannelAdapter.send_acknowledgment method which replaced
+    the standalone replies.py functions.
+    """
 
     def test_send_acknowledgment_new_conversation(
         self, email_config: RepoServerConfig, sample_email_message
     ) -> None:
         """Test acknowledgment reply includes conversation ID for new conv."""
-        import sys
+        from unittest.mock import MagicMock
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import GatewayService
-
-        config = ServerConfig(
-            global_config=GlobalConfig(),
-            repos={"test": email_config},
+        from airut.gateway.email.adapter import (
+            EmailChannelAdapter,
+            EmailParsedMessage,
         )
-        service = GatewayService(config)
-        handler = service.repo_handlers["test"]
 
-        # Set up message without conversation ID (new conversation)
-        message = sample_email_message
-        message.replace_header("Subject", "New request")
-        message.replace_header("Message-ID", "<new123@example.com>")
-        message.replace_header("From", email_config.authorized_senders[0])
+        responder = MagicMock()
+        adapter = EmailChannelAdapter(
+            config=email_config,
+            authenticator=MagicMock(),
+            authorizer=MagicMock(),
+            responder=responder,
+        )
+
+        parsed = EmailParsedMessage(
+            sender=email_config.authorized_senders[0],
+            body="New request",
+            conversation_id=None,
+            model_hint=None,
+            original_message_id="<new123@example.com>",
+            decoded_subject="New request",
+        )
 
         conv_id = "abc12345"
-        model = "sonnet"
+        adapter.send_acknowledgment(parsed, conv_id, "sonnet", None)
 
-        # Mock responder.send_reply
-        from airut.gateway.email.replies import send_acknowledgment
-
-        with patch.object(handler.responder, "send_reply") as mock_send:
-            send_acknowledgment(
-                handler, message, conv_id, model, service.global_config
-            )
-
-            # Verify send_reply was called
-            mock_send.assert_called_once()
-
-            # Check call arguments
-            call_kwargs = mock_send.call_args[1]
-            assert call_kwargs["to"] == email_config.authorized_senders[0]
-            assert f"[ID:{conv_id}]" in call_kwargs["subject"]
-            assert "Re:" in call_kwargs["subject"]
-            assert "started working" in call_kwargs["body"]
-            assert "reply shortly" in call_kwargs["body"]
-            assert call_kwargs["in_reply_to"] == "<new123@example.com>"
+        responder.send_reply.assert_called_once()
+        call_kwargs = responder.send_reply.call_args[1]
+        assert call_kwargs["to"] == email_config.authorized_senders[0]
+        assert f"[ID:{conv_id}]" in call_kwargs["subject"]
+        assert "Re:" in call_kwargs["subject"]
+        assert "started working" in call_kwargs["body"]
+        assert "reply shortly" in call_kwargs["body"]
+        assert call_kwargs["in_reply_to"] == "<new123@example.com>"
 
     def test_send_acknowledgment_existing_conversation(
         self, email_config: RepoServerConfig, sample_email_message
     ) -> None:
         """Test acknowledgment reply preserves existing conversation ID."""
-        import sys
+        from unittest.mock import MagicMock
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import GatewayService
-
-        config = ServerConfig(
-            global_config=GlobalConfig(),
-            repos={"test": email_config},
+        from airut.gateway.email.adapter import (
+            EmailChannelAdapter,
+            EmailParsedMessage,
         )
-        service = GatewayService(config)
-        handler = service.repo_handlers["test"]
+
+        responder = MagicMock()
+        adapter = EmailChannelAdapter(
+            config=email_config,
+            authenticator=MagicMock(),
+            authorizer=MagicMock(),
+            responder=responder,
+        )
 
         conv_id = "xyz98765"
-
-        # Set up message with existing conversation ID
-        message = sample_email_message
-        message.replace_header(
-            "Subject", f"Re: [ID:{conv_id}] Original request"
+        parsed = EmailParsedMessage(
+            sender=email_config.authorized_senders[0],
+            body="Follow-up",
+            conversation_id=conv_id,
+            model_hint=None,
+            original_message_id="<followup456@example.com>",
+            decoded_subject=f"Re: [ID:{conv_id}] Original request",
         )
-        message.replace_header("Message-ID", "<followup456@example.com>")
-        message.replace_header("From", email_config.authorized_senders[0])
 
-        from airut.gateway.email.replies import send_acknowledgment
+        adapter.send_acknowledgment(parsed, conv_id, "sonnet", None)
 
-        with patch.object(handler.responder, "send_reply") as mock_send:
-            send_acknowledgment(
-                handler, message, conv_id, "sonnet", service.global_config
-            )
-
-            call_kwargs = mock_send.call_args[1]
-            # Should not duplicate [ID:...] in subject
-            subject = call_kwargs["subject"]
-            assert subject.count(f"[ID:{conv_id}]") == 1
+        call_kwargs = responder.send_reply.call_args[1]
+        subject = call_kwargs["subject"]
+        assert subject.count(f"[ID:{conv_id}]") == 1
 
     def test_send_acknowledgment_smtp_failure_non_fatal(
         self, email_config: RepoServerConfig, sample_email_message
     ) -> None:
         """Test acknowledgment SMTP failure doesn't raise exception."""
-        import sys
+        from unittest.mock import MagicMock
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import GatewayService
-
-        config = ServerConfig(
-            global_config=GlobalConfig(),
-            repos={"test": email_config},
+        from airut.gateway.email.adapter import (
+            EmailChannelAdapter,
+            EmailParsedMessage,
         )
-        service = GatewayService(config)
-        handler = service.repo_handlers["test"]
-        message = sample_email_message
 
-        from airut.gateway.email.replies import send_acknowledgment
+        responder = MagicMock()
+        responder.send_reply.side_effect = SMTPSendError("Send failed")
+        adapter = EmailChannelAdapter(
+            config=email_config,
+            authenticator=MagicMock(),
+            authorizer=MagicMock(),
+            responder=responder,
+        )
 
-        # Mock responder to raise SMTPSendError
-        with patch.object(
-            handler.responder,
-            "send_reply",
-            side_effect=SMTPSendError("Send failed"),
-        ):
-            # Should not raise - acknowledgment failure is non-fatal
-            send_acknowledgment(
-                handler, message, "conv123", "sonnet", service.global_config
-            )
+        parsed = EmailParsedMessage(
+            sender=email_config.authorized_senders[0],
+            body="Request",
+            conversation_id=None,
+            model_hint=None,
+            decoded_subject="Test",
+        )
+
+        # Should not raise - acknowledgment failure is non-fatal
+        adapter.send_acknowledgment(parsed, "conv123", "sonnet", None)
 
     def test_send_acknowledgment_preserves_threading_headers(
         self, email_config: RepoServerConfig
     ) -> None:
         """Test acknowledgment reply has correct threading headers."""
-        import sys
-        from email.parser import BytesParser
+        from unittest.mock import MagicMock
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import GatewayService
-
-        config = ServerConfig(
-            global_config=GlobalConfig(),
-            repos={"test": email_config},
+        from airut.gateway.email.adapter import (
+            EmailChannelAdapter,
+            EmailParsedMessage,
         )
-        service = GatewayService(config)
-        handler = service.repo_handlers["test"]
 
-        # Create message with References header
-        message_bytes = b"""From: authorized@example.com
-To: claude@example.com
-Subject: Original request
-Message-ID: <msg1@example.com>
-References: <prev1@example.com> <prev2@example.com>
-Authentication-Results: mx.example.com; dmarc=pass
+        responder = MagicMock()
+        adapter = EmailChannelAdapter(
+            config=email_config,
+            authenticator=MagicMock(),
+            authorizer=MagicMock(),
+            responder=responder,
+        )
 
-Please help.
-"""
-        message = BytesParser().parsebytes(message_bytes)
+        parsed = EmailParsedMessage(
+            sender="authorized@example.com",
+            body="Please help.",
+            conversation_id=None,
+            model_hint=None,
+            original_message_id="<msg1@example.com>",
+            original_references=[
+                "<prev1@example.com>",
+                "<prev2@example.com>",
+            ],
+            decoded_subject="Original request",
+        )
 
         conv_id = "thread123"
+        adapter.send_acknowledgment(parsed, conv_id, "sonnet", None)
 
-        from airut.gateway.email.replies import send_acknowledgment
-
-        with patch.object(handler.responder, "send_reply") as mock_send:
-            send_acknowledgment(
-                handler, message, conv_id, "sonnet", service.global_config
-            )
-
-            call_kwargs = mock_send.call_args[1]
-            assert call_kwargs["in_reply_to"] == "<msg1@example.com>"
-            # References should include original references + Message-ID
-            refs = call_kwargs["references"]
-            assert "<prev1@example.com>" in refs
-            assert "<prev2@example.com>" in refs
-            assert "<msg1@example.com>" in refs
+        call_kwargs = responder.send_reply.call_args[1]
+        assert call_kwargs["in_reply_to"] == "<msg1@example.com>"
+        refs = call_kwargs["references"]
+        assert "<prev1@example.com>" in refs
+        assert "<prev2@example.com>" in refs
+        assert "<msg1@example.com>" in refs
 
     def test_acknowledgment_sent_before_execution(
         self,
@@ -1059,94 +1058,86 @@ Please help.
         self, master_repo: Path, tmp_path: Path, sample_email_message
     ) -> None:
         """Test acknowledgment includes dashboard link when configured."""
-        import sys
+        from unittest.mock import MagicMock
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import GatewayService
-
-        work_dir = tmp_path / "conversations"
-        work_dir.mkdir()
-
-        # Create config with dashboard_base_url
-        global_config = GlobalConfig(
-            dashboard_base_url="https://dashboard.example.com"
-        )
-        repo_config = RepoServerConfig(
-            repo_id="test",
-            imap_server="imap.example.com",
-            imap_port=993,
-            smtp_server="smtp.example.com",
-            smtp_port=587,
-            email_username="test@example.com",
-            email_password="test_password",
-            email_from="Test Service <test@example.com>",
-            authorized_senders=["authorized@example.com"],
-            trusted_authserv_id="mx.example.com",
-            git_repo_url=str(master_repo),
-        )
-        config = ServerConfig(
-            global_config=global_config,
-            repos={"test": repo_config},
+        from airut.gateway.email.adapter import (
+            EmailChannelAdapter,
+            EmailParsedMessage,
         )
 
-        service = GatewayService(config)
-        handler = service.repo_handlers["test"]
-        message = sample_email_message
-        message.replace_header("Subject", "New request")
-        message.replace_header("From", repo_config.authorized_senders[0])
-        message.replace_header("Message-ID", "<test123@example.com>")
+        responder = MagicMock()
+        adapter = EmailChannelAdapter(
+            config=RepoServerConfig(
+                repo_id="test",
+                imap_server="imap.example.com",
+                imap_port=993,
+                smtp_server="smtp.example.com",
+                smtp_port=587,
+                email_username="test@example.com",
+                email_password="test_password",
+                email_from="Test Service <test@example.com>",
+                authorized_senders=["authorized@example.com"],
+                trusted_authserv_id="mx.example.com",
+                git_repo_url=str(master_repo),
+            ),
+            authenticator=MagicMock(),
+            authorizer=MagicMock(),
+            responder=responder,
+        )
+
+        parsed = EmailParsedMessage(
+            sender="authorized@example.com",
+            body="New request",
+            conversation_id=None,
+            model_hint=None,
+            original_message_id="<test123@example.com>",
+            decoded_subject="New request",
+        )
 
         conv_id = "abc12345"
+        dashboard_url = "https://dashboard.example.com"
+        adapter.send_acknowledgment(parsed, conv_id, "sonnet", dashboard_url)
 
-        from airut.gateway.email.replies import send_acknowledgment
-
-        with patch.object(handler.responder, "send_reply") as mock_send:
-            send_acknowledgment(
-                handler, message, conv_id, "sonnet", service.global_config
-            )
-
-            call_kwargs = mock_send.call_args[1]
-            body = call_kwargs["body"]
-            html_body = call_kwargs["html_body"]
-            expected_url = "https://dashboard.example.com/conversation/abc12345"
-            # URL is in the body
-            assert expected_url in body
-            assert "started working" in body
-            # HTML has clickable link
-            assert f'<a href="{expected_url}">{expected_url}</a>' in html_body
+        call_kwargs = responder.send_reply.call_args[1]
+        body = call_kwargs["body"]
+        html_body = call_kwargs["html_body"]
+        expected_url = "https://dashboard.example.com/conversation/abc12345"
+        assert expected_url in body
+        assert "started working" in body
+        assert f'<a href="{expected_url}">{expected_url}</a>' in html_body
 
     def test_send_acknowledgment_no_dashboard_link_when_not_configured(
         self, email_config: RepoServerConfig, sample_email_message
     ) -> None:
         """Test acknowledgment omits dashboard link when not configured."""
-        import sys
+        from unittest.mock import MagicMock
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import GatewayService
-
-        # Default config has dashboard_base_url=None
-        config = ServerConfig(
-            global_config=GlobalConfig(),
-            repos={"test": email_config},
+        from airut.gateway.email.adapter import (
+            EmailChannelAdapter,
+            EmailParsedMessage,
         )
-        service = GatewayService(config)
-        handler = service.repo_handlers["test"]
-        message = sample_email_message
-        message.replace_header("Subject", "New request")
-        message.replace_header("From", email_config.authorized_senders[0])
 
-        conv_id = "abc12345"
+        responder = MagicMock()
+        adapter = EmailChannelAdapter(
+            config=email_config,
+            authenticator=MagicMock(),
+            authorizer=MagicMock(),
+            responder=responder,
+        )
 
-        from airut.gateway.email.replies import send_acknowledgment
+        parsed = EmailParsedMessage(
+            sender=email_config.authorized_senders[0],
+            body="New request",
+            conversation_id=None,
+            model_hint=None,
+            decoded_subject="New request",
+        )
 
-        with patch.object(handler.responder, "send_reply") as mock_send:
-            send_acknowledgment(
-                handler, message, conv_id, "sonnet", service.global_config
-            )
+        adapter.send_acknowledgment(parsed, "abc12345", "sonnet", None)
 
-            call_kwargs = mock_send.call_args[1]
-            body = call_kwargs["body"]
-            assert "Task URL:" not in body
+        call_kwargs = responder.send_reply.call_args[1]
+        body = call_kwargs["body"]
+        assert "Task URL:" not in body
 
     def test_acknowledgment_skipped_for_followup_messages(
         self,
@@ -1330,6 +1321,7 @@ class TestTaskIdTracking:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from airut.gateway.channel import ParsedMessage
         from airut.gateway.service import GatewayService
 
         config = ServerConfig(
@@ -1339,10 +1331,14 @@ class TestTaskIdTracking:
         service = GatewayService(config)
         handler = service.repo_handlers["test"]
 
-        # Set up message without conversation ID (new conversation)
         message = sample_email_message
         message.replace_header("Subject", "New request without ID")
         message.replace_header("From", email_config.authorized_senders[0])
+
+        mock_parsed = MagicMock(spec=ParsedMessage, conversation_id=None)
+        mock_adapter = MagicMock()
+        mock_adapter.authenticate_and_parse.return_value = mock_parsed
+        handler.adapter = mock_adapter
 
         # Use a temporary task ID
         temp_task_id = "new-12345678"
@@ -1377,6 +1373,7 @@ class TestTaskIdTracking:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from airut.gateway.channel import ParsedMessage
         from airut.gateway.service import GatewayService
 
         config = ServerConfig(
@@ -1389,6 +1386,11 @@ class TestTaskIdTracking:
         message = sample_email_message
         message.replace_header("Subject", "New request")
         message.replace_header("From", email_config.authorized_senders[0])
+
+        mock_parsed = MagicMock(spec=ParsedMessage, conversation_id=None)
+        mock_adapter = MagicMock()
+        mock_adapter.authenticate_and_parse.return_value = mock_parsed
+        handler.adapter = mock_adapter
 
         temp_task_id = "new-87654321"
         service.tracker.add_task(temp_task_id, "New request")
@@ -1407,19 +1409,16 @@ class TestTaskIdTracking:
         assert task.success is False
 
 
-class TestDuplicateEmailRejection:
-    """Tests for rejecting duplicate emails for active conversations."""
+class TestDuplicateMessageRejection:
+    """Tests for rejecting duplicate messages for active conversations."""
 
-    def test_submit_message_rejects_duplicate_for_active_task(
+    def test_rejects_duplicate_for_active_task(
         self,
         email_config: RepoServerConfig,
         sample_email_message,
     ) -> None:
-        """Test duplicate email is rejected when task is active."""
-        import sys
-        from concurrent.futures import ThreadPoolExecutor
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        """Test duplicate message is rejected when task is active."""
+        from airut.gateway.channel import ParsedMessage
         from airut.gateway.service import GatewayService
 
         config = ServerConfig(
@@ -1428,57 +1427,48 @@ class TestDuplicateEmailRejection:
         )
         service = GatewayService(config)
         handler = service.repo_handlers["test"]
-        service._executor_pool = ThreadPoolExecutor(max_workers=1)
 
         conv_id = "abc12345"
 
-        # Add an active task
+        # Add an active task for this conversation
         service.tracker.add_task(conv_id, "First request")
         service.tracker.start_task(conv_id)
 
-        # Create message for same conversation
-        message = sample_email_message
-        message.replace_header("Subject", f"Re: [ID:{conv_id}] Follow-up")
-        message.replace_header("From", email_config.authorized_senders[0])
+        # Worker receives raw msg; adapter returns parsed with same conv_id
+        parsed = ParsedMessage(
+            sender=email_config.authorized_senders[0],
+            body="Follow-up",
+            conversation_id=conv_id,
+            model_hint=None,
+        )
 
-        # submit_message calls adapter.authenticate_and_parse then
-        # adapter.send_rejection — mock the adapter methods
-        mock_parsed = MagicMock()
-        with (
-            patch.object(
-                handler.adapter,
-                "authenticate_and_parse",
-                return_value=mock_parsed,
-            ),
-            patch.object(
-                handler.adapter,
-                "send_rejection",
-            ) as mock_reject,
-        ):
-            result = service.submit_message(message, handler)
+        mock_adapter = MagicMock()
+        mock_adapter.authenticate_and_parse.return_value = parsed
+        handler.adapter = mock_adapter
 
-        # Should return False (rejected)
-        assert result is False
+        task_id = "new-dup"
+        service.tracker.add_task(task_id, "(authenticating)")
+        service._process_message_worker(sample_email_message, task_id, handler)
+
         # Should send rejection reply via adapter
-        mock_reject.assert_called_once()
-        call_args = mock_reject.call_args
-        assert call_args[0][0] == mock_parsed
+        mock_adapter.send_rejection.assert_called_once()
+        call_args = mock_adapter.send_rejection.call_args
+        assert call_args[0][0] == parsed
         assert call_args[0][1] == conv_id
         assert "still being processed" in call_args[0][2]
 
-        # Clean up
-        service._executor_pool.shutdown(wait=False)
+        # Task should be marked as failed
+        task = service.tracker.get_task(task_id)
+        assert task is not None
+        assert task.success is False
 
-    def test_submit_message_accepts_message_for_completed_task(
+    def test_accepts_message_for_completed_task(
         self,
         email_config: RepoServerConfig,
         sample_email_message,
     ) -> None:
         """Test message accepted when previous task is completed."""
-        import sys
-        from concurrent.futures import ThreadPoolExecutor
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from airut.gateway.channel import ParsedMessage
         from airut.gateway.service import GatewayService
 
         config = ServerConfig(
@@ -1487,7 +1477,6 @@ class TestDuplicateEmailRejection:
         )
         service = GatewayService(config)
         handler = service.repo_handlers["test"]
-        service._executor_pool = ThreadPoolExecutor(max_workers=1)
 
         conv_id = "xyz98765"
 
@@ -1496,31 +1485,45 @@ class TestDuplicateEmailRejection:
         service.tracker.start_task(conv_id)
         service.tracker.complete_task(conv_id, success=True)
 
-        # Create message for same conversation
-        message = sample_email_message
-        message.replace_header("Subject", f"Re: [ID:{conv_id}] Follow-up")
-        message.replace_header("From", email_config.authorized_senders[0])
+        # Worker receives raw msg; adapter returns parsed with same conv_id
+        parsed = ParsedMessage(
+            sender=email_config.authorized_senders[0],
+            body="Follow-up",
+            conversation_id=conv_id,
+            model_hint=None,
+        )
 
-        # Mock _process_message_worker to prevent actual processing
-        with patch.object(service, "_process_message_worker"):
-            result = service.submit_message(message, handler)
+        mock_adapter = MagicMock()
+        mock_adapter.authenticate_and_parse.return_value = parsed
+        handler.adapter = mock_adapter
 
-            # Should return True (accepted)
-            assert result is True
+        task_id = "new-followup"
+        service.tracker.add_task(task_id, "(authenticating)")
 
-        # Clean up
-        service._executor_pool.shutdown(wait=False)
+        # Mock process_message to prevent actual execution
+        with patch(
+            "airut.gateway.service.gateway.process_message",
+            return_value=(True, conv_id),
+        ):
+            service._process_message_worker(
+                sample_email_message, task_id, handler
+            )
 
-    def test_submit_message_accepts_new_conversation(
+        # Should NOT reject — no active task for this conv_id
+        mock_adapter.send_rejection.assert_not_called()
+
+        # Task should be completed successfully
+        task = service.tracker.get_task(conv_id)
+        assert task is not None
+        assert task.success is True
+
+    def test_accepts_new_conversation(
         self,
         email_config: RepoServerConfig,
         sample_email_message,
     ) -> None:
         """Test new conversation message is always accepted."""
-        import sys
-        from concurrent.futures import ThreadPoolExecutor
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+        from airut.gateway.channel import ParsedMessage
         from airut.gateway.service import GatewayService
 
         config = ServerConfig(
@@ -1529,80 +1532,99 @@ class TestDuplicateEmailRejection:
         )
         service = GatewayService(config)
         handler = service.repo_handlers["test"]
-        service._executor_pool = ThreadPoolExecutor(max_workers=1)
 
-        # Create message without conversation ID (new conversation)
-        message = sample_email_message
-        message.replace_header("Subject", "Brand new request")
-        message.replace_header("From", email_config.authorized_senders[0])
+        # Worker receives a raw message; adapter returns parsed with no conv_id
+        parsed = ParsedMessage(
+            sender=email_config.authorized_senders[0],
+            body="Brand new request",
+            conversation_id=None,
+            model_hint=None,
+        )
 
-        # Mock _process_message_worker to prevent actual processing
-        with patch.object(service, "_process_message_worker"):
-            result = service.submit_message(message, handler)
+        mock_adapter = MagicMock()
+        mock_adapter.authenticate_and_parse.return_value = parsed
+        handler.adapter = mock_adapter
 
-            # Should return True (accepted)
-            assert result is True
+        task_id = "new-fresh"
+        service.tracker.add_task(task_id, "(authenticating)")
 
-        # Clean up
-        service._executor_pool.shutdown(wait=False)
+        # Mock process_message to simulate what it does: update task ID
+        def mock_process(svc, parsed_msg, tid, handler, adapter):
+            service.tracker.update_task_id(tid, "newconv1")
+            return (True, "newconv1")
+
+        with patch(
+            "airut.gateway.service.gateway.process_message",
+            side_effect=mock_process,
+        ):
+            service._process_message_worker(
+                sample_email_message, task_id, handler
+            )
+
+        # Should NOT reject — new conversation has no conv_id
+        mock_adapter.send_rejection.assert_not_called()
+
+        # Task should be completed successfully with the new conv_id
+        task = service.tracker.get_task("newconv1")
+        assert task is not None
+        assert task.success is True
 
 
 class TestRejectionReply:
-    """Tests for _send_rejection_reply method."""
+    """Tests for adapter.send_rejection method."""
 
-    def test_send_rejection_reply_includes_conv_id(
+    def test_send_rejection_includes_conv_id(
         self, email_config: RepoServerConfig, sample_email_message
     ) -> None:
         """Test rejection reply includes conversation ID in subject."""
-        import sys
+        from unittest.mock import MagicMock
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import GatewayService
-
-        config = ServerConfig(
-            global_config=GlobalConfig(),
-            repos={"test": email_config},
+        from airut.gateway.email.adapter import (
+            EmailChannelAdapter,
+            EmailParsedMessage,
         )
-        service = GatewayService(config)
-        handler = service.repo_handlers["test"]
 
-        message = sample_email_message
-        message.replace_header("Subject", "Original request")
-        message.replace_header("From", email_config.authorized_senders[0])
-        message.replace_header("Message-ID", "<reject123@example.com>")
+        responder = MagicMock()
+        adapter = EmailChannelAdapter(
+            config=email_config,
+            authenticator=MagicMock(),
+            authorizer=MagicMock(),
+            responder=responder,
+        )
+
+        parsed = EmailParsedMessage(
+            sender=email_config.authorized_senders[0],
+            body="Original request",
+            conversation_id=None,
+            model_hint=None,
+            original_message_id="<reject123@example.com>",
+            decoded_subject="Original request",
+        )
 
         conv_id = "def45678"
         reason = "Task already in progress"
 
-        from airut.gateway.email.replies import send_rejection_reply
+        adapter.send_rejection(parsed, conv_id, reason, None)
 
-        with patch.object(handler.responder, "send_reply") as mock_send:
-            send_rejection_reply(
-                handler, message, conv_id, reason, service.global_config
-            )
+        responder.send_reply.assert_called_once()
+        call_kwargs = responder.send_reply.call_args[1]
+        assert f"[ID:{conv_id}]" in call_kwargs["subject"]
+        assert "could not be processed" in call_kwargs["body"]
+        assert reason in call_kwargs["body"]
+        assert conv_id in call_kwargs["body"]
 
-            mock_send.assert_called_once()
-            call_kwargs = mock_send.call_args[1]
-            assert f"[ID:{conv_id}]" in call_kwargs["subject"]
-            assert "could not be processed" in call_kwargs["body"]
-            assert reason in call_kwargs["body"]
-            assert conv_id in call_kwargs["body"]
-
-    def test_send_rejection_reply_includes_dashboard_link(
+    def test_send_rejection_includes_dashboard_link(
         self, master_repo: Path, tmp_path: Path, sample_email_message
     ) -> None:
         """Test rejection reply includes dashboard link when configured."""
-        import sys
+        from unittest.mock import MagicMock
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import GatewayService
-
-        work_dir = tmp_path / "conversations"
-        work_dir.mkdir()
-
-        global_config = GlobalConfig(
-            dashboard_base_url="https://dashboard.example.com"
+        from airut.gateway.email.adapter import (
+            EmailChannelAdapter,
+            EmailParsedMessage,
         )
+
+        responder = MagicMock()
         repo_config = RepoServerConfig(
             repo_id="test",
             imap_server="imap.example.com",
@@ -1616,66 +1638,59 @@ class TestRejectionReply:
             trusted_authserv_id="mx.example.com",
             git_repo_url=str(master_repo),
         )
-        config = ServerConfig(
-            global_config=global_config,
-            repos={"test": repo_config},
+        adapter = EmailChannelAdapter(
+            config=repo_config,
+            authenticator=MagicMock(),
+            authorizer=MagicMock(),
+            responder=responder,
         )
 
-        service = GatewayService(config)
-        handler = service.repo_handlers["test"]
-        message = sample_email_message
-        message.replace_header("Subject", "Request")
-        message.replace_header("From", repo_config.authorized_senders[0])
+        parsed = EmailParsedMessage(
+            sender="authorized@example.com",
+            body="Request",
+            conversation_id=None,
+            model_hint=None,
+            decoded_subject="Request",
+        )
 
         conv_id = "link1234"
+        dashboard_url = "https://dashboard.example.com"
+        adapter.send_rejection(parsed, conv_id, "Test reason", dashboard_url)
 
-        from airut.gateway.email.replies import send_rejection_reply
+        call_kwargs = responder.send_reply.call_args[1]
+        expected_url = f"https://dashboard.example.com/conversation/{conv_id}"
+        assert expected_url in call_kwargs["body"]
+        assert conv_id in call_kwargs["body"]
+        expected_link = f'<a href="{expected_url}">{conv_id}</a>'
+        assert expected_link in call_kwargs["html_body"]
 
-        with patch.object(handler.responder, "send_reply") as mock_send:
-            send_rejection_reply(
-                handler, message, conv_id, "Test reason", service.global_config
-            )
-
-            call_kwargs = mock_send.call_args[1]
-            expected_url = (
-                f"https://dashboard.example.com/conversation/{conv_id}"
-            )
-            # URL is embedded in the conversation ID line (plain text)
-            assert expected_url in call_kwargs["body"]
-            assert conv_id in call_kwargs["body"]
-            # HTML has clickable link
-            expected_link = f'<a href="{expected_url}">{conv_id}</a>'
-            assert expected_link in call_kwargs["html_body"]
-
-    def test_send_rejection_reply_smtp_failure_non_fatal(
+    def test_send_rejection_smtp_failure_non_fatal(
         self, email_config: RepoServerConfig, sample_email_message
     ) -> None:
         """Test rejection SMTP failure doesn't raise exception."""
-        import sys
+        from unittest.mock import MagicMock
 
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import GatewayService
-
-        config = ServerConfig(
-            global_config=GlobalConfig(),
-            repos={"test": email_config},
+        from airut.gateway.email.adapter import (
+            EmailChannelAdapter,
+            EmailParsedMessage,
         )
-        service = GatewayService(config)
-        handler = service.repo_handlers["test"]
-        message = sample_email_message
 
-        from airut.gateway.email.replies import send_rejection_reply
+        responder = MagicMock()
+        responder.send_reply.side_effect = SMTPSendError("Send failed")
+        adapter = EmailChannelAdapter(
+            config=email_config,
+            authenticator=MagicMock(),
+            authorizer=MagicMock(),
+            responder=responder,
+        )
 
-        with patch.object(
-            handler.responder,
-            "send_reply",
-            side_effect=SMTPSendError("Send failed"),
-        ):
-            # Should not raise
-            send_rejection_reply(
-                handler,
-                message,
-                "conv123",
-                "Test reason",
-                service.global_config,
-            )
+        parsed = EmailParsedMessage(
+            sender=email_config.authorized_senders[0],
+            body="Request",
+            conversation_id=None,
+            model_hint=None,
+            decoded_subject="Test",
+        )
+
+        # Should not raise
+        adapter.send_rejection(parsed, "conv123", "Test reason", None)

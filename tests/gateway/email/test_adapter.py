@@ -473,6 +473,106 @@ class TestSendRejection:
         # Should not raise
         adapter.send_rejection(parsed, "conv1", "reason", None)
 
+    def test_html_escapes_reason(self) -> None:
+        adapter, _, _, responder = _make_adapter()
+        parsed = EmailParsedMessage(
+            sender="user@example.com",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            original_message_id="<msg1@ex.com>",
+            decoded_subject="Test",
+        )
+
+        adapter.send_rejection(
+            parsed,
+            "conv1",
+            "<script>alert('xss')</script>",
+            None,
+        )
+        call_kw = responder.send_reply.call_args[1]
+        assert "<script>" not in call_kw["html_body"]
+        assert "&lt;script&gt;" in call_kw["html_body"]
+
+
+class TestStructuredMessageId:
+    """Tests for structured Message-ID generation on all reply types."""
+
+    def test_acknowledgment_has_structured_id(self) -> None:
+        adapter, _, _, responder = _make_adapter()
+        parsed = EmailParsedMessage(
+            sender="user@example.com",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            original_message_id="<msg1@ex.com>",
+            decoded_subject="Test",
+        )
+
+        adapter.send_acknowledgment(parsed, "aabb1122", "sonnet", None)
+        call_kw = responder.send_reply.call_args[1]
+        mid = call_kw["message_id"]
+        assert mid.startswith("<airut.aabb1122.")
+        assert "@example.com>" in mid
+
+    def test_rejection_has_structured_id(self) -> None:
+        adapter, _, _, responder = _make_adapter()
+        parsed = EmailParsedMessage(
+            sender="user@example.com",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            original_message_id="<msg1@ex.com>",
+            decoded_subject="Test",
+        )
+
+        adapter.send_rejection(parsed, "aabb1122", "Busy", None)
+        call_kw = responder.send_reply.call_args[1]
+        mid = call_kw["message_id"]
+        assert mid.startswith("<airut.aabb1122.")
+        assert "@example.com>" in mid
+
+    def test_reply_has_structured_id(self) -> None:
+        adapter, _, _, responder = _make_adapter()
+        parsed = EmailParsedMessage(
+            sender="user@example.com",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            original_message_id="<msg1@ex.com>",
+            decoded_subject="Test",
+        )
+
+        adapter.send_reply(parsed, "aabb1122", "Done", "", [])
+        call_kw = responder.send_reply.call_args[1]
+        mid = call_kw["message_id"]
+        assert mid.startswith("<airut.aabb1122.")
+        assert "@example.com>" in mid
+
+    def test_retry_preserves_message_id(self) -> None:
+        """SMTP retry uses the same Message-ID."""
+        adapter, _, _, responder = _make_adapter()
+        parsed = EmailParsedMessage(
+            sender="user@example.com",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            original_message_id="<msg1@ex.com>",
+            decoded_subject="Test",
+        )
+
+        # First call fails, second succeeds
+        responder.send_reply.side_effect = [
+            SMTPSendError("fail"),
+            None,
+        ]
+        adapter.send_reply(parsed, "aabb1122", "body", "", [])
+        assert responder.send_reply.call_count == 2
+        first_mid = responder.send_reply.call_args_list[0][1]["message_id"]
+        second_mid = responder.send_reply.call_args_list[1][1]["message_id"]
+        assert first_mid == second_mid
+        assert first_mid.startswith("<airut.aabb1122.")
+
 
 class TestBuildReplyHeaders:
     def test_adds_conversation_id_to_subject(self) -> None:
@@ -598,3 +698,42 @@ class TestResponderProperty:
     def test_exposes_responder(self) -> None:
         adapter, _, _, responder = _make_adapter()
         assert adapter.responder is responder
+
+
+class TestListenerProperty:
+    def test_exposes_listener(self) -> None:
+        listener = MagicMock()
+        adapter = EmailChannelAdapter(
+            config=_make_config(),
+            authenticator=MagicMock(),
+            authorizer=MagicMock(),
+            responder=MagicMock(),
+            listener=listener,
+        )
+        assert adapter.listener is listener
+
+    def test_raises_when_no_listener(self) -> None:
+        adapter, _, _, _ = _make_adapter()
+        with pytest.raises(RuntimeError, match="created without a listener"):
+            _ = adapter.listener
+
+
+class TestFromConfig:
+    def test_creates_all_components(self) -> None:
+        with (
+            patch(
+                "airut.gateway.email.adapter.SenderAuthenticator"
+            ) as mock_auth,
+            patch("airut.gateway.email.adapter.SenderAuthorizer") as mock_authz,
+            patch("airut.gateway.email.adapter.EmailResponder") as mock_resp,
+            patch("airut.gateway.email.adapter.EmailListener") as mock_listener,
+        ):
+            config = _make_config()
+            adapter = EmailChannelAdapter.from_config(config)
+
+        mock_auth.assert_called_once()
+        mock_authz.assert_called_once()
+        mock_resp.assert_called_once_with(config)
+        mock_listener.assert_called_once_with(config)
+        assert adapter.listener is mock_listener.return_value
+        assert adapter.responder is mock_resp.return_value

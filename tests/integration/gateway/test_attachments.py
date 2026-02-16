@@ -94,7 +94,7 @@ events = [
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)
 
     def test_multiple_attachments_saved(
@@ -169,7 +169,7 @@ events = [
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)
 
     def test_binary_attachment_preserved(
@@ -234,7 +234,7 @@ events = [
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)
 
     def test_email_without_attachment(
@@ -293,5 +293,5 @@ events = [
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)

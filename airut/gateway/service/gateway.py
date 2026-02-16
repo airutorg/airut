@@ -22,9 +22,9 @@ import time
 import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import replace
-from email.message import Message
 from importlib.resources import files
 from pathlib import Path
+from typing import Any
 
 from airut.dashboard import (
     DashboardServer,
@@ -35,7 +35,6 @@ from airut.dashboard.tracker import BootPhase, BootState, RepoState, RepoStatus
 from airut.dashboard.versioned import VersionClock, VersionedStore
 from airut.dns import get_system_resolver
 from airut.gateway.config import ServerConfig
-from airut.gateway.email.parsing import decode_subject, extract_conversation_id
 from airut.gateway.service.message_processing import (
     process_message,
 )
@@ -504,57 +503,36 @@ class GatewayService:
         return False
 
     def submit_message(
-        self, message: Message, repo_handler: RepoHandler
+        self,
+        raw_message: Any,
+        repo_handler: RepoHandler,
     ) -> bool:
-        """Submit message for parallel processing.
+        """Submit a raw message for authentication and processing.
 
         Called by RepoHandlers when they receive a new message.
+        Authentication and parsing happen in the worker thread.
 
         Args:
-            message: Email message to process.
+            raw_message: Channel-specific raw message
+                (e.g. email.message.Message).
             repo_handler: The repo handler that received this message.
 
         Returns:
-            True if message was submitted, False if rejected.
+            True if message was submitted, False if pool not ready.
         """
         if not self._executor_pool:
             logger.error("Executor pool not initialized")
             return False
 
-        subject = decode_subject(message) or "(no subject)"
-        sender = message.get("From", "")
-        conv_id = extract_conversation_id(subject)
+        task_id = f"new-{id(raw_message):08x}"
         repo_id = repo_handler.config.repo_id
-
-        # Reject emails for conversations that already have an active task
-        if conv_id and self.tracker.is_task_active(conv_id):
-            logger.warning(
-                "Rejecting duplicate email for conversation %s - active",
-                conv_id,
-            )
-            # Use the adapter for rejection replies
-            parsed = repo_handler.adapter.authenticate_and_parse(message)
-            if parsed is not None:
-                reason = (
-                    "Your previous request for this "
-                    "conversation is still being processed. "
-                    "Please wait for it to complete before "
-                    "sending another message."
-                )
-                repo_handler.adapter.send_rejection(
-                    parsed,
-                    conv_id,
-                    reason,
-                    self.global_config.dashboard_base_url,
-                )
-            return False
-
-        # Use conversation ID if available, otherwise generate a temp ID
-        task_id = conv_id if conv_id else f"new-{id(message):08x}"
-        self.tracker.add_task(task_id, subject, repo_id=repo_id, sender=sender)
+        self.tracker.add_task(task_id, "(authenticating)", repo_id=repo_id)
 
         future = self._executor_pool.submit(
-            self._process_message_worker, message, task_id, repo_handler
+            self._process_message_worker,
+            raw_message,
+            task_id,
+            repo_handler,
         )
 
         with self._futures_lock:
@@ -584,22 +562,42 @@ class GatewayService:
 
     def _process_message_worker(
         self,
-        message: Message,
+        raw_message: Any,
         task_id: str,
         repo_handler: RepoHandler,
     ) -> None:
         """Worker thread entry point for message processing."""
         self.tracker.start_task(task_id)
-
         adapter = repo_handler.adapter
 
         # Authenticate and parse through the channel adapter
-        parsed = adapter.authenticate_and_parse(message)
+        parsed = adapter.authenticate_and_parse(raw_message)
         if parsed is None:
             self.tracker.complete_task(task_id, False)
             return
 
         conv_id = parsed.conversation_id
+
+        # Reject messages for conversations that already have an active task
+        if conv_id and self.tracker.is_task_active(conv_id):
+            logger.warning(
+                "Rejecting duplicate message for conversation %s - active",
+                conv_id,
+            )
+            reason = (
+                "Your previous request for this "
+                "conversation is still being processed. "
+                "Please wait for it to complete before "
+                "sending another message."
+            )
+            adapter.send_rejection(
+                parsed,
+                conv_id,
+                reason,
+                self.global_config.dashboard_base_url,
+            )
+            self.tracker.complete_task(task_id, False)
+            return
 
         success = False
         final_task_id = task_id
@@ -732,7 +730,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("Received signal %d, initiating shutdown...", signum)
         service.running = False
         for handler in service.repo_handlers.values():
-            handler.listener.interrupt()
+            handler.stop()
 
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)

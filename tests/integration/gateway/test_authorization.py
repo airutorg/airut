@@ -73,7 +73,7 @@ class TestAuthorizationRejection:
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)
 
     def test_authorized_sender_accepted(
@@ -117,7 +117,7 @@ class TestAuthorizationRejection:
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)
 
     def test_case_insensitive_sender_match(
@@ -147,7 +147,7 @@ class TestAuthorizationRejection:
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)
 
     def test_dmarc_fail_rejected(
@@ -199,7 +199,7 @@ class TestAuthorizationRejection:
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)
 
     def test_missing_auth_results_rejected(
@@ -251,5 +251,5 @@ class TestAuthorizationRejection:
 
         finally:
             service.running = False
-            service.repo_handlers["test"].listener.interrupt()
+            service.repo_handlers["test"].adapter.listener.interrupt()
             service_thread.join(timeout=10.0)

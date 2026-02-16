@@ -28,7 +28,8 @@ protocol handling (email IMAP/SMTP, etc.) via two core types in
   conversation_id, model_hint, attachments, and channel_context.
 - **`ChannelAdapter`** — `typing.Protocol` defining the interface between the
   core and channel implementations: `authenticate_and_parse()`,
-  `save_attachments()`, `send_acknowledgment()`, `send_reply()`, `send_error()`.
+  `save_attachments()`, `send_acknowledgment()`, `send_reply()`, `send_error()`,
+  `send_rejection()`.
 
 Each channel implements `ChannelAdapter` (e.g., `EmailChannelAdapter` in
 `gateway/email/adapter.py`). The core works entirely through `ParsedMessage` and
@@ -39,15 +40,17 @@ Each channel implements `ChannelAdapter` (e.g., `EmailChannelAdapter` in
 **Protocol-agnostic core** (`gateway/service/`):
 
 - **GatewayService** — Orchestration, thread pool, lifecycle management
-- **RepoHandler** — Per-repo state: channel adapter, listener, conversation
-  manager
+- **RepoHandler** — Per-repo state: channel adapter, conversation manager
 - **ConversationManager** — Git checkout management and state persistence
 - **Sandbox** — Container lifecycle, network isolation, and execution
   (`airut/sandbox/`)
 
 **Email channel** (`gateway/email/`):
 
-- **EmailChannelAdapter** — Implements `ChannelAdapter` for email
+- **EmailChannelAdapter** — Implements `ChannelAdapter` for email. Owns all
+  email sub-components (listener, responder, authenticator, authorizer) via
+  `from_config()` factory. `RepoHandler` accesses email functionality only
+  through the adapter.
 - **EmailListener** — IMAP polling loop
 - **EmailResponder** — SMTP reply construction with threading support
 - **SenderAuthenticator** — DMARC verification on trusted headers
@@ -58,9 +61,14 @@ Each channel implements `ChannelAdapter` (e.g., `EmailChannelAdapter` in
 ```
 Channel (e.g., IMAP Server)
   -> Listener (e.g., EmailListener poll/IDLE)
-    -> ChannelAdapter.authenticate_and_parse()
-      -> (email: DMARC + sender auth + MIME parsing)
-    -> GatewayService._process_message_worker()
+    -> RepoHandler._submit_message(raw_message)
+      -> GatewayService.submit_message(raw_message, handler)
+        -> Register temp task in tracker
+        -> Submit to worker thread pool
+    -> GatewayService._process_message_worker()  [worker thread]
+      -> ChannelAdapter.authenticate_and_parse()
+        -> (email: DMARC + sender auth + MIME parsing)
+      -> Duplicate detection (reject if conversation already active)
       -> ConversationManager
         -> Initialize/resume git checkout
         -> ChannelAdapter.save_attachments()
