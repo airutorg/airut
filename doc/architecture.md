@@ -1,8 +1,9 @@
 # Architecture
 
-Airut is an email gateway for headless Claude Code interaction. It treats Claude
-as a correspondent you exchange emails with — send instructions, receive
-results, reply to continue the conversation.
+Airut is a protocol-agnostic gateway for headless Claude Code interaction. It
+currently supports email as a channel — send instructions, receive results,
+reply to continue the conversation. The architecture separates channel-specific
+protocol handling from the core orchestration to support future channels.
 
 ## Concepts
 
@@ -48,19 +49,20 @@ This section describes how the implementation realizes the concepts above.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         EmailGatewayService                             │
+│                           GatewayService                                │
 │                                                                         │
 │  ┌──────────────────────────────────────────────────────────────────┐   │
 │  │                    RepoHandler (per repository)                  │   │
 │  │                                                                  │   │
-│  │  EmailListener ──▶ Authenticator ──▶ Authorizer                  │   │
-│  │       │                                   │                      │   │
-│  │       │           ConversationManager ◀───┘                      │   │
-│  │       │                   │                                      │   │
-│  │       │           Sandbox (airut/sandbox/) ◀──────────┐          │   │
-│  │       │                   │                           │          │   │
-│  │       ▼                   ▼                           │          │   │
-│  │  EmailResponder ◀─── Task execution ◀─── ProxyManager (internal) │   │
+│  │  Listener ──▶ ChannelAdapter.authenticate_and_parse()            │   │
+│  │       │                                         │                │   │
+│  │       │       ConversationManager ◀─────────────┘                │   │
+│  │       │                  │                                       │   │
+│  │       │       Sandbox (airut/sandbox/) ◀─────────────────┐       │   │
+│  │       │                  │                               │       │   │
+│  │       ▼                  ▼                               │       │   │
+│  │  ChannelAdapter ◀──── Task execution ◀──── ProxyManager (int.)   │   │
+│  │  .send_reply()                                                   │   │
 │  └──────────────────────────────────────────────────────────────────┘   │
 │                                                                         │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌────────────────────────┐   │
@@ -75,8 +77,8 @@ each component's lifetime and what resources it can access.
 
 **Service-scoped** — one instance per server process, shared across all repos:
 
-- **EmailGatewayService** — Top-level orchestrator that manages repo handlers,
-  shared thread pool, dashboard, and graceful shutdown
+- **GatewayService** — Top-level orchestrator that manages repo handlers, shared
+  thread pool, dashboard, and graceful shutdown
 - **Sandbox** (`airut/sandbox/`) — Manages container execution, proxy
   infrastructure, execution context state, and image builds
 - **ThreadPool** — Limits concurrent task execution across repositories
@@ -87,14 +89,14 @@ each component's lifetime and what resources it can access.
 
 - **RepoHandler** — Per-repository component that owns all repo-scoped
   components below
+- **ChannelAdapter** — Protocol-specific message handling (authentication,
+  parsing, replies). For email: `EmailChannelAdapter` wraps the listener,
+  authenticator, authorizer, and responder.
 - **EmailListener** — Polls IMAP inbox (or uses IDLE) for incoming messages
-- **SenderAuthenticator** — Verifies DMARC pass on trusted headers
-- **SenderAuthorizer** — Checks sender against repository allowlist
 - **ConversationManager** — Creates/resumes conversations, manages git mirror
   and workspaces
 - **Sandbox Task** — Per-execution task created by the Sandbox; runs Claude Code
   in a container with proxy, mounts, and execution context management
-- **EmailResponder** — Sends replies via SMTP with proper threading headers
 - **GitMirrorCache** — Bare mirror repository for fast local clones
 
 **Conversation-scoped** — created when a new email thread starts, persists
@@ -106,7 +108,7 @@ across all tasks in that conversation:
   (streaming events), and `/root/.claude` state for `--resume` across tasks
 - **Conversation lock** — Serializes task execution within a conversation
 
-**Task-scoped** — created when processing an inbound email, destroyed when the
+**Task-scoped** — created when processing an inbound message, destroyed when the
 task completes:
 
 - **Container process** — Podman container running Claude Code
@@ -119,7 +121,7 @@ task completes:
 
 | Concept            | Implementation                                                  |
 | ------------------ | --------------------------------------------------------------- |
-| Email conversation | Conversation ID (`[ID:xyz123]`) + conversation directory        |
+| Conversation       | Conversation ID + conversation directory                        |
 | Git checkout       | `ConversationManager` clones from git mirror                    |
 | Claude session     | Session ID stored in `conversation.json`, passed via `--resume` |
 | Container sandbox  | `Sandbox`/`Task` runs Podman with controlled mounts             |
@@ -132,18 +134,96 @@ The sandbox library (`airut/sandbox/`) is protocol-agnostic — it knows nothing
 about email, conversations, or gateway-specific layouts. The gateway bridges its
 own concepts to the sandbox's neutral interface:
 
-| Gateway concept  | Sandbox concept         | Mapping                                 |
-| ---------------- | ----------------------- | --------------------------------------- |
-| Conversation ID  | `execution_context_id`  | Passed to `create_task()`               |
-| Conversation dir | `execution_context_dir` | Gateway builds paths, sandbox uses them |
-| Email task       | `Task.execute()` call   | One email → one `execute()` invocation  |
+| Gateway concept  | Sandbox concept         | Mapping                                  |
+| ---------------- | ----------------------- | ---------------------------------------- |
+| Conversation ID  | `execution_context_id`  | Passed to `create_task()`                |
+| Conversation dir | `execution_context_dir` | Gateway builds paths, sandbox uses them  |
+| Inbound message  | `Task.execute()` call   | One message → one `execute()` invocation |
 
 The `execution_context_id` is an opaque string to the sandbox — it scopes
 execution context state and network resources without knowing that it represents
 a conversation. See [spec/sandbox.md](../spec/sandbox.md) for the sandbox's own
 API documentation.
 
+### Authentication and Authorization
+
+The channel adapter is responsible for authenticating and authorizing inbound
+messages before the core processes them. This is a single
+`authenticate_and_parse()` call that returns a `ParsedMessage` on success or
+`None` to reject the message. The core does not know how authentication works —
+it only sees the result.
+
+Each channel implements authentication differently. The email channel uses a
+two-layer approach (see [Email Channel](#email-channel) below for details):
+
+1. **Authentication** (`SenderAuthenticator`) — Verifies sender identity via
+   DMARC on trusted `Authentication-Results` headers
+2. **Authorization** (`SenderAuthorizer`) — Checks authenticated sender against
+   the repository's allowlist
+
 ### Request Flow
+
+```
+Inbound message
+    │
+    ▼
+Listener ──▶ ChannelAdapter.authenticate_and_parse()
+    │              │
+    │              ├──▶ Returns ParsedMessage or None (rejected)
+    │              │
+    ▼              ▼
+ConversationManager
+    │
+    ├──▶ Resolve conversation ID, or generate new ID
+    │
+    ├──▶ Create conversation directory, or resume existing
+    │
+    ├──▶ Clone workspace from git mirror (new) or reuse (resume)
+    │
+    ├──▶ ChannelAdapter.save_attachments() ──▶ inbox/
+    │
+    ▼
+Sandbox (airut/sandbox/)
+    │
+    ├──▶ Build container image (cached by content hash)
+    │
+    ├──▶ Create Task with mounts, env, session dir
+    │
+    ├──▶ Prepend channel context to prompt (gateway layer)
+    │
+    ├──▶ Task.execute():
+    │        Start proxy (network sandbox)
+    │        Run Claude Code container with mounts:
+    │            /workspace  ← conversation workspace
+    │            /inbox      ← channel attachments
+    │            /outbox     ← files to attach to reply
+    │        For existing sessions, pass --resume {session_id}
+    │        Capture output, classify outcome
+    │        Stop proxy
+    │
+    ▼
+ChannelAdapter.send_reply()
+    │
+    ▼
+Listener cleanup
+```
+
+### Email Channel
+
+The email channel (`gateway/email/`) implements `ChannelAdapter` as
+`EmailChannelAdapter`, wrapping the email-specific components:
+
+- **EmailListener** — IMAP polling (or IDLE) for incoming messages
+- **SenderAuthenticator** — DMARC verification on trusted headers
+- **SenderAuthorizer** — Sender allowlist checking
+- **EmailResponder** — SMTP reply construction with threading headers
+
+**Email lifecycle:** Airut treats the IMAP inbox as a work queue. After
+processing a message (whether successful or not), it permanently deletes the
+message from the inbox. This is why each repository requires a dedicated email
+account — Airut will process and delete every message it finds.
+
+**Email request flow** (channel-specific detail within the generic flow above):
 
 ```
 IMAP inbox
@@ -155,33 +235,14 @@ EmailListener (poll or IDLE)
     │
     ├──▶ SenderAuthorizer (allowlist check)
     │
-    ▼
-ConversationManager
+    ├──▶ Parse MIME body, strip quotes, decode attachments
     │
-    ├──▶ Parse [ID:...] from subject, or generate new ID
+    ├──▶ Extract conversation ID from headers or subject [ID:...]
     │
-    ├──▶ Create conversation directory, or resume existing
-    │
-    ├──▶ Clone workspace from git mirror (new) or reuse (resume)
+    ├──▶ Extract model hint from subaddressing (user+opus@...)
     │
     ▼
-Sandbox (airut/sandbox/)
-    │
-    ├──▶ Build container image (cached by content hash)
-    │
-    ├──▶ Create Task with mounts, env, session dir
-    │
-    ├──▶ Prepend email prelude to prompt (gateway layer)
-    │
-    ├──▶ Task.execute():
-    │        Start proxy (network sandbox)
-    │        Run Claude Code container with mounts:
-    │            /workspace  ← conversation workspace
-    │            /inbox      ← email attachments
-    │            /outbox     ← files to attach to reply
-    │        For existing sessions, pass --resume {session_id}
-    │        Capture output, classify outcome
-    │        Stop proxy
+    ... (generic flow: ConversationManager → Sandbox → Task) ...
     │
     ▼
 EmailResponder
@@ -200,11 +261,6 @@ EmailListener
     │
     └──▶ Delete original message from IMAP inbox (expunge)
 ```
-
-**Email lifecycle:** Airut treats the IMAP inbox as a work queue. After
-processing a message (whether successful or not), it permanently deletes the
-message from the inbox. This is why each repository requires a dedicated email
-account — Airut will process and delete every message it finds.
 
 ### Storage Structure
 

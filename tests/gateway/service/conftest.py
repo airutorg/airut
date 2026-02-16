@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from airut.gateway.service import EmailGatewayService
+from airut.gateway.service import GatewayService
 
 
 def make_message(
@@ -56,7 +56,7 @@ def update_repo(handler: Any, **overrides: Any) -> None:
 def make_service(
     email_config: Any, tmp_path: Path, **config_overrides: Any
 ) -> tuple[Any, Any]:
-    """Create an EmailGatewayService with all external deps mocked.
+    """Create an GatewayService with all external deps mocked.
 
     Returns:
         Tuple of (service, handler) where handler is svc.repo_handlers["test"].
@@ -99,7 +99,7 @@ def make_service(
         ),
     ):
         mock_ver.return_value = (MagicMock(git_sha="abc1234"), MagicMock())
-        svc = EmailGatewayService(server_config, repo_root=tmp_path)
+        svc = GatewayService(server_config, repo_root=tmp_path)
 
     handler = svc.repo_handlers["test"]
 

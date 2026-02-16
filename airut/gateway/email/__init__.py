@@ -3,31 +3,17 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Gateway subsystem.
+"""Email channel implementation for the gateway.
 
-Provides headless interaction with Claude Code via messaging channels:
-- Channel adapter abstraction (ChannelAdapter, ParsedMessage)
-- Git-based conversation state management (ConversationManager)
-- Email channel implementation (gateway/email/)
-- Configuration loading
+Provides email-specific protocol handling:
+- EmailChannelAdapter: ChannelAdapter implementation for email
+- EmailListener: IMAP polling/IDLE listener
+- EmailResponder: SMTP reply construction
+- SenderAuthenticator: DMARC verification
+- SenderAuthorizer: Sender allowlist checking
+- Email MIME parsing and attachment extraction
 """
 
-from airut.gateway.channel import (
-    ChannelAdapter,
-    ParsedMessage,
-)
-from airut.gateway.config import (
-    ConfigError,
-    GlobalConfig,
-    RepoConfig,
-    RepoServerConfig,
-    ServerConfig,
-)
-from airut.gateway.conversation import (
-    ConversationError,
-    ConversationManager,
-    GitCloneError,
-)
 from airut.gateway.email.listener import (
     EmailListener,
     IMAPConnectionError,
@@ -35,11 +21,13 @@ from airut.gateway.email.listener import (
 )
 from airut.gateway.email.parsing import (
     ParseError,
+    collect_outbox_files,
     decode_subject,
     extract_attachments,
     extract_body,
     extract_conversation_id,
     extract_conversation_id_from_headers,
+    extract_model_from_address,
 )
 from airut.gateway.email.responder import (
     EmailResponder,
@@ -54,30 +42,19 @@ from airut.gateway.email.security import (
 
 
 __all__ = [
-    # channel
-    "ChannelAdapter",
-    "ParsedMessage",
-    # config
-    "ConfigError",
-    "GlobalConfig",
-    "RepoConfig",
-    "RepoServerConfig",
-    "ServerConfig",
-    # conversation
-    "ConversationError",
-    "ConversationManager",
-    "GitCloneError",
     # listener
     "EmailListener",
     "IMAPConnectionError",
     "IMAPIdleError",
     # parsing
     "ParseError",
+    "collect_outbox_files",
     "decode_subject",
     "extract_attachments",
     "extract_body",
     "extract_conversation_id",
     "extract_conversation_id_from_headers",
+    "extract_model_from_address",
     # responder
     "EmailResponder",
     "SMTPSendError",

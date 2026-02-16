@@ -6,9 +6,7 @@
 """Per-repository handler for the gateway service.
 
 This module contains the RepoHandler class that manages:
-- Email listener lifecycle (IMAP connection, polling/IDLE)
-- Email responder for sending replies
-- Authentication and authorization
+- Channel adapter lifecycle (email listener, authentication, responder)
 - Conversation management for a single repository
 - Container executor for Claude Code
 """
@@ -23,17 +21,18 @@ from typing import TYPE_CHECKING
 
 from airut.gateway.config import RepoServerConfig
 from airut.gateway.conversation import ConversationManager
-from airut.gateway.listener import (
+from airut.gateway.email.adapter import EmailChannelAdapter
+from airut.gateway.email.listener import (
     EmailListener,
     IMAPConnectionError,
     IMAPIdleError,
 )
-from airut.gateway.responder import EmailResponder
-from airut.gateway.security import SenderAuthenticator, SenderAuthorizer
+from airut.gateway.email.responder import EmailResponder
+from airut.gateway.email.security import SenderAuthenticator, SenderAuthorizer
 
 
 if TYPE_CHECKING:
-    from airut.gateway.service.gateway import EmailGatewayService
+    from airut.gateway.service.gateway import GatewayService
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +45,7 @@ class RepoHandler:
     """Per-repo components and listener thread.
 
     Encapsulates all components that are specific to a single repository:
-    email listener, responder, authentication, authorization, conversation
-    management, and container execution.
+    channel adapter, conversation management, and container execution.
 
     The handler runs a listener loop in its own thread and submits messages
     to the shared executor pool for processing.
@@ -55,12 +53,13 @@ class RepoHandler:
     Attributes:
         config: Per-repo server-side configuration.
         service: Back-reference to the parent service for shared resources.
+        adapter: Channel adapter for sending replies.
     """
 
     def __init__(
         self,
         config: RepoServerConfig,
-        service: EmailGatewayService,
+        service: GatewayService,
     ) -> None:
         """Initialize per-repo components.
 
@@ -81,6 +80,14 @@ class RepoHandler:
         self.conversation_manager = ConversationManager(
             repo_url=config.git_repo_url,
             storage_dir=config.storage_dir,
+        )
+
+        # Build channel adapter
+        self.adapter = EmailChannelAdapter(
+            config=config,
+            authenticator=self.authenticator,
+            authorizer=self.authorizer,
+            responder=self.responder,
         )
 
         self._listener_thread: threading.Thread | None = None

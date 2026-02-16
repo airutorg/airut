@@ -152,14 +152,15 @@ conversation directory layout.
 ### Component Ownership
 
 ```
-EmailGatewayService (orchestrator)
+GatewayService (orchestrator)
 ├── repos: dict[str, RepoHandler]
 │   ├── "airut" → RepoHandler
 │   │   ├── config: RepoServerConfig
-│   │   ├── listener: EmailListener         (per-repo IMAP)
-│   │   ├── responder: EmailResponder       (per-repo SMTP)
-│   │   ├── authenticator: SenderAuthenticator (per-repo authserv_id)
-│   │   ├── authorizer: SenderAuthorizer    (per-repo authorized_senders)
+│   │   ├── adapter: EmailChannelAdapter    (per-repo channel adapter)
+│   │   │   ├── listener: EmailListener     (per-repo IMAP)
+│   │   │   ├── responder: EmailResponder   (per-repo SMTP)
+│   │   │   ├── authenticator: SenderAuthenticator
+│   │   │   └── authorizer: SenderAuthorizer
 │   │   ├── conversation_manager: ConversationManager (per-repo storage)
 │   │   └── sandbox: Sandbox                (per-repo mirror for images)
 │   └── "another-repo" → RepoHandler
@@ -170,18 +171,15 @@ EmailGatewayService (orchestrator)
 └── executor_pool: ThreadPoolExecutor (shared, global max_concurrent)
 ```
 
-| Component             | Scope    | Rationale                                                   |
-| --------------------- | -------- | ----------------------------------------------------------- |
-| `EmailListener`       | Per-repo | Different IMAP inbox per repo                               |
-| `EmailResponder`      | Per-repo | Different SMTP credentials and from address                 |
-| `SenderAuthenticator` | Per-repo | Different `trusted_authserv_id`                             |
-| `SenderAuthorizer`    | Per-repo | Different `authorized_senders`                              |
-| `ConversationManager` | Per-repo | Different storage directory and git mirror                  |
-| `Sandbox`             | Per-repo | Different mirror (for image builds from Dockerfile)         |
-| `ProxyManager`        | Shared   | Gateway infra shared; per-conversation proxy uses allowlist |
-| `TaskTracker`         | Shared   | Global view, tasks tagged with `repo_id`                    |
-| `DashboardServer`     | Shared   | Single dashboard for all repos                              |
-| `ThreadPoolExecutor`  | Shared   | Global `max_concurrent` limit across repos                  |
+| Component             | Scope    | Rationale                                                     |
+| --------------------- | -------- | ------------------------------------------------------------- |
+| `ChannelAdapter`      | Per-repo | Wraps channel-specific components (listener, responder, auth) |
+| `ConversationManager` | Per-repo | Different storage directory and git mirror                    |
+| `Sandbox`             | Per-repo | Different mirror (for image builds from Dockerfile)           |
+| `ProxyManager`        | Shared   | Gateway infra shared; per-conversation proxy uses allowlist   |
+| `TaskTracker`         | Shared   | Global view, tasks tagged with `repo_id`                      |
+| `DashboardServer`     | Shared   | Single dashboard for all repos                                |
+| `ThreadPoolExecutor`  | Shared   | Global `max_concurrent` limit across repos                    |
 
 ### Listener Threading Model
 
@@ -210,16 +208,13 @@ class RepoHandler:
     """Per-repo components and listener thread."""
 
     config: RepoServerConfig
-    listener: EmailListener
-    responder: EmailResponder
-    authenticator: SenderAuthenticator
-    authorizer: SenderAuthorizer
+    adapter: ChannelAdapter  # e.g., EmailChannelAdapter
     conversation_manager: ConversationManager
     sandbox: Sandbox
 ```
 
-Message processing logic (currently in `EmailGatewayService._process_message`)
-moves to `RepoHandler`. It uses the shared executor pool and task tracker via a
+Message processing logic (in `GatewayService._process_message`) moves to
+`RepoHandler`. It uses the shared executor pool and task tracker via a
 back-reference to the service.
 
 ### Proxy Manager

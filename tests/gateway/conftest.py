@@ -65,7 +65,9 @@ def microsoft_oauth2_email_config(tmp_path: Path, master_repo: Path):
     """
     from airut.gateway.config import RepoServerConfig
 
-    with patch("airut.gateway.microsoft_oauth2.ConfidentialClientApplication"):
+    with patch(
+        "airut.gateway.email.microsoft_oauth2.ConfidentialClientApplication"
+    ):
         yield RepoServerConfig(
             repo_id="test",
             imap_server="outlook.office365.com",

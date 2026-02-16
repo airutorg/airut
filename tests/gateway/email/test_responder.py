@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from airut.gateway.responder import (
+from airut.gateway.email.responder import (
     EmailResponder,
     SMTPSendError,
     _extract_domain,
@@ -473,7 +473,7 @@ def test_send_reply_oauth2_token_error_raises_smtp_send_error(
     microsoft_oauth2_email_config,
 ):
     """Test OAuth2 token errors are wrapped in SMTPSendError."""
-    from airut.gateway.microsoft_oauth2 import MicrosoftOAuth2TokenError
+    from airut.gateway.email.microsoft_oauth2 import MicrosoftOAuth2TokenError
 
     responder = EmailResponder(microsoft_oauth2_email_config)
     assert responder._token_provider is not None

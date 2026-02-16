@@ -6,7 +6,7 @@
 """Message processing logic for the gateway service.
 
 This module handles:
-- Processing individual email messages
+- Processing parsed messages from any channel adapter
 - Managing conversation state and session resumption
 - Executing Claude Code in containers via the sandbox
 - Handling prompt-too-long recovery
@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC
-from email.message import Message
 from typing import TYPE_CHECKING
 
 from airut.allowlist import parse_allowlist_yaml
@@ -31,21 +30,9 @@ from airut.conversation import (
     create_conversation_layout,
     prepare_conversation,
 )
+from airut.gateway.channel import ChannelAdapter, ParsedMessage
 from airut.gateway.config import ReplacementMap, RepoConfig
 from airut.gateway.conversation import GitCloneError
-from airut.gateway.parsing import (
-    decode_subject,
-    extract_attachments,
-    extract_body,
-    extract_conversation_id,
-    extract_conversation_id_from_headers,
-    extract_model_from_address,
-)
-from airut.gateway.service.email_replies import (
-    send_acknowledgment,
-    send_error_reply,
-    send_reply,
-)
 from airut.gateway.service.usage_stats import extract_usage_stats
 from airut.sandbox import (
     ContainerEnv,
@@ -56,7 +43,7 @@ from airut.sandbox import (
 
 
 if TYPE_CHECKING:
-    from airut.gateway.service.gateway import EmailGatewayService
+    from airut.gateway.service.gateway import GatewayService
     from airut.gateway.service.repo_handler import RepoHandler
     from airut.sandbox.secrets import SecretReplacements
 
@@ -69,7 +56,7 @@ _REPO_CONTAINER_DIR = ".airut/container"
 
 def build_recovery_prompt(
     last_response: str | None,
-    email_context: str,
+    channel_context: str,
     user_message: str,
 ) -> str:
     """Build a prompt for a new session after context compaction failure.
@@ -80,13 +67,13 @@ def build_recovery_prompt(
 
     Args:
         last_response: The last successful response from the agent, or None.
-        email_context: The email context header (email mode instructions).
+        channel_context: The channel context header (channel mode instructions).
         user_message: The user's current message that triggered the error.
 
     Returns:
         Prompt string for the new session.
     """
-    parts = [email_context, ""]
+    parts = [channel_context, ""]
 
     parts.append(
         "IMPORTANT: The previous conversation session could not be resumed "
@@ -116,7 +103,7 @@ def build_recovery_prompt(
 
 
 def _build_image(
-    service: EmailGatewayService,
+    service: GatewayService,
     mirror: object,
 ) -> str:
     """Build or reuse container image from git mirror.
@@ -224,85 +211,47 @@ def _build_reply_summary(
 
 
 def process_message(
-    service: EmailGatewayService,
-    message: Message,
+    service: GatewayService,
+    parsed: ParsedMessage,
     task_id: str,
     repo_handler: RepoHandler,
+    adapter: ChannelAdapter,
 ) -> tuple[bool, str | None]:
-    """Process a single email message.
+    """Process a parsed message from any channel.
 
     Args:
         service: Parent service for shared resources.
-        message: Parsed email message.
+        parsed: Parsed message from the channel adapter.
         task_id: Task ID for dashboard tracking.
         repo_handler: Repo handler that owns this message.
+        adapter: Channel adapter for sending replies.
 
     Returns:
         Tuple of (success, conversation_id).
     """
-    sender = message.get("From", "")
-    subject = decode_subject(message)
-    message_id = message.get("Message-ID", "")
-    to_address = message.get("To", "")
     repo_id = repo_handler.config.repo_id
-
-    logger.info(
-        "Repo '%s': processing message from %s: %s",
-        repo_id,
-        sender,
-        subject[:50] + "..." if len(subject) > 50 else subject,
-    )
-
-    # Extract model from To address (e.g., airut+opus@domain.com)
-    requested_model = extract_model_from_address(to_address)
-
-    # Authentication: verify DMARC from trusted server
-    authenticated_sender = repo_handler.authenticator.authenticate(message)
-    if authenticated_sender is None:
-        logger.warning(
-            "Repo '%s': rejecting unauthenticated message from %s "
-            "(Message-ID: %s)",
-            repo_id,
-            sender,
-            message_id,
-        )
-        return False, None
-
-    # Authorization: check sender is allowed
-    if not repo_handler.authorizer.is_authorized(authenticated_sender):
-        logger.warning(
-            "Repo '%s': rejecting unauthorized message from %s "
-            "(Message-ID: %s)",
-            repo_id,
-            sender,
-            message_id,
-        )
-        return False, None
-
-    # Extract conversation ID: headers first, then subject fallback
-    references = message.get("References", "").split()
-    in_reply_to = message.get("In-Reply-To")
-    conv_id = extract_conversation_id_from_headers(
-        references, in_reply_to
-    ) or extract_conversation_id(subject)
+    conv_id = parsed.conversation_id
     conv_mgr = repo_handler.conversation_manager
     is_new = not conv_mgr.exists(conv_id) if conv_id else True
 
-    # Extract body (HTML quotes stripped via strip_html_quotes in extract_body)
-    clean_body = extract_body(message)
+    logger.info(
+        "Repo '%s': processing message from %s",
+        repo_id,
+        parsed.sender,
+    )
 
-    if not clean_body.strip():
+    if not parsed.body.strip():
         logger.warning("Repo '%s': empty message body", repo_id)
-        send_error_reply(
-            repo_handler,
-            message,
+        adapter.send_error(
+            parsed,
+            None,
             "Your message appears to be empty. "
             "Please send a new message with instructions.",
         )
         return False, None
 
     conversation_store: ConversationStore | None = None
-    prompt = clean_body
+    prompt = parsed.body
 
     try:
         # Manage conversation
@@ -343,14 +292,14 @@ def process_message(
         )
 
         if is_new:
-            model = requested_model or repo_config.default_model
+            model = parsed.model_hint or repo_config.default_model
             logger.info(
                 "Repo '%s': using model=%s for new conversation %s "
                 "(requested=%s, default=%s)",
                 repo_id,
                 model,
                 conv_id,
-                requested_model,
+                parsed.model_hint,
                 repo_config.default_model,
             )
 
@@ -362,12 +311,12 @@ def process_message(
             conversation_dir = conv_mgr.get_conversation_dir(conv_id)
             conversation_store = ConversationStore(conversation_dir)
             model = conversation_store.get_model() or repo_config.default_model
-            if requested_model and requested_model != model:
+            if parsed.model_hint and parsed.model_hint != model:
                 logger.warning(
                     "Repo '%s': ignoring model=%s in resumed "
                     "conversation %s (using stored model=%s)",
                     repo_id,
-                    requested_model,
+                    parsed.model_hint,
                     conv_id,
                     model,
                 )
@@ -375,48 +324,32 @@ def process_message(
 
         # Send acknowledgment only for first message
         if is_new:
-            send_acknowledgment(
-                repo_handler, message, conv_id, model, service.global_config
-            )
+            dashboard_url = service.global_config.dashboard_base_url
+            adapter.send_acknowledgment(parsed, conv_id, model, dashboard_url)
 
         # Prepare session layout
         layout = create_conversation_layout(conversation_dir)
         prepare_conversation(layout)
 
-        # Extract attachments
-        filenames = extract_attachments(message, layout.inbox)
+        # Save attachments via the channel adapter now that inbox dir exists
+        filenames = adapter.save_attachments(parsed, layout.inbox)
+        channel_context = parsed.channel_context
         if filenames:
+            parsed.attachments = filenames
             logger.info(
                 "Repo '%s': saved %d attachments: %s",
                 repo_id,
                 len(filenames),
                 ", ".join(filenames),
             )
-
-        # Build prompt
-        email_context = (
-            "User is interacting with this session via email interface "
-            "and will receive your last reply as email. "
-            "After the reply, everything not in /workspace, /inbox, "
-            "and /storage is reset. "
-            "Markdown formatting is supported in your responses. "
-            "To send files back to the user, place them in the "
-            "/outbox directory root (no subdirectories). "
-            "Use /storage to persist files across messages.\n\n"
-            "IMPORTANT: AskUserQuestion and plan mode tools "
-            "(EnterPlanMode/ExitPlanMode) do not work over email "
-            "interface. If you need clarification, include questions in "
-            "your response text and the user will reply via email."
-        )
-
-        if filenames:
             inbox_note = (
-                f" The user has attached files to their email, "
+                f" The user has attached files to their message, "
                 f"which I have saved to /inbox/: {', '.join(filenames)}."
             )
-            email_context += inbox_note
+            channel_context += inbox_note
 
-        prompt = f"{email_context}\n\n{clean_body}"
+        # Build prompt
+        prompt = f"{channel_context}\n\n{parsed.body}"
 
         # Build or reuse container image
         image_tag = _build_image(service, conv_mgr.mirror)
@@ -522,7 +455,7 @@ def process_message(
 
             last_response = conversation_store.get_last_successful_response()
             recovery_prompt = build_recovery_prompt(
-                last_response, email_context, clean_body
+                last_response, channel_context, parsed.body
             )
 
             # Create new task for retry
@@ -579,9 +512,16 @@ def process_message(
             )
             conversation_store.add_reply(conv_id, reply)
 
-            if usage_stats.has_any():
-                stats_footer = usage_stats.format_summary()
-                response_body = f"{response_body}\n\n*{stats_footer}*"
+            # Collect outbox files for attachment
+            outbox_files = (
+                list(layout.outbox.iterdir()) if layout.outbox.exists() else []
+            )
+            usage_footer = (
+                usage_stats.format_summary() if usage_stats.has_any() else ""
+            )
+            adapter.send_reply(
+                parsed, conv_id, response_body, usage_footer, outbox_files
+            )
         elif result.outcome == Outcome.TIMEOUT:
             error_msg = (
                 f"The task was interrupted after "
@@ -590,7 +530,7 @@ def process_message(
                 "Reply to resume \u2014 you can ask about progress or "
                 "request next steps."
             )
-            send_error_reply(repo_handler, message, error_msg)
+            adapter.send_error(parsed, conv_id, error_msg)
             reply = _build_reply_summary(
                 result,
                 request_text=prompt,
@@ -623,13 +563,16 @@ def process_message(
             )
             conversation_store.add_reply(conv_id, reply)
 
-        # Send reply
-        assert conv_id is not None
-        send_reply(repo_handler, message, conv_id, response_body)
+            # Send error response with outbox files
+            outbox_files = (
+                list(layout.outbox.iterdir()) if layout.outbox.exists() else []
+            )
+            adapter.send_reply(parsed, conv_id, response_body, "", outbox_files)
+
         logger.info(
             "Repo '%s': sent reply to %s for conversation %s",
             repo_id,
-            sender,
+            parsed.sender,
             conv_id,
         )
         return result.outcome == Outcome.SUCCESS, conv_id
@@ -646,7 +589,7 @@ def process_message(
             "To retry, send your message again.\n\n"
             f"`{e}`"
         )
-        send_error_reply(repo_handler, message, error_msg)
+        adapter.send_error(parsed, conv_id, error_msg)
         return False, None
     except Exception as e:
         logger.exception(
@@ -659,7 +602,7 @@ def process_message(
             "To retry, send your message again.\n\n"
             f"`{type(e).__name__}: {e}`"
         )
-        send_error_reply(repo_handler, message, error_msg)
+        adapter.send_error(parsed, conv_id, error_msg)
         if conv_id and conversation_store:
             try:
                 from datetime import datetime

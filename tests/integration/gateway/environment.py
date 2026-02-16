@@ -339,10 +339,10 @@ class IntegrationEnvironment:
         )
 
     def create_service(self):
-        """Create an EmailGatewayService with this environment's config."""
-        from airut.gateway.service import EmailGatewayService
+        """Create an GatewayService with this environment's config."""
+        from airut.gateway.service import GatewayService
 
-        return EmailGatewayService(
+        return GatewayService(
             self.config,
             repo_root=self.repo_root,
             egress_network=self.egress_network,

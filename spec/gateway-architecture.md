@@ -1,47 +1,75 @@
-# Email Gateway
+# Gateway
 
-Headless email gateway for interacting with the codebase via Claude Code.
-Enables authorized users to send instructions via email and receive Claude's
-responses with full conversation state management.
+Protocol-agnostic gateway for interacting with codebases via Claude Code.
+Enables authorized users to send instructions via messaging channels (email,
+etc.) and receive Claude's responses with full conversation state management.
 
 ## Overview
 
-A persistent Python daemon that monitors email, spins up ephemeral Claude Code
-sessions in containers, and replies with results. Each email conversation maps
-to an isolated git checkout with persistent `.claude/` session state.
+A persistent Python daemon that monitors messaging channels, spins up ephemeral
+Claude Code sessions in containers, and replies with results. Each conversation
+maps to an isolated git checkout with persistent `.claude/` session state.
 
-**Key principle**: Email as a stateful interface to Claude Code, with git-based
-conversation isolation and container-based execution for security.
+**Key principle**: Messaging channels as stateful interfaces to Claude Code,
+with git-based conversation isolation and container-based execution for
+security.
 
 ## Architecture
 
+### Channel Abstraction
+
+The gateway separates protocol-agnostic orchestration (conversation management,
+sandbox execution, session resumption, dashboard tracking) from channel-specific
+protocol handling (email IMAP/SMTP, etc.) via two core types in
+`gateway/channel.py`:
+
+- **`ParsedMessage`** — Protocol-agnostic dataclass produced by the channel
+  adapter after authentication and parsing. Contains sender, body,
+  conversation_id, model_hint, attachments, and channel_context.
+- **`ChannelAdapter`** — `typing.Protocol` defining the interface between the
+  core and channel implementations: `authenticate_and_parse()`,
+  `save_attachments()`, `send_acknowledgment()`, `send_reply()`, `send_error()`.
+
+Each channel implements `ChannelAdapter` (e.g., `EmailChannelAdapter` in
+`gateway/email/adapter.py`). The core works entirely through `ParsedMessage` and
+`ChannelAdapter` — it imports nothing from channel-specific subpackages.
+
 ### Components
 
-- **EmailListener** - IMAP polling loop with authentication and quote stripping
-- **ConversationManager** - Git checkout management and state persistence
-- **Sandbox** - Container lifecycle, network isolation, and execution
+**Protocol-agnostic core** (`gateway/service/`):
+
+- **GatewayService** — Orchestration, thread pool, lifecycle management
+- **RepoHandler** — Per-repo state: channel adapter, listener, conversation
+  manager
+- **ConversationManager** — Git checkout management and state persistence
+- **Sandbox** — Container lifecycle, network isolation, and execution
   (`airut/sandbox/`)
-- **EmailResponder** - SMTP reply construction with threading support
-- **SenderAuthenticator** - DMARC verification on trusted headers
-- **SenderAuthorizer** - Sender allowlist checking
+
+**Email channel** (`gateway/email/`):
+
+- **EmailChannelAdapter** — Implements `ChannelAdapter` for email
+- **EmailListener** — IMAP polling loop
+- **EmailResponder** — SMTP reply construction with threading support
+- **SenderAuthenticator** — DMARC verification on trusted headers
+- **SenderAuthorizer** — Sender allowlist checking
 
 ### Data Flow
 
 ```
-IMAP Server
-  -> EmailListener (poll/IDLE)
-    -> SenderAuthenticator + SenderAuthorizer
-    -> Resolve conversation: headers first, then subject [ID:xyz123]
-    -> ConversationManager
-      -> Initialize/resume git checkout
-      -> Save attachments to inbox/
-    -> Sandbox (Task)
-      -> Spawn Podman container
-      -> Mount conversation directories
-      -> Run claude CLI
-    -> EmailResponder
-      -> Parse JSON output
-      -> Send SMTP reply with [ID:xyz123]
+Channel (e.g., IMAP Server)
+  -> Listener (e.g., EmailListener poll/IDLE)
+    -> ChannelAdapter.authenticate_and_parse()
+      -> (email: DMARC + sender auth + MIME parsing)
+    -> GatewayService._process_message_worker()
+      -> ConversationManager
+        -> Initialize/resume git checkout
+        -> ChannelAdapter.save_attachments()
+      -> Sandbox (Task)
+        -> Spawn Podman container
+        -> Mount conversation directories
+        -> Run claude CLI
+      -> ChannelAdapter.send_reply()
+        -> (email: SMTP with threading headers)
 ```
 
 ## Conversation State Management
@@ -63,7 +91,7 @@ Storage uses XDG state directory: `~/.local/state/airut/<repo_id>/`.
 │   │   │   ├── .git/            # Git repository
 │   │   │   └── ...              # Full project structure
 │   │   ├── claude/              # Claude Code session state (mounted at /root/.claude)
-│   │   ├── inbox/               # Email attachments (mounted at /inbox)
+│   │   ├── inbox/               # Channel attachments (mounted at /inbox)
 │   │   ├── outbox/              # Files to attach to reply (mounted at /outbox)
 │   │   └── storage/             # Conversation-scoped persistent data (mounted at /storage)
 │   └── def67890/                # Another session
@@ -229,7 +257,7 @@ perspective):
 | --------------------------------------------------- | ----------------------------------- | ---------- |
 | `{STORAGE}/conversations/{ID}/workspace:/workspace` | Conversation workspace              | Read-write |
 | `{STORAGE}/conversations/{ID}/claude:/root/.claude` | Per-conversation session state      | Read-write |
-| `{STORAGE}/conversations/{ID}/inbox:/inbox`         | Email attachments                   | Read-write |
+| `{STORAGE}/conversations/{ID}/inbox:/inbox`         | Channel attachments                 | Read-write |
 | `{STORAGE}/conversations/{ID}/outbox:/outbox`       | Files to attach to reply            | Read-write |
 | `{STORAGE}/conversations/{ID}/storage:/storage`     | Conversation-scoped persistent data | Read-write |
 
@@ -303,7 +331,7 @@ written only at state transitions.
 1. Before execution, load session metadata from `conversation.json`
 2. If a previous session_id exists, pass `--resume {session_id}` to Claude
 3. After execution, record the new reply summary for future resumption
-4. Claude maintains conversation context across email messages
+4. Claude maintains conversation context across messages
 
 **Unresumable session recovery**: When a resumed session fails due to an
 unresumable error, the service automatically retries with a fresh session. The
@@ -495,7 +523,7 @@ been implemented.
 
 ## Not In Scope
 
-- **Web UI**: Email-only interface by design
-- **Real-time chat**: Email is asynchronous
+- **Web UI for task submission**: Channel-based interfaces only (email, etc.)
+- **Real-time chat**: Channels are asynchronous
 - **Collaboration**: Single authorized sender per deployment
 - **Conversation export**: Use git log for audit trail
