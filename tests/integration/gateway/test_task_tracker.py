@@ -35,6 +35,34 @@ from .conftest import get_message_text
 from .environment import IntegrationEnvironment
 
 
+def _poll_tracker(
+    tracker,
+    predicate,
+    timeout: float = 10.0,
+    interval: float = 0.1,
+):
+    """Poll the tracker until predicate(all_tasks) is truthy.
+
+    Args:
+        tracker: TaskTracker instance.
+        predicate: Callable taking list[TaskState], returns truthy
+            value when done.
+        timeout: Maximum seconds to wait.
+        interval: Seconds between polls.
+
+    Returns:
+        The truthy value returned by predicate, or None on timeout.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        tasks = tracker.get_all_tasks()
+        result = predicate(tasks)
+        if result:
+            return result
+        time.sleep(interval)
+    return None
+
+
 class TestTaskTrackerNewConversation:
     """Test task tracker state during new conversation lifecycle."""
 
@@ -309,29 +337,24 @@ class TestTaskTrackerUnauthorized:
             )
             assert processed, "Service did not process message in time"
 
-            # Give tracker time to update
-            time.sleep(1.0)
-
-            # Check tracker state
-            all_tasks = service.tracker.get_all_tasks()
-            assert len(all_tasks) >= 1, "No tasks in tracker"
-
-            # Find the task (it has a temp ID like "new-...")
-            # but should have been completed with failure
-            auth_tasks = [
-                t
-                for t in all_tasks
-                if t.subject == "(not authorized)"
-                or t.sender == "hacker@evil.com"
-            ]
-            assert len(auth_tasks) >= 1, (
-                "No auth rejection task found. Tasks: "
-                + repr(
-                    [
-                        (t.conversation_id, t.subject, t.sender)
-                        for t in all_tasks
-                    ]
-                )
+            # Poll tracker for completed auth rejection task
+            auth_tasks = _poll_tracker(
+                service.tracker,
+                lambda tasks: [
+                    t
+                    for t in tasks
+                    if t.status == TaskStatus.COMPLETED
+                    and (
+                        t.subject == "(not authorized)"
+                        or t.sender == "hacker@evil.com"
+                    )
+                ],
+            )
+            assert auth_tasks, "No auth rejection task found. Tasks: " + repr(
+                [
+                    (t.conversation_id, t.subject, t.sender)
+                    for t in service.tracker.get_all_tasks()
+                ]
             )
 
             task = auth_tasks[0]
@@ -379,27 +402,24 @@ class TestTaskTrackerUnauthorized:
             )
             assert processed
 
-            time.sleep(1.0)
-
-            all_tasks = service.tracker.get_all_tasks()
-            assert len(all_tasks) >= 1
-
-            # Find the auth failure task
-            auth_tasks = [
-                t for t in all_tasks if t.subject == "(not authorized)"
-            ]
-            assert len(auth_tasks) >= 1, (
-                "No DMARC rejection task found. Tasks: "
-                + repr(
-                    [
-                        (t.conversation_id, t.subject, t.sender)
-                        for t in all_tasks
-                    ]
-                )
+            # Poll for completed auth rejection task
+            auth_tasks = _poll_tracker(
+                service.tracker,
+                lambda tasks: [
+                    t
+                    for t in tasks
+                    if t.status == TaskStatus.COMPLETED
+                    and t.subject == "(not authorized)"
+                ],
+            )
+            assert auth_tasks, "No DMARC rejection task found. Tasks: " + repr(
+                [
+                    (t.conversation_id, t.subject, t.sender)
+                    for t in service.tracker.get_all_tasks()
+                ]
             )
 
             task = auth_tasks[0]
-            assert task.status == TaskStatus.COMPLETED
             assert task.success is False
 
         finally:
@@ -473,17 +493,18 @@ sys.exit(1)
             )
             assert response is not None
 
-            # Give tracker time to finalize
-            time.sleep(1.0)
-
-            # Task should be completed (not stuck)
-            all_tasks = service.tracker.get_all_tasks()
-            completed_tasks = [
-                t for t in all_tasks if t.status == TaskStatus.COMPLETED
-            ]
-            assert len(completed_tasks) >= 1, (
-                "No completed tasks after empty body. "
-                + repr([(t.conversation_id, t.status.value) for t in all_tasks])
+            # Poll for at least one completed task
+            completed = _poll_tracker(
+                service.tracker,
+                lambda tasks: [
+                    t for t in tasks if t.status == TaskStatus.COMPLETED
+                ],
+            )
+            assert completed, "No completed tasks after empty body. " + repr(
+                [
+                    (t.conversation_id, t.status.value)
+                    for t in service.tracker.get_all_tasks()
+                ]
             )
 
         finally:
@@ -554,20 +575,24 @@ events = [
             assert seen_first, "First concurrent task not completed"
             assert seen_second, "Second concurrent task not completed"
 
-            # Give tracker time to finalize
-            time.sleep(1.0)
-
-            # Both tasks should be completed
-            all_tasks = service.tracker.get_all_tasks()
-            completed_tasks = [
-                t for t in all_tasks if t.status == TaskStatus.COMPLETED
-            ]
-
-            # We should have at least 2 completed tasks
-            assert len(completed_tasks) >= 2, (
-                "Expected at least 2 completed tasks, "
-                f"got {len(completed_tasks)}. "
-                + repr([(t.conversation_id, t.subject) for t in all_tasks])
+            # Poll for at least 2 completed tasks
+            completed_tasks = _poll_tracker(
+                service.tracker,
+                lambda tasks: (
+                    [t for t in tasks if t.status == TaskStatus.COMPLETED]
+                    if sum(1 for t in tasks if t.status == TaskStatus.COMPLETED)
+                    >= 2
+                    else None
+                ),
+            )
+            assert completed_tasks, (
+                "Expected at least 2 completed tasks. "
+                + repr(
+                    [
+                        (t.conversation_id, t.subject)
+                        for t in service.tracker.get_all_tasks()
+                    ]
+                )
             )
 
             # Verify they have different conversation IDs
@@ -699,13 +724,15 @@ events = [
         service_thread.start()
 
         try:
-            # Wait for service to be ready
-            time.sleep(2.0)
-
             if service.dashboard is not None:
                 from werkzeug.test import Client
 
                 client = Client(service.dashboard._wsgi_app)
+
+                # Dashboard WSGI app is available immediately (no
+                # need to wait for the HTTP server thread — we use
+                # the werkzeug test client which calls the app
+                # directly).
 
                 # Get initial ETag
                 r1 = client.get("/api/tracker")
@@ -730,11 +757,13 @@ events = [
                     timeout=30.0,
                 )
 
-                time.sleep(1.0)
-
-                # ETag should have changed
-                r2 = client.get("/api/tracker")
-                etag2 = r2.headers.get("ETag")
+                # Poll until ETag changes (tracker updated)
+                deadline = time.monotonic() + 10.0
+                etag2 = etag1
+                while etag2 == etag1 and time.monotonic() < deadline:
+                    time.sleep(0.1)
+                    r2 = client.get("/api/tracker")
+                    etag2 = r2.headers.get("ETag")
                 assert etag1 != etag2, "ETag should change after state mutation"
 
                 # Old ETag should still return 200 (not 304)
@@ -898,10 +927,15 @@ events = [
             # Wait for inbox to be processed
             integration_env.email_server.wait_until_inbox_empty(timeout=10.0)
 
-            # Give tracker time to finalize
-            time.sleep(2.0)
+            # Poll until no tasks are in non-terminal states
+            _poll_tracker(
+                service.tracker,
+                lambda tasks: (
+                    len(tasks) >= 2
+                    and all(t.status == TaskStatus.COMPLETED for t in tasks)
+                ),
+            )
 
-            # Check that NO tasks are stuck
             all_tasks = service.tracker.get_all_tasks()
             stuck_tasks = [
                 t
