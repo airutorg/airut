@@ -174,10 +174,14 @@ class TestProcessMessageWorker:
     def test_auth_failure_completes_task(
         self, email_config, tmp_path: Path
     ) -> None:
-        """When authenticate_and_parse returns None, task is marked failed."""
+        """When authenticate_and_parse raises, task is marked failed."""
+        from airut.gateway.channel import AuthenticationError
+
         svc, handler = make_service(email_config, tmp_path)
         msg = make_message()
-        handler.adapter.authenticate_and_parse.return_value = None
+        handler.adapter.authenticate_and_parse.side_effect = (
+            AuthenticationError(sender="bad@evil.com", reason="not authorized")
+        )
 
         svc._process_message_worker(msg, "task-1", handler)
 
@@ -341,6 +345,89 @@ class TestProcessMessageWorker:
 
         svc.tracker.start_task.assert_called_once_with("new-7f2fdf9f")
         svc.tracker.complete_task.assert_called_once_with("new-7f2fdf9f", False)
+
+    def test_resume_updates_task_id_to_conv_id(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """When resuming an existing conversation, task ID updates to conv_id.
+
+        Regression: process_message only calls update_task_id for new
+        conversations. For resumed conversations, the worker must update
+        the temp ID to the real conv_id so the dashboard shows the task
+        under the correct conversation.
+        """
+        from airut.gateway.channel import ParsedMessage
+
+        svc, handler = make_service(email_config, tmp_path)
+        parsed = ParsedMessage(
+            sender="user@example.com",
+            body="Follow-up",
+            conversation_id="aabb1122",
+            model_hint=None,
+            subject="Re: [ID:aabb1122] Follow-up",
+        )
+        handler.adapter.authenticate_and_parse.return_value = parsed
+        handler.conversation_manager.exists.return_value = True
+        svc.tracker.is_task_active.return_value = False
+
+        msg = make_message()
+        with patch(
+            "airut.gateway.service.gateway.process_message",
+            return_value=(True, "aabb1122"),
+        ):
+            svc._process_message_worker(msg, "new-deadbeef", handler)
+
+        # Task ID should have been reassigned from temp to real conv_id
+        svc.tracker.reassign_task.assert_called_once_with(
+            "new-deadbeef", "aabb1122"
+        )
+        svc.tracker.complete_task.assert_called_once_with("aabb1122", True)
+
+    def test_auth_failure_updates_subject(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """When auth fails, subject updates to '(not authorized)'.
+
+        Regression: unauthorized messages left the task with subject
+        '(authenticating)' and no sender recorded. The dashboard
+        provided no visibility into who sent the rejected message.
+        """
+        from airut.gateway.channel import AuthenticationError
+
+        svc, handler = make_service(email_config, tmp_path)
+        handler.adapter.authenticate_and_parse.side_effect = (
+            AuthenticationError(
+                sender="hacker@evil.com",
+                reason="sender not authorized",
+            )
+        )
+
+        msg = make_message(sender="hacker@evil.com")
+        svc._process_message_worker(msg, "new-unauth01", handler)
+
+        # Subject should have been updated from "(authenticating)"
+        svc.tracker.update_task_subject.assert_called_once_with(
+            "new-unauth01",
+            "(not authorized)",
+            sender="hacker@evil.com",
+        )
+
+    def test_auth_exception_not_swallowed(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """Non-auth exceptions don't update subject but still complete."""
+        svc, handler = make_service(email_config, tmp_path)
+        handler.adapter.authenticate_and_parse.side_effect = RuntimeError(
+            "IMAP disconnect"
+        )
+
+        msg = make_message()
+        svc._process_message_worker(msg, "new-crash01", handler)
+
+        # Non-auth exceptions should NOT update subject
+        svc.tracker.update_task_subject.assert_not_called()
+        # But task should still be completed as failed
+        svc.tracker.complete_task.assert_called_once_with("new-crash01", False)
 
 
 class TestStartStop:

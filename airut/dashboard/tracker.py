@@ -332,6 +332,54 @@ class TaskTracker:
             self._clock.tick()
             return True
 
+    def reassign_task(self, temp_id: str, conv_id: str) -> bool:
+        """Move a temporary task to a (possibly existing) conversation ID.
+
+        Handles two cases:
+
+        - **conv_id is new**: renames ``temp_id`` → ``conv_id`` (like
+          ``update_task_id``).
+        - **conv_id already exists** (resumed conversation): transfers
+          the temp task's in-progress state onto the existing task and
+          deletes the temp entry, incrementing ``message_count``.
+
+        Args:
+            temp_id: Temporary task ID (e.g. ``"new-..."``) to remove.
+            conv_id: Real conversation ID to track under.
+
+        Returns:
+            True if the reassignment succeeded, False if ``temp_id``
+            was not found.
+        """
+        with self._lock:
+            if temp_id not in self._tasks:
+                return False
+
+            temp_task = self._tasks[temp_id]
+
+            if conv_id not in self._tasks:
+                # Simple rename
+                self._tasks.pop(temp_id)
+                temp_task.conversation_id = conv_id
+                self._tasks[conv_id] = temp_task
+            else:
+                # Resume: transfer state to existing task
+                existing = self._tasks[conv_id]
+                existing.status = temp_task.status
+                existing.subject = temp_task.subject
+                existing.sender = temp_task.sender
+                existing.started_at = temp_task.started_at
+                existing.completed_at = None
+                existing.success = None
+                existing.message_count += 1
+                if temp_task.model is not None:
+                    existing.model = temp_task.model
+                self._tasks.move_to_end(conv_id)
+                del self._tasks[temp_id]
+
+            self._clock.tick()
+            return True
+
     def set_task_model(self, conversation_id: str, model: str) -> bool:
         """Set the model for a task.
 

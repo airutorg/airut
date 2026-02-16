@@ -362,6 +362,91 @@ class TestTaskTracker:
         assert tracker.get_task("old-id") is not None
         assert tracker.get_task("new-id") is not None
 
+    def test_reassign_task_simple_rename(self) -> None:
+        """Test reassigning a temp task to a new conv_id (rename)."""
+        tracker = TaskTracker()
+        tracker.add_task("new-12345678", "Test subject", sender="user@ex.com")
+        tracker.start_task("new-12345678")
+
+        result = tracker.reassign_task("new-12345678", "abc12345")
+
+        assert result is True
+        assert tracker.get_task("new-12345678") is None
+        task = tracker.get_task("abc12345")
+        assert task is not None
+        assert task.conversation_id == "abc12345"
+        assert task.subject == "Test subject"
+        assert task.sender == "user@ex.com"
+        assert task.status == TaskStatus.IN_PROGRESS
+
+    def test_reassign_task_merge_with_existing(self) -> None:
+        """Test reassigning temp task to an existing completed conv_id."""
+        tracker = TaskTracker()
+
+        # Existing completed task
+        tracker.add_task("abc12345", "Original subject", sender="old@ex.com")
+        tracker.start_task("abc12345")
+        tracker.complete_task("abc12345", success=True)
+        existing_task = tracker.get_task("abc12345")
+        assert existing_task is not None
+        original_msg_count = existing_task.message_count
+
+        # New temp task (in progress)
+        tracker.add_task("new-temp", "Follow-up", sender="new@ex.com")
+        tracker.start_task("new-temp")
+
+        result = tracker.reassign_task("new-temp", "abc12345")
+
+        assert result is True
+        assert tracker.get_task("new-temp") is None
+        task = tracker.get_task("abc12345")
+        assert task is not None
+        # State should be transferred from temp task
+        assert task.status == TaskStatus.IN_PROGRESS
+        assert task.subject == "Follow-up"
+        assert task.sender == "new@ex.com"
+        assert task.completed_at is None
+        assert task.success is None
+        assert task.message_count == original_msg_count + 1
+
+    def test_reassign_task_merge_transfers_model(self) -> None:
+        """Test model is transferred from temp task during merge."""
+        tracker = TaskTracker()
+
+        tracker.add_task("abc12345", "Original")
+        tracker.start_task("abc12345")
+        tracker.complete_task("abc12345", success=True)
+
+        tracker.add_task("new-temp", "Follow-up", model="opus")
+        tracker.start_task("new-temp")
+
+        tracker.reassign_task("new-temp", "abc12345")
+
+        task = tracker.get_task("abc12345")
+        assert task is not None
+        assert task.model == "opus"
+
+    def test_reassign_task_temp_not_found(self) -> None:
+        """Test reassign returns False when temp_id doesn't exist."""
+        tracker = TaskTracker()
+
+        result = tracker.reassign_task("nonexistent", "abc12345")
+
+        assert result is False
+
+    def test_reassign_task_ticks_clock(self) -> None:
+        """Test reassign_task ticks the version clock."""
+        from airut.dashboard.versioned import VersionClock
+
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        tracker.add_task("new-temp", "Test")
+        version_before = clock.version
+
+        tracker.reassign_task("new-temp", "abc12345")
+
+        assert clock.version > version_before
+
     def test_update_task_subject_success(self) -> None:
         """Test updating a task's subject."""
         tracker = TaskTracker()

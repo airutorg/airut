@@ -25,7 +25,12 @@ protocol handling (email IMAP/SMTP, etc.) via two core types in
 
 - **`ParsedMessage`** — Protocol-agnostic dataclass produced by the channel
   adapter after authentication and parsing. Contains sender, body,
-  conversation_id, model_hint, attachments, and channel_context.
+  conversation_id, model_hint, attachments, subject, and channel_context.
+- **`AuthenticationError`** — Exception raised by `authenticate_and_parse()`
+  when authentication or authorization fails. Carries `sender` (raw sender
+  identity for dashboard visibility) and `reason` (human-readable rejection
+  reason). Allows the gateway core to update the task tracker without
+  protocol-specific knowledge.
 - **`ChannelAdapter`** — `typing.Protocol` defining the interface between the
   core and channel implementations: `authenticate_and_parse()`,
   `save_attachments()`, `send_acknowledgment()`, `send_reply()`, `send_error()`,
@@ -68,6 +73,8 @@ Channel (e.g., IMAP Server)
     -> GatewayService._process_message_worker()  [worker thread]
       -> ChannelAdapter.authenticate_and_parse()
         -> (email: DMARC + sender auth + MIME parsing)
+        -> raises AuthenticationError on failure (with sender + reason)
+      -> Reassign temp task ID to real conversation ID
       -> Duplicate detection (reject if conversation already active)
       -> ConversationManager
         -> Initialize/resume git checkout
