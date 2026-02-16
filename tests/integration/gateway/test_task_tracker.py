@@ -701,8 +701,8 @@ events = [
                 assert conv_task is not None
                 assert conv_task["status"] == "completed"
 
-                # Test /health endpoint
-                health_response = client.get("/health")
+                # Test /api/health endpoint
+                health_response = client.get("/api/health")
                 assert health_response.status_code == 200
                 health_data = json.loads(health_response.get_data(as_text=True))
                 assert health_data["status"] == "ok"

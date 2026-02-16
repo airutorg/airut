@@ -98,8 +98,8 @@ class DashboardServer:
             [
                 Rule("/", endpoint="index"),
                 Rule("/favicon.svg", endpoint="favicon"),
-                Rule("/version", endpoint="version"),
-                Rule("/update", endpoint="update"),
+                Rule("/api/version", endpoint="version"),
+                Rule("/api/update", endpoint="update"),
                 Rule("/repo/<repo_id>", endpoint="repo_detail"),
                 Rule(
                     "/conversation/<conversation_id>",
@@ -141,7 +141,7 @@ class DashboardServer:
                     "/api/conversation/<conversation_id>/network/poll",
                     endpoint="api_network_poll",
                 ),
-                Rule("/health", endpoint="health"),
+                Rule("/api/health", endpoint="health"),
                 Rule("/api/tracker", endpoint="api_tracker"),
             ]
         )

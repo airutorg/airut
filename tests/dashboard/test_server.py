@@ -60,7 +60,7 @@ class TestDashboardServer:
         assert server.version_info is version_info
 
     def test_health_endpoint(self) -> None:
-        """Test /health endpoint."""
+        """Test /api/health endpoint."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
         tracker.add_task("t2", "Task 2")
@@ -69,7 +69,7 @@ class TestDashboardServer:
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/health")
+        response = client.get("/api/health")
         assert response.status_code == 200
         assert response.content_type == "application/json"
 
@@ -84,7 +84,7 @@ class TestDashboardServer:
         assert data["repos"]["total"] == 0
 
     def test_health_endpoint_with_repos(self) -> None:
-        """Test /health endpoint with repos configured."""
+        """Test /api/health endpoint with repos configured."""
         tracker = TaskTracker()
         repo_states = [
             RepoState(
@@ -110,7 +110,7 @@ class TestDashboardServer:
         server = DashboardServer(tracker, repos_store=repos_store)
         client = Client(server._wsgi_app)
 
-        response = client.get("/health")
+        response = client.get("/api/health")
         assert response.status_code == 200
 
         data = json.loads(response.get_data(as_text=True))
@@ -120,7 +120,7 @@ class TestDashboardServer:
         assert data["repos"]["total"] == 2
 
     def test_version_endpoint(self) -> None:
-        """Test /version endpoint returns structured JSON."""
+        """Test /api/version endpoint returns structured JSON."""
         tracker = TaskTracker()
         version_info = VersionInfo(
             version="v0.8.0",
@@ -132,7 +132,7 @@ class TestDashboardServer:
         server = DashboardServer(tracker, version_info=version_info)
         client = Client(server._wsgi_app)
 
-        response = client.get("/version")
+        response = client.get("/api/version")
         assert response.status_code == 200
         assert response.content_type == "application/json"
 
@@ -150,12 +150,12 @@ class TestDashboardServer:
         assert response.headers.get("Expires") == "0"
 
     def test_version_endpoint_no_version_info(self) -> None:
-        """Test /version endpoint returns 404 when no version info."""
+        """Test /api/version endpoint returns 404 when no version info."""
         tracker = TaskTracker()
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/version")
+        response = client.get("/api/version")
         assert response.status_code == 404
         data = json.loads(response.get_data(as_text=True))
         assert "error" in data
@@ -808,7 +808,7 @@ class TestDashboardServer:
         assert "viewBox" in data
 
     def test_health_endpoint_boot_state_booting(self) -> None:
-        """Test /health returns booting status during boot."""
+        """Test /api/health returns booting status during boot."""
         tracker = TaskTracker()
         boot_state = BootState(
             phase=BootPhase.PROXY,
@@ -819,7 +819,7 @@ class TestDashboardServer:
         server = DashboardServer(tracker, boot_store=boot_store)
         client = Client(server._wsgi_app)
 
-        response = client.get("/health")
+        response = client.get("/api/health")
         data = json.loads(response.get_data(as_text=True))
         assert data["status"] == "booting"
         assert data["boot"]["phase"] == "proxy"
@@ -827,7 +827,7 @@ class TestDashboardServer:
         assert "error" not in data["boot"]
 
     def test_health_endpoint_boot_state_failed(self) -> None:
-        """Test /health returns error status when boot failed."""
+        """Test /api/health returns error status when boot failed."""
         tracker = TaskTracker()
         boot_state = BootState(
             phase=BootPhase.FAILED,
@@ -840,14 +840,14 @@ class TestDashboardServer:
         server = DashboardServer(tracker, boot_store=boot_store)
         client = Client(server._wsgi_app)
 
-        response = client.get("/health")
+        response = client.get("/api/health")
         data = json.loads(response.get_data(as_text=True))
         assert data["status"] == "error"
         assert data["boot"]["phase"] == "failed"
         assert data["boot"]["error"] == "Connection refused"
 
     def test_health_endpoint_boot_state_ready_with_repos(self) -> None:
-        """Test /health returns ok when boot is ready with live repos."""
+        """Test /api/health returns ok when boot is ready with live repos."""
         tracker = TaskTracker()
         boot_state = BootState(phase=BootPhase.READY, message="Service ready")
         repo_states = [
@@ -867,7 +867,7 @@ class TestDashboardServer:
         )
         client = Client(server._wsgi_app)
 
-        response = client.get("/health")
+        response = client.get("/api/health")
         data = json.loads(response.get_data(as_text=True))
         assert data["status"] == "ok"
 
@@ -1185,19 +1185,19 @@ class TestETagSupport:
         assert response.status_code == 304
 
     def test_health_etag(self) -> None:
-        """Test /health returns ETag and supports 304."""
+        """Test /api/health returns ETag and supports 304."""
         clock = VersionClock()
         tracker = TaskTracker(clock=clock)
         server = DashboardServer(tracker, clock=clock)
         client = Client(server._wsgi_app)
 
-        response = client.get("/health")
+        response = client.get("/api/health")
         assert response.status_code == 200
         etag = response.headers.get("ETag")
         assert etag is not None
 
         # 304 on match
-        response = client.get("/health", headers={"If-None-Match": etag})
+        response = client.get("/api/health", headers={"If-None-Match": etag})
         assert response.status_code == 304
 
     def test_etag_changes_after_state_update(self) -> None:
@@ -1272,7 +1272,7 @@ class TestUpdateEndpoint:
 
     @patch("airut.dashboard.handlers.check_upstream_version")
     def test_update_available(self, mock_check: MagicMock) -> None:
-        """Test /update endpoint when update is available."""
+        """Test /api/update endpoint when update is available."""
         from airut.version import GitVersionInfo, UpstreamVersion
 
         git_info = GitVersionInfo(
@@ -1292,7 +1292,7 @@ class TestUpdateEndpoint:
         server = DashboardServer(tracker, git_version_info=git_info)
         client = Client(server._wsgi_app)
 
-        response = client.get("/update")
+        response = client.get("/api/update")
         assert response.status_code == 200
         assert response.content_type == "application/json"
 
@@ -1307,7 +1307,7 @@ class TestUpdateEndpoint:
 
     @patch("airut.dashboard.handlers.check_upstream_version")
     def test_up_to_date(self, mock_check: MagicMock) -> None:
-        """Test /update endpoint when up to date."""
+        """Test /api/update endpoint when up to date."""
         from airut.version import GitVersionInfo, UpstreamVersion
 
         git_info = GitVersionInfo(
@@ -1327,7 +1327,7 @@ class TestUpdateEndpoint:
         server = DashboardServer(tracker, git_version_info=git_info)
         client = Client(server._wsgi_app)
 
-        response = client.get("/update")
+        response = client.get("/api/update")
         assert response.status_code == 200
 
         data = json.loads(response.get_data(as_text=True))
@@ -1338,7 +1338,7 @@ class TestUpdateEndpoint:
 
     @patch("airut.dashboard.handlers.check_upstream_version")
     def test_upstream_check_not_applicable(self, mock_check: MagicMock) -> None:
-        """Test /update when upstream check returns None."""
+        """Test /api/update when upstream check returns None."""
         from airut.version import GitVersionInfo
 
         git_info = GitVersionInfo(
@@ -1353,7 +1353,7 @@ class TestUpdateEndpoint:
         server = DashboardServer(tracker, git_version_info=git_info)
         client = Client(server._wsgi_app)
 
-        response = client.get("/update")
+        response = client.get("/api/update")
         assert response.status_code == 200
 
         data = json.loads(response.get_data(as_text=True))
@@ -1363,17 +1363,17 @@ class TestUpdateEndpoint:
         assert data["release_url"] is None
 
     def test_no_version_info(self) -> None:
-        """Test /update returns 404 when no version info."""
+        """Test /api/update returns 404 when no version info."""
         tracker = TaskTracker()
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/update")
+        response = client.get("/api/update")
         assert response.status_code == 404
 
     @patch("airut.dashboard.handlers.check_upstream_version")
     def test_current_falls_back_to_sha(self, mock_check: MagicMock) -> None:
-        """Test /update uses sha_short when version is empty."""
+        """Test /api/update uses sha_short when version is empty."""
         from airut.version import GitVersionInfo
 
         git_info = GitVersionInfo(
@@ -1388,13 +1388,13 @@ class TestUpdateEndpoint:
         server = DashboardServer(tracker, git_version_info=git_info)
         client = Client(server._wsgi_app)
 
-        response = client.get("/update")
+        response = client.get("/api/update")
         data = json.loads(response.get_data(as_text=True))
         assert data["current"] == "abc1234"
 
     @patch("airut.dashboard.handlers.check_upstream_version")
     def test_release_url_github_source(self, mock_check: MagicMock) -> None:
-        """Test /update returns commit URL for GitHub source updates."""
+        """Test /api/update returns commit URL for GitHub source updates."""
         from airut.version import GitVersionInfo, UpstreamVersion
 
         git_info = GitVersionInfo(
@@ -1415,7 +1415,7 @@ class TestUpdateEndpoint:
         server = DashboardServer(tracker, git_version_info=git_info)
         client = Client(server._wsgi_app)
 
-        response = client.get("/update")
+        response = client.get("/api/update")
         data = json.loads(response.get_data(as_text=True))
         assert data["update_available"] is True
         assert data["release_url"] == (
