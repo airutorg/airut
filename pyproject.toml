@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "Headless Claude Code interaction via email"
 license = "MIT"
 readme = "PYPI_README.md"
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.13,<3.15"
 dependencies = [
     "msal>=1.31",
     "packaging>=21.0",
@@ -87,7 +87,7 @@ force-single-line = false
 lines-after-imports = 2
 
 [tool.ty.environment]
-python-version = "3.13"
+python-version = "3.14"
 
 [tool.ty.src]
 include = ["airut", "scripts", "tests"]
