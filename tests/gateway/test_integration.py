@@ -676,9 +676,15 @@ class TestParallelExecution:
         message.replace_header("Subject", "New request without ID")
         message.replace_header("From", email_config.authorized_senders[0])
 
-        mock_parsed = MagicMock(spec=ParsedMessage, conversation_id=None)
+        parsed = ParsedMessage(
+            sender="user@example.com",
+            body="Do something",
+            conversation_id=None,
+            model_hint=None,
+            subject="New request without ID",
+        )
         mock_adapter = MagicMock()
-        mock_adapter.authenticate_and_parse.return_value = mock_parsed
+        mock_adapter.authenticate_and_parse.return_value = parsed
         handler.adapter = mock_adapter
 
         # Mock process_message to track calls
@@ -690,7 +696,7 @@ class TestParallelExecution:
             mock_process.assert_called_once()
             call_args = mock_process.call_args
             assert call_args[0][0] is service
-            assert call_args[0][1] is mock_parsed
+            assert call_args[0][1] is parsed
             assert call_args[0][2] == "test-task-id"
             assert call_args[0][3] is handler
 
@@ -724,9 +730,15 @@ class TestParallelExecution:
         message.replace_header("Subject", f"Re: [ID:{conv_id}] Follow-up")
         message.replace_header("From", email_config.authorized_senders[0])
 
-        mock_parsed = MagicMock(spec=ParsedMessage, conversation_id=conv_id)
+        parsed = ParsedMessage(
+            sender="user@example.com",
+            body="Follow-up",
+            conversation_id=conv_id,
+            model_hint=None,
+            subject=f"Re: [ID:{conv_id}] Follow-up",
+        )
         mock_adapter = MagicMock()
-        mock_adapter.authenticate_and_parse.return_value = mock_parsed
+        mock_adapter.authenticate_and_parse.return_value = parsed
         handler.adapter = mock_adapter
 
         with patch(
@@ -1335,9 +1347,15 @@ class TestTaskIdTracking:
         message.replace_header("Subject", "New request without ID")
         message.replace_header("From", email_config.authorized_senders[0])
 
-        mock_parsed = MagicMock(spec=ParsedMessage, conversation_id=None)
+        parsed = ParsedMessage(
+            sender="user@example.com",
+            body="Do something",
+            conversation_id=None,
+            model_hint=None,
+            subject="New request without ID",
+        )
         mock_adapter = MagicMock()
-        mock_adapter.authenticate_and_parse.return_value = mock_parsed
+        mock_adapter.authenticate_and_parse.return_value = parsed
         handler.adapter = mock_adapter
 
         # Use a temporary task ID
@@ -1347,7 +1365,7 @@ class TestTaskIdTracking:
 
         # Mock process_message to simulate what it does: update task ID
         # then return. Real process_message updates tracker before ack.
-        def mock_process_message(svc, parsed, task_id, handler, adapter):
+        def mock_process_message(svc, p, task_id, handler, adapter):
             service.tracker.update_task_id(task_id, new_conv_id)
             return (True, new_conv_id)
 
@@ -1387,9 +1405,15 @@ class TestTaskIdTracking:
         message.replace_header("Subject", "New request")
         message.replace_header("From", email_config.authorized_senders[0])
 
-        mock_parsed = MagicMock(spec=ParsedMessage, conversation_id=None)
+        parsed = ParsedMessage(
+            sender="user@example.com",
+            body="Do something",
+            conversation_id=None,
+            model_hint=None,
+            subject="New request",
+        )
         mock_adapter = MagicMock()
-        mock_adapter.authenticate_and_parse.return_value = mock_parsed
+        mock_adapter.authenticate_and_parse.return_value = parsed
         handler.adapter = mock_adapter
 
         temp_task_id = "new-87654321"

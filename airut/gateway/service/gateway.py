@@ -570,38 +570,43 @@ class GatewayService:
         self.tracker.start_task(task_id)
         adapter = repo_handler.adapter
 
-        # Authenticate and parse through the channel adapter
-        parsed = adapter.authenticate_and_parse(raw_message)
-        if parsed is None:
-            self.tracker.complete_task(task_id, False)
-            return
-
-        conv_id = parsed.conversation_id
-
-        # Reject messages for conversations that already have an active task
-        if conv_id and self.tracker.is_task_active(conv_id):
-            logger.warning(
-                "Rejecting duplicate message for conversation %s - active",
-                conv_id,
-            )
-            reason = (
-                "Your previous request for this "
-                "conversation is still being processed. "
-                "Please wait for it to complete before "
-                "sending another message."
-            )
-            adapter.send_rejection(
-                parsed,
-                conv_id,
-                reason,
-                self.global_config.dashboard_base_url,
-            )
-            self.tracker.complete_task(task_id, False)
-            return
-
         success = False
         final_task_id = task_id
         try:
+            # Authenticate and parse through the channel adapter
+            parsed = adapter.authenticate_and_parse(raw_message)
+            if parsed is None:
+                return
+
+            # Update task title from "(authenticating)" to real subject
+            self.tracker.update_task_subject(
+                task_id,
+                parsed.subject or "(no subject)",
+                sender=parsed.sender,
+            )
+
+            conv_id = parsed.conversation_id
+
+            # Reject messages for conversations that already have an active task
+            if conv_id and self.tracker.is_task_active(conv_id):
+                logger.warning(
+                    "Rejecting duplicate message for conversation %s - active",
+                    conv_id,
+                )
+                reason = (
+                    "Your previous request for this "
+                    "conversation is still being processed. "
+                    "Please wait for it to complete before "
+                    "sending another message."
+                )
+                adapter.send_rejection(
+                    parsed,
+                    conv_id,
+                    reason,
+                    self.global_config.dashboard_base_url,
+                )
+                return
+
             if conv_id and repo_handler.conversation_manager.exists(conv_id):
                 lock = self._get_conversation_lock(conv_id)
                 with lock:
@@ -616,6 +621,8 @@ class GatewayService:
                 )
                 if final_conv_id:
                     final_task_id = final_conv_id
+        except Exception:
+            logger.exception("Error processing message (task %s)", task_id)
         finally:
             self.tracker.complete_task(final_task_id, success)
 

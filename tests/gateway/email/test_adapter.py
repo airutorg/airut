@@ -146,6 +146,28 @@ class TestAuthenticateAndParse:
         assert result is not None
         assert "email interface" in result.channel_context
 
+    def test_subject_set_from_email(self) -> None:
+        """Parsed message includes decoded email subject for task tracker."""
+        adapter, auth, authz, _ = _make_adapter()
+        auth.authenticate.return_value = "user@example.com"
+        authz.is_authorized.return_value = True
+        msg = _make_email(subject="Fix the login bug")
+
+        result = adapter.authenticate_and_parse(msg)
+        assert result is not None
+        assert result.subject == "Fix the login bug"
+
+    def test_subject_fallback_no_subject(self) -> None:
+        """Empty email subject falls back to '(no subject)'."""
+        adapter, auth, authz, _ = _make_adapter()
+        auth.authenticate.return_value = "user@example.com"
+        authz.is_authorized.return_value = True
+        msg = _make_email(subject="")
+
+        result = adapter.authenticate_and_parse(msg)
+        assert result is not None
+        assert result.subject == "(no subject)"
+
     def test_references_parsed(self) -> None:
         adapter, auth, authz, _ = _make_adapter()
         auth.authenticate.return_value = "user@example.com"
