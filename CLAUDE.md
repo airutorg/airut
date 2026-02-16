@@ -266,7 +266,6 @@ workflows/                  - Step-by-step operational guides
 - `scripts/ci.py` — local CI runner (runs all checks)
 - `scripts/pr.py` — PR workflow (CI status and review comments)
 - `scripts/airut.py` — email gateway entry point (`uv run airut`)
-- `scripts/install_services.py` — migration stub for legacy updater
 
 ## Standards
 

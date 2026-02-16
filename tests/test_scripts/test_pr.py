@@ -213,6 +213,43 @@ class TestFormatCIStatus:
 
         assert "BLOCKED" in result
 
+    def test_format_unknown_status(self) -> None:
+        """Formats unknown CI status when no standard state matches."""
+        status = CIStatus(
+            pr_number=123,
+            checks=[
+                CICheckResult(
+                    name="action-check",
+                    status=CheckStatus.COMPLETED,
+                    conclusion=CheckConclusion.ACTION_REQUIRED,
+                    workflow="CI",
+                ),
+            ],
+        )
+
+        result = format_ci_status(status)
+
+        assert "Unknown" in result
+
+    def test_format_unknown_conclusion(self) -> None:
+        """Formats check with unknown conclusion using '?' indicator."""
+        status = CIStatus(
+            pr_number=123,
+            checks=[
+                CICheckResult(
+                    name="action-check",
+                    status=CheckStatus.COMPLETED,
+                    conclusion=CheckConclusion.ACTION_REQUIRED,
+                    workflow="CI",
+                ),
+            ],
+        )
+
+        result = format_ci_status(status)
+
+        assert "?" in result
+        assert "action-check" in result
+
 
 class TestFormatReviewStatus:
     """Tests for format_review_status function."""
@@ -371,6 +408,18 @@ class TestFormatReviewStatus:
         assert "💬" in result
         assert "COMMENTED" in result
 
+    def test_format_pending_review_state(self) -> None:
+        """Formats PENDING review state with '?' indicator."""
+        status = ReviewStatus(
+            pr_number=123,
+            reviews={"user1": ReviewState.PENDING},
+        )
+
+        result = format_review_status(status)
+
+        assert "?" in result
+        assert "PENDING" in result
+
 
 class TestCmdCI:
     """Tests for cmd_ci function."""
@@ -489,6 +538,93 @@ class TestCmdCI:
             cmd_ci(args)
 
         mock_logs.assert_called_once_with(123, "failing-test")
+
+    def test_verbose_truncates_long_logs(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Truncates failure logs longer than 5000 chars."""
+        status = CIStatus(
+            pr_number=123,
+            checks=[
+                CICheckResult(
+                    name="failing-test",
+                    status=CheckStatus.COMPLETED,
+                    conclusion=CheckConclusion.FAILURE,
+                    workflow="CI",
+                ),
+            ],
+        )
+
+        long_logs = "x" * 6000
+        with (
+            patch("scripts.pr.check_ci_status", return_value=status),
+            patch(
+                "scripts.pr.get_check_failure_logs",
+                return_value=long_logs,
+            ),
+        ):
+            args = make_ci_args(verbose=True)
+            cmd_ci(args)
+
+        captured = capsys.readouterr()
+        assert "(truncated)" in captured.out
+
+    def test_unknown_state_returns_2(self) -> None:
+        """Returns 2 for unrecognised CI state."""
+        status = CIStatus(
+            pr_number=123,
+            checks=[
+                CICheckResult(
+                    name="action-check",
+                    status=CheckStatus.COMPLETED,
+                    conclusion=CheckConclusion.ACTION_REQUIRED,
+                    workflow="CI",
+                ),
+            ],
+        )
+
+        with patch("scripts.pr.check_ci_status", return_value=status):
+            args = make_ci_args()
+            result = cmd_ci(args)
+
+        assert result == 2
+
+    def test_pr_url_from_current_branch(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Uses get_current_pr when --pr is not given."""
+        status = CIStatus(
+            pr_number=123,
+            checks=[
+                CICheckResult(
+                    name="test",
+                    status=CheckStatus.COMPLETED,
+                    conclusion=CheckConclusion.SUCCESS,
+                    workflow="CI",
+                ),
+            ],
+        )
+        pr_info = PRInfo(
+            number=123,
+            title="Test PR",
+            state=PRState.OPEN,
+            head_ref="feature",
+            base_ref="main",
+            url="https://github.com/owner/repo/pull/123",
+            is_draft=False,
+            mergeable="MERGEABLE",
+            behind_by=0,
+        )
+
+        with (
+            patch("scripts.pr.check_ci_status", return_value=status),
+            patch("airut.gh.pr.get_current_pr", return_value=pr_info),
+        ):
+            args = make_ci_args(pr=None)
+            cmd_ci(args)
+
+        captured = capsys.readouterr()
+        assert "PR URL:" in captured.out
 
     def test_prints_pr_url(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Prints PR URL after status."""
@@ -670,6 +806,36 @@ class TestCmdReview:
 
         # Should still succeed even if PR URL fetch fails
         assert result == 0
+
+    def test_pr_url_from_current_branch(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Uses get_current_pr when --pr is not given."""
+        status = ReviewStatus(
+            pr_number=123,
+            reviews={"user1": ReviewState.APPROVED},
+        )
+        pr_info = PRInfo(
+            number=123,
+            title="Test PR",
+            state=PRState.OPEN,
+            head_ref="feature",
+            base_ref="main",
+            url="https://github.com/owner/repo/pull/123",
+            is_draft=False,
+            mergeable="MERGEABLE",
+            behind_by=0,
+        )
+
+        with (
+            patch("scripts.pr.get_review_status", return_value=status),
+            patch("airut.gh.pr.get_current_pr", return_value=pr_info),
+        ):
+            args = make_review_args(pr=None)
+            cmd_review(args)
+
+        captured = capsys.readouterr()
+        assert "PR URL:" in captured.out
 
 
 class TestMain:

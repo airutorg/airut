@@ -42,20 +42,16 @@ if TYPE_CHECKING:
 else:
     try:
         from hatchling.builders.hooks.plugin.interface import (
-            BuildHookInterface,
+            BuildHookInterface as _BuildBase,  # pragma: no cover
         )
-
-        _BuildBase = BuildHookInterface
-    except ImportError:  # pragma: no cover
+    except ImportError:
         _BuildBase = object
 
     try:
         from hatchling.metadata.plugin.interface import (
-            MetadataHookInterface,
+            MetadataHookInterface as _MetaBase,  # pragma: no cover
         )
-
-        _MetaBase = MetadataHookInterface
-    except ImportError:  # pragma: no cover
+    except ImportError:
         _MetaBase = object
 
 

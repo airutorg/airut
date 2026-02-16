@@ -126,6 +126,11 @@ class TestTagToPep440:
         """Pre-release tags should pass through base."""
         assert _tag_to_pep440("v1.0.0rc1") == "1.0.0rc1"
 
+    def test_unmatched_tag_returns_as_is(self) -> None:
+        """Tag that doesn't match the regex is returned unchanged."""
+        # A tag like "v" strips to empty string, which won't match the regex
+        assert _tag_to_pep440("v") == ""
+
 
 class TestReadVersionFromFile:
     """Tests for _read_version_from_file."""
