@@ -11,7 +11,7 @@ from email.parser import BytesParser
 
 import pytest
 
-from airut.gateway.security import (
+from airut.gateway.email.security import (
     SenderAuthenticator,
     SenderAuthorizer,
     _extract_email,

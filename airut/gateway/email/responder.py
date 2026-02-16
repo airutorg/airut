@@ -21,7 +21,7 @@ from email.mime.text import MIMEText
 from email.utils import parseaddr
 
 from airut.gateway.config import RepoServerConfig
-from airut.gateway.microsoft_oauth2 import (
+from airut.gateway.email.microsoft_oauth2 import (
     MicrosoftOAuth2TokenError,
     MicrosoftOAuth2TokenProvider,
 )

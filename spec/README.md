@@ -5,10 +5,10 @@ describe contracts, data formats, and detailed behavior.
 
 For high-level documentation, see [doc/](../doc/).
 
-## Email Gateway
+## Gateway
 
-- [gateway-architecture.md](gateway-architecture.md) — Core gateway design, data
-  flow, email protocol, container execution
+- [gateway-architecture.md](gateway-architecture.md) — Core gateway design,
+  channel abstraction, data flow, container execution
 - [authentication.md](authentication.md) — DMARC verification and sender
   authorization
 - [repo-config.md](repo-config.md) — Repo config schema (`.airut/airut.yaml`)

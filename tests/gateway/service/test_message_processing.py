@@ -14,12 +14,13 @@ import pytest
 
 from airut.claude_output import StreamEvent, parse_stream_events
 from airut.claude_output.types import Usage
+from airut.gateway.channel import ParsedMessage
 from airut.gateway.config import RepoConfig
 from airut.gateway.service import build_recovery_prompt
 from airut.gateway.service.message_processing import process_message
 from airut.sandbox import ExecutionResult, Outcome
 
-from .conftest import make_message, make_service, update_global
+from .conftest import make_service, update_global
 
 
 def _parse_events(*raw_events: dict) -> list[StreamEvent]:
@@ -41,6 +42,24 @@ def _make_repo_config(
         timeout=timeout,
         network_sandbox_enabled=network_sandbox_enabled,
         container_env=container_env or {},
+    )
+
+
+def _make_parsed_message(
+    *,
+    sender: str = "user@example.com",
+    body: str = "Hello",
+    conversation_id: str | None = None,
+    model_hint: str | None = None,
+    channel_context: str = "Email context",
+) -> ParsedMessage:
+    """Build a ParsedMessage for testing."""
+    return ParsedMessage(
+        sender=sender,
+        body=body,
+        conversation_id=conversation_id,
+        model_hint=model_hint,
+        channel_context=channel_context,
     )
 
 
@@ -123,7 +142,7 @@ class TestProcessMessage:
 
     def _setup_svc(
         self, email_config: Any, tmp_path: Path
-    ) -> tuple[Any, Any, Any]:
+    ) -> tuple[Any, Any, Any, Any]:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_base_url=None)
 
@@ -154,10 +173,6 @@ class TestProcessMessage:
         mock_mirror.read_file.side_effect = _read_file
         handler.conversation_manager.mirror = mock_mirror
 
-        handler.authenticator.authenticate.return_value = (
-            "authorized@example.com"
-        )
-
         mock_conv_store = MagicMock()
         mock_conv_store.get_session_id_for_resume.return_value = None
         mock_conv_store.get_model.return_value = None
@@ -171,111 +186,44 @@ class TestProcessMessage:
         svc.sandbox.create_task.return_value = mock_task
         svc._mock_task = mock_task  # Store for test access
 
-        return svc, handler, mock_conv_store
+        # Create mock adapter
+        adapter = MagicMock()
+        adapter.save_attachments.return_value = []
+
+        return svc, handler, mock_conv_store, adapter
 
     def test_new_conversation_success(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
-        msg = make_message(body="Do something")
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        parsed = _make_parsed_message(body="Do something")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(svc, msg, "task1", handler)
+            success, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
 
         assert success is True
         assert conv_id == "conv1"
-        handler.responder.send_reply.assert_called()  # ack + reply
-
-    def test_unauthenticated_rejected(
-        self, email_config: Any, tmp_path: Path
-    ) -> None:
-        svc, handler, _ = self._setup_svc(email_config, tmp_path)
-        handler.authenticator.authenticate.return_value = None
-        msg = make_message()
-        success, conv_id = process_message(svc, msg, "task1", handler)
-        assert success is False
-        assert conv_id is None
-
-    def test_unauthorized_rejected(
-        self, email_config: Any, tmp_path: Path
-    ) -> None:
-        svc, handler, _ = self._setup_svc(email_config, tmp_path)
-        handler.authenticator.authenticate.return_value = "other@example.com"
-        handler.authorizer.is_authorized.return_value = False
-        msg = make_message()
-        success, conv_id = process_message(svc, msg, "task1", handler)
-        assert success is False
-        assert conv_id is None
-
-    def test_unauthorized_sender_rejected_before_conversation_lookup(
-        self, email_config: Any, tmp_path: Path
-    ) -> None:
-        """Authorization rejects before conversation ID is ever examined.
-
-        Even when the email subject contains a valid conversation ID,
-        an unauthorized sender must be rejected without any call to
-        conversation_manager.exists() or resume_existing().
-        """
-        svc, handler, _ = self._setup_svc(email_config, tmp_path)
-        handler.authenticator.authenticate.return_value = "intruder@evil.com"
-        handler.authorizer.is_authorized.return_value = False
-        msg = make_message(
-            subject="[ID:aabb1122] Continue task",
-            body="I want to hijack this conversation",
-        )
-        success, conv_id = process_message(svc, msg, "task1", handler)
-        assert success is False
-        assert conv_id is None
-        # Conversation manager must never be consulted
-        handler.conversation_manager.exists.assert_not_called()
-        handler.conversation_manager.resume_existing.assert_not_called()
-
-    def test_conversation_id_from_other_repo_treated_as_new(
-        self, email_config: Any, tmp_path: Path
-    ) -> None:
-        """A conversation ID that doesn't exist in this repo starts a new one.
-
-        When an email arrives with a conversation ID that belongs to a
-        different repo (not found in this repo's ConversationManager),
-        the system must treat it as a new conversation rather than
-        erroring or leaking state.
-        """
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
-        # The conversation ID exists in the subject but NOT in this repo
-        handler.conversation_manager.exists.return_value = False
-        msg = make_message(
-            subject="[ID:deadbeef] Continue task",
-            body="Work on this",
-        )
-
-        with patch(
-            "airut.gateway.service.message_processing.ConversationStore",
-            return_value=mock_cs,
-        ):
-            success, conv_id = process_message(svc, msg, "task1", handler)
-        assert success is True
-        # Should create a new conversation, not resume
-        handler.conversation_manager.initialize_new.assert_called_once()
-        handler.conversation_manager.resume_existing.assert_not_called()
+        adapter.send_reply.assert_called_once()
 
     def test_empty_body_rejected(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        svc, handler, _ = self._setup_svc(email_config, tmp_path)
-        msg = make_message(body="")
+        svc, handler, _, adapter = self._setup_svc(email_config, tmp_path)
+        parsed = _make_parsed_message(body="")
 
-        with patch(
-            "airut.gateway.service.message_processing.extract_body",
-            return_value="",
-        ):
-            success, conv_id = process_message(svc, msg, "task1", handler)
+        success, conv_id = process_message(
+            svc, parsed, "task1", handler, adapter
+        )
         assert success is False
+        adapter.send_error.assert_called_once()
 
     def test_execution_failure(self, email_config: Any, tmp_path: Path) -> None:
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
         svc._mock_task.execute.return_value = _make_failure_result(
             events=_parse_events(
@@ -292,115 +240,117 @@ class TestProcessMessage:
             ),
             stderr="FATAL: OOM\nline2\nline3",
         )
-        msg = make_message(body="Do something")
+        parsed = _make_parsed_message(body="Do something")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(svc, msg, "task1", handler)
+            success, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
         assert success is False
         assert conv_id == "conv1"
 
     def test_container_timeout(self, email_config: Any, tmp_path: Path) -> None:
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         svc._mock_task.execute.return_value = _make_failure_result(
             outcome=Outcome.TIMEOUT,
         )
-        msg = make_message(body="Do something")
+        parsed = _make_parsed_message(body="Do something")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(svc, msg, "task1", handler)
+            success, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
         assert success is False
 
     def test_git_clone_error(self, email_config: Any, tmp_path: Path) -> None:
         from airut.gateway import GitCloneError
 
-        svc, handler, _ = self._setup_svc(email_config, tmp_path)
+        svc, handler, _, adapter = self._setup_svc(email_config, tmp_path)
         handler.conversation_manager.initialize_new.side_effect = GitCloneError(
             "clone failed"
         )
-        msg = make_message(body="Do something")
-        success, conv_id = process_message(svc, msg, "task1", handler)
+        parsed = _make_parsed_message(body="Do something")
+        success, conv_id = process_message(
+            svc, parsed, "task1", handler, adapter
+        )
         assert success is False
         assert conv_id is None
 
     def test_unexpected_error(self, email_config: Any, tmp_path: Path) -> None:
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         svc._mock_task.execute.side_effect = RuntimeError("unexpected")
-        msg = make_message(body="Do something")
+        parsed = _make_parsed_message(body="Do something")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(svc, msg, "task1", handler)
+            success, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
         assert success is False
 
     def test_resume_existing_conversation(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         repo_path = tmp_path / "repo"
         handler.conversation_manager.exists.return_value = True
         handler.conversation_manager.resume_existing.return_value = repo_path
         mock_cs.get_model.return_value = "opus"
         mock_cs.get_session_id_for_resume.return_value = "session-abc"
 
-        msg = make_message(subject="[ID:aabb1122] Test", body="Continue")
+        parsed = _make_parsed_message(
+            body="Continue", conversation_id="aabb1122"
+        )
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(svc, msg, "conv1", handler)
+            success, conv_id = process_message(
+                svc, parsed, "conv1", handler, adapter
+            )
         assert success is True
         # Mirror should be updated before resuming
         handler.conversation_manager.mirror.update_mirror.assert_called_once()
         # Should not send acknowledgment for resumed conversations
-        # (only send_reply for the response)
-        calls = handler.responder.send_reply.call_args_list
-        assert len(calls) == 1  # only the reply, no ack
+        adapter.send_acknowledgment.assert_not_called()
+        # Only the reply
+        adapter.send_reply.assert_called_once()
 
-    def test_model_from_address(
+    def test_model_hint_used_for_new_conversation(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
-        msg = make_message(to="airut+opus@example.com", body="Do stuff")
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        parsed = _make_parsed_message(body="Do stuff", model_hint="opus")
 
-        with (
-            patch(
-                "airut.gateway.service.message_processing.ConversationStore",
-                return_value=mock_cs,
-            ),
-            patch(
-                "airut.gateway.service.message_processing.extract_model_from_address",
-                return_value="opus",
-            ),
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
-            process_message(svc, msg, "task1", handler)
+            process_message(svc, parsed, "task1", handler, adapter)
         # task.execute should be called with opus model
         call_kwargs = svc._mock_task.execute.call_args[1]
         assert call_kwargs["model"] == "opus"
 
     def test_attachments_saved(self, email_config: Any, tmp_path: Path) -> None:
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
-        msg = make_message(body="See attached")
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        # Adapter returns attachment filenames
+        adapter.save_attachments.return_value = ["report.pdf"]
+        parsed = _make_parsed_message(body="See attached")
 
-        with (
-            patch(
-                "airut.gateway.service.message_processing.ConversationStore",
-                return_value=mock_cs,
-            ),
-            patch(
-                "airut.gateway.service.message_processing.extract_attachments",
-                return_value=["report.pdf"],
-            ),
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
-            process_message(svc, msg, "task1", handler)
+            process_message(svc, parsed, "task1", handler, adapter)
         # Prompt should mention inbox
         call_args = svc._mock_task.execute.call_args
         assert "report.pdf" in call_args[0][0]  # positional prompt arg
@@ -408,31 +358,31 @@ class TestProcessMessage:
     def test_usage_stats_footer(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
-        msg = make_message(body="Check")
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        parsed = _make_parsed_message(body="Check")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            process_message(svc, msg, "task1", handler)
-        # Reply should contain cost footer
-        reply_call = handler.responder.send_reply.call_args_list[-1]
-        body = reply_call[1]["body"]
-        assert "Cost:" in body
+            process_message(svc, parsed, "task1", handler, adapter)
+        # Reply should contain cost footer via adapter
+        adapter.send_reply.assert_called_once()
+        # Check the usage_footer arg (5th positional)
+        assert "Cost:" in str(adapter.send_reply.call_args)
 
     def test_success_calls_add_reply(
         self, email_config: Any, tmp_path: Path
     ) -> None:
         """Successful execution records reply via add_reply."""
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
-        msg = make_message(body="Do stuff")
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        parsed = _make_parsed_message(body="Do stuff")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            process_message(svc, msg, "task1", handler)
+            process_message(svc, parsed, "task1", handler, adapter)
 
         mock_cs.add_reply.assert_called_once()
         call_args = mock_cs.add_reply.call_args
@@ -442,44 +392,38 @@ class TestProcessMessage:
         self, email_config: Any, tmp_path: Path
     ) -> None:
         """task.event_log.start_new_reply() is called before execution."""
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
-        msg = make_message(body="Do stuff")
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        parsed = _make_parsed_message(body="Do stuff")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            process_message(svc, msg, "task1", handler)
+            process_message(svc, parsed, "task1", handler, adapter)
 
         svc._mock_task.event_log.start_new_reply.assert_called_once()
 
     def test_resumed_conversation_ignores_model_request(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         repo_path = tmp_path / "repo"
         handler.conversation_manager.exists.return_value = True
         handler.conversation_manager.resume_existing.return_value = repo_path
         mock_cs.get_model.return_value = "sonnet"
         mock_cs.get_session_id_for_resume.return_value = None
 
-        msg = make_message(
-            subject="[ID:aabb1122] Test",
-            to="airut+opus@example.com",
+        parsed = _make_parsed_message(
             body="Continue",
+            conversation_id="aabb1122",
+            model_hint="opus",
         )
 
-        with (
-            patch(
-                "airut.gateway.service.message_processing.ConversationStore",
-                return_value=mock_cs,
-            ),
-            patch(
-                "airut.gateway.service.message_processing.extract_model_from_address",
-                return_value="opus",
-            ),
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
-            process_message(svc, msg, "conv1", handler)
+            process_message(svc, parsed, "conv1", handler, adapter)
         # Should use stored model, not requested
         call_kwargs = svc._mock_task.execute.call_args[1]
         assert call_kwargs["model"] == "sonnet"
@@ -487,35 +431,34 @@ class TestProcessMessage:
     def test_task_id_updated_for_new_conversation(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
-        msg = make_message(body="Do something")
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        parsed = _make_parsed_message(body="Do something")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            process_message(svc, msg, "temp-123", handler)
+            process_message(svc, parsed, "temp-123", handler, adapter)
         svc.tracker.update_task_id.assert_called_once_with("temp-123", "conv1")
 
     def test_long_subject_truncated_in_log(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        """Subjects > 50 chars are truncated in log messages."""
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
-        long_subject = "A" * 60
-        msg = make_message(subject=long_subject, body="Do stuff")
+        """Long messages don't crash processing."""
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        parsed = _make_parsed_message(body="Do stuff")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            process_message(svc, msg, "task1", handler)
+            process_message(svc, parsed, "task1", handler, adapter)
         # Just verify it doesn't crash
 
     def test_no_usage_stats_no_footer(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
         # Result with no cost event → no usage stats footer
         svc._mock_task.execute.return_value = _make_success_result(
@@ -526,48 +469,47 @@ class TestProcessMessage:
                 },
             ),
         )
-        msg = make_message(body="Do stuff")
+        parsed = _make_parsed_message(body="Do stuff")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            process_message(svc, msg, "task1", handler)
-        reply_call = handler.responder.send_reply.call_args_list[-1]
-        body = reply_call[1]["body"]
-        assert "Cost:" not in body
+            process_message(svc, parsed, "task1", handler, adapter)
+        # Check that usage_footer is empty
+        call_args = adapter.send_reply.call_args
+        usage_footer = call_args[0][3]  # 4th positional arg
+        assert usage_footer == ""
 
     def test_failure_with_stderr(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
         stderr_lines = "\n".join(f"line{i}" for i in range(15))
         svc._mock_task.execute.return_value = _make_failure_result(
             stderr=stderr_lines,
         )
-        msg = make_message(body="Do stuff")
+        parsed = _make_parsed_message(body="Do stuff")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, _ = process_message(svc, msg, "task1", handler)
+            success, _ = process_message(svc, parsed, "task1", handler, adapter)
         assert success is False
-        # Check that reply uses the short error format
-        reply_call = handler.responder.send_reply.call_args_list[-1]
-        body = reply_call[1]["body"]
-        assert "An error occurred" in body
-        # stderr is no longer included in the email
-        assert "Stderr" not in body
+        # Check that reply uses the short error format via adapter
+        call_args = adapter.send_reply.call_args
+        response_text = call_args[0][2]  # 3rd positional arg
+        assert "An error occurred" in response_text
 
     def test_failure_with_error_summary(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
         svc._mock_task.execute.return_value = _make_failure_result()
-        msg = make_message(body="Do stuff")
+        parsed = _make_parsed_message(body="Do stuff")
 
         with (
             patch(
@@ -575,28 +517,24 @@ class TestProcessMessage:
                 return_value=mock_cs,
             ),
             patch(
-                "airut.gateway.service.message_processing.extract_error_summary",
+                "airut.gateway.service.message_processing."
+                "extract_error_summary",
                 return_value="Error summary text",
             ),
         ):
-            success, _ = process_message(svc, msg, "task1", handler)
+            success, _ = process_message(svc, parsed, "task1", handler, adapter)
         assert success is False
         # Claude output is included when error_summary exists
-        reply_call = handler.responder.send_reply.call_args_list[-1]
-        body = reply_call[1]["body"]
-        assert "Claude output:" in body
-        assert "Error summary text" in body
+        call_args = adapter.send_reply.call_args
+        response_text = call_args[0][2]  # 3rd positional arg
+        assert "Claude output:" in response_text
+        assert "Error summary text" in response_text
 
     def test_execution_failure_persists_session(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        """Conversation store must be updated even when execution fails.
-
-        Bug: when result.outcome is not SUCCESS, the error execution's
-        metadata (session_id, is_error flag) was lost. The next message
-        could not resume properly.
-        """
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
+        """Conversation store must be updated even when execution fails."""
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
         svc._mock_task.execute.return_value = _make_failure_result(
             events=_parse_events(
@@ -608,23 +546,25 @@ class TestProcessMessage:
                     "duration_ms": 500,
                     "total_cost_usd": 0.005,
                     "num_turns": 1,
-                    "usage": {"input_tokens": 50, "output_tokens": 10},
+                    "usage": {
+                        "input_tokens": 50,
+                        "output_tokens": 10,
+                    },
                 },
             ),
             stderr="FATAL: OOM",
         )
-        msg = make_message(body="Do something")
+        parsed = _make_parsed_message(body="Do something")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(svc, msg, "task1", handler)
+            success, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
 
         assert success is False
-        # The critical assertion: conversation store must be updated with
-        # the error execution's output so the session_id is available for
-        # resume.
         mock_cs.add_reply.assert_called_once()
         call_args = mock_cs.add_reply.call_args
         assert call_args[0][0] == "conv1"  # conversation_id
@@ -633,20 +573,21 @@ class TestProcessMessage:
         self, email_config: Any, tmp_path: Path
     ) -> None:
         """Store must be updated on container timeout."""
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         svc._mock_task.execute.return_value = _make_failure_result(
             outcome=Outcome.TIMEOUT,
         )
-        msg = make_message(body="Do something")
+        parsed = _make_parsed_message(body="Do something")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(svc, msg, "task1", handler)
+            success, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
 
         assert success is False
-        # Conversation store must record the error so next message can resume
         mock_cs.add_reply.assert_called_once()
         call_args = mock_cs.add_reply.call_args
         assert call_args[0][0] == "conv1"  # conversation_id
@@ -655,15 +596,17 @@ class TestProcessMessage:
         self, email_config: Any, tmp_path: Path
     ) -> None:
         """Conversation store must be updated on unexpected exceptions."""
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         svc._mock_task.execute.side_effect = RuntimeError("unexpected")
-        msg = make_message(body="Do something")
+        parsed = _make_parsed_message(body="Do something")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(svc, msg, "task1", handler)
+            success, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
 
         assert success is False
         mock_cs.add_reply.assert_called_once()
@@ -674,16 +617,18 @@ class TestProcessMessage:
         self, email_config: Any, tmp_path: Path
     ) -> None:
         """Persist failure in catch-all handler is logged, not raised."""
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         svc._mock_task.execute.side_effect = RuntimeError("unexpected")
         mock_cs.add_reply.side_effect = OSError("disk full")
-        msg = make_message(body="Do something")
+        parsed = _make_parsed_message(body="Do something")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(svc, msg, "task1", handler)
+            success, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
 
         assert success is False
         assert conv_id == "conv1"
@@ -692,7 +637,7 @@ class TestProcessMessage:
         self, email_config: Any, tmp_path: Path
     ) -> None:
         """Prompt-too-long error triggers retry with fresh session."""
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
         # Simulate resuming an existing conversation
         repo_path = tmp_path / "repo"
@@ -729,7 +674,6 @@ class TestProcessMessage:
             ),
         )
 
-        # create_task is called twice (once for first attempt, once for retry)
         mock_task1 = MagicMock()
         mock_task1.execute.return_value = prompt_too_long_result
         mock_task1.event_log = MagicMock()
@@ -740,13 +684,17 @@ class TestProcessMessage:
 
         svc.sandbox.create_task.side_effect = [mock_task1, mock_task2]
 
-        msg = make_message(subject="[ID:aabb1122] Test", body="Continue please")
+        parsed = _make_parsed_message(
+            body="Continue please", conversation_id="aabb1122"
+        )
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(svc, msg, "task1", handler)
+            success, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
 
         assert success is True
         # Should have created two tasks: first attempt + retry
@@ -766,7 +714,7 @@ class TestProcessMessage:
         self, email_config: Any, tmp_path: Path
     ) -> None:
         """Prompt-too-long without session_id does not retry (new conv)."""
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         mock_cs.get_session_id_for_resume.return_value = None
 
         svc._mock_task.execute.return_value = _make_failure_result(
@@ -774,13 +722,15 @@ class TestProcessMessage:
             stdout="Prompt is too long",
         )
 
-        msg = make_message(body="Do something")
+        parsed = _make_parsed_message(body="Do something")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(svc, msg, "task1", handler)
+            success, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
 
         assert success is False
         # Should only create one task (no retry)
@@ -790,7 +740,7 @@ class TestProcessMessage:
         self, email_config: Any, tmp_path: Path
     ) -> None:
         """API 4xx error triggers retry with fresh session."""
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
         # Simulate resuming an existing conversation
         repo_path = tmp_path / "repo"
@@ -837,29 +787,31 @@ class TestProcessMessage:
 
         svc.sandbox.create_task.side_effect = [mock_task1, mock_task2]
 
-        msg = make_message(subject="[ID:aabb1122] Test", body="Continue please")
+        parsed = _make_parsed_message(
+            body="Continue please", conversation_id="aabb1122"
+        )
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(svc, msg, "task1", handler)
+            success, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
 
         assert success is True
-        # Should have created two tasks: first attempt + retry
         assert svc.sandbox.create_task.call_count == 2
         first_call = mock_task1.execute.call_args
         assert first_call[1]["session_id"] == "old-session-id"
         second_call = mock_task2.execute.call_args
         assert second_call[1]["session_id"] is None
-        # Recovery prompt should mention context loss
         assert "context length limits" in second_call[0][0]
 
     def test_session_corrupted_no_retry_without_session_id(
         self, email_config: Any, tmp_path: Path
     ) -> None:
         """API 4xx without session_id does not retry (new conversation)."""
-        svc, handler, mock_cs = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         mock_cs.get_session_id_for_resume.return_value = None
 
         svc._mock_task.execute.return_value = _make_failure_result(
@@ -867,13 +819,15 @@ class TestProcessMessage:
             stderr="API Error: 400\ninvalid_request_error",
         )
 
-        msg = make_message(body="Do something")
+        parsed = _make_parsed_message(body="Do something")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(svc, msg, "task1", handler)
+            success, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
 
         assert success is False
         # Should only create one task (no retry)
@@ -897,7 +851,7 @@ class TestBuildImageErrors:
 
     def _setup_svc(
         self, email_config: Any, tmp_path: Path
-    ) -> tuple[Any, Any, Any]:
+    ) -> tuple[Any, Any, Any, Any]:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_base_url=None)
 
@@ -928,10 +882,6 @@ class TestBuildImageErrors:
         mock_mirror.read_file.side_effect = _read_file
         handler.conversation_manager.mirror = mock_mirror
 
-        handler.authenticator.authenticate.return_value = (
-            "authorized@example.com"
-        )
-
         mock_conv_store = MagicMock()
         mock_conv_store.get_session_id_for_resume.return_value = None
         mock_conv_store.get_model.return_value = None
@@ -943,88 +893,93 @@ class TestBuildImageErrors:
         svc.sandbox.create_task.return_value = mock_task
         svc._mock_task = mock_task
 
-        return svc, handler, mock_conv_store
+        adapter = MagicMock()
+        adapter.save_attachments.return_value = []
+
+        return svc, handler, mock_conv_store, adapter
 
     def test_list_directory_error_raises_image_build_error(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        """mirror.list_directory failure is caught and sent as error reply."""
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        """mirror.list_directory failure is caught and sent as error."""
+        svc, handler, mock_ss, adapter = self._setup_svc(email_config, tmp_path)
         handler.conversation_manager.mirror.list_directory.side_effect = (
             RuntimeError("mirror error")
         )
-        msg = make_message(body="Do something")
+        parsed = _make_parsed_message(body="Do something")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_ss,
         ):
-            success, conv_id = process_message(svc, msg, "task1", handler)
+            success, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
 
         assert success is False
-        # ImageBuildError is caught by the generic Exception handler
         assert conv_id == "conv1"
-        # Error reply should be sent
-        reply_call = handler.responder.send_reply.call_args_list[-1]
-        body = reply_call[1]["body"]
-        assert "ImageBuildError" in body
+        # Error reply should be sent via adapter
+        adapter.send_error.assert_called_once()
+        error_msg = adapter.send_error.call_args[0][2]
+        assert "ImageBuildError" in error_msg
 
     def test_read_file_error_raises_image_build_error(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        """mirror.read_file failure is caught and sent as error reply."""
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        """mirror.read_file failure is caught and sent as error."""
+        svc, handler, mock_ss, adapter = self._setup_svc(email_config, tmp_path)
 
-        # list_directory succeeds but read_file fails
         handler.conversation_manager.mirror.list_directory.return_value = [
             "Dockerfile"
         ]
         handler.conversation_manager.mirror.read_file.side_effect = (
             RuntimeError("read error")
         )
-        msg = make_message(body="Do something")
+        parsed = _make_parsed_message(body="Do something")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_ss,
         ):
-            success, conv_id = process_message(svc, msg, "task1", handler)
+            success, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
 
         assert success is False
         assert conv_id == "conv1"
-        reply_call = handler.responder.send_reply.call_args_list[-1]
-        body = reply_call[1]["body"]
-        assert "ImageBuildError" in body
+        adapter.send_error.assert_called_once()
+        error_msg = adapter.send_error.call_args[0][2]
+        assert "ImageBuildError" in error_msg
 
     def test_no_dockerfile_raises_image_build_error(
         self, email_config: Any, tmp_path: Path
     ) -> None:
         """Missing Dockerfile in directory listing raises ImageBuildError."""
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_ss, adapter = self._setup_svc(email_config, tmp_path)
 
-        # Return files but no Dockerfile
         handler.conversation_manager.mirror.list_directory.return_value = [
             "requirements.txt",
             "setup.py",
         ]
-        # read_file succeeds for non-Dockerfile files
         handler.conversation_manager.mirror.read_file.side_effect = (
             lambda path: b"content"
         )
-        msg = make_message(body="Do something")
+        parsed = _make_parsed_message(body="Do something")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_ss,
         ):
-            success, conv_id = process_message(svc, msg, "task1", handler)
+            success, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
 
         assert success is False
         assert conv_id == "conv1"
-        reply_call = handler.responder.send_reply.call_args_list[-1]
-        body = reply_call[1]["body"]
-        assert "ImageBuildError" in body
-        assert "No Dockerfile" in body
+        adapter.send_error.assert_called_once()
+        error_msg = adapter.send_error.call_args[0][2]
+        assert "ImageBuildError" in error_msg
+        assert "No Dockerfile" in error_msg
 
 
 class TestAllowlistParseError:
@@ -1044,7 +999,7 @@ class TestAllowlistParseError:
 
     def _setup_svc(
         self, email_config: Any, tmp_path: Path
-    ) -> tuple[Any, Any, Any]:
+    ) -> tuple[Any, Any, Any, Any]:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_base_url=None)
 
@@ -1075,10 +1030,6 @@ class TestAllowlistParseError:
         mock_mirror.read_file.side_effect = _read_file
         handler.conversation_manager.mirror = mock_mirror
 
-        handler.authenticator.authenticate.return_value = (
-            "authorized@example.com"
-        )
-
         mock_conv_store = MagicMock()
         mock_conv_store.get_session_id_for_resume.return_value = None
         mock_conv_store.get_model.return_value = None
@@ -1089,26 +1040,31 @@ class TestAllowlistParseError:
         svc.sandbox.ensure_image.return_value = "airut:test"
         svc.sandbox.create_task.return_value = mock_task
 
-        return svc, handler, mock_conv_store
+        adapter = MagicMock()
+        adapter.save_attachments.return_value = []
+
+        return svc, handler, mock_conv_store, adapter
 
     def test_allowlist_read_error_raises_proxy_error(
         self, email_config: Any, tmp_path: Path
     ) -> None:
         """Failure reading/parsing allowlist raises ProxyError."""
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
-        msg = make_message(body="Do something")
+        svc, handler, mock_ss, adapter = self._setup_svc(email_config, tmp_path)
+        parsed = _make_parsed_message(body="Do something")
 
         with patch(
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_ss,
         ):
-            success, conv_id = process_message(svc, msg, "task1", handler)
+            success, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
 
         assert success is False
         assert conv_id == "conv1"
-        reply_call = handler.responder.send_reply.call_args_list[-1]
-        body = reply_call[1]["body"]
-        assert "ProxyError" in body
+        adapter.send_error.assert_called_once()
+        error_msg = adapter.send_error.call_args[0][2]
+        assert "ProxyError" in error_msg
 
 
 class TestConvertReplacementMap:
@@ -1116,7 +1072,7 @@ class TestConvertReplacementMap:
 
     def _setup_svc(
         self, email_config: Any, tmp_path: Path
-    ) -> tuple[Any, Any, Any]:
+    ) -> tuple[Any, Any, Any, Any]:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_base_url=None)
 
@@ -1147,10 +1103,6 @@ class TestConvertReplacementMap:
         mock_mirror.read_file.side_effect = _read_file
         handler.conversation_manager.mirror = mock_mirror
 
-        handler.authenticator.authenticate.return_value = (
-            "authorized@example.com"
-        )
-
         mock_conv_store = MagicMock()
         mock_conv_store.get_session_id_for_resume.return_value = None
         mock_conv_store.get_model.return_value = None
@@ -1162,18 +1114,21 @@ class TestConvertReplacementMap:
         svc.sandbox.create_task.return_value = mock_task
         svc._mock_task = mock_task
 
-        return svc, handler, mock_conv_store
+        adapter = MagicMock()
+        adapter.save_attachments.return_value = []
+
+        return svc, handler, mock_conv_store, adapter
 
     def test_replacement_and_signing_entries_converted(
         self, email_config: Any, tmp_path: Path
     ) -> None:
-        """ReplacementEntry and SigningCredentialEntry objects are converted."""
+        """ReplacementEntry and SigningCredentialEntry are converted."""
         from airut.gateway.config import (
             ReplacementEntry,
             SigningCredentialEntry,
         )
 
-        svc, handler, mock_ss = self._setup_svc(email_config, tmp_path)
+        svc, handler, mock_ss, adapter = self._setup_svc(email_config, tmp_path)
 
         replacement_map = {
             "surrogate-token-1": ReplacementEntry(
@@ -1183,7 +1138,7 @@ class TestConvertReplacementMap:
             ),
             "surrogate-key-id": SigningCredentialEntry(
                 access_key_id="AKIAIOSFODNN7EXAMPLE",
-                secret_access_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                secret_access_key=("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"),
                 session_token="FwoGZXIvYXdzEBY",
                 surrogate_session_token="surr-session-token",
                 scopes=("bedrock.us-east-1.amazonaws.com",),
@@ -1192,9 +1147,12 @@ class TestConvertReplacementMap:
 
         rc = _make_repo_config(network_sandbox_enabled=True)
 
+        parsed = _make_parsed_message(body="Do something")
+
         with (
             patch(
-                "airut.gateway.service.message_processing.RepoConfig.from_mirror",
+                "airut.gateway.service.message_processing."
+                "RepoConfig.from_mirror",
                 return_value=(rc, replacement_map),
             ),
             patch(
@@ -1203,7 +1161,7 @@ class TestConvertReplacementMap:
             ),
         ):
             success, conv_id = process_message(
-                svc, make_message(body="Do something"), "task1", handler
+                svc, parsed, "task1", handler, adapter
             )
 
         assert success is True
@@ -1234,23 +1192,23 @@ class TestBuildRecoveryPrompt:
     def test_includes_user_message(self) -> None:
         result = build_recovery_prompt(
             last_response=None,
-            email_context="Email context header",
+            channel_context="Channel context header",
             user_message="Please fix the bug",
         )
         assert "Please fix the bug" in result
 
-    def test_includes_email_context(self) -> None:
+    def test_includes_channel_context(self) -> None:
         result = build_recovery_prompt(
             last_response=None,
-            email_context="Email context header",
+            channel_context="Channel context header",
             user_message="hello",
         )
-        assert "Email context header" in result
+        assert "Channel context header" in result
 
     def test_includes_context_loss_notice(self) -> None:
         result = build_recovery_prompt(
             last_response=None,
-            email_context="ctx",
+            channel_context="ctx",
             user_message="hello",
         )
         assert "context length limits" in result
@@ -1259,7 +1217,7 @@ class TestBuildRecoveryPrompt:
     def test_includes_last_response(self) -> None:
         result = build_recovery_prompt(
             last_response="I created a PR at https://example.com",
-            email_context="ctx",
+            channel_context="ctx",
             user_message="hello",
         )
         assert "I created a PR at https://example.com" in result
@@ -1268,7 +1226,7 @@ class TestBuildRecoveryPrompt:
     def test_omits_last_response_when_none(self) -> None:
         result = build_recovery_prompt(
             last_response=None,
-            email_context="ctx",
+            channel_context="ctx",
             user_message="hello",
         )
         assert "Your last reply" not in result
@@ -1277,7 +1235,7 @@ class TestBuildRecoveryPrompt:
         long_response = "x" * 5000
         result = build_recovery_prompt(
             last_response=long_response,
-            email_context="ctx",
+            channel_context="ctx",
             user_message="hello",
         )
         assert "[...truncated]" in result

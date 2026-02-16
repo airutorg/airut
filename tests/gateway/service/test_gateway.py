@@ -3,7 +3,7 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Tests for gateway module (EmailGatewayService orchestration)."""
+"""Tests for gateway module (GatewayService orchestration)."""
 
 import concurrent.futures
 import os
@@ -12,12 +12,12 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from airut.gateway.service import EmailGatewayService, main
+from airut.gateway.service import GatewayService, main
 
 from .conftest import make_message, make_service, update_global
 
 
-class TestEmailGatewayServiceInit:
+class TestGatewayServiceInit:
     def test_init_sets_running(self, email_config, tmp_path: Path) -> None:
         svc, _ = make_service(email_config, tmp_path)
         assert svc.running is True
@@ -50,7 +50,7 @@ class TestEmailGatewayServiceInit:
             ),
         ):
             mv.return_value = (MagicMock(git_sha="x"), MagicMock())
-            svc = EmailGatewayService(server_config, repo_root=None)
+            svc = GatewayService(server_config, repo_root=None)
             # repo_root should be auto-detected
             assert svc.repo_root is not None
 
@@ -80,7 +80,7 @@ class TestEmailGatewayServiceInit:
             ),
         ):
             mv.return_value = (MagicMock(git_sha="x"), MagicMock())
-            EmailGatewayService(
+            GatewayService(
                 server_config,
                 repo_root=tmp_path,
                 egress_network="custom-egress-net",
@@ -184,6 +184,23 @@ class TestGetConversationLock:
 
 
 class TestProcessMessageWorker:
+    def test_auth_failure_completes_task(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """When authenticate_and_parse returns None, task is marked failed."""
+        svc, handler = make_service(email_config, tmp_path)
+        msg = make_message()
+
+        with patch.object(
+            handler.adapter,
+            "authenticate_and_parse",
+            return_value=None,
+        ):
+            svc._process_message_worker(msg, "task-1", handler)
+
+        svc.tracker.start_task.assert_called_once_with("task-1")
+        svc.tracker.complete_task.assert_called_once_with("task-1", False)
+
     def test_new_conversation(self, email_config, tmp_path: Path) -> None:
         svc, handler = make_service(email_config, tmp_path)
         handler.conversation_manager.exists.return_value = False
@@ -378,7 +395,7 @@ class TestRepoHandlerInitError:
             ),
         ):
             mv.return_value = (MagicMock(git_sha="x"), MagicMock())
-            svc = EmailGatewayService(server_config, repo_root=tmp_path)
+            svc = GatewayService(server_config, repo_root=tmp_path)
 
         # Handler was not created, but error was recorded
         assert "test" not in svc.repo_handlers
@@ -418,7 +435,7 @@ class TestRepoHandlerInitError:
             ),
         ):
             mv.return_value = (MagicMock(git_sha="x"), MagicMock())
-            svc = EmailGatewayService(server_config, repo_root=tmp_path)
+            svc = GatewayService(server_config, repo_root=tmp_path)
 
         # start() should fail since all repos failed during init
         with pytest.raises(RuntimeError, match="All 1 repo"):
@@ -802,7 +819,7 @@ class TestMain:
                 return_value=mock_config,
             ),
             patch(
-                "airut.gateway.service.gateway.EmailGatewayService",
+                "airut.gateway.service.gateway.GatewayService",
                 side_effect=RuntimeError("init fail"),
             ),
         ):
@@ -825,7 +842,7 @@ class TestMain:
                 return_value=mock_config,
             ),
             patch(
-                "airut.gateway.service.gateway.EmailGatewayService",
+                "airut.gateway.service.gateway.GatewayService",
                 return_value=mock_svc,
             ),
             patch.dict("os.environ", {}, clear=False),
@@ -850,7 +867,7 @@ class TestMain:
                 return_value=mock_config,
             ),
             patch(
-                "airut.gateway.service.gateway.EmailGatewayService",
+                "airut.gateway.service.gateway.GatewayService",
                 return_value=mock_svc,
             ),
             patch.dict("os.environ", {}, clear=False),
@@ -874,7 +891,7 @@ class TestMain:
                 return_value=mock_config,
             ),
             patch(
-                "airut.gateway.service.gateway.EmailGatewayService",
+                "airut.gateway.service.gateway.GatewayService",
                 return_value=mock_svc,
             ),
             patch.dict("os.environ", {}, clear=False),
@@ -900,7 +917,7 @@ class TestMain:
                 return_value=mock_config,
             ),
             patch(
-                "airut.gateway.service.gateway.EmailGatewayService",
+                "airut.gateway.service.gateway.GatewayService",
                 return_value=mock_svc,
             ),
             patch.dict("os.environ", {}, clear=False),
@@ -929,7 +946,7 @@ class TestMain:
                 return_value=mock_config,
             ),
             patch(
-                "airut.gateway.service.gateway.EmailGatewayService",
+                "airut.gateway.service.gateway.GatewayService",
                 return_value=mock_svc,
             ),
             patch("airut.gateway.service.gateway.signal.signal") as mock_sig,
@@ -967,7 +984,7 @@ class TestMain:
                 return_value=mock_config,
             ),
             patch(
-                "airut.gateway.service.gateway.EmailGatewayService",
+                "airut.gateway.service.gateway.GatewayService",
                 return_value=mock_svc,
             ),
             patch(
@@ -1001,7 +1018,7 @@ class TestMain:
                 return_value=mock_config,
             ),
             patch(
-                "airut.gateway.service.gateway.EmailGatewayService",
+                "airut.gateway.service.gateway.GatewayService",
                 return_value=mock_svc,
             ),
             patch.dict("os.environ", {}, clear=False),
@@ -1014,7 +1031,7 @@ class TestMain:
 
 
 class TestUpstreamDnsResolution:
-    """Tests for upstream DNS auto-detection in EmailGatewayService init."""
+    """Tests for upstream DNS auto-detection in GatewayService init."""
 
     def test_auto_detects_when_upstream_dns_is_none(
         self, email_config, tmp_path: Path
@@ -1044,7 +1061,7 @@ class TestUpstreamDnsResolution:
             ) as mock_resolver,
         ):
             mv.return_value = (MagicMock(git_sha="x"), MagicMock())
-            EmailGatewayService(server_config, repo_root=tmp_path)
+            GatewayService(server_config, repo_root=tmp_path)
             mock_resolver.assert_called_once()
             # Sandbox should receive the auto-detected DNS via SandboxConfig
             assert mock_sandbox.call_args[0][0].upstream_dns == "192.168.1.1"
@@ -1076,7 +1093,7 @@ class TestUpstreamDnsResolution:
             ) as mock_resolver,
         ):
             mv.return_value = (MagicMock(git_sha="x"), MagicMock())
-            EmailGatewayService(server_config, repo_root=tmp_path)
+            GatewayService(server_config, repo_root=tmp_path)
             mock_resolver.assert_not_called()
             # Sandbox should receive the explicit DNS via SandboxConfig
             assert mock_sandbox.call_args[0][0].upstream_dns == "8.8.8.8"
@@ -1113,4 +1130,4 @@ class TestUpstreamDnsResolution:
             with pytest.raises(
                 SystemResolverError, match="No nameserver entries"
             ):
-                EmailGatewayService(server_config, repo_root=tmp_path)
+                GatewayService(server_config, repo_root=tmp_path)

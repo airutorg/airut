@@ -33,7 +33,7 @@ from airut.gateway.config import (
     RepoServerConfig,
     ServerConfig,
 )
-from airut.gateway.parsing import (
+from airut.gateway.email.parsing import (
     extract_attachments,
     extract_body,
     extract_conversation_id,
@@ -254,7 +254,9 @@ class TestErrorRecovery:
         responder = EmailResponder(email_config)
 
         # Mock SMTP to fail
-        with patch("airut.gateway.responder.smtplib.SMTP") as mock_smtp_class:
+        with patch(
+            "airut.gateway.email.responder.smtplib.SMTP"
+        ) as mock_smtp_class:
             # Create mock that raises exception in send_message
             mock_smtp = MagicMock()
             mock_smtp.__enter__.return_value.send_message.side_effect = (
@@ -271,7 +273,9 @@ class TestErrorRecovery:
                 )
 
         # Now test successful send
-        with patch("airut.gateway.responder.smtplib.SMTP") as mock_smtp_class:
+        with patch(
+            "airut.gateway.email.responder.smtplib.SMTP"
+        ) as mock_smtp_class:
             mock_smtp = MagicMock()
             mock_smtp.__enter__.return_value.send_message.return_value = {}
             mock_smtp_class.return_value = mock_smtp
@@ -438,13 +442,13 @@ class TestParallelExecution:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
 
         # Verify parallel state initialized
         assert service._executor_pool is None  # Not initialized until start()
@@ -458,13 +462,13 @@ class TestParallelExecution:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
 
         # Get lock for new conversation
         lock1 = service._get_conversation_lock("conv123")
@@ -487,13 +491,13 @@ class TestParallelExecution:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
 
         future = concurrent.futures.Future()
         service._pending_futures = {future}
@@ -514,13 +518,13 @@ class TestParallelExecution:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
 
         future = concurrent.futures.Future()
         service._pending_futures = {future}
@@ -541,13 +545,13 @@ class TestParallelExecution:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
 
         future = concurrent.futures.Future()
         service._pending_futures = {future}
@@ -568,13 +572,13 @@ class TestParallelExecution:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
         assert service._executor_pool is None
 
@@ -592,13 +596,13 @@ class TestParallelExecution:
         from concurrent.futures import ThreadPoolExecutor
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         service._executor_pool = ThreadPoolExecutor(max_workers=1)
 
         # Create a future that completes quickly
@@ -625,7 +629,7 @@ class TestParallelExecution:
         from concurrent.futures import ThreadPoolExecutor
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         # Create config with very short timeout
         global_config = GlobalConfig(
@@ -636,7 +640,7 @@ class TestParallelExecution:
             repos={"test": email_config},
         )
 
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         service._executor_pool = ThreadPoolExecutor(max_workers=1)
 
         # Create a slow task
@@ -661,18 +665,19 @@ class TestParallelExecution:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
 
         # Set up message without conversation ID (new conversation)
         message = sample_email_message
         message.replace_header("Subject", "New request without ID")
+        message.replace_header("From", email_config.authorized_senders[0])
 
         # Mock process_message to track calls
         with patch(
@@ -680,9 +685,12 @@ class TestParallelExecution:
             return_value=(True, None),
         ) as mock_process:
             service._process_message_worker(message, "test-task-id", handler)
-            mock_process.assert_called_once_with(
-                service, message, "test-task-id", handler
-            )
+            mock_process.assert_called_once()
+            # Verify key args: service, parsed msg, task_id
+            call_args = mock_process.call_args
+            assert call_args[0][0] is service
+            assert call_args[0][2] == "test-task-id"
+            assert call_args[0][3] is handler
 
         # No conversation locks should have been created
         assert len(service._conversation_locks) == 0
@@ -697,13 +705,13 @@ class TestParallelExecution:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
 
         # Create an existing conversation
@@ -712,6 +720,7 @@ class TestParallelExecution:
         # Set up message with existing conversation ID
         message = sample_email_message
         message.replace_header("Subject", f"Re: [ID:{conv_id}] Follow-up")
+        message.replace_header("From", email_config.authorized_senders[0])
 
         # Mock process_message to track calls
         with patch(
@@ -719,9 +728,7 @@ class TestParallelExecution:
             return_value=(True, conv_id),
         ) as mock_process:
             service._process_message_worker(message, "test-task-id", handler)
-            mock_process.assert_called_once_with(
-                service, message, "test-task-id", handler
-            )
+            mock_process.assert_called_once()
 
         # Conversation lock should have been created
         assert conv_id in service._conversation_locks
@@ -737,13 +744,13 @@ class TestAcknowledgmentReply:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
 
         # Set up message without conversation ID (new conversation)
@@ -756,7 +763,7 @@ class TestAcknowledgmentReply:
         model = "sonnet"
 
         # Mock responder.send_reply
-        from airut.gateway.service.email_replies import send_acknowledgment
+        from airut.gateway.email.replies import send_acknowledgment
 
         with patch.object(handler.responder, "send_reply") as mock_send:
             send_acknowledgment(
@@ -782,13 +789,13 @@ class TestAcknowledgmentReply:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
 
         conv_id = "xyz98765"
@@ -801,7 +808,7 @@ class TestAcknowledgmentReply:
         message.replace_header("Message-ID", "<followup456@example.com>")
         message.replace_header("From", email_config.authorized_senders[0])
 
-        from airut.gateway.service.email_replies import send_acknowledgment
+        from airut.gateway.email.replies import send_acknowledgment
 
         with patch.object(handler.responder, "send_reply") as mock_send:
             send_acknowledgment(
@@ -820,17 +827,17 @@ class TestAcknowledgmentReply:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
         message = sample_email_message
 
-        from airut.gateway.service.email_replies import send_acknowledgment
+        from airut.gateway.email.replies import send_acknowledgment
 
         # Mock responder to raise SMTPSendError
         with patch.object(
@@ -851,13 +858,13 @@ class TestAcknowledgmentReply:
         from email.parser import BytesParser
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
 
         # Create message with References header
@@ -874,7 +881,7 @@ Please help.
 
         conv_id = "thread123"
 
-        from airut.gateway.service.email_replies import send_acknowledgment
+        from airut.gateway.email.replies import send_acknowledgment
 
         with patch.object(handler.responder, "send_reply") as mock_send:
             send_acknowledgment(
@@ -899,18 +906,15 @@ Please help.
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.channel import ParsedMessage
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
-
-        message = sample_email_message
-        message.replace_header("Subject", "New request")
-        message.replace_header("From", email_config.authorized_senders[0])
 
         call_order: list[str] = []
 
@@ -936,9 +940,6 @@ Please help.
                 exit_code=0,
             )
 
-        def track_send_reply(*args, **kwargs):
-            call_order.append("final_reply")
-
         # Create mock task
         mock_task = MagicMock()
         mock_task.execute.side_effect = track_execute
@@ -946,19 +947,23 @@ Please help.
         service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock
         service.sandbox.create_task.return_value = mock_task  # type: ignore[invalid-assignment]  # mock
 
-        with (
-            patch.object(
-                handler.responder, "send_reply", side_effect=track_send_reply
-            ),
-            # Patch the module-level function that process_message calls
-            patch(
-                "airut.gateway.service.message_processing.send_acknowledgment",
-                side_effect=track_ack,
-            ),
-        ):
-            from airut.gateway.service.message_processing import process_message
+        # Create mock adapter
+        adapter = MagicMock()
+        adapter.send_acknowledgment.side_effect = track_ack
+        adapter.save_attachments.return_value = []
 
-            process_message(service, message, "test-task-id", handler)
+        parsed = ParsedMessage(
+            sender=email_config.authorized_senders[0],
+            body="New request",
+            conversation_id=None,
+            model_hint=None,
+        )
+
+        from airut.gateway.service.message_processing import (
+            process_message,
+        )
+
+        process_message(service, parsed, "test-task-id", handler, adapter)
 
         # Verify acknowledgment comes before execution
         assert "acknowledgment" in call_order
@@ -984,31 +989,26 @@ Please help.
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.channel import ParsedMessage
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
-
-        message = sample_email_message
-        message.replace_header("Subject", "New request without ID")
-        message.replace_header("From", email_config.authorized_senders[0])
 
         temp_task_id = "new-12345678"
         service.tracker.add_task(temp_task_id, "New request")
 
         task_id_at_ack_time: str | None = None
 
-        def track_task_id_at_ack(repo_handler, msg, conv_id, model, cfg):
+        def track_task_id_at_ack(parsed, conv_id, model, dashboard_url):
             nonlocal task_id_at_ack_time
-            # Check if task exists under the real conv_id at acknowledgment time
             task = service.tracker.get_task(conv_id)
             if task is not None:
                 task_id_at_ack_time = conv_id
-            # Don't actually send
 
         # Create mock task
         from airut.claude_output.types import Usage
@@ -1032,18 +1032,25 @@ Please help.
         service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock
         service.sandbox.create_task.return_value = mock_task  # type: ignore[invalid-assignment]  # mock
 
-        with (
-            patch(
-                "airut.gateway.service.message_processing.send_acknowledgment",
-                side_effect=track_task_id_at_ack,
-            ),
-            patch.object(handler.responder, "send_reply"),
-        ):
-            from airut.gateway.service.message_processing import process_message
+        # Create mock adapter
+        adapter = MagicMock()
+        adapter.send_acknowledgment.side_effect = track_task_id_at_ack
+        adapter.save_attachments.return_value = []
 
-            process_message(service, message, temp_task_id, handler)
+        parsed = ParsedMessage(
+            sender=email_config.authorized_senders[0],
+            body="New request without ID",
+            conversation_id=None,
+            model_hint=None,
+        )
 
-        # Task should be accessible by real conv_id at acknowledgment time
+        from airut.gateway.service.message_processing import (
+            process_message,
+        )
+
+        process_message(service, parsed, temp_task_id, handler, adapter)
+
+        # Task should be accessible by real conv_id at ack time
         assert task_id_at_ack_time is not None, (
             "Task should be findable by conversation ID when ack is sent"
         )
@@ -1055,7 +1062,7 @@ Please help.
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         work_dir = tmp_path / "conversations"
         work_dir.mkdir()
@@ -1082,7 +1089,7 @@ Please help.
             repos={"test": repo_config},
         )
 
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
         message = sample_email_message
         message.replace_header("Subject", "New request")
@@ -1091,7 +1098,7 @@ Please help.
 
         conv_id = "abc12345"
 
-        from airut.gateway.service.email_replies import send_acknowledgment
+        from airut.gateway.email.replies import send_acknowledgment
 
         with patch.object(handler.responder, "send_reply") as mock_send:
             send_acknowledgment(
@@ -1115,14 +1122,14 @@ Please help.
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         # Default config has dashboard_base_url=None
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
         message = sample_email_message
         message.replace_header("Subject", "New request")
@@ -1130,7 +1137,7 @@ Please help.
 
         conv_id = "abc12345"
 
-        from airut.gateway.service.email_replies import send_acknowledgment
+        from airut.gateway.email.replies import send_acknowledgment
 
         with patch.object(handler.responder, "send_reply") as mock_send:
             send_acknowledgment(
@@ -1151,26 +1158,24 @@ Please help.
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.channel import ParsedMessage
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
 
         # Create an existing conversation first
         conv_id, _ = handler.conversation_manager.initialize_new()
 
-        # Set up a follow-up message (has the conversation ID in subject)
-        message = sample_email_message
-        message.replace_header("Subject", f"Re: [ID:{conv_id}] Follow-up")
-        message.replace_header("From", email_config.authorized_senders[0])
-
         # Create mock task
         from airut.claude_output.types import Usage
-        from airut.gateway.service.message_processing import process_message
+        from airut.gateway.service.message_processing import (
+            process_message,
+        )
         from airut.sandbox import ExecutionResult, Outcome
 
         mock_task = MagicMock()
@@ -1191,16 +1196,21 @@ Please help.
         service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock
         service.sandbox.create_task.return_value = mock_task  # type: ignore[invalid-assignment]  # mock
 
-        with (
-            patch(
-                "airut.gateway.service.message_processing.send_acknowledgment"
-            ) as mock_ack,
-            patch.object(handler.responder, "send_reply"),
-        ):
-            process_message(service, message, "test-task-id", handler)
+        # Create mock adapter
+        adapter = MagicMock()
+        adapter.save_attachments.return_value = []
 
-        # Acknowledgment should NOT be called for follow-up messages
-        mock_ack.assert_not_called()
+        parsed = ParsedMessage(
+            sender=email_config.authorized_senders[0],
+            body="Follow-up",
+            conversation_id=conv_id,
+            model_hint=None,
+        )
+
+        process_message(service, parsed, "test-task-id", handler, adapter)
+
+        # Acknowledgment should NOT be called for follow-up msgs
+        adapter.send_acknowledgment.assert_not_called()
 
 
 class TestExtractUsageStats:
@@ -1320,13 +1330,13 @@ class TestTaskIdTracking:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
 
         # Set up message without conversation ID (new conversation)
@@ -1341,7 +1351,7 @@ class TestTaskIdTracking:
 
         # Mock process_message to simulate what it does: update task ID
         # then return. Real process_message updates tracker before ack.
-        def mock_process_message(svc, msg, task_id, handler):
+        def mock_process_message(svc, parsed, task_id, handler, adapter):
             service.tracker.update_task_id(task_id, new_conv_id)
             return (True, new_conv_id)
 
@@ -1367,17 +1377,18 @@ class TestTaskIdTracking:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
 
         message = sample_email_message
         message.replace_header("Subject", "New request")
+        message.replace_header("From", email_config.authorized_senders[0])
 
         temp_task_id = "new-87654321"
         service.tracker.add_task(temp_task_id, "New request")
@@ -1409,13 +1420,13 @@ class TestDuplicateEmailRejection:
         from concurrent.futures import ThreadPoolExecutor
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
         service._executor_pool = ThreadPoolExecutor(max_workers=1)
 
@@ -1430,20 +1441,30 @@ class TestDuplicateEmailRejection:
         message.replace_header("Subject", f"Re: [ID:{conv_id}] Follow-up")
         message.replace_header("From", email_config.authorized_senders[0])
 
-        # Mock send_rejection_reply (module-level function)
-        with patch(
-            "airut.gateway.service.gateway.send_rejection_reply"
-        ) as mock_reject:
+        # submit_message calls adapter.authenticate_and_parse then
+        # adapter.send_rejection — mock the adapter methods
+        mock_parsed = MagicMock()
+        with (
+            patch.object(
+                handler.adapter,
+                "authenticate_and_parse",
+                return_value=mock_parsed,
+            ),
+            patch.object(
+                handler.adapter,
+                "send_rejection",
+            ) as mock_reject,
+        ):
             result = service.submit_message(message, handler)
 
-            # Should return False (rejected)
-            assert result is False
-            # Should send rejection reply
-            mock_reject.assert_called_once()
-            call_args = mock_reject.call_args
-            assert call_args[0][1] == message  # message argument
-            assert call_args[0][2] == conv_id  # conv_id argument
-            assert "still being processed" in call_args[0][3]  # reason
+        # Should return False (rejected)
+        assert result is False
+        # Should send rejection reply via adapter
+        mock_reject.assert_called_once()
+        call_args = mock_reject.call_args
+        assert call_args[0][0] == mock_parsed
+        assert call_args[0][1] == conv_id
+        assert "still being processed" in call_args[0][2]
 
         # Clean up
         service._executor_pool.shutdown(wait=False)
@@ -1458,13 +1479,13 @@ class TestDuplicateEmailRejection:
         from concurrent.futures import ThreadPoolExecutor
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
         service._executor_pool = ThreadPoolExecutor(max_workers=1)
 
@@ -1500,13 +1521,13 @@ class TestDuplicateEmailRejection:
         from concurrent.futures import ThreadPoolExecutor
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
         service._executor_pool = ThreadPoolExecutor(max_workers=1)
 
@@ -1536,13 +1557,13 @@ class TestRejectionReply:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
 
         message = sample_email_message
@@ -1553,7 +1574,7 @@ class TestRejectionReply:
         conv_id = "def45678"
         reason = "Task already in progress"
 
-        from airut.gateway.service.email_replies import send_rejection_reply
+        from airut.gateway.email.replies import send_rejection_reply
 
         with patch.object(handler.responder, "send_reply") as mock_send:
             send_rejection_reply(
@@ -1574,7 +1595,7 @@ class TestRejectionReply:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         work_dir = tmp_path / "conversations"
         work_dir.mkdir()
@@ -1600,7 +1621,7 @@ class TestRejectionReply:
             repos={"test": repo_config},
         )
 
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
         message = sample_email_message
         message.replace_header("Subject", "Request")
@@ -1608,7 +1629,7 @@ class TestRejectionReply:
 
         conv_id = "link1234"
 
-        from airut.gateway.service.email_replies import send_rejection_reply
+        from airut.gateway.email.replies import send_rejection_reply
 
         with patch.object(handler.responder, "send_reply") as mock_send:
             send_rejection_reply(
@@ -1633,17 +1654,17 @@ class TestRejectionReply:
         import sys
 
         sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
         )
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
         handler = service.repo_handlers["test"]
         message = sample_email_message
 
-        from airut.gateway.service.email_replies import send_rejection_reply
+        from airut.gateway.email.replies import send_rejection_reply
 
         with patch.object(
             handler.responder,

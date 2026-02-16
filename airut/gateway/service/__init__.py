@@ -3,21 +3,20 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Email gateway service package.
+"""Gateway service package.
 
-Provides the main email gateway service that monitors email, executes Claude
-Code in containers, and replies with results.
+Provides the main gateway service that monitors messaging channels, executes
+Claude Code in containers, and replies with results.
 
 The service has been modularized into the following components:
-- gateway: Main EmailGatewayService orchestrator and entry point
+- gateway: Main GatewayService orchestrator and entry point
 - repo_handler: Per-repository handler (listener, auth, conversation mgmt)
-- message_processing: Email message processing and Claude execution
-- email_replies: Email reply sending (acknowledgments, errors, results)
+- message_processing: Message processing and Claude execution
 - usage_stats: Usage statistics extraction from Claude output
 """
 
 from airut.gateway.service.gateway import (
-    EmailGatewayService,
+    GatewayService,
     capture_version_info,
     main,
 )
@@ -34,7 +33,7 @@ from airut.gateway.service.usage_stats import (
 
 __all__ = [
     # gateway
-    "EmailGatewayService",
+    "GatewayService",
     "capture_version_info",
     "main",
     # repo_handler

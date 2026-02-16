@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from airut.gateway.service.email_replies import (
+from airut.gateway.email.replies import (
     _clean_outbox,
     send_acknowledgment,
     send_error_reply,
@@ -301,6 +301,17 @@ class TestSendReply:
         call_kwargs = handler.responder.send_reply.call_args[1]
         assert call_kwargs["attachments"] is None
 
+    def test_subject_with_existing_conv_id(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        svc, handler = make_service(email_config, tmp_path)
+        handler.conversation_manager.get_workspace_path.return_value = tmp_path
+        msg = make_message(subject="Re: [ID:conv1] Hello")
+        send_reply(handler, msg, "conv1", "body")
+        call_kwargs = handler.responder.send_reply.call_args[1]
+        assert call_kwargs["subject"].count("[ID:conv1]") == 1
+        assert call_kwargs["subject"] == "Re: [ID:conv1] Hello"
+
     def test_structured_message_id(self, email_config, tmp_path: Path) -> None:
         svc, handler = make_service(email_config, tmp_path)
         handler.conversation_manager.get_workspace_path.return_value = tmp_path
@@ -385,7 +396,7 @@ class TestCleanOutbox:
             patch.object(
                 Path, "unlink", side_effect=OSError("Permission denied")
             ),
-            patch("airut.gateway.service.email_replies.logger") as mock_logger,
+            patch("airut.gateway.email.replies.logger") as mock_logger,
         ):
             _clean_outbox(attachments, outbox)
             mock_logger.warning.assert_called_once()

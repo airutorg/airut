@@ -21,8 +21,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from airut.conversation import create_conversation_layout
-from airut.gateway.parsing import collect_outbox_files, decode_subject
-from airut.gateway.responder import SMTPSendError, generate_message_id
+from airut.gateway.email.parsing import collect_outbox_files, decode_subject
+from airut.gateway.email.responder import SMTPSendError, generate_message_id
 
 
 if TYPE_CHECKING:

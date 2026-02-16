@@ -3,10 +3,10 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Main email gateway service orchestrator.
+"""Main gateway service orchestrator.
 
 This module contains:
-- EmailGatewayService: Main service class that orchestrates all components
+- GatewayService: Main service class that orchestrates all components
 - capture_version_info: Git version capture at startup
 - main: CLI entry point
 """
@@ -35,8 +35,7 @@ from airut.dashboard.tracker import BootPhase, BootState, RepoState, RepoStatus
 from airut.dashboard.versioned import VersionClock, VersionedStore
 from airut.dns import get_system_resolver
 from airut.gateway.config import ServerConfig
-from airut.gateway.parsing import decode_subject, extract_conversation_id
-from airut.gateway.service.email_replies import send_rejection_reply
+from airut.gateway.email.parsing import decode_subject, extract_conversation_id
 from airut.gateway.service.message_processing import (
     process_message,
 )
@@ -69,8 +68,8 @@ def capture_version_info() -> tuple[VersionInfo, GitVersionInfo]:
     return version_info, git_version
 
 
-class EmailGatewayService:
-    """Main email gateway service orchestrator.
+class GatewayService:
+    """Main gateway service orchestrator.
 
     Manages multiple RepoHandlers, shared executor pool, dashboard, and
     proxy manager.  Each repo has its own listener thread; all repos
@@ -167,7 +166,7 @@ class EmailGatewayService:
                     error_msg,
                 )
 
-        logger.info("Email gateway service initialized")
+        logger.info("Gateway service initialized")
         version_label = self._version_info.version or self._version_info.git_sha
         logger.info("Version: %s", version_label)
         logger.info(
@@ -189,7 +188,7 @@ class EmailGatewayService:
         Raises:
             RuntimeError: If all repos fail to initialize (unless resilient).
         """
-        logger.info("Starting email gateway service...")
+        logger.info("Starting gateway service...")
 
         # Start dashboard immediately so it's visible during boot
         self._start_dashboard_early()
@@ -421,7 +420,7 @@ class EmailGatewayService:
             return
         self._stopped = True
 
-        logger.info("Stopping email gateway service...")
+        logger.info("Stopping gateway service...")
         self.running = False
         self._shutdown_event.set()
 
@@ -533,15 +532,21 @@ class EmailGatewayService:
                 "Rejecting duplicate email for conversation %s - active",
                 conv_id,
             )
-            send_rejection_reply(
-                repo_handler,
-                message,
-                conv_id,
-                "Your previous request for this conversation is still being "
-                "processed. Please wait for it to complete before sending "
-                "another message.",
-                self.global_config,
-            )
+            # Use the adapter for rejection replies
+            parsed = repo_handler.adapter.authenticate_and_parse(message)
+            if parsed is not None:
+                reason = (
+                    "Your previous request for this "
+                    "conversation is still being processed. "
+                    "Please wait for it to complete before "
+                    "sending another message."
+                )
+                repo_handler.adapter.send_rejection(
+                    parsed,
+                    conv_id,
+                    reason,
+                    self.global_config.dashboard_base_url,
+                )
             return False
 
         # Use conversation ID if available, otherwise generate a temp ID
@@ -586,8 +591,15 @@ class EmailGatewayService:
         """Worker thread entry point for message processing."""
         self.tracker.start_task(task_id)
 
-        subject = decode_subject(message)
-        conv_id = extract_conversation_id(subject)
+        adapter = repo_handler.adapter
+
+        # Authenticate and parse through the channel adapter
+        parsed = adapter.authenticate_and_parse(message)
+        if parsed is None:
+            self.tracker.complete_task(task_id, False)
+            return
+
+        conv_id = parsed.conversation_id
 
         success = False
         final_task_id = task_id
@@ -596,13 +608,13 @@ class EmailGatewayService:
                 lock = self._get_conversation_lock(conv_id)
                 with lock:
                     success, final_conv_id = process_message(
-                        self, message, task_id, repo_handler
+                        self, parsed, task_id, repo_handler, adapter
                     )
                     if final_conv_id:
                         final_task_id = final_conv_id
             else:
                 success, final_conv_id = process_message(
-                    self, message, task_id, repo_handler
+                    self, parsed, task_id, repo_handler, adapter
                 )
                 if final_conv_id:
                     final_task_id = final_conv_id
@@ -676,8 +688,10 @@ def main(argv: list[str] | None = None) -> int:
         Exit code (0=success, 1=config error, 2=startup, 3=runtime error).
     """
     parser = argparse.ArgumentParser(
-        description="Airut Email Gateway Service",
-        epilog="Monitors email and executes Claude Code in response.",
+        description="Airut Gateway Service",
+        epilog=(
+            "Monitors messaging channels and executes Claude Code in response."
+        ),
     )
     parser.add_argument(
         "--debug",
@@ -699,7 +713,7 @@ def main(argv: list[str] | None = None) -> int:
         add_secret_filter=True,
     )
 
-    logger.info("Airut Email Gateway Service starting...")
+    logger.info("Airut Gateway Service starting...")
 
     try:
         config = ServerConfig.from_yaml()
@@ -708,7 +722,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        service = EmailGatewayService(config)
+        service = GatewayService(config)
     except Exception as e:
         logger.exception("Failed to initialize service: %s", e)
         return 2

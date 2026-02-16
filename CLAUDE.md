@@ -2,8 +2,9 @@
 
 ## Project Overview
 
-Airut is an email gateway for headless Claude Code interaction. Named "Airut"
-(Finnish: herald/messenger).
+Airut is a protocol-agnostic gateway for headless Claude Code interaction.
+Currently supports email as a channel; designed for future channels (Slack,
+etc.). Named "Airut" (Finnish: herald/messenger).
 
 Network requests from containers are sandboxed; if requests fail, check
 `.airut/network-allowlist.yaml`. See `doc/network-sandbox.md` for details.
@@ -24,8 +25,8 @@ High-level documentation in `doc/` (see `doc/README.md` for full list):
 
 Implementation specs in `spec/` (see `spec/README.md` for full list):
 
-- `spec/gateway-architecture.md` — email protocol, conversation state, container
-  execution
+- `spec/gateway-architecture.md` — gateway architecture, channel abstraction,
+  conversation state, container execution
 - `spec/sandbox.md` — sandbox library for safe containerized execution
 - `spec/authentication.md` — DMARC verification and sender authorization
 - `spec/repo-config.md` — repo config schema and YAML tags
@@ -236,7 +237,10 @@ airut/                        - Library code
   claude_output/            - Typed Claude streaming JSON output parser
   conversation/             - Conversation directory layout and preparation
   dashboard/                - Web dashboard server
-  gateway/                  - Email gateway service
+  gateway/                  - Protocol-agnostic gateway service
+    channel.py              - ChannelAdapter protocol + ParsedMessage
+    email/                  - Email channel implementation
+    service/                - Core orchestration (GatewayService, RepoHandler)
   gh/                       - GitHub API wrappers
   git_mirror.py             - Git mirror cache
   install_services.py       - Service installation logic
@@ -257,7 +261,9 @@ tests/                      - Unit tests (100% coverage required)
   test_dns.py               - DNS resolver tests
   sandbox/                  - Sandbox execution tests
   dashboard/                - Dashboard tests
-  gateway/                  - Email gateway tests
+  gateway/                  - Gateway tests
+    email/                  - Email channel tests
+    service/                - Core service tests
 workflows/                  - Step-by-step operational guides
 ```
 

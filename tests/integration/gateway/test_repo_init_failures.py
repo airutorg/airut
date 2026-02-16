@@ -75,9 +75,9 @@ class TestImapConnectionFailures:
             repos={"test": repo_config},
         )
 
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
-        service = EmailGatewayService(config, repo_root=tmp_path)
+        service = GatewayService(config, repo_root=tmp_path)
 
         # Starting should fail since all repos fail
         with pytest.raises(RuntimeError, match="All 1 repo"):
@@ -136,9 +136,9 @@ class TestImapConnectionFailures:
             repos={"unreachable": repo_config},
         )
 
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
-        service = EmailGatewayService(config, repo_root=tmp_path)
+        service = GatewayService(config, repo_root=tmp_path)
 
         # Starting should fail
         with pytest.raises(RuntimeError, match="All 1 repo"):
@@ -190,9 +190,9 @@ class TestGitCloneFailures:
             repos={"bad-git": repo_config},
         )
 
-        from airut.gateway.service import EmailGatewayService
+        from airut.gateway.service import GatewayService
 
-        service = EmailGatewayService(config, repo_root=tmp_path)
+        service = GatewayService(config, repo_root=tmp_path)
 
         with pytest.raises(RuntimeError, match="All 1 repo"):
             service.start()
