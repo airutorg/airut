@@ -49,6 +49,12 @@ class ParsedMessage:
     into the container at /inbox). No cleanup is needed -- files accumulate
     naturally and are garbage-collected with the conversation."""
 
+    subject: str = ""
+    """Short display title for the task tracker (e.g. email subject line).
+
+    Shown on the dashboard to identify the task. If empty, the tracker
+    falls back to a generic placeholder."""
+
     channel_context: str = ""
     """Channel-specific context instructions prepended to the prompt.
     E.g., 'User is interacting via email interface...'"""

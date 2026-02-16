@@ -276,6 +276,36 @@ class TaskTracker:
                 self._evict_old_completed()
                 self._clock.tick()
 
+    def update_task_subject(
+        self,
+        conversation_id: str,
+        subject: str,
+        *,
+        sender: str = "",
+    ) -> bool:
+        """Update the subject (display title) of an existing task.
+
+        Used after authentication completes to replace the placeholder
+        ``(authenticating)`` title with the real subject.
+
+        Args:
+            conversation_id: Task identifier to update.
+            subject: New subject/title to display.
+            sender: Sender identity to set (if non-empty).
+
+        Returns:
+            True if the task was found and updated, False otherwise.
+        """
+        with self._lock:
+            if conversation_id not in self._tasks:
+                return False
+            task = self._tasks[conversation_id]
+            task.subject = subject
+            if sender:
+                task.sender = sender
+            self._clock.tick()
+            return True
+
     def update_task_id(self, old_id: str, new_id: str) -> bool:
         """Update a task's conversation ID.
 

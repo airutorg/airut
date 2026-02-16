@@ -362,6 +362,58 @@ class TestTaskTracker:
         assert tracker.get_task("old-id") is not None
         assert tracker.get_task("new-id") is not None
 
+    def test_update_task_subject_success(self) -> None:
+        """Test updating a task's subject."""
+        tracker = TaskTracker()
+        tracker.add_task("new-12345678", "(authenticating)")
+        tracker.start_task("new-12345678")
+
+        result = tracker.update_task_subject(
+            "new-12345678", "Fix the login bug", sender="user@example.com"
+        )
+
+        assert result is True
+        task = tracker.get_task("new-12345678")
+        assert task is not None
+        assert task.subject == "Fix the login bug"
+        assert task.sender == "user@example.com"
+
+    def test_update_task_subject_without_sender(self) -> None:
+        """Test updating subject without changing sender."""
+        tracker = TaskTracker()
+        tracker.add_task(
+            "abc12345", "(authenticating)", sender="original@example.com"
+        )
+
+        result = tracker.update_task_subject("abc12345", "New subject")
+
+        assert result is True
+        task = tracker.get_task("abc12345")
+        assert task is not None
+        assert task.subject == "New subject"
+        assert task.sender == "original@example.com"  # Preserved
+
+    def test_update_task_subject_nonexistent(self) -> None:
+        """Test updating subject on non-existent task."""
+        tracker = TaskTracker()
+
+        result = tracker.update_task_subject("nonexistent", "Subject")
+
+        assert result is False
+
+    def test_update_task_subject_ticks_clock(self) -> None:
+        """Test that update_task_subject ticks the version clock."""
+        from airut.dashboard.versioned import VersionClock
+
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        tracker.add_task("abc12345", "(authenticating)")
+        version_before = clock.version
+
+        tracker.update_task_subject("abc12345", "Real subject")
+
+        assert clock.version > version_before
+
     def test_set_task_model_success(self) -> None:
         """Test setting model on an existing task."""
         tracker = TaskTracker()

@@ -234,8 +234,6 @@ class TestProcessMessageWorker:
         svc.tracker.complete_task.assert_called_once_with("conv1", True)
 
     def test_exception_marks_failed(self, email_config, tmp_path: Path) -> None:
-        import pytest
-
         svc, handler = make_service(email_config, tmp_path)
         handler.conversation_manager.exists.return_value = False
         mock_parsed = MagicMock(conversation_id=None)
@@ -247,8 +245,7 @@ class TestProcessMessageWorker:
             "airut.gateway.service.gateway.process_message",
             side_effect=RuntimeError("boom"),
         ):
-            with pytest.raises(RuntimeError):
-                svc._process_message_worker(msg, "task1", handler)
+            svc._process_message_worker(msg, "task1", handler)
         svc.tracker.complete_task.assert_called_once_with("task1", False)
 
     def test_uses_returned_conv_id(self, email_config, tmp_path: Path) -> None:
@@ -283,6 +280,67 @@ class TestProcessMessageWorker:
         ):
             svc._process_message_worker(msg, "task1", handler)
         svc.tracker.complete_task.assert_called_once_with("task1", False)
+
+    def test_subject_updated_after_auth(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """Task subject updates from '(authenticating)' after auth succeeds.
+
+        Regression: d0bfb11 moved authentication to the worker thread and
+        set all task subjects to '(authenticating)' at submit time, but
+        never updated the subject after authentication completed. This
+        caused all tasks in the dashboard to show '(authenticating)' forever.
+        """
+        from airut.gateway.channel import ParsedMessage
+
+        svc, handler = make_service(email_config, tmp_path)
+        parsed = ParsedMessage(
+            sender="user@example.com",
+            body="Do something",
+            conversation_id=None,
+            model_hint=None,
+            subject="Fix the login bug",
+            channel_context="",
+        )
+        handler.adapter.authenticate_and_parse.return_value = parsed
+        handler.conversation_manager.exists.return_value = False
+        svc.tracker.is_task_active.return_value = False
+
+        msg = make_message(subject="Fix the login bug")
+        with patch(
+            "airut.gateway.service.gateway.process_message",
+            return_value=(True, "conv1"),
+        ):
+            svc._process_message_worker(msg, "new-abc", handler)
+
+        # The tracker should have been told to update the subject
+        # from "(authenticating)" to the real subject and sender
+        svc.tracker.update_task_subject.assert_called_once_with(
+            "new-abc",
+            "Fix the login bug",
+            sender="user@example.com",
+        )
+
+    def test_auth_exception_completes_task(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """Task completes even when authenticate_and_parse raises.
+
+        Regression: d0bfb11 moved authentication into the worker thread
+        but the try/finally that ensures complete_task is called only
+        wrapped process_message, not authenticate_and_parse. If auth
+        raised an exception, the task stayed stuck in 'in_progress'.
+        """
+        svc, handler = make_service(email_config, tmp_path)
+        handler.adapter.authenticate_and_parse.side_effect = RuntimeError(
+            "IMAP connection lost"
+        )
+
+        msg = make_message()
+        svc._process_message_worker(msg, "new-7f2fdf9f", handler)
+
+        svc.tracker.start_task.assert_called_once_with("new-7f2fdf9f")
+        svc.tracker.complete_task.assert_called_once_with("new-7f2fdf9f", False)
 
 
 class TestStartStop:
