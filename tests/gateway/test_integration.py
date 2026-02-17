@@ -24,6 +24,7 @@ from airut.gateway import (
     ConversationManager,
     EmailListener,
     EmailResponder,
+    ParsedMessage,
     RawMessage,
     SenderAuthenticator,
     SenderAuthorizer,
@@ -40,6 +41,7 @@ from airut.gateway.email.parsing import (
     extract_body,
     extract_conversation_id,
 )
+from airut.gateway.service import GatewayService
 from airut.gateway.service.usage_stats import extract_usage_stats
 
 
@@ -569,12 +571,6 @@ class TestParallelExecution:
         self, email_config: RepoServerConfig
     ) -> None:
         """Test service initializes parallel execution state."""
-        # Import here to avoid circular imports
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import GatewayService
-
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
@@ -590,11 +586,6 @@ class TestParallelExecution:
         self, email_config: RepoServerConfig
     ) -> None:
         """Test _get_conversation_lock creates and returns locks."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import GatewayService
-
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
@@ -619,11 +610,6 @@ class TestParallelExecution:
         self, email_config: RepoServerConfig
     ) -> None:
         """Test _on_future_complete removes future from tracking."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import GatewayService
-
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
@@ -646,11 +632,6 @@ class TestParallelExecution:
         self, email_config: RepoServerConfig
     ) -> None:
         """Test _on_future_complete handles cancelled futures."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import GatewayService
-
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
@@ -673,11 +654,6 @@ class TestParallelExecution:
         self, email_config: RepoServerConfig
     ) -> None:
         """Test _on_future_complete logs exceptions from futures."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import GatewayService
-
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
@@ -700,11 +676,6 @@ class TestParallelExecution:
         self, email_config: RepoServerConfig, sample_email_message
     ) -> None:
         """Test submit_message returns early if pool not initialized."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import GatewayService
-
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
@@ -720,11 +691,7 @@ class TestParallelExecution:
         self, email_config: RepoServerConfig
     ) -> None:
         """Test stop() waits for pending futures."""
-        import sys
         from concurrent.futures import ThreadPoolExecutor
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import GatewayService
 
         config = ServerConfig(
             global_config=GlobalConfig(),
@@ -753,11 +720,7 @@ class TestParallelExecution:
         self, email_config: RepoServerConfig
     ) -> None:
         """Test stop() cancels futures that exceed timeout."""
-        import sys
         from concurrent.futures import ThreadPoolExecutor
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.service import GatewayService
 
         # Create config with very short timeout
         global_config = GlobalConfig(
@@ -790,12 +753,6 @@ class TestParallelExecution:
         self, email_config: RepoServerConfig, sample_email_message
     ) -> None:
         """Test _process_message_worker doesn't lock new conversations."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.channel import ParsedMessage
-        from airut.gateway.service import GatewayService
-
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
@@ -839,12 +796,6 @@ class TestParallelExecution:
         master_repo,
     ) -> None:
         """Test _process_message_worker locks existing conversations."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.channel import ParsedMessage
-        from airut.gateway.service import GatewayService
-
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
@@ -1045,12 +996,6 @@ class TestAcknowledgmentReply:
         master_repo: Path,
     ) -> None:
         """Test acknowledgment is sent before Claude execution starts."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.channel import ParsedMessage
-        from airut.gateway.service import GatewayService
-
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
@@ -1128,12 +1073,6 @@ class TestAcknowledgmentReply:
         immediately, even for new conversations where a temporary "new-..."
         ID is initially assigned.
         """
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.channel import ParsedMessage
-        from airut.gateway.service import GatewayService
-
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
@@ -1289,12 +1228,6 @@ class TestAcknowledgmentReply:
         master_repo: Path,
     ) -> None:
         """Test acknowledgment is NOT sent for follow-up messages."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.channel import ParsedMessage
-        from airut.gateway.service import GatewayService
-
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
@@ -1461,12 +1394,6 @@ class TestTaskIdTracking:
         master_repo: Path,
     ) -> None:
         """Test task ID is updated when new conversation created."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.channel import ParsedMessage
-        from airut.gateway.service import GatewayService
-
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
@@ -1517,12 +1444,6 @@ class TestTaskIdTracking:
         sample_email_message,
     ) -> None:
         """Test task ID unchanged when conv_id is None (e.g., auth failure)."""
-        import sys
-
-        sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-        from airut.gateway.channel import ParsedMessage
-        from airut.gateway.service import GatewayService
-
         config = ServerConfig(
             global_config=GlobalConfig(),
             repos={"test": email_config},
