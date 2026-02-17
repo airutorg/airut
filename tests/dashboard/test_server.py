@@ -176,7 +176,7 @@ class TestDashboardServer:
 
         data = json.loads(response.get_data(as_text=True))
         assert len(data) == 1
-        assert data[0]["conversation_id"] == "abc12345"
+        assert data[0]["task_id"] == "abc12345"
         assert data[0]["display_title"] == "Test Subject"
         assert data[0]["status"] == "queued"
         assert isinstance(data[0]["queued_at"], float)
@@ -185,6 +185,7 @@ class TestDashboardServer:
         """Test /api/conversation/<id> endpoint."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
@@ -194,7 +195,7 @@ class TestDashboardServer:
         assert response.content_type == "application/json"
 
         data = json.loads(response.get_data(as_text=True))
-        assert data["conversation_id"] == "abc12345"
+        assert data["task_id"] == "abc12345"
         assert data["display_title"] == "Test Subject"
 
     def test_api_task_not_found(self) -> None:
@@ -243,7 +244,7 @@ class TestDashboardServer:
         # Check tasks (sorted newest first by queued_at)
         assert len(data["tasks"]) == 2
         # Find t1 in results
-        t1 = next(t for t in data["tasks"] if t["conversation_id"] == "t1")
+        t1 = next(t for t in data["tasks"] if t["task_id"] == "t1")
         assert t1["display_title"] == "Task One"
         assert t1["repo_id"] == "repo-a"
         assert t1["sender"] == "alice@test.local"
@@ -435,10 +436,13 @@ class TestDashboardServer:
         """Test / (dashboard) endpoint."""
         tracker = TaskTracker()
         tracker.add_task("q1", "Queued Task")
+        tracker.set_conversation_id("q1", "q1")
         tracker.add_task("p1", "Executing Task")
+        tracker.set_conversation_id("p1", "p1")
         tracker.set_authenticating("p1")
         tracker.set_executing("p1")
         tracker.add_task("c1", "Completed Task")
+        tracker.set_conversation_id("c1", "c1")
         tracker.set_authenticating("c1")
         tracker.set_executing("c1")
         tracker.complete_task("c1", CompletionReason.SUCCESS)
@@ -605,6 +609,7 @@ class TestDashboardServer:
         """Test /conversation/<id> endpoint."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject <script>alert(1)</script>")
+        tracker.set_conversation_id("abc12345", "abc12345")
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
@@ -715,12 +720,12 @@ class TestDashboardServer:
         """Test _task_to_dict conversion."""
         tracker = TaskTracker()
         task = TaskState(
+            task_id="task-abc12345",
             conversation_id="abc12345",
             display_title="Test",
             status=TaskStatus.EXECUTING,
             queued_at=1000.0,
             started_at=1030.0,
-            message_count=2,
         )
 
         server = DashboardServer(tracker)
@@ -728,6 +733,7 @@ class TestDashboardServer:
         with patch("airut.dashboard.tracker.time.time", return_value=1090.0):
             result = server._task_to_dict(task)
 
+        assert result["task_id"] == "task-abc12345"
         assert result["conversation_id"] == "abc12345"
         assert result["display_title"] == "Test"
         assert result["status"] == "executing"
@@ -735,7 +741,6 @@ class TestDashboardServer:
         assert result["started_at"] == 1030.0
         assert result["completed_at"] is None
         assert result["completion_reason"] is None
-        assert result["message_count"] == 2
         assert result["queue_duration"] == 30.0
         assert result["execution_duration"] == 60.0
         assert result["total_duration"] == 90.0
@@ -766,6 +771,7 @@ class TestDashboardServer:
         """Test task detail shows styled badge for executing task."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Executing")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -783,6 +789,7 @@ class TestDashboardServer:
         """Test task detail page shows success styling for completed task."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Success")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
         tracker.complete_task("abc12345", CompletionReason.SUCCESS)
@@ -802,6 +809,7 @@ class TestDashboardServer:
         """Test task detail page shows failed styling for failed task."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Failed")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
         tracker.complete_task("abc12345", CompletionReason.EXECUTION_FAILED)
@@ -1067,6 +1075,7 @@ class TestDashboardServer:
         """Test dashboard renders authenticating task with correct label."""
         tracker = TaskTracker()
         tracker.add_task("auth1", "Authenticating Task")
+        tracker.set_conversation_id("auth1", "auth1")
         tracker.set_authenticating("auth1")
 
         server = DashboardServer(tracker)
@@ -1083,6 +1092,7 @@ class TestDashboardServer:
         """Test dashboard renders pending task with 'Queued behind' label."""
         tracker = TaskTracker()
         tracker.add_task("pend1", "Pending Task")
+        tracker.set_conversation_id("pend1", "pend1")
         tracker.set_authenticating("pend1")
         tracker.set_pending("pend1")
 
@@ -1100,6 +1110,7 @@ class TestDashboardServer:
         """Test dashboard renders ⊘ icon for AUTH_FAILED completion reason."""
         tracker = TaskTracker()
         tracker.add_task("afail", "Auth Failed Task")
+        tracker.set_conversation_id("afail", "afail")
         tracker.set_authenticating("afail")
         tracker.set_executing("afail")
         tracker.complete_task("afail", CompletionReason.AUTH_FAILED)
@@ -1151,6 +1162,7 @@ class TestDashboardServer:
         tracker = TaskTracker()
         # Construct a TaskState directly with COMPLETED status but no reason
         task = TaskState(
+            task_id="noreason",
             conversation_id="noreason",
             display_title="No Reason Task",
             status=TaskStatus.COMPLETED,

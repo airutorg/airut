@@ -170,6 +170,7 @@ def _task_state_to_dict(task: TaskState) -> dict[str, Any]:
         Dict representation suitable for SSE state event.
     """
     result: dict[str, Any] = {
+        "task_id": task.task_id,
         "conversation_id": task.conversation_id,
         "display_title": task.display_title,
         "repo_id": task.repo_id,
@@ -183,7 +184,6 @@ def _task_state_to_dict(task: TaskState) -> dict[str, Any]:
         "queued_at": task.queued_at,
         "started_at": task.started_at,
         "completed_at": task.completed_at,
-        "message_count": task.message_count,
         "model": task.model,
         "queue_duration": task.queue_duration(),
         "execution_duration": task.execution_duration(),
@@ -347,9 +347,12 @@ def sse_events_log_stream(
             data = json.dumps({"offset": offset, "html": html})
             yield format_sse_event("html", data)
 
-        # Check if task is done
-        task = tracker.get_task(conversation_id)
-        if task is None or task.status == TaskStatus.COMPLETED:
+        # Check if all tasks for this conversation are done
+        tasks = tracker.get_tasks_for_conversation(conversation_id)
+        all_done = not tasks or all(
+            t.status == TaskStatus.COMPLETED for t in tasks
+        )
+        if all_done:
             # Drain any remaining events
             events, offset = event_log.tail(offset)
             if events:
@@ -428,9 +431,12 @@ def sse_network_log_stream(
             data = json.dumps({"offset": offset, "html": html})
             yield format_sse_event("html", data)
 
-        # Check if task is done
-        task = tracker.get_task(conversation_id)
-        if task is None or task.status == TaskStatus.COMPLETED:
+        # Check if all tasks for this conversation are done
+        tasks = tracker.get_tasks_for_conversation(conversation_id)
+        all_done = not tasks or all(
+            t.status == TaskStatus.COMPLETED for t in tasks
+        )
+        if all_done:
             # Drain any remaining lines
             lines, offset = network_log.tail(offset)
             if lines:

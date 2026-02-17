@@ -19,7 +19,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 
-from .conftest import MOCK_CONTAINER_COMMAND, get_message_text
+from .conftest import (
+    MOCK_CONTAINER_COMMAND,
+    find_task_for_conversation,
+    get_message_text,
+)
 from .environment import IntegrationEnvironment
 
 
@@ -446,7 +450,7 @@ events = [
                 # before task completion callback).  Use wait_for_sent's
                 # guarantee that the response was already sent as a
                 # synchronization point instead of polling.
-                task = service.tracker.get_task(conv_id)
+                task = find_task_for_conversation(service.tracker, conv_id)
                 assert task is not None, f"Task {conv_id} not found in tracker"
                 assert task.repo_id == "main-repo"
 

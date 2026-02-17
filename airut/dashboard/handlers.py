@@ -33,6 +33,7 @@ from airut.dashboard.sse import (
     sse_state_stream,
 )
 from airut.dashboard.tracker import (
+    ACTIVE_STATUSES,
     BootState,
     CompletionReason,
     RepoState,
@@ -553,18 +554,21 @@ class RequestHandlers:
                 content_type="application/json",
             )
 
-        # Check if task is active
-        task = self.tracker.get_task(conversation_id)
-        if task is None:
+        # Find the executing task for this conversation
+        tasks = self.tracker.get_tasks_for_conversation(conversation_id)
+        if not tasks:
             return Response(
                 json.dumps({"error": "Task not found"}),
                 status=404,
                 content_type="application/json",
             )
 
-        if task.status != TaskStatus.EXECUTING:
-            status_value = task.status.value
-            error_msg = f"Task is not running (status: {status_value})"
+        executing = [t for t in tasks if t.status == TaskStatus.EXECUTING]
+        if not executing:
+            # Summarize the actual statuses present so the caller
+            # understands why stop was rejected.
+            statuses = sorted({t.status.value for t in tasks})
+            error_msg = f"Task is not running (statuses: {', '.join(statuses)})"
             return Response(
                 json.dumps({"error": error_msg}),
                 status=400,
@@ -830,9 +834,9 @@ class RequestHandlers:
 
         html = render_events_html(events) if events else ""
 
-        # Check if task is done
-        task = self.tracker.get_task(conversation_id)
-        done = task is None or task.status == TaskStatus.COMPLETED
+        # Check if all tasks for this conversation are done
+        tasks = self.tracker.get_tasks_for_conversation(conversation_id)
+        done = not tasks or all(t.status == TaskStatus.COMPLETED for t in tasks)
 
         return Response(
             json.dumps({"offset": new_offset, "html": html, "done": done}),
@@ -880,9 +884,9 @@ class RequestHandlers:
 
         html = render_network_lines_html(lines) if lines else ""
 
-        # Check if task is done
-        task = self.tracker.get_task(conversation_id)
-        done = task is None or task.status == TaskStatus.COMPLETED
+        # Check if all tasks for this conversation are done
+        tasks = self.tracker.get_tasks_for_conversation(conversation_id)
+        done = not tasks or all(t.status == TaskStatus.COMPLETED for t in tasks)
 
         return Response(
             json.dumps({"offset": new_offset, "html": html, "done": done}),
@@ -915,6 +919,7 @@ class RequestHandlers:
         snapshot = self.tracker.get_snapshot()
         tasks_data = [
             {
+                "task_id": t.task_id,
                 "conversation_id": t.conversation_id,
                 "display_title": t.display_title,
                 "repo_id": t.repo_id,
@@ -928,7 +933,6 @@ class RequestHandlers:
                 "queued_at": t.queued_at,
                 "started_at": t.started_at,
                 "completed_at": t.completed_at,
-                "message_count": t.message_count,
                 "model": t.model,
             }
             for t in snapshot.value
@@ -1038,6 +1042,7 @@ class RequestHandlers:
 
         has_errors = any(r.is_error for r in conversation.replies)
         task = TaskState(
+            task_id=f"disk-{conversation_id}",
             conversation_id=conversation_id,
             display_title=f"[Past conversation {conversation_id}]",
             status=TaskStatus.COMPLETED,
@@ -1049,7 +1054,6 @@ class RequestHandlers:
             queued_at=completed_at or 0.0,
             started_at=completed_at,
             completed_at=completed_at,
-            message_count=len(conversation.replies),
             model=conversation.model,
         )
 
@@ -1060,9 +1064,9 @@ class RequestHandlers:
     ) -> tuple[TaskState, ConversationMetadata | None] | None:
         """Load task and conversation metadata from memory or disk.
 
-        Tries to load from in-memory tracker first, then falls back to disk
-        for past tasks. This is the unified entry point for all handlers that
-        need both task state and conversation data.
+        Tries to load from in-memory tracker first (using
+        ``get_tasks_for_conversation`` to find the most relevant task),
+        then falls back to disk for past tasks.
 
         Args:
             conversation_id: Conversation ID to load.
@@ -1071,10 +1075,14 @@ class RequestHandlers:
             Tuple of (TaskState, ConversationMetadata or None) if found,
             None if task not found in memory or on disk.
         """
-        task = self.tracker.get_task(conversation_id)
+        tasks = self.tracker.get_tasks_for_conversation(conversation_id)
 
-        if task is not None:
-            # Task found in memory, load conversation separately
+        if tasks:
+            # Prefer active task over completed; fall back to newest
+            task = next(
+                (t for t in tasks if t.status in ACTIVE_STATUSES),
+                tasks[0],
+            )
             conversation = self._load_conversation(conversation_id)
             return task, conversation
 
@@ -1104,6 +1112,7 @@ class RequestHandlers:
             Dict representation of task.
         """
         result: dict[str, Any] = {
+            "task_id": task.task_id,
             "conversation_id": task.conversation_id,
             "display_title": task.display_title,
             "status": task.status.value,
@@ -1116,7 +1125,6 @@ class RequestHandlers:
             "queued_at": task.queued_at,
             "started_at": task.started_at,
             "completed_at": task.completed_at,
-            "message_count": task.message_count,
             "model": task.model,
             "queue_duration": task.queue_duration(),
             "execution_duration": task.execution_duration(),

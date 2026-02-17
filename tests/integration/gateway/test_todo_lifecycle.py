@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from airut.dashboard.tracker import TaskStatus
 
-from .conftest import get_message_text
+from .conftest import get_message_text, wait_for_conv_completion
 from .environment import IntegrationEnvironment
 
 
@@ -113,7 +113,9 @@ events = [
             conv_id = extract_conversation_id(response["Subject"])
             assert conv_id is not None
 
-            task = service.tracker.wait_for_completion(conv_id, timeout=5.0)
+            task = wait_for_conv_completion(
+                service.tracker, conv_id, timeout=5.0
+            )
             assert task is not None, f"Task {conv_id} not completed"
             assert task.status == TaskStatus.COMPLETED
             assert task.succeeded is True
@@ -193,7 +195,9 @@ sys.exit(1)
 
             conv_id = extract_conversation_id(response["Subject"])
             if conv_id:
-                task = service.tracker.wait_for_completion(conv_id, timeout=5.0)
+                task = wait_for_conv_completion(
+                    service.tracker, conv_id, timeout=5.0
+                )
                 assert task is not None
                 assert task.status == TaskStatus.COMPLETED
                 assert task.succeeded is False
@@ -269,8 +273,8 @@ events = [
             )
             assert response1 is not None
 
-            task_after_first = service.tracker.wait_for_completion(
-                conv_id, timeout=5.0
+            task_after_first = wait_for_conv_completion(
+                service.tracker, conv_id, timeout=5.0
             )
             assert task_after_first is not None
             assert task_after_first.succeeded is True
@@ -310,12 +314,11 @@ events = [
             )
             assert response2 is not None
 
-            task_after_resume = service.tracker.wait_for_completion(
-                conv_id, timeout=5.0
+            task_after_resume = wait_for_conv_completion(
+                service.tracker, conv_id, timeout=5.0
             )
             assert task_after_resume is not None
             assert task_after_resume.succeeded is True
-            assert task_after_resume.message_count == 2
 
             # CRITICAL: No stale todos from previous execution
             assert task_after_resume.todos is None, (

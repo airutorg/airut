@@ -231,6 +231,7 @@ class TestTaskStateToDictConversion:
     def test_queued_task(self) -> None:
         """Test converting queued task."""
         task = TaskState(
+            task_id="task-abc12345",
             conversation_id="abc12345",
             display_title="Test Task",
             repo_id="repo1",
@@ -239,6 +240,7 @@ class TestTaskStateToDictConversion:
             queued_at=1000.0,
         )
         result = _task_state_to_dict(task)
+        assert result["task_id"] == "task-abc12345"
         assert result["conversation_id"] == "abc12345"
         assert result["display_title"] == "Test Task"
         assert result["repo_id"] == "repo1"
@@ -252,6 +254,7 @@ class TestTaskStateToDictConversion:
     def test_completed_task(self) -> None:
         """Test converting completed task with all fields."""
         task = TaskState(
+            task_id="task-abc12345",
             conversation_id="abc12345",
             display_title="Completed Task",
             status=TaskStatus.COMPLETED,
@@ -259,13 +262,12 @@ class TestTaskStateToDictConversion:
             started_at=1010.0,
             completed_at=1070.0,
             completion_reason=CompletionReason.SUCCESS,
-            message_count=3,
             model="claude-3",
         )
         result = _task_state_to_dict(task)
+        assert result["task_id"] == "task-abc12345"
         assert result["status"] == "completed"
         assert result["completion_reason"] == "success"
-        assert result["message_count"] == 3
         assert result["model"] == "claude-3"
         assert result["queue_duration"] is not None
         assert result["execution_duration"] is not None
@@ -278,6 +280,7 @@ class TestTaskStateToDictWithTodos:
     def test_task_with_todos(self) -> None:
         """Test converting task with todos includes them."""
         task = TaskState(
+            task_id="task-abc12345",
             conversation_id="abc12345",
             display_title="Test",
             status=TaskStatus.EXECUTING,
@@ -304,6 +307,7 @@ class TestTaskStateToDictWithTodos:
     def test_task_without_todos(self) -> None:
         """Test converting task without todos omits the field."""
         task = TaskState(
+            task_id="task-abc12345",
             conversation_id="abc12345",
             display_title="Test",
             status=TaskStatus.QUEUED,
@@ -336,7 +340,7 @@ class TestBuildStateSnapshot:
         result = json.loads(build_state_snapshot(tracker, None, None, 5))
         assert result["version"] == 5
         assert len(result["tasks"]) == 2
-        task_ids = {t["conversation_id"] for t in result["tasks"]}
+        task_ids = {t["task_id"] for t in result["tasks"]}
         assert task_ids == {"t1", "t2"}
 
     def test_with_boot_store(self) -> None:
@@ -398,7 +402,7 @@ class TestSSEStateStream:
         data = json.loads("".join(data_lines))
         assert "version" in data
         assert len(data["tasks"]) == 1
-        assert data["tasks"][0]["conversation_id"] == "t1"
+        assert data["tasks"][0]["task_id"] == "t1"
 
     def test_heartbeat_on_timeout(self) -> None:
         """Test that heartbeat is sent when no changes occur."""
@@ -468,7 +472,7 @@ class TestSSEStateStream:
         ]
         data = json.loads("".join(data_lines))
         assert len(data["tasks"]) == 1
-        assert data["tasks"][0]["conversation_id"] == "t1"
+        assert data["tasks"][0]["task_id"] == "t1"
 
 
 def _parse_sse_data(sse_text: str) -> dict:
@@ -486,6 +490,7 @@ class TestSSEEventsLogStream:
         """Stream yields initial event with empty HTML."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
         tracker.set_authenticating("t1")
         tracker.set_executing("t1")
         event_log = EventLog(tmp_path / "t1")
@@ -506,6 +511,7 @@ class TestSSEEventsLogStream:
         """Stream sends done event when task is completed."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
         tracker.set_authenticating("t1")
         tracker.set_executing("t1")
         conv_dir = tmp_path / "t1"
@@ -546,6 +552,7 @@ class TestSSEEventsLogStream:
         """Stream yields new events as pre-rendered HTML."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
         tracker.set_authenticating("t1")
         tracker.set_executing("t1")
         conv_dir = tmp_path / "t1"
@@ -575,6 +582,7 @@ class TestSSEEventsLogStream:
         """Stream sends heartbeat when idle."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
         tracker.set_authenticating("t1")
         tracker.set_executing("t1")
         conv_dir = tmp_path / "t1"
@@ -600,6 +608,7 @@ class TestSSEEventsLogStream:
         """Stream yields events that arrive after initial snapshot."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
         tracker.set_authenticating("t1")
         tracker.set_executing("t1")
         conv_dir = tmp_path / "t1"
@@ -637,6 +646,7 @@ class TestSSEEventsLogStream:
         """Stream drains remaining events when task completes."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
         tracker.set_authenticating("t1")
         tracker.set_executing("t1")
         conv_dir = tmp_path / "t1"
@@ -690,6 +700,7 @@ class TestSSEEventsLogStream:
         """
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
         tracker.set_authenticating("t1")
         tracker.set_executing("t1")
         conv_dir = tmp_path / "t1"
@@ -747,6 +758,7 @@ class TestSSEEventsLogStream:
         """Heartbeat resets the last_heartbeat timer."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
         tracker.set_authenticating("t1")
         tracker.set_executing("t1")
         conv_dir = tmp_path / "t1"
@@ -780,6 +792,7 @@ class TestSSENetworkLogStream:
         """Stream yields initial event with empty HTML."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
         tracker.set_authenticating("t1")
         tracker.set_executing("t1")
         log_path = tmp_path / "network-sandbox.log"
@@ -799,6 +812,7 @@ class TestSSENetworkLogStream:
         """Stream yields new lines as pre-rendered HTML."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
         tracker.set_authenticating("t1")
         tracker.set_executing("t1")
         log_path = tmp_path / "network-sandbox.log"
@@ -818,6 +832,7 @@ class TestSSENetworkLogStream:
         """Stream sends done event when task is completed."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
         tracker.set_authenticating("t1")
         tracker.set_executing("t1")
         log_path = tmp_path / "network-sandbox.log"
@@ -839,6 +854,7 @@ class TestSSENetworkLogStream:
         """Stream sends heartbeat when idle."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
         tracker.set_authenticating("t1")
         tracker.set_executing("t1")
         log_path = tmp_path / "network-sandbox.log"
@@ -862,6 +878,7 @@ class TestSSENetworkLogStream:
         """Stream yields lines that arrive after initial snapshot."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
         tracker.set_authenticating("t1")
         tracker.set_executing("t1")
         log_path = tmp_path / "network-sandbox.log"
@@ -892,6 +909,7 @@ class TestSSENetworkLogStream:
         """Stream drains remaining lines when task completes."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
         tracker.set_authenticating("t1")
         tracker.set_executing("t1")
         log_path = tmp_path / "network-sandbox.log"
@@ -929,6 +947,7 @@ class TestSSENetworkLogStream:
         """
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
         tracker.set_authenticating("t1")
         tracker.set_executing("t1")
         log_path = tmp_path / "network-sandbox.log"
@@ -973,6 +992,7 @@ class TestSSENetworkLogStream:
         """Heartbeat resets the last_heartbeat timer."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
         tracker.set_authenticating("t1")
         tracker.set_executing("t1")
         log_path = tmp_path / "network-sandbox.log"

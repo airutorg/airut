@@ -156,6 +156,7 @@ class TestActionsPageEndpoint:
         """
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 

@@ -31,7 +31,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from airut.dashboard.tracker import TaskStatus
 
-from .conftest import get_message_text
+from .conftest import (
+    get_message_text,
+    wait_for_conv_completion,
+)
 from .environment import IntegrationEnvironment
 
 
@@ -111,7 +114,9 @@ events = [
             assert conv_id is not None
 
             # Wait for task completion in tracker
-            task = service.tracker.wait_for_completion(conv_id, timeout=5.0)
+            task = wait_for_conv_completion(
+                service.tracker, conv_id, timeout=5.0
+            )
             assert task is not None, f"Task {conv_id} not completed in tracker"
 
             # Validate final task state
@@ -120,7 +125,6 @@ events = [
             assert task.conversation_id == conv_id
             assert "Track this task" in task.display_title
             assert task.sender == "user@test.local"
-            assert task.message_count == 1
             assert task.model is not None  # Model should be set
             assert task.started_at is not None
             assert task.completed_at is not None
@@ -176,7 +180,9 @@ events = [
             conv_id = extract_conversation_id(response["Subject"])
             assert conv_id is not None
 
-            task = service.tracker.wait_for_completion(conv_id, timeout=5.0)
+            task = wait_for_conv_completion(
+                service.tracker, conv_id, timeout=5.0
+            )
             assert task is not None
 
             # CRITICAL: display_title must NOT be "(authenticating)"
@@ -196,16 +202,17 @@ events = [
 class TestTaskTrackerConversationResume:
     """Test task tracker state during conversation resume."""
 
-    def test_task_tracker_resume_increments_message_count(
+    def test_task_tracker_resume_creates_separate_tasks(
         self,
         integration_env: IntegrationEnvironment,
         create_email,
         extract_conversation_id,
     ) -> None:
-        """Test that resuming a conversation increments message_count.
+        """Test that resuming a conversation creates separate tasks.
 
-        This was a regression where the temp task wasn't properly merged
-        into the existing completed task on resume.
+        Each message creates its own task keyed by task_id. After both
+        complete, there should be two tasks sharing the same
+        conversation_id.
         """
         # First message
         first_mock_code = """
@@ -239,12 +246,11 @@ events = [
             assert response1 is not None
 
             # Verify first task completion
-            task_after_first = service.tracker.wait_for_completion(
-                conv_id, timeout=5.0
+            task_after_first = wait_for_conv_completion(
+                service.tracker, conv_id, timeout=5.0
             )
             assert task_after_first is not None
             assert task_after_first.succeeded is True
-            assert task_after_first.message_count == 1
 
             # Clear outbox for second message
             integration_env.email_server.clear_outbox()
@@ -273,29 +279,27 @@ events = [
             )
             assert response2 is not None
 
-            # Verify task after resume
-            task_after_resume = service.tracker.wait_for_completion(
-                conv_id, timeout=5.0
-            )
-            assert task_after_resume is not None
-            assert task_after_resume.succeeded is True
+            # Verify all tasks for this conversation completed
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                conv_tasks = service.tracker.get_tasks_for_conversation(conv_id)
+                if len(conv_tasks) >= 2 and all(
+                    t.status == TaskStatus.COMPLETED for t in conv_tasks
+                ):
+                    break
+                time.sleep(0.1)
 
-            # CRITICAL: message_count should be 2 after resume
-            assert task_after_resume.message_count == 2, (
-                f"Expected message_count=2 after resume, "
-                f"got {task_after_resume.message_count}"
+            conv_tasks = service.tracker.get_tasks_for_conversation(conv_id)
+
+            # There should be 2 tasks (one per message) for this conv
+            assert len(conv_tasks) >= 2, (
+                f"Expected 2 tasks for {conv_id}, found {len(conv_tasks)}."
             )
 
-            # Conversation ID should remain the same
-            assert task_after_resume.conversation_id == conv_id
-
-            # There should be exactly 1 task in the tracker for this conv
-            all_tasks = service.tracker.get_all_tasks()
-            matching = [t for t in all_tasks if t.conversation_id == conv_id]
-            assert len(matching) == 1, (
-                f"Expected 1 task for {conv_id}, found {len(matching)}. "
-                "Temp task may not have been cleaned up."
-            )
+            # All should be completed and successful
+            for t in conv_tasks:
+                assert t.succeeded is True
+                assert t.conversation_id == conv_id
 
         finally:
             service.stop()
@@ -455,7 +459,9 @@ sys.exit(1)
 
             conv_id = extract_conversation_id(response["Subject"])
             if conv_id:
-                task = service.tracker.wait_for_completion(conv_id, timeout=5.0)
+                task = wait_for_conv_completion(
+                    service.tracker, conv_id, timeout=5.0
+                )
                 assert task is not None
                 assert task.status == TaskStatus.COMPLETED
                 assert task.succeeded is False
@@ -635,7 +641,9 @@ events = [
             assert conv_id is not None
 
             # Wait for completion
-            task = service.tracker.wait_for_completion(conv_id, timeout=5.0)
+            task = wait_for_conv_completion(
+                service.tracker, conv_id, timeout=5.0
+            )
             assert task is not None
 
             # Query dashboard API if dashboard is running
@@ -673,7 +681,7 @@ events = [
                 assert api_task["completion_reason"] == "success"
                 assert api_task["sender"] == "user@test.local"
                 assert api_task["display_title"] == "API tracker test"
-                assert api_task["message_count"] == 1
+                assert "task_id" in api_task
                 assert api_task["model"] is not None
                 assert api_task["repo_id"] == "test"
 
@@ -810,7 +818,9 @@ events = [
             conv_id = extract_conversation_id(response["Subject"])
             assert conv_id is not None
 
-            task = service.tracker.wait_for_completion(conv_id, timeout=5.0)
+            task = wait_for_conv_completion(
+                service.tracker, conv_id, timeout=5.0
+            )
             assert task is not None
 
             # Default model from test repo config is "sonnet"
@@ -857,7 +867,9 @@ events = [
             conv_id = extract_conversation_id(response["Subject"])
             assert conv_id is not None
 
-            task = service.tracker.wait_for_completion(conv_id, timeout=5.0)
+            task = wait_for_conv_completion(
+                service.tracker, conv_id, timeout=5.0
+            )
             assert task is not None
             assert task.repo_id == "test", (
                 f"Expected repo_id='test', got '{task.repo_id}'"

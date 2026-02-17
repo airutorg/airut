@@ -147,36 +147,41 @@ all task data with status counts.
 {
   "version": 42,
   "counts": {
-    "queued": 1,
-    "in_progress": 2,
+    "queued": 0,
+    "authenticating": 0,
+    "pending": 0,
+    "executing": 1,
     "completed": 10
   },
   "tasks": [
     {
+      "task_id": "a1b2c3d4e5f6",
       "conversation_id": "a1b2c3d4",
-      "subject": "Help with task",
+      "display_title": "Help with task",
       "repo_id": "my-repo",
       "sender": "user@example.com",
+      "authenticated_sender": "user@example.com",
       "status": "completed",
+      "completion_reason": "success",
       "queued_at": 1700000000.0,
       "started_at": 1700000001.0,
       "completed_at": 1700000060.0,
-      "success": true,
-      "message_count": 1,
       "model": "sonnet"
     }
   ]
 }
 ```
 
-| Field             | Type             | Description                                                                |
-| ----------------- | ---------------- | -------------------------------------------------------------------------- |
-| `version`         | `int`            | Monotonic version clock value at time of snapshot                          |
-| `counts`          | `dict`           | Task counts keyed by status (`queued`, `in_progress`, `completed`)         |
-| `tasks`           | `list[object]`   | All tracked tasks (active + completed history)                             |
-| `tasks[].status`  | `string`         | One of `queued`, `in_progress`, `completed`                                |
-| `tasks[].success` | `bool \| null`   | `null` while not completed; `true`/`false` when done                       |
-| `tasks[].model`   | `string \| null` | Claude model used (e.g., `"sonnet"`, `"opus"`), or `null` if not yet known |
+| Field                       | Type             | Description                                                                                   |
+| --------------------------- | ---------------- | --------------------------------------------------------------------------------------------- |
+| `version`                   | `int`            | Monotonic version clock value at time of snapshot                                             |
+| `counts`                    | `dict`           | Task counts keyed by status (`queued`, `authenticating`, `pending`, `executing`, `completed`) |
+| `tasks`                     | `list[object]`   | All tracked tasks (active + completed history)                                                |
+| `tasks[].task_id`           | `string`         | Stable unique task identifier (12-char hex UUID)                                              |
+| `tasks[].conversation_id`   | `string`         | Conversation ID (empty until assigned after authentication)                                   |
+| `tasks[].status`            | `string`         | One of `queued`, `authenticating`, `pending`, `executing`, `completed`                        |
+| `tasks[].completion_reason` | `string \| null` | Why the task completed (e.g., `"success"`, `"auth_failed"`), or `null` while active           |
+| `tasks[].model`             | `string \| null` | Claude model used (e.g., `"sonnet"`, `"opus"`), or `null` if not yet known                    |
 
 Supports `ETag` / `If-None-Match` conditional requests — returns
 `304 Not Modified` when the version clock has not advanced since the client's

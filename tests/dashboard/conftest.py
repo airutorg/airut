@@ -90,6 +90,7 @@ class DashboardHarness:
 
         if add_task:
             self.tracker.add_task(self.CONV_ID, self.SUBJECT)
+            self.tracker.set_conversation_id(self.CONV_ID, self.CONV_ID)
 
         self._server: DashboardServer | None = None
         self._client: Client | None = None

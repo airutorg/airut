@@ -88,6 +88,13 @@ the appropriate adapter.
 
 ### Task Lifecycle
 
+Each incoming message creates its own `TaskState` with a **stable `task_id`**
+(12-char hex UUID, generated at submission time) that never changes. After
+authentication the task is assigned a `conversation_id`, but the `task_id`
+remains the same. The tracker's internal `_tasks` dict is keyed by `task_id`.
+Multiple tasks can share the same `conversation_id` (one per message in the
+conversation).
+
 Tasks progress through a 5-state lifecycle tracked by `TaskTracker`:
 
 ```
@@ -145,40 +152,45 @@ ChannelListener thread:
   -> Message arrives on channel
   -> submit(raw_message)
     -> GatewayService.submit_message(raw_message, handler)
-      -> Register temp task in tracker (QUEUED)
+      -> task_id = uuid4().hex[:12]  (stable, never changes)
+      -> tracker.add_task(task_id, ...)                  → QUEUED
       -> Submit to worker thread pool
 
 GatewayService._process_message_worker()  [worker thread]:
-  -> tracker.set_authenticating()                        → AUTHENTICATING
+  -> tracker.set_authenticating(task_id)                 → AUTHENTICATING
   -> ChannelAdapter.authenticate_and_parse()
     -> (email: DMARC + sender auth + MIME parsing)
     -> raises AuthenticationError on failure:
-       tracker.complete_task(AUTH_FAILED or UNAUTHORIZED) → COMPLETED
-  -> tracker.update_task_display_title(authenticated_sender=...)
-  -> Reassign temp task ID to real conversation ID
-  -> If conversation already active:
+       tracker.complete_task(task_id, AUTH_FAILED/UNAUTHORIZED) → COMPLETED
+  -> tracker.update_task_display_title(task_id, authenticated_sender=...)
+  -> tracker.set_conversation_id(task_id, conv_id)
+  -> If conversation already active (has_active_task):
      -> If queue full: send_rejection(), complete_task(REJECTED)
-     -> Else: enqueue PendingMessage, tracker.set_pending() → PENDING, return
-  -> tracker.set_executing()                             → EXECUTING
-  -> ConversationManager
-    -> Initialize/resume git checkout
-    -> ChannelAdapter.save_attachments()
-  -> Sandbox (Task)
-    -> Spawn Podman container
-    -> Mount conversation directories
-    -> Run claude CLI
-  -> tracker.complete_task(reason)                       → COMPLETED
-  -> ChannelAdapter.send_reply() or send_error()
-  -> _drain_pending(conv_id)
-    -> Pop first pending message
-    -> Submit _process_pending_message() to thread pool
+     -> Else: enqueue PendingMessage, tracker.set_pending(task_id) → PENDING
+       (executing task stays EXECUTING; pending task is a separate entry)
+     -> return
+  -> _execute_and_complete(parsed, task_id, ...)
+    -> tracker.set_executing(task_id)                    → EXECUTING
+    -> ConversationManager
+      -> Initialize/resume git checkout
+      -> ChannelAdapter.save_attachments()
+    -> Sandbox (Task)
+      -> Spawn Podman container
+      -> Mount conversation directories
+      -> Run claude CLI
+    -> tracker.complete_task(task_id, reason)             → COMPLETED
+    -> ChannelAdapter.send_reply() or send_error()
+    -> _drain_pending(conv_id)
+      -> Pop first pending message
+      -> Submit _process_pending_message() to thread pool
 
 GatewayService._process_pending_message()  [worker thread]:
-  -> tracker.set_executing()                             → EXECUTING
-  -> (skips authentication — already done at receive time)
-  -> process_message() → CompletionReason
-  -> tracker.complete_task(reason)                       → COMPLETED
-  -> _drain_pending(conv_id)                  (chains to next pending)
+  -> _execute_and_complete(parsed, task_id, ...)
+    -> tracker.set_executing(task_id)                    → EXECUTING
+    -> (skips authentication — already done at receive time)
+    -> process_message() → CompletionReason
+    -> tracker.complete_task(task_id, reason)             → COMPLETED
+    -> _drain_pending(conv_id)                (chains to next pending)
 
 RepoHandler.stop()
   -> adapter.listener.stop()
@@ -620,11 +632,15 @@ thread pool.
 
 ### Per-Conversation Serialization
 
-Messages to the same conversation are serialized via the pending queue:
+Messages to the same conversation are serialized via the pending queue. Each
+pending message has its own `TaskState` in the tracker (keyed by its stable
+`task_id`) with status PENDING — visible separately from the executing task.
 
-1. Worker checks `tracker.is_task_active(conv_id)` after authentication
+1. Worker checks `tracker.has_active_task(conv_id)` after authentication
 2. If active: message is enqueued as `PendingMessage` (up to
-   `MAX_PENDING_PER_CONVERSATION = 3`), worker thread is freed immediately
+   `MAX_PENDING_PER_CONVERSATION = 3`), worker thread is freed immediately. The
+   pending task's `conversation_id` is set so it appears in the dashboard
+   alongside the executing task.
 3. If not active: message proceeds to execution
 4. On completion: `_drain_pending()` submits the next queued message
 

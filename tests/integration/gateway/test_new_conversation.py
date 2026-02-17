@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 
-from .conftest import get_message_text
+from .conftest import get_message_text, wait_for_conv_completion
 from .environment import IntegrationEnvironment
 
 
@@ -232,7 +232,9 @@ events = [
             assert conv_id is not None
 
             # Wait for task completion
-            task = service.tracker.wait_for_completion(conv_id, timeout=5.0)
+            task = wait_for_conv_completion(
+                service.tracker, conv_id, timeout=5.0
+            )
 
             assert task is not None, f"Task {conv_id} not found in tracker"
             assert task.status.value == "completed", (

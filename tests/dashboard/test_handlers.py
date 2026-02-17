@@ -159,6 +159,7 @@ class TestConversationDataIntegration:
         """Task detail page includes conversation data when available."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -205,6 +206,7 @@ class TestConversationDataIntegration:
         """Task detail page shows task details even without conversation."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
 
         server = DashboardServer(tracker)  # No work_dirs
         client = Client(server._wsgi_app)
@@ -222,6 +224,7 @@ class TestConversationDataIntegration:
         """Test /api/conversation/<id> includes conversation data."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -259,6 +262,7 @@ class TestConversationDataIntegration:
         """Test /api/conversation/<id> has null when no data available."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
 
         server = DashboardServer(tracker)  # No work_dirs
         client = Client(server._wsgi_app)
@@ -274,6 +278,7 @@ class TestConversationDataIntegration:
         """Excludes conversation data from list endpoint."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
@@ -290,6 +295,7 @@ class TestConversationDataIntegration:
         """Conversation section shows error styling for error replies."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -323,6 +329,7 @@ class TestConversationDataIntegration:
         """Conversation section displays multiple replies correctly."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -375,6 +382,7 @@ class TestConversationDataIntegration:
         """_task_to_dict includes conversation data when requested."""
         tracker = TaskTracker()
         task = TaskState(
+            task_id="task-abc12345",
             conversation_id="abc12345",
             display_title="Test",
             status=TaskStatus.COMPLETED,
@@ -420,6 +428,7 @@ class TestConversationDataIntegration:
         """_task_to_dict excludes conversation data when not requested."""
         tracker = TaskTracker()
         task = TaskState(
+            task_id="task-abc12345",
             conversation_id="abc12345",
             display_title="Test",
             status=TaskStatus.COMPLETED,
@@ -434,6 +443,7 @@ class TestConversationDataIntegration:
         """Test usage grid only shows token counts, not nested objects."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -484,6 +494,7 @@ class TestConversationDataIntegration:
         """Test task detail page displays request and response text."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -532,6 +543,7 @@ class TestConversationDataIntegration:
         """
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -563,6 +575,7 @@ class TestConversationDataIntegration:
         """
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -611,6 +624,7 @@ class TestConversationDataIntegration:
         """Task detail page escapes pending request text to prevent XSS."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -634,6 +648,7 @@ class TestConversationDataIntegration:
         """Test task detail page handles missing request/response text."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -667,6 +682,7 @@ class TestConversationDataIntegration:
         """Test /api/conversation/<id> includes request/response text."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -707,6 +723,7 @@ class TestConversationDataIntegration:
         """Test /api/conversation/<id> includes events from EventLog."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -745,6 +762,7 @@ class TestConversationDataIntegration:
         """Test _task_to_dict uses preloaded conversation when provided."""
         tracker = TaskTracker()
         task = TaskState(
+            task_id="task-abc12345",
             conversation_id="abc12345",
             display_title="Test",
             status=TaskStatus.COMPLETED,
@@ -790,6 +808,7 @@ class TestTodoProgressDisplay:
         """Task detail page shows progress section for active tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
         tracker.update_todos(
@@ -829,6 +848,7 @@ class TestTodoProgressDisplay:
         """Task detail page hides progress section for completed tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
         tracker.update_todos(
@@ -851,6 +871,7 @@ class TestTodoProgressDisplay:
         """Task detail page has no progress section without todos."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -868,6 +889,7 @@ class TestTodoProgressDisplay:
         """Test /api/conversations includes todos for tasks with them."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.update_todos(
             "abc12345",
             [TodoItem(content="Step 1", status=TodoStatus.PENDING)],
@@ -888,6 +910,7 @@ class TestTodoProgressDisplay:
         """Test /api/conversations omits todos when not set."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
@@ -906,6 +929,7 @@ class TestTodoProgressDisplay:
         """Task detail for active task includes renderTodos JS."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -920,6 +944,7 @@ class TestTodoProgressDisplay:
         """Polling fallback JS calls updateTaskFromData (including todos)."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -965,7 +990,6 @@ class TestLoadPastTasks:
         task, conversation = result
         assert task.conversation_id == "abc12345"
         assert task.status == TaskStatus.COMPLETED
-        assert task.message_count == 1
         assert task.succeeded is True
         assert conversation is not None
         assert conversation.conversation_id == "abc12345"
@@ -1120,6 +1144,7 @@ class TestLoadPastTasks:
         """Test that in-memory task takes precedence over disk."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "In-Memory Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -1196,7 +1221,6 @@ class TestLoadPastTasks:
 
         assert result is not None
         task, conversation = result
-        assert task.message_count == 2
         assert len(conversation.replies) == 2
 
     def test_load_task_from_disk_invalid_timestamp(
@@ -1304,7 +1328,7 @@ class TestLoadPastTasks:
 
         # Task metadata
         assert task.conversation_id == "5287313b"
-        assert task.message_count == 2
+        assert task.task_id == "disk-5287313b"
         assert task.succeeded is True
 
         # Conversation data
@@ -1365,6 +1389,7 @@ class TestLoadPastTasks:
         """Test that in-memory task takes precedence for actions."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "In-Memory Subject")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -1408,6 +1433,7 @@ class TestLoadTaskWithConversation:
         """Test loading task that exists in memory."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "In-Memory Task")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -1489,6 +1515,7 @@ class TestLoadTaskWithConversation:
         """Test loading in-memory task when conversation file missing."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Memory Task")
+        tracker.set_conversation_id("abc12345", "abc12345")
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         result = server._load_task_with_conversation("abc12345")
@@ -1507,6 +1534,7 @@ class TestStopEndpoint:
         tracker = TaskTracker()
         task_id = "abc12345"
         tracker.add_task(task_id, "Test Task")
+        tracker.set_conversation_id(task_id, task_id)
         tracker.set_authenticating(task_id)
         tracker.set_executing(task_id)
 
@@ -1543,6 +1571,7 @@ class TestStopEndpoint:
         tracker = TaskTracker()
         task_id = "abc12345"
         tracker.add_task(task_id, "Test Task")
+        tracker.set_conversation_id(task_id, task_id)
         # Task is QUEUED, not EXECUTING
 
         def mock_stop(conv_id: str) -> bool:
@@ -1556,6 +1585,38 @@ class TestStopEndpoint:
         data = response.get_json()
         assert "error" in data
         assert "not running" in data["error"]
+        assert "queued" in data["error"]
+
+    def test_stop_endpoint_mixed_statuses(self) -> None:
+        """Test stop error summarizes all statuses when none executing."""
+        tracker = TaskTracker()
+        conv_id = "conv0001"
+
+        # One completed task
+        tracker.add_task("task-001", "First")
+        tracker.set_conversation_id("task-001", conv_id)
+        tracker.set_authenticating("task-001")
+        tracker.set_executing("task-001")
+        tracker.complete_task("task-001", CompletionReason.SUCCESS)
+
+        # One pending task
+        tracker.add_task("task-002", "Second")
+        tracker.set_conversation_id("task-002", conv_id)
+        tracker.set_authenticating("task-002")
+        tracker.set_pending("task-002")
+
+        def mock_stop(cid: str) -> bool:
+            return True
+
+        server = DashboardServer(tracker, stop_callback=mock_stop)
+        client = Client(server._wsgi_app)
+
+        response = client.post(f"/api/conversation/{conv_id}/stop")
+        assert response.status_code == 400
+        data = response.get_json()
+        # Error should mention both statuses present
+        assert "completed" in data["error"]
+        assert "pending" in data["error"]
 
     def test_stop_endpoint_no_callback(self) -> None:
         """Test stop endpoint when no stop callback configured."""
@@ -1579,6 +1640,7 @@ class TestStopEndpoint:
         tracker = TaskTracker()
         task_id = "abc12345"
         tracker.add_task(task_id, "Test Task")
+        tracker.set_conversation_id(task_id, task_id)
         tracker.set_authenticating(task_id)
         tracker.set_executing(task_id)
 
@@ -1599,6 +1661,7 @@ class TestStopEndpoint:
         tracker = TaskTracker()
         task_id = "abc12345"
         tracker.add_task(task_id, "Test Task")
+        tracker.set_conversation_id(task_id, task_id)
         tracker.set_authenticating(task_id)
         tracker.set_executing(task_id)
 
@@ -1619,6 +1682,7 @@ class TestStopEndpoint:
         tracker = TaskTracker()
         task_id = "abc12345"
         tracker.add_task(task_id, "Test Task")
+        tracker.set_conversation_id(task_id, task_id)
         tracker.set_authenticating(task_id)
         tracker.set_executing(task_id)
 
@@ -1641,6 +1705,7 @@ class TestStopEndpoint:
         tracker = TaskTracker()
         task_id = "abc12345"
         tracker.add_task(task_id, "Test Task")
+        tracker.set_conversation_id(task_id, task_id)
         tracker.set_authenticating(task_id)
         tracker.set_executing(task_id)
         tracker.complete_task(task_id, CompletionReason.SUCCESS)
@@ -1675,6 +1740,7 @@ class TestEventsLogStreamEndpoint:
         """Returns SSE response for existing conversation."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
         tracker.complete_task("abc12345", CompletionReason.SUCCESS)
@@ -1698,6 +1764,7 @@ class TestEventsLogStreamEndpoint:
         """Returns 429 when SSE connection limit is reached."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -1717,6 +1784,7 @@ class TestEventsLogStreamEndpoint:
         """Passes offset parameter to the stream."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
         tracker.complete_task("abc12345", CompletionReason.SUCCESS)
@@ -1736,6 +1804,7 @@ class TestEventsLogStreamEndpoint:
         """Handles invalid offset parameter gracefully."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
         tracker.complete_task("abc12345", CompletionReason.SUCCESS)
@@ -1768,6 +1837,7 @@ class TestNetworkLogStreamEndpoint:
         """Returns SSE response for existing conversation."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
         tracker.complete_task("abc12345", CompletionReason.SUCCESS)
@@ -1790,6 +1860,7 @@ class TestNetworkLogStreamEndpoint:
         """Returns 429 when SSE connection limit is reached."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -1809,6 +1880,7 @@ class TestNetworkLogStreamEndpoint:
         """Passes offset parameter to the stream."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
         tracker.complete_task("abc12345", CompletionReason.SUCCESS)
@@ -1828,6 +1900,7 @@ class TestNetworkLogStreamEndpoint:
         """Handles invalid offset parameter gracefully."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
         tracker.complete_task("abc12345", CompletionReason.SUCCESS)
@@ -1851,6 +1924,7 @@ class TestSSELivePages:
         """Task detail page no longer uses meta-refresh."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -1866,6 +1940,7 @@ class TestSSELivePages:
         """Task detail page includes SSE script for active tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -1882,6 +1957,7 @@ class TestSSELivePages:
         """Task detail page has no SSE script for completed tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
         tracker.complete_task("abc12345", CompletionReason.SUCCESS)
@@ -1930,6 +2006,7 @@ class TestSSELivePages:
         """Actions page includes SSE script for active tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -1949,6 +2026,7 @@ class TestSSELivePages:
         """Actions page has no SSE script for completed tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
         tracker.complete_task("abc12345", CompletionReason.SUCCESS)
@@ -1968,6 +2046,7 @@ class TestSSELivePages:
         """Network page includes SSE script for active tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -1993,6 +2072,7 @@ class TestSSELivePages:
         """
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -2032,6 +2112,7 @@ class TestSSELivePages:
 
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -2079,6 +2160,7 @@ class TestSSELivePages:
         """Network page has no SSE script for completed tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
         tracker.complete_task("abc12345", CompletionReason.SUCCESS)
@@ -2111,6 +2193,7 @@ class TestEventsLogPollEndpoint:
         """Returns empty HTML and offset 0 for empty event log."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -2133,6 +2216,7 @@ class TestEventsLogPollEndpoint:
         """Returns rendered HTML for new events."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -2159,6 +2243,7 @@ class TestEventsLogPollEndpoint:
         """Returns done=True for completed tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
         tracker.complete_task("abc12345", CompletionReason.SUCCESS)
@@ -2177,6 +2262,7 @@ class TestEventsLogPollEndpoint:
         """Returns 304 when ETag matches and no new data."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -2202,6 +2288,7 @@ class TestEventsLogPollEndpoint:
         """Respects offset parameter to skip already-seen data."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -2228,6 +2315,7 @@ class TestEventsLogPollEndpoint:
         """Handles invalid offset parameter gracefully."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -2246,6 +2334,7 @@ class TestEventsLogPollEndpoint:
         """Response includes ETag header based on offset."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -2276,6 +2365,7 @@ class TestNetworkLogPollEndpoint:
         """Returns empty HTML and offset 0 for no network log."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -2299,6 +2389,7 @@ class TestNetworkLogPollEndpoint:
 
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -2323,6 +2414,7 @@ class TestNetworkLogPollEndpoint:
         """Returns done=True for completed tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
         tracker.complete_task("abc12345", CompletionReason.SUCCESS)
@@ -2341,6 +2433,7 @@ class TestNetworkLogPollEndpoint:
         """Returns 304 when ETag matches and no new data."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -2368,6 +2461,7 @@ class TestNetworkLogPollEndpoint:
 
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -2391,6 +2485,7 @@ class TestNetworkLogPollEndpoint:
         """Handles invalid offset parameter gracefully."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -2413,6 +2508,7 @@ class TestPollingFallbackJS:
         """Actions page JS includes polling fallback for active tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -2432,6 +2528,7 @@ class TestPollingFallbackJS:
         """Network page JS includes polling fallback for active tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -2451,6 +2548,7 @@ class TestPollingFallbackJS:
         """Task detail page JS includes polling fallback."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
 
@@ -2496,6 +2594,7 @@ class TestPollingFallbackJS:
         """Completed tasks don't include polling fallback JS."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
         tracker.complete_task("abc12345", CompletionReason.SUCCESS)
@@ -2515,6 +2614,7 @@ class TestPollingFallbackJS:
         """Completed tasks don't include polling fallback JS."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
+        tracker.set_conversation_id("abc12345", "abc12345")
         tracker.set_authenticating("abc12345")
         tracker.set_executing("abc12345")
         tracker.complete_task("abc12345", CompletionReason.SUCCESS)

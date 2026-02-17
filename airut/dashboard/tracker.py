@@ -7,6 +7,12 @@
 
 Provides thread-safe in-memory storage of task states for the dashboard
 to display pending, executing, and completed tasks.
+
+Each incoming message creates its own ``TaskState`` with a stable
+``task_id`` that never changes.  After authentication the task is
+assigned a ``conversation_id``.  Multiple tasks can share the same
+``conversation_id`` (one per message in the conversation).  The
+internal ``_tasks`` dict is keyed by ``task_id``.
 """
 
 import copy
@@ -180,10 +186,17 @@ ACTIVE_STATUSES: frozenset[TaskStatus] = frozenset(
 
 @dataclass
 class TaskState:
-    """State of a single task in the queue.
+    """State of a single task (one per message).
+
+    Each incoming message creates its own ``TaskState``.  The
+    ``task_id`` is stable from creation and never changes.  The
+    ``conversation_id`` starts empty and is assigned after
+    authentication determines which conversation the message belongs to.
 
     Attributes:
-        conversation_id: Unique 8-char hex conversation identifier.
+        task_id: Stable unique identifier, generated at submission time.
+        conversation_id: 8-char hex conversation identifier, set after
+            authentication.  Empty until assigned.
         display_title: Short display title for the dashboard
             (e.g. email subject line, first line of Slack message).
         repo_id: Repository identifier.
@@ -198,12 +211,12 @@ class TaskState:
         queued_at: Unix timestamp when task was added to queue.
         started_at: Unix timestamp when execution (EXECUTING) began, or None.
         completed_at: Unix timestamp when execution finished, or None.
-        message_count: Number of messages in the conversation.
-        model: Claude model used for this conversation (e.g., "opus", "sonnet").
+        model: Claude model used for this task (e.g., "opus", "sonnet").
         todos: Latest TodoWrite state from Claude, or None if no todos
             have been emitted yet.
     """
 
+    task_id: str
     conversation_id: str
     display_title: str
     repo_id: str = ""
@@ -215,7 +228,6 @@ class TaskState:
     queued_at: float = field(default_factory=time.time)
     started_at: float | None = None
     completed_at: float | None = None
-    message_count: int = 1
     model: str | None = None
     todos: list[TodoItem] | None = None
 
@@ -264,7 +276,8 @@ class TaskTracker:
     """Thread-safe task state management.
 
     Tracks tasks through their lifecycle from queued to completed,
-    maintaining a bounded history of completed tasks.
+    maintaining a bounded history of completed tasks.  Each incoming
+    message creates a separate task entry keyed by ``task_id``.
 
     Integrates with a shared ``VersionClock`` so SSE endpoints wake
     on every mutation.
@@ -287,12 +300,12 @@ class TaskTracker:
         self.max_completed = max_completed
         self._clock = clock or VersionClock()
         self._lock = threading.RLock()
-        # OrderedDict maintains insertion order for FIFO eviction
+        # OrderedDict keyed by task_id for FIFO eviction
         self._tasks: OrderedDict[str, TaskState] = OrderedDict()
 
     def add_task(
         self,
-        conversation_id: str,
+        task_id: str,
         display_title: str,
         *,
         repo_id: str = "",
@@ -301,106 +314,109 @@ class TaskTracker:
     ) -> None:
         """Record a new task as queued.
 
+        Each incoming message creates a new task.  The ``task_id`` is
+        stable for the lifetime of the task.
+
         Args:
-            conversation_id: Unique conversation identifier.
+            task_id: Unique task identifier (stable, never changes).
             display_title: Short display title for the dashboard.
             repo_id: Repository identifier.
             sender: Raw sender identity for display.
-            model: Optional Claude model for this conversation.
+            model: Optional Claude model for this task.
         """
         with self._lock:
-            # Check if task already exists (resuming conversation)
-            if conversation_id in self._tasks:
-                # Update existing task back to queued state
-                task = self._tasks[conversation_id]
-                task.status = TaskStatus.QUEUED
-                task.queued_at = time.time()
-                task.started_at = None
-                task.completed_at = None
-                task.completion_reason = None
-                task.completion_detail = ""
-                task.authenticated_sender = ""
-                task.message_count += 1
-                # Preserve existing model if not provided
-                if model is not None:
-                    task.model = model
-                if repo_id:
-                    task.repo_id = repo_id
-                if sender:
-                    task.sender = sender
-                # Move to end (most recent)
-                self._tasks.move_to_end(conversation_id)
-            else:
-                self._tasks[conversation_id] = TaskState(
-                    conversation_id=conversation_id,
-                    display_title=display_title,
-                    repo_id=repo_id,
-                    sender=sender,
-                    model=model,
-                )
+            self._tasks[task_id] = TaskState(
+                task_id=task_id,
+                conversation_id="",
+                display_title=display_title,
+                repo_id=repo_id,
+                sender=sender,
+                model=model,
+            )
             self._evict_old_completed()
             self._clock.tick()
 
-    def set_authenticating(self, conversation_id: str) -> bool:
+    def set_conversation_id(self, task_id: str, conv_id: str) -> bool:
+        """Assign a conversation ID to a task.
+
+        Called after authentication determines which conversation the
+        message belongs to.  The task keeps its ``task_id`` — only the
+        ``conversation_id`` field is updated.
+
+        Args:
+            task_id: Task identifier to update.
+            conv_id: Conversation ID to assign.
+
+        Returns:
+            True if the task was found and updated, False otherwise.
+        """
+        with self._lock:
+            if task_id not in self._tasks:
+                return False
+            self._tasks[task_id].conversation_id = conv_id
+            self._clock.tick()
+            return True
+
+    def set_authenticating(self, task_id: str) -> bool:
         """Transition a task from QUEUED to AUTHENTICATING.
 
         Args:
-            conversation_id: Task identifier to update.
+            task_id: Task identifier to update.
 
         Returns:
             True if the task was found and transitioned, False if missing
             or not in QUEUED state.
         """
         with self._lock:
-            if conversation_id not in self._tasks:
+            if task_id not in self._tasks:
                 return False
-            task = self._tasks[conversation_id]
+            task = self._tasks[task_id]
             if task.status != TaskStatus.QUEUED:
                 return False
             task.status = TaskStatus.AUTHENTICATING
             self._clock.tick()
             return True
 
-    def set_pending(self, conversation_id: str) -> bool:
+    def set_pending(self, task_id: str) -> bool:
         """Transition a task to PENDING.
 
         Used when the conversation already has an active task and this
         message must wait.  Valid from AUTHENTICATING state.
 
         Args:
-            conversation_id: Task identifier to update.
+            task_id: Task identifier to update.
 
         Returns:
             True if the task was found and transitioned, False if missing
             or not in a valid source state.
         """
         with self._lock:
-            if conversation_id not in self._tasks:
+            if task_id not in self._tasks:
                 return False
-            task = self._tasks[conversation_id]
+            task = self._tasks[task_id]
             if task.status != TaskStatus.AUTHENTICATING:
                 return False
             task.status = TaskStatus.PENDING
             self._clock.tick()
             return True
 
-    def set_executing(self, conversation_id: str) -> bool:
+    def set_executing(self, task_id: str) -> bool:
         """Transition a task to EXECUTING.
 
         Sets ``started_at`` to the current time.  Valid from
         AUTHENTICATING or PENDING states.
 
         Args:
-            conversation_id: Task identifier to update.
+            task_id: Task identifier to update.
 
         Returns:
             True if the task was found and transitioned, False if missing
             or not in a valid source state.
         """
         with self._lock:
-            if conversation_id not in self._tasks:
+            if task_id not in self._tasks:
                 return False
-            task = self._tasks[conversation_id]
+            task = self._tasks[task_id]
             if task.status not in (
                 TaskStatus.AUTHENTICATING,
                 TaskStatus.PENDING,
@@ -421,29 +437,27 @@ class TaskTracker:
 
     def complete_task(
         self,
-        conversation_id: str,
+        task_id: str,
         reason: CompletionReason,
         detail: str = "",
-        message_count: int | None = None,
     ) -> bool:
         """Mark a task as completed.
 
         Valid from AUTHENTICATING, PENDING, or EXECUTING states.
 
         Args:
-            conversation_id: Conversation identifier to update.
+            task_id: Task identifier to update.
             reason: Why the task completed.
             detail: Human-readable completion detail.
-            message_count: Optional updated message count.
 
         Returns:
             True if the task was found and completed, False if missing
             or not in a valid source state.
         """
         with self._lock:
-            if conversation_id not in self._tasks:
+            if task_id not in self._tasks:
                 return False
-            task = self._tasks[conversation_id]
+            task = self._tasks[task_id]
             if task.status not in self._COMPLETABLE_STATUSES:
                 return False
             task.status = TaskStatus.COMPLETED
@@ -451,15 +465,13 @@ class TaskTracker:
             task.completion_reason = reason
             task.completion_detail = detail
             task.todos = None
-            if message_count is not None:
-                task.message_count = message_count
             self._evict_old_completed()
             self._clock.tick()
             return True
 
     def update_task_display_title(
         self,
-        conversation_id: str,
+        task_id: str,
         display_title: str,
         *,
         sender: str = "",
@@ -471,7 +483,7 @@ class TaskTracker:
         ``(authenticating)`` title with the real title.
 
         Args:
-            conversation_id: Task identifier to update.
+            task_id: Task identifier to update.
             display_title: New display title.
             sender: Raw sender identity to set (if non-empty).
             authenticated_sender: Verified sender identity to set
@@ -481,9 +493,9 @@ class TaskTracker:
             True if the task was found and updated, False otherwise.
         """
         with self._lock:
-            if conversation_id not in self._tasks:
+            if task_id not in self._tasks:
                 return False
-            task = self._tasks[conversation_id]
+            task = self._tasks[task_id]
             task.display_title = display_title
             if sender:
                 task.sender = sender
@@ -492,89 +504,13 @@ class TaskTracker:
             self._clock.tick()
             return True
 
-    def update_task_id(self, old_id: str, new_id: str) -> bool:
-        """Update a task's conversation ID.
-
-        Used when a temporary task ID (e.g., "new-...") needs to be replaced
-        with the real conversation ID after it's generated.
-
-        Args:
-            old_id: Current task ID to update.
-            new_id: New conversation ID to assign.
-
-        Returns:
-            True if the task was found and updated, False otherwise.
-        """
-        with self._lock:
-            if old_id not in self._tasks:
-                return False
-            if new_id in self._tasks:
-                # New ID already exists, can't update
-                return False
-
-            task = self._tasks.pop(old_id)
-            task.conversation_id = new_id
-            self._tasks[new_id] = task
-            self._clock.tick()
-            return True
-
-    def reassign_task(self, temp_id: str, conv_id: str) -> bool:
-        """Move a temporary task to a (possibly existing) conversation ID.
-
-        Handles two cases:
-
-        - **conv_id is new**: renames ``temp_id`` → ``conv_id`` (like
-          ``update_task_id``).
-        - **conv_id already exists** (resumed conversation): transfers
-          the temp task's state onto the existing task and deletes the
-          temp entry, incrementing ``message_count``.
-
-        Args:
-            temp_id: Temporary task ID (e.g. ``"new-..."``) to remove.
-            conv_id: Real conversation ID to track under.
-
-        Returns:
-            True if the reassignment succeeded, False if ``temp_id``
-            was not found.
-        """
-        with self._lock:
-            if temp_id not in self._tasks:
-                return False
-
-            temp_task = self._tasks[temp_id]
-
-            if conv_id not in self._tasks:
-                # Simple rename
-                self._tasks.pop(temp_id)
-                temp_task.conversation_id = conv_id
-                self._tasks[conv_id] = temp_task
-            else:
-                # Resume: transfer state to existing task
-                existing = self._tasks[conv_id]
-                existing.status = temp_task.status
-                existing.display_title = temp_task.display_title
-                existing.sender = temp_task.sender
-                existing.authenticated_sender = temp_task.authenticated_sender
-                existing.started_at = temp_task.started_at
-                existing.completed_at = None
-                existing.completion_reason = None
-                existing.completion_detail = ""
-                existing.message_count += 1
-                if temp_task.model is not None:
-                    existing.model = temp_task.model
-                self._tasks.move_to_end(conv_id)
-                del self._tasks[temp_id]
-
-            self._clock.tick()
-            return True
-
-    def update_todos(self, conversation_id: str, todos: list[TodoItem]) -> bool:
+    def update_todos(self, task_id: str, todos: list[TodoItem]) -> bool:
         """Update the in-progress todo list for a task.
 
         Called when Claude emits a TodoWrite tool use during execution.
 
         Args:
-            conversation_id: Conversation identifier to update.
+            task_id: Task identifier to update.
             todos: List of ``TodoItem`` instances parsed from the
                 TodoWrite tool_input.
 
@@ -582,57 +518,85 @@ class TaskTracker:
             True if the task was found and updated, False otherwise.
         """
         with self._lock:
-            if conversation_id not in self._tasks:
+            if task_id not in self._tasks:
                 return False
-            self._tasks[conversation_id].todos = todos
+            self._tasks[task_id].todos = todos
             self._clock.tick()
             return True
 
-    def set_task_model(self, conversation_id: str, model: str) -> bool:
+    def set_task_model(self, task_id: str, model: str) -> bool:
         """Set the model for a task.
 
         Args:
-            conversation_id: Conversation identifier to update.
+            task_id: Task identifier to update.
             model: Claude model name to set.
 
         Returns:
             True if the task was found and updated, False otherwise.
         """
         with self._lock:
-            if conversation_id not in self._tasks:
+            if task_id not in self._tasks:
                 return False
-            self._tasks[conversation_id].model = model
+            self._tasks[task_id].model = model
             self._clock.tick()
             return True
 
-    def is_task_active(self, conversation_id: str) -> bool:
-        """Check if a task is currently active (not completed).
+    def has_active_task(self, conversation_id: str) -> bool:
+        """Check if a conversation has any active (non-completed) task.
 
-        Returns True for QUEUED, AUTHENTICATING, PENDING, and EXECUTING.
+        Scans all tasks for one matching the given ``conversation_id``
+        whose status is in ``ACTIVE_STATUSES``.
 
         Args:
-            conversation_id: Conversation identifier to check.
+            conversation_id: Conversation ID to check.  Must be non-empty;
+                empty strings would match unassigned tasks.
 
         Returns:
-            True if task exists and is not COMPLETED, False otherwise.
+            True if at least one active task exists, False otherwise.
         """
+        if not conversation_id:
+            return False
         with self._lock:
-            task = self._tasks.get(conversation_id)
-            if task is None:
-                return False
-            return task.status in ACTIVE_STATUSES
+            return any(
+                t.conversation_id == conversation_id
+                and t.status in ACTIVE_STATUSES
+                for t in self._tasks.values()
+            )
 
-    def get_task(self, conversation_id: str) -> TaskState | None:
-        """Get a single task by conversation ID.
+    def get_task(self, task_id: str) -> TaskState | None:
+        """Get a single task by task ID.
 
         Args:
-            conversation_id: Conversation identifier to look up.
+            task_id: Task identifier to look up.
 
         Returns:
             TaskState if found, None otherwise.
         """
         with self._lock:
-            return self._tasks.get(conversation_id)
+            return self._tasks.get(task_id)
+
+    def get_tasks_for_conversation(
+        self, conversation_id: str
+    ) -> list[TaskState]:
+        """Get all tasks for a conversation, newest first.
+
+        Args:
+            conversation_id: Conversation ID to filter by.  Must be
+                non-empty; empty strings would match unassigned tasks.
+
+        Returns:
+            List of tasks with matching conversation_id, sorted by
+            queued_at descending (newest first).
+        """
+        if not conversation_id:
+            return []
+        with self._lock:
+            tasks = [
+                t
+                for t in self._tasks.values()
+                if t.conversation_id == conversation_id
+            ]
+        return sorted(tasks, key=lambda t: t.queued_at, reverse=True)
 
     def get_all_tasks(self) -> list[TaskState]:
         """Get all tasks sorted by queued_at (newest first).
@@ -693,13 +657,13 @@ class TaskTracker:
 
     def wait_for_completion(
         self,
-        conversation_id: str,
+        task_id: str,
         timeout: float = 5.0,
     ) -> TaskState | None:
         """Wait for a task to reach COMPLETED status.
 
         Args:
-            conversation_id: Conversation identifier to wait for.
+            task_id: Task identifier to wait for.
             timeout: Maximum time to wait in seconds.
 
         Returns:
@@ -708,24 +672,24 @@ class TaskTracker:
         deadline = time.monotonic() + timeout
         while True:
             with self._lock:
-                task = self._tasks.get(conversation_id)
+                task = self._tasks.get(task_id)
                 if task and task.status == TaskStatus.COMPLETED:
                     return task
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 with self._lock:
-                    return self._tasks.get(conversation_id)
+                    return self._tasks.get(task_id)
             # Wait on the shared clock for any state change
             self._clock.wait(self._clock.version, timeout=remaining)
 
     def _evict_old_completed(self) -> None:
         """Remove oldest completed tasks if over limit.
 
-        Must be called with lock held.
+        Must be called with lock held.  Evicts per-task in FIFO order.
         """
         completed = [
-            cid
-            for cid, task in self._tasks.items()
+            tid
+            for tid, task in self._tasks.items()
             if task.status == TaskStatus.COMPLETED
         ]
         # Remove oldest completed tasks (first in OrderedDict)

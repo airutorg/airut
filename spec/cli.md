@@ -133,9 +133,10 @@ Update airut to the latest version via `uv tool upgrade airut`.
 | `--force` | Skip the in-flight task check entirely         |
 
 **Task blocking** prevents data loss during updates. The health endpoint returns
-`{"tasks": {"in_progress": N, "queued": N}}`. When `--wait` is specified and
-tasks are active, the command polls every 10 seconds until idle or the service
-becomes unreachable.
+task counts by status (e.g.,
+`{"tasks": {"queued": 0, "authenticating": 0, "pending": 0, "executing": 1, "completed": 5}}`).
+When `--wait` is specified and tasks are active, the command polls every 10
+seconds until idle or the service becomes unreachable.
 
 ### install-service
 

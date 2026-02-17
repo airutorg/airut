@@ -16,8 +16,12 @@ from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
+
+
+if TYPE_CHECKING:
+    from airut.dashboard.tracker import TaskState
 
 import pytest
 
@@ -257,6 +261,57 @@ def extract_conversation_id() -> Callable[[str], str | None]:
         return match.group(1) if match else None
 
     return _extract
+
+
+def find_task_for_conversation(tracker, conv_id: str):
+    """Find the most recent task for a conversation.
+
+    Uses ``get_tasks_for_conversation`` to look up tasks by
+    ``conversation_id`` since the tracker is keyed by ``task_id``
+    (which tests cannot predict).
+
+    Args:
+        tracker: TaskTracker instance.
+        conv_id: Conversation ID to look up.
+
+    Returns:
+        The most recent TaskState for the conversation, or None.
+    """
+    tasks = tracker.get_tasks_for_conversation(conv_id)
+    return tasks[0] if tasks else None
+
+
+def wait_for_conv_completion(
+    tracker,
+    conv_id: str,
+    timeout: float = 10.0,
+) -> "TaskState | None":
+    """Wait for the most recent task in a conversation to complete.
+
+    Polls ``get_tasks_for_conversation`` until the newest task reaches
+    COMPLETED status, using the tracker's version clock for efficient
+    wakeups.
+
+    Args:
+        tracker: TaskTracker instance.
+        conv_id: Conversation ID to wait for.
+        timeout: Maximum seconds to wait.
+
+    Returns:
+        The completed TaskState, or None on timeout.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    while True:
+        tasks = tracker.get_tasks_for_conversation(conv_id)
+        if tasks and tasks[0].status.value == "completed":
+            return tasks[0]
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            # Return whatever we have
+            return tasks[0] if tasks else None
+        time.sleep(min(0.1, remaining))
 
 
 def get_message_text(msg: MIMEMultipart | MIMEText | Any) -> str:

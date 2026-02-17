@@ -24,7 +24,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 from airut.conversation import ConversationStore
 from airut.sandbox.event_log import EventLog
 
-from .conftest import get_message_text
+from .conftest import (
+    find_task_for_conversation,
+    get_message_text,
+    wait_for_conv_completion,
+)
 from .environment import IntegrationEnvironment
 
 
@@ -237,7 +241,7 @@ def sync_between_events(event_num):
                 pytest.fail("Task did not signal readiness via sync file")
 
             # Verify task is actually in progress
-            task = service.tracker.get_task(conv_id)
+            task = find_task_for_conversation(service.tracker, conv_id)
             assert task is not None
             assert task.status.value == "executing"
 
@@ -247,7 +251,9 @@ def sync_between_events(event_num):
 
             # Task should eventually be marked as completed
             # (process_message unregisters the task in its finally block)
-            task = service.tracker.wait_for_completion(conv_id, timeout=5.0)
+            task = wait_for_conv_completion(
+                service.tracker, conv_id, timeout=5.0
+            )
             if not task or task.status.value != "completed":
                 pytest.fail("Task did not complete after stop")
 
@@ -360,7 +366,7 @@ def sync_between_events(event_num):
                 pytest.fail("Task did not signal readiness via sync file")
 
             # Verify task is in progress
-            task = service.tracker.get_task(conv_id)
+            task = find_task_for_conversation(service.tracker, conv_id)
             assert task is not None
             assert task.status.value == "executing"
 
@@ -373,7 +379,9 @@ def sync_between_events(event_num):
             assert stop_result is True, "Dashboard stop callback failed"
 
             # Verify task eventually completes
-            task = service.tracker.wait_for_completion(conv_id, timeout=5.0)
+            task = wait_for_conv_completion(
+                service.tracker, conv_id, timeout=5.0
+            )
             if not task or task.status.value != "completed":
                 pytest.fail("Task did not complete after dashboard stop")
 
