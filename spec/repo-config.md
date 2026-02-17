@@ -129,4 +129,4 @@ full design.
 Since `network.sandbox_enabled` is now per-repo (per-conversation), the
 `ProxyManager` is always created and its gateway infrastructure (egress network,
 proxy image, CA cert) is set up at startup. Per-conversation proxy containers
-are only started when the repo config has `sandbox_enabled: true`.
+are only started when the repo config has `network.sandbox_enabled: true`.

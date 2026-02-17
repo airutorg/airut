@@ -9,12 +9,12 @@ protocol handling from the core orchestration to support future channels.
 
 Airut organizes work around three concepts:
 
-- **Conversation** — an email thread. One email thread = one conversation,
-  identified by an 8-character hex ID. A conversation owns a git workspace,
-  persistent Claude session state, and a sandboxed execution environment. Tasks
-  within a conversation execute serially — only one task runs at a time.
-  Parallelism occurs across different conversations, not within one.
-- **Task** — an individual execution within a conversation. Each inbound email
+- **Conversation** — a message thread from a channel. One thread = one
+  conversation, identified by an 8-character hex ID. A conversation owns a git
+  workspace, persistent Claude session state, and a sandboxed execution
+  environment. Tasks within a conversation execute serially — only one task runs
+  at a time. Parallelism occurs across different conversations, not within one.
+- **Task** — an individual execution within a conversation. Each inbound message
   triggers one task. A conversation contains one or more tasks, executed one at
   a time in the order received.
 - **Session** — Claude Code's persistent context, identified by a `session_id`
@@ -292,13 +292,13 @@ Workspaces are full clones (no shared objects) for isolation.
 
 A single server manages multiple repositories with per-repo isolation:
 
-| Per-Repository             | Shared Across Repos            |
-| -------------------------- | ------------------------------ |
-| Email inbox (IMAP account) | Thread pool (`max_concurrent`) |
-| Authorized senders         | Dashboard                      |
-| Secrets pool               | Proxy infrastructure           |
-| Storage directory          |                                |
-| Git mirror                 |                                |
+| Per-Repository                     | Shared Across Repos            |
+| ---------------------------------- | ------------------------------ |
+| Channel inbox (e.g., IMAP account) | Thread pool (`max_concurrent`) |
+| Authorized senders                 | Dashboard                      |
+| Secrets pool                       | Proxy infrastructure           |
+| Storage directory                  |                                |
+| Git mirror                         |                                |
 
 Each repository has its own `RepoHandler` with isolated components.
 
@@ -365,7 +365,7 @@ Airut is designed for **small-scale deployments**:
 
 - Single operator managing a few repositories
 - Not multi-tenant — all repos share one server
-- No web UI for task submission (email only)
+- No web UI for task submission (channel-based only)
 
 **Claude Code only** — no support for other agentic frameworks. The container
 runs Claude Code with `--dangerously-skip-permissions` in sandbox mode.

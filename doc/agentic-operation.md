@@ -26,21 +26,20 @@ Successful agentic operation relies on:
 
 Airut handles the infrastructure that enables agentic operation:
 
-- **Email conversation management** — Incoming email triggers agent execution,
-  replies are sent automatically, conversation threading via `[ID:xyz123]` in
-  subject
+- **Conversation management** — Incoming messages trigger agent execution,
+  replies are sent automatically, conversation threading maintains context
 - **Container isolation** — Each conversation runs in a dedicated Podman
   container with controlled mounts (workspace, Claude session, inbox/outbox,
   storage). The container is ephemeral; only the mounted directories persist
   between tasks. Claude Code runs with `--dangerously-skip-permissions` since
-  interactive approval isn't possible over email — the container sandbox
-  provides the safety boundary instead
+  interactive approval isn't possible in headless channels — the container
+  sandbox provides the safety boundary instead
 - **Network sandbox** — All HTTP(S) traffic routed through a proxy that enforces
   an allowlist, preventing data exfiltration
 - **Credential injection** — Secrets passed via environment variables, never
   mounted from host
-- **Session persistence** — Claude Code sessions resume across email replies
-  with full context
+- **Session persistence** — Claude Code sessions resume across messages with
+  full context
 
 See [security.md](security.md) for the full security model.
 
@@ -290,13 +289,13 @@ it codifies them as heuristics. This builds institutional knowledge over time.
 
 Agentic operation with Airut requires:
 
-| Component               | Purpose                                   |
-| ----------------------- | ----------------------------------------- |
-| Airut                   | Email handling, sandboxing, session state |
-| `CLAUDE.md`             | Workflow instructions and codebase docs   |
-| Workflow tools          | Reliable CI/PR operations                 |
-| Branch protection       | Human-in-the-loop checkpoint              |
-| Dedicated agent account | Limited permissions, clear audit trail    |
+| Component               | Purpose                                     |
+| ----------------------- | ------------------------------------------- |
+| Airut                   | Message handling, sandboxing, session state |
+| `CLAUDE.md`             | Workflow instructions and codebase docs     |
+| Workflow tools          | Reliable CI/PR operations                   |
+| Branch protection       | Human-in-the-loop checkpoint                |
+| Dedicated agent account | Limited permissions, clear audit trail      |
 
 The Airut repository demonstrates these practices. Adapt them when onboarding
 new repositories.
