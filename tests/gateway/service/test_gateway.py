@@ -962,7 +962,7 @@ class TestMain:
             ),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False, resilient=False
+                debug=False, resilient=False, config=None
             )
             assert main() == 1
 
@@ -983,7 +983,7 @@ class TestMain:
             ),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False, resilient=False
+                debug=False, resilient=False, config=None
             )
             assert main() == 2
 
@@ -1007,7 +1007,7 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False, resilient=False
+                debug=False, resilient=False, config=None
             )
             assert main() == 3
         mock_svc.stop.assert_called_once()
@@ -1032,7 +1032,7 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False, resilient=False
+                debug=False, resilient=False, config=None
             )
             assert main() == 0
         mock_svc.stop.assert_called_once()
@@ -1056,7 +1056,7 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False, resilient=False
+                debug=False, resilient=False, config=None
             )
             assert main() == 0
         mock_svc.stop.assert_called_once()
@@ -1082,7 +1082,7 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=True, resilient=False
+                debug=True, resilient=False, config=None
             )
             main()
 
@@ -1112,7 +1112,7 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False, resilient=False
+                debug=False, resilient=False, config=None
             )
             main()
 
@@ -1153,7 +1153,7 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False, resilient=False
+                debug=False, resilient=False, config=None
             )
             main()
 
@@ -1183,10 +1183,61 @@ class TestMain:
             patch.dict("os.environ", {}, clear=False),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
-                debug=False, resilient=True
+                debug=False, resilient=True, config=None
             )
             assert main() == 0
         mock_svc.start.assert_called_once_with(resilient=True)
+
+    def test_config_path_override(self) -> None:
+        """Test that --config passes the path to ServerConfig.from_yaml()."""
+        mock_config = MagicMock()
+        mock_svc = MagicMock()
+        custom_path = Path("/tmp/custom-airut.yaml")
+        with (
+            patch("airut.gateway.service.gateway.configure_logging"),
+            patch(
+                "airut.gateway.service.gateway.argparse.ArgumentParser"
+            ) as mock_ap,
+            patch(
+                "airut.gateway.service.gateway.ServerConfig.from_yaml",
+                return_value=mock_config,
+            ) as mock_from_yaml,
+            patch(
+                "airut.gateway.service.gateway.GatewayService",
+                return_value=mock_svc,
+            ),
+            patch.dict("os.environ", {}, clear=False),
+        ):
+            mock_ap.return_value.parse_args.return_value = MagicMock(
+                debug=False, resilient=False, config=custom_path
+            )
+            assert main() == 0
+        mock_from_yaml.assert_called_once_with(config_path=custom_path)
+
+    def test_config_path_default_none(self) -> None:
+        """Test that without --config, from_yaml() gets config_path=None."""
+        mock_config = MagicMock()
+        mock_svc = MagicMock()
+        with (
+            patch("airut.gateway.service.gateway.configure_logging"),
+            patch(
+                "airut.gateway.service.gateway.argparse.ArgumentParser"
+            ) as mock_ap,
+            patch(
+                "airut.gateway.service.gateway.ServerConfig.from_yaml",
+                return_value=mock_config,
+            ) as mock_from_yaml,
+            patch(
+                "airut.gateway.service.gateway.GatewayService",
+                return_value=mock_svc,
+            ),
+            patch.dict("os.environ", {}, clear=False),
+        ):
+            mock_ap.return_value.parse_args.return_value = MagicMock(
+                debug=False, resilient=False, config=None
+            )
+            assert main() == 0
+        mock_from_yaml.assert_called_once_with(config_path=None)
 
 
 class TestUpstreamDnsResolution:
