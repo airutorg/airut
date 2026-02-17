@@ -34,7 +34,7 @@ from airut.dashboard import (
 from airut.dashboard.tracker import BootPhase, BootState, RepoState, RepoStatus
 from airut.dashboard.versioned import VersionClock, VersionedStore
 from airut.dns import get_system_resolver
-from airut.gateway.channel import AuthenticationError
+from airut.gateway.channel import AuthenticationError, RawMessage
 from airut.gateway.config import ServerConfig
 from airut.gateway.service.message_processing import (
     process_message,
@@ -94,7 +94,8 @@ class GatewayService:
         self._egress_network = egress_network
         self.config = config
         self.global_config = config.global_config
-        self.running = True
+        self._running = True
+        self._stopped = False
 
         if repo_root is None:
             repo_root = Path(__file__).parent.parent.parent.parent
@@ -224,7 +225,7 @@ class GatewayService:
 
         # Block main thread until shutdown
         try:
-            while self.running:
+            while self._running:
                 time.sleep(1)
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
@@ -310,12 +311,12 @@ class GatewayService:
                 error_message=error_msg,
                 error_type=error_type,
                 git_repo_url=repo_config.git_repo_url,
-                channel_info=repo_config.email.imap_server,
+                channel_info=repo_config.channel_info,
                 storage_dir=str(repo_config.storage_dir),
             )
 
         # Start all repo listeners, tracking success/failure
-        listener_threads = []
+        started_count = 0
         for repo_id, repo_handler in self.repo_handlers.items():
             config = repo_handler.config
             boot = self._boot_store.get().value
@@ -326,13 +327,13 @@ class GatewayService:
                 )
             )
             try:
-                thread = repo_handler.start_listener()
-                listener_threads.append(thread)
+                repo_handler.start_listener()
+                started_count += 1
                 repo_states[repo_id] = RepoState(
                     repo_id=repo_id,
                     status=RepoStatus.LIVE,
                     git_repo_url=config.git_repo_url,
-                    channel_info=config.email.imap_server,
+                    channel_info=config.channel_info,
                     storage_dir=str(config.storage_dir),
                 )
                 logger.info("Repo '%s': started successfully", repo_id)
@@ -345,7 +346,7 @@ class GatewayService:
                     error_message=error_msg,
                     error_type=error_type,
                     git_repo_url=config.git_repo_url,
-                    channel_info=config.email.imap_server,
+                    channel_info=config.channel_info,
                     storage_dir=str(config.storage_dir),
                 )
                 logger.error(
@@ -392,7 +393,7 @@ class GatewayService:
         )
         logger.info(
             "Service ready. %d repo listener(s) running.",
-            len(listener_threads),
+            started_count,
         )
 
     def _get_work_dirs(self) -> list[Path]:
@@ -416,12 +417,12 @@ class GatewayService:
 
     def stop(self) -> None:
         """Stop the service gracefully."""
-        if hasattr(self, "_stopped") and self._stopped:
+        if self._stopped:
             return
         self._stopped = True
 
         logger.info("Stopping gateway service...")
-        self.running = False
+        self._running = False
         self._shutdown_event.set()
 
         # Shutdown sandbox
@@ -505,7 +506,7 @@ class GatewayService:
 
     def submit_message(
         self,
-        raw_message: Any,
+        raw_message: RawMessage[Any],
         repo_handler: RepoHandler,
     ) -> bool:
         """Submit a raw message for authentication and processing.
@@ -514,8 +515,7 @@ class GatewayService:
         Authentication and parsing happen in the worker thread.
 
         Args:
-            raw_message: Channel-specific raw message
-                (e.g. email.message.Message).
+            raw_message: Channel-agnostic raw message envelope.
             repo_handler: The repo handler that received this message.
 
         Returns:
@@ -527,7 +527,16 @@ class GatewayService:
 
         task_id = f"new-{id(raw_message):08x}"
         repo_id = repo_handler.config.repo_id
-        self.tracker.add_task(task_id, "(authenticating)", repo_id=repo_id)
+        # Use subject from RawMessage for immediate tracker display;
+        # falls back to truncated sender, then to a placeholder.
+        initial_subject = (
+            raw_message.subject or raw_message.sender[:40] or "(authenticating)"
+        )
+        self.tracker.add_task(
+            task_id,
+            initial_subject,
+            repo_id=repo_id,
+        )
 
         future = self._executor_pool.submit(
             self._process_message_worker,
@@ -563,7 +572,7 @@ class GatewayService:
 
     def _process_message_worker(
         self,
-        raw_message: Any,
+        raw_message: RawMessage[Any],
         task_id: str,
         repo_handler: RepoHandler,
     ) -> None:
@@ -653,7 +662,7 @@ class GatewayService:
             max_age_days,
         )
 
-        while self.running:
+        while self._running:
             if self._shutdown_event.wait(timeout=gc_interval):
                 break  # Shutdown signaled
 
@@ -759,9 +768,7 @@ def main(argv: list[str] | None = None) -> int:
     def shutdown_handler(signum: int, frame: object) -> None:
         """Handle shutdown signals."""
         logger.info("Received signal %d, initiating shutdown...", signum)
-        service.running = False
-        for handler in service.repo_handlers.values():
-            handler.stop()
+        service.stop()
 
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)

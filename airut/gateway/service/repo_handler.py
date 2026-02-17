@@ -6,7 +6,7 @@
 """Per-repository handler for the gateway service.
 
 This module contains the RepoHandler class that manages:
-- Channel adapter lifecycle (email listener, authentication, responder)
+- Channel adapter lifecycle (listener start/stop)
 - Conversation management for a single repository
 - Container executor for Claude Code
 """
@@ -14,18 +14,12 @@ This module contains the RepoHandler class that manages:
 from __future__ import annotations
 
 import logging
-import threading
-import time
-from email.message import Message
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from airut.gateway.channel import ChannelAdapter, RawMessage
 from airut.gateway.config import RepoServerConfig
 from airut.gateway.conversation import ConversationManager
-from airut.gateway.email.adapter import EmailChannelAdapter
-from airut.gateway.email.listener import (
-    IMAPConnectionError,
-    IMAPIdleError,
-)
+from airut.gateway.service.adapter_factory import create_adapter
 
 
 if TYPE_CHECKING:
@@ -34,18 +28,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class _ReconnectFailedError(Exception):
-    """Sentinel raised when IMAP reconnection attempts are exhausted."""
-
-
 class RepoHandler:
-    """Per-repo components and listener thread.
+    """Per-repo components and listener lifecycle.
 
     Encapsulates all components that are specific to a single repository:
     channel adapter, conversation management, and container execution.
 
-    The handler runs a listener loop in its own thread and submits messages
-    to the shared executor pool for processing.
+    The channel listener manages its own threads internally. RepoHandler
+    delegates lifecycle to the adapter's listener.
 
     Attributes:
         config: Per-repo server-side configuration.
@@ -67,252 +57,47 @@ class RepoHandler:
         self.config = config
         self.service = service
 
-        self.adapter = EmailChannelAdapter.from_config(
-            config.email, repo_id=config.repo_id
-        )
+        self.adapter: ChannelAdapter = create_adapter(config)
         self.conversation_manager = ConversationManager(
             repo_url=config.git_repo_url,
             storage_dir=config.storage_dir,
         )
 
-        self._listener_thread: threading.Thread | None = None
+        logger.info(
+            "RepoHandler initialized for '%s' (channel=%s)",
+            config.repo_id,
+            config.channel_type,
+        )
 
-        logger.info("RepoHandler initialized for '%s'", config.repo_id)
+    def start_listener(self) -> None:
+        """Start the channel listener.
 
-    def start_listener(self) -> threading.Thread:
-        """Start the listener in a daemon thread.
-
-        Returns:
-            The listener thread.
+        Updates the git mirror first, then delegates to the channel
+        adapter's listener. The listener manages its own threads.
         """
-        # Update git mirror on startup (before proxy, which reads config
-        # from the mirror)
         logger.info(
             "Repo '%s': updating git mirror from origin...",
             self.config.repo_id,
         )
         self.conversation_manager.mirror.update_mirror()
 
-        # Connect to IMAP
-        logger.info(
-            "Repo '%s': connecting to IMAP %s:%d",
-            self.config.repo_id,
-            self.config.email.imap_server,
-            self.config.email.imap_port,
+        self.adapter.listener.start(
+            submit=lambda msg: self._submit_message(msg)
         )
-        self.adapter.listener.connect(max_retries=3)
-
-        self._listener_thread = threading.Thread(
-            target=self._listener_loop,
-            daemon=True,
-            name=f"Listener-{self.config.repo_id}",
-        )
-        self._listener_thread.start()
 
         logger.info(
-            "Repo '%s': listener started (%s mode)",
+            "Repo '%s': listener started (channel=%s)",
             self.config.repo_id,
-            "IDLE" if self.config.email.use_imap_idle else "polling",
-        )
-        return self._listener_thread
-
-    def _listener_loop(self) -> None:
-        """Main listener loop, dispatching to IDLE or polling mode."""
-        if self.config.email.use_imap_idle:
-            self._idle_loop()
-        else:
-            self._polling_loop()
-
-    def _reconnect_with_backoff(
-        self,
-        reconnect_attempts: int,
-        max_reconnect_attempts: int,
-        *,
-        error: IMAPConnectionError | None = None,
-    ) -> int:
-        """Handle IMAP reconnection with exponential backoff.
-
-        Args:
-            reconnect_attempts: Current attempt count (will be incremented).
-            max_reconnect_attempts: Max attempts before giving up.
-            error: The connection error that triggered the reconnect.
-
-        Returns:
-            Updated reconnect_attempts count.
-
-        Raises:
-            _ReconnectFailedError: If max attempts reached.
-        """
-        reconnect_attempts += 1
-        repo_id = self.config.repo_id
-        logger.error(
-            "Repo '%s': IMAP connection error (attempt %d/%d): %s",
-            repo_id,
-            reconnect_attempts,
-            max_reconnect_attempts,
-            error or "unknown",
+            self.config.channel_type,
         )
 
-        if reconnect_attempts >= max_reconnect_attempts:
-            logger.critical(
-                "Repo '%s': failed to reconnect after %d attempts",
-                repo_id,
-                max_reconnect_attempts,
-            )
-            raise _ReconnectFailedError
-
-        backoff = min(10 * (3 ** (reconnect_attempts - 1)), 300)
-        logger.info("Repo '%s': reconnecting in %ds...", repo_id, backoff)
-        time.sleep(backoff)
-
-        try:
-            self.adapter.listener.disconnect()
-            self.adapter.listener.connect(max_retries=3)
-            logger.info("Repo '%s': reconnected to IMAP", repo_id)
-        except IMAPConnectionError as reconnect_error:
-            logger.error(
-                "Repo '%s': reconnection failed: %s",
-                repo_id,
-                reconnect_error,
-            )
-
-        return reconnect_attempts
-
-    def _polling_loop(self) -> None:
-        """Polling-based message loop."""
-        reconnect_attempts = 0
-        max_reconnect_attempts = 5
-        repo_id = self.config.repo_id
-
-        while self.service.running:
-            try:
-                messages = self.adapter.listener.fetch_unread()
-
-                if messages:
-                    logger.info(
-                        "Repo '%s': processing %d new messages",
-                        repo_id,
-                        len(messages),
-                    )
-
-                reconnect_attempts = 0
-
-                for msg_id, message in messages:
-                    try:
-                        self.adapter.listener.delete_message(msg_id)
-                        self._submit_message(message)
-                    except Exception as e:
-                        logger.exception(
-                            "Repo '%s': failed to submit message: %s",
-                            repo_id,
-                            e,
-                        )
-
-                time.sleep(self.config.email.poll_interval_seconds)
-
-            except IMAPConnectionError as e:
-                try:
-                    reconnect_attempts = self._reconnect_with_backoff(
-                        reconnect_attempts, max_reconnect_attempts, error=e
-                    )
-                except _ReconnectFailedError:
-                    return
-
-    def _idle_loop(self) -> None:
-        """IDLE-based message loop."""
-        reconnect_attempts = 0
-        max_reconnect_attempts = 5
-        last_reconnect = time.time()
-        reconnect_interval = self.config.email.idle_reconnect_interval_seconds
-        repo_id = self.config.repo_id
-
-        while self.service.running:
-            try:
-                if time.time() - last_reconnect >= reconnect_interval:
-                    logger.info(
-                        "Repo '%s': periodic reconnect after %d seconds",
-                        repo_id,
-                        reconnect_interval,
-                    )
-                    self.adapter.listener.disconnect()
-                    self.adapter.listener.connect(max_retries=3)
-                    last_reconnect = time.time()
-
-                messages = self.adapter.listener.fetch_unread()
-
-                if messages:
-                    logger.info(
-                        "Repo '%s': processing %d new messages",
-                        repo_id,
-                        len(messages),
-                    )
-
-                reconnect_attempts = 0
-
-                for msg_id, message in messages:
-                    try:
-                        self.adapter.listener.delete_message(msg_id)
-                        self._submit_message(message)
-                    except Exception as e:
-                        logger.exception(
-                            "Repo '%s': failed to submit message: %s",
-                            repo_id,
-                            e,
-                        )
-
-                if messages:
-                    continue
-
-                try:
-                    has_pending = self.adapter.listener.idle_start()
-                    if has_pending:
-                        continue
-
-                    time_until_reconnect = max(
-                        0, reconnect_interval - (time.time() - last_reconnect)
-                    )
-                    idle_timeout = min(time_until_reconnect, 29 * 60)
-
-                    if idle_timeout > 0:
-                        got_notification = self.adapter.listener.idle_wait(
-                            idle_timeout
-                        )
-
-                        if got_notification:
-                            logger.debug(
-                                "Repo '%s': IDLE notification received",
-                                repo_id,
-                            )
-
-                    if not self.service.running:
-                        break
-
-                    self.adapter.listener.idle_done()
-
-                except IMAPIdleError as e:
-                    logger.warning(
-                        "Repo '%s': IDLE error, reconnecting: %s",
-                        repo_id,
-                        e,
-                    )
-                    last_reconnect = 0
-
-            except IMAPConnectionError as e:
-                try:
-                    reconnect_attempts = self._reconnect_with_backoff(
-                        reconnect_attempts, max_reconnect_attempts, error=e
-                    )
-                    last_reconnect = time.time()
-                except _ReconnectFailedError:
-                    return
-
-    def _submit_message(self, message: Message) -> bool:
+    def _submit_message(self, message: RawMessage[Any]) -> bool:
         """Submit a raw message for authentication and processing.
 
         Authentication happens in the worker thread, not here.
 
         Args:
-            message: Raw email message to process.
+            message: Raw message envelope to process.
 
         Returns:
             True if message was submitted, False if pool not ready.
@@ -321,6 +106,5 @@ class RepoHandler:
 
     def stop(self) -> None:
         """Stop listener and close resources."""
-        self.adapter.listener.interrupt()
-        self.adapter.listener.close()
+        self.adapter.listener.stop()
         logger.info("Repo '%s': listener stopped", self.config.repo_id)

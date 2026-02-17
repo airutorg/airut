@@ -17,9 +17,13 @@ from dataclasses import dataclass, field
 from email.message import Message
 from pathlib import Path
 
-from airut.gateway.channel import AuthenticationError, ParsedMessage
+from airut.gateway.channel import (
+    AuthenticationError,
+    ParsedMessage,
+    RawMessage,
+)
 from airut.gateway.config import EmailChannelConfig
-from airut.gateway.email.listener import EmailListener
+from airut.gateway.email.channel_listener import EmailChannelListener
 from airut.gateway.email.parsing import (
     collect_outbox_files,
     decode_subject,
@@ -78,9 +82,9 @@ class EmailChannelAdapter:
         authenticator: SenderAuthenticator,
         authorizer: SenderAuthorizer,
         responder: EmailResponder,
-        listener: EmailListener | None = None,
+        listener: EmailChannelListener | None = None,
         *,
-        repo_id: str = "",
+        repo_id: str,
     ) -> None:
         self._config = config
         self._repo_id = repo_id
@@ -91,7 +95,7 @@ class EmailChannelAdapter:
 
     @classmethod
     def from_config(
-        cls, config: EmailChannelConfig, *, repo_id: str = ""
+        cls, config: EmailChannelConfig, *, repo_id: str
     ) -> EmailChannelAdapter:
         """Create an adapter with all email components from config.
 
@@ -115,13 +119,13 @@ class EmailChannelAdapter:
             ),
             authorizer=SenderAuthorizer(config.authorized_senders),
             responder=EmailResponder(config),
-            listener=EmailListener(config),
+            listener=EmailChannelListener(config, repo_id=repo_id),
             repo_id=repo_id,
         )
 
     @property
-    def listener(self) -> EmailListener:
-        """Email listener for IMAP lifecycle management.
+    def listener(self) -> EmailChannelListener:
+        """Email channel listener for message lifecycle management.
 
         Raises:
             RuntimeError: If adapter was created without a listener.
@@ -136,12 +140,12 @@ class EmailChannelAdapter:
         return self._responder
 
     def authenticate_and_parse(
-        self, raw_message: Message
+        self, raw_message: RawMessage[Message]
     ) -> EmailParsedMessage:
         """Authenticate sender via DMARC and parse the email.
 
         Args:
-            raw_message: Raw email.message.Message from IMAP.
+            raw_message: RawMessage wrapping an email.message.Message.
 
         Returns:
             EmailParsedMessage if authenticated and authorized.
@@ -150,12 +154,13 @@ class EmailChannelAdapter:
             AuthenticationError: If DMARC verification or sender
                 authorization fails.
         """
-        sender = raw_message.get("From", "")
-        message_id = raw_message.get("Message-ID", "")
+        email_msg = raw_message.content
+        sender = email_msg.get("From", "")
+        message_id = email_msg.get("Message-ID", "")
         repo_id = self._repo_id
 
         # Authentication: verify DMARC from trusted server
-        authenticated_sender = self._authenticator.authenticate(raw_message)
+        authenticated_sender = self._authenticator.authenticate(email_msg)
         if authenticated_sender is None:
             logger.warning(
                 "Repo '%s': rejecting unauthenticated message from %s "
@@ -184,19 +189,19 @@ class EmailChannelAdapter:
             )
 
         # Extract conversation ID: headers first, then subject fallback
-        subject = decode_subject(raw_message)
-        references = raw_message.get("References", "").split()
-        in_reply_to = raw_message.get("In-Reply-To")
+        subject = decode_subject(email_msg)
+        references = email_msg.get("References", "").split()
+        in_reply_to = email_msg.get("In-Reply-To")
         conv_id = extract_conversation_id_from_headers(
             references, in_reply_to
         ) or extract_conversation_id(subject)
 
         # Extract model from To address (e.g., airut+opus@domain.com)
-        to_address = raw_message.get("To", "")
+        to_address = email_msg.get("To", "")
         model_hint = extract_model_from_address(to_address)
 
         # Extract body (HTML quotes stripped)
-        clean_body = extract_body(raw_message)
+        clean_body = extract_body(email_msg)
 
         # Build channel context
         channel_context = (
@@ -221,10 +226,10 @@ class EmailChannelAdapter:
             model_hint=model_hint,
             subject=subject or "(no subject)",
             channel_context=channel_context,
-            original_message_id=raw_message.get("Message-ID"),
+            original_message_id=email_msg.get("Message-ID"),
             original_references=references,
             decoded_subject=subject,
-            _raw_message=raw_message,
+            _raw_message=email_msg,
         )
 
     def save_attachments(

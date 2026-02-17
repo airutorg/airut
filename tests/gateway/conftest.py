@@ -44,7 +44,7 @@ def email_config(tmp_path: Path, master_repo: Path):
     return RepoServerConfig(
         repo_id="test",
         git_repo_url=str(master_repo),
-        email=EmailChannelConfig(
+        channel=EmailChannelConfig(
             imap_server="imap.example.com",
             imap_port=993,
             smtp_server="smtp.example.com",
@@ -73,7 +73,7 @@ def microsoft_oauth2_email_config(tmp_path: Path, master_repo: Path):
         yield RepoServerConfig(
             repo_id="test",
             git_repo_url=str(master_repo),
-            email=EmailChannelConfig(
+            channel=EmailChannelConfig(
                 imap_server="outlook.office365.com",
                 imap_port=993,
                 smtp_server="smtp.office365.com",

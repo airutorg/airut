@@ -134,8 +134,7 @@ events = [
             assert counts["queued"] == 0
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
     def test_task_subject_updated_from_authenticating(
@@ -190,8 +189,7 @@ events = [
             assert task.sender == "user@test.local"
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
 
@@ -300,8 +298,7 @@ events = [
             )
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
 
@@ -374,8 +371,7 @@ class TestTaskTrackerUnauthorized:
             assert task.subject == "(not authorized)"
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
     def test_dmarc_failure_tracked(
@@ -423,8 +419,7 @@ class TestTaskTrackerUnauthorized:
             assert task.success is False
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
 
@@ -468,8 +463,7 @@ sys.exit(1)
                 assert task.sender == "user@test.local"
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
     def test_empty_body_tracked(
@@ -508,8 +502,7 @@ sys.exit(1)
             )
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
 
@@ -602,8 +595,7 @@ events = [
             )
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
 
@@ -709,8 +701,7 @@ events = [
                 assert health_data["tasks"]["completed"] >= 1
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
     def test_tracker_api_etag_changes_on_mutation(
@@ -781,8 +772,7 @@ events = [
                 assert r4.status_code == 304
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
 
@@ -829,8 +819,7 @@ events = [
             )
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
 
@@ -875,8 +864,7 @@ events = [
             )
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
 
@@ -960,6 +948,5 @@ events = [
                 )
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)

@@ -93,8 +93,7 @@ events = [
             assert attachment_path.read_bytes() == attachment_content
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
     def test_multiple_attachments_saved(
@@ -168,8 +167,7 @@ events = [
             ).read_bytes() == b'{"key": "value"}'
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
     def test_binary_attachment_preserved(
@@ -233,8 +231,7 @@ events = [
             assert attachment_path.read_bytes() == binary_content
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
     def test_email_without_attachment(
@@ -292,6 +289,5 @@ events = [
                 assert len(files) == 0, f"Unexpected files in inbox: {files}"
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)

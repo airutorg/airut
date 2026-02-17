@@ -106,8 +106,7 @@ events = [
 
         finally:
             # Stop the service
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
     def test_conversation_id_format(
@@ -154,8 +153,7 @@ events = [
             )
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
     def test_email_threading_headers(
@@ -194,8 +192,7 @@ events = [
             )
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
     def test_dashboard_tracks_task(
@@ -244,6 +241,5 @@ events = [
             assert task.success is True, "Task should be successful"
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)

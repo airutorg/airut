@@ -45,13 +45,13 @@ class UsageStats:
         )
 
     def format_summary(self) -> str:
-        """Format usage stats as a summary string for email footer.
+        """Format usage stats as a summary string for reply footer.
 
         Note: Cost is excluded for subscription plans (Claude Pro/Max)
         since users pay a flat monthly fee, not per-request.
 
         Uses middle dot (·) as separator instead of pipe to avoid
-        markdown table interpretation when rendered in email.
+        markdown table interpretation when rendered in replies.
         """
         parts = []
 

@@ -115,8 +115,7 @@ events = [
 
         finally:
             # Stop the service (simulate restart)
-            service1.running = False
-            service1.repo_handlers["test"].adapter.listener.interrupt()
+            service1.stop()
             service_thread1.join(timeout=10.0)
 
         # Clear sent emails to avoid confusion
@@ -166,8 +165,7 @@ events = [
             assert response2_conv_id == conv_id
 
         finally:
-            service2.running = False
-            service2.repo_handlers["test"].adapter.listener.interrupt()
+            service2.stop()
             service_thread2.join(timeout=10.0)
 
         # Now verify conversation file has BOTH replies with full history
@@ -273,8 +271,7 @@ events = [
             assert response2 is not None
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
         # Verify that the executor was called with the correct session_id

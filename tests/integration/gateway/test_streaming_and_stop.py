@@ -143,8 +143,7 @@ events = [
 
         finally:
             # Stop the service
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
 
@@ -260,8 +259,7 @@ def sync_between_events(event_num):
         finally:
             # Stop the service gracefully
             try:
-                service.running = False
-                service.repo_handlers["test"].adapter.listener.interrupt()
+                service.stop()
                 service_thread.join(timeout=3.0)
             except Exception:
                 pass  # Best effort cleanup
@@ -382,8 +380,7 @@ def sync_between_events(event_num):
         finally:
             # Stop the service gracefully
             try:
-                service.running = False
-                service.repo_handlers["test"].adapter.listener.interrupt()
+                service.stop()
                 service_thread.join(timeout=3.0)
             except Exception:
                 pass  # Best effort cleanup

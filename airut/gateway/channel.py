@@ -11,7 +11,9 @@ channel-specific implementations (email, Slack, etc.).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -80,14 +82,118 @@ class ParsedMessage:
     E.g., 'User is interacting via email interface...'"""
 
 
+@dataclass
+class RawMessage[ContentT]:
+    """Channel-agnostic raw message envelope.
+
+    Wraps a channel-specific payload with standard metadata that the
+    gateway core can use before authentication completes (e.g. for
+    task tracker display).
+
+    Type parameter ``ContentT`` is the channel-specific payload type
+    (e.g. ``email.message.Message`` for email). The gateway core uses
+    ``RawMessage[Any]``; channel adapters narrow to their concrete type.
+
+    Attributes:
+        sender: Raw sender identity as presented by the channel
+            (e.g. email From header, Slack user ID). Not yet verified.
+        content: Channel-specific payload (e.g. ``email.message.Message``).
+        subject: Optional display title (e.g. email subject line).
+            Used by the task tracker before authentication completes.
+            Falls back to a truncated ``sender`` if empty.
+    """
+
+    sender: str
+    content: ContentT
+    subject: str = ""
+
+
+class ChannelHealth(Enum):
+    """Health state of a channel listener.
+
+    Attributes:
+        STARTING: Not yet connected.
+        CONNECTED: Healthy, receiving messages.
+        DEGRADED: Temporarily lost connection, internally retrying.
+        FAILED: Hard failure, will not retry.
+    """
+
+    STARTING = "starting"
+    CONNECTED = "connected"
+    DEGRADED = "degraded"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class ChannelStatus:
+    """Current status of a channel listener.
+
+    Attributes:
+        health: Current health state.
+        message: Human-readable status description
+            (e.g. "IMAP reconnecting (attempt 2/5)").
+        error_type: Exception type name if degraded or failed.
+    """
+
+    health: ChannelHealth
+    message: str = ""
+    error_type: str | None = None
+
+
+class ChannelListener(Protocol):
+    """Interface for channel-specific message listening.
+
+    Implementations manage their own threads and connection lifecycle.
+    ``start()`` may block for initial connection setup, then runs the
+    message loop in a background thread. ``stop()`` blocks until
+    shutdown is complete.
+    """
+
+    def start(self, submit: Callable[[RawMessage[Any]], bool]) -> None:
+        """Connect to the channel and start the listener thread.
+
+        Initial connection is synchronous and may block (e.g. IMAP
+        connect with retries). The polling/IDLE loop runs in a
+        background thread after the connection succeeds.
+
+        Args:
+            submit: Callback to invoke with each RawMessage. Returns
+                True if the message was accepted for processing.
+
+        Raises:
+            Exception: If the initial connection fails.
+        """
+        ...
+
+    def stop(self) -> None:
+        """Stop listening and release all resources.
+
+        Blocks until internal threads have terminated.
+        """
+        ...
+
+    @property
+    def status(self) -> ChannelStatus:
+        """Current health of this listener."""
+        ...
+
+
 class ChannelAdapter(Protocol):
     """Interface for channel-specific message handling.
 
-    Implementations handle authentication, parsing, and response delivery
-    for a specific messaging protocol (email, Slack, etc.).
+    Implementations handle authentication, parsing, response delivery,
+    and message listening for a specific messaging protocol (email,
+    Slack, etc.).
     """
 
-    def authenticate_and_parse(self, raw_message: Any) -> ParsedMessage:
+    @property
+    def listener(self) -> ChannelListener:
+        """Channel listener for message lifecycle management."""
+        ...
+
+    def authenticate_and_parse(
+        self, raw_message: RawMessage[Any]
+    ) -> ParsedMessage:
         """Authenticate the sender and parse the message.
 
         Returns a ParsedMessage if authentication and authorization

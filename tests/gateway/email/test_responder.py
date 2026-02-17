@@ -20,20 +20,20 @@ from airut.gateway.email.responder import (
 
 def test_responder_init(email_config):
     """Test responder initialization."""
-    responder = EmailResponder(email_config.email)
-    assert responder.config == email_config.email
+    responder = EmailResponder(email_config.channel)
+    assert responder.config == email_config.channel
     assert responder._token_provider is None
 
 
 def test_responder_init_with_oauth2(microsoft_oauth2_email_config):
     """Test responder initialization with Microsoft OAuth2."""
-    responder = EmailResponder(microsoft_oauth2_email_config.email)
+    responder = EmailResponder(microsoft_oauth2_email_config.channel)
     assert responder._token_provider is not None
 
 
 def test_send_reply_success(email_config):
     """Test sending reply successfully."""
-    responder = EmailResponder(email_config.email)
+    responder = EmailResponder(email_config.channel)
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
@@ -48,17 +48,17 @@ def test_send_reply_success(email_config):
         )
 
         mock_smtp_class.assert_called_once_with(
-            email_config.email.smtp_server, email_config.email.smtp_port
+            email_config.channel.smtp_server, email_config.channel.smtp_port
         )
         mock_server.starttls.assert_called_once()
         mock_server.login.assert_called_once_with(
-            email_config.email.username, email_config.email.password
+            email_config.channel.username, email_config.channel.password
         )
         mock_server.send_message.assert_called_once()
 
         # Verify message structure (multipart alternative)
         sent_message = mock_server.send_message.call_args[0][0]
-        assert sent_message["From"] == email_config.email.from_address
+        assert sent_message["From"] == email_config.channel.from_address
         assert sent_message["To"] == "recipient@example.com"
         assert sent_message["Subject"] == "[ID:abc12345] Re: Test"
         assert sent_message["In-Reply-To"] == "<msg123@example.com>"
@@ -76,7 +76,7 @@ def test_send_reply_success(email_config):
 
 def test_send_reply_without_threading(email_config):
     """Test sending reply without threading headers."""
-    responder = EmailResponder(email_config.email)
+    responder = EmailResponder(email_config.channel)
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
@@ -96,7 +96,7 @@ def test_send_reply_without_threading(email_config):
 
 def test_send_reply_smtp_exception(email_config):
     """Test sending reply with SMTP exception."""
-    responder = EmailResponder(email_config.email)
+    responder = EmailResponder(email_config.channel)
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
@@ -115,7 +115,7 @@ def test_send_reply_smtp_exception(email_config):
 
 def test_send_reply_connection_error(email_config):
     """Test sending reply with connection error."""
-    responder = EmailResponder(email_config.email)
+    responder = EmailResponder(email_config.channel)
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_smtp_class.side_effect = OSError("Connection refused")
@@ -130,7 +130,7 @@ def test_send_reply_connection_error(email_config):
 
 def test_send_reply_starttls_error(email_config):
     """Test sending reply with STARTTLS error."""
-    responder = EmailResponder(email_config.email)
+    responder = EmailResponder(email_config.channel)
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
@@ -149,7 +149,7 @@ def test_send_reply_starttls_error(email_config):
 
 def test_send_reply_auth_error(email_config):
     """Test sending reply with authentication error."""
-    responder = EmailResponder(email_config.email)
+    responder = EmailResponder(email_config.channel)
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
@@ -168,7 +168,7 @@ def test_send_reply_auth_error(email_config):
 
 def test_send_reply_empty_references(email_config):
     """Test sending reply with empty references list."""
-    responder = EmailResponder(email_config.email)
+    responder = EmailResponder(email_config.channel)
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
@@ -192,7 +192,7 @@ def test_send_reply_empty_references(email_config):
 
 def test_send_reply_unicode_content(email_config):
     """Test sending reply with unicode content."""
-    responder = EmailResponder(email_config.email)
+    responder = EmailResponder(email_config.channel)
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
@@ -213,7 +213,7 @@ def test_send_reply_unicode_content(email_config):
 
 def test_send_reply_with_explicit_html_body(email_config):
     """Test sending reply with explicit HTML body."""
-    responder = EmailResponder(email_config.email)
+    responder = EmailResponder(email_config.channel)
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
@@ -248,7 +248,7 @@ def test_send_reply_with_explicit_html_body(email_config):
 
 def test_send_reply_markdown_to_html_conversion(email_config):
     """Test markdown is converted to HTML when no explicit html_body."""
-    responder = EmailResponder(email_config.email)
+    responder = EmailResponder(email_config.channel)
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
@@ -279,7 +279,7 @@ def test_send_reply_markdown_to_html_conversion(email_config):
 
 def test_send_reply_with_single_attachment(email_config):
     """Test sending reply with a single attachment."""
-    responder = EmailResponder(email_config.email)
+    responder = EmailResponder(email_config.channel)
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
@@ -316,7 +316,7 @@ def test_send_reply_with_single_attachment(email_config):
 
 def test_send_reply_with_multiple_attachments(email_config):
     """Test sending reply with multiple attachments."""
-    responder = EmailResponder(email_config.email)
+    responder = EmailResponder(email_config.channel)
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
@@ -351,7 +351,7 @@ def test_send_reply_with_multiple_attachments(email_config):
 
 def test_send_reply_without_attachments(email_config):
     """Test sending reply without attachments uses alternative structure."""
-    responder = EmailResponder(email_config.email)
+    responder = EmailResponder(email_config.channel)
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
@@ -379,7 +379,7 @@ def test_send_reply_without_attachments(email_config):
 
 def test_send_reply_with_binary_attachment(email_config):
     """Test sending reply with binary attachment."""
-    responder = EmailResponder(email_config.email)
+    responder = EmailResponder(email_config.channel)
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
@@ -408,7 +408,7 @@ def test_send_reply_with_binary_attachment(email_config):
 
 def test_send_reply_with_unknown_extension_attachment(email_config):
     """Test attachment with unknown file extension."""
-    responder = EmailResponder(email_config.email)
+    responder = EmailResponder(email_config.channel)
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
@@ -433,7 +433,7 @@ def test_send_reply_with_unknown_extension_attachment(email_config):
 
 def test_send_reply_oauth2_xoauth2(microsoft_oauth2_email_config):
     """Test SMTP authentication with Microsoft OAuth2 uses XOAUTH2."""
-    responder = EmailResponder(microsoft_oauth2_email_config.email)
+    responder = EmailResponder(microsoft_oauth2_email_config.channel)
     assert responder._token_provider is not None
 
     with (
@@ -464,7 +464,7 @@ def test_send_reply_oauth2_xoauth2(microsoft_oauth2_email_config):
             auth_fn(b"") == "user=test@company.com\x01auth=Bearer tok\x01\x01"
         )
         mock_gen.assert_called_once_with(
-            microsoft_oauth2_email_config.email.username
+            microsoft_oauth2_email_config.channel.username
         )
         mock_server.send_message.assert_called_once()
 
@@ -475,7 +475,7 @@ def test_send_reply_oauth2_token_error_raises_smtp_send_error(
     """Test OAuth2 token errors are wrapped in SMTPSendError."""
     from airut.gateway.email.microsoft_oauth2 import MicrosoftOAuth2TokenError
 
-    responder = EmailResponder(microsoft_oauth2_email_config.email)
+    responder = EmailResponder(microsoft_oauth2_email_config.channel)
     assert responder._token_provider is not None
 
     with (
@@ -545,7 +545,7 @@ def test_generate_message_id_unique_nonce() -> None:
 
 def test_send_reply_with_message_id(email_config):
     """Test that explicit Message-ID is set on outgoing email."""
-    responder = EmailResponder(email_config.email)
+    responder = EmailResponder(email_config.channel)
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()
@@ -567,7 +567,7 @@ def test_send_reply_with_message_id(email_config):
 
 def test_send_reply_without_message_id(email_config):
     """Test that no explicit Message-ID leaves it to the mail library."""
-    responder = EmailResponder(email_config.email)
+    responder = EmailResponder(email_config.channel)
 
     with patch("smtplib.SMTP") as mock_smtp_class:
         mock_server = MagicMock()

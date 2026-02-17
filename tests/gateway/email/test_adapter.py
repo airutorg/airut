@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from airut.gateway.channel import RawMessage
 from airut.gateway.config import EmailChannelConfig
 from airut.gateway.email.adapter import (
     EmailChannelAdapter,
@@ -58,6 +59,14 @@ def _make_email(
     return BytesParser().parsebytes(raw.encode())
 
 
+def _make_raw_message(**kwargs: object) -> RawMessage:
+    """Build a RawMessage wrapping an email for authenticate_and_parse tests."""
+    sender = str(kwargs.get("sender", "user@example.com"))
+    subject = str(kwargs.get("subject", "Hello"))
+    email_msg = _make_email(**kwargs)  # type: ignore[arg-type]
+    return RawMessage(sender=sender, content=email_msg, subject=subject)
+
+
 def _make_adapter(
     config: EmailChannelConfig | None = None,
 ) -> tuple[
@@ -76,6 +85,7 @@ def _make_adapter(
         authenticator=authenticator,
         authorizer=authorizer,
         responder=responder,
+        repo_id="test",
     )
     return adapter, authenticator, authorizer, responder
 
@@ -85,7 +95,7 @@ class TestAuthenticateAndParse:
         adapter, auth, authz, _ = _make_adapter()
         auth.authenticate.return_value = "user@example.com"
         authz.is_authorized.return_value = True
-        msg = _make_email(body="Do something")
+        msg = _make_raw_message(body="Do something")
 
         result = adapter.authenticate_and_parse(msg)
 
@@ -95,14 +105,14 @@ class TestAuthenticateAndParse:
         assert result.body == "Do something"
         assert result.conversation_id is None
         assert result.original_message_id == "<msg1@example.com>"
-        assert result._raw_message is msg
+        assert result._raw_message is msg.content
 
     def test_unauthenticated_raises(self) -> None:
         from airut.gateway.channel import AuthenticationError
 
         adapter, auth, _, _ = _make_adapter()
         auth.authenticate.return_value = None
-        msg = _make_email()
+        msg = _make_raw_message()
 
         with pytest.raises(AuthenticationError) as exc_info:
             adapter.authenticate_and_parse(msg)
@@ -115,7 +125,7 @@ class TestAuthenticateAndParse:
         adapter, auth, authz, _ = _make_adapter()
         auth.authenticate.return_value = "user@example.com"
         authz.is_authorized.return_value = False
-        msg = _make_email()
+        msg = _make_raw_message()
 
         with pytest.raises(AuthenticationError) as exc_info:
             adapter.authenticate_and_parse(msg)
@@ -126,7 +136,7 @@ class TestAuthenticateAndParse:
         adapter, auth, authz, _ = _make_adapter()
         auth.authenticate.return_value = "user@example.com"
         authz.is_authorized.return_value = True
-        msg = _make_email(subject="Re: [ID:aabb1122] Follow-up")
+        msg = _make_raw_message(subject="Re: [ID:aabb1122] Follow-up")
 
         result = adapter.authenticate_and_parse(msg)
         assert result is not None
@@ -136,7 +146,7 @@ class TestAuthenticateAndParse:
         adapter, auth, authz, _ = _make_adapter()
         auth.authenticate.return_value = "user@example.com"
         authz.is_authorized.return_value = True
-        msg = _make_email(to="bot+opus@example.com")
+        msg = _make_raw_message(to="bot+opus@example.com")
 
         result = adapter.authenticate_and_parse(msg)
         assert result is not None
@@ -146,7 +156,7 @@ class TestAuthenticateAndParse:
         adapter, auth, authz, _ = _make_adapter()
         auth.authenticate.return_value = "user@example.com"
         authz.is_authorized.return_value = True
-        msg = _make_email()
+        msg = _make_raw_message()
 
         result = adapter.authenticate_and_parse(msg)
         assert result is not None
@@ -157,7 +167,7 @@ class TestAuthenticateAndParse:
         adapter, auth, authz, _ = _make_adapter()
         auth.authenticate.return_value = "user@example.com"
         authz.is_authorized.return_value = True
-        msg = _make_email(subject="Fix the login bug")
+        msg = _make_raw_message(subject="Fix the login bug")
 
         result = adapter.authenticate_and_parse(msg)
         assert result is not None
@@ -168,7 +178,7 @@ class TestAuthenticateAndParse:
         adapter, auth, authz, _ = _make_adapter()
         auth.authenticate.return_value = "user@example.com"
         authz.is_authorized.return_value = True
-        msg = _make_email(subject="")
+        msg = _make_raw_message(subject="")
 
         result = adapter.authenticate_and_parse(msg)
         assert result is not None
@@ -178,7 +188,7 @@ class TestAuthenticateAndParse:
         adapter, auth, authz, _ = _make_adapter()
         auth.authenticate.return_value = "user@example.com"
         authz.is_authorized.return_value = True
-        msg = _make_email(references="<ref1@ex.com> <ref2@ex.com>")
+        msg = _make_raw_message(references="<ref1@ex.com> <ref2@ex.com>")
 
         result = adapter.authenticate_and_parse(msg)
         assert result is not None
@@ -737,6 +747,7 @@ class TestListenerProperty:
             authorizer=MagicMock(),
             responder=MagicMock(),
             listener=listener,
+            repo_id="test",
         )
         assert adapter.listener is listener
 
@@ -754,14 +765,16 @@ class TestFromConfig:
             ) as mock_auth,
             patch("airut.gateway.email.adapter.SenderAuthorizer") as mock_authz,
             patch("airut.gateway.email.adapter.EmailResponder") as mock_resp,
-            patch("airut.gateway.email.adapter.EmailListener") as mock_listener,
+            patch(
+                "airut.gateway.email.adapter.EmailChannelListener"
+            ) as mock_listener,
         ):
             config = _make_config()
-            adapter = EmailChannelAdapter.from_config(config)
+            adapter = EmailChannelAdapter.from_config(config, repo_id="test")
 
         mock_auth.assert_called_once()
         mock_authz.assert_called_once()
         mock_resp.assert_called_once_with(config)
-        mock_listener.assert_called_once_with(config)
+        mock_listener.assert_called_once_with(config, repo_id="test")
         assert adapter.listener is mock_listener.return_value
         assert adapter.responder is mock_resp.return_value

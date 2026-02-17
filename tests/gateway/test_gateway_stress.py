@@ -31,7 +31,7 @@ from airut.dashboard.tracker import (
     TaskTracker,
 )
 from airut.dashboard.versioned import VersionClock
-from airut.gateway.channel import AuthenticationError, ParsedMessage
+from airut.gateway.channel import AuthenticationError, ParsedMessage, RawMessage
 
 from .service.conftest import make_message, make_service, update_global
 
@@ -94,7 +94,9 @@ class TestWorkerLifecycleRealTracker:
             "airut.gateway.service.gateway.process_message",
             side_effect=fake_process,
         ):
-            svc._process_message_worker("raw", task_id, handler)
+            svc._process_message_worker(
+                RawMessage(sender="test", content=None), task_id, handler
+            )
 
         # Temp ID gone, real conv_id exists and is completed
         assert svc.tracker.get_task(task_id) is None
@@ -118,7 +120,9 @@ class TestWorkerLifecycleRealTracker:
 
         task_id = "new-auth-fail"
         svc.tracker.add_task(task_id, "(authenticating)", repo_id="test")
-        svc._process_message_worker("raw", task_id, handler)
+        svc._process_message_worker(
+            RawMessage(sender="test", content=None), task_id, handler
+        )
 
         task = svc.tracker.get_task(task_id)
         assert task is not None
@@ -139,7 +143,9 @@ class TestWorkerLifecycleRealTracker:
 
         task_id = "new-crash-00"
         svc.tracker.add_task(task_id, "(authenticating)", repo_id="test")
-        svc._process_message_worker("raw", task_id, handler)
+        svc._process_message_worker(
+            RawMessage(sender="test", content=None), task_id, handler
+        )
 
         task = svc.tracker.get_task(task_id)
         assert task is not None
@@ -175,7 +181,9 @@ class TestWorkerLifecycleRealTracker:
             "airut.gateway.service.gateway.process_message",
             return_value=(True, conv_id),
         ):
-            svc._process_message_worker("raw", temp_id, handler)
+            svc._process_message_worker(
+                RawMessage(sender="test", content=None), temp_id, handler
+            )
 
         # Temp task gone
         assert svc.tracker.get_task(temp_id) is None
@@ -218,7 +226,9 @@ class TestDuplicateRejectionStress:
 
         temp_id = "new-dup-q"
         svc.tracker.add_task(temp_id, "(authenticating)")
-        svc._process_message_worker("raw", temp_id, handler)
+        svc._process_message_worker(
+            RawMessage(sender="test", content=None), temp_id, handler
+        )
 
         handler.adapter.send_rejection.assert_called_once()
         # Verify rejection reason
@@ -246,7 +256,9 @@ class TestDuplicateRejectionStress:
 
         temp_id = "new-dup-ip"
         svc.tracker.add_task(temp_id, "(authenticating)")
-        svc._process_message_worker("raw", temp_id, handler)
+        svc._process_message_worker(
+            RawMessage(sender="test", content=None), temp_id, handler
+        )
 
         handler.adapter.send_rejection.assert_called_once()
 
@@ -281,7 +293,9 @@ class TestDuplicateRejectionStress:
             "airut.gateway.service.gateway.process_message",
             side_effect=fake_process,
         ):
-            svc._process_message_worker("raw", temp_id, handler)
+            svc._process_message_worker(
+                RawMessage(sender="test", content=None), temp_id, handler
+            )
 
         handler.adapter.send_rejection.assert_not_called()
 
@@ -311,7 +325,9 @@ class TestDuplicateRejectionStress:
             "airut.gateway.service.gateway.process_message",
             side_effect=fake_process,
         ):
-            svc._process_message_worker("raw", temp_id, handler)
+            svc._process_message_worker(
+                RawMessage(sender="test", content=None), temp_id, handler
+            )
 
         handler.adapter.send_rejection.assert_not_called()
 
@@ -562,7 +578,7 @@ class TestSubmitMessageEdgeCases:
         tasks = svc.tracker.get_all_tasks()
         assert len(tasks) == 1
         assert tasks[0].conversation_id.startswith("new-")
-        assert tasks[0].subject == "(authenticating)"
+        assert tasks[0].subject == "Test"
 
     def test_submit_message_tracks_future(
         self, email_config, tmp_path: Path
@@ -653,11 +669,11 @@ class TestBootStateEdgeCases:
 
         svc.sandbox.startup.side_effect = track_phase
 
-        def fake_loop():
-            svc.running = False
+        def fake_start(**kwargs):
+            svc._running = False
 
-        with patch.object(handler, "_listener_loop", side_effect=fake_loop):
-            svc.start()
+        handler.adapter.listener.start.side_effect = fake_start
+        svc.start()
 
         assert BootPhase.PROXY in phases_seen
 
@@ -669,7 +685,7 @@ class TestBootStateEdgeCases:
             email_config, tmp_path, dashboard_enabled=True
         )
 
-        handler.adapter.listener.connect.side_effect = RuntimeError("fail")
+        handler.adapter.listener.start.side_effect = RuntimeError("fail")
 
         with (
             patch("airut.gateway.service.gateway.DashboardServer") as mock_ds,
@@ -861,7 +877,9 @@ class TestWorkerEdgeCases:
             "airut.gateway.service.gateway.process_message",
             side_effect=fake_process,
         ) as mock_process:
-            svc._process_message_worker("raw", temp_id, handler)
+            svc._process_message_worker(
+                RawMessage(sender="test", content=None), temp_id, handler
+            )
 
         # process_message is called — it handles empty body detection
         mock_process.assert_called_once()
@@ -893,7 +911,9 @@ class TestWorkerEdgeCases:
             "airut.gateway.service.gateway.process_message",
             side_effect=fake_process,
         ):
-            svc._process_message_worker("raw", temp_id, handler)
+            svc._process_message_worker(
+                RawMessage(sender="test", content=None), temp_id, handler
+            )
 
         # Subject should be "(no subject)" since parsed.subject is empty
         # The update happens via tracker.update_task_subject with
@@ -937,7 +957,9 @@ class TestWorkerEdgeCases:
             "airut.gateway.service.gateway.process_message",
             side_effect=RuntimeError("kaboom"),
         ):
-            svc._process_message_worker("raw", temp_id, handler)
+            svc._process_message_worker(
+                RawMessage(sender="test", content=None), temp_id, handler
+            )
 
         # Temp should be gone (was reassigned)
         assert svc.tracker.get_task(temp_id) is None

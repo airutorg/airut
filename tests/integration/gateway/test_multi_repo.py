@@ -43,9 +43,7 @@ def _start_service(env: IntegrationEnvironment):
 
 def _stop_service(service, thread) -> None:
     """Stop a running service and join the thread."""
-    service.running = False
-    for handler in service.repo_handlers.values():
-        handler.adapter.listener.interrupt()
+    service.stop()
     thread.join(timeout=10.0)
 
 

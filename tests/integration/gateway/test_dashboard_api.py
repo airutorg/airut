@@ -257,8 +257,7 @@ events = [
             assert data["done"] is True
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
 
@@ -360,8 +359,7 @@ events = [
             assert r.status_code == 404
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
 

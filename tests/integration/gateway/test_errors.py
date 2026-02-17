@@ -75,8 +75,7 @@ time.sleep(999)
             ), f"Response should mention timeout: {payload[:200]}"
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
     def test_crash_sends_error_response(
@@ -114,8 +113,7 @@ sys.exit(1)
             )
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
     def test_invalid_json_sends_error_response(
@@ -155,8 +153,7 @@ sys.exit(0)
             )
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
 
     def test_dashboard_tracks_failed_task(
@@ -199,6 +196,5 @@ sys.exit(1)
                     )
 
         finally:
-            service.running = False
-            service.repo_handlers["test"].adapter.listener.interrupt()
+            service.stop()
             service_thread.join(timeout=10.0)
