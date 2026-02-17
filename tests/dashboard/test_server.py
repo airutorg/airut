@@ -683,6 +683,34 @@ class TestDashboardServer:
         assert "&#x2713;" in html  # Checkmark for success
         assert "&#x2717;" in html  # X mark for failure
 
+    def test_status_css_covers_all_task_statuses(self) -> None:
+        """Every TaskStatus value must have a .status.<value> CSS rule."""
+        from airut.dashboard.views.styles import task_detail_styles
+
+        css = task_detail_styles()
+        for status in TaskStatus:
+            # COMPLETED uses .status.completed.success / .failed
+            if status == TaskStatus.COMPLETED:
+                assert ".status.completed.success" in css
+                assert ".status.completed.failed" in css
+            else:
+                assert f".status.{status.value}" in css, (
+                    f"Missing CSS rule for .status.{status.value}"
+                )
+
+    def test_task_card_css_covers_executing_states(self) -> None:
+        """Task card and column header CSS must cover dashboard columns."""
+        from airut.dashboard.views.styles import dashboard_styles
+
+        css = dashboard_styles()
+        # Dashboard groups tasks into pending/executing/completed columns
+        # and applies these as CSS classes to task cards and column headers
+        for cls in ("pending", "executing"):
+            assert f".task.{cls}" in css, f"Missing CSS rule for .task.{cls}"
+            assert f".column-header.{cls}" in css, (
+                f"Missing CSS rule for .column-header.{cls}"
+            )
+
     def test_task_to_dict(self) -> None:
         """Test _task_to_dict conversion."""
         tracker = TaskTracker()
@@ -733,6 +761,23 @@ class TestDashboardServer:
         # Truncated version should appear in the task-subject div
         # (full subject only appears in title attribute)
         assert 'class="task-subject"' in html
+
+    def test_task_detail_executing_status_badge(self) -> None:
+        """Test task detail shows styled badge for executing task."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Executing")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345")
+        html = response.get_data(as_text=True)
+
+        assert "EXECUTING" in html
+        # The status span must use the "executing" CSS class for styling
+        assert 'class="status executing' in html
 
     def test_task_detail_completed_success(self) -> None:
         """Test task detail page shows success styling for completed task."""

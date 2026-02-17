@@ -332,7 +332,8 @@ def _task_card_styles() -> str:
             border-bottom: 2px solid #eee;
         }
         .column-header.queued { border-color: #f0ad4e; color: #8a6d3b; }
-        .column-header.in-progress { border-color: #5bc0de; color: #31708f; }
+        .column-header.pending { border-color: #f0ad4e; color: #8a6d3b; }
+        .column-header.executing { border-color: #5bc0de; color: #31708f; }
         .column-header.completed { border-color: #5cb85c; color: #3c763d; }
         .task {
             padding: 12px;
@@ -342,7 +343,8 @@ def _task_card_styles() -> str:
             border-left: 3px solid #ddd;
         }
         .task.queued { border-left-color: #f0ad4e; }
-        .task.in-progress { border-left-color: #5bc0de; }
+        .task.pending { border-left-color: #f0ad4e; }
+        .task.executing { border-left-color: #5bc0de; }
         .task.completed.success { border-left-color: #5cb85c; }
         .task.completed.failed { border-left-color: #d9534f; }
         .task-id {
@@ -442,7 +444,9 @@ def _task_detail_specific() -> str:
             font-weight: 600;
         }
         .status.queued { background: #fcf8e3; color: #8a6d3b; }
-        .status.in_progress { background: #d9edf7; color: #31708f; }
+        .status.authenticating { background: #fcf8e3; color: #8a6d3b; }
+        .status.pending { background: #fcf8e3; color: #8a6d3b; }
+        .status.executing { background: #d9edf7; color: #31708f; }
         .status.completed.success { background: #dff0d8; color: #3c763d; }
         .status.completed.failed { background: #f2dede; color: #a94442; }
         .conversation-summary {
