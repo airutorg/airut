@@ -104,10 +104,10 @@ starting point for onboarding your own projects.
   and resource limits
 - **[doc/network-sandbox.md](doc/network-sandbox.md)** — Network allowlist and
   proxy architecture
-- **[doc/deployment.md](doc/deployment.md)** — Installation and configuration
-  guide
-- **[doc/repo-onboarding.md](doc/repo-onboarding.md)** — How to onboard a new
-  repository
+- **[doc/deployment.md](doc/deployment.md)** — Installation and server
+  configuration
+- **[doc/repo-onboarding.md](doc/repo-onboarding.md)** — Onboarding new
+  repositories
 - **[doc/agentic-operation.md](doc/agentic-operation.md)** — Email-to-PR
   workflow patterns
 
@@ -181,7 +181,7 @@ airut/
 │   │   └── proxy/         # Network sandbox (proxy filter, DNS, AWS signing)
 │   ├── conversation/      # Conversation directory layout and preparation
 │   ├── dashboard/         # Web dashboard server
-│   ├── gateway/           # Email gateway service
+│   ├── gateway/           # Protocol-agnostic gateway service
 │   ├── gh/                # GitHub API wrappers
 │   └── sandbox/           # Sandboxed execution (container, proxy, session, image)
 ├── scripts/               # CLI tools

@@ -17,7 +17,7 @@ High-level documentation in `doc/` (see `doc/README.md` for full list):
 - `doc/security.md` — security model (email auth, isolation, credentials)
 - `doc/execution-sandbox.md` — container isolation and resource limits
 - `doc/network-sandbox.md` — network allowlist and proxy architecture
-- `doc/deployment.md` — installation and configuration
+- `doc/deployment.md` — installation and server configuration
 - `doc/m365-oauth2.md` — Microsoft 365 OAuth2 setup for IMAP/SMTP
 - `doc/repo-onboarding.md` — onboarding new repositories
 - `doc/gerrit-onboarding.md` — Gerrit-specific onboarding
@@ -25,14 +25,26 @@ High-level documentation in `doc/` (see `doc/README.md` for full list):
 
 Implementation specs in `spec/` (see `spec/README.md` for full list):
 
-- `spec/gateway-architecture.md` — gateway architecture, channel abstraction,
-  conversation state, container execution
-- `spec/sandbox.md` — sandbox library for safe containerized execution
+- `spec/gateway-architecture.md` — core gateway design, channel abstraction,
+  data flow, container execution
 - `spec/authentication.md` — DMARC verification and sender authorization
-- `spec/repo-config.md` — repo config schema and YAML tags
-- `spec/image.md` — two-layer container image build
-- `spec/dashboard.md` — web dashboard endpoints and UI
+- `spec/repo-config.md` — repo config schema and server/repo split
+- `spec/multi-repo.md` — multi-repository support design
+- `spec/integration-tests.md` — end-to-end test specification
+- `spec/sandbox.md` — sandbox library for safe containerized Claude Code
+  execution
+- `spec/image.md` — two-layer container image build strategy
+- `spec/network-sandbox.md` — proxy lifecycle, resource scoping, log format,
+  crash recovery
+- `spec/masked-secrets.md` — scope-restricted credentials with proxy-level token
+  replacement
+- `spec/aws-sigv4-resigning.md` — AWS SigV4/SigV4A credential masking via proxy
+  re-signing
+- `spec/dashboard.md` — web dashboard for task monitoring
+- `spec/live-dashboard.md` — real-time dashboard updates via SSE
 - `spec/cli.md` — CLI subcommands, service management, self-update
+- `spec/pr-workflow-tool.md` — PR workflow automation (ci.py, pr.py)
+- `spec/local-ci-runner.md` — local CI runner for pre-push validation
 
 ## Operational Workflows
 
@@ -253,7 +265,6 @@ airut/                        - Library code
 scripts/                    - CLI tools
   airut.py                  - Gateway entry point (uv run airut)
   ci.py, pr.py              - CI/PR tools
-  install_services.py       - Migration stub for legacy updater
   check_licenses.py         - Runtime dependency license compliance
   check_markdown.py         - Markdown validation
 spec/                       - Design specifications (see spec/README.md)
