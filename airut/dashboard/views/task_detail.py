@@ -231,11 +231,6 @@ def render_task_detail(
                     class="field-value mono">{total_time}</div>
             </div>
             <div class="detail-item">
-                <div class="field-label">Messages</div>
-                <div id="task-message-count"
-                    class="field-value mono">{task.message_count}</div>
-            </div>
-            <div class="detail-item">
                 <div class="field-label">Total Cost</div>
                 <div class="field-value mono">{cost_display}</div>
             </div>
@@ -432,10 +427,6 @@ def _sse_task_detail_script(conversation_id: str) -> str:
             if (totalEl) {{
                 totalEl.textContent = formatDuration(task.total_duration);
             }}
-
-            // Update message count
-            var msgEl = document.getElementById('task-message-count');
-            if (msgEl) msgEl.textContent = task.message_count || 0;
 
             // Hide stop button when task is no longer executing
             if (task.status !== 'executing') {{

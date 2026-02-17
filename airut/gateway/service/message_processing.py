@@ -64,13 +64,13 @@ _REPO_CONTAINER_DIR = ".airut/container"
 
 
 def _make_todo_callback(
-    tracker: TaskTracker, conversation_id: str
+    tracker: TaskTracker, task_id: str
 ) -> Callable[[StreamEvent], None]:
     """Build an on_event callback that captures TodoWrite events.
 
     Args:
         tracker: Task tracker to update.
-        conversation_id: Conversation ID to update todos for.
+        task_id: Task ID to update todos for.
 
     Returns:
         Callback suitable for ``task.execute(on_event=...)``.
@@ -100,7 +100,7 @@ def _make_todo_callback(
                         for t in raw
                         if isinstance(t, dict)
                     ]
-                    tracker.update_todos(conversation_id, items)
+                    tracker.update_todos(task_id, items)
 
     return on_event
 
@@ -317,8 +317,7 @@ def process_message(
             conv_id, repo_path = conv_mgr.initialize_new()
             logger.info("Repo '%s': created conversation %s", repo_id, conv_id)
 
-            if conv_id != task_id:
-                service.tracker.update_task_id(task_id, conv_id)
+            service.tracker.set_conversation_id(task_id, conv_id)
         else:
             logger.info("Repo '%s': resuming conversation %s", repo_id, conv_id)
             assert conv_id is not None
@@ -357,7 +356,7 @@ def process_message(
             conversation_dir = conv_mgr.get_conversation_dir(conv_id)
             conversation_store = ConversationStore(conversation_dir)
             conversation_store.set_model(conv_id, model)
-            service.tracker.set_task_model(conv_id, model)
+            service.tracker.set_task_model(task_id, model)
         else:
             conversation_dir = conv_mgr.get_conversation_dir(conv_id)
             conversation_store = ConversationStore(conversation_dir)
@@ -371,7 +370,7 @@ def process_message(
                     conv_id,
                     model,
                 )
-            service.tracker.set_task_model(conv_id, model)
+            service.tracker.set_task_model(task_id, model)
 
         # Send acknowledgment only for first message
         if is_new:
@@ -476,7 +475,7 @@ def process_message(
                 conv_id,
             )
 
-        todo_callback = _make_todo_callback(service.tracker, conv_id)
+        todo_callback = _make_todo_callback(service.tracker, task_id)
 
         try:
             result = task.execute(

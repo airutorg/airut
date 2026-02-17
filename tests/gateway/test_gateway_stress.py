@@ -87,8 +87,8 @@ class TestWorkerLifecycleRealTracker:
         svc.tracker.add_task(task_id, "(authenticating)", repo_id="test")
 
         def fake_process(svc_, parsed_, tid, handler_, adapter_):
-            # Real process_message renames the task ID
-            svc_.tracker.update_task_id(tid, "conv-xyz")
+            # In the new API, process_message sets conv_id on the task
+            svc_.tracker.set_conversation_id(tid, "conv-xyz")
             return CompletionReason.SUCCESS, "conv-xyz"
 
         with patch(
@@ -99,14 +99,14 @@ class TestWorkerLifecycleRealTracker:
                 RawMessage(sender="test", content=None), task_id, handler
             )
 
-        # Temp ID gone, real conv_id exists and is completed
-        assert svc.tracker.get_task(task_id) is None
-        task = svc.tracker.get_task("conv-xyz")
+        # Task stays under its task_id (never renamed)
+        task = svc.tracker.get_task(task_id)
         assert task is not None
         assert task.status == TaskStatus.COMPLETED
         assert task.succeeded is True
         assert task.display_title == "Build the feature"
         assert task.sender == "user@example.com"
+        assert task.conversation_id == "conv-xyz"
 
     def test_auth_failure_lifecycle(self, email_config, tmp_path: Path) -> None:
         """AuthenticationError records sender and marks task failed."""
@@ -156,15 +156,16 @@ class TestWorkerLifecycleRealTracker:
     def test_resume_conversation_full_lifecycle(
         self, email_config, tmp_path: Path
     ) -> None:
-        """Resume: existing task gets reassigned, subject updated, completed."""
+        """Resume: task gets conversation_id set, subject updated, completed."""
         svc, handler = _make_gateway_real_tracker(email_config, tmp_path)
 
         conv_id = "existing01"
-        # Simulate previously completed conversation
-        svc.tracker.add_task(conv_id, "Original task", repo_id="test")
-        svc.tracker.set_authenticating(conv_id)
-        svc.tracker.set_executing(conv_id)
-        svc.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
+        # Simulate previously completed conversation task
+        svc.tracker.add_task("prev-task", "Original task", repo_id="test")
+        svc.tracker.set_conversation_id("prev-task", conv_id)
+        svc.tracker.set_authenticating("prev-task")
+        svc.tracker.set_executing("prev-task")
+        svc.tracker.complete_task("prev-task", CompletionReason.SUCCESS)
 
         parsed = ParsedMessage(
             sender="alice@example.com",
@@ -187,16 +188,13 @@ class TestWorkerLifecycleRealTracker:
                 RawMessage(sender="test", content=None), temp_id, handler
             )
 
-        # Temp task gone
-        assert svc.tracker.get_task(temp_id) is None
-
-        # Real task updated
-        task = svc.tracker.get_task(conv_id)
+        # Task stays under temp_id with conversation_id assigned
+        task = svc.tracker.get_task(temp_id)
         assert task is not None
         assert task.status == TaskStatus.COMPLETED
         assert task.succeeded is True
         assert task.sender == "alice@example.com"
-        assert task.message_count == 2  # original + resume
+        assert task.conversation_id == conv_id
 
 
 # ===================================================================
@@ -215,7 +213,9 @@ class TestDuplicateRejectionStress:
         update_global(svc, dashboard_base_url=None)
 
         conv_id = "dup-queued"
-        svc.tracker.add_task(conv_id, "Queued task")
+        # Create an active task for this conversation
+        svc.tracker.add_task("active-task", "Queued task")
+        svc.tracker.set_conversation_id("active-task", conv_id)
         # Task is QUEUED (not started)
 
         parsed = ParsedMessage(
@@ -234,7 +234,7 @@ class TestDuplicateRejectionStress:
 
         # New behavior: messages for active conversations are queued
         handler.adapter.send_rejection.assert_not_called()
-        task = svc.tracker.get_task(conv_id)
+        task = svc.tracker.get_task(temp_id)
         assert task is not None
         assert task.status == TaskStatus.PENDING
 
@@ -246,9 +246,11 @@ class TestDuplicateRejectionStress:
         update_global(svc, dashboard_base_url=None)
 
         conv_id = "dup-inprog"
-        svc.tracker.add_task(conv_id, "Active task")
-        svc.tracker.set_authenticating(conv_id)
-        svc.tracker.set_executing(conv_id)
+        # Create an active executing task for this conversation
+        svc.tracker.add_task("active-task", "Active task")
+        svc.tracker.set_conversation_id("active-task", conv_id)
+        svc.tracker.set_authenticating("active-task")
+        svc.tracker.set_executing("active-task")
 
         parsed = ParsedMessage(
             sender="user@example.com",
@@ -266,7 +268,7 @@ class TestDuplicateRejectionStress:
 
         # New behavior: messages for active conversations are queued
         handler.adapter.send_rejection.assert_not_called()
-        task = svc.tracker.get_task(conv_id)
+        task = svc.tracker.get_task(temp_id)
         assert task is not None
         assert task.status == TaskStatus.PENDING
 
@@ -278,10 +280,12 @@ class TestDuplicateRejectionStress:
         update_global(svc, dashboard_base_url=None)
 
         conv_id = "dup-done"
-        svc.tracker.add_task(conv_id, "Done task")
-        svc.tracker.set_authenticating(conv_id)
-        svc.tracker.set_executing(conv_id)
-        svc.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
+        # Create a completed task for this conversation
+        svc.tracker.add_task("done-task", "Done task")
+        svc.tracker.set_conversation_id("done-task", conv_id)
+        svc.tracker.set_authenticating("done-task")
+        svc.tracker.set_executing("done-task")
+        svc.tracker.complete_task("done-task", CompletionReason.SUCCESS)
 
         parsed = ParsedMessage(
             sender="user@example.com",
@@ -327,7 +331,7 @@ class TestDuplicateRejectionStress:
         svc.tracker.add_task(temp_id, "(authenticating)")
 
         def fake_process(svc_, parsed_, tid, handler_, adapter_):
-            svc_.tracker.update_task_id(tid, "new-conv-id")
+            svc_.tracker.set_conversation_id(tid, "new-conv-id")
             return CompletionReason.SUCCESS, "new-conv-id"
 
         with patch(
@@ -414,9 +418,9 @@ class TestActiveTaskManagement:
         def register_tasks(start_id: int, count: int):
             try:
                 for i in range(count):
-                    task_id = f"conv-{start_id + i}"
-                    svc.register_active_task(task_id, MagicMock())
-                    svc.unregister_active_task(task_id)
+                    conv_id = f"conv-{start_id + i}"
+                    svc.register_active_task(conv_id, MagicMock())
+                    svc.unregister_active_task(conv_id)
             except Exception as e:
                 errors.append(e)
 
@@ -573,7 +577,7 @@ class TestSubmitMessageEdgeCases:
     def test_submit_adds_task_to_tracker(
         self, email_config, tmp_path: Path
     ) -> None:
-        """submit_message registers a new-XX task in the tracker."""
+        """submit_message registers a task in the tracker."""
         svc, handler = _make_gateway_real_tracker(email_config, tmp_path)
         svc._executor_pool = MagicMock()
         mock_future = MagicMock()
@@ -583,10 +587,9 @@ class TestSubmitMessageEdgeCases:
         result = svc.submit_message(msg, handler)
 
         assert result is True
-        # There should be exactly one task with a new-XX prefix
+        # There should be exactly one task (with a uuid-based task_id)
         tasks = svc.tracker.get_all_tasks()
         assert len(tasks) == 1
-        assert tasks[0].conversation_id.startswith("new-")
         assert tasks[0].display_title == "Test"
 
     def test_submit_message_tracks_future(
@@ -913,7 +916,7 @@ class TestWorkerEdgeCases:
         svc.tracker.add_task(temp_id, "(authenticating)")
 
         def fake_process(svc_, parsed_, tid, handler_, adapter_):
-            svc_.tracker.update_task_id(tid, "conv-ns")
+            svc_.tracker.set_conversation_id(tid, "conv-ns")
             return CompletionReason.SUCCESS, "conv-ns"
 
         with patch(
@@ -927,26 +930,28 @@ class TestWorkerEdgeCases:
         # display_title should be "(no subject)" since parsed.display_title
         # is empty. The update happens via tracker.update_task_display_title
         # with parsed.display_title or "(no subject)"
-        task = svc.tracker.get_task("conv-ns")
+        task = svc.tracker.get_task(temp_id)
         assert task is not None
         assert task.display_title == "(no subject)"
 
-    def test_process_message_exception_after_reassign(
+    def test_process_message_exception_after_conv_id_set(
         self, email_config, tmp_path: Path
     ) -> None:
-        """Exception after reassign_task still completes the real conv_id.
+        """Exception after set_conversation_id still completes the task.
 
-        When the worker calls reassign_task (because conv_id matches an
-        existing conversation) and then process_message raises, the
-        ``finally`` block should complete the real conv_id, not the temp.
+        When the worker calls set_conversation_id (because conv_id
+        matches an existing conversation) and then process_message
+        raises, the ``finally`` block should complete the task_id.
         """
         svc, handler = _make_gateway_real_tracker(email_config, tmp_path)
 
         conv_id = "exn-after"
-        svc.tracker.add_task(conv_id, "Original")
-        svc.tracker.set_authenticating(conv_id)
-        svc.tracker.set_executing(conv_id)
-        svc.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
+        # Simulate previously completed conversation task
+        svc.tracker.add_task("prev-task", "Original")
+        svc.tracker.set_conversation_id("prev-task", conv_id)
+        svc.tracker.set_authenticating("prev-task")
+        svc.tracker.set_executing("prev-task")
+        svc.tracker.complete_task("prev-task", CompletionReason.SUCCESS)
 
         parsed = ParsedMessage(
             sender="user@example.com",
@@ -971,13 +976,12 @@ class TestWorkerEdgeCases:
                 RawMessage(sender="test", content=None), temp_id, handler
             )
 
-        # Temp should be gone (was reassigned)
-        assert svc.tracker.get_task(temp_id) is None
-        # Real conv should be completed (failed)
-        task = svc.tracker.get_task(conv_id)
+        # Task stays under temp_id and should be completed (failed)
+        task = svc.tracker.get_task(temp_id)
         assert task is not None
         assert task.status == TaskStatus.COMPLETED
         assert task.succeeded is False
+        assert task.conversation_id == conv_id
 
 
 # ===================================================================
@@ -999,9 +1003,10 @@ class TestQueueFullRejection:
 
         conv_id = "queue-full-conv"
         # Create an active task for this conversation
-        svc.tracker.add_task(conv_id, "Active task", repo_id="test")
-        svc.tracker.set_authenticating(conv_id)
-        svc.tracker.set_executing(conv_id)
+        svc.tracker.add_task("active-task", "Active task", repo_id="test")
+        svc.tracker.set_conversation_id("active-task", conv_id)
+        svc.tracker.set_authenticating("active-task")
+        svc.tracker.set_executing("active-task")
 
         # Fill the pending queue to MAX_PENDING_PER_CONVERSATION
         import collections
@@ -1044,8 +1049,7 @@ class TestQueueFullRejection:
         assert "Too many messages queued" in call_args[0][2]
         assert call_args[0][3] == "https://dash.example.com"
 
-        # Task should be completed as REJECTED
-        task = svc.tracker.get_task(conv_id)
+        # The overflow task should be completed as REJECTED
+        task = svc.tracker.get_task(temp_id)
         assert task is not None
-        # The overflow task was reassigned to conv_id, so check completion
         assert task.status == TaskStatus.COMPLETED

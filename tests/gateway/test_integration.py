@@ -1088,8 +1088,8 @@ class TestAcknowledgmentReply:
 
         def track_task_id_at_ack(parsed, conv_id, model, dashboard_url):
             nonlocal task_id_at_ack_time
-            task = service.tracker.get_task(conv_id)
-            if task is not None:
+            tasks = service.tracker.get_tasks_for_conversation(conv_id)
+            if tasks:
                 task_id_at_ack_time = conv_id
 
         # Create mock task
@@ -1418,10 +1418,10 @@ class TestTaskIdTracking:
         new_conv_id = "abc12345"
         service.tracker.add_task(temp_task_id, "New request without ID")
 
-        # Mock process_message to simulate what it does: update task ID
+        # Mock process_message to simulate what it does: set conversation_id
         # then return. Real process_message updates tracker before ack.
         def mock_process_message(svc, p, task_id, handler, adapter):
-            service.tracker.update_task_id(task_id, new_conv_id)
+            service.tracker.set_conversation_id(task_id, new_conv_id)
             return (CompletionReason.SUCCESS, new_conv_id)
 
         with patch(
@@ -1432,10 +1432,10 @@ class TestTaskIdTracking:
                 sample_email_message, temp_task_id, handler
             )
 
-        # Task should have been updated with new ID
-        assert service.tracker.get_task(temp_task_id) is None
-        task = service.tracker.get_task(new_conv_id)
+        # Task stays under its original task_id
+        task = service.tracker.get_task(temp_task_id)
         assert task is not None
+        assert task.conversation_id == new_conv_id
         assert task.status.value == "completed"
         assert task.succeeded is True
 
@@ -1511,6 +1511,7 @@ class TestDuplicateMessageRejection:
 
         # Add an active task for this conversation
         service.tracker.add_task(conv_id, "First request")
+        service.tracker.set_conversation_id(conv_id, conv_id)
         service.tracker.set_authenticating(conv_id)
         service.tracker.set_executing(conv_id)
 
@@ -1533,8 +1534,8 @@ class TestDuplicateMessageRejection:
         # Message should be queued, not rejected
         mock_adapter.send_rejection.assert_not_called()
 
-        # Task stays PENDING — waiting for _drain_pending to pick it up
-        task = service.tracker.get_task(conv_id)
+        # New task stays PENDING — waiting for _drain_pending to pick it up
+        task = service.tracker.get_task(task_id)
         assert task is not None
         assert task.status == TaskStatus.PENDING
 
@@ -1546,7 +1547,7 @@ class TestDuplicateMessageRejection:
         """Atomic lock prevents TOCTOU race on enqueue.
 
         If the active task completes before we acquire
-        ``_pending_messages_lock``, ``is_task_active`` (checked under
+        ``_pending_messages_lock``, ``has_active_task`` (checked under
         the lock) returns False and the message goes through normal
         execution instead of being queued.
         """
@@ -1564,6 +1565,7 @@ class TestDuplicateMessageRejection:
 
         # Task that was active but is now completed
         service.tracker.add_task(conv_id, "Active task")
+        service.tracker.set_conversation_id(conv_id, conv_id)
         service.tracker.set_authenticating(conv_id)
         service.tracker.set_executing(conv_id)
         service.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
@@ -1582,7 +1584,7 @@ class TestDuplicateMessageRejection:
         task_id = "new-race"
         service.tracker.add_task(task_id, "(authenticating)")
 
-        # Since is_task_active returns False under the lock,
+        # Since has_active_task returns False under the lock,
         # the message goes through normal execution (process_message)
         # instead of being queued as pending.
         with patch(
@@ -1597,7 +1599,7 @@ class TestDuplicateMessageRejection:
         mock_process.assert_called_once()
 
         # Task should be completed successfully
-        task = service.tracker.get_task(conv_id)
+        task = service.tracker.get_task(task_id)
         assert task is not None
         assert task.status == TaskStatus.COMPLETED
         assert task.completion_reason == CompletionReason.SUCCESS
@@ -1622,6 +1624,7 @@ class TestDuplicateMessageRejection:
 
         # Add and complete a task
         service.tracker.add_task(conv_id, "First request")
+        service.tracker.set_conversation_id(conv_id, conv_id)
         service.tracker.set_authenticating(conv_id)
         service.tracker.set_executing(conv_id)
         service.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
@@ -1653,8 +1656,8 @@ class TestDuplicateMessageRejection:
         # Should NOT reject — no active task for this conv_id
         mock_adapter.send_rejection.assert_not_called()
 
-        # Task should be completed successfully
-        task = service.tracker.get_task(conv_id)
+        # New task should be completed successfully
+        task = service.tracker.get_task(task_id)
         assert task is not None
         assert task.succeeded is True
 
@@ -1689,9 +1692,9 @@ class TestDuplicateMessageRejection:
         task_id = "new-fresh"
         service.tracker.add_task(task_id, "(authenticating)")
 
-        # Mock process_message to simulate what it does: update task ID
+        # Mock process_message to simulate what it does: set conversation_id
         def mock_process(svc, parsed_msg, tid, handler, adapter):
-            service.tracker.update_task_id(tid, "newconv1")
+            service.tracker.set_conversation_id(tid, "newconv1")
             return (CompletionReason.SUCCESS, "newconv1")
 
         with patch(
@@ -1706,7 +1709,7 @@ class TestDuplicateMessageRejection:
         mock_adapter.send_rejection.assert_not_called()
 
         # Task should be completed successfully with the new conv_id
-        task = service.tracker.get_task("newconv1")
+        task = service.tracker.get_task(task_id)
         assert task is not None
         assert task.succeeded is True
 
@@ -1842,18 +1845,17 @@ class TestConversationResumeTaskTracking:
     """Tests for task tracker state during conversation resume.
 
     Regression: d0bfb11 moved authentication to worker thread and uses
-    temporary ``new-XXXX`` task IDs. For resumed conversations,
-    ``process_message`` does NOT call ``update_task_id`` (only new
-    conversations do). This left the temp task stuck in IN_PROGRESS
-    while ``complete_task`` updated the old completed task.
+    temporary ``new-XXXX`` task IDs. For resumed conversations, the
+    worker sets ``conversation_id`` on the task and completes it under
+    the original ``task_id``.
     """
 
-    def test_resume_updates_task_id_from_temp_to_real(
+    def test_resume_sets_conversation_id_and_completes(
         self,
         email_config: RepoServerConfig,
         sample_email_message,
     ) -> None:
-        """Task ID updates from new-XX to conv_id when resuming conversation."""
+        """Task keeps task_id, gets conversation_id set when resuming."""
         from airut.gateway.channel import ParsedMessage
         from airut.gateway.service import GatewayService
 
@@ -1868,6 +1870,7 @@ class TestConversationResumeTaskTracking:
 
         # Simulate a previously completed conversation
         service.tracker.add_task(conv_id, "Original request")
+        service.tracker.set_conversation_id(conv_id, conv_id)
         service.tracker.set_authenticating(conv_id)
         service.tracker.set_executing(conv_id)
         service.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
@@ -1890,8 +1893,8 @@ class TestConversationResumeTaskTracking:
         temp_task_id = "new-deadbeef"
         service.tracker.add_task(temp_task_id, "(authenticating)")
 
-        # Mock process_message — it returns conv_id but does NOT call
-        # update_task_id (because this is an existing conversation).
+        # Mock process_message — it returns conv_id. The worker
+        # sets conversation_id and completes under task_id.
         # Also patch exists() to simulate the conversation existing.
         with (
             patch(
@@ -1906,12 +1909,10 @@ class TestConversationResumeTaskTracking:
                 sample_email_message, temp_task_id, handler
             )
 
-        # The temporary task should be gone
-        assert service.tracker.get_task(temp_task_id) is None
-
-        # The real conv_id task should be completed and successful
-        task = service.tracker.get_task(conv_id)
+        # The task stays under its original task_id
+        task = service.tracker.get_task(temp_task_id)
         assert task is not None
+        assert task.conversation_id == conv_id
         assert task.status.value == "completed"
         assert task.succeeded is True
 
@@ -1920,10 +1921,11 @@ class TestConversationResumeTaskTracking:
         email_config: RepoServerConfig,
         sample_email_message,
     ) -> None:
-        """While executing a resumed conversation, dashboard shows IN_PROGRESS.
+        """While executing a resumed conversation, dashboard shows EXECUTING.
 
-        The user should see the task as in_progress under the real conv_id
-        during execution, not as completed (stale) or under a temp ID.
+        The task keeps its original task_id and is EXECUTING during
+        process_message. The conversation_id field is set so the
+        dashboard can associate it with the conversation.
         """
         from airut.gateway.channel import ParsedMessage
         from airut.gateway.service import GatewayService
@@ -1939,6 +1941,7 @@ class TestConversationResumeTaskTracking:
 
         # Previously completed
         service.tracker.add_task(conv_id, "First request")
+        service.tracker.set_conversation_id(conv_id, conv_id)
         service.tracker.set_authenticating(conv_id)
         service.tracker.set_executing(conv_id)
         service.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
@@ -1963,13 +1966,12 @@ class TestConversationResumeTaskTracking:
 
         def mock_process(svc, p, task_id, rh, adapter):
             # During execution, check the tracker state
-            conv_task = service.tracker.get_task(conv_id)
             temp_task = service.tracker.get_task(temp_task_id)
-            task_state_during_execution["conv_task_status"] = (
-                conv_task.status if conv_task else None
+            task_state_during_execution["temp_task_status"] = (
+                temp_task.status if temp_task else None
             )
-            task_state_during_execution["temp_task_exists"] = (
-                temp_task is not None
+            task_state_during_execution["temp_task_conv_id"] = (
+                temp_task.conversation_id if temp_task else None
             )
             return (CompletionReason.SUCCESS, conv_id)
 
@@ -1986,20 +1988,20 @@ class TestConversationResumeTaskTracking:
                 sample_email_message, temp_task_id, handler
             )
 
-        # During execution, conv_id task should have been EXECUTING
+        # During execution, the task should be EXECUTING under its task_id
         assert (
-            task_state_during_execution["conv_task_status"]
+            task_state_during_execution["temp_task_status"]
             == TaskStatus.EXECUTING
         )
-        # The temp task should have been merged (not exist separately)
-        assert task_state_during_execution["temp_task_exists"] is False
+        # The conversation_id should be set
+        assert task_state_during_execution["temp_task_conv_id"] == conv_id
 
-    def test_resume_failure_marks_conv_id_task_failed(
+    def test_resume_failure_marks_task_failed(
         self,
         email_config: RepoServerConfig,
         sample_email_message,
     ) -> None:
-        """When resumed conversation fails, the conv_id task shows failed."""
+        """When resumed conversation fails, the task shows failed."""
         from airut.gateway.channel import ParsedMessage
         from airut.gateway.service import GatewayService
 
@@ -2013,6 +2015,7 @@ class TestConversationResumeTaskTracking:
         conv_id = "eeff6677"
 
         service.tracker.add_task(conv_id, "Original")
+        service.tracker.set_conversation_id(conv_id, conv_id)
         service.tracker.set_authenticating(conv_id)
         service.tracker.set_executing(conv_id)
         service.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
@@ -2044,16 +2047,13 @@ class TestConversationResumeTaskTracking:
                 sample_email_message, temp_task_id, handler
             )
 
-        # Temp task should be gone
-        assert service.tracker.get_task(temp_task_id) is None
-
-        # Conv task should show failure
-        task = service.tracker.get_task(conv_id)
+        # Task stays under its original task_id
+        task = service.tracker.get_task(temp_task_id)
         assert task is not None
         assert task.status.value == "completed"
         assert task.succeeded is False
 
-    def test_resume_exception_marks_conv_id_task_failed(
+    def test_resume_exception_marks_task_failed(
         self,
         email_config: RepoServerConfig,
         sample_email_message,
@@ -2072,6 +2072,7 @@ class TestConversationResumeTaskTracking:
         conv_id = "11223344"
 
         service.tracker.add_task(conv_id, "Original")
+        service.tracker.set_conversation_id(conv_id, conv_id)
         service.tracker.set_authenticating(conv_id)
         service.tracker.set_executing(conv_id)
         service.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
@@ -2103,11 +2104,8 @@ class TestConversationResumeTaskTracking:
                 sample_email_message, temp_task_id, handler
             )
 
-        # Temp task should be gone
-        assert service.tracker.get_task(temp_task_id) is None
-
-        # Conv task should be completed (failed), not stuck in_progress
-        task = service.tracker.get_task(conv_id)
+        # Task stays under its original task_id, completed (failed)
+        task = service.tracker.get_task(temp_task_id)
         assert task is not None
         assert task.status.value == "completed"
         assert task.succeeded is False
@@ -2131,6 +2129,7 @@ class TestConversationResumeTaskTracking:
         conv_id = "55667788"
 
         service.tracker.add_task(conv_id, "Original subject")
+        service.tracker.set_conversation_id(conv_id, conv_id)
         service.tracker.set_authenticating(conv_id)
         service.tracker.set_executing(conv_id)
         service.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
@@ -2162,7 +2161,7 @@ class TestConversationResumeTaskTracking:
                 sample_email_message, temp_task_id, handler
             )
 
-        task = service.tracker.get_task(conv_id)
+        task = service.tracker.get_task(temp_task_id)
         assert task is not None
         # Subject should be the real subject, not "(authenticating)"
         assert task.display_title == "Re: [ID:55667788] Original subject"

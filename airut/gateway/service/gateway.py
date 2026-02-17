@@ -21,6 +21,7 @@ import signal
 import threading
 import time
 import traceback
+import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from importlib.resources import files
@@ -515,24 +516,27 @@ class GatewayService:
 
         logger.info("Service stopped")
 
-    def register_active_task(self, task_id: str, task: Task) -> None:
+    def register_active_task(self, conversation_id: str, task: Task) -> None:
         """Register an active task for stop functionality.
 
+        The dashboard stop button works by conversation ID, so active
+        tasks are keyed by ``conversation_id``.
+
         Args:
-            task_id: Task/conversation ID.
+            conversation_id: Conversation this task belongs to.
             task: Active sandbox Task.
         """
         with self._active_tasks_lock:
-            self._active_tasks[task_id] = task
+            self._active_tasks[conversation_id] = task
 
-    def unregister_active_task(self, task_id: str) -> None:
+    def unregister_active_task(self, conversation_id: str) -> None:
         """Unregister a completed task.
 
         Args:
-            task_id: Task/conversation ID.
+            conversation_id: Conversation whose active task finished.
         """
         with self._active_tasks_lock:
-            self._active_tasks.pop(task_id, None)
+            self._active_tasks.pop(conversation_id, None)
 
     def _stop_execution(self, conversation_id: str) -> bool:
         """Stop a running execution by conversation ID.
@@ -573,7 +577,7 @@ class GatewayService:
             logger.error("Executor pool not initialized")
             return False
 
-        task_id = f"new-{id(raw_message):08x}"
+        task_id = uuid.uuid4().hex[:12]
         repo_id = repo_handler.config.repo_id
         # Use display_title from RawMessage for immediate tracker display;
         # falls back to truncated sender, then to a placeholder.
@@ -632,7 +636,7 @@ class GatewayService:
 
         reason = CompletionReason.INTERNAL_ERROR
         detail = ""
-        final_task_id = task_id
+        conv_id: str | None = None
         completed_elsewhere = False
         try:
             # Authenticate and parse through the channel adapter.
@@ -655,26 +659,23 @@ class GatewayService:
             # Queue messages for conversations that already have an
             # active task instead of rejecting them outright.
             #
-            # The is_task_active check, reassign, depth-check, and
-            # enqueue are ALL done under _pending_messages_lock to
-            # prevent a TOCTOU race where the active task completes
-            # (and drains) between the check and the append — which
-            # would leave the message PENDING forever with nothing
-            # to drain it.
+            # The has_active_task check, set_conversation_id, depth-
+            # check, and enqueue are ALL done under
+            # _pending_messages_lock to prevent a TOCTOU race where the
+            # active task completes (and drains) between the check and
+            # the append — which would leave the message PENDING forever
+            # with nothing to drain it.
             if conv_id:
                 with self._pending_messages_lock:
-                    if not self.tracker.is_task_active(conv_id):
+                    if not self.tracker.has_active_task(conv_id):
                         # No active task — fall through to normal
                         # execution below (outside the lock).
                         pass
                     else:
-                        # Reassign temp task to real conv_id so the
+                        # Set conversation_id on the task so the
                         # pending task shows the correct conversation
-                        # ID.  Done inside the lock so the drain
-                        # cannot interleave.
-                        if conv_id != task_id:
-                            self.tracker.reassign_task(task_id, conv_id)
-                            final_task_id = conv_id
+                        # in the dashboard.
+                        self.tracker.set_conversation_id(task_id, conv_id)
 
                         queue = self._pending_messages.get(conv_id)
                         queue_len = len(queue) if queue else 0
@@ -705,7 +706,7 @@ class GatewayService:
                         # Enqueue and free the worker thread.
                         pending = PendingMessage(
                             parsed=parsed,
-                            task_id=final_task_id,
+                            task_id=task_id,
                             repo_handler=repo_handler,
                             adapter=adapter,
                         )
@@ -715,7 +716,7 @@ class GatewayService:
                             )
                         self._pending_messages[conv_id].append(pending)
 
-                        self.tracker.set_pending(final_task_id)
+                        self.tracker.set_pending(task_id)
                         logger.info(
                             "Queued message for busy conversation %s "
                             "(queue depth: %d)",
@@ -729,26 +730,20 @@ class GatewayService:
                         completed_elsewhere = True
                         return
 
-            # Move the temp task to the real conv_id so the dashboard
-            # tracks it under the correct ID during execution and after
-            # completion.  For resumed conversations the conv_id task
-            # already exists (completed); reassign_task merges state.
-            if conv_id and conv_id != task_id:
-                self.tracker.reassign_task(task_id, conv_id)
-                final_task_id = conv_id
+            # Assign conversation_id to the task for dashboard display.
+            if conv_id:
+                self.tracker.set_conversation_id(task_id, conv_id)
 
             # Delegate execution, completion, and drain to the shared
             # helper (also used by _process_pending_message).
             # Handles its own complete_task + _drain_pending.
-            self._execute_and_complete(
-                parsed, final_task_id, repo_handler, adapter
-            )
+            self._execute_and_complete(parsed, task_id, repo_handler, adapter)
             # Signal the finally block to skip duplicate completion.
             completed_elsewhere = True
             return
         except AuthenticationError as auth_err:
             self.tracker.update_task_display_title(
-                final_task_id,
+                task_id,
                 "(not authorized)",
                 sender=auth_err.sender,
             )
@@ -767,14 +762,13 @@ class GatewayService:
                 # _pending_messages_lock.  This ordering is
                 # load-bearing — see the invariant comment on
                 # _pending_messages_lock above.
-                self.tracker.complete_task(final_task_id, reason, detail)
+                self.tracker.complete_task(task_id, reason, detail)
                 # Drain any pending messages for this conversation.
-                # final_task_id is always the conversation ID (set by
-                # reassign_task) or the temp ID if process_message
-                # returned no conv_id.  New conversations (conv_id
-                # starts as None) never have pending messages queued
-                # under a temp ID, so a no-op lookup here is safe.
-                self._drain_pending(final_task_id)
+                # conv_id is set after authentication; for auth
+                # failures or new conversations without a conv_id,
+                # drain is a no-op (no pending messages exist).
+                if conv_id:
+                    self._drain_pending(conv_id)
 
     def _drain_pending(self, conv_id: str) -> None:
         """Submit the next queued message for a conversation, if any.
@@ -835,14 +829,16 @@ class GatewayService:
 
         Args:
             parsed: Authenticated and parsed message.
-            task_id: Current tracker task ID (may be temp or conv ID).
+            task_id: Stable tracker task ID.
             repo_handler: Repository handler for this message.
             adapter: Channel adapter that produced the parsed message.
         """
         conv_id = parsed.conversation_id
         reason = CompletionReason.INTERNAL_ERROR
         detail = ""
-        final_task_id = task_id
+        # Track the final conversation ID for draining.  process_message
+        # may create a new conversation and return a new conv_id.
+        drain_conv_id = conv_id
 
         try:
             self.tracker.set_executing(task_id)
@@ -854,13 +850,13 @@ class GatewayService:
                         self, parsed, task_id, repo_handler, adapter
                     )
                     if final_conv_id:
-                        final_task_id = final_conv_id
+                        drain_conv_id = final_conv_id
             else:
                 reason, final_conv_id = process_message(
                     self, parsed, task_id, repo_handler, adapter
                 )
                 if final_conv_id:
-                    final_task_id = final_conv_id
+                    drain_conv_id = final_conv_id
         except Exception:
             logger.exception("Error processing message (task %s)", task_id)
             reason = CompletionReason.INTERNAL_ERROR
@@ -869,11 +865,10 @@ class GatewayService:
             # then does _drain_pending acquire _pending_messages_lock.
             # This ordering is load-bearing — see the invariant comment
             # on _pending_messages_lock above.
-            self.tracker.complete_task(final_task_id, reason, detail)
+            self.tracker.complete_task(task_id, reason, detail)
             # Drain any pending messages for this conversation.
-            # final_task_id is the conversation ID (or temp ID for
-            # new conversations which never have pending messages).
-            self._drain_pending(final_task_id)
+            if drain_conv_id:
+                self._drain_pending(drain_conv_id)
 
     def _process_pending_message(self, pending: PendingMessage) -> None:
         """Execute a previously-authenticated pending message.

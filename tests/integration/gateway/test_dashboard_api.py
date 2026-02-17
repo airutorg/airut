@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 
-from .conftest import get_message_text
+from .conftest import get_message_text, wait_for_conv_completion
 from .environment import IntegrationEnvironment
 
 
@@ -53,7 +53,7 @@ def _wait_for_task_completion(service, conv_id: str, timeout: float = 10.0):
     Returns:
         The completed TaskState, or None on timeout.
     """
-    return service.tracker.wait_for_completion(conv_id, timeout=timeout)
+    return wait_for_conv_completion(service.tracker, conv_id, timeout=timeout)
 
 
 class TestDashboardAPIEndpoints:
@@ -170,7 +170,7 @@ events = [
             assert data["conversation_id"] == conv_id
             assert data["status"] == "completed"
             assert data["completion_reason"] == "success"
-            assert data["message_count"] == 1
+            assert "task_id" in data
             assert "conversation" in data
             assert data["conversation"] is not None
             assert data["conversation"]["reply_count"] >= 1

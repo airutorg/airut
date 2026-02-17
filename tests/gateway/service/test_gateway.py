@@ -116,7 +116,7 @@ class TestSubmitMessage:
         msg = make_message()
         svc.submit_message(msg, handler)
         task_id = svc.tracker.add_task.call_args[0][0]
-        assert task_id.startswith("new-")
+        assert len(task_id) == 12  # uuid4().hex[:12]
 
 
 class TestOnFutureComplete:
@@ -198,7 +198,7 @@ class TestProcessMessageWorker:
             sender="user@test.local",
         )
         handler.adapter.authenticate_and_parse.return_value = mock_parsed
-        svc.tracker.is_task_active.return_value = True
+        svc.tracker.has_active_task.return_value = True
 
         msg = make_message()
         svc._process_message_worker(msg, "task-1", handler)
@@ -216,7 +216,7 @@ class TestProcessMessageWorker:
         handler.conversation_manager.exists.return_value = False
         mock_parsed = MagicMock(conversation_id=None)
         handler.adapter.authenticate_and_parse.return_value = mock_parsed
-        svc.tracker.is_task_active.return_value = False
+        svc.tracker.has_active_task.return_value = False
 
         msg = make_message()
         with patch(
@@ -227,7 +227,7 @@ class TestProcessMessageWorker:
         svc.tracker.set_authenticating.assert_called_once_with("new-123")
         svc.tracker.set_executing.assert_called_once()
         svc.tracker.complete_task.assert_called_once_with(
-            "conv1", CompletionReason.SUCCESS, ""
+            "new-123", CompletionReason.SUCCESS, ""
         )
 
     def test_existing_conversation_uses_lock(
@@ -239,16 +239,16 @@ class TestProcessMessageWorker:
         handler.conversation_manager.exists.return_value = True
         mock_parsed = MagicMock(conversation_id="aabb1122")
         handler.adapter.authenticate_and_parse.return_value = mock_parsed
-        svc.tracker.is_task_active.return_value = False
+        svc.tracker.has_active_task.return_value = False
 
         msg = make_message()
         with patch(
             "airut.gateway.service.gateway.process_message",
             return_value=(CompletionReason.SUCCESS, "conv1"),
         ):
-            svc._process_message_worker(msg, "conv1", handler)
+            svc._process_message_worker(msg, "task-conv1", handler)
         svc.tracker.complete_task.assert_called_once_with(
-            "conv1", CompletionReason.SUCCESS, ""
+            "task-conv1", CompletionReason.SUCCESS, ""
         )
 
     def test_exception_marks_failed(self, email_config, tmp_path: Path) -> None:
@@ -258,7 +258,7 @@ class TestProcessMessageWorker:
         handler.conversation_manager.exists.return_value = False
         mock_parsed = MagicMock(conversation_id=None)
         handler.adapter.authenticate_and_parse.return_value = mock_parsed
-        svc.tracker.is_task_active.return_value = False
+        svc.tracker.has_active_task.return_value = False
 
         msg = make_message()
         with patch(
@@ -271,14 +271,14 @@ class TestProcessMessageWorker:
         )
 
     def test_uses_returned_conv_id(self, email_config, tmp_path: Path) -> None:
-        """When process_message returns a conv_id, use it for completion."""
+        """Task_id used for completion, not conv_id."""
         from airut.dashboard.tracker import CompletionReason
 
         svc, handler = make_service(email_config, tmp_path)
         handler.conversation_manager.exists.return_value = False
         mock_parsed = MagicMock(conversation_id=None)
         handler.adapter.authenticate_and_parse.return_value = mock_parsed
-        svc.tracker.is_task_active.return_value = False
+        svc.tracker.has_active_task.return_value = False
 
         msg = make_message()
         with patch(
@@ -287,7 +287,7 @@ class TestProcessMessageWorker:
         ):
             svc._process_message_worker(msg, "temp-123", handler)
         svc.tracker.complete_task.assert_called_once_with(
-            "real-conv-id", CompletionReason.EXECUTION_FAILED, ""
+            "temp-123", CompletionReason.EXECUTION_FAILED, ""
         )
 
     def test_none_conv_id_uses_task_id(
@@ -299,7 +299,7 @@ class TestProcessMessageWorker:
         handler.conversation_manager.exists.return_value = False
         mock_parsed = MagicMock(conversation_id=None)
         handler.adapter.authenticate_and_parse.return_value = mock_parsed
-        svc.tracker.is_task_active.return_value = False
+        svc.tracker.has_active_task.return_value = False
 
         msg = make_message()
         with patch(
@@ -335,7 +335,7 @@ class TestProcessMessageWorker:
         )
         handler.adapter.authenticate_and_parse.return_value = parsed
         handler.conversation_manager.exists.return_value = False
-        svc.tracker.is_task_active.return_value = False
+        svc.tracker.has_active_task.return_value = False
 
         msg = make_message(subject="Fix the login bug")
         with patch(
@@ -378,15 +378,13 @@ class TestProcessMessageWorker:
             "new-7f2fdf9f", CompletionReason.INTERNAL_ERROR, ""
         )
 
-    def test_resume_updates_task_id_to_conv_id(
+    def test_resume_sets_conversation_id(
         self, email_config, tmp_path: Path
     ) -> None:
-        """When resuming an existing conversation, task ID updates to conv_id.
+        """When resuming an existing conversation, conversation_id is set.
 
-        Regression: process_message only calls update_task_id for new
-        conversations. For resumed conversations, the worker must update
-        the temp ID to the real conv_id so the dashboard shows the task
-        under the correct conversation.
+        The worker calls set_conversation_id so the dashboard shows the
+        task under the correct conversation.
         """
         from airut.dashboard.tracker import CompletionReason
         from airut.gateway.channel import ParsedMessage
@@ -401,7 +399,7 @@ class TestProcessMessageWorker:
         )
         handler.adapter.authenticate_and_parse.return_value = parsed
         handler.conversation_manager.exists.return_value = True
-        svc.tracker.is_task_active.return_value = False
+        svc.tracker.has_active_task.return_value = False
 
         msg = make_message()
         with patch(
@@ -410,12 +408,12 @@ class TestProcessMessageWorker:
         ):
             svc._process_message_worker(msg, "new-deadbeef", handler)
 
-        # Task ID should have been reassigned from temp to real conv_id
-        svc.tracker.reassign_task.assert_called_once_with(
+        # Task should have had conversation_id set
+        svc.tracker.set_conversation_id.assert_called_with(
             "new-deadbeef", "aabb1122"
         )
         svc.tracker.complete_task.assert_called_once_with(
-            "aabb1122", CompletionReason.SUCCESS, ""
+            "new-deadbeef", CompletionReason.SUCCESS, ""
         )
 
     def test_auth_failure_updates_display_title(
@@ -590,7 +588,7 @@ class TestProcessPendingMessage:
 
         svc.tracker.set_executing.assert_called_once_with("task-1")
         svc.tracker.complete_task.assert_called_once_with(
-            "conv1", CompletionReason.SUCCESS, ""
+            "task-1", CompletionReason.SUCCESS, ""
         )
 
     def test_new_conversation_no_lock(
@@ -647,7 +645,7 @@ class TestProcessPendingMessage:
         )
 
     def test_uses_returned_conv_id(self, email_config, tmp_path: Path) -> None:
-        """_process_pending_message uses returned conv_id for completion."""
+        """_process_pending_message uses task_id for completion."""
         from airut.dashboard.tracker import CompletionReason
 
         svc, handler = make_service(email_config, tmp_path)
@@ -667,7 +665,7 @@ class TestProcessPendingMessage:
             svc._process_pending_message(pending)
 
         svc.tracker.complete_task.assert_called_once_with(
-            "real-conv-id", CompletionReason.SUCCESS, ""
+            "task-4", CompletionReason.SUCCESS, ""
         )
 
     def test_drains_pending_after_completion(

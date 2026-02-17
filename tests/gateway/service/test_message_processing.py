@@ -579,7 +579,9 @@ class TestProcessMessage:
             return_value=mock_cs,
         ):
             process_message(svc, parsed, "temp-123", handler, adapter)
-        svc.tracker.update_task_id.assert_called_once_with("temp-123", "conv1")
+        svc.tracker.set_conversation_id.assert_called_once_with(
+            "temp-123", "conv1"
+        )
 
     def test_long_subject_truncated_in_log(
         self, email_config: Any, tmp_path: Path
