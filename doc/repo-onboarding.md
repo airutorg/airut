@@ -96,6 +96,15 @@ url_prefixes:
   - host: uploads.github.com
     path: /repos/your-org/your-repo*
     methods: [POST]
+  - host: raw.githubusercontent.com
+    path: /your-org/your-repo*
+    methods: [GET, HEAD]
+  - host: objects.githubusercontent.com
+    path: /your-org/your-repo*
+    methods: [GET, HEAD]
+  - host: results-receiver.actions.githubusercontent.com
+    path: /rest/runs*
+    methods: [GET, POST]
 ```
 
 Start restrictive and add hosts as needed. The agent will tell you when it
