@@ -395,7 +395,7 @@ def _make_repo_server_config(
             repo_defaults[key] = value
 
     email_config = EmailChannelConfig(**email_defaults)  # type: ignore[arg-type]
-    return RepoServerConfig(email=email_config, **repo_defaults)  # type: ignore[arg-type]
+    return RepoServerConfig(channel=email_config, **repo_defaults)  # type: ignore[arg-type]
 
 
 def test_repo_server_config_defaults(master_repo: Path, tmp_path: Path) -> None:
@@ -403,18 +403,18 @@ def test_repo_server_config_defaults(master_repo: Path, tmp_path: Path) -> None:
     config = _make_repo_server_config(master_repo, tmp_path)
 
     assert config.repo_id == "test"
-    assert config.email.imap_server == "imap.example.com"
-    assert config.email.imap_port == 993
-    assert config.email.smtp_server == "smtp.example.com"
-    assert config.email.smtp_port == 587
-    assert config.email.username == "test@example.com"
-    assert config.email.password == "secret123"
-    assert config.email.authorized_senders == ["authorized@example.com"]
+    assert config.channel.imap_server == "imap.example.com"
+    assert config.channel.imap_port == 993
+    assert config.channel.smtp_server == "smtp.example.com"
+    assert config.channel.smtp_port == 587
+    assert config.channel.username == "test@example.com"
+    assert config.channel.password == "secret123"
+    assert config.channel.authorized_senders == ["authorized@example.com"]
     assert config.git_repo_url == str(master_repo)
     assert config.storage_dir == get_storage_dir("test")
-    assert config.email.poll_interval_seconds == 60
-    assert config.email.use_imap_idle is True
-    assert config.email.idle_reconnect_interval_seconds == 29 * 60
+    assert config.channel.poll_interval_seconds == 60
+    assert config.channel.use_imap_idle is True
+    assert config.channel.idle_reconnect_interval_seconds == 29 * 60
     assert config.secrets == {}
 
 
@@ -430,9 +430,9 @@ def test_repo_server_config_with_custom_defaults(
         idle_reconnect_interval_seconds=1800,
     )
 
-    assert config.email.poll_interval_seconds == 30
-    assert config.email.use_imap_idle is False
-    assert config.email.idle_reconnect_interval_seconds == 1800
+    assert config.channel.poll_interval_seconds == 30
+    assert config.channel.use_imap_idle is False
+    assert config.channel.idle_reconnect_interval_seconds == 1800
 
 
 def test_repo_server_config_secret_redaction(
@@ -493,7 +493,7 @@ def test_repo_server_config_empty_repo_url(tmp_path: Path) -> None:
         RepoServerConfig(
             repo_id="test",
             git_repo_url="",
-            email=EmailChannelConfig(
+            channel=EmailChannelConfig(
                 imap_server="imap.example.com",
                 imap_port=993,
                 smtp_server="smtp.example.com",
@@ -557,9 +557,9 @@ def test_repo_server_config_oauth2_defaults(
 ) -> None:
     """Microsoft OAuth2 fields default to None."""
     config = _make_repo_server_config(master_repo, tmp_path)
-    assert config.email.microsoft_oauth2_tenant_id is None
-    assert config.email.microsoft_oauth2_client_id is None
-    assert config.email.microsoft_oauth2_client_secret is None
+    assert config.channel.microsoft_oauth2_tenant_id is None
+    assert config.channel.microsoft_oauth2_client_id is None
+    assert config.channel.microsoft_oauth2_client_secret is None
 
 
 def test_repo_server_config_oauth2_all_set(
@@ -573,9 +573,9 @@ def test_repo_server_config_oauth2_all_set(
         microsoft_oauth2_client_id="client-456",
         microsoft_oauth2_client_secret="secret-789",
     )
-    assert config.email.microsoft_oauth2_tenant_id == "tenant-123"
-    assert config.email.microsoft_oauth2_client_id == "client-456"
-    assert config.email.microsoft_oauth2_client_secret == "secret-789"
+    assert config.channel.microsoft_oauth2_tenant_id == "tenant-123"
+    assert config.channel.microsoft_oauth2_client_id == "client-456"
+    assert config.channel.microsoft_oauth2_client_secret == "secret-789"
 
 
 def test_repo_server_config_oauth2_partial_raises(
@@ -628,7 +628,7 @@ def test_repo_server_config_internal_auth_fallback_default(
 ) -> None:
     """microsoft_internal_auth_fallback defaults to False."""
     config = _make_repo_server_config(master_repo, tmp_path)
-    assert config.email.microsoft_internal_auth_fallback is False
+    assert config.channel.microsoft_internal_auth_fallback is False
 
 
 def test_repo_server_config_internal_auth_fallback_enabled(
@@ -640,7 +640,7 @@ def test_repo_server_config_internal_auth_fallback_enabled(
         tmp_path,
         microsoft_internal_auth_fallback=True,
     )
-    assert config.email.microsoft_internal_auth_fallback is True
+    assert config.channel.microsoft_internal_auth_fallback is True
 
 
 # ---------------------------------------------------------------------------
@@ -754,13 +754,30 @@ class TestServerConfigValidation:
         return RepoServerConfig(
             repo_id=repo_id,
             git_repo_url="https://example.com/repo.git",
-            email=EmailChannelConfig(**email_defaults),  # type: ignore[arg-type]
+            channel=EmailChannelConfig(**email_defaults),  # type: ignore[arg-type]
         )
 
     def test_empty_repos_rejected(self, tmp_path: Path) -> None:
         """At least one repo must be configured."""
         with pytest.raises(ConfigError, match="At least one repo"):
             ServerConfig(global_config=GlobalConfig(), repos={})
+
+    def test_non_email_channel_skipped_in_inbox_check(
+        self, tmp_path: Path
+    ) -> None:
+        """Non-email channels are skipped during IMAP inbox validation."""
+        r1 = self._repo("a", tmp_path)
+        # Simulate a non-email channel config
+        mock_channel = MagicMock(spec=[])
+        mock_channel.channel_type = "slack"
+        mock_channel.channel_info = "slack-channel"
+        r2 = RepoServerConfig(
+            repo_id="b",
+            git_repo_url="https://example.com/repo.git",
+            channel=mock_channel,
+        )
+        # Should not raise — the non-email repo is skipped
+        ServerConfig(global_config=GlobalConfig(), repos={"a": r1, "b": r2})
 
     def test_duplicate_inbox_rejected(self, tmp_path: Path) -> None:
         """Two repos sharing the same IMAP inbox are rejected."""
@@ -792,12 +809,12 @@ class TestFromYaml:
         assert config.global_config.container_command == "podman"
 
         # Repo config
-        assert repo.email.imap_server == "imap.test.com"
-        assert repo.email.imap_port == 993
-        assert repo.email.smtp_port == 587
-        assert repo.email.password == "plain_password"
-        assert repo.email.poll_interval_seconds == 60
-        assert repo.email.use_imap_idle is True
+        assert repo.channel.imap_server == "imap.test.com"
+        assert repo.channel.imap_port == 993
+        assert repo.channel.smtp_port == 587
+        assert repo.channel.password == "plain_password"
+        assert repo.channel.poll_interval_seconds == 60
+        assert repo.channel.use_imap_idle is True
         assert repo.secrets == {}
 
     def test_full_config(self, master_repo: Path, tmp_path: Path) -> None:
@@ -827,12 +844,12 @@ class TestFromYaml:
         assert config.global_config.container_command == "docker"
 
         # Repo config
-        assert repo.email.imap_port == 143
-        assert repo.email.smtp_port == 25
-        assert repo.email.password == "env_pw"
-        assert repo.email.poll_interval_seconds == 45
-        assert repo.email.use_imap_idle is False
-        assert repo.email.idle_reconnect_interval_seconds == 1800
+        assert repo.channel.imap_port == 143
+        assert repo.channel.smtp_port == 25
+        assert repo.channel.password == "env_pw"
+        assert repo.channel.poll_interval_seconds == 45
+        assert repo.channel.use_imap_idle is False
+        assert repo.channel.idle_reconnect_interval_seconds == 1800
         assert repo.secrets == {
             "GH_TOKEN": "ghp_tok",
             "R2_ACCOUNT_ID": "test-account",
@@ -940,7 +957,7 @@ class TestFromYaml:
         ):
             config = ServerConfig.from_yaml()
 
-        assert config.repos["test"].email.imap_server == "imap.test.com"
+        assert config.repos["test"].channel.imap_server == "imap.test.com"
 
     def test_env_override_bool_field(
         self, master_repo: Path, tmp_path: Path
@@ -957,7 +974,7 @@ class TestFromYaml:
         with patch.dict("os.environ", {"USE_IDLE": "false"}):
             config = ServerConfig.from_yaml(yaml_path)
 
-        assert config.repos["test"].email.use_imap_idle is False
+        assert config.repos["test"].channel.use_imap_idle is False
 
     def test_env_override_int_field(
         self, master_repo: Path, tmp_path: Path
@@ -974,7 +991,7 @@ class TestFromYaml:
         with patch.dict("os.environ", {"POLL_INTERVAL": "120"}):
             config = ServerConfig.from_yaml(yaml_path)
 
-        assert config.repos["test"].email.poll_interval_seconds == 120
+        assert config.repos["test"].channel.poll_interval_seconds == 120
 
     def test_repos_not_a_mapping(self, tmp_path: Path) -> None:
         """Raise ConfigError when repos is not a mapping."""
@@ -1027,9 +1044,9 @@ class TestFromYaml:
         config = ServerConfig.from_yaml(yaml_path)
         repo = config.repos["test"]
 
-        assert repo.email.microsoft_oauth2_tenant_id == "my-tenant"
-        assert repo.email.microsoft_oauth2_client_id == "my-client"
-        assert repo.email.microsoft_oauth2_client_secret == "my-secret"
+        assert repo.channel.microsoft_oauth2_tenant_id == "my-tenant"
+        assert repo.channel.microsoft_oauth2_client_id == "my-client"
+        assert repo.channel.microsoft_oauth2_client_secret == "my-secret"
 
     def test_microsoft_oauth2_env_vars(
         self, master_repo: Path, tmp_path: Path
@@ -1060,9 +1077,9 @@ class TestFromYaml:
             config = ServerConfig.from_yaml(yaml_path)
 
         repo = config.repos["test"]
-        assert repo.email.microsoft_oauth2_tenant_id == "env-tenant"
-        assert repo.email.microsoft_oauth2_client_id == "env-client"
-        assert repo.email.microsoft_oauth2_client_secret == "env-secret"
+        assert repo.channel.microsoft_oauth2_tenant_id == "env-tenant"
+        assert repo.channel.microsoft_oauth2_client_id == "env-client"
+        assert repo.channel.microsoft_oauth2_client_secret == "env-secret"
 
     def test_microsoft_oauth2_password_optional(
         self, master_repo: Path, tmp_path: Path
@@ -1088,8 +1105,8 @@ class TestFromYaml:
         config = ServerConfig.from_yaml(yaml_path)
         repo = config.repos["test"]
 
-        assert repo.email.password == ""
-        assert repo.email.microsoft_oauth2_tenant_id == "my-tenant"
+        assert repo.channel.password == ""
+        assert repo.channel.microsoft_oauth2_tenant_id == "my-tenant"
 
     def test_microsoft_oauth2_absent_defaults_none(
         self, master_repo: Path, tmp_path: Path
@@ -1101,9 +1118,9 @@ class TestFromYaml:
         config = ServerConfig.from_yaml(yaml_path)
         repo = config.repos["test"]
 
-        assert repo.email.microsoft_oauth2_tenant_id is None
-        assert repo.email.microsoft_oauth2_client_id is None
-        assert repo.email.microsoft_oauth2_client_secret is None
+        assert repo.channel.microsoft_oauth2_tenant_id is None
+        assert repo.channel.microsoft_oauth2_client_id is None
+        assert repo.channel.microsoft_oauth2_client_secret is None
 
     def test_internal_auth_fallback_from_yaml(
         self, master_repo: Path, tmp_path: Path
@@ -1120,7 +1137,7 @@ class TestFromYaml:
 
         config = ServerConfig.from_yaml(yaml_path)
         repo = config.repos["test"]
-        assert repo.email.microsoft_internal_auth_fallback is True
+        assert repo.channel.microsoft_internal_auth_fallback is True
 
     def test_internal_auth_fallback_default_false(
         self, master_repo: Path, tmp_path: Path
@@ -1131,7 +1148,7 @@ class TestFromYaml:
 
         config = ServerConfig.from_yaml(yaml_path)
         repo = config.repos["test"]
-        assert repo.email.microsoft_internal_auth_fallback is False
+        assert repo.channel.microsoft_internal_auth_fallback is False
 
     def test_legacy_field_at_repo_level_rejected(
         self, master_repo: Path, tmp_path: Path

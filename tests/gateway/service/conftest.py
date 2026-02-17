@@ -5,7 +5,6 @@
 
 """Shared fixtures for gateway service tests."""
 
-from email.message import Message
 from email.parser import BytesParser
 from pathlib import Path
 from typing import Any
@@ -13,6 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from airut.gateway.channel import RawMessage
 from airut.gateway.service import GatewayService
 
 
@@ -25,8 +25,8 @@ def make_message(
     message_id: str = "<msg1@example.com>",
     references: str = "",
     auth_results: str = "mx.google.com; dmarc=pass; spf=pass",
-) -> Message:
-    """Build a simple email Message for testing."""
+) -> RawMessage:
+    """Build a RawMessage wrapping an email Message for testing."""
     raw = (
         f"From: {sender}\r\n"
         f"To: {to}\r\n"
@@ -38,7 +38,8 @@ def make_message(
     if auth_results:
         raw += f"Authentication-Results: {auth_results}\r\n"
     raw += f"\r\n{body}"
-    return BytesParser().parsebytes(raw.encode())
+    email_msg = BytesParser().parsebytes(raw.encode())
+    return RawMessage(sender=sender, content=email_msg, subject=subject)
 
 
 def update_global(svc: Any, **overrides: Any) -> None:
@@ -72,7 +73,7 @@ def update_repo(handler: Any, **overrides: Any) -> None:
     """Update repo config with new values (frozen dataclass)."""
     for key, value in overrides.items():
         if key in _EMAIL_FIELDS:
-            object.__setattr__(handler.config.email, key, value)
+            object.__setattr__(handler.config.channel, key, value)
         else:
             object.__setattr__(handler.config, key, value)
 
@@ -80,7 +81,7 @@ def update_repo(handler: Any, **overrides: Any) -> None:
 def make_service(
     email_config: Any, tmp_path: Path, **config_overrides: Any
 ) -> tuple[Any, Any]:
-    """Create an GatewayService with all external deps mocked.
+    """Create a GatewayService with all external deps mocked.
 
     Returns:
         Tuple of (service, handler) where handler is svc.repo_handlers["test"].
@@ -110,8 +111,8 @@ def make_service(
 
     with (
         patch(
-            "airut.gateway.service.repo_handler.EmailChannelAdapter.from_config"
-        ) as mock_from_config,
+            "airut.gateway.service.repo_handler.create_adapter"
+        ) as mock_create,
         patch("airut.gateway.service.repo_handler.ConversationManager"),
         patch("airut.gateway.service.gateway.capture_version_info") as mock_ver,
         patch("airut.gateway.service.gateway.TaskTracker"),
@@ -122,7 +123,7 @@ def make_service(
         ),
     ):
         mock_adapter = MagicMock()
-        mock_from_config.return_value = mock_adapter
+        mock_create.return_value = mock_adapter
         mock_ver.return_value = (MagicMock(git_sha="abc1234"), MagicMock())
         svc = GatewayService(server_config, repo_root=tmp_path)
 

@@ -708,6 +708,20 @@ class EmailChannelConfig:
                 f"{self.idle_reconnect_interval_seconds}"
             )
 
+    @property
+    def channel_type(self) -> str:
+        """Return the channel type identifier."""
+        return "email"
+
+    @property
+    def channel_info(self) -> str:
+        """Return a short description for dashboard display."""
+        return self.imap_server
+
+
+# Type alias for channel config union. Extend with new channel types.
+ChannelConfig = EmailChannelConfig
+
 
 @dataclass(frozen=True)
 class RepoServerConfig:
@@ -723,7 +737,7 @@ class RepoServerConfig:
     Attributes:
         repo_id: Repository identifier (key from ``repos`` mapping).
         git_repo_url: Git repository URL to clone from.
-        email: Email channel configuration.
+        channel: Channel configuration (email, Slack, etc.).
         secrets: Per-repo secrets pool for ``!secret`` resolution.
         masked_secrets: Secrets with scope restrictions for proxy replacement.
         signing_credentials: Signing credentials for proxy re-signing.
@@ -734,7 +748,7 @@ class RepoServerConfig:
 
     repo_id: str
     git_repo_url: str
-    email: EmailChannelConfig
+    channel: ChannelConfig
     secrets: dict[str, str] = field(default_factory=dict)
     masked_secrets: dict[str, MaskedSecret] = field(default_factory=dict)
     signing_credentials: dict[str, SigningCredential] = field(
@@ -770,14 +784,21 @@ class RepoServerConfig:
             )
 
         logger.info(
-            "Repo '%s' config loaded: imap=%s:%d, smtp=%s:%d, authorized=%s",
+            "Repo '%s' config loaded: channel=%s, info=%s",
             self.repo_id,
-            self.email.imap_server,
-            self.email.imap_port,
-            self.email.smtp_server,
-            self.email.smtp_port,
-            self.email.authorized_senders,
+            self.channel_type,
+            self.channel_info,
         )
+
+    @property
+    def channel_type(self) -> str:
+        """Return the channel type string (delegated to channel config)."""
+        return self.channel.channel_type
+
+    @property
+    def channel_info(self) -> str:
+        """Return channel info for dashboard (delegated to channel config)."""
+        return self.channel.channel_info
 
     @property
     def storage_dir(self) -> Path:
@@ -808,18 +829,20 @@ class ServerConfig:
         if not self.repos:
             raise ConfigError("At least one repo must be configured")
 
-        # Validate no duplicate IMAP inboxes
+        # Validate no duplicate IMAP inboxes (for email-channel repos)
         seen_inboxes: dict[tuple[str, str], str] = {}
         for repo_id, repo in self.repos.items():
+            if not isinstance(repo.channel, EmailChannelConfig):
+                continue
             inbox_key = (
-                repo.email.imap_server.lower(),
-                repo.email.username.lower(),
+                repo.channel.imap_server.lower(),
+                repo.channel.username.lower(),
             )
             if inbox_key in seen_inboxes:
                 raise ConfigError(
                     f"Repo '{repo_id}' and repo '{seen_inboxes[inbox_key]}' "
                     f"share the same IMAP inbox "
-                    f"({repo.email.imap_server}/{repo.email.username}). "
+                    f"({repo.channel.imap_server}/{repo.channel.username}). "
                     f"Each repo must have its own inbox."
                 )
             seen_inboxes[inbox_key] = repo_id
@@ -1056,7 +1079,7 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
             str,
             required=f"{prefix}.git.repo_url",
         ),
-        email=email_config,
+        channel=email_config,
         secrets=secrets,
         masked_secrets=masked_secrets,
         signing_credentials=signing_credentials,

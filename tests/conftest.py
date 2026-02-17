@@ -170,8 +170,14 @@ Please fix the linting errors.
 
 @pytest.fixture
 def sample_email_message():
-    """Parsed sample email message."""
+    """Sample email wrapped as RawMessage.
+
+    Tests that need to manipulate email headers can access the
+    underlying email via ``.content``.
+    """
     from email.parser import BytesParser
+
+    from airut.gateway.channel import RawMessage
 
     sample_bytes = b"""From: user@example.com
 To: claude@example.com
@@ -185,4 +191,9 @@ Please fix the linting errors.
 > On Jan 12, 2026, Claude wrote:
 > > Can you review this code?
 """
-    return BytesParser().parsebytes(sample_bytes)
+    email_msg = BytesParser().parsebytes(sample_bytes)
+    return RawMessage(
+        sender="user@example.com",
+        content=email_msg,
+        subject="[ID:abc12345] Test request",
+    )

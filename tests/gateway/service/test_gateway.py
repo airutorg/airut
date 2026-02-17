@@ -20,7 +20,7 @@ from .conftest import make_message, make_service, update_global
 class TestGatewayServiceInit:
     def test_init_sets_running(self, email_config, tmp_path: Path) -> None:
         svc, _ = make_service(email_config, tmp_path)
-        assert svc.running is True
+        assert svc._running is True
 
     def test_init_no_executor_pool(self, email_config, tmp_path: Path) -> None:
         svc, _ = make_service(email_config, tmp_path)
@@ -36,10 +36,7 @@ class TestGatewayServiceInit:
         )
 
         with (
-            patch(
-                "airut.gateway.service.repo_handler.EmailChannelAdapter"
-                ".from_config"
-            ),
+            patch("airut.gateway.service.repo_handler.create_adapter"),
             patch("airut.gateway.service.repo_handler.ConversationManager"),
             patch("airut.gateway.service.gateway.capture_version_info") as mv,
             patch("airut.gateway.service.gateway.TaskTracker"),
@@ -66,10 +63,7 @@ class TestGatewayServiceInit:
         )
 
         with (
-            patch(
-                "airut.gateway.service.repo_handler.EmailChannelAdapter"
-                ".from_config"
-            ),
+            patch("airut.gateway.service.repo_handler.create_adapter"),
             patch("airut.gateway.service.repo_handler.ConversationManager"),
             patch("airut.gateway.service.gateway.capture_version_info") as mv,
             patch("airut.gateway.service.gateway.TaskTracker"),
@@ -435,15 +429,16 @@ class TestStartStop:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_enabled=False)
 
-        # Make _listener_loop exit immediately
-        def fake_loop():
-            svc.running = False
+        # Make listener.start stop the service immediately
+        def fake_start(**kwargs):
+            svc._running = False
 
-        with patch.object(handler, "_listener_loop", side_effect=fake_loop):
-            svc.start()
+        handler.adapter.listener.start.side_effect = fake_start
+
+        svc.start()
 
         handler.conversation_manager.mirror.update_mirror.assert_called_once()
-        handler.adapter.listener.connect.assert_called_once_with(max_retries=3)
+        handler.adapter.listener.start.assert_called_once()
         assert svc._executor_pool is not None
 
     def test_start_with_dashboard(self, email_config, tmp_path: Path) -> None:
@@ -451,11 +446,12 @@ class TestStartStop:
             email_config, tmp_path, dashboard_enabled=True
         )
 
-        def fake_loop():
-            svc.running = False
+        def fake_start(**kwargs):
+            svc._running = False
+
+        handler.adapter.listener.start.side_effect = fake_start
 
         with (
-            patch.object(handler, "_listener_loop", side_effect=fake_loop),
             patch("airut.gateway.service.gateway.DashboardServer") as mock_ds,
         ):
             update_global(svc, dashboard_enabled=True)
@@ -466,7 +462,15 @@ class TestStartStop:
         svc, handler = make_service(email_config, tmp_path)
         svc.stop()
         svc.stop()  # Second call should be no-op
-        handler.adapter.listener.close.assert_called_once()
+        handler.adapter.listener.stop.assert_called_once()
+
+    def test_stop_without_start(self, email_config, tmp_path: Path) -> None:
+        """stop() before start() completes without error."""
+        svc, handler = make_service(email_config, tmp_path)
+        svc.stop()
+        assert svc._running is False
+        assert svc._stopped is True
+        handler.adapter.listener.stop.assert_called_once()
 
     def test_stop_waits_for_pending(self, email_config, tmp_path: Path) -> None:
         svc, _ = make_service(email_config, tmp_path)
@@ -511,11 +515,7 @@ class TestStartStop:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_enabled=False)
 
-        def fake_loop():
-            pass  # Don't set running=False; let sleep raise
-
         with (
-            patch.object(handler, "_listener_loop", side_effect=fake_loop),
             patch("time.sleep", side_effect=KeyboardInterrupt),
         ):
             svc.start()  # Should handle KeyboardInterrupt gracefully
@@ -537,10 +537,7 @@ class TestRepoHandlerInitError:
 
         # Make RepoHandler init fail by patching ConversationManager
         with (
-            patch(
-                "airut.gateway.service.repo_handler.EmailChannelAdapter"
-                ".from_config"
-            ),
+            patch("airut.gateway.service.repo_handler.create_adapter"),
             patch(
                 "airut.gateway.service.repo_handler.ConversationManager",
                 side_effect=RuntimeError("Git clone failed"),
@@ -577,10 +574,7 @@ class TestRepoHandlerInitError:
         )
 
         with (
-            patch(
-                "airut.gateway.service.repo_handler.EmailChannelAdapter"
-                ".from_config"
-            ),
+            patch("airut.gateway.service.repo_handler.create_adapter"),
             patch(
                 "airut.gateway.service.repo_handler.ConversationManager",
                 side_effect=RuntimeError("Git clone failed"),
@@ -644,7 +638,7 @@ class TestStartRepoInitFailure:
         update_global(svc, dashboard_enabled=False)
 
         # Make the repo fail during start_listener
-        handler.adapter.listener.connect.side_effect = RuntimeError(
+        handler.adapter.listener.start.side_effect = RuntimeError(
             "Connection refused"
         )
 
@@ -665,15 +659,14 @@ class TestStartRepoInitFailure:
         mock_handler2.config = MagicMock()
         mock_handler2.config.repo_id = "repo2"
         mock_handler2.config.git_repo_url = "https://example.com/repo2"
-        mock_handler2.config.email.imap_server = "imap2.example.com"
+        mock_handler2.config.channel_info = "imap2.example.com"
         mock_handler2.config.storage_dir = tmp_path / "s2"
         mock_handler2.start_listener.side_effect = RuntimeError("Auth failed")
         svc.repo_handlers["repo2"] = mock_handler2
 
         # Make the first handler succeed but stop immediately
         def fake_start():
-            svc.running = False
-            return MagicMock()
+            svc._running = False
 
         handler.start_listener = fake_start
 
@@ -698,11 +691,12 @@ class TestBootState:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_enabled=False)
 
-        def fake_loop():
-            svc.running = False
+        def fake_start(**kwargs):
+            svc._running = False
 
-        with patch.object(handler, "_listener_loop", side_effect=fake_loop):
-            svc.start()
+        handler.adapter.listener.start.side_effect = fake_start
+
+        svc.start()
 
         boot = svc._boot_store.get().value
         assert boot.phase == BootPhase.READY
@@ -719,7 +713,7 @@ class TestBootState:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_enabled=False)
 
-        handler.adapter.listener.connect.side_effect = RuntimeError(
+        handler.adapter.listener.start.side_effect = RuntimeError(
             "Connection refused"
         )
 
@@ -742,7 +736,7 @@ class TestBootState:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_enabled=False)
 
-        handler.adapter.listener.connect.side_effect = RuntimeError(
+        handler.adapter.listener.start.side_effect = RuntimeError(
             "Connection refused"
         )
 
@@ -764,7 +758,7 @@ class TestBootState:
             email_config, tmp_path, dashboard_enabled=True
         )
 
-        handler.adapter.listener.connect.side_effect = RuntimeError("fail")
+        handler.adapter.listener.start.side_effect = RuntimeError("fail")
 
         with (
             patch("airut.gateway.service.gateway.DashboardServer") as mock_ds,
@@ -790,11 +784,10 @@ class TestBootState:
             nonlocal dashboard_started_during_boot
             # Dashboard should already be started when _boot runs
             dashboard_started_during_boot = svc.dashboard is not None
-            svc.running = False
+            svc._running = False
             return original_boot()
 
         with (
-            patch.object(handler, "_listener_loop", side_effect=lambda: None),
             patch("airut.gateway.service.gateway.DashboardServer") as mock_ds,
         ):
             svc._boot = check_dashboard_then_boot
@@ -1121,11 +1114,9 @@ class TestMain:
         assert sig_mod.SIGTERM in sig_calls
 
     def test_shutdown_handler(self) -> None:
-        """Test that the shutdown handler sets running=False and interrupts."""
+        """Test that the shutdown handler calls service.stop()."""
         mock_config = MagicMock()
         mock_svc = MagicMock()
-        mock_svc.running = True
-        mock_svc.repo_handlers = {"test": MagicMock()}
         captured_handler = None
 
         def capture_signal(signum, handler):
@@ -1158,10 +1149,11 @@ class TestMain:
             main()
 
         assert captured_handler is not None
-        # Call the shutdown handler
+        # main() already called stop() once in the finally block;
+        # reset to verify the signal handler calls it independently.
+        mock_svc.stop.reset_mock()
         captured_handler(2, None)
-        assert mock_svc.running is False
-        mock_svc.repo_handlers["test"].stop.assert_called_once()
+        mock_svc.stop.assert_called_once()
 
     def test_resilient_flag_passed(self) -> None:
         """Test that --resilient flag is passed to service.start()."""
@@ -1257,10 +1249,7 @@ class TestUpstreamDnsResolution:
         )
 
         with (
-            patch(
-                "airut.gateway.service.repo_handler.EmailChannelAdapter"
-                ".from_config"
-            ),
+            patch("airut.gateway.service.repo_handler.create_adapter"),
             patch("airut.gateway.service.repo_handler.ConversationManager"),
             patch("airut.gateway.service.gateway.capture_version_info") as mv,
             patch("airut.gateway.service.gateway.TaskTracker"),
@@ -1290,10 +1279,7 @@ class TestUpstreamDnsResolution:
         )
 
         with (
-            patch(
-                "airut.gateway.service.repo_handler.EmailChannelAdapter"
-                ".from_config"
-            ),
+            patch("airut.gateway.service.repo_handler.create_adapter"),
             patch("airut.gateway.service.repo_handler.ConversationManager"),
             patch("airut.gateway.service.gateway.capture_version_info") as mv,
             patch("airut.gateway.service.gateway.TaskTracker"),
@@ -1321,10 +1307,7 @@ class TestUpstreamDnsResolution:
         )
 
         with (
-            patch(
-                "airut.gateway.service.repo_handler.EmailChannelAdapter"
-                ".from_config"
-            ),
+            patch("airut.gateway.service.repo_handler.create_adapter"),
             patch("airut.gateway.service.repo_handler.ConversationManager"),
             patch("airut.gateway.service.gateway.capture_version_info") as mv,
             patch("airut.gateway.service.gateway.TaskTracker"),

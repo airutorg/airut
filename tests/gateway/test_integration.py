@@ -24,6 +24,7 @@ from airut.gateway import (
     ConversationManager,
     EmailListener,
     EmailResponder,
+    RawMessage,
     SenderAuthenticator,
     SenderAuthorizer,
     SMTPSendError,
@@ -58,23 +59,25 @@ class TestEndToEndFlow:
             storage_dir=email_config.storage_dir,
         )
         authenticator = SenderAuthenticator(
-            email_config.email.trusted_authserv_id
+            email_config.channel.trusted_authserv_id
         )
-        authorizer = SenderAuthorizer(email_config.email.authorized_senders)
-        responder = EmailResponder(email_config.email)
+        authorizer = SenderAuthorizer(email_config.channel.authorized_senders)
+        responder = EmailResponder(email_config.channel)
 
-        # Mock email message with new conversation
-        message = sample_email_message
-        message.replace_header("Subject", "Please help with task")
-        message.replace_header("From", email_config.email.authorized_senders[0])
+        # Extract underlying email from RawMessage
+        email_msg = sample_email_message.content
+        email_msg.replace_header("Subject", "Please help with task")
+        email_msg.replace_header(
+            "From", email_config.channel.authorized_senders[0]
+        )
 
         # Validate authentication and authorization
-        sender = authenticator.authenticate(message)
+        sender = authenticator.authenticate(email_msg)
         assert sender is not None
         assert authorizer.is_authorized(sender) is True
 
         # Extract conversation ID (should be None for new)
-        conv_id = extract_conversation_id(message.get("Subject"))
+        conv_id = extract_conversation_id(email_msg.get("Subject"))
         assert conv_id is None
 
         # Create new conversation
@@ -86,10 +89,10 @@ class TestEndToEndFlow:
         # Create inbox and extract attachments
         inbox_path = repo_path / "inbox"
         inbox_path.mkdir(exist_ok=True)
-        filenames = extract_attachments(message, inbox_path)
+        filenames = extract_attachments(email_msg, inbox_path)
 
         # Extract body (HTML quotes stripped in extract_body)
-        clean_body = extract_body(message)
+        clean_body = extract_body(email_msg)
 
         # Build prompt
         if filenames:
@@ -103,11 +106,11 @@ class TestEndToEndFlow:
         # Mock responder send
         with patch.object(responder, "send_reply") as mock_send:
             responder.send_reply(
-                to=message.get("From"),
-                subject=f"Re: [ID:{conv_id}] {message.get('Subject')}",
+                to=email_msg.get("From"),
+                subject=f"Re: [ID:{conv_id}] {email_msg.get('Subject')}",
                 body="Done!",
-                in_reply_to=message.get("Message-ID"),
-                references=[message.get("Message-ID")],
+                in_reply_to=email_msg.get("Message-ID"),
+                references=[email_msg.get("Message-ID")],
             )
             mock_send.assert_called_once()
 
@@ -127,13 +130,13 @@ class TestEndToEndFlow:
         conv_id, repo_path = conversation_manager.initialize_new()
 
         # Simulate follow-up message
-        message = sample_email_message
-        message.replace_header(
+        email_msg = sample_email_message.content
+        email_msg.replace_header(
             "Subject", f"Re: [ID:{conv_id}] Follow-up question"
         )
 
         # Extract conversation ID
-        extracted_id = extract_conversation_id(message.get("Subject"))
+        extracted_id = extract_conversation_id(email_msg.get("Subject"))
         assert extracted_id == conv_id
 
         # Resume conversation
@@ -146,16 +149,16 @@ class TestEndToEndFlow:
     ):
         """Test that unauthorized senders are rejected."""
         authenticator = SenderAuthenticator(
-            email_config.email.trusted_authserv_id
+            email_config.channel.trusted_authserv_id
         )
-        authorizer = SenderAuthorizer(email_config.email.authorized_senders)
+        authorizer = SenderAuthorizer(email_config.channel.authorized_senders)
 
         # Modify message to have unauthorized sender
-        message = sample_email_message
-        message.replace_header("From", "hacker@evil.com")
+        email_msg = sample_email_message.content
+        email_msg.replace_header("From", "hacker@evil.com")
 
         # Should authenticate (DMARC passes) but not authorize
-        sender = authenticator.authenticate(message)
+        sender = authenticator.authenticate(email_msg)
         assert sender is not None
         assert authorizer.is_authorized(sender) is False
 
@@ -191,7 +194,7 @@ class TestEndToEndFlow:
 
         # Create email with attachment
         msg = MIMEMultipart()
-        msg["From"] = email_config.email.authorized_senders[0]
+        msg["From"] = email_config.channel.authorized_senders[0]
         msg["To"] = "claude@example.com"
         msg["Subject"] = "Please process this file"
         msg["Message-ID"] = "<attach123@example.com>"
@@ -218,9 +221,9 @@ class TestEndToEndFlow:
             storage_dir=email_config.storage_dir,
         )
         authenticator = SenderAuthenticator(
-            email_config.email.trusted_authserv_id
+            email_config.channel.trusted_authserv_id
         )
-        authorizer = SenderAuthorizer(email_config.email.authorized_senders)
+        authorizer = SenderAuthorizer(email_config.channel.authorized_senders)
 
         # Validate authentication and authorization
         sender = authenticator.authenticate(msg)
@@ -258,7 +261,7 @@ class TestErrorRecovery:
         """Test SMTP send retry on failure."""
         from smtplib import SMTPException
 
-        responder = EmailResponder(email_config.email)
+        responder = EmailResponder(email_config.channel)
 
         # Mock SMTP to fail
         with patch(
@@ -358,20 +361,20 @@ class TestComponentIntegration:
     ):
         """Test that config properly initializes all components."""
         # Create all components from config
-        listener = EmailListener(email_config.email)
-        responder = EmailResponder(email_config.email)
+        listener = EmailListener(email_config.channel)
+        responder = EmailResponder(email_config.channel)
         authenticator = SenderAuthenticator(
-            email_config.email.trusted_authserv_id
+            email_config.channel.trusted_authserv_id
         )
-        authorizer = SenderAuthorizer(email_config.email.authorized_senders)
+        authorizer = SenderAuthorizer(email_config.channel.authorized_senders)
         conversation_manager = ConversationManager(
             repo_url=email_config.git_repo_url,
             storage_dir=email_config.storage_dir,
         )
 
         # Verify components initialized
-        assert listener.config == email_config.email
-        assert responder.config == email_config.email
+        assert listener.config == email_config.channel
+        assert responder.config == email_config.channel
         assert authenticator.trusted_authserv_id == "mx.example.com"
         # Verify authorizer patterns match config
         assert authorizer.is_authorized("authorized@example.com") is True
@@ -438,6 +441,125 @@ Follow-up question.
         # Extract In-Reply-To
         in_reply_to = followup.get("In-Reply-To")
         assert in_reply_to == "<msg1@example.com>"
+
+    def test_channel_listener_health_status(
+        self,
+        email_config: RepoServerConfig,
+    ) -> None:
+        """Listener reports STARTING then CONNECTED after start()."""
+        from airut.gateway.channel import ChannelHealth
+        from airut.gateway.email.channel_listener import EmailChannelListener
+
+        mock_el = MagicMock()
+        cl = EmailChannelListener(
+            email_config.channel, email_listener=mock_el, repo_id="test-repo"
+        )
+
+        # Before start, status is STARTING
+        assert cl.status.health == ChannelHealth.STARTING
+
+        # After start, status is CONNECTED
+        with patch.object(cl, "_listener_loop"):
+            cl.start(submit=MagicMock(return_value=True))
+
+        assert cl.status.health == ChannelHealth.CONNECTED
+
+        cl.stop()
+
+    def test_submit_callback_chain(
+        self,
+        email_config: RepoServerConfig,
+    ) -> None:
+        """Full callback chain: listener → RepoHandler → GatewayService.
+
+        Verifies the wiring from EmailChannelListener's submit callback
+        through RepoHandler._submit_message to GatewayService.submit_message.
+        Uses the real adapter and listener created by from_config, with
+        only the low-level EmailListener mocked for IMAP control.
+        """
+        from email.parser import BytesParser
+
+        from airut.gateway.email.adapter import EmailChannelAdapter
+        from airut.gateway.email.channel_listener import (
+            EmailChannelListener,
+        )
+        from airut.gateway.service import GatewayService
+
+        config = ServerConfig(
+            global_config=GlobalConfig(),
+            repos={"test": email_config},
+        )
+        service = GatewayService(config)
+        handler = service.repo_handlers["test"]
+
+        # The real adapter has a real EmailChannelListener.
+        # Replace its low-level EmailListener with a mock.
+        adapter = handler.adapter
+        assert isinstance(adapter, EmailChannelAdapter)
+        real_listener = adapter.listener
+        assert isinstance(real_listener, EmailChannelListener)
+        mock_el = MagicMock()
+        real_listener._email_listener = mock_el
+
+        # Track calls to service.submit_message
+        received: list[RawMessage] = []
+
+        def tracking_submit(
+            raw_message: RawMessage, repo_handler: object
+        ) -> bool:
+            received.append(raw_message)
+            return False  # Don't actually process
+
+        mock_submit = MagicMock(side_effect=tracking_submit)
+
+        # Build a test email
+        raw_bytes = (
+            b"From: user@example.com\r\n"
+            b"Subject: Chain test\r\n"
+            b"Message-ID: <chain@example.com>\r\n"
+            b"\r\nHello"
+        )
+        msg = BytesParser().parsebytes(raw_bytes)
+
+        call_count = 0
+
+        def fake_fetch():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [("1", msg)]
+            real_listener._running = False
+            return []
+
+        mock_el.fetch_unread.side_effect = fake_fetch
+
+        with (
+            patch("time.sleep"),
+            patch.object(
+                handler.conversation_manager.mirror,
+                "update_mirror",
+            ),
+            patch.object(
+                service,
+                "submit_message",
+                mock_submit,
+            ),
+        ):
+            handler.start_listener()
+            assert real_listener._thread is not None
+            real_listener._thread.join(timeout=5)
+
+        # Verify the full chain was invoked
+        assert len(received) == 1
+        assert received[0].sender == "user@example.com"
+        assert received[0].subject == "Chain test"
+        assert received[0].content is msg
+
+        # service.submit_message was called with (raw_message, handler)
+        mock_submit.assert_called_once()
+        assert mock_submit.call_args[0][1] is handler
+
+        real_listener.stop()
 
 
 class TestParallelExecution:
@@ -681,10 +803,6 @@ class TestParallelExecution:
         service = GatewayService(config)
         handler = service.repo_handlers["test"]
 
-        message = sample_email_message
-        message.replace_header("Subject", "New request without ID")
-        message.replace_header("From", email_config.email.authorized_senders[0])
-
         parsed = ParsedMessage(
             sender="user@example.com",
             body="Do something",
@@ -701,7 +819,9 @@ class TestParallelExecution:
             "airut.gateway.service.gateway.process_message",
             return_value=(True, None),
         ) as mock_process:
-            service._process_message_worker(message, "test-task-id", handler)
+            service._process_message_worker(
+                sample_email_message, "test-task-id", handler
+            )
             mock_process.assert_called_once()
             call_args = mock_process.call_args
             assert call_args[0][0] is service
@@ -735,10 +855,6 @@ class TestParallelExecution:
         # Create an existing conversation
         conv_id, _ = handler.conversation_manager.initialize_new()
 
-        message = sample_email_message
-        message.replace_header("Subject", f"Re: [ID:{conv_id}] Follow-up")
-        message.replace_header("From", email_config.email.authorized_senders[0])
-
         parsed = ParsedMessage(
             sender="user@example.com",
             body="Follow-up",
@@ -754,7 +870,9 @@ class TestParallelExecution:
             "airut.gateway.service.gateway.process_message",
             return_value=(True, conv_id),
         ) as mock_process:
-            service._process_message_worker(message, "test-task-id", handler)
+            service._process_message_worker(
+                sample_email_message, "test-task-id", handler
+            )
             mock_process.assert_called_once()
 
         # Conversation lock should have been created
@@ -781,14 +899,15 @@ class TestAcknowledgmentReply:
 
         responder = MagicMock()
         adapter = EmailChannelAdapter(
-            config=email_config.email,
+            config=email_config.channel,
             authenticator=MagicMock(),
             authorizer=MagicMock(),
             responder=responder,
+            repo_id="test",
         )
 
         parsed = EmailParsedMessage(
-            sender=email_config.email.authorized_senders[0],
+            sender=email_config.channel.authorized_senders[0],
             body="New request",
             conversation_id=None,
             model_hint=None,
@@ -801,7 +920,7 @@ class TestAcknowledgmentReply:
 
         responder.send_reply.assert_called_once()
         call_kwargs = responder.send_reply.call_args[1]
-        assert call_kwargs["to"] == email_config.email.authorized_senders[0]
+        assert call_kwargs["to"] == email_config.channel.authorized_senders[0]
         assert f"[ID:{conv_id}]" in call_kwargs["subject"]
         assert "Re:" in call_kwargs["subject"]
         assert "started working" in call_kwargs["body"]
@@ -821,15 +940,16 @@ class TestAcknowledgmentReply:
 
         responder = MagicMock()
         adapter = EmailChannelAdapter(
-            config=email_config.email,
+            config=email_config.channel,
             authenticator=MagicMock(),
             authorizer=MagicMock(),
             responder=responder,
+            repo_id="test",
         )
 
         conv_id = "xyz98765"
         parsed = EmailParsedMessage(
-            sender=email_config.email.authorized_senders[0],
+            sender=email_config.channel.authorized_senders[0],
             body="Follow-up",
             conversation_id=conv_id,
             model_hint=None,
@@ -857,14 +977,15 @@ class TestAcknowledgmentReply:
         responder = MagicMock()
         responder.send_reply.side_effect = SMTPSendError("Send failed")
         adapter = EmailChannelAdapter(
-            config=email_config.email,
+            config=email_config.channel,
             authenticator=MagicMock(),
             authorizer=MagicMock(),
             responder=responder,
+            repo_id="test",
         )
 
         parsed = EmailParsedMessage(
-            sender=email_config.email.authorized_senders[0],
+            sender=email_config.channel.authorized_senders[0],
             body="Request",
             conversation_id=None,
             model_hint=None,
@@ -887,10 +1008,11 @@ class TestAcknowledgmentReply:
 
         responder = MagicMock()
         adapter = EmailChannelAdapter(
-            config=email_config.email,
+            config=email_config.channel,
             authenticator=MagicMock(),
             authorizer=MagicMock(),
             responder=responder,
+            repo_id="test",
         )
 
         parsed = EmailParsedMessage(
@@ -973,7 +1095,7 @@ class TestAcknowledgmentReply:
         adapter.save_attachments.return_value = []
 
         parsed = ParsedMessage(
-            sender=email_config.email.authorized_senders[0],
+            sender=email_config.channel.authorized_senders[0],
             body="New request",
             conversation_id=None,
             model_hint=None,
@@ -1058,7 +1180,7 @@ class TestAcknowledgmentReply:
         adapter.save_attachments.return_value = []
 
         parsed = ParsedMessage(
-            sender=email_config.email.authorized_senders[0],
+            sender=email_config.channel.authorized_senders[0],
             body="New request without ID",
             conversation_id=None,
             model_hint=None,
@@ -1102,6 +1224,7 @@ class TestAcknowledgmentReply:
             authenticator=MagicMock(),
             authorizer=MagicMock(),
             responder=responder,
+            repo_id="test",
         )
 
         parsed = EmailParsedMessage(
@@ -1138,14 +1261,15 @@ class TestAcknowledgmentReply:
 
         responder = MagicMock()
         adapter = EmailChannelAdapter(
-            config=email_config.email,
+            config=email_config.channel,
             authenticator=MagicMock(),
             authorizer=MagicMock(),
             responder=responder,
+            repo_id="test",
         )
 
         parsed = EmailParsedMessage(
-            sender=email_config.email.authorized_senders[0],
+            sender=email_config.channel.authorized_senders[0],
             body="New request",
             conversation_id=None,
             model_hint=None,
@@ -1211,7 +1335,7 @@ class TestAcknowledgmentReply:
         adapter.save_attachments.return_value = []
 
         parsed = ParsedMessage(
-            sender=email_config.email.authorized_senders[0],
+            sender=email_config.channel.authorized_senders[0],
             body="Follow-up",
             conversation_id=conv_id,
             model_hint=None,
@@ -1350,10 +1474,6 @@ class TestTaskIdTracking:
         service = GatewayService(config)
         handler = service.repo_handlers["test"]
 
-        message = sample_email_message
-        message.replace_header("Subject", "New request without ID")
-        message.replace_header("From", email_config.email.authorized_senders[0])
-
         parsed = ParsedMessage(
             sender="user@example.com",
             body="Do something",
@@ -1380,7 +1500,9 @@ class TestTaskIdTracking:
             "airut.gateway.service.gateway.process_message",
             side_effect=mock_process_message,
         ):
-            service._process_message_worker(message, temp_task_id, handler)
+            service._process_message_worker(
+                sample_email_message, temp_task_id, handler
+            )
 
         # Task should have been updated with new ID
         assert service.tracker.get_task(temp_task_id) is None
@@ -1408,10 +1530,6 @@ class TestTaskIdTracking:
         service = GatewayService(config)
         handler = service.repo_handlers["test"]
 
-        message = sample_email_message
-        message.replace_header("Subject", "New request")
-        message.replace_header("From", email_config.email.authorized_senders[0])
-
         parsed = ParsedMessage(
             sender="user@example.com",
             body="Do something",
@@ -1431,7 +1549,9 @@ class TestTaskIdTracking:
             "airut.gateway.service.gateway.process_message",
             return_value=(False, None),
         ):
-            service._process_message_worker(message, temp_task_id, handler)
+            service._process_message_worker(
+                sample_email_message, temp_task_id, handler
+            )
 
         # Task should remain with temp ID
         task = service.tracker.get_task(temp_task_id)
@@ -1467,7 +1587,7 @@ class TestDuplicateMessageRejection:
 
         # Worker receives raw msg; adapter returns parsed with same conv_id
         parsed = ParsedMessage(
-            sender=email_config.email.authorized_senders[0],
+            sender=email_config.channel.authorized_senders[0],
             body="Follow-up",
             conversation_id=conv_id,
             model_hint=None,
@@ -1518,7 +1638,7 @@ class TestDuplicateMessageRejection:
 
         # Worker receives raw msg; adapter returns parsed with same conv_id
         parsed = ParsedMessage(
-            sender=email_config.email.authorized_senders[0],
+            sender=email_config.channel.authorized_senders[0],
             body="Follow-up",
             conversation_id=conv_id,
             model_hint=None,
@@ -1566,7 +1686,7 @@ class TestDuplicateMessageRejection:
 
         # Worker receives a raw message; adapter returns parsed with no conv_id
         parsed = ParsedMessage(
-            sender=email_config.email.authorized_senders[0],
+            sender=email_config.channel.authorized_senders[0],
             body="Brand new request",
             conversation_id=None,
             model_hint=None,
@@ -1617,14 +1737,15 @@ class TestRejectionReply:
 
         responder = MagicMock()
         adapter = EmailChannelAdapter(
-            config=email_config.email,
+            config=email_config.channel,
             authenticator=MagicMock(),
             authorizer=MagicMock(),
             responder=responder,
+            repo_id="test",
         )
 
         parsed = EmailParsedMessage(
-            sender=email_config.email.authorized_senders[0],
+            sender=email_config.channel.authorized_senders[0],
             body="Original request",
             conversation_id=None,
             model_hint=None,
@@ -1672,6 +1793,7 @@ class TestRejectionReply:
             authenticator=MagicMock(),
             authorizer=MagicMock(),
             responder=responder,
+            repo_id="test",
         )
 
         parsed = EmailParsedMessage(
@@ -1707,14 +1829,15 @@ class TestRejectionReply:
         responder = MagicMock()
         responder.send_reply.side_effect = SMTPSendError("Send failed")
         adapter = EmailChannelAdapter(
-            config=email_config.email,
+            config=email_config.channel,
             authenticator=MagicMock(),
             authorizer=MagicMock(),
             responder=responder,
+            repo_id="test",
         )
 
         parsed = EmailParsedMessage(
-            sender=email_config.email.authorized_senders[0],
+            sender=email_config.channel.authorized_senders[0],
             body="Request",
             conversation_id=None,
             model_hint=None,
@@ -2137,17 +2260,23 @@ class TestUnauthorizedSenderTracking:
         mock_authorizer.is_authorized.return_value = False
 
         adapter = EmailChannelAdapter(
-            config=email_config.email,
+            config=email_config.channel,
             authenticator=mock_authenticator,
             authorizer=mock_authorizer,
             responder=MagicMock(),
+            repo_id="test",
         )
-        handler.adapter = adapter
+        handler.adapter = adapter  # test mock
 
         temp_task_id = "new-unauth02"
         service.tracker.add_task(temp_task_id, "(authenticating)")
 
-        service._process_message_worker(email_msg, temp_task_id, handler)
+        raw_message = RawMessage(
+            sender="hacker@malicious.com",
+            content=email_msg,
+            subject="Please do something",
+        )
+        service._process_message_worker(raw_message, temp_task_id, handler)
 
         task = service.tracker.get_task(temp_task_id)
         assert task is not None
@@ -2188,17 +2317,23 @@ class TestUnauthorizedSenderTracking:
         mock_authenticator.authenticate.return_value = None
 
         adapter = EmailChannelAdapter(
-            config=email_config.email,
+            config=email_config.channel,
             authenticator=mock_authenticator,
             authorizer=MagicMock(),
             responder=MagicMock(),
+            repo_id="test",
         )
-        handler.adapter = adapter
+        handler.adapter = adapter  # test mock
 
         temp_task_id = "new-unauth03"
         service.tracker.add_task(temp_task_id, "(authenticating)")
 
-        service._process_message_worker(email_msg, temp_task_id, handler)
+        raw_message = RawMessage(
+            sender="spoofed@evil.com",
+            content=email_msg,
+            subject="Spoofed message",
+        )
+        service._process_message_worker(raw_message, temp_task_id, handler)
 
         task = service.tracker.get_task(temp_task_id)
         assert task is not None

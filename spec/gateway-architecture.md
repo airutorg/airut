@@ -20,8 +20,7 @@ security.
 
 The gateway separates protocol-agnostic orchestration (conversation management,
 sandbox execution, session resumption, dashboard tracking) from channel-specific
-protocol handling (email IMAP/SMTP, etc.) via two core types in
-`gateway/channel.py`:
+protocol handling (email IMAP/SMTP, etc.) via types in `gateway/channel.py`:
 
 - **`ParsedMessage`** — Protocol-agnostic dataclass produced by the channel
   adapter after authentication and parsing. Contains sender, body,
@@ -31,21 +30,39 @@ protocol handling (email IMAP/SMTP, etc.) via two core types in
   identity for dashboard visibility) and `reason` (human-readable rejection
   reason). Allows the gateway core to update the task tracker without
   protocol-specific knowledge.
+- **`ChannelListener`** — `typing.Protocol` defining the listener lifecycle
+  interface. Non-blocking `start(submit)` spawns internal threads; blocking
+  `stop()` ensures clean shutdown; `status` property exposes health without
+  callbacks. Each implementation manages its own threads, reconnection logic,
+  and health tracking.
+- **`ChannelHealth`** — Enum with states `STARTING`, `CONNECTED`, `DEGRADED`
+  (temporarily lost, internally retrying), and `FAILED` (gave up, will not
+  retry). Maps to dashboard display.
+- **`ChannelStatus`** — Frozen dataclass with `health`, `message`, and
+  `error_type` for structured health reporting.
+- **`RawMessage[T]`** — Generic dataclass wrapping a channel-specific payload
+  (`T`) with sender identity and display subject. The email channel uses
+  `RawMessage[email.message.Message]`; the core uses `RawMessage[Any]`.
 - **`ChannelAdapter`** — `typing.Protocol` defining the interface between the
-  core and channel implementations: `authenticate_and_parse()`,
-  `save_attachments()`, `send_acknowledgment()`, `send_reply()`, `send_error()`,
-  `send_rejection()`.
+  core and channel implementations: `listener` property (a `ChannelListener`),
+  `authenticate_and_parse()`, `save_attachments()`, `send_acknowledgment()`,
+  `send_reply()`, `send_error()`, `send_rejection()`.
 
 Each channel implements `ChannelAdapter` (e.g., `EmailChannelAdapter` in
-`gateway/email/adapter.py`). The core works entirely through `ParsedMessage` and
-`ChannelAdapter` — it imports nothing from channel-specific subpackages.
+`gateway/email/adapter.py`). The core works entirely through `ParsedMessage`,
+`ChannelListener`, and `ChannelAdapter` — it imports nothing from
+channel-specific subpackages. A factory function `create_adapter()` in
+`gateway/service/adapter_factory.py` dispatches on channel config type to create
+the appropriate adapter.
 
 ### Components
 
 **Protocol-agnostic core** (`gateway/service/`):
 
 - **GatewayService** — Orchestration, thread pool, lifecycle management
-- **RepoHandler** — Per-repo state: channel adapter, conversation manager
+- **RepoHandler** — Per-repo state: channel adapter, conversation manager.
+  Delegates listener lifecycle entirely to `adapter.listener.start()` /
+  `adapter.listener.stop()`. Has zero channel-specific imports.
 - **ConversationManager** — Git checkout management and state persistence
 - **Sandbox** — Container lifecycle, network isolation, and execution
   (`airut/sandbox/`)
@@ -56,7 +73,10 @@ Each channel implements `ChannelAdapter` (e.g., `EmailChannelAdapter` in
   email sub-components (listener, responder, authenticator, authorizer) via
   `from_config()` factory. `RepoHandler` accesses email functionality only
   through the adapter.
-- **EmailListener** — IMAP polling loop
+- **EmailChannelListener** — Implements `ChannelListener` for email. Manages the
+  IMAP polling/IDLE loop in an internal thread with automatic reconnection and
+  health tracking. Wraps the low-level `EmailListener`.
+- **EmailListener** — Low-level IMAP operations (connect, fetch, IDLE, close)
 - **EmailResponder** — SMTP reply construction with threading support
 - **SenderAuthenticator** — DMARC verification on trusted headers
 - **SenderAuthorizer** — Sender allowlist checking
@@ -64,27 +84,37 @@ Each channel implements `ChannelAdapter` (e.g., `EmailChannelAdapter` in
 ### Data Flow
 
 ```
-Channel (e.g., IMAP Server)
-  -> Listener (e.g., EmailListener poll/IDLE)
-    -> RepoHandler._submit_message(raw_message)
-      -> GatewayService.submit_message(raw_message, handler)
-        -> Register temp task in tracker
-        -> Submit to worker thread pool
-    -> GatewayService._process_message_worker()  [worker thread]
-      -> ChannelAdapter.authenticate_and_parse()
-        -> (email: DMARC + sender auth + MIME parsing)
-        -> raises AuthenticationError on failure (with sender + reason)
-      -> Reassign temp task ID to real conversation ID
-      -> Duplicate detection (reject if conversation already active)
-      -> ConversationManager
-        -> Initialize/resume git checkout
-        -> ChannelAdapter.save_attachments()
-      -> Sandbox (Task)
-        -> Spawn Podman container
-        -> Mount conversation directories
-        -> Run claude CLI
-      -> ChannelAdapter.send_reply()
-        -> (email: SMTP with threading headers)
+RepoHandler.start_listener()
+  -> adapter.listener.start(submit=handler._submit_message)
+    -> ChannelListener spawns internal thread
+    -> (email: EmailChannelListener connects IMAP, runs poll/IDLE loop)
+
+ChannelListener thread:
+  -> Message arrives on channel
+  -> submit(raw_message)
+    -> GatewayService.submit_message(raw_message, handler)
+      -> Register temp task in tracker
+      -> Submit to worker thread pool
+
+GatewayService._process_message_worker()  [worker thread]:
+  -> ChannelAdapter.authenticate_and_parse()
+    -> (email: DMARC + sender auth + MIME parsing)
+    -> raises AuthenticationError on failure (with sender + reason)
+  -> Reassign temp task ID to real conversation ID
+  -> Duplicate detection (reject if conversation already active)
+  -> ConversationManager
+    -> Initialize/resume git checkout
+    -> ChannelAdapter.save_attachments()
+  -> Sandbox (Task)
+    -> Spawn Podman container
+    -> Mount conversation directories
+    -> Run claude CLI
+  -> ChannelAdapter.send_reply()
+    -> (email: SMTP with threading headers)
+
+RepoHandler.stop()
+  -> adapter.listener.stop()
+    -> (email: interrupt IDLE, join thread, close IMAP connection)
 ```
 
 ## Conversation State Management

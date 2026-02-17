@@ -10,6 +10,7 @@ Claude Code in containers, and replies with results.
 
 The service has been modularized into the following components:
 - gateway: Main GatewayService orchestrator and entry point
+- adapter_factory: Channel adapter creation from config
 - repo_handler: Per-repository handler (listener, auth, conversation mgmt)
 - message_processing: Message processing and Claude execution
 - usage_stats: Usage statistics extraction from Claude output

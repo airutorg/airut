@@ -188,7 +188,7 @@ class IntegrationEnvironment:
         repo_config = RepoServerConfig(
             repo_id="test",
             git_repo_url=str(master_repo),
-            email=EmailChannelConfig(
+            channel=EmailChannelConfig(
                 imap_server="127.0.0.1",
                 imap_port=imap_port,
                 smtp_server="127.0.0.1",
@@ -304,7 +304,7 @@ class IntegrationEnvironment:
             repos[repo_id] = RepoServerConfig(
                 repo_id=repo_id,
                 git_repo_url=str(master_repo),
-                email=EmailChannelConfig(
+                channel=EmailChannelConfig(
                     imap_server="127.0.0.1",
                     imap_port=imap_port,
                     smtp_server="127.0.0.1",

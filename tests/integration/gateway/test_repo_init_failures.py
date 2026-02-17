@@ -63,7 +63,7 @@ class TestImapConnectionFailures:
         repo_config = RepoServerConfig(
             repo_id="test",
             git_repo_url=str(master_repo),
-            email=EmailChannelConfig(
+            channel=EmailChannelConfig(
                 imap_server="127.0.0.1",
                 imap_port=9999,  # No server listening on this port
                 smtp_server="127.0.0.1",
@@ -126,7 +126,7 @@ class TestImapConnectionFailures:
         repo_config = RepoServerConfig(
             repo_id="unreachable",
             git_repo_url=str(master_repo),
-            email=EmailChannelConfig(
+            channel=EmailChannelConfig(
                 imap_server="127.0.0.1",  # Refused on port 1
                 imap_port=1,  # Privileged port - immediate refusal
                 smtp_server="127.0.0.1",
@@ -182,7 +182,7 @@ class TestGitCloneFailures:
         repo_config = RepoServerConfig(
             repo_id="bad-git",
             git_repo_url="/nonexistent/path/that/does/not/exist",
-            email=EmailChannelConfig(
+            channel=EmailChannelConfig(
                 imap_server="127.0.0.1",
                 imap_port=9999,  # No server listening
                 smtp_server="127.0.0.1",
@@ -291,9 +291,7 @@ events = [
                 )
 
             finally:
-                service.running = False
-                for handler in service.repo_handlers.values():
-                    handler.adapter.listener.interrupt()
+                service.stop()
                 service_thread.join(timeout=10.0)
         finally:
             env.cleanup()
@@ -354,9 +352,7 @@ class TestDashboardRepoStatus:
                 assert failed_count == 1
 
             finally:
-                service.running = False
-                for handler in service.repo_handlers.values():
-                    handler.adapter.listener.interrupt()
+                service.stop()
                 service_thread.join(timeout=10.0)
         finally:
             env.cleanup()
@@ -409,8 +405,7 @@ class TestDashboardRepoStatus:
                 assert health_data["repos"]["failed"] == 0
 
             finally:
-                service.running = False
-                service.repo_handlers["test"].adapter.listener.interrupt()
+                service.stop()
                 service_thread.join(timeout=10.0)
         finally:
             env.cleanup()

@@ -14,9 +14,14 @@ Provides headless interaction with Claude Code via messaging channels:
 
 from airut.gateway.channel import (
     ChannelAdapter,
+    ChannelHealth,
+    ChannelListener,
+    ChannelStatus,
     ParsedMessage,
+    RawMessage,
 )
 from airut.gateway.config import (
+    ChannelConfig,
     ConfigError,
     EmailChannelConfig,
     GlobalConfig,
@@ -57,8 +62,13 @@ from airut.gateway.email.security import (
 __all__ = [
     # channel
     "ChannelAdapter",
+    "ChannelHealth",
+    "ChannelListener",
+    "ChannelStatus",
     "ParsedMessage",
+    "RawMessage",
     # config
+    "ChannelConfig",
     "ConfigError",
     "EmailChannelConfig",
     "GlobalConfig",
