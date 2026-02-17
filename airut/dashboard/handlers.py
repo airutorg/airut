@@ -251,25 +251,66 @@ class RequestHandlers:
             },
         )
 
-    def handle_task_detail(
+    def handle_task_detail_by_id(
+        self, request: Request, task_id: str
+    ) -> Response:
+        """Handle task detail page (by task_id).
+
+        Args:
+            request: Incoming request.
+            task_id: Task ID to show.
+
+        Returns:
+            HTML response with task details.
+        """
+        task = self.tracker.get_task(task_id)
+        if task is None:
+            return Response("Task not found", status=404)
+
+        conversation = None
+        if task.conversation_id:
+            conversation = self._load_conversation(task.conversation_id)
+
+        return Response(
+            views.render_task_detail(task, conversation),
+            content_type="text/html; charset=utf-8",
+        )
+
+    def handle_conversation_detail(
         self, request: Request, conversation_id: str
     ) -> Response:
-        """Handle conversation detail page.
+        """Handle conversation overview page.
+
+        Shows all tasks for a conversation with links to individual
+        task pages, plus aggregate stats and full reply history.
 
         Args:
             request: Incoming request.
             conversation_id: Conversation ID to show.
 
         Returns:
-            HTML response with conversation details.
+            HTML response with conversation overview.
         """
-        result = self._load_task_with_conversation(conversation_id)
-        if result is None:
+        tasks = self.tracker.get_tasks_for_conversation(conversation_id)
+        conversation = self._load_conversation(conversation_id)
+
+        # Fall back to disk for past conversations.  Both
+        # _load_conversation and _load_task_from_disk resolve the same
+        # directory, so if the disk result exists the conversation is
+        # already loaded above.
+        if not tasks:
+            disk_result = self._load_task_from_disk(conversation_id)
+            if disk_result is not None:
+                task, _conv = disk_result
+                tasks = [task]
+
+        if not tasks and conversation is None:
             return Response("Conversation not found", status=404)
-        task, conversation = result
 
         return Response(
-            views.render_task_detail(task, conversation),
+            views.render_conversation_detail(
+                conversation_id, tasks, conversation
+            ),
             content_type="text/html; charset=utf-8",
         )
 
@@ -349,6 +390,39 @@ class RequestHandlers:
                 task, log_content, network_log_offset=network_log_offset
             ),
             content_type="text/html; charset=utf-8",
+        )
+
+    def handle_api_task_by_id(self, request: Request, task_id: str) -> Response:
+        """Handle JSON API for single task by task_id.
+
+        Args:
+            request: Incoming request.
+            task_id: Task ID to return.
+
+        Returns:
+            JSON response with task details.
+        """
+        task = self.tracker.get_task(task_id)
+        if task is None:
+            return Response(
+                json.dumps({"error": "Task not found"}),
+                status=404,
+                content_type="application/json",
+            )
+
+        conversation = None
+        if task.conversation_id:
+            conversation = self._load_conversation(task.conversation_id)
+
+        return Response(
+            json.dumps(
+                self._task_to_dict(
+                    task,
+                    include_conversation=True,
+                    conversation=conversation,
+                )
+            ),
+            content_type="application/json",
         )
 
     def handle_api_tasks(self, request: Request) -> Response:
@@ -934,6 +1008,7 @@ class RequestHandlers:
                 "started_at": t.started_at,
                 "completed_at": t.completed_at,
                 "model": t.model,
+                "reply_index": t.reply_index,
             }
             for t in snapshot.value
         ]
@@ -1078,8 +1153,13 @@ class RequestHandlers:
         tasks = self.tracker.get_tasks_for_conversation(conversation_id)
 
         if tasks:
-            # Prefer active task over completed; fall back to newest
-            task = next(
+            # Prefer EXECUTING over other active states, then any
+            # active over completed, then fall back to newest.
+            executing = next(
+                (t for t in tasks if t.status == TaskStatus.EXECUTING),
+                None,
+            )
+            task = executing or next(
                 (t for t in tasks if t.status in ACTIVE_STATUSES),
                 tasks[0],
             )
@@ -1115,6 +1195,7 @@ class RequestHandlers:
             "task_id": task.task_id,
             "conversation_id": task.conversation_id,
             "display_title": task.display_title,
+            "repo_id": task.repo_id,
             "status": task.status.value,
             "completion_reason": (
                 task.completion_reason.value if task.completion_reason else None
@@ -1126,6 +1207,7 @@ class RequestHandlers:
             "started_at": task.started_at,
             "completed_at": task.completed_at,
             "model": task.model,
+            "reply_index": task.reply_index,
             "queue_duration": task.queue_duration(),
             "execution_duration": task.execution_duration(),
             "total_duration": task.total_duration(),

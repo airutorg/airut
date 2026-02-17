@@ -183,13 +183,16 @@ class TestConversationDataIntegration:
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345")
+        # Task detail page needs reply_index set for single-reply view
+        tracker.set_reply_index("abc12345", 0)
+
+        response = client.get("/task/abc12345")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
 
-        # Check conversation replies section and task details
-        assert "Conversation Replies" in html
+        # Check reply section and task details
+        assert "Reply" in html
         assert "Task Details" in html
         assert "$0.0456" in html  # Cost in task details
         assert "5" in html  # Turns
@@ -211,14 +214,14 @@ class TestConversationDataIntegration:
         server = DashboardServer(tracker)  # No work_dirs
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345")
+        response = client.get("/task/abc12345")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
         # Task Details section always renders
         assert "Task Details" in html
-        # No conversation replies section when no data
-        assert "Conversation Replies" not in html
+        # No reply section when no data
+        assert "Reply #" not in html
 
     def test_api_task_includes_conversation_data(self, tmp_path: Path) -> None:
         """Test /api/conversation/<id> includes conversation data."""
@@ -517,10 +520,12 @@ class TestConversationDataIntegration:
             response_text="I'll help you with that task.",
         )
 
+        tracker.set_reply_index("abc12345", 0)
+
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345")
+        response = client.get("/task/abc12345")
         html = response.get_data(as_text=True)
 
         # Check request/response sections are displayed
@@ -557,12 +562,12 @@ class TestConversationDataIntegration:
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345")
+        response = client.get("/task/abc12345")
         html = response.get_data(as_text=True)
 
         # Must show the pending request text
         assert "Fix the authentication bug" in html
-        # Should show it in the conversation section, not just metadata
+        # Should show it in the reply section, not just metadata
         assert "Pending Request" in html
 
     def test_task_detail_pending_request_with_completed_replies(
@@ -605,16 +610,17 @@ class TestConversationDataIntegration:
         store = ConversationStore(conv_dir)
         store.set_pending_request("abc12345", "Follow-up request")
 
+        # This is the second task for the conversation (reply_index=1)
+        tracker.set_reply_index("abc12345", 1)
+
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345")
+        response = client.get("/task/abc12345")
         html = response.get_data(as_text=True)
 
-        # Completed reply should show
-        assert "Reply #1" in html
-        assert "First request" in html
-        # Pending request should also show
+        # Task detail shows only THIS task's reply (the pending one)
+        # The completed reply #1 is on the conversation page, not here
         assert "Follow-up request" in html
         assert "Pending Request" in html
 
@@ -637,7 +643,7 @@ class TestConversationDataIntegration:
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345")
+        response = client.get("/task/abc12345")
         html = response.get_data(as_text=True)
 
         # Must be escaped, not raw
@@ -669,10 +675,12 @@ class TestConversationDataIntegration:
             },
         )
 
+        tracker.set_reply_index("abc12345", 0)
+
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345")
+        response = client.get("/task/abc12345")
         html = response.get_data(as_text=True)
 
         # Request/Response sections should not be present
@@ -833,7 +841,7 @@ class TestTodoProgressDisplay:
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345")
+        response = client.get("/task/abc12345")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
@@ -860,7 +868,7 @@ class TestTodoProgressDisplay:
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345")
+        response = client.get("/task/abc12345")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
@@ -878,7 +886,7 @@ class TestTodoProgressDisplay:
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345")
+        response = client.get("/task/abc12345")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
@@ -936,7 +944,7 @@ class TestTodoProgressDisplay:
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345")
+        response = client.get("/task/abc12345")
         html = response.get_data(as_text=True)
         assert "renderTodos" in html
 
@@ -951,7 +959,7 @@ class TestTodoProgressDisplay:
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345")
+        response = client.get("/task/abc12345")
         html = response.get_data(as_text=True)
         # Polling fallback must use the shared updateTaskFromData function
         assert "updateTaskFromData" in html
@@ -1067,10 +1075,10 @@ class TestLoadPastTasks:
         task, _ = result
         assert task.completion_reason == CompletionReason.EXECUTION_FAILED
 
-    def test_task_detail_loads_past_task_from_disk(
+    def test_conversation_page_loads_past_task_from_disk(
         self, tmp_path: Path
     ) -> None:
-        """Test task detail page loads past task not in memory."""
+        """Test conversation page loads past task not in memory."""
         tracker = TaskTracker()
         # Do NOT add task to tracker - it's a "past" task
         conv_dir = tmp_path / "abc12345"
@@ -1100,7 +1108,6 @@ class TestLoadPastTasks:
 
         html = response.get_data(as_text=True)
         assert "Conversation: abc12345" in html
-        assert "[Past conversation abc12345]" in html
         assert "COMPLETED" in html
         # Conversation data should be displayed
         assert "$0.05" in html
@@ -1169,15 +1176,13 @@ class TestLoadPastTasks:
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345")
+        response = client.get("/task/abc12345")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
         # Should show in-memory task subject, not disk placeholder
         assert "In-Memory Subject" in html
         assert "EXECUTING" in html
-        # Past conversation label should NOT appear
-        assert "[Past conversation" not in html
 
     def test_load_task_from_disk_multiple_replies(self, tmp_path: Path) -> None:
         """Test past task with multiple replies shows correct count."""
@@ -1692,7 +1697,7 @@ class TestStopEndpoint:
         server = DashboardServer(tracker, stop_callback=mock_stop)
         client = Client(server._wsgi_app)
 
-        response = client.get(f"/conversation/{task_id}")
+        response = client.get(f"/task/{task_id}")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
@@ -1716,7 +1721,7 @@ class TestStopEndpoint:
         server = DashboardServer(tracker, stop_callback=mock_stop)
         client = Client(server._wsgi_app)
 
-        response = client.get(f"/conversation/{task_id}")
+        response = client.get(f"/task/{task_id}")
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
@@ -1931,7 +1936,7 @@ class TestSSELivePages:
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345")
+        response = client.get("/task/abc12345")
         html = response.get_data(as_text=True)
 
         assert 'meta http-equiv="refresh"' not in html
@@ -1947,7 +1952,7 @@ class TestSSELivePages:
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345")
+        response = client.get("/task/abc12345")
         html = response.get_data(as_text=True)
 
         assert "connectTaskSSE" in html
@@ -1965,7 +1970,7 @@ class TestSSELivePages:
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345")
+        response = client.get("/task/abc12345")
         html = response.get_data(as_text=True)
 
         assert "connectTaskSSE" not in html
@@ -2555,7 +2560,7 @@ class TestPollingFallbackJS:
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345")
+        response = client.get("/task/abc12345")
         html = response.get_data(as_text=True)
 
         assert "startTaskPolling" in html
@@ -2629,3 +2634,539 @@ class TestPollingFallbackJS:
         html = response.get_data(as_text=True)
 
         assert "startNetworkPolling" not in html
+
+
+class TestTaskDetailByIdEndpoint:
+    """Tests for the /task/<task_id> endpoint."""
+
+    def test_task_not_found_returns_404(self) -> None:
+        """GET /task/<nonexistent> returns 404."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/nonexistent")
+        assert response.status_code == 404
+        assert "Task not found" in response.get_data(as_text=True)
+
+    def test_task_detail_by_id(self) -> None:
+        """GET /task/<id> shows task detail page."""
+        tracker = TaskTracker()
+        tracker.add_task("t123", "My Task")
+        tracker.set_conversation_id("t123", "c456")
+        tracker.set_authenticating("t123")
+        tracker.set_executing("t123")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/t123")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+
+        assert "Task: t123" in html
+        assert "My Task" in html
+        assert 'href="/conversation/c456"' in html
+        assert "EXECUTING" in html
+
+    def test_task_detail_no_conversation_id(self) -> None:
+        """Task without conversation_id omits conversation link."""
+        tracker = TaskTracker()
+        tracker.add_task("t789", "Auth Failed Task")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/t789")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+
+        assert "Task: t789" in html
+        assert "/conversation/" not in html
+
+
+class TestApiTaskByIdEndpoint:
+    """Tests for the /api/task/<task_id> endpoint."""
+
+    def test_api_task_not_found(self) -> None:
+        """GET /api/task/<nonexistent> returns 404 JSON."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/task/nonexistent")
+        assert response.status_code == 404
+        data = json.loads(response.get_data(as_text=True))
+        assert data["error"] == "Task not found"
+
+    def test_api_task_by_id(self) -> None:
+        """GET /api/task/<id> returns task JSON."""
+        tracker = TaskTracker()
+        tracker.add_task("t123", "My Task")
+        tracker.set_conversation_id("t123", "c456")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/task/t123")
+        assert response.status_code == 200
+        data = json.loads(response.get_data(as_text=True))
+        assert data["task_id"] == "t123"
+        assert data["conversation_id"] == "c456"
+        assert data["display_title"] == "My Task"
+
+    def test_api_task_includes_reply_index(self) -> None:
+        """API response includes reply_index field."""
+        tracker = TaskTracker()
+        tracker.add_task("t123", "My Task")
+        tracker.set_reply_index("t123", 2)
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/task/t123")
+        data = json.loads(response.get_data(as_text=True))
+        assert data["reply_index"] == 2
+
+    def test_api_task_with_conversation(self, tmp_path: Path) -> None:
+        """API response includes conversation data if available."""
+        tracker = TaskTracker()
+        tracker.add_task("t123", "My Task")
+        tracker.set_conversation_id("t123", "c456")
+
+        conv_dir = tmp_path / "c456"
+        conv_dir.mkdir()
+        _add_reply(
+            conv_dir,
+            "c456",
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_abc",
+                "duration_ms": 3000,
+                "total_cost_usd": 0.02,
+                "num_turns": 2,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
+        )
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/task/t123")
+        data = json.loads(response.get_data(as_text=True))
+        assert data["conversation"] is not None
+        assert data["conversation"]["total_cost_usd"] == 0.02
+
+
+class TestConversationOverviewPage:
+    """Tests for the /conversation/<conv_id> conversation overview page."""
+
+    def test_conversation_overview_multiple_tasks(self) -> None:
+        """Conversation page shows all tasks for the conversation."""
+        tracker = TaskTracker()
+        # First task: completed
+        tracker.add_task("t001", "First task")
+        tracker.set_conversation_id("t001", "conv1")
+        tracker.set_authenticating("t001")
+        tracker.set_executing("t001")
+        tracker.complete_task("t001", CompletionReason.SUCCESS)
+        # Second task: executing
+        tracker.add_task("t002", "Second task")
+        tracker.set_conversation_id("t002", "conv1")
+        tracker.set_authenticating("t002")
+        tracker.set_executing("t002")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/conv1")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+
+        assert "Conversation: conv1" in html
+        assert 'href="/task/t001"' in html
+        assert 'href="/task/t002"' in html
+        assert "Tasks (2)" in html
+
+    def test_conversation_overview_auth_failed_task(self) -> None:
+        """Auth-failed tasks show on conversation page if conv_id set."""
+        tracker = TaskTracker()
+        tracker.add_task("t001", "Auth Task")
+        tracker.set_conversation_id("t001", "conv1")
+        tracker.set_authenticating("t001")
+        tracker.complete_task("t001", CompletionReason.AUTH_FAILED)
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/conv1")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+
+        assert "COMPLETED" in html
+        assert "&#x2298;" in html  # reject icon
+
+    def test_conversation_overview_pending_task(self) -> None:
+        """Pending tasks show 'Queued behind active task'."""
+        tracker = TaskTracker()
+        tracker.add_task("t001", "Active task")
+        tracker.set_conversation_id("t001", "conv1")
+        tracker.set_authenticating("t001")
+        tracker.set_executing("t001")
+
+        tracker.add_task("t002", "Queued task")
+        tracker.set_conversation_id("t002", "conv1")
+        tracker.set_authenticating("t002")
+        tracker.set_pending("t002")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/conv1")
+        html = response.get_data(as_text=True)
+
+        assert "Queued behind active task" in html
+        assert "PENDING" in html
+
+    def test_conversation_overview_with_replies(self, tmp_path: Path) -> None:
+        """Conversation page shows reply history and aggregates."""
+        tracker = TaskTracker()
+        tracker.add_task("t001", "Task 1")
+        tracker.set_conversation_id("t001", "conv1")
+
+        conv_dir = tmp_path / "conv1"
+        conv_dir.mkdir()
+
+        _add_reply(
+            conv_dir,
+            "conv1",
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_1",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
+            request_text="Please help",
+            response_text="Here is help",
+        )
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/conv1")
+        html = response.get_data(as_text=True)
+
+        # Check aggregate stats
+        assert "$0.05" in html
+        assert "3" in html  # turns
+        # Check reply content
+        assert "Reply #1" in html
+        assert "Please help" in html
+        assert "Here is help" in html
+        assert "Conversation Replies" in html
+
+    def test_conversation_overview_pending_request(
+        self, tmp_path: Path
+    ) -> None:
+        """Conversation page shows pending request in replies section."""
+        tracker = TaskTracker()
+        tracker.add_task("t001", "Active task")
+        tracker.set_conversation_id("t001", "conv1")
+        tracker.set_authenticating("t001")
+        tracker.set_executing("t001")
+
+        conv_dir = tmp_path / "conv1"
+        conv_dir.mkdir()
+
+        store = ConversationStore(conv_dir)
+        store.set_pending_request("conv1", "Current request text")
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/conv1")
+        html = response.get_data(as_text=True)
+
+        assert "Current request text" in html
+        assert "Pending Request" in html
+
+    def test_conversation_overview_not_found(self) -> None:
+        """GET /conversation/<unknown> returns 404."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/unknown1")
+        assert response.status_code == 404
+
+
+class TestSingleReplySection:
+    """Tests for render_single_reply_section in task detail."""
+
+    def test_single_reply_with_request_response(self, tmp_path: Path) -> None:
+        """Task detail shows request/response for single reply."""
+        tracker = TaskTracker()
+        tracker.add_task("t001", "Task 1")
+        tracker.set_conversation_id("t001", "c001")
+        tracker.set_reply_index("t001", 0)
+
+        conv_dir = tmp_path / "c001"
+        conv_dir.mkdir()
+
+        _add_reply(
+            conv_dir,
+            "c001",
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_1",
+                "duration_ms": 1000,
+                "total_cost_usd": 0.01,
+                "num_turns": 1,
+                "is_error": False,
+                "usage": {"input_tokens": 50},
+                "result": "",
+            },
+            request_text="Help me",
+            response_text="Here you go",
+        )
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/t001")
+        html = response.get_data(as_text=True)
+
+        assert "Reply #1" in html
+        assert "Help me" in html
+        assert "Here you go" in html
+        assert "Request" in html
+        assert "Response" in html
+
+    def test_single_reply_no_conversation(self) -> None:
+        """Task detail with no conversation omits reply section."""
+        tracker = TaskTracker()
+        tracker.add_task("t001", "Orphan Task")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/t001")
+        html = response.get_data(as_text=True)
+
+        assert "Reply #" not in html
+
+    def test_single_reply_disk_fallback(self, tmp_path: Path) -> None:
+        """Task without reply_index falls back to full reply list."""
+        tracker = TaskTracker()
+        tracker.add_task("t001", "Task 1")
+        tracker.set_conversation_id("t001", "c001")
+        # No reply_index set
+
+        conv_dir = tmp_path / "c001"
+        conv_dir.mkdir()
+
+        _add_reply(
+            conv_dir,
+            "c001",
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_1",
+                "duration_ms": 1000,
+                "total_cost_usd": 0.01,
+                "num_turns": 1,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
+        )
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/t001")
+        html = response.get_data(as_text=True)
+
+        # Falls back to showing all replies
+        assert "Conversation Replies" in html
+        assert "Reply #1" in html
+
+    def test_single_reply_index_beyond_replies(self, tmp_path: Path) -> None:
+        """Task with reply_index beyond replies shows nothing."""
+        tracker = TaskTracker()
+        tracker.add_task("t001", "Task 1")
+        tracker.set_conversation_id("t001", "c001")
+        tracker.set_reply_index("t001", 5)  # Beyond any reply
+
+        conv_dir = tmp_path / "c001"
+        conv_dir.mkdir()
+
+        _add_reply(
+            conv_dir,
+            "c001",
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_1",
+                "duration_ms": 1000,
+                "total_cost_usd": 0.01,
+                "num_turns": 1,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
+        )
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/t001")
+        html = response.get_data(as_text=True)
+
+        # reply_index 5 > 1 reply, so no reply section shown
+        assert "Reply #" not in html
+
+
+class TestConversationOverviewCoverage:
+    """Additional tests for conversation overview page coverage."""
+
+    def test_execution_failed_task_row(self) -> None:
+        """Task with EXECUTION_FAILED shows X mark icon."""
+        tracker = TaskTracker()
+        tracker.add_task("t001", "Failed task")
+        tracker.set_conversation_id("t001", "conv1")
+        tracker.set_authenticating("t001")
+        tracker.set_executing("t001")
+        tracker.complete_task("t001", CompletionReason.EXECUTION_FAILED)
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/conv1")
+        html = response.get_data(as_text=True)
+
+        assert "&#x2717;" in html  # X mark icon
+
+    def test_conversation_disk_fallback_with_loaded_conversation(
+        self, tmp_path: Path
+    ) -> None:
+        """Disk task loaded even when conversation already loaded."""
+        tracker = TaskTracker()
+        # No tasks in tracker, but conversation.json exists on disk
+        cid = "ab12cd34"
+
+        conv_dir = tmp_path / cid
+        conv_dir.mkdir()
+
+        _add_reply(
+            conv_dir,
+            cid,
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_1",
+                "duration_ms": 1000,
+                "total_cost_usd": 0.01,
+                "num_turns": 1,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
+        )
+        # Set model so _load_conversation finds the file
+        store = ConversationStore(conv_dir)
+        store.set_model(cid, "opus")
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get(f"/conversation/{cid}")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+
+        # Should show the disk-loaded task
+        assert f"Conversation: {cid}" in html
+        assert "COMPLETED" in html
+        assert "opus" in html
+
+    def test_queued_task_waiting_time(self) -> None:
+        """Queued (non-pending) task shows 'Waiting:' time label."""
+        tracker = TaskTracker()
+        tracker.add_task("t001", "Queued task")
+        tracker.set_conversation_id("t001", "conv1")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/conv1")
+        html = response.get_data(as_text=True)
+
+        assert "Waiting:" in html
+
+    def test_conversation_model_display(self, tmp_path: Path) -> None:
+        """Conversation page shows model from conversation metadata."""
+        tracker = TaskTracker()
+        tracker.add_task("t001", "Task 1")
+        tracker.set_conversation_id("t001", "conv1")
+
+        conv_dir = tmp_path / "conv1"
+        conv_dir.mkdir()
+        store = ConversationStore(conv_dir)
+        store.set_model("conv1", "opus")
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/conv1")
+        html = response.get_data(as_text=True)
+
+        assert "opus" in html
+
+    def test_conversation_replies_with_pending(self, tmp_path: Path) -> None:
+        """Conversation page shows pending request alongside replies."""
+        tracker = TaskTracker()
+        tracker.add_task("t001", "Task")
+        tracker.set_conversation_id("t001", "conv1")
+        tracker.set_authenticating("t001")
+        tracker.set_executing("t001")
+
+        conv_dir = tmp_path / "conv1"
+        conv_dir.mkdir()
+
+        _add_reply(
+            conv_dir,
+            "conv1",
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_1",
+                "duration_ms": 1000,
+                "total_cost_usd": 0.01,
+                "num_turns": 1,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
+        )
+
+        store = ConversationStore(conv_dir)
+        store.set_pending_request("conv1", "Follow-up question")
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/conv1")
+        html = response.get_data(as_text=True)
+
+        assert "Reply #1" in html
+        assert "Follow-up question" in html
+        assert "Pending Request" in html

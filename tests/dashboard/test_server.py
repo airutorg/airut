@@ -654,6 +654,24 @@ class TestDashboardServer:
         html = response.get_data(as_text=True)
         assert "No conversations" in html
 
+    def test_index_task_cards_link_to_task_page(self) -> None:
+        """Dashboard task cards link to /task/<id> using task_id."""
+        tracker = TaskTracker()
+        tracker.add_task("task123abc", "My Task")
+        tracker.set_conversation_id("task123abc", "conv456")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/")
+        html = response.get_data(as_text=True)
+
+        # Task card should link to /task/<task_id>
+        assert 'href="/task/task123abc"' in html
+        # Conversation badge should link to /conversation/<conv_id>
+        assert 'href="/conversation/conv456"' in html
+        assert "conv-badge" in html
+
     def test_index_task_states_styling(self) -> None:
         """Test dashboard shows correct styling for task states."""
         tracker = TaskTracker()
@@ -797,7 +815,7 @@ class TestDashboardServer:
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345")
+        response = client.get("/task/abc12345")
         html = response.get_data(as_text=True)
 
         # Check success styling and text
@@ -817,7 +835,7 @@ class TestDashboardServer:
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/abc12345")
+        response = client.get("/task/abc12345")
         html = response.get_data(as_text=True)
 
         # Check failed styling and text
@@ -1177,7 +1195,7 @@ class TestDashboardServer:
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/conversation/noreason")
+        response = client.get("/task/noreason")
         assert response.status_code == 200
         html_text = response.get_data(as_text=True)
 

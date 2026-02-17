@@ -185,6 +185,7 @@ def _task_state_to_dict(task: TaskState) -> dict[str, Any]:
         "started_at": task.started_at,
         "completed_at": task.completed_at,
         "model": task.model,
+        "reply_index": task.reply_index,
         "queue_duration": task.queue_duration(),
         "execution_duration": task.execution_duration(),
         "total_duration": task.total_duration(),

@@ -158,11 +158,17 @@ def _sse_live_script() -> str:
                 sender = '<div class="task-sender">'
                     + escapeHtml(task.sender) + '</div>';
             }
+            var tid = task.task_id || '';
             var cid = task.conversation_id || '';
+            var convBadge = '';
+            if (cid) {
+                convBadge = ' <a href="/conversation/' + cid
+                    + '" class="conv-badge">' + cid + '</a>';
+            }
             return '<div class="task ' + statusClass + ' ' + sc + '">'
                 + '<div class="task-id">'
-                + '<a href="/conversation/' + cid + '">[' + cid + ']</a>'
-                + ' ' + badge + icon + '</div>'
+                + '<a href="/task/' + tid + '">[' + tid + ']</a>'
+                + convBadge + ' ' + badge + icon + '</div>'
                 + '<div class="task-subject" title="' + title + '">'
                 + truncated + '</div>'
                 + sender

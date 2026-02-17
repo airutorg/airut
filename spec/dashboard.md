@@ -116,24 +116,26 @@ credential problems) while others continue processing emails.
 
 ### HTTP Endpoints
 
-| Route                                   | Method | Description                            |
-| --------------------------------------- | ------ | -------------------------------------- |
-| `/`                                     | GET    | Main dashboard with task lists         |
-| `/api/version`                          | GET    | Structured version info (JSON)         |
-| `/api/update`                           | GET    | Upstream update check (JSON)           |
-| `/repo/{repo_id}`                       | GET    | Repository detail view                 |
-| `/conversation/{conv_id}`               | GET    | Task detail view                       |
-| `/conversation/{conv_id}/actions`       | GET    | Actions timeline viewer                |
-| `/conversation/{conv_id}/network`       | GET    | Network logs viewer                    |
-| `/api/repos`                            | GET    | JSON API for repository status (ETag)  |
-| `/api/conversations`                    | GET    | JSON API for task list (ETag)          |
-| `/api/conversation/{id}`                | GET    | JSON API for single task               |
-| `/api/conversation/{id}/stop`           | POST   | Stop a running task                    |
-| `/api/tracker`                          | GET    | JSON API for full tracker state (ETag) |
-| `/api/events/stream`                    | GET    | SSE state stream (real-time updates)   |
-| `/api/conversation/{id}/events/stream`  | GET    | SSE event log stream (per-task)        |
-| `/api/conversation/{id}/network/stream` | GET    | SSE network log stream (per-task)      |
-| `/api/health`                           | GET    | Health check endpoint (ETag)           |
+| Route                                   | Method | Description                                 |
+| --------------------------------------- | ------ | ------------------------------------------- |
+| `/`                                     | GET    | Main dashboard with task lists              |
+| `/task/{task_id}`                       | GET    | Task detail view (primary detail page)      |
+| `/conversation/{conv_id}`               | GET    | Conversation overview (all tasks + replies) |
+| `/conversation/{conv_id}/actions`       | GET    | Actions timeline viewer                     |
+| `/conversation/{conv_id}/network`       | GET    | Network logs viewer                         |
+| `/repo/{repo_id}`                       | GET    | Repository detail view                      |
+| `/api/version`                          | GET    | Structured version info (JSON)              |
+| `/api/update`                           | GET    | Upstream update check (JSON)                |
+| `/api/repos`                            | GET    | JSON API for repository status (ETag)       |
+| `/api/conversations`                    | GET    | JSON API for task list (ETag)               |
+| `/api/task/{task_id}`                   | GET    | JSON API for single task by task_id         |
+| `/api/conversation/{id}`                | GET    | JSON API for single task by conversation    |
+| `/api/conversation/{id}/stop`           | POST   | Stop a running task                         |
+| `/api/tracker`                          | GET    | JSON API for full tracker state (ETag)      |
+| `/api/events/stream`                    | GET    | SSE state stream (real-time updates)        |
+| `/api/conversation/{id}/events/stream`  | GET    | SSE event log stream (per-task)             |
+| `/api/conversation/{id}/network/stream` | GET    | SSE network log stream (per-task)           |
+| `/api/health`                           | GET    | Health check endpoint (ETag)                |
 
 ### `GET /api/tracker`
 
@@ -166,7 +168,8 @@ all task data with status counts.
       "queued_at": 1700000000.0,
       "started_at": 1700000001.0,
       "completed_at": 1700000060.0,
-      "model": "sonnet"
+      "model": "sonnet",
+      "reply_index": 0
     }
   ]
 }
@@ -182,6 +185,7 @@ all task data with status counts.
 | `tasks[].status`            | `string`         | One of `queued`, `authenticating`, `pending`, `executing`, `completed`                        |
 | `tasks[].completion_reason` | `string \| null` | Why the task completed (e.g., `"success"`, `"auth_failed"`), or `null` while active           |
 | `tasks[].model`             | `string \| null` | Claude model used (e.g., `"sonnet"`, `"opus"`), or `null` if not yet known                    |
+| `tasks[].reply_index`       | `int \| null`    | Index of this task's reply in the conversation (0-based), or `null` if not yet assigned       |
 
 Supports `ETag` / `If-None-Match` conditional requests — returns
 `304 Not Modified` when the version clock has not advanced since the client's
@@ -238,33 +242,59 @@ Three-column layout showing queued, in-progress, and completed tasks.
 
 **Task cards** display:
 
-- Conversation ID (linked to detail view)
+- Task ID (linked to `/task/{task_id}` detail view)
+- Conversation ID badge (linked to `/conversation/{conv_id}`, shown only when
+  assigned — auth-failed tasks with no conversation_id omit the badge)
 - Email subject (truncated)
 - Timing information
 - Success/failure indicator for completed tasks
 
-### Task Detail
+### Task Detail (`/task/{task_id}`)
 
-Single task view with three sections:
+Primary detail view for a single task. Every task has a `task_id` from creation,
+so this works for all tasks including auth failures that never receive a
+`conversation_id`.
 
-**Summary card** — subject, repository, sender, status, action buttons.
+**Summary card** — subject, repository, sender, status, action buttons. If
+`conversation_id` is assigned, shows a link to `/conversation/{conv_id}`. Action
+buttons (View Actions, View Network) are hidden when there is no
+conversation_id.
 
 **Progress section** (active tasks only) — live-updating checklist of Claude's
 TodoWrite items. Shows completed (checkmark), in-progress (spinner with
 activeForm label), and pending (circle) items. Updated in real-time via the
-global SSE state stream, with automatic fallback to ETag-based polling when SSE
-is unavailable. Todo state is tracked as a list of `TodoItem` dataclass
-instances (`content`, `status`, `active_form`) — a typed contract independent of
-the Claude output parser types. Todos are cleared when a task completes (success
-or failure) so that stale progress data is never exposed via the API or carried
-over when a conversation is resumed.
+global SSE state stream (filtered by `task_id`), with automatic fallback to
+ETag-based polling when SSE is unavailable. Todo state is tracked as a list of
+`TodoItem` dataclass instances (`content`, `status`, `active_form`) — a typed
+contract independent of the Claude output parser types. Todos are cleared when a
+task completes (success or failure) so that stale progress data is never exposed
+via the API or carried over when a conversation is resumed.
 
 **Task Details card** — model, timestamps (queued, started, completed), duration
-breakdowns (queue time, execution time, total), message count, total cost, and
-total turns.
+breakdowns (queue time, execution time, total), message count, cost, and turns
+for this task's specific reply.
 
-**Conversation Replies** — per-reply history with cost, duration, turns, session
-ID, token usage, and request/response text.
+**Reply section** — shows only the reply associated with this specific task
+(matched by `reply_index`). If the task has no associated reply (auth failure,
+in-progress, etc.), shows the pending request text or nothing.
+
+### Conversation Overview (`/conversation/{conv_id}`)
+
+Aggregate view showing all tasks for a conversation. Email acknowledgment links
+(`{base_url}/conversation/{conv_id}`) point here.
+
+**Summary card** — conversation ID, aggregate stats (total reply count, total
+cost, total turns, model).
+
+**Task list** — all tasks for this conversation, each showing:
+
+- Task ID (linked to `/task/{task_id}`)
+- Status badge with icon
+- Display title (truncated)
+- Timing info (queue time, execution duration, etc.)
+
+**Conversation Replies** — full per-reply history with cost, duration, turns,
+session ID, token usage, and request/response text.
 
 ### Repository Detail
 
@@ -278,19 +308,22 @@ Per-repository view showing:
 
 ### Past Task Loading
 
-When a task detail URL is accessed but the task is not in the in-memory tracker
-(e.g., after a service restart), the dashboard attempts to load the task from
-disk by reading the conversation file from the conversation directory.
+When a conversation URL is accessed but no tasks are in the in-memory tracker
+(e.g., after a service restart), the dashboard attempts to load a synthetic task
+from disk by reading the conversation file from the conversation directory.
 
 This enables:
 
 - Following links in acknowledgment emails after service restarts
-- Viewing historical task details without keeping all tasks in memory
+- Viewing historical conversation details without keeping all tasks in memory
 - API access to past task data including conversation statistics
 
-Past tasks loaded from disk are marked as COMPLETED with a placeholder subject
-(`[Past conversation {id}]`). The main dashboard completed tasks column is NOT
-populated from disk—only direct URL access triggers disk loading.
+Past tasks loaded from disk are marked as COMPLETED with a synthetic task_id
+(`disk-{conv_id}`) and placeholder subject (`[Past conversation {id}]`). The
+main dashboard completed tasks column is NOT populated from disk — only direct
+URL access to `/conversation/{conv_id}` triggers disk loading. The
+`/task/{task_id}` endpoint does not support disk loading (disk-loaded tasks have
+synthetic IDs not known to the caller).
 
 ### Styling
 
@@ -306,8 +339,8 @@ populated from disk—only direct URL access triggers disk loading.
 - **Localhost binding**: Default to 127.0.0.1 to prevent accidental exposure
 - **Minimal actions**: Only action is stopping running tasks
 
-The dashboard exposes conversation IDs, email subjects, and timing information.
-Acceptable for a single-user system behind authentication.
+The dashboard exposes task IDs, conversation IDs, email subjects, and timing
+information. Acceptable for a single-user system behind authentication.
 
 ## Future Enhancements
 

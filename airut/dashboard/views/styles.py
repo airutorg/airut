@@ -387,6 +387,21 @@ def _task_card_styles() -> str:
             font-size: 14px;
             margin-left: 4px;
         }
+        .conv-badge {
+            display: inline-block;
+            background: #f0f0f0;
+            color: #666;
+            font-size: 10px;
+            padding: 1px 5px;
+            border-radius: 3px;
+            margin-left: 4px;
+            vertical-align: middle;
+            text-decoration: none;
+        }
+        .conv-badge:hover {
+            background: #e0e0e0;
+            text-decoration: none;
+        }
         .empty {
             color: #999;
             font-style: italic;

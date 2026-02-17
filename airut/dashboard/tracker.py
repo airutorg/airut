@@ -214,6 +214,10 @@ class TaskState:
         model: Claude model used for this task (e.g., "opus", "sonnet").
         todos: Latest TodoWrite state from Claude, or None if no todos
             have been emitted yet.
+        reply_index: Zero-based index of this task's reply within the
+            conversation's reply list.  Set when the task starts
+            executing (= current length of conversation replies).
+            ``None`` if the task never reached execution.
     """
 
     task_id: str
@@ -230,6 +234,7 @@ class TaskState:
     completed_at: float | None = None
     model: str | None = None
     todos: list[TodoItem] | None = None
+    reply_index: int | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -521,6 +526,27 @@ class TaskTracker:
             if task_id not in self._tasks:
                 return False
             self._tasks[task_id].todos = todos
+            self._clock.tick()
+            return True
+
+    def set_reply_index(self, task_id: str, reply_index: int) -> bool:
+        """Set the reply index for a task.
+
+        Called when execution starts to record which conversation reply
+        index this task's output will occupy.
+
+        Args:
+            task_id: Task identifier to update.
+            reply_index: Zero-based index into the conversation's reply
+                list.
+
+        Returns:
+            True if the task was found and updated, False otherwise.
+        """
+        with self._lock:
+            if task_id not in self._tasks:
+                return False
+            self._tasks[task_id].reply_index = reply_index
             self._clock.tick()
             return True
 

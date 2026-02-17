@@ -3,7 +3,7 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Task (conversation) detail page view."""
+"""Task detail page view (per-task, keyed by task_id)."""
 
 import html
 
@@ -18,7 +18,7 @@ from airut.dashboard.tracker import (
 )
 from airut.dashboard.views.components import (
     render_action_buttons,
-    render_conversation_replies_section,
+    render_single_reply_section,
     render_stop_script,
 )
 from airut.dashboard.views.styles import task_detail_styles
@@ -76,6 +76,11 @@ def render_task_detail(
 ) -> str:
     """Render task detail page HTML.
 
+    Shows details for a single task identified by ``task_id``.  If the
+    task has a ``reply_index``, only that specific reply from the
+    conversation is shown.  Otherwise falls back to showing the pending
+    request or nothing.
+
     Args:
         task: Task to display.
         conversation: Optional conversation metadata to display.
@@ -120,17 +125,35 @@ def render_task_detail(
         model_display = conversation.model
     model_display = model_display or "-"
 
-    # Build conversation cost/turns for the details section
+    # Build cost/turns for just this task's reply
     cost_display = "-"
     turns_display = "-"
-    if conversation and conversation.replies:
-        cost_display = f"${conversation.total_cost_usd:.4f}"
-        turns_display = str(conversation.total_turns)
+    if (
+        conversation
+        and task.reply_index is not None
+        and task.reply_index < len(conversation.replies)
+    ):
+        reply = conversation.replies[task.reply_index]
+        cost_display = f"${reply.total_cost_usd:.4f}"
+        turns_display = str(reply.num_turns)
+    elif conversation and conversation.pending_request_text:
+        # Task is still executing, no reply yet
+        pass
 
-    # Build conversation replies section
-    replies_section = render_conversation_replies_section(
-        task.conversation_id, conversation
-    )
+    # Build single reply section for this task
+    replies_section = render_single_reply_section(task, conversation)
+
+    # Conversation link (if assigned)
+    conv_link = ""
+    if task.conversation_id:
+        escaped_cid = html.escape(task.conversation_id)
+        conv_link = f"""
+        <div class="field">
+            <div class="field-label">Conversation</div>
+            <div class="field-value">
+                <a href="/conversation/{escaped_cid}">{escaped_cid}</a>
+            </div>
+        </div>"""
 
     # Build progress section from todos
     is_active = task.status in ACTIVE_STATUSES
@@ -138,9 +161,7 @@ def render_task_detail(
     if task.todos and is_active:
         progress_section = _render_progress_section(task.todos)
 
-    sse_script = (
-        _sse_task_detail_script(task.conversation_id) if is_active else ""
-    )
+    sse_script = _sse_task_detail_script(task.task_id) if is_active else ""
     status_notice = (
         '<div id="stream-status" class="stream-status">Connecting...</div>'
         if is_active
@@ -152,7 +173,7 @@ def render_task_detail(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Conversation {task.conversation_id} - Dashboard</title>
+    <title>Task {task.task_id} - Dashboard</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <style>
         {task_detail_styles()}
@@ -162,7 +183,7 @@ def render_task_detail(
 <div class="page">
     <div class="back"><a href="/">&larr; Back to Dashboard</a></div>
     <div class="card">
-        <h1>Conversation: {task.conversation_id}</h1>
+        <h1>Task: {task.task_id}</h1>
 
         <div class="field">
             <div class="field-label">Subject</div>
@@ -178,6 +199,8 @@ def render_task_detail(
             <div class="field-label">Sender</div>
             <div class="field-value">{html.escape(task.sender) or "-"}</div>
         </div>
+
+        {conv_link}
 
         <div class="field">
             <div class="field-label">Status</div>
@@ -231,11 +254,11 @@ def render_task_detail(
                     class="field-value mono">{total_time}</div>
             </div>
             <div class="detail-item">
-                <div class="field-label">Total Cost</div>
+                <div class="field-label">Cost</div>
                 <div class="field-value mono">{cost_display}</div>
             </div>
             <div class="detail-item">
-                <div class="field-label">Total Turns</div>
+                <div class="field-label">Turns</div>
                 <div class="field-value mono">{turns_display}</div>
             </div>
         </div>
@@ -249,14 +272,14 @@ def render_task_detail(
 </html>"""
 
 
-def _sse_task_detail_script(conversation_id: str) -> str:
+def _sse_task_detail_script(task_id: str) -> str:
     """JavaScript for SSE-based live task detail updates.
 
     Connects to the global state stream and updates the task detail
-    fields in real-time when state changes.
+    fields in real-time when state changes.  Filters by ``task_id``.
 
     Args:
-        conversation_id: Conversation ID to track.
+        task_id: Task ID to track.
 
     Returns:
         HTML <script> tag with SSE task detail update logic.
@@ -344,7 +367,7 @@ def _sse_task_detail_script(conversation_id: str) -> str:
                     var tasks = data.tasks || [];
                     var task = null;
                     for (var i = 0; i < tasks.length; i++) {{
-                        if (tasks[i].conversation_id === '{conversation_id}') {{
+                        if (tasks[i].task_id === '{task_id}') {{
                             task = tasks[i];
                             break;
                         }}
@@ -453,7 +476,7 @@ def _sse_task_detail_script(conversation_id: str) -> str:
                     if (!tasks) return;
                     var task = null;
                     for (var i = 0; i < tasks.length; i++) {{
-                        if (tasks[i].conversation_id === '{conversation_id}') {{
+                        if (tasks[i].task_id === '{task_id}') {{
                             task = tasks[i];
                             break;
                         }}
