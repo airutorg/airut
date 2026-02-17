@@ -48,6 +48,47 @@ class BootPhase(Enum):
     FAILED = "failed"
 
 
+class TodoStatus(Enum):
+    """Status of a single todo item."""
+
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+
+
+@dataclass(frozen=True)
+class TodoItem:
+    """A single todo item from Claude's TodoWrite tool.
+
+    Defines the contract for todo progress data tracked by the dashboard.
+    Immutable snapshot — new lists replace old ones on each TodoWrite
+    event.
+
+    Attributes:
+        content: Imperative description of the task (e.g., "Run tests").
+        status: Todo item status.
+        active_form: Present-continuous form shown during execution
+            (e.g., "Running tests").  Defaults to *content* if not
+            provided by the tool.
+    """
+
+    content: str
+    status: TodoStatus
+    active_form: str = ""
+
+    def to_dict(self) -> dict[str, str]:
+        """Serialize to a JSON-compatible dict.
+
+        Returns:
+            Dict with ``content``, ``status``, and ``activeForm`` keys.
+        """
+        return {
+            "content": self.content,
+            "status": self.status.value,
+            "activeForm": self.active_form or self.content,
+        }
+
+
 @dataclass(frozen=True)
 class BootState:
     """Current boot state of the service.
@@ -115,6 +156,8 @@ class TaskState:
             None if pending.
         message_count: Number of messages in the conversation.
         model: Claude model used for this conversation (e.g., "opus", "sonnet").
+        todos: Latest TodoWrite state from Claude, or None if no todos
+            have been emitted yet.
     """
 
     conversation_id: str
@@ -128,6 +171,7 @@ class TaskState:
     success: bool | None = None
     message_count: int = 1
     model: str | None = None
+    todos: list[TodoItem] | None = None
 
     def queue_duration(self) -> float:
         """Calculate time spent in queue.
@@ -380,6 +424,26 @@ class TaskTracker:
             self._clock.tick()
             return True
 
+    def update_todos(self, conversation_id: str, todos: list[TodoItem]) -> bool:
+        """Update the in-progress todo list for a task.
+
+        Called when Claude emits a TodoWrite tool use during execution.
+
+        Args:
+            conversation_id: Conversation identifier to update.
+            todos: List of ``TodoItem`` instances parsed from the
+                TodoWrite tool_input.
+
+        Returns:
+            True if the task was found and updated, False otherwise.
+        """
+        with self._lock:
+            if conversation_id not in self._tasks:
+                return False
+            self._tasks[conversation_id].todos = todos
+            self._clock.tick()
+            return True
+
     def set_task_model(self, conversation_id: str, model: str) -> bool:
         """Set the model for a task.
 
@@ -463,11 +527,9 @@ class TaskTracker:
     def get_snapshot(self) -> Versioned[tuple[TaskState, ...]]:
         """Get an atomic snapshot of all tasks with the current version.
 
-        Returns shallow copies of tasks to ensure the snapshot is stable.
-        This is safe because ``TaskState`` fields are all primitives
-        (str, float, int, bool, None, Enum) — no mutable containers.
-        If mutable fields are added to ``TaskState``, switch to
-        ``copy.deepcopy``.
+        Returns deep copies of tasks to ensure the snapshot is stable.
+        Deep copy is required because ``TaskState.todos`` contains
+        mutable containers (list of dicts).
 
         Returns:
             Versioned tuple of TaskState copies, sorted newest first.
@@ -480,7 +542,7 @@ class TaskTracker:
             )
             return Versioned(
                 version=self._clock.version,
-                value=tuple(copy.copy(t) for t in tasks),
+                value=tuple(copy.deepcopy(t) for t in tasks),
             )
 
     def wait_for_completion(

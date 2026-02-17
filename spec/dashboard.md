@@ -240,14 +240,24 @@ Three-column layout showing queued, in-progress, and completed tasks.
 
 ### Task Detail
 
-Single task view showing:
+Single task view with three sections:
 
-- Full subject line
-- Status with success/failure indication
-- Claude model used (e.g., "opus", "sonnet")
-- Timestamps (queued, started, completed)
-- Duration breakdowns (queue time, execution time, total)
-- Message count
+**Summary card** — subject, repository, sender, status, action buttons.
+
+**Progress section** (active tasks only) — live-updating checklist of Claude's
+TodoWrite items. Shows completed (checkmark), in-progress (spinner with
+activeForm label), and pending (circle) items. Updated in real-time via the
+global SSE state stream, with automatic fallback to ETag-based polling when SSE
+is unavailable. Todo state is tracked as a list of `TodoItem` dataclass
+instances (`content`, `status`, `active_form`) — a typed contract independent of
+the Claude output parser types.
+
+**Task Details card** — model, timestamps (queued, started, completed), duration
+breakdowns (queue time, execution time, total), message count, total cost, and
+total turns.
+
+**Conversation Replies** — per-reply history with cost, duration, turns, session
+ID, token usage, and request/response text.
 
 ### Repository Detail
 

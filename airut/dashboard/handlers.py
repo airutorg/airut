@@ -1100,6 +1100,8 @@ class RequestHandlers:
             "execution_duration": task.execution_duration(),
             "total_duration": task.total_duration(),
         }
+        if task.todos is not None:
+            result["todos"] = [t.to_dict() for t in task.todos]
 
         if include_conversation:
             if conversation is None:

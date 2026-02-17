@@ -169,7 +169,7 @@ def _task_state_to_dict(task: TaskState) -> dict[str, Any]:
     Returns:
         Dict representation suitable for SSE state event.
     """
-    return {
+    result: dict[str, Any] = {
         "conversation_id": task.conversation_id,
         "subject": task.subject,
         "repo_id": task.repo_id,
@@ -185,6 +185,9 @@ def _task_state_to_dict(task: TaskState) -> dict[str, Any]:
         "execution_duration": task.execution_duration(),
         "total_duration": task.total_duration(),
     }
+    if task.todos is not None:
+        result["todos"] = [t.to_dict() for t in task.todos]
+    return result
 
 
 def build_state_snapshot(

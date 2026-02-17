@@ -362,50 +362,44 @@ def render_stop_script(task: TaskState) -> str:
     </script>"""
 
 
-def render_conversation_section(
+def render_conversation_replies_section(
     conversation_id: str,
     conversation: ConversationMetadata | None,
 ) -> str:
-    """Render conversation data section HTML.
+    """Render conversation replies section HTML.
+
+    Shows the reply history with per-reply stats, usage, and
+    request/response text. Does not include the summary stats
+    (cost, turns, duration) — those are shown in the Task Details card.
 
     Args:
         conversation_id: Conversation ID for JSON link.
         conversation: Conversation metadata to display, or None.
 
     Returns:
-        HTML string for conversation data section.
+        HTML string for conversation replies section.
     """
-    if conversation is None:
-        return """
+    if conversation is None or not conversation.replies:
+        if conversation and conversation.pending_request_text:
+            # Show pending request even without completed replies
+            escaped_pending = html.escape(conversation.pending_request_text)
+            return f"""
     <div class="card">
-        <h2>Conversation Data</h2>
-        <div class="no-conversation">No conversation data available</div>
+        <h2>Conversation Replies</h2>
+        <div class="reply-list">
+            <div class="reply in-progress">
+                <div class="reply-header">
+                    <span class="reply-number">Pending Request</span>
+                    <span class="reply-timestamp">in progress</span>
+                </div>
+                <div class="text-section">
+                    <div class="text-section-header">Request</div>
+                    <div class="text-content request">{escaped_pending}</div>
+                </div>
+            </div>
+        </div>
     </div>"""
-
-    # Build summary section
-    total_duration_ms = sum(r.duration_ms for r in conversation.replies)
-    duration_str = format_duration(total_duration_ms / 1000)
-
-    summary_html = f"""
-        <div class="conversation-summary">
-            <div class="summary-item">
-                <div class="summary-value">\
-${conversation.total_cost_usd:.4f}</div>
-                <div class="summary-label">Total Cost</div>
-            </div>
-            <div class="summary-item">
-                <div class="summary-value">{conversation.total_turns}</div>
-                <div class="summary-label">Total Turns</div>
-            </div>
-            <div class="summary-item">
-                <div class="summary-value">{len(conversation.replies)}</div>
-                <div class="summary-label">Replies</div>
-            </div>
-            <div class="summary-item">
-                <div class="summary-value">{duration_str}</div>
-                <div class="summary-label">Total Duration</div>
-            </div>
-        </div>"""
+        return ""
 
     # Build replies list
     replies_html = ""
@@ -505,12 +499,8 @@ ${conversation.total_cost_usd:.4f}</div>
 
     return f"""
     <div class="card">
-        <h2>Conversation Data</h2>
-        {summary_html}
+        <h2>Conversation Replies</h2>
         <div class="reply-list">
-            <h3 style="font-size: 14px; margin-bottom: 12px; color: #555;">
-                Reply History
-            </h3>
             {replies_html}
             {pending_html}
         </div>

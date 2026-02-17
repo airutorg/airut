@@ -23,7 +23,13 @@ from airut.conversation import (
     ReplySummary,
 )
 from airut.dashboard.server import DashboardServer
-from airut.dashboard.tracker import TaskState, TaskStatus, TaskTracker
+from airut.dashboard.tracker import (
+    TaskState,
+    TaskStatus,
+    TaskTracker,
+    TodoItem,
+    TodoStatus,
+)
 from airut.sandbox import EventLog
 from tests.dashboard.conftest import parse_events as _parse_events
 
@@ -180,9 +186,10 @@ class TestConversationDataIntegration:
 
         html = response.get_data(as_text=True)
 
-        # Check conversation data is displayed
-        assert "Conversation Data" in html
-        assert "$0.0456" in html  # Cost
+        # Check conversation replies section and task details
+        assert "Conversation Replies" in html
+        assert "Task Details" in html
+        assert "$0.0456" in html  # Cost in task details
         assert "5" in html  # Turns
         assert "Reply #1" in html
         # Full session ID
@@ -194,7 +201,7 @@ class TestConversationDataIntegration:
         assert "100" in html  # output_tokens value
 
     def test_task_detail_no_conversation_data(self) -> None:
-        """Task detail page shows placeholder when no data available."""
+        """Task detail page shows task details even without conversation."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
 
@@ -205,7 +212,10 @@ class TestConversationDataIntegration:
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
-        assert "No conversation data available" in html
+        # Task Details section always renders
+        assert "Task Details" in html
+        # No conversation replies section when no data
+        assert "Conversation Replies" not in html
 
     def test_api_task_includes_conversation_data(self, tmp_path: Path) -> None:
         """Test /api/conversation/<id> includes conversation data."""
@@ -767,6 +777,151 @@ class TestConversationDataIntegration:
 
         assert result["conversation"]["total_cost_usd"] == 0.05
         assert result["conversation"]["total_turns"] == 10
+
+
+class TestTodoProgressDisplay:
+    """Tests for todo progress display on task detail page."""
+
+    def test_task_detail_shows_progress_for_active_task(self) -> None:
+        """Task detail page shows progress section for active tasks."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+        tracker.start_task("abc12345")
+        tracker.update_todos(
+            "abc12345",
+            [
+                TodoItem(
+                    content="Run tests",
+                    status=TodoStatus.COMPLETED,
+                ),
+                TodoItem(
+                    content="Fix bugs",
+                    status=TodoStatus.IN_PROGRESS,
+                    active_form="Fixing bugs",
+                ),
+                TodoItem(
+                    content="Deploy",
+                    status=TodoStatus.PENDING,
+                ),
+            ],
+        )
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345")
+        assert response.status_code == 200
+
+        html = response.get_data(as_text=True)
+        assert "Progress" in html
+        assert "Run tests" in html
+        assert "Fixing bugs" in html  # activeForm for in_progress
+        assert "Deploy" in html
+        assert "todo-spinner" in html  # spinner for in_progress
+        assert "&#x2713;" in html  # checkmark for completed
+
+    def test_task_detail_hides_progress_for_completed_task(self) -> None:
+        """Task detail page hides progress section for completed tasks."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+        tracker.start_task("abc12345")
+        tracker.update_todos(
+            "abc12345",
+            [TodoItem(content="Done", status=TodoStatus.COMPLETED)],
+        )
+        tracker.complete_task("abc12345", success=True)
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345")
+        assert response.status_code == 200
+
+        html = response.get_data(as_text=True)
+        # Server-rendered progress section uses id="progress-section"
+        assert 'id="progress-section"' not in html
+
+    def test_task_detail_no_progress_without_todos(self) -> None:
+        """Task detail page has no progress section without todos."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+        tracker.start_task("abc12345")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345")
+        assert response.status_code == 200
+
+        html = response.get_data(as_text=True)
+        # Server-rendered progress section uses id="progress-section"
+        assert 'id="progress-section"' not in html
+
+    def test_api_task_includes_todos(self) -> None:
+        """Test /api/conversations includes todos for tasks with them."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+        tracker.update_todos(
+            "abc12345",
+            [TodoItem(content="Step 1", status=TodoStatus.PENDING)],
+        )
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/conversations")
+        assert response.status_code == 200
+
+        data = json.loads(response.get_data(as_text=True))
+        assert len(data) == 1
+        assert "todos" in data[0]
+        assert data[0]["todos"][0]["content"] == "Step 1"
+
+    def test_api_task_no_todos_key_when_none(self) -> None:
+        """Test /api/conversations omits todos when not set."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/conversations")
+        data = json.loads(response.get_data(as_text=True))
+        assert "todos" not in data[0]
+
+    def test_render_progress_section_empty_list(self) -> None:
+        """_render_progress_section returns empty string for empty list."""
+        from airut.dashboard.views.task_detail import _render_progress_section
+
+        assert _render_progress_section([]) == ""
+
+    def test_task_detail_renders_todo_js(self) -> None:
+        """Task detail for active task includes renderTodos JS."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+        tracker.start_task("abc12345")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345")
+        html = response.get_data(as_text=True)
+        assert "renderTodos" in html
+
+    def test_task_detail_polling_fallback_updates_todos(self) -> None:
+        """Polling fallback JS calls updateTaskFromData (including todos)."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+        tracker.start_task("abc12345")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345")
+        html = response.get_data(as_text=True)
+        # Polling fallback must use the shared updateTaskFromData function
+        assert "updateTaskFromData" in html
+        assert "startTaskPolling" in html
 
 
 class TestLoadPastTasks:

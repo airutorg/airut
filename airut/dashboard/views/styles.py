@@ -607,6 +607,69 @@ def _task_detail_specific() -> str:
             padding: 20px;
             text-align: center;
         }
+        .details-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 12px;
+        }
+        .detail-item {
+            background: #f8f9fa;
+            padding: 10px 12px;
+            border-radius: 6px;
+        }
+        .progress-card h2 {
+            margin: 0 0 12px 0;
+        }
+        .todo-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .todo-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 8px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .todo-item.completed {
+            color: #3c763d;
+        }
+        .todo-item.in-progress {
+            color: #31708f;
+            background: #d9edf7;
+        }
+        .todo-item.pending {
+            color: #888;
+        }
+        .todo-icon {
+            font-size: 14px;
+            width: 16px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+        .todo-icon.completed {
+            color: #5cb85c;
+        }
+        .todo-icon.pending {
+            color: #ccc;
+        }
+        .todo-spinner {
+            width: 14px;
+            height: 14px;
+            border: 2px solid #5bc0de;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            flex-shrink: 0;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .todo-label {
+            line-height: 1.3;
+        }
         .text-section {
             margin-top: 12px;
             border-top: 1px solid #e0e0e0;
