@@ -14,6 +14,8 @@ For high-level documentation, see [doc/](../doc/).
 - [repo-config.md](repo-config.md) — Repo config schema (`.airut/airut.yaml`)
   and server/repo split
 - [multi-repo.md](multi-repo.md) — Multi-repository support design
+- [multi-channel.md](multi-channel.md) — Multiple channels per repository (email
+  \+ Slack)
 - [integration-tests.md](integration-tests.md) — End-to-end test specification
 
 ## Sandbox
