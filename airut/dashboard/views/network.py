@@ -69,7 +69,7 @@ def render_network_page(
 </head>
 <body>
     <div class="header">
-        <a href="/conversation/{task.conversation_id}">&larr; Back</a>
+        <a href="/task/{task.task_id}">&larr; Back</a>
         <h1>Network Logs: {task.conversation_id}</h1>
         <span class="subtitle">{escaped_title}</span>
     </div>
