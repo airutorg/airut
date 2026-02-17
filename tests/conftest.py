@@ -195,5 +195,5 @@ Please fix the linting errors.
     return RawMessage(
         sender="user@example.com",
         content=email_msg,
-        subject="[ID:abc12345] Test request",
+        display_title="[ID:abc12345] Test request",
     )

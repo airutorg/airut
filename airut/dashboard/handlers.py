@@ -34,6 +34,7 @@ from airut.dashboard.sse import (
 )
 from airut.dashboard.tracker import (
     BootState,
+    CompletionReason,
     RepoState,
     TaskState,
     TaskStatus,
@@ -138,16 +139,21 @@ class RequestHandlers:
             HTML response with dashboard.
         """
         counts = self.tracker.get_counts()
-        queued = self.tracker.get_tasks_by_status(TaskStatus.QUEUED)
-        in_progress = self.tracker.get_tasks_by_status(TaskStatus.IN_PROGRESS)
+        # Pending column: QUEUED + AUTHENTICATING + PENDING
+        pending = (
+            self.tracker.get_tasks_by_status(TaskStatus.QUEUED)
+            + self.tracker.get_tasks_by_status(TaskStatus.AUTHENTICATING)
+            + self.tracker.get_tasks_by_status(TaskStatus.PENDING)
+        )
+        executing = self.tracker.get_tasks_by_status(TaskStatus.EXECUTING)
         completed = self.tracker.get_tasks_by_status(TaskStatus.COMPLETED)
         boot_state = self._get_boot_state()
 
         return Response(
             views.render_dashboard(
                 counts,
-                queued,
-                in_progress,
+                pending,
+                executing,
                 completed,
                 self.version_info,
                 self._get_repo_states(),
@@ -556,7 +562,7 @@ class RequestHandlers:
                 content_type="application/json",
             )
 
-        if task.status != TaskStatus.IN_PROGRESS:
+        if task.status != TaskStatus.EXECUTING:
             status_value = task.status.value
             error_msg = f"Task is not running (status: {status_value})"
             return Response(
@@ -908,14 +914,18 @@ class RequestHandlers:
         tasks_data = [
             {
                 "conversation_id": t.conversation_id,
-                "subject": t.subject,
+                "display_title": t.display_title,
                 "repo_id": t.repo_id,
                 "sender": t.sender,
+                "authenticated_sender": t.authenticated_sender,
                 "status": t.status.value,
+                "completion_reason": (
+                    t.completion_reason.value if t.completion_reason else None
+                ),
+                "completion_detail": t.completion_detail,
                 "queued_at": t.queued_at,
                 "started_at": t.started_at,
                 "completed_at": t.completed_at,
-                "success": t.success,
                 "message_count": t.message_count,
                 "model": t.model,
             }
@@ -1024,14 +1034,19 @@ class RequestHandlers:
             except (ValueError, AttributeError):
                 pass
 
+        has_errors = any(r.is_error for r in conversation.replies)
         task = TaskState(
             conversation_id=conversation_id,
-            subject=f"[Past conversation {conversation_id}]",
+            display_title=f"[Past conversation {conversation_id}]",
             status=TaskStatus.COMPLETED,
+            completion_reason=(
+                CompletionReason.EXECUTION_FAILED
+                if has_errors
+                else CompletionReason.SUCCESS
+            ),
             queued_at=completed_at or 0.0,
             started_at=completed_at,
             completed_at=completed_at,
-            success=not any(r.is_error for r in conversation.replies),
             message_count=len(conversation.replies),
             model=conversation.model,
         )
@@ -1088,12 +1103,17 @@ class RequestHandlers:
         """
         result: dict[str, Any] = {
             "conversation_id": task.conversation_id,
-            "subject": task.subject,
+            "display_title": task.display_title,
             "status": task.status.value,
+            "completion_reason": (
+                task.completion_reason.value if task.completion_reason else None
+            ),
+            "completion_detail": task.completion_detail,
+            "sender": task.sender,
+            "authenticated_sender": task.authenticated_sender,
             "queued_at": task.queued_at,
             "started_at": task.started_at,
             "completed_at": task.completed_at,
-            "success": task.success,
             "message_count": task.message_count,
             "model": task.model,
             "queue_duration": task.queue_duration(),

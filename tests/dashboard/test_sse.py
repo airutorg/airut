@@ -24,6 +24,7 @@ from airut.dashboard.sse import (
 from airut.dashboard.tracker import (
     BootPhase,
     BootState,
+    CompletionReason,
     RepoState,
     RepoStatus,
     TaskState,
@@ -231,7 +232,7 @@ class TestTaskStateToDictConversion:
         """Test converting queued task."""
         task = TaskState(
             conversation_id="abc12345",
-            subject="Test Task",
+            display_title="Test Task",
             repo_id="repo1",
             sender="user@example.com",
             status=TaskStatus.QUEUED,
@@ -239,31 +240,31 @@ class TestTaskStateToDictConversion:
         )
         result = _task_state_to_dict(task)
         assert result["conversation_id"] == "abc12345"
-        assert result["subject"] == "Test Task"
+        assert result["display_title"] == "Test Task"
         assert result["repo_id"] == "repo1"
         assert result["sender"] == "user@example.com"
         assert result["status"] == "queued"
         assert result["queued_at"] == 1000.0
         assert result["started_at"] is None
         assert result["completed_at"] is None
-        assert result["success"] is None
+        assert result["completion_reason"] is None
 
     def test_completed_task(self) -> None:
         """Test converting completed task with all fields."""
         task = TaskState(
             conversation_id="abc12345",
-            subject="Completed Task",
+            display_title="Completed Task",
             status=TaskStatus.COMPLETED,
             queued_at=1000.0,
             started_at=1010.0,
             completed_at=1070.0,
-            success=True,
+            completion_reason=CompletionReason.SUCCESS,
             message_count=3,
             model="claude-3",
         )
         result = _task_state_to_dict(task)
         assert result["status"] == "completed"
-        assert result["success"] is True
+        assert result["completion_reason"] == "success"
         assert result["message_count"] == 3
         assert result["model"] == "claude-3"
         assert result["queue_duration"] is not None
@@ -278,8 +279,8 @@ class TestTaskStateToDictWithTodos:
         """Test converting task with todos includes them."""
         task = TaskState(
             conversation_id="abc12345",
-            subject="Test",
-            status=TaskStatus.IN_PROGRESS,
+            display_title="Test",
+            status=TaskStatus.EXECUTING,
             queued_at=1000.0,
             started_at=1010.0,
             todos=[
@@ -304,7 +305,7 @@ class TestTaskStateToDictWithTodos:
         """Test converting task without todos omits the field."""
         task = TaskState(
             conversation_id="abc12345",
-            subject="Test",
+            display_title="Test",
             status=TaskStatus.QUEUED,
             queued_at=1000.0,
         )
@@ -329,7 +330,8 @@ class TestBuildStateSnapshot:
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
         tracker.add_task("t2", "Task 2")
-        tracker.start_task("t2")
+        tracker.set_authenticating("t2")
+        tracker.set_executing("t2")
 
         result = json.loads(build_state_snapshot(tracker, None, None, 5))
         assert result["version"] == 5
@@ -484,7 +486,8 @@ class TestSSEEventsLogStream:
         """Stream yields initial event with empty HTML."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
-        tracker.start_task("t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
         event_log = EventLog(tmp_path / "t1")
         (tmp_path / "t1").mkdir()
 
@@ -503,7 +506,8 @@ class TestSSEEventsLogStream:
         """Stream sends done event when task is completed."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
-        tracker.start_task("t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
         conv_dir = tmp_path / "t1"
         conv_dir.mkdir()
         event_log = EventLog(conv_dir)
@@ -515,7 +519,7 @@ class TestSSEEventsLogStream:
         next(gen)
 
         # Complete the task
-        tracker.complete_task("t1", success=True)
+        tracker.complete_task("t1", CompletionReason.SUCCESS)
 
         # Next should be done event
         event = next(gen)
@@ -542,7 +546,8 @@ class TestSSEEventsLogStream:
         """Stream yields new events as pre-rendered HTML."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
-        tracker.start_task("t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
         conv_dir = tmp_path / "t1"
         conv_dir.mkdir()
         event_log = EventLog(conv_dir)
@@ -570,7 +575,8 @@ class TestSSEEventsLogStream:
         """Stream sends heartbeat when idle."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
-        tracker.start_task("t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
         conv_dir = tmp_path / "t1"
         conv_dir.mkdir()
         event_log = EventLog(conv_dir)
@@ -594,7 +600,8 @@ class TestSSEEventsLogStream:
         """Stream yields events that arrive after initial snapshot."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
-        tracker.start_task("t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
         conv_dir = tmp_path / "t1"
         conv_dir.mkdir()
         event_log = EventLog(conv_dir)
@@ -622,7 +629,7 @@ class TestSSEEventsLogStream:
         assert "system:" in data["html"]
 
         # Now complete the task
-        tracker.complete_task("t1", success=True)
+        tracker.complete_task("t1", CompletionReason.SUCCESS)
         done = next(gen)
         assert "event: done\n" in done
 
@@ -630,7 +637,8 @@ class TestSSEEventsLogStream:
         """Stream drains remaining events when task completes."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
-        tracker.start_task("t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
         conv_dir = tmp_path / "t1"
         conv_dir.mkdir()
         event_log = EventLog(conv_dir)
@@ -659,7 +667,7 @@ class TestSSEEventsLogStream:
         )
         for e in events2:
             event_log.append_event(e)
-        tracker.complete_task("t1", success=True)
+        tracker.complete_task("t1", CompletionReason.SUCCESS)
 
         # Collect remaining events (drain + done)
         remaining = []
@@ -682,7 +690,8 @@ class TestSSEEventsLogStream:
         """
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
-        tracker.start_task("t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
         conv_dir = tmp_path / "t1"
         conv_dir.mkdir()
         event_log = EventLog(conv_dir)
@@ -702,7 +711,7 @@ class TestSSEEventsLogStream:
         event_log.start_new_reply()
         for e in events:
             event_log.append_event(e)
-        tracker.complete_task("t1", success=True)
+        tracker.complete_task("t1", CompletionReason.SUCCESS)
 
         # Make the regular poll return empty by patching tail to return
         # empty first time, then real data on drain
@@ -738,7 +747,8 @@ class TestSSEEventsLogStream:
         """Heartbeat resets the last_heartbeat timer."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
-        tracker.start_task("t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
         conv_dir = tmp_path / "t1"
         conv_dir.mkdir()
         event_log = EventLog(conv_dir)
@@ -770,7 +780,8 @@ class TestSSENetworkLogStream:
         """Stream yields initial event with empty HTML."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
-        tracker.start_task("t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
         log_path = tmp_path / "network-sandbox.log"
         network_log = NetworkLog(log_path)
 
@@ -788,7 +799,8 @@ class TestSSENetworkLogStream:
         """Stream yields new lines as pre-rendered HTML."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
-        tracker.start_task("t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
         log_path = tmp_path / "network-sandbox.log"
         log_path.write_text("allowed GET https://api.github.com -> 200\n")
         network_log = NetworkLog(log_path)
@@ -806,7 +818,8 @@ class TestSSENetworkLogStream:
         """Stream sends done event when task is completed."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
-        tracker.start_task("t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
         log_path = tmp_path / "network-sandbox.log"
         network_log = NetworkLog(log_path)
 
@@ -817,7 +830,7 @@ class TestSSENetworkLogStream:
         next(gen)
 
         # Complete the task
-        tracker.complete_task("t1", success=True)
+        tracker.complete_task("t1", CompletionReason.SUCCESS)
 
         event = next(gen)
         assert "event: done\n" in event
@@ -826,7 +839,8 @@ class TestSSENetworkLogStream:
         """Stream sends heartbeat when idle."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
-        tracker.start_task("t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
         log_path = tmp_path / "network-sandbox.log"
         network_log = NetworkLog(log_path)
 
@@ -848,7 +862,8 @@ class TestSSENetworkLogStream:
         """Stream yields lines that arrive after initial snapshot."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
-        tracker.start_task("t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
         log_path = tmp_path / "network-sandbox.log"
         network_log = NetworkLog(log_path)
 
@@ -869,7 +884,7 @@ class TestSSENetworkLogStream:
         assert "log-line" in data["html"]
 
         # Now complete the task
-        tracker.complete_task("t1", success=True)
+        tracker.complete_task("t1", CompletionReason.SUCCESS)
         done = next(gen)
         assert "event: done\n" in done
 
@@ -877,7 +892,8 @@ class TestSSENetworkLogStream:
         """Stream drains remaining lines when task completes."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
-        tracker.start_task("t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
         log_path = tmp_path / "network-sandbox.log"
         log_path.write_text("line1\n")
         network_log = NetworkLog(log_path)
@@ -893,7 +909,7 @@ class TestSSENetworkLogStream:
         # Append more and complete
         with log_path.open("a") as f:
             f.write("line2\n")
-        tracker.complete_task("t1", success=True)
+        tracker.complete_task("t1", CompletionReason.SUCCESS)
 
         # Collect remaining
         remaining = []
@@ -913,7 +929,8 @@ class TestSSENetworkLogStream:
         """
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
-        tracker.start_task("t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
         log_path = tmp_path / "network-sandbox.log"
         network_log = NetworkLog(log_path)
 
@@ -925,7 +942,7 @@ class TestSSENetworkLogStream:
 
         # Write lines and complete the task
         log_path.write_text("late line\n")
-        tracker.complete_task("t1", success=True)
+        tracker.complete_task("t1", CompletionReason.SUCCESS)
 
         # Make the regular poll return empty but drain finds data
         real_tail = network_log.tail
@@ -956,7 +973,8 @@ class TestSSENetworkLogStream:
         """Heartbeat resets the last_heartbeat timer."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
-        tracker.start_task("t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
         log_path = tmp_path / "network-sandbox.log"
         network_log = NetworkLog(log_path)
 

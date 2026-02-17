@@ -39,7 +39,7 @@ def make_message(
         raw += f"Authentication-Results: {auth_results}\r\n"
     raw += f"\r\n{body}"
     email_msg = BytesParser().parsebytes(raw.encode())
-    return RawMessage(sender=sender, content=email_msg, subject=subject)
+    return RawMessage(sender=sender, content=email_msg, display_title=subject)
 
 
 def update_global(svc: Any, **overrides: Any) -> None:

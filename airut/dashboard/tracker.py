@@ -3,10 +3,10 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Task tracking for email gateway dashboard.
+"""Task tracking for gateway dashboard.
 
 Provides thread-safe in-memory storage of task states for the dashboard
-to display queued, in-progress, and completed tasks.
+to display pending, executing, and completed tasks.
 """
 
 import copy
@@ -19,12 +19,39 @@ from enum import Enum
 from airut.dashboard.versioned import VersionClock, Versioned
 
 
+# Maximum number of pending messages queued per conversation.
+MAX_PENDING_PER_CONVERSATION = 3
+
+
 class TaskStatus(Enum):
-    """Task execution status."""
+    """Task lifecycle status.
+
+    Tasks progress through: QUEUED → AUTHENTICATING → EXECUTING → COMPLETED.
+    If the conversation is busy, an authenticated task enters PENDING before
+    EXECUTING.
+    """
 
     QUEUED = "queued"
-    IN_PROGRESS = "in_progress"
+    AUTHENTICATING = "authenticating"
+    PENDING = "pending"
+    EXECUTING = "executing"
     COMPLETED = "completed"
+
+
+class CompletionReason(Enum):
+    """Why a task reached the COMPLETED state.
+
+    Separates the reason for completion from the completion status itself,
+    allowing the dashboard to display different icons and colors for each.
+    """
+
+    SUCCESS = "success"
+    AUTH_FAILED = "auth_failed"
+    UNAUTHORIZED = "unauthorized"
+    EXECUTION_FAILED = "execution_failed"
+    TIMEOUT = "timeout"
+    INTERNAL_ERROR = "internal_error"
+    REJECTED = "rejected"
 
 
 class RepoStatus(Enum):
@@ -141,19 +168,36 @@ class RepoState:
     initialized_at: float = field(default_factory=time.time)
 
 
+ACTIVE_STATUSES: frozenset[TaskStatus] = frozenset(
+    {
+        TaskStatus.QUEUED,
+        TaskStatus.AUTHENTICATING,
+        TaskStatus.PENDING,
+        TaskStatus.EXECUTING,
+    }
+)
+
+
 @dataclass
 class TaskState:
     """State of a single task in the queue.
 
     Attributes:
         conversation_id: Unique 8-char hex conversation identifier.
-        subject: Original email subject line.
-        status: Current task status.
+        display_title: Short display title for the dashboard
+            (e.g. email subject line, first line of Slack message).
+        repo_id: Repository identifier.
+        sender: Raw sender identity (pre-auth) for display.
+        authenticated_sender: Verified sender identity, set only after
+            authentication succeeds.  Empty if auth failed or not yet
+            attempted.
+        status: Current task lifecycle status.
+        completion_reason: Why the task completed, or None if still active.
+        completion_detail: Human-readable detail about the completion
+            (e.g. "DMARC verification failed", "timeout after 300s").
         queued_at: Unix timestamp when task was added to queue.
-        started_at: Unix timestamp when execution began, or None.
+        started_at: Unix timestamp when execution (EXECUTING) began, or None.
         completed_at: Unix timestamp when execution finished, or None.
-        success: True if completed successfully, False if failed,
-            None if pending.
         message_count: Number of messages in the conversation.
         model: Claude model used for this conversation (e.g., "opus", "sonnet").
         todos: Latest TodoWrite state from Claude, or None if no todos
@@ -161,17 +205,29 @@ class TaskState:
     """
 
     conversation_id: str
-    subject: str
+    display_title: str
     repo_id: str = ""
     sender: str = ""
+    authenticated_sender: str = ""
     status: TaskStatus = TaskStatus.QUEUED
+    completion_reason: CompletionReason | None = None
+    completion_detail: str = ""
     queued_at: float = field(default_factory=time.time)
     started_at: float | None = None
     completed_at: float | None = None
-    success: bool | None = None
     message_count: int = 1
     model: str | None = None
     todos: list[TodoItem] | None = None
+
+    @property
+    def is_terminal(self) -> bool:
+        """Whether this task has reached a terminal state."""
+        return self.status == TaskStatus.COMPLETED
+
+    @property
+    def succeeded(self) -> bool:
+        """Whether this task completed successfully."""
+        return self.completion_reason == CompletionReason.SUCCESS
 
     def queue_duration(self) -> float:
         """Calculate time spent in queue.
@@ -237,7 +293,7 @@ class TaskTracker:
     def add_task(
         self,
         conversation_id: str,
-        subject: str,
+        display_title: str,
         *,
         repo_id: str = "",
         sender: str = "",
@@ -247,9 +303,9 @@ class TaskTracker:
 
         Args:
             conversation_id: Unique conversation identifier.
-            subject: Original email subject line.
+            display_title: Short display title for the dashboard.
             repo_id: Repository identifier.
-            sender: Email address of the sender.
+            sender: Raw sender identity for display.
             model: Optional Claude model for this conversation.
         """
         with self._lock:
@@ -261,7 +317,9 @@ class TaskTracker:
                 task.queued_at = time.time()
                 task.started_at = None
                 task.completed_at = None
-                task.success = None
+                task.completion_reason = None
+                task.completion_detail = ""
+                task.authenticated_sender = ""
                 task.message_count += 1
                 # Preserve existing model if not provided
                 if model is not None:
@@ -275,7 +333,7 @@ class TaskTracker:
             else:
                 self._tasks[conversation_id] = TaskState(
                     conversation_id=conversation_id,
-                    subject=subject,
+                    display_title=display_title,
                     repo_id=repo_id,
                     sender=sender,
                     model=model,
@@ -283,60 +341,141 @@ class TaskTracker:
             self._evict_old_completed()
             self._clock.tick()
 
-    def start_task(self, conversation_id: str) -> None:
-        """Mark a task as in-progress.
+    def set_authenticating(self, conversation_id: str) -> bool:
+        """Transition a task from QUEUED to AUTHENTICATING.
 
         Args:
-            conversation_id: Conversation identifier to update.
+            conversation_id: Task identifier to update.
+
+        Returns:
+            True if the task was found and transitioned, False if missing
+            or not in QUEUED state.
         """
         with self._lock:
-            if conversation_id in self._tasks:
-                task = self._tasks[conversation_id]
-                task.status = TaskStatus.IN_PROGRESS
-                task.started_at = time.time()
-                self._clock.tick()
+            if conversation_id not in self._tasks:
+                return False
+            task = self._tasks[conversation_id]
+            if task.status != TaskStatus.QUEUED:
+                return False
+            task.status = TaskStatus.AUTHENTICATING
+            self._clock.tick()
+            return True
+
+    def set_pending(self, conversation_id: str) -> bool:
+        """Transition a task to PENDING.
+
+        Used when the conversation already has an active task and this
+        message must wait.  Valid from AUTHENTICATING state.
+
+        Args:
+            conversation_id: Task identifier to update.
+
+        Returns:
+            True if the task was found and transitioned, False if missing
+            or not in a valid source state.
+        """
+        with self._lock:
+            if conversation_id not in self._tasks:
+                return False
+            task = self._tasks[conversation_id]
+            if task.status != TaskStatus.AUTHENTICATING:
+                return False
+            task.status = TaskStatus.PENDING
+            self._clock.tick()
+            return True
+
+    def set_executing(self, conversation_id: str) -> bool:
+        """Transition a task to EXECUTING.
+
+        Sets ``started_at`` to the current time.  Valid from
+        AUTHENTICATING or PENDING states.
+
+        Args:
+            conversation_id: Task identifier to update.
+
+        Returns:
+            True if the task was found and transitioned, False if missing
+            or not in a valid source state.
+        """
+        with self._lock:
+            if conversation_id not in self._tasks:
+                return False
+            task = self._tasks[conversation_id]
+            if task.status not in (
+                TaskStatus.AUTHENTICATING,
+                TaskStatus.PENDING,
+            ):
+                return False
+            task.status = TaskStatus.EXECUTING
+            task.started_at = time.time()
+            self._clock.tick()
+            return True
+
+    _COMPLETABLE_STATUSES: frozenset[TaskStatus] = frozenset(
+        {
+            TaskStatus.AUTHENTICATING,
+            TaskStatus.PENDING,
+            TaskStatus.EXECUTING,
+        }
+    )
 
     def complete_task(
         self,
         conversation_id: str,
-        success: bool,
+        reason: CompletionReason,
+        detail: str = "",
         message_count: int | None = None,
-    ) -> None:
+    ) -> bool:
         """Mark a task as completed.
+
+        Valid from AUTHENTICATING, PENDING, or EXECUTING states.
 
         Args:
             conversation_id: Conversation identifier to update.
-            success: Whether execution succeeded.
+            reason: Why the task completed.
+            detail: Human-readable completion detail.
             message_count: Optional updated message count.
+
+        Returns:
+            True if the task was found and completed, False if missing
+            or not in a valid source state.
         """
         with self._lock:
-            if conversation_id in self._tasks:
-                task = self._tasks[conversation_id]
-                task.status = TaskStatus.COMPLETED
-                task.completed_at = time.time()
-                task.success = success
-                task.todos = None
-                if message_count is not None:
-                    task.message_count = message_count
-                self._evict_old_completed()
-                self._clock.tick()
+            if conversation_id not in self._tasks:
+                return False
+            task = self._tasks[conversation_id]
+            if task.status not in self._COMPLETABLE_STATUSES:
+                return False
+            task.status = TaskStatus.COMPLETED
+            task.completed_at = time.time()
+            task.completion_reason = reason
+            task.completion_detail = detail
+            task.todos = None
+            if message_count is not None:
+                task.message_count = message_count
+            self._evict_old_completed()
+            self._clock.tick()
+            return True
 
-    def update_task_subject(
+    def update_task_display_title(
         self,
         conversation_id: str,
-        subject: str,
+        display_title: str,
         *,
         sender: str = "",
+        authenticated_sender: str = "",
     ) -> bool:
-        """Update the subject (display title) of an existing task.
+        """Update the display title of an existing task.
 
         Used after authentication completes to replace the placeholder
-        ``(authenticating)`` title with the real subject.
+        ``(authenticating)`` title with the real title.
 
         Args:
             conversation_id: Task identifier to update.
-            subject: New subject/title to display.
-            sender: Sender identity to set (if non-empty).
+            display_title: New display title.
+            sender: Raw sender identity to set (if non-empty).
+            authenticated_sender: Verified sender identity to set
+                (if non-empty).
 
         Returns:
             True if the task was found and updated, False otherwise.
@@ -345,9 +484,11 @@ class TaskTracker:
             if conversation_id not in self._tasks:
                 return False
             task = self._tasks[conversation_id]
-            task.subject = subject
+            task.display_title = display_title
             if sender:
                 task.sender = sender
+            if authenticated_sender:
+                task.authenticated_sender = authenticated_sender
             self._clock.tick()
             return True
 
@@ -385,8 +526,8 @@ class TaskTracker:
         - **conv_id is new**: renames ``temp_id`` → ``conv_id`` (like
           ``update_task_id``).
         - **conv_id already exists** (resumed conversation): transfers
-          the temp task's in-progress state onto the existing task and
-          deletes the temp entry, incrementing ``message_count``.
+          the temp task's state onto the existing task and deletes the
+          temp entry, incrementing ``message_count``.
 
         Args:
             temp_id: Temporary task ID (e.g. ``"new-..."``) to remove.
@@ -411,11 +552,13 @@ class TaskTracker:
                 # Resume: transfer state to existing task
                 existing = self._tasks[conv_id]
                 existing.status = temp_task.status
-                existing.subject = temp_task.subject
+                existing.display_title = temp_task.display_title
                 existing.sender = temp_task.sender
+                existing.authenticated_sender = temp_task.authenticated_sender
                 existing.started_at = temp_task.started_at
                 existing.completed_at = None
-                existing.success = None
+                existing.completion_reason = None
+                existing.completion_detail = ""
                 existing.message_count += 1
                 if temp_task.model is not None:
                     existing.model = temp_task.model
@@ -463,19 +606,21 @@ class TaskTracker:
             return True
 
     def is_task_active(self, conversation_id: str) -> bool:
-        """Check if a task is currently queued or in progress.
+        """Check if a task is currently active (not completed).
+
+        Returns True for QUEUED, AUTHENTICATING, PENDING, and EXECUTING.
 
         Args:
             conversation_id: Conversation identifier to check.
 
         Returns:
-            True if task exists and is QUEUED or IN_PROGRESS, False otherwise.
+            True if task exists and is not COMPLETED, False otherwise.
         """
         with self._lock:
             task = self._tasks.get(conversation_id)
             if task is None:
                 return False
-            return task.status in (TaskStatus.QUEUED, TaskStatus.IN_PROGRESS)
+            return task.status in ACTIVE_STATUSES
 
     def get_task(self, conversation_id: str) -> TaskState | None:
         """Get a single task by conversation ID.

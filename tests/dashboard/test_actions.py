@@ -1094,7 +1094,8 @@ class TestSSEServerSideRendering:
         the server. It should not contain any event rendering logic.
         """
         # Mark task as in-progress so SSE script is included
-        harness.tracker.start_task(harness.CONV_ID)
+        harness.tracker.set_authenticating(harness.CONV_ID)
+        harness.tracker.set_executing(harness.CONV_ID)
 
         html = harness.get_html("/conversation/abc12345/actions")
 
@@ -1128,7 +1129,8 @@ class TestSSEServerSideRendering:
         )
 
         # Start a follow-up reply (task must be in-progress for SSE)
-        harness.tracker.start_task(harness.CONV_ID)
+        harness.tracker.set_authenticating(harness.CONV_ID)
+        harness.tracker.set_executing(harness.CONV_ID)
         harness.store.set_pending_request(harness.CONV_ID, "Follow-up request")
         harness.event_log.start_new_reply()
 
@@ -1171,7 +1173,8 @@ class TestSSEServerSideRendering:
         )
 
         # Start a follow-up reply (task in-progress enables SSE)
-        harness.tracker.start_task(harness.CONV_ID)
+        harness.tracker.set_authenticating(harness.CONV_ID)
+        harness.tracker.set_executing(harness.CONV_ID)
         harness.store.set_pending_request(harness.CONV_ID, "Next request")
         harness.event_log.start_new_reply()
 

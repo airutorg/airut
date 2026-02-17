@@ -116,7 +116,7 @@ events = [
             data = json.loads(r.get_data(as_text=True))
             assert data["status"] == "ok"
             assert data["tasks"]["completed"] >= 1
-            assert data["tasks"]["in_progress"] == 0
+            assert data["tasks"]["executing"] == 0
             assert data["tasks"]["queued"] == 0
             assert data["repos"]["live"] >= 1
             assert "boot" in data
@@ -151,8 +151,8 @@ events = [
             )
             assert task_data is not None
             assert task_data["status"] == "completed"
-            assert task_data["success"] is True
-            assert "Dashboard API test" in task_data["subject"]
+            assert task_data["completion_reason"] == "success"
+            assert "Dashboard API test" in task_data["display_title"]
             # ETag support
             etag = r.headers.get("ETag")
             assert etag is not None
@@ -169,7 +169,7 @@ events = [
             data = json.loads(r.get_data(as_text=True))
             assert data["conversation_id"] == conv_id
             assert data["status"] == "completed"
-            assert data["success"] is True
+            assert data["completion_reason"] == "success"
             assert data["message_count"] == 1
             assert "conversation" in data
             assert data["conversation"] is not None
@@ -221,7 +221,7 @@ events = [
             )
             assert tracker_task is not None
             assert tracker_task["status"] == "completed"
-            assert tracker_task["success"] is True
+            assert tracker_task["completion_reason"] == "success"
             assert tracker_task["repo_id"] == "test"
             assert tracker_task["model"] is not None
             # ETag support
@@ -398,5 +398,5 @@ class TestDashboardAPIBeforeBoot:
         assert r.status_code == 200
         data = json.loads(r.get_data(as_text=True))
         assert data["counts"]["queued"] == 0
-        assert data["counts"]["in_progress"] == 0
+        assert data["counts"]["executing"] == 0
         assert data["counts"]["completed"] == 0

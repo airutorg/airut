@@ -24,6 +24,7 @@ from airut.conversation import (
 )
 from airut.dashboard.server import DashboardServer
 from airut.dashboard.tracker import (
+    CompletionReason,
     TaskState,
     TaskStatus,
     TaskTracker,
@@ -375,12 +376,12 @@ class TestConversationDataIntegration:
         tracker = TaskTracker()
         task = TaskState(
             conversation_id="abc12345",
-            subject="Test",
+            display_title="Test",
             status=TaskStatus.COMPLETED,
             queued_at=1000.0,
             started_at=1030.0,
             completed_at=1090.0,
-            success=True,
+            completion_reason=CompletionReason.SUCCESS,
         )
 
         conv_dir = tmp_path / "abc12345"
@@ -420,7 +421,7 @@ class TestConversationDataIntegration:
         tracker = TaskTracker()
         task = TaskState(
             conversation_id="abc12345",
-            subject="Test",
+            display_title="Test",
             status=TaskStatus.COMPLETED,
         )
 
@@ -531,7 +532,8 @@ class TestConversationDataIntegration:
         """
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -561,7 +563,8 @@ class TestConversationDataIntegration:
         """
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -608,7 +611,8 @@ class TestConversationDataIntegration:
         """Task detail page escapes pending request text to prevent XSS."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -742,7 +746,7 @@ class TestConversationDataIntegration:
         tracker = TaskTracker()
         task = TaskState(
             conversation_id="abc12345",
-            subject="Test",
+            display_title="Test",
             status=TaskStatus.COMPLETED,
         )
 
@@ -786,7 +790,8 @@ class TestTodoProgressDisplay:
         """Task detail page shows progress section for active tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
         tracker.update_todos(
             "abc12345",
             [
@@ -824,12 +829,13 @@ class TestTodoProgressDisplay:
         """Task detail page hides progress section for completed tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
         tracker.update_todos(
             "abc12345",
             [TodoItem(content="Done", status=TodoStatus.COMPLETED)],
         )
-        tracker.complete_task("abc12345", success=True)
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
@@ -845,7 +851,8 @@ class TestTodoProgressDisplay:
         """Task detail page has no progress section without todos."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
@@ -899,7 +906,8 @@ class TestTodoProgressDisplay:
         """Task detail for active task includes renderTodos JS."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
@@ -912,7 +920,8 @@ class TestTodoProgressDisplay:
         """Polling fallback JS calls updateTaskFromData (including todos)."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
@@ -957,7 +966,7 @@ class TestLoadPastTasks:
         assert task.conversation_id == "abc12345"
         assert task.status == TaskStatus.COMPLETED
         assert task.message_count == 1
-        assert task.success is True
+        assert task.succeeded is True
         assert conversation is not None
         assert conversation.conversation_id == "abc12345"
 
@@ -1006,7 +1015,7 @@ class TestLoadPastTasks:
         assert result is None
 
     def test_load_task_from_disk_with_error_reply(self, tmp_path: Path) -> None:
-        """Test past task with error reply shows success=False."""
+        """Test past task with error reply shows EXECUTION_FAILED reason."""
         tracker = TaskTracker()
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -1032,7 +1041,7 @@ class TestLoadPastTasks:
 
         assert result is not None
         task, _ = result
-        assert task.success is False
+        assert task.completion_reason == CompletionReason.EXECUTION_FAILED
 
     def test_task_detail_loads_past_task_from_disk(
         self, tmp_path: Path
@@ -1111,7 +1120,8 @@ class TestLoadPastTasks:
         """Test that in-memory task takes precedence over disk."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "In-Memory Subject")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -1140,7 +1150,7 @@ class TestLoadPastTasks:
         html = response.get_data(as_text=True)
         # Should show in-memory task subject, not disk placeholder
         assert "In-Memory Subject" in html
-        assert "IN PROGRESS" in html
+        assert "EXECUTING" in html
         # Past conversation label should NOT appear
         assert "[Past conversation" not in html
 
@@ -1295,7 +1305,7 @@ class TestLoadPastTasks:
         # Task metadata
         assert task.conversation_id == "5287313b"
         assert task.message_count == 2
-        assert task.success is True
+        assert task.succeeded is True
 
         # Conversation data
         assert len(conversation.replies) == 2
@@ -1355,7 +1365,8 @@ class TestLoadPastTasks:
         """Test that in-memory task takes precedence for actions."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "In-Memory Subject")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -1397,7 +1408,8 @@ class TestLoadTaskWithConversation:
         """Test loading task that exists in memory."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "In-Memory Task")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -1422,8 +1434,8 @@ class TestLoadTaskWithConversation:
 
         assert result is not None
         task, conversation = result
-        assert task.subject == "In-Memory Task"
-        assert task.status == TaskStatus.IN_PROGRESS
+        assert task.display_title == "In-Memory Task"
+        assert task.status == TaskStatus.EXECUTING
         assert conversation is not None
         assert conversation.conversation_id == "abc12345"
 
@@ -1457,7 +1469,7 @@ class TestLoadTaskWithConversation:
 
         assert result is not None
         task, conversation = result
-        assert task.subject == "[Past conversation abc12345]"
+        assert task.display_title == "[Past conversation abc12345]"
         assert task.status == TaskStatus.COMPLETED
         assert conversation is not None
 
@@ -1483,7 +1495,7 @@ class TestLoadTaskWithConversation:
 
         assert result is not None
         task, conversation = result
-        assert task.subject == "Memory Task"
+        assert task.display_title == "Memory Task"
         assert conversation is None  # No conversation file on disk
 
 
@@ -1495,7 +1507,8 @@ class TestStopEndpoint:
         tracker = TaskTracker()
         task_id = "abc12345"
         tracker.add_task(task_id, "Test Task")
-        tracker.start_task(task_id)
+        tracker.set_authenticating(task_id)
+        tracker.set_executing(task_id)
 
         # Mock stop callback that succeeds
         def mock_stop(conv_id: str) -> bool:
@@ -1530,7 +1543,7 @@ class TestStopEndpoint:
         tracker = TaskTracker()
         task_id = "abc12345"
         tracker.add_task(task_id, "Test Task")
-        # Task is QUEUED, not IN_PROGRESS
+        # Task is QUEUED, not EXECUTING
 
         def mock_stop(conv_id: str) -> bool:
             return True
@@ -1549,7 +1562,8 @@ class TestStopEndpoint:
         tracker = TaskTracker()
         task_id = "abc12345"
         tracker.add_task(task_id, "Test Task")
-        tracker.start_task(task_id)
+        tracker.set_authenticating(task_id)
+        tracker.set_executing(task_id)
 
         # No stop callback provided
         server = DashboardServer(tracker, stop_callback=None)
@@ -1565,7 +1579,8 @@ class TestStopEndpoint:
         tracker = TaskTracker()
         task_id = "abc12345"
         tracker.add_task(task_id, "Test Task")
-        tracker.start_task(task_id)
+        tracker.set_authenticating(task_id)
+        tracker.set_executing(task_id)
 
         # Mock stop callback that fails
         def mock_stop(conv_id: str) -> bool:
@@ -1584,7 +1599,8 @@ class TestStopEndpoint:
         tracker = TaskTracker()
         task_id = "abc12345"
         tracker.add_task(task_id, "Test Task")
-        tracker.start_task(task_id)
+        tracker.set_authenticating(task_id)
+        tracker.set_executing(task_id)
 
         # Mock stop callback that raises exception
         def mock_stop(conv_id):
@@ -1603,7 +1619,8 @@ class TestStopEndpoint:
         tracker = TaskTracker()
         task_id = "abc12345"
         tracker.add_task(task_id, "Test Task")
-        tracker.start_task(task_id)
+        tracker.set_authenticating(task_id)
+        tracker.set_executing(task_id)
 
         def mock_stop(conv_id: str) -> bool:
             return True
@@ -1624,7 +1641,9 @@ class TestStopEndpoint:
         tracker = TaskTracker()
         task_id = "abc12345"
         tracker.add_task(task_id, "Test Task")
-        tracker.complete_task(task_id, success=True)
+        tracker.set_authenticating(task_id)
+        tracker.set_executing(task_id)
+        tracker.complete_task(task_id, CompletionReason.SUCCESS)
 
         def mock_stop(conv_id: str) -> bool:
             return True
@@ -1656,8 +1675,9 @@ class TestEventsLogStreamEndpoint:
         """Returns SSE response for existing conversation."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -1697,8 +1717,9 @@ class TestEventsLogStreamEndpoint:
         """Passes offset parameter to the stream."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -1715,8 +1736,9 @@ class TestEventsLogStreamEndpoint:
         """Handles invalid offset parameter gracefully."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -1746,8 +1768,9 @@ class TestNetworkLogStreamEndpoint:
         """Returns SSE response for existing conversation."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -1786,8 +1809,9 @@ class TestNetworkLogStreamEndpoint:
         """Passes offset parameter to the stream."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -1804,8 +1828,9 @@ class TestNetworkLogStreamEndpoint:
         """Handles invalid offset parameter gracefully."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -1826,7 +1851,8 @@ class TestSSELivePages:
         """Task detail page no longer uses meta-refresh."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
@@ -1840,7 +1866,8 @@ class TestSSELivePages:
         """Task detail page includes SSE script for active tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
@@ -1855,7 +1882,9 @@ class TestSSELivePages:
         """Task detail page has no SSE script for completed tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
@@ -1901,7 +1930,8 @@ class TestSSELivePages:
         """Actions page includes SSE script for active tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -1919,7 +1949,9 @@ class TestSSELivePages:
         """Actions page has no SSE script for completed tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -1936,7 +1968,8 @@ class TestSSELivePages:
         """Network page includes SSE script for active tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -1960,7 +1993,8 @@ class TestSSELivePages:
         """
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -1998,7 +2032,8 @@ class TestSSELivePages:
 
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -2044,7 +2079,9 @@ class TestSSELivePages:
         """Network page has no SSE script for completed tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -2074,7 +2111,8 @@ class TestEventsLogPollEndpoint:
         """Returns empty HTML and offset 0 for empty event log."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -2095,7 +2133,8 @@ class TestEventsLogPollEndpoint:
         """Returns rendered HTML for new events."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -2120,7 +2159,9 @@ class TestEventsLogPollEndpoint:
         """Returns done=True for completed tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -2136,7 +2177,8 @@ class TestEventsLogPollEndpoint:
         """Returns 304 when ETag matches and no new data."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -2160,7 +2202,8 @@ class TestEventsLogPollEndpoint:
         """Respects offset parameter to skip already-seen data."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -2185,7 +2228,8 @@ class TestEventsLogPollEndpoint:
         """Handles invalid offset parameter gracefully."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -2202,7 +2246,8 @@ class TestEventsLogPollEndpoint:
         """Response includes ETag header based on offset."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -2231,7 +2276,8 @@ class TestNetworkLogPollEndpoint:
         """Returns empty HTML and offset 0 for no network log."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -2253,7 +2299,8 @@ class TestNetworkLogPollEndpoint:
 
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -2276,7 +2323,9 @@ class TestNetworkLogPollEndpoint:
         """Returns done=True for completed tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -2292,7 +2341,8 @@ class TestNetworkLogPollEndpoint:
         """Returns 304 when ETag matches and no new data."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -2318,7 +2368,8 @@ class TestNetworkLogPollEndpoint:
 
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -2340,7 +2391,8 @@ class TestNetworkLogPollEndpoint:
         """Handles invalid offset parameter gracefully."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -2361,7 +2413,8 @@ class TestPollingFallbackJS:
         """Actions page JS includes polling fallback for active tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -2379,7 +2432,8 @@ class TestPollingFallbackJS:
         """Network page JS includes polling fallback for active tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -2397,7 +2451,8 @@ class TestPollingFallbackJS:
         """Task detail page JS includes polling fallback."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
@@ -2441,7 +2496,9 @@ class TestPollingFallbackJS:
         """Completed tasks don't include polling fallback JS."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()
@@ -2458,7 +2515,9 @@ class TestPollingFallbackJS:
         """Completed tasks don't include polling fallback JS."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         conv_dir = tmp_path / "abc12345"
         conv_dir.mkdir()

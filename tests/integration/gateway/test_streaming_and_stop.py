@@ -239,7 +239,7 @@ def sync_between_events(event_num):
             # Verify task is actually in progress
             task = service.tracker.get_task(conv_id)
             assert task is not None
-            assert task.status.value == "in_progress"
+            assert task.status.value == "executing"
 
             # Stop the task
             stop_success = service._stop_execution(conv_id)
@@ -362,7 +362,7 @@ def sync_between_events(event_num):
             # Verify task is in progress
             task = service.tracker.get_task(conv_id)
             assert task is not None
-            assert task.status.value == "in_progress"
+            assert task.status.value == "executing"
 
             # Use dashboard's stop callback
             assert service.dashboard is not None, "Dashboard not started"

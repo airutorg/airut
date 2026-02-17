@@ -21,6 +21,7 @@ from airut.dashboard.formatters import (
 from airut.dashboard.tracker import (
     BootPhase,
     BootState,
+    CompletionReason,
     RepoState,
     RepoStatus,
     TaskState,
@@ -220,24 +221,36 @@ def render_task_list(tasks: list[TaskState], status_class: str) -> str:
         if task.status == TaskStatus.QUEUED:
             duration = format_duration(task.queue_duration())
             time_label = f"Waiting: {duration}"
-        elif task.status == TaskStatus.IN_PROGRESS:
+        elif task.status == TaskStatus.AUTHENTICATING:
+            time_label = "Authenticating..."
+        elif task.status == TaskStatus.PENDING:
+            time_label = "Queued behind active task"
+        elif task.status == TaskStatus.EXECUTING:
             time_label = (
                 f"Running: {format_duration(task.execution_duration())}"
             )
         elif task.status == TaskStatus.COMPLETED:
-            if task.success:
+            reason = task.completion_reason
+            if reason == CompletionReason.SUCCESS:
                 success_class = "success"
                 status_icon = '<span class="status-icon">&#x2713;</span>'
+            elif reason in (
+                CompletionReason.AUTH_FAILED,
+                CompletionReason.UNAUTHORIZED,
+                CompletionReason.REJECTED,
+            ):
+                success_class = "failed"
+                status_icon = '<span class="status-icon">&#x2298;</span>'
             else:
                 success_class = "failed"
                 status_icon = '<span class="status-icon">&#x2717;</span>'
             time_label = f"Took: {format_duration(task.execution_duration())}"
 
-        escaped_subject = html.escape(task.subject)
-        truncated_subject = (
-            escaped_subject[:50] + "..."
-            if len(escaped_subject) > 50
-            else escaped_subject
+        escaped_title = html.escape(task.display_title)
+        truncated_title = (
+            escaped_title[:50] + "..."
+            if len(escaped_title) > 50
+            else escaped_title
         )
 
         repo_badge = ""
@@ -258,8 +271,8 @@ def render_task_list(tasks: list[TaskState], status_class: str) -> str:
                     </a>
                     {repo_badge}{status_icon}
                 </div>
-                <div class="task-subject" title="{escaped_subject}">
-                    {truncated_subject}
+                <div class="task-subject" title="{escaped_title}">
+                    {truncated_title}
                 </div>
                 {sender_line}
                 <div class="task-time">{time_label}</div>
@@ -283,7 +296,7 @@ def render_action_buttons(task: TaskState) -> str:
     """
     cid = task.conversation_id
     stop_html = ""
-    if task.status == TaskStatus.IN_PROGRESS:
+    if task.status == TaskStatus.EXECUTING:
         stop_html = (
             '<button id="stop-btn" class="stop-btn"'
             ' onclick="stopTask()">Stop</button>'
@@ -312,7 +325,7 @@ def render_stop_script(task: TaskState) -> str:
         HTML script tag with stopTask function, or empty string if task
         not in progress.
     """
-    if task.status != TaskStatus.IN_PROGRESS:
+    if task.status != TaskStatus.EXECUTING:
         return ""
 
     return f"""
