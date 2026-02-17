@@ -587,6 +587,9 @@ def _task_detail_specific() -> str:
             background: #ccc;
             cursor: not-allowed;
         }
+        .stop-result:empty {
+            display: none;
+        }
         .stop-result {
             margin-top: 12px;
             padding: 12px;
