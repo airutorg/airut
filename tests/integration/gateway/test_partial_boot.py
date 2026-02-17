@@ -31,6 +31,22 @@ from .conftest import MOCK_CONTAINER_COMMAND, get_message_text
 from .environment import IntegrationEnvironment
 
 
+def _poll_boot_phase(
+    service,
+    target_phase: BootPhase,
+    timeout: float = 10.0,
+    interval: float = 0.05,
+) -> bool:
+    """Poll until boot phase reaches or passes the target."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        phase = service._boot_store.get().value.phase
+        if phase == target_phase:
+            return True
+        time.sleep(interval)
+    return False
+
+
 class TestPartialBootListenerFailure:
     """Test service boot when a repo listener fails to start."""
 
@@ -78,8 +94,9 @@ class TestPartialBootListenerFailure:
             service_thread = threading.Thread(target=service.start, daemon=True)
             service_thread.start()
 
-            # Give service time to boot
-            time.sleep(3)
+            # Wait for boot to reach READY (polls every 50ms)
+            booted = _poll_boot_phase(service, BootPhase.READY)
+            assert booted, "Service did not reach READY boot phase"
 
             try:
                 # Verify boot phase reached READY (not FAILED)

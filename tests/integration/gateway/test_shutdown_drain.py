@@ -147,10 +147,14 @@ def sync_between_events(event_num):
             tasks = service.tracker.get_all_tasks()
             executing = [t for t in tasks if t.status == TaskStatus.EXECUTING]
             assert len(executing) >= 1
+
+            # Unblock mock_claude so it finishes promptly
+            workspace = sync_file.parent
+            (workspace / "stop_signal.txt").write_text("stop")
         finally:
             # Stop the service — this should shut down cleanly
             service.stop()
-            service_thread.join(timeout=15.0)
+            service_thread.join(timeout=10.0)
 
         # After shutdown, verify service state
         assert service._stopped is True
@@ -247,14 +251,18 @@ events = [
                 timeout=15.0,
             )
             assert pending_found, "Second message did not enter PENDING"
+
+            # Unblock mock_claude so shutdown completes promptly
+            sync_file = _wait_for_sync_file(integration_env.storage_dir)
+            if sync_file:
+                workspace = sync_file.parent
+                (workspace / "stop_signal.txt").write_text("stop")
         finally:
             # Shutdown the service with active + pending tasks
-            # This should complete within the shutdown timeout (5s)
-            # without deadlock
             service.stop()
 
             # Verify service thread completes in reasonable time
-            service_thread.join(timeout=15.0)
+            service_thread.join(timeout=10.0)
             assert not service_thread.is_alive(), (
                 "Service thread still alive after stop — possible deadlock"
             )
