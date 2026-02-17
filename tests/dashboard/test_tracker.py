@@ -737,6 +737,70 @@ class TestTaskTracker:
         assert snap.version == 0
         assert snap.value == ()
 
+    def test_get_snapshot_deep_copies_todos(self) -> None:
+        """Test get_snapshot deep copies todos so mutations don't leak."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        todos = [{"content": "Step 1", "status": "pending"}]
+        tracker.update_todos("t1", todos)
+
+        snap = tracker.get_snapshot()
+        assert snap.value[0].todos == todos
+        # Mutate the original list — snapshot should be unaffected
+        todos.append({"content": "Step 2", "status": "pending"})
+        assert snap.value[0].todos is not None
+        assert len(snap.value[0].todos) == 1
+
+    def test_update_todos_success(self) -> None:
+        """Test updating todos on an existing task."""
+        from airut.dashboard.versioned import VersionClock
+
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        tracker.add_task("abc12345", "Test")
+        version_before = clock.version
+
+        todos = [
+            {"content": "Run tests", "status": "in_progress"},
+            {"content": "Fix bugs", "status": "pending"},
+        ]
+        result = tracker.update_todos("abc12345", todos)
+
+        assert result is True
+        assert clock.version > version_before
+        task = tracker.get_task("abc12345")
+        assert task is not None
+        assert task.todos == todos
+
+    def test_update_todos_nonexistent(self) -> None:
+        """Test updating todos on non-existent task returns False."""
+        tracker = TaskTracker()
+        result = tracker.update_todos(
+            "nonexistent", [{"content": "X", "status": "pending"}]
+        )
+        assert result is False
+
+    def test_update_todos_replaces_previous(self) -> None:
+        """Test updating todos replaces the previous list."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.update_todos(
+            "abc12345", [{"content": "A", "status": "pending"}]
+        )
+        tracker.update_todos(
+            "abc12345", [{"content": "B", "status": "completed"}]
+        )
+        task = tracker.get_task("abc12345")
+        assert task is not None
+        assert task.todos is not None
+        assert len(task.todos) == 1
+        assert task.todos[0]["content"] == "B"
+
+    def test_task_state_todos_default_none(self) -> None:
+        """Test TaskState.todos defaults to None."""
+        task = TaskState(conversation_id="abc", subject="Test")
+        assert task.todos is None
+
 
 class TestTaskStatus:
     """Tests for TaskStatus enum."""

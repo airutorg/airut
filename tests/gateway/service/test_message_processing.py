@@ -126,6 +126,135 @@ def _make_failure_result(
     )
 
 
+class TestMakeTodoCallback:
+    """Tests for _make_todo_callback."""
+
+    def test_captures_todowrite_event(self) -> None:
+        """Callback extracts todos from TodoWrite tool use events."""
+        from airut.claude_output.types import (
+            EventType,
+            StreamEvent,
+            ToolUseBlock,
+        )
+        from airut.dashboard.tracker import TaskTracker
+        from airut.gateway.service.message_processing import (
+            _make_todo_callback,
+        )
+
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+
+        callback = _make_todo_callback(tracker, "abc12345")
+
+        todos = [
+            {"content": "Run tests", "status": "in_progress"},
+            {"content": "Fix bugs", "status": "pending"},
+        ]
+        event = StreamEvent(
+            event_type=EventType.ASSISTANT,
+            subtype="",
+            session_id="s1",
+            content_blocks=(
+                ToolUseBlock(
+                    tool_id="t1",
+                    tool_name="TodoWrite",
+                    tool_input={"todos": todos},
+                ),
+            ),
+            raw="{}",
+        )
+        callback(event)
+
+        task = tracker.get_task("abc12345")
+        assert task is not None
+        assert task.todos == todos
+
+    def test_ignores_non_todowrite_events(self) -> None:
+        """Callback ignores tool uses that aren't TodoWrite."""
+        from airut.claude_output.types import (
+            EventType,
+            StreamEvent,
+            TextBlock,
+            ToolUseBlock,
+        )
+        from airut.dashboard.tracker import TaskTracker
+        from airut.gateway.service.message_processing import (
+            _make_todo_callback,
+        )
+
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+
+        callback = _make_todo_callback(tracker, "abc12345")
+
+        # Text block — should be ignored
+        text_event = StreamEvent(
+            event_type=EventType.ASSISTANT,
+            subtype="",
+            session_id="s1",
+            content_blocks=(TextBlock(text="hello"),),
+            raw="{}",
+        )
+        callback(text_event)
+
+        # Other tool — should be ignored
+        other_event = StreamEvent(
+            event_type=EventType.ASSISTANT,
+            subtype="",
+            session_id="s1",
+            content_blocks=(
+                ToolUseBlock(
+                    tool_id="t1",
+                    tool_name="Bash",
+                    tool_input={"command": "ls"},
+                ),
+            ),
+            raw="{}",
+        )
+        callback(other_event)
+
+        task = tracker.get_task("abc12345")
+        assert task is not None
+        assert task.todos is None
+
+    def test_ignores_invalid_todos_value(self) -> None:
+        """Callback ignores TodoWrite with non-list todos."""
+        from airut.claude_output.types import (
+            EventType,
+            StreamEvent,
+            ToolUseBlock,
+        )
+        from airut.dashboard.tracker import TaskTracker
+        from airut.gateway.service.message_processing import (
+            _make_todo_callback,
+        )
+
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+
+        callback = _make_todo_callback(tracker, "abc12345")
+
+        # todos is a string, not a list
+        event = StreamEvent(
+            event_type=EventType.ASSISTANT,
+            subtype="",
+            session_id="s1",
+            content_blocks=(
+                ToolUseBlock(
+                    tool_id="t1",
+                    tool_name="TodoWrite",
+                    tool_input={"todos": "not a list"},
+                ),
+            ),
+            raw="{}",
+        )
+        callback(event)
+
+        task = tracker.get_task("abc12345")
+        assert task is not None
+        assert task.todos is None
+
+
 class TestProcessMessage:
     @pytest.fixture(autouse=True)
     def _patch_repo_config(self):

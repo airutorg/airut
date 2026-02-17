@@ -6,16 +6,64 @@
 """Task (conversation) detail page view."""
 
 import html
+from typing import Any
 
 from airut.conversation import ConversationMetadata
 from airut.dashboard.formatters import format_duration, format_timestamp
 from airut.dashboard.tracker import TaskState, TaskStatus
 from airut.dashboard.views.components import (
     render_action_buttons,
-    render_conversation_section,
+    render_conversation_replies_section,
     render_stop_script,
 )
 from airut.dashboard.views.styles import task_detail_styles
+
+
+def _render_progress_section(todos: list[dict[str, Any]]) -> str:
+    """Render the checklist-style progress section.
+
+    Args:
+        todos: List of todo dicts from TodoWrite tool_input.
+
+    Returns:
+        HTML string for the progress section.
+    """
+    if not todos:
+        return ""
+
+    items: list[str] = []
+    for todo in todos:
+        status = todo.get("status", "pending")
+        content = html.escape(todo.get("content", ""))
+        active_form = html.escape(todo.get("activeForm", content))
+
+        if status == "completed":
+            icon = '<span class="todo-icon completed">&#x2713;</span>'
+            css_class = "completed"
+            label = content
+        elif status == "in_progress":
+            icon = '<span class="todo-spinner"></span>'
+            css_class = "in-progress"
+            label = active_form
+        else:
+            icon = '<span class="todo-icon pending">&#x25CB;</span>'
+            css_class = "pending"
+            label = content
+
+        items.append(
+            f'<div class="todo-item {css_class}">'
+            f"{icon}"
+            f'<span class="todo-label">{label}</span>'
+            f"</div>"
+        )
+
+    return f"""
+    <div id="progress-section" class="card progress-card">
+        <h2>Progress</h2>
+        <div id="todo-list" class="todo-list">
+            {"".join(items)}
+        </div>
+    </div>"""
 
 
 def render_task_detail(
@@ -60,12 +108,24 @@ def render_task_detail(
         model_display = conversation.model
     model_display = model_display or "-"
 
-    # Build conversation data section if available
-    session_section = render_conversation_section(
+    # Build conversation cost/turns for the details section
+    cost_display = "-"
+    turns_display = "-"
+    if conversation and conversation.replies:
+        cost_display = f"${conversation.total_cost_usd:.4f}"
+        turns_display = str(conversation.total_turns)
+
+    # Build conversation replies section
+    replies_section = render_conversation_replies_section(
         task.conversation_id, conversation
     )
 
+    # Build progress section from todos
     is_active = task.status in (TaskStatus.QUEUED, TaskStatus.IN_PROGRESS)
+    progress_section = ""
+    if task.todos and is_active:
+        progress_section = _render_progress_section(task.todos)
+
     sse_script = (
         _sse_task_detail_script(task.conversation_id) if is_active else ""
     )
@@ -117,55 +177,63 @@ def render_task_detail(
             </div>
         </div>
 
+        {render_action_buttons(task)}
+    </div>
+    {progress_section}
+    <div class="card">
+        <h2>Task Details</h2>
+
         <div class="field">
             <div class="field-label">Model</div>
             <div id="task-model" class="field-value mono">{model_display}</div>
         </div>
 
-        <div class="field">
-            <div class="field-label">Queued At</div>
-            <div class="field-value mono">{queued_at}</div>
+        <div class="details-grid">
+            <div class="detail-item">
+                <div class="field-label">Queued At</div>
+                <div class="field-value mono">{queued_at}</div>
+            </div>
+            <div class="detail-item">
+                <div class="field-label">Started At</div>
+                <div id="task-started-at"
+                    class="field-value mono">{started_at}</div>
+            </div>
+            <div class="detail-item">
+                <div class="field-label">Completed At</div>
+                <div id="task-completed-at"
+                    class="field-value mono">{completed_at}</div>
+            </div>
+            <div class="detail-item">
+                <div class="field-label">Queue Time</div>
+                <div id="task-queue-time"
+                    class="field-value mono">{queue_time}</div>
+            </div>
+            <div class="detail-item">
+                <div class="field-label">Execution Time</div>
+                <div id="task-exec-time"
+                    class="field-value mono">{exec_time}</div>
+            </div>
+            <div class="detail-item">
+                <div class="field-label">Total Time</div>
+                <div id="task-total-time"
+                    class="field-value mono">{total_time}</div>
+            </div>
+            <div class="detail-item">
+                <div class="field-label">Messages</div>
+                <div id="task-message-count"
+                    class="field-value mono">{task.message_count}</div>
+            </div>
+            <div class="detail-item">
+                <div class="field-label">Total Cost</div>
+                <div class="field-value mono">{cost_display}</div>
+            </div>
+            <div class="detail-item">
+                <div class="field-label">Total Turns</div>
+                <div class="field-value mono">{turns_display}</div>
+            </div>
         </div>
-
-        <div class="field">
-            <div class="field-label">Started At</div>
-            <div id="task-started-at"
-                class="field-value mono">{started_at}</div>
-        </div>
-
-        <div class="field">
-            <div class="field-label">Completed At</div>
-            <div id="task-completed-at"
-                class="field-value mono">{completed_at}</div>
-        </div>
-
-        <div class="field">
-            <div class="field-label">Queue Time</div>
-            <div id="task-queue-time"
-                class="field-value mono">{queue_time}</div>
-        </div>
-
-        <div class="field">
-            <div class="field-label">Execution Time</div>
-            <div id="task-exec-time"
-                class="field-value mono">{exec_time}</div>
-        </div>
-
-        <div class="field">
-            <div class="field-label">Total Time</div>
-            <div id="task-total-time"
-                class="field-value mono">{total_time}</div>
-        </div>
-
-        <div class="field">
-            <div class="field-label">Messages in Conversation</div>
-            <div id="task-message-count"
-                class="field-value mono">{task.message_count}</div>
-        </div>
-
-        {render_action_buttons(task)}
     </div>
-    {session_section}
+    {replies_section}
 </div>
     {status_notice}
     {render_stop_script(task)}
@@ -200,6 +268,63 @@ def _sse_task_detail_script(conversation_id: str) -> str:
             if (ts == null) return '-';
             var d = new Date(ts * 1000);
             return d.toISOString();
+        }}
+
+        function escapeHtml(text) {{
+            var div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }}
+
+        function renderTodos(todos) {{
+            var section = document.getElementById('progress-section');
+            var list = document.getElementById('todo-list');
+            if (!todos || todos.length === 0) {{
+                if (section) section.style.display = 'none';
+                return;
+            }}
+            // Create section if it doesn't exist yet
+            if (!section) {{
+                section = document.createElement('div');
+                section.id = 'progress-section';
+                section.className = 'card progress-card';
+                section.innerHTML = '<h2>Progress</h2>'
+                    + '<div id="todo-list" class="todo-list"></div>';
+                // Insert after the first card
+                var cards = document.querySelectorAll('.card');
+                if (cards.length > 0) {{
+                    cards[0].after(section);
+                }}
+                list = document.getElementById('todo-list');
+            }} else {{
+                section.style.display = '';
+            }}
+            var html = '';
+            for (var i = 0; i < todos.length; i++) {{
+                var t = todos[i];
+                var status = t.status || 'pending';
+                var content = escapeHtml(t.content || '');
+                var activeForm = escapeHtml(t.activeForm || content);
+                var icon, cssClass, label;
+                if (status === 'completed') {{
+                    icon = '<span class="todo-icon completed">&#x2713;</span>';
+                    cssClass = 'completed';
+                    label = content;
+                }} else if (status === 'in_progress') {{
+                    icon = '<span class="todo-spinner"></span>';
+                    cssClass = 'in-progress';
+                    label = activeForm;
+                }} else {{
+                    icon = '<span class="todo-icon pending">&#x25CB;</span>';
+                    cssClass = 'pending';
+                    label = content;
+                }}
+                html += '<div class="todo-item ' + cssClass + '">'
+                    + icon
+                    + '<span class="todo-label">' + label + '</span>'
+                    + '</div>';
+            }}
+            list.innerHTML = html;
         }}
 
         function connectTaskSSE() {{
@@ -286,6 +411,9 @@ def _sse_task_detail_script(conversation_id: str) -> str:
                     // Update message count
                     var msgEl = document.getElementById('task-message-count');
                     if (msgEl) msgEl.textContent = task.message_count || 0;
+
+                    // Update todo progress
+                    renderTodos(task.todos || null);
 
                     // If completed, close stream and reload for full data
                     if (task.status === 'completed') {{

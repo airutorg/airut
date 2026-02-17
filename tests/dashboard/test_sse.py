@@ -269,6 +269,39 @@ class TestTaskStateToDictConversion:
         assert result["total_duration"] is not None
 
 
+class TestTaskStateToDictWithTodos:
+    """Tests for TaskState to dict conversion with todos."""
+
+    def test_task_with_todos(self) -> None:
+        """Test converting task with todos includes them."""
+        task = TaskState(
+            conversation_id="abc12345",
+            subject="Test",
+            status=TaskStatus.IN_PROGRESS,
+            queued_at=1000.0,
+            started_at=1010.0,
+            todos=[
+                {"content": "Step 1", "status": "completed"},
+                {"content": "Step 2", "status": "in_progress"},
+            ],
+        )
+        result = _task_state_to_dict(task)
+        assert "todos" in result
+        assert len(result["todos"]) == 2
+        assert result["todos"][0]["content"] == "Step 1"
+
+    def test_task_without_todos(self) -> None:
+        """Test converting task without todos omits the field."""
+        task = TaskState(
+            conversation_id="abc12345",
+            subject="Test",
+            status=TaskStatus.QUEUED,
+            queued_at=1000.0,
+        )
+        result = _task_state_to_dict(task)
+        assert "todos" not in result
+
+
 class TestBuildStateSnapshot:
     """Tests for building JSON state snapshots."""
 

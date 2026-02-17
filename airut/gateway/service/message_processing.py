@@ -24,12 +24,14 @@ from airut.claude_output import (
     extract_result_summary,
     extract_session_id,
 )
+from airut.claude_output.types import StreamEvent, ToolUseBlock
 from airut.conversation import (
     ConversationStore,
     ReplySummary,
     create_conversation_layout,
     prepare_conversation,
 )
+from airut.dashboard.tracker import TaskTracker
 from airut.gateway.channel import ChannelAdapter, ParsedMessage
 from airut.gateway.config import ReplacementMap, RepoConfig
 from airut.gateway.conversation import GitCloneError
@@ -43,6 +45,8 @@ from airut.sandbox import (
 
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from airut.gateway.service.gateway import GatewayService
     from airut.gateway.service.repo_handler import RepoHandler
     from airut.sandbox.secrets import SecretReplacements
@@ -52,6 +56,32 @@ logger = logging.getLogger(__name__)
 
 _REPO_DOCKERFILE_PATH = ".airut/container/Dockerfile"
 _REPO_CONTAINER_DIR = ".airut/container"
+
+
+def _make_todo_callback(
+    tracker: TaskTracker, conversation_id: str
+) -> Callable[[StreamEvent], None]:
+    """Build an on_event callback that captures TodoWrite events.
+
+    Args:
+        tracker: Task tracker to update.
+        conversation_id: Conversation ID to update todos for.
+
+    Returns:
+        Callback suitable for ``task.execute(on_event=...)``.
+    """
+
+    def on_event(event: StreamEvent) -> None:
+        for block in event.content_blocks:
+            if (
+                isinstance(block, ToolUseBlock)
+                and block.tool_name == "TodoWrite"
+            ):
+                todos = block.tool_input.get("todos")
+                if isinstance(todos, list):
+                    tracker.update_todos(conversation_id, todos)
+
+    return on_event
 
 
 def build_recovery_prompt(
@@ -425,11 +455,14 @@ def process_message(
                 conv_id,
             )
 
+        todo_callback = _make_todo_callback(service.tracker, conv_id)
+
         try:
             result = task.execute(
                 prompt,
                 session_id=session_id,
                 model=model,
+                on_event=todo_callback,
             )
         finally:
             service.unregister_active_task(conv_id)
@@ -484,6 +517,7 @@ def process_message(
                     recovery_prompt,
                     session_id=None,
                     model=model,
+                    on_event=todo_callback,
                 )
                 # Update prompt so conversation stores the recovery prompt
                 prompt = recovery_prompt
