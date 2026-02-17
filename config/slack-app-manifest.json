@@ -1,0 +1,53 @@
+{
+  "_metadata": {
+    "major_version": 2,
+    "minor_version": 1
+  },
+  "display_information": {
+    "name": "Airut",
+    "description": "AI coding assistant powered by Claude Code",
+    "background_color": "#1a1a2e"
+  },
+  "features": {
+    "app_home": {
+      "home_tab_enabled": false,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
+    "bot_user": {
+      "display_name": "Airut",
+      "always_online": true
+    },
+    "assistant_view": {
+      "assistant_description": "AI coding assistant — send a message to start working on your codebase with Claude Code.",
+      "suggested_prompts": []
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "assistant:write",
+        "chat:write",
+        "im:history",
+        "users:read",
+        "files:read",
+        "files:write"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "bot_events": [
+        "assistant_thread_started",
+        "assistant_thread_context_changed",
+        "message.im"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": false
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": true,
+    "token_rotation_enabled": false
+  }
+}

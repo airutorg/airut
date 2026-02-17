@@ -27,6 +27,9 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
 
 - `spec/gateway-architecture.md` — core gateway design, channel abstraction,
   data flow, container execution
+- `spec/slack-channel.md` — Slack channel: interaction model, authorization, and
+  Agents & AI Apps integration
+- `spec/multi-channel.md` — multiple channels per repository (email + Slack)
 - `spec/authentication.md` — DMARC verification and sender authorization
 - `spec/repo-config.md` — repo config schema and server/repo split
 - `spec/multi-repo.md` — multi-repository support design

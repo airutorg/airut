@@ -9,11 +9,15 @@ For high-level documentation, see [doc/](../doc/).
 
 - [gateway-architecture.md](gateway-architecture.md) — Core gateway design,
   channel abstraction, data flow, container execution
+- [slack-channel.md](slack-channel.md) — Slack channel: interaction model,
+  authorization, and Agents & AI Apps integration
 - [authentication.md](authentication.md) — DMARC verification and sender
   authorization
 - [repo-config.md](repo-config.md) — Repo config schema (`.airut/airut.yaml`)
   and server/repo split
 - [multi-repo.md](multi-repo.md) — Multi-repository support design
+- [multi-channel.md](multi-channel.md) — Multiple channels per repository (email
+  \+ Slack)
 - [integration-tests.md](integration-tests.md) — End-to-end test specification
 
 ## Sandbox
