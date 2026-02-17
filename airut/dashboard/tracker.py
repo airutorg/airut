@@ -315,6 +315,7 @@ class TaskTracker:
                 task.status = TaskStatus.COMPLETED
                 task.completed_at = time.time()
                 task.success = success
+                task.todos = None
                 if message_count is not None:
                     task.message_count = message_count
                 self._evict_old_completed()

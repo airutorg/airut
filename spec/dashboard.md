@@ -250,7 +250,9 @@ activeForm label), and pending (circle) items. Updated in real-time via the
 global SSE state stream, with automatic fallback to ETag-based polling when SSE
 is unavailable. Todo state is tracked as a list of `TodoItem` dataclass
 instances (`content`, `status`, `active_form`) — a typed contract independent of
-the Claude output parser types.
+the Claude output parser types. Todos are cleared when a task completes (success
+or failure) so that stale progress data is never exposed via the API or carried
+over when a conversation is resumed.
 
 **Task Details card** — model, timestamps (queued, started, completed), duration
 breakdowns (queue time, execution time, total), message count, total cost, and
