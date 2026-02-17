@@ -808,6 +808,46 @@ class TestTaskTracker:
         task = TaskState(conversation_id="abc", subject="Test")
         assert task.todos is None
 
+    def test_complete_task_clears_todos(self) -> None:
+        """Test that completing a task clears its todos."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.start_task("abc12345")
+        tracker.update_todos(
+            "abc12345",
+            [TodoItem(content="Step 1", status=TodoStatus.IN_PROGRESS)],
+        )
+
+        # Verify todos are set
+        task = tracker.get_task("abc12345")
+        assert task is not None
+        assert task.todos is not None
+
+        tracker.complete_task("abc12345", success=True)
+
+        task = tracker.get_task("abc12345")
+        assert task is not None
+        assert task.todos is None
+
+    def test_complete_task_failure_clears_todos(self) -> None:
+        """Test that a failed task also clears its todos."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.start_task("abc12345")
+        tracker.update_todos(
+            "abc12345",
+            [
+                TodoItem(content="A", status=TodoStatus.COMPLETED),
+                TodoItem(content="B", status=TodoStatus.IN_PROGRESS),
+            ],
+        )
+
+        tracker.complete_task("abc12345", success=False)
+
+        task = tracker.get_task("abc12345")
+        assert task is not None
+        assert task.todos is None
+
 
 class TestTodoItem:
     """Tests for TodoItem dataclass."""
