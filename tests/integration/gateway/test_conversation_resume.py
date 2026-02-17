@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from airut.conversation import CONVERSATION_FILE_NAME
 
-from .conftest import get_message_text
+from .conftest import get_message_text, wait_for_conv_completion
 from .environment import IntegrationEnvironment
 
 
@@ -269,6 +269,20 @@ events = [
                 timeout=30.0,
             )
             assert response2 is not None
+
+            # Wait for second task to fully complete in tracker
+            task2 = wait_for_conv_completion(
+                service.tracker, conv_id, timeout=5.0
+            )
+            assert task2 is not None
+
+            # Verify reply_index was set correctly on the resumed task
+            # (first task = 0, second task = 1)
+            tasks = service.tracker.get_tasks_for_conversation(conv_id)
+            assert len(tasks) == 2
+            # tasks[0] is newest (second message), tasks[1] is oldest
+            assert tasks[0].reply_index == 1
+            assert tasks[1].reply_index == 0
 
         finally:
             service.stop()

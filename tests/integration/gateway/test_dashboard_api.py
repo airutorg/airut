@@ -15,6 +15,7 @@ Endpoints covered:
 - GET /api/update                              — Upstream update check (JSON)
 - GET /api/conversations                       — Task list (JSON, ETag)
 - GET /api/conversation/{id}                   — Single task detail (JSON)
+- GET /api/task/{task_id}                      — Task detail by ID (JSON)
 - POST /api/conversation/{id}/stop             — Stop a running task (JSON)
 - GET /api/repos                               — Repository list (JSON, ETag)
 - GET /api/tracker                             — Full tracker snapshot (ETag)
@@ -24,7 +25,8 @@ Endpoints covered:
 - GET /api/conversation/{id}/network/stream    — SSE network log stream
 - GET /api/conversation/{id}/network/poll      — Network log polling
 - GET /repo/{repo_id}                          — Repository detail page
-- GET /conversation/{id}                       — Task detail page
+- GET /task/{task_id}                          — Task detail page (by ID)
+- GET /conversation/{id}                       — Conversation overview page
 - GET /conversation/{id}/actions               — Actions viewer page
 - GET /conversation/{id}/network               — Network logs viewer page
 """
@@ -171,12 +173,31 @@ events = [
             assert data["status"] == "completed"
             assert data["completion_reason"] == "success"
             assert "task_id" in data
+            task_id = data["task_id"]
             assert "conversation" in data
             assert data["conversation"] is not None
             assert data["conversation"]["reply_count"] >= 1
+            # New fields from task-centric navigation
+            assert data["repo_id"] == "test"
+            assert data["reply_index"] == 0  # First task in conversation
 
             # ── GET /api/conversation/{id} (not found) ───────────
             r = client.get("/api/conversation/deadbeef")
+            assert r.status_code == 404
+
+            # ── GET /api/task/{task_id} ───────────────────────────
+            r = client.get(f"/api/task/{task_id}")
+            assert r.status_code == 200
+            assert r.content_type == "application/json"
+            data = json.loads(r.get_data(as_text=True))
+            assert data["task_id"] == task_id
+            assert data["conversation_id"] == conv_id
+            assert data["status"] == "completed"
+            assert data["reply_index"] == 0
+            assert data["repo_id"] == "test"
+
+            # ── GET /api/task/{task_id} (not found) ───────────────
+            r = client.get("/api/task/nonexistent-task-id")
             assert r.status_code == 404
 
             # ── POST /api/conversation/{id}/stop (not running) ───
@@ -224,6 +245,7 @@ events = [
             assert tracker_task["completion_reason"] == "success"
             assert tracker_task["repo_id"] == "test"
             assert tracker_task["model"] is not None
+            assert tracker_task["reply_index"] == 0
             # ETag support
             etag = r.headers.get("ETag")
             assert etag is not None
@@ -328,15 +350,26 @@ events = [
             r = client.get("/repo/nonexistent")
             assert r.status_code == 404
 
-            # ── GET /conversation/{id} ───────────────────────────
+            # ── GET /conversation/{id} (overview page) ────────────
             r = client.get(f"/conversation/{conv_id}")
             assert r.status_code == 200
             assert "text/html" in r.content_type
-            html = r.get_data(as_text=True)
-            assert conv_id in html
+            page_html = r.get_data(as_text=True)
+            assert conv_id in page_html
 
             # ── GET /conversation/{id} (not found) ───────────────
             r = client.get("/conversation/deadbeef")
+            assert r.status_code == 404
+
+            # ── GET /task/{task_id} ───────────────────────────────
+            r = client.get(f"/task/{task.task_id}")
+            assert r.status_code == 200
+            assert "text/html" in r.content_type
+            task_html = r.get_data(as_text=True)
+            assert task.task_id in task_html
+
+            # ── GET /task/{task_id} (not found) ───────────────────
+            r = client.get("/task/nonexistent-task-id")
             assert r.status_code == 404
 
             # ── GET /conversation/{id}/actions ───────────────────
