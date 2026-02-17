@@ -84,7 +84,7 @@ class TestNetworkLogsEndpoint:
         harness.write_log("allowed GET https://api.github.com -> 200\n")
 
         html = harness.get_html("/conversation/abc12345/network")
-        assert 'href="/conversation/abc12345"' in html
+        assert 'href="/task/abc12345"' in html
         assert "&larr; Back" in html
 
     def test_detail_page_has_network_link(
