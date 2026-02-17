@@ -12,7 +12,8 @@ This package is split into modules by concern:
     - ``styles`` — shared CSS generation
     - ``components`` — reusable HTML fragments
     - ``dashboard`` — main dashboard page
-    - ``task_detail`` — conversation detail page
+    - ``task_detail`` — per-task detail page (keyed by task_id)
+    - ``conversation_detail`` — conversation overview page (all tasks)
     - ``repo_detail`` — repository detail page
     - ``actions`` — actions viewer and event renderers
     - ``network`` — network logs viewer
@@ -33,11 +34,13 @@ from airut.dashboard.views.components import (
     render_conversation_replies_section,
     render_logo,
     render_repos_section,
+    render_single_reply_section,
     render_stop_script,
     render_task_list,
     render_version_info,
     update_check_script,
 )
+from airut.dashboard.views.conversation_detail import render_conversation_detail
 from airut.dashboard.views.dashboard import render_dashboard
 from airut.dashboard.views.network import (
     render_network_log_line,
@@ -54,6 +57,8 @@ __all__ = [
     "render_actions_page",
     "render_actions_timeline",
     "render_boot_state",
+    "render_conversation_detail",
+    "render_conversation_replies_section",
     "render_dashboard",
     "render_events_list",
     "render_logo",
@@ -62,8 +67,8 @@ __all__ = [
     "render_network_page",
     "render_repo_detail",
     "render_repos_section",
-    "render_conversation_replies_section",
     "render_single_event",
+    "render_single_reply_section",
     "render_stop_script",
     "render_task_detail",
     "render_task_list",

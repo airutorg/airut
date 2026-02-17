@@ -177,7 +177,7 @@ class TestActionsPageEndpoint:
         """Test task detail page links to actions viewer."""
         harness.add_events(result_event())
 
-        html = harness.get_html("/conversation/abc12345")
+        html = harness.get_html("/task/abc12345")
         assert "/conversation/abc12345/actions" in html
         assert "View Actions" in html
 

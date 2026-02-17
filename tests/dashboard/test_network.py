@@ -93,7 +93,7 @@ class TestNetworkLogsEndpoint:
         """Test task detail page links to network logs viewer."""
         harness.add_events(result_event())
 
-        html = harness.get_html("/conversation/abc12345")
+        html = harness.get_html("/task/abc12345")
         assert "/conversation/abc12345/network" in html
         assert "View Network Logs" in html
 

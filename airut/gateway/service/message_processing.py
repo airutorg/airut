@@ -357,6 +357,7 @@ def process_message(
             conversation_store = ConversationStore(conversation_dir)
             conversation_store.set_model(conv_id, model)
             service.tracker.set_task_model(task_id, model)
+            service.tracker.set_reply_index(task_id, 0)
         else:
             conversation_dir = conv_mgr.get_conversation_dir(conv_id)
             conversation_store = ConversationStore(conversation_dir)
@@ -371,6 +372,14 @@ def process_message(
                     model,
                 )
             service.tracker.set_task_model(task_id, model)
+            # Record the reply index for this task (next index in the
+            # conversation's reply list).  This assumes only one task
+            # executes per conversation at a time (enforced by the
+            # queue), so the reply count won't change between load()
+            # and set_reply_index().
+            conv_meta = conversation_store.load()
+            reply_count = len(conv_meta.replies) if conv_meta else 0
+            service.tracker.set_reply_index(task_id, reply_count)
 
         # Send acknowledgment only for first message
         if is_new:

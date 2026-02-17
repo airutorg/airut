@@ -102,8 +102,12 @@ class DashboardServer:
                 Rule("/api/update", endpoint="update"),
                 Rule("/repo/<repo_id>", endpoint="repo_detail"),
                 Rule(
+                    "/task/<task_id>",
+                    endpoint="task_detail_by_id",
+                ),
+                Rule(
                     "/conversation/<conversation_id>",
-                    endpoint="task_detail",
+                    endpoint="conversation_detail",
                 ),
                 Rule(
                     "/conversation/<conversation_id>/actions",
@@ -114,6 +118,10 @@ class DashboardServer:
                     endpoint="task_network",
                 ),
                 Rule("/api/conversations", endpoint="api_tasks"),
+                Rule(
+                    "/api/task/<task_id>",
+                    endpoint="api_task_by_id",
+                ),
                 Rule(
                     "/api/conversation/<conversation_id>",
                     endpoint="api_task",
@@ -153,10 +161,12 @@ class DashboardServer:
             "version": self._handlers.handle_version,
             "update": self._handlers.handle_update,
             "repo_detail": self._handlers.handle_repo_detail,
-            "task_detail": self._handlers.handle_task_detail,
+            "task_detail_by_id": (self._handlers.handle_task_detail_by_id),
+            "conversation_detail": (self._handlers.handle_conversation_detail),
             "task_actions": self._handlers.handle_task_actions,
             "task_network": self._handlers.handle_task_network,
             "api_tasks": self._handlers.handle_api_tasks,
+            "api_task_by_id": self._handlers.handle_api_task_by_id,
             "api_task": self._handlers.handle_api_task,
             "api_task_stop": self._handlers.handle_api_task_stop,
             "api_repos": self._handlers.handle_api_repos,
