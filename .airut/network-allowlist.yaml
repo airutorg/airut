@@ -56,4 +56,4 @@ url_prefixes:
     methods: [GET, HEAD]
   - host: results-receiver.actions.githubusercontent.com
     path: /rest/runs*
-    methods: [POST]
+    methods: [GET, POST]
