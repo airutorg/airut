@@ -17,7 +17,12 @@ import time
 from collections.abc import Callable
 from email.message import Message
 
-from airut.gateway.channel import ChannelHealth, ChannelStatus, RawMessage
+from airut.gateway.channel import (
+    ChannelHealth,
+    ChannelListener,
+    ChannelStatus,
+    RawMessage,
+)
 from airut.gateway.config import EmailChannelConfig
 from airut.gateway.email.listener import (
     EmailListener,
@@ -33,7 +38,7 @@ class _ReconnectFailedError(Exception):
     """Sentinel raised when IMAP reconnection attempts are exhausted."""
 
 
-class EmailChannelListener:
+class EmailChannelListener(ChannelListener):
     """ChannelListener implementation for email (IMAP).
 
     Manages the IMAP polling/IDLE loop in an internal thread, with

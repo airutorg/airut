@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, overload
 import yaml
 from platformdirs import user_config_path, user_state_path
 
+from airut.gateway.channel import ChannelConfig
 from airut.gateway.dotenv_loader import load_dotenv_once
 from airut.logging import SecretFilter
 
@@ -615,7 +616,7 @@ class GlobalConfig:
 
 
 @dataclass(frozen=True)
-class EmailChannelConfig:
+class EmailChannelConfig(ChannelConfig):
     """Email channel configuration (IMAP + SMTP).
 
     Contains all settings specific to the email channel: mail server
@@ -719,10 +720,6 @@ class EmailChannelConfig:
         return self.imap_server
 
 
-# Type alias for channel config union. Extend with new channel types.
-ChannelConfig = EmailChannelConfig
-
-
 @dataclass(frozen=True)
 class RepoServerConfig:
     """Per-repo server-side configuration.
@@ -748,7 +745,7 @@ class RepoServerConfig:
 
     repo_id: str
     git_repo_url: str
-    channel: ChannelConfig
+    channel: EmailChannelConfig
     secrets: dict[str, str] = field(default_factory=dict)
     masked_secrets: dict[str, MaskedSecret] = field(default_factory=dict)
     signing_credentials: dict[str, SigningCredential] = field(

@@ -19,6 +19,7 @@ from pathlib import Path
 
 from airut.gateway.channel import (
     AuthenticationError,
+    ChannelAdapter,
     ParsedMessage,
     RawMessage,
 )
@@ -69,7 +70,7 @@ class EmailParsedMessage(ParsedMessage):
     Not part of the public ParsedMessage interface."""
 
 
-class EmailChannelAdapter:
+class EmailChannelAdapter(ChannelAdapter):
     """ChannelAdapter implementation for email (IMAP/SMTP).
 
     Wraps SenderAuthenticator, SenderAuthorizer, email parsing functions,

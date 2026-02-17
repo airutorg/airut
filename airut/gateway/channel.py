@@ -140,6 +140,25 @@ class ChannelStatus:
     error_type: str | None = None
 
 
+class ChannelConfig(Protocol):
+    """Interface for channel-specific configuration.
+
+    Channel config implementations must provide ``channel_type`` and
+    ``channel_info`` properties so the gateway core and dashboard can
+    identify and display channels without protocol-specific knowledge.
+    """
+
+    @property
+    def channel_type(self) -> str:
+        """Return the channel type identifier (e.g. ``"email"``)."""
+        ...
+
+    @property
+    def channel_info(self) -> str:
+        """Return a short description for dashboard display."""
+        ...
+
+
 class ChannelListener(Protocol):
     """Interface for channel-specific message listening.
 
