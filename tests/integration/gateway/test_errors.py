@@ -6,16 +6,16 @@
 """Integration tests for error handling.
 
 Tests that the service handles errors gracefully:
-1. Claude timeout sends error response
-2. Claude crash sends error response
-3. Conversation remains recoverable after errors
+1. Claude crash sends error response
+2. Conversation remains recoverable after errors
+
+Note: Timeout testing has been moved to test_execution_timeout.py which
+uses a short timeout (10s) for a fast, reliable test.
 """
 
 import sys
 import threading
 from pathlib import Path
-
-import pytest
 
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
@@ -27,56 +27,6 @@ from .environment import IntegrationEnvironment
 
 class TestErrorHandling:
     """Test error handling and recovery."""
-
-    @pytest.mark.skip(
-        reason="Timeout test requires long wait and SMTP connection stability"
-    )
-    def test_timeout_sends_error_response(
-        self,
-        integration_env: IntegrationEnvironment,
-        create_email,
-        extract_conversation_id,
-    ) -> None:
-        """Test that execution timeout sends an error response."""
-        # Mock code that sleeps forever to trigger timeout
-        mock_code = """
-# Sleep longer than any reasonable timeout
-time.sleep(999)
-"""
-
-        msg = create_email(
-            subject="Timeout test",
-            body=mock_code,
-        )
-        integration_env.email_server.inject_message(msg)
-
-        service = integration_env.create_service()
-        service_thread = threading.Thread(target=service.start, daemon=True)
-        service_thread.start()
-
-        try:
-            # Should receive an error response
-            # Wait longer than execution timeout (30s) for the error to arrive
-            response = integration_env.email_server.wait_for_sent(
-                lambda m: (
-                    "timed out" in get_message_text(m).lower()
-                    or "error" in get_message_text(m).lower()
-                ),
-                timeout=45.0,
-            )
-            assert response is not None, (
-                "Should receive error response on timeout"
-            )
-
-            # Verify error mentioned in response
-            payload = get_message_text(response)
-            assert (
-                "timed out" in payload.lower() or "timeout" in payload.lower()
-            ), f"Response should mention timeout: {payload[:200]}"
-
-        finally:
-            service.stop()
-            service_thread.join(timeout=10.0)
 
     def test_crash_sends_error_response(
         self,
