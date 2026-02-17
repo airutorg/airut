@@ -241,7 +241,10 @@ def main() -> int:
         print(json.dumps(event))
         sys.stdout.flush()
 
-    return 0
+    # Allow mock code to set a custom exit code via context variable.
+    # This is used when the mock needs to emit events AND exit non-zero
+    # (e.g., simulating a crash after partial output).
+    return int(context.get("exit_code", 0))
 
 
 if __name__ == "__main__":
