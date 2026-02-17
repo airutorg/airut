@@ -588,8 +588,7 @@ class TestFetchHealth:
     def test_success(self, mock_urlopen: MagicMock) -> None:
         """Returns parsed JSON on success."""
         body = (
-            b'{"status":"ok","tasks":'
-            b'{"queued":1,"in_progress":2,"completed":3}}'
+            b'{"status":"ok","tasks":{"queued":1,"executing":2,"completed":3}}'
         )
         mock_resp = MagicMock()
         mock_resp.read.return_value = body
@@ -602,7 +601,7 @@ class TestFetchHealth:
         assert result["status"] == "ok"
         assert result["tasks"] == {
             "queued": 1,
-            "in_progress": 2,
+            "executing": 2,
             "completed": 3,
         }
 
@@ -655,7 +654,7 @@ class TestGetActiveTaskCounts:
         mock_health: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Returns (in_progress, queued) tuple from health data."""
+        """Returns (running, waiting) tuple from health data."""
         config_path = tmp_path / "airut.yaml"
         config_path.write_text("dummy")
         mock_config_path.return_value = config_path
@@ -671,11 +670,51 @@ class TestGetActiveTaskCounts:
         mock_from_yaml.return_value = config
         mock_health.return_value = {
             "status": "ok",
-            "tasks": {"queued": 1, "in_progress": 2, "completed": 5},
+            "tasks": {"queued": 1, "executing": 2, "completed": 5},
         }
 
         result = _get_active_task_counts()
         assert result == (2, 1)
+
+    @patch("airut.cli._fetch_health")
+    @patch("airut.cli.ServerConfig.from_yaml")
+    @patch("airut.cli.get_config_path")
+    def test_includes_authenticating_and_pending(
+        self,
+        mock_config_path: MagicMock,
+        mock_from_yaml: MagicMock,
+        mock_health: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Sums authenticating+executing and queued+pending."""
+        config_path = tmp_path / "airut.yaml"
+        config_path.write_text("dummy")
+        mock_config_path.return_value = config_path
+
+        @dataclass
+        class FakeGlobal:
+            dashboard_base_url: str | None = None
+            dashboard_host: str = "127.0.0.1"
+            dashboard_port: int = 5200
+
+        config = MagicMock()
+        config.global_config = FakeGlobal()
+        mock_from_yaml.return_value = config
+        mock_health.return_value = {
+            "status": "ok",
+            "tasks": {
+                "queued": 1,
+                "authenticating": 2,
+                "pending": 3,
+                "executing": 4,
+                "completed": 10,
+            },
+        }
+
+        result = _get_active_task_counts()
+        # running = executing(4) + authenticating(2) = 6
+        # waiting = queued(1) + pending(3) = 4
+        assert result == (6, 4)
 
     @patch("airut.cli.get_config_path")
     def test_no_config_file(
@@ -780,7 +819,7 @@ class TestGetActiveTaskCounts:
         mock_from_yaml.return_value = config
         mock_health.return_value = {
             "status": "ok",
-            "tasks": {"queued": "one", "in_progress": 0, "completed": 0},
+            "tasks": {"queued": "one", "executing": 0, "completed": 0},
         }
 
         assert _get_active_task_counts() is None

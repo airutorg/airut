@@ -25,6 +25,7 @@ from unittest.mock import MagicMock, patch
 
 from airut.dashboard.tracker import (
     BootPhase,
+    CompletionReason,
     RepoState,
     RepoStatus,
     TaskStatus,
@@ -77,7 +78,7 @@ class TestWorkerLifecycleRealTracker:
             body="Build the feature",
             conversation_id=None,
             model_hint=None,
-            subject="Build the feature",
+            display_title="Build the feature",
         )
         handler.adapter.authenticate_and_parse.return_value = parsed
         handler.conversation_manager.exists.return_value = False
@@ -88,7 +89,7 @@ class TestWorkerLifecycleRealTracker:
         def fake_process(svc_, parsed_, tid, handler_, adapter_):
             # Real process_message renames the task ID
             svc_.tracker.update_task_id(tid, "conv-xyz")
-            return True, "conv-xyz"
+            return CompletionReason.SUCCESS, "conv-xyz"
 
         with patch(
             "airut.gateway.service.gateway.process_message",
@@ -103,8 +104,8 @@ class TestWorkerLifecycleRealTracker:
         task = svc.tracker.get_task("conv-xyz")
         assert task is not None
         assert task.status == TaskStatus.COMPLETED
-        assert task.success is True
-        assert task.subject == "Build the feature"
+        assert task.succeeded is True
+        assert task.display_title == "Build the feature"
         assert task.sender == "user@example.com"
 
     def test_auth_failure_lifecycle(self, email_config, tmp_path: Path) -> None:
@@ -127,8 +128,8 @@ class TestWorkerLifecycleRealTracker:
         task = svc.tracker.get_task(task_id)
         assert task is not None
         assert task.status == TaskStatus.COMPLETED
-        assert task.success is False
-        assert "(not authorized)" in task.subject
+        assert task.succeeded is False
+        assert "(not authorized)" in task.display_title
         assert task.sender == "evil@hacker.com"
 
     def test_runtime_error_does_not_update_subject(
@@ -149,8 +150,8 @@ class TestWorkerLifecycleRealTracker:
 
         task = svc.tracker.get_task(task_id)
         assert task is not None
-        assert task.success is False
-        assert task.subject == "(authenticating)"
+        assert task.succeeded is False
+        assert task.display_title == "(authenticating)"
 
     def test_resume_conversation_full_lifecycle(
         self, email_config, tmp_path: Path
@@ -161,15 +162,16 @@ class TestWorkerLifecycleRealTracker:
         conv_id = "existing01"
         # Simulate previously completed conversation
         svc.tracker.add_task(conv_id, "Original task", repo_id="test")
-        svc.tracker.start_task(conv_id)
-        svc.tracker.complete_task(conv_id, success=True)
+        svc.tracker.set_authenticating(conv_id)
+        svc.tracker.set_executing(conv_id)
+        svc.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
 
         parsed = ParsedMessage(
             sender="alice@example.com",
             body="Follow-up question",
             conversation_id=conv_id,
             model_hint=None,
-            subject="Re: [ID:existing01] Follow-up",
+            display_title="Re: [ID:existing01] Follow-up",
         )
         handler.adapter.authenticate_and_parse.return_value = parsed
         handler.conversation_manager.exists.return_value = True
@@ -179,7 +181,7 @@ class TestWorkerLifecycleRealTracker:
 
         with patch(
             "airut.gateway.service.gateway.process_message",
-            return_value=(True, conv_id),
+            return_value=(CompletionReason.SUCCESS, conv_id),
         ):
             svc._process_message_worker(
                 RawMessage(sender="test", content=None), temp_id, handler
@@ -192,7 +194,7 @@ class TestWorkerLifecycleRealTracker:
         task = svc.tracker.get_task(conv_id)
         assert task is not None
         assert task.status == TaskStatus.COMPLETED
-        assert task.success is True
+        assert task.succeeded is True
         assert task.sender == "alice@example.com"
         assert task.message_count == 2  # original + resume
 
@@ -208,7 +210,7 @@ class TestDuplicateRejectionStress:
     def test_duplicate_for_queued_task(
         self, email_config, tmp_path: Path
     ) -> None:
-        """Message rejected when task is QUEUED (not yet started)."""
+        """Message queued as pending when task is QUEUED (not yet started)."""
         svc, handler = _make_gateway_real_tracker(email_config, tmp_path)
         update_global(svc, dashboard_base_url=None)
 
@@ -230,21 +232,23 @@ class TestDuplicateRejectionStress:
             RawMessage(sender="test", content=None), temp_id, handler
         )
 
-        handler.adapter.send_rejection.assert_called_once()
-        # Verify rejection reason
-        reason = handler.adapter.send_rejection.call_args[0][2]
-        assert "still being processed" in reason
+        # New behavior: messages for active conversations are queued
+        handler.adapter.send_rejection.assert_not_called()
+        task = svc.tracker.get_task(conv_id)
+        assert task is not None
+        assert task.status == TaskStatus.PENDING
 
-    def test_duplicate_for_in_progress_task(
+    def test_duplicate_for_executing_task(
         self, email_config, tmp_path: Path
     ) -> None:
-        """Message rejected when task is IN_PROGRESS."""
+        """Message queued as pending when task is EXECUTING."""
         svc, handler = _make_gateway_real_tracker(email_config, tmp_path)
         update_global(svc, dashboard_base_url=None)
 
         conv_id = "dup-inprog"
         svc.tracker.add_task(conv_id, "Active task")
-        svc.tracker.start_task(conv_id)
+        svc.tracker.set_authenticating(conv_id)
+        svc.tracker.set_executing(conv_id)
 
         parsed = ParsedMessage(
             sender="user@example.com",
@@ -260,7 +264,11 @@ class TestDuplicateRejectionStress:
             RawMessage(sender="test", content=None), temp_id, handler
         )
 
-        handler.adapter.send_rejection.assert_called_once()
+        # New behavior: messages for active conversations are queued
+        handler.adapter.send_rejection.assert_not_called()
+        task = svc.tracker.get_task(conv_id)
+        assert task is not None
+        assert task.status == TaskStatus.PENDING
 
     def test_not_duplicate_for_completed_task(
         self, email_config, tmp_path: Path
@@ -271,8 +279,9 @@ class TestDuplicateRejectionStress:
 
         conv_id = "dup-done"
         svc.tracker.add_task(conv_id, "Done task")
-        svc.tracker.start_task(conv_id)
-        svc.tracker.complete_task(conv_id, success=True)
+        svc.tracker.set_authenticating(conv_id)
+        svc.tracker.set_executing(conv_id)
+        svc.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
 
         parsed = ParsedMessage(
             sender="user@example.com",
@@ -287,7 +296,7 @@ class TestDuplicateRejectionStress:
         svc.tracker.add_task(temp_id, "(authenticating)")
 
         def fake_process(svc_, parsed_, tid, handler_, adapter_):
-            return True, conv_id
+            return CompletionReason.SUCCESS, conv_id
 
         with patch(
             "airut.gateway.service.gateway.process_message",
@@ -319,7 +328,7 @@ class TestDuplicateRejectionStress:
 
         def fake_process(svc_, parsed_, tid, handler_, adapter_):
             svc_.tracker.update_task_id(tid, "new-conv-id")
-            return True, "new-conv-id"
+            return CompletionReason.SUCCESS, "new-conv-id"
 
         with patch(
             "airut.gateway.service.gateway.process_message",
@@ -578,7 +587,7 @@ class TestSubmitMessageEdgeCases:
         tasks = svc.tracker.get_all_tasks()
         assert len(tasks) == 1
         assert tasks[0].conversation_id.startswith("new-")
-        assert tasks[0].subject == "Test"
+        assert tasks[0].display_title == "Test"
 
     def test_submit_message_tracks_future(
         self, email_config, tmp_path: Path
@@ -862,7 +871,7 @@ class TestWorkerEdgeCases:
             body="   \n\t  ",
             conversation_id=None,
             model_hint=None,
-            subject="Empty body",
+            display_title="Empty body",
         )
         handler.adapter.authenticate_and_parse.return_value = parsed
         handler.conversation_manager.exists.return_value = False
@@ -871,7 +880,7 @@ class TestWorkerEdgeCases:
         svc.tracker.add_task(temp_id, "(authenticating)")
 
         def fake_process(svc_, parsed_, tid, handler_, adapter_):
-            return False, None
+            return CompletionReason.EXECUTION_FAILED, None
 
         with patch(
             "airut.gateway.service.gateway.process_message",
@@ -887,7 +896,7 @@ class TestWorkerEdgeCases:
     def test_no_subject_defaults_to_placeholder(
         self, email_config, tmp_path: Path
     ) -> None:
-        """ParsedMessage with empty subject falls back to '(no subject)'."""
+        """Empty display_title falls back to '(no subject)'."""
         svc, handler = _make_gateway_real_tracker(email_config, tmp_path)
 
         parsed = ParsedMessage(
@@ -895,7 +904,7 @@ class TestWorkerEdgeCases:
             body="Do something",
             conversation_id=None,
             model_hint=None,
-            subject="",
+            display_title="",
         )
         handler.adapter.authenticate_and_parse.return_value = parsed
         handler.conversation_manager.exists.return_value = False
@@ -905,7 +914,7 @@ class TestWorkerEdgeCases:
 
         def fake_process(svc_, parsed_, tid, handler_, adapter_):
             svc_.tracker.update_task_id(tid, "conv-ns")
-            return True, "conv-ns"
+            return CompletionReason.SUCCESS, "conv-ns"
 
         with patch(
             "airut.gateway.service.gateway.process_message",
@@ -915,12 +924,12 @@ class TestWorkerEdgeCases:
                 RawMessage(sender="test", content=None), temp_id, handler
             )
 
-        # Subject should be "(no subject)" since parsed.subject is empty
-        # The update happens via tracker.update_task_subject with
-        # parsed.subject or "(no subject)"
+        # display_title should be "(no subject)" since parsed.display_title
+        # is empty. The update happens via tracker.update_task_display_title
+        # with parsed.display_title or "(no subject)"
         task = svc.tracker.get_task("conv-ns")
         assert task is not None
-        assert task.subject == "(no subject)"
+        assert task.display_title == "(no subject)"
 
     def test_process_message_exception_after_reassign(
         self, email_config, tmp_path: Path
@@ -935,15 +944,16 @@ class TestWorkerEdgeCases:
 
         conv_id = "exn-after"
         svc.tracker.add_task(conv_id, "Original")
-        svc.tracker.start_task(conv_id)
-        svc.tracker.complete_task(conv_id, success=True)
+        svc.tracker.set_authenticating(conv_id)
+        svc.tracker.set_executing(conv_id)
+        svc.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
 
         parsed = ParsedMessage(
             sender="user@example.com",
             body="Resume with error",
             conversation_id=conv_id,
             model_hint=None,
-            subject="Re: resume",
+            display_title="Re: resume",
         )
         handler.adapter.authenticate_and_parse.return_value = parsed
         # exists=True means this is a resumed conversation; the worker
@@ -967,4 +977,75 @@ class TestWorkerEdgeCases:
         task = svc.tracker.get_task(conv_id)
         assert task is not None
         assert task.status == TaskStatus.COMPLETED
-        assert task.success is False
+        assert task.succeeded is False
+
+
+# ===================================================================
+# Queue full rejection
+# ===================================================================
+
+
+class TestQueueFullRejection:
+    """Test that queue full causes rejection when MAX_PENDING is reached."""
+
+    def test_queue_full_sends_rejection(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """When queue has MAX_PENDING_PER_CONVERSATION messages, reject."""
+        from airut.dashboard.tracker import MAX_PENDING_PER_CONVERSATION
+
+        svc, handler = _make_gateway_real_tracker(email_config, tmp_path)
+        update_global(svc, dashboard_base_url="https://dash.example.com")
+
+        conv_id = "queue-full-conv"
+        # Create an active task for this conversation
+        svc.tracker.add_task(conv_id, "Active task", repo_id="test")
+        svc.tracker.set_authenticating(conv_id)
+        svc.tracker.set_executing(conv_id)
+
+        # Fill the pending queue to MAX_PENDING_PER_CONVERSATION
+        import collections
+
+        from airut.gateway.service.gateway import PendingMessage
+
+        queue = collections.deque()
+        for i in range(MAX_PENDING_PER_CONVERSATION):
+            queue.append(
+                PendingMessage(
+                    parsed=MagicMock(conversation_id=conv_id),
+                    task_id=f"pending-{i}",
+                    repo_handler=handler,
+                    adapter=handler.adapter,
+                )
+            )
+        svc._pending_messages[conv_id] = queue
+
+        # Now send one more message — should be rejected
+        parsed = ParsedMessage(
+            sender="user@example.com",
+            body="One too many",
+            conversation_id=conv_id,
+            model_hint=None,
+            display_title="Overflow message",
+        )
+        handler.adapter.authenticate_and_parse.return_value = parsed
+
+        temp_id = "new-overflow"
+        svc.tracker.add_task(temp_id, "(authenticating)", repo_id="test")
+        svc._process_message_worker(
+            RawMessage(sender="test", content=None), temp_id, handler
+        )
+
+        # Should have called send_rejection
+        handler.adapter.send_rejection.assert_called_once()
+        call_args = handler.adapter.send_rejection.call_args
+        assert call_args[0][0] is parsed
+        assert call_args[0][1] == conv_id
+        assert "Too many messages queued" in call_args[0][2]
+        assert call_args[0][3] == "https://dash.example.com"
+
+        # Task should be completed as REJECTED
+        task = svc.tracker.get_task(conv_id)
+        assert task is not None
+        # The overflow task was reassigned to conv_id, so check completion
+        assert task.status == TaskStatus.COMPLETED

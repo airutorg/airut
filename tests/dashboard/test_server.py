@@ -15,6 +15,7 @@ from airut.dashboard.server import DashboardServer
 from airut.dashboard.tracker import (
     BootPhase,
     BootState,
+    CompletionReason,
     RepoState,
     RepoStatus,
     TaskState,
@@ -64,7 +65,8 @@ class TestDashboardServer:
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
         tracker.add_task("t2", "Task 2")
-        tracker.start_task("t2")
+        tracker.set_authenticating("t2")
+        tracker.set_executing("t2")
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
@@ -77,7 +79,7 @@ class TestDashboardServer:
         # When no repos are configured, status is degraded
         assert data["status"] == "degraded"
         assert data["tasks"]["queued"] == 1
-        assert data["tasks"]["in_progress"] == 1
+        assert data["tasks"]["executing"] == 1
         assert data["tasks"]["completed"] == 0
         assert data["repos"]["live"] == 0
         assert data["repos"]["failed"] == 0
@@ -175,7 +177,7 @@ class TestDashboardServer:
         data = json.loads(response.get_data(as_text=True))
         assert len(data) == 1
         assert data[0]["conversation_id"] == "abc12345"
-        assert data[0]["subject"] == "Test Subject"
+        assert data[0]["display_title"] == "Test Subject"
         assert data[0]["status"] == "queued"
         assert isinstance(data[0]["queued_at"], float)
 
@@ -193,7 +195,7 @@ class TestDashboardServer:
 
         data = json.loads(response.get_data(as_text=True))
         assert data["conversation_id"] == "abc12345"
-        assert data["subject"] == "Test Subject"
+        assert data["display_title"] == "Test Subject"
 
     def test_api_task_not_found(self) -> None:
         """Test /api/conversation/<id> returns 404 for unknown task."""
@@ -211,9 +213,12 @@ class TestDashboardServer:
         tracker.add_task(
             "t1", "Task One", repo_id="repo-a", sender="alice@test.local"
         )
-        tracker.start_task("t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
         tracker.add_task("t2", "Task Two", repo_id="repo-b")
-        tracker.complete_task("t2", success=True)
+        tracker.set_authenticating("t2")
+        tracker.set_executing("t2")
+        tracker.complete_task("t2", CompletionReason.SUCCESS)
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
@@ -232,17 +237,17 @@ class TestDashboardServer:
 
         # Check counts
         assert data["counts"]["queued"] == 0
-        assert data["counts"]["in_progress"] == 1
+        assert data["counts"]["executing"] == 1
         assert data["counts"]["completed"] == 1
 
         # Check tasks (sorted newest first by queued_at)
         assert len(data["tasks"]) == 2
         # Find t1 in results
         t1 = next(t for t in data["tasks"] if t["conversation_id"] == "t1")
-        assert t1["subject"] == "Task One"
+        assert t1["display_title"] == "Task One"
         assert t1["repo_id"] == "repo-a"
         assert t1["sender"] == "alice@test.local"
-        assert t1["status"] == "in_progress"
+        assert t1["status"] == "executing"
         assert t1["started_at"] is not None
         assert t1["model"] is None
 
@@ -430,11 +435,13 @@ class TestDashboardServer:
         """Test / (dashboard) endpoint."""
         tracker = TaskTracker()
         tracker.add_task("q1", "Queued Task")
-        tracker.add_task("p1", "In Progress Task")
-        tracker.start_task("p1")
+        tracker.add_task("p1", "Executing Task")
+        tracker.set_authenticating("p1")
+        tracker.set_executing("p1")
         tracker.add_task("c1", "Completed Task")
-        tracker.start_task("c1")
-        tracker.complete_task("c1", success=True)
+        tracker.set_authenticating("c1")
+        tracker.set_executing("c1")
+        tracker.complete_task("c1", CompletionReason.SUCCESS)
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
@@ -447,9 +454,9 @@ class TestDashboardServer:
 
         # Check basic structure
         assert "Airut Dashboard" in html
-        assert "Queued (1)" in html
-        assert "In Progress (1)" in html
-        assert "Completed (1)" in html
+        assert "Pending (1)" in html
+        assert "Executing (1)" in html
+        assert "Done (1)" in html
 
         # Check task IDs are present
         assert "q1" in html
@@ -650,18 +657,21 @@ class TestDashboardServer:
         tracker.add_task("queued", "Queued")
 
         # In-progress task
-        tracker.add_task("progress", "In Progress")
-        tracker.start_task("progress")
+        tracker.add_task("progress", "Executing")
+        tracker.set_authenticating("progress")
+        tracker.set_executing("progress")
 
         # Successful task
         tracker.add_task("success", "Success")
-        tracker.start_task("success")
-        tracker.complete_task("success", success=True)
+        tracker.set_authenticating("success")
+        tracker.set_executing("success")
+        tracker.complete_task("success", CompletionReason.SUCCESS)
 
         # Failed task
         tracker.add_task("failed", "Failed")
-        tracker.start_task("failed")
-        tracker.complete_task("failed", success=False)
+        tracker.set_authenticating("failed")
+        tracker.set_executing("failed")
+        tracker.complete_task("failed", CompletionReason.EXECUTION_FAILED)
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
@@ -678,8 +688,8 @@ class TestDashboardServer:
         tracker = TaskTracker()
         task = TaskState(
             conversation_id="abc12345",
-            subject="Test",
-            status=TaskStatus.IN_PROGRESS,
+            display_title="Test",
+            status=TaskStatus.EXECUTING,
             queued_at=1000.0,
             started_at=1030.0,
             message_count=2,
@@ -691,12 +701,12 @@ class TestDashboardServer:
             result = server._task_to_dict(task)
 
         assert result["conversation_id"] == "abc12345"
-        assert result["subject"] == "Test"
-        assert result["status"] == "in_progress"
+        assert result["display_title"] == "Test"
+        assert result["status"] == "executing"
         assert result["queued_at"] == 1000.0
         assert result["started_at"] == 1030.0
         assert result["completed_at"] is None
-        assert result["success"] is None
+        assert result["completion_reason"] is None
         assert result["message_count"] == 2
         assert result["queue_duration"] == 30.0
         assert result["execution_duration"] == 60.0
@@ -728,8 +738,9 @@ class TestDashboardServer:
         """Test task detail page shows success styling for completed task."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Success")
-        tracker.start_task("abc12345")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
@@ -746,8 +757,9 @@ class TestDashboardServer:
         """Test task detail page shows failed styling for failed task."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Failed")
-        tracker.start_task("abc12345")
-        tracker.complete_task("abc12345", success=False)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.EXECUTION_FAILED)
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
@@ -757,7 +769,7 @@ class TestDashboardServer:
 
         # Check failed styling and text
         assert "COMPLETED" in html
-        assert "- Failed" in html
+        assert "- Execution Failed" in html
         assert "failed" in html  # CSS class
 
     def test_dispatch_error_handling(self) -> None:
@@ -1005,6 +1017,117 @@ class TestDashboardServer:
 
         assert "Initializing..." in html
         assert "boot-spinner" in html
+
+    def test_index_authenticating_task(self) -> None:
+        """Test dashboard renders authenticating task with correct label."""
+        tracker = TaskTracker()
+        tracker.add_task("auth1", "Authenticating Task")
+        tracker.set_authenticating("auth1")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/")
+        html_text = response.get_data(as_text=True)
+
+        # Authenticating tasks appear in the Pending column
+        assert "Authenticating..." in html_text
+        assert "auth1" in html_text
+
+    def test_index_pending_task(self) -> None:
+        """Test dashboard renders pending task with 'Queued behind' label."""
+        tracker = TaskTracker()
+        tracker.add_task("pend1", "Pending Task")
+        tracker.set_authenticating("pend1")
+        tracker.set_pending("pend1")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/")
+        html_text = response.get_data(as_text=True)
+
+        # Pending tasks appear in the Pending column
+        assert "Queued behind active task" in html_text
+        assert "pend1" in html_text
+
+    def test_index_auth_failed_completion_icon(self) -> None:
+        """Test dashboard renders ⊘ icon for AUTH_FAILED completion reason."""
+        tracker = TaskTracker()
+        tracker.add_task("afail", "Auth Failed Task")
+        tracker.set_authenticating("afail")
+        tracker.set_executing("afail")
+        tracker.complete_task("afail", CompletionReason.AUTH_FAILED)
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/")
+        html_text = response.get_data(as_text=True)
+
+        # AUTH_FAILED uses the ⊘ icon (&#x2298;), not the ✗ icon (&#x2717;)
+        assert "&#x2298;" in html_text
+        assert "afail" in html_text
+
+    def test_index_unauthorized_completion_icon(self) -> None:
+        """Test dashboard renders ⊘ icon for UNAUTHORIZED completion reason."""
+        tracker = TaskTracker()
+        tracker.add_task("unauth", "Unauthorized Task")
+        tracker.set_authenticating("unauth")
+        tracker.set_executing("unauth")
+        tracker.complete_task("unauth", CompletionReason.UNAUTHORIZED)
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/")
+        html_text = response.get_data(as_text=True)
+
+        assert "&#x2298;" in html_text
+
+    def test_index_rejected_completion_icon(self) -> None:
+        """Test dashboard renders ⊘ icon for REJECTED completion reason."""
+        tracker = TaskTracker()
+        tracker.add_task("rej", "Rejected Task")
+        tracker.set_authenticating("rej")
+        tracker.set_executing("rej")
+        tracker.complete_task("rej", CompletionReason.REJECTED)
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/")
+        html_text = response.get_data(as_text=True)
+
+        assert "&#x2298;" in html_text
+
+    def test_task_detail_completed_no_reason(self) -> None:
+        """Test task detail shows '- Failed' when completion_reason is None."""
+        tracker = TaskTracker()
+        # Construct a TaskState directly with COMPLETED status but no reason
+        task = TaskState(
+            conversation_id="noreason",
+            display_title="No Reason Task",
+            status=TaskStatus.COMPLETED,
+            queued_at=1000.0,
+            started_at=1010.0,
+            completed_at=1020.0,
+            completion_reason=None,
+        )
+        # Inject directly into the tracker's internal dict
+        tracker._tasks["noreason"] = task
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/noreason")
+        assert response.status_code == 200
+        html_text = response.get_data(as_text=True)
+
+        # Should show "- Failed" since completion_reason is None
+        assert "- Failed" in html_text
+        assert "COMPLETED" in html_text
+        assert "failed" in html_text  # CSS class
 
 
 class TestSSEEndpoint:

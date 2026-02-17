@@ -238,7 +238,7 @@ events = [
             assert task.status.value == "completed", (
                 f"Task status: {task.status}"
             )
-            assert task.success is True, "Task should be successful"
+            assert task.succeeded is True, "Task should be successful"
 
         finally:
             service.stop()

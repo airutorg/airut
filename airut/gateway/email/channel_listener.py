@@ -238,7 +238,7 @@ class EmailChannelListener(ChannelListener):
                         raw = RawMessage(
                             sender=message.get("From", ""),
                             content=message,
-                            subject=message.get("Subject", ""),
+                            display_title=message.get("Subject", ""),
                         )
                         self._submit(raw)
                     except Exception as e:
@@ -294,7 +294,7 @@ class EmailChannelListener(ChannelListener):
                         raw = RawMessage(
                             sender=message.get("From", ""),
                             content=message,
-                            subject=message.get("Subject", ""),
+                            display_title=message.get("Subject", ""),
                         )
                         self._submit(raw)
                     except Exception as e:

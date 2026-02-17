@@ -9,7 +9,13 @@ import html
 
 from airut.conversation import ConversationMetadata
 from airut.dashboard.formatters import format_duration, format_timestamp
-from airut.dashboard.tracker import TaskState, TaskStatus, TodoItem, TodoStatus
+from airut.dashboard.tracker import (
+    ACTIVE_STATUSES,
+    TaskState,
+    TaskStatus,
+    TodoItem,
+    TodoStatus,
+)
 from airut.dashboard.views.components import (
     render_action_buttons,
     render_conversation_replies_section,
@@ -80,14 +86,22 @@ def render_task_detail(
     status_display = task.status.value.replace("_", " ").upper()
     success_text = ""
     if task.status == TaskStatus.COMPLETED:
-        success_text = " - Success" if task.success else " - Failed"
+        if task.succeeded:
+            success_text = " - Success"
+        elif task.completion_reason is not None:
+            reason_label = task.completion_reason.value.replace(
+                "_", " "
+            ).title()
+            success_text = f" - {reason_label}"
+        else:
+            success_text = " - Failed"
 
-    escaped_subject = html.escape(task.subject)
+    escaped_title = html.escape(task.display_title)
 
     # Precompute success class for the status span
-    if task.success:
+    if task.succeeded:
         success_class = "success"
-    elif task.success is False:
+    elif task.status == TaskStatus.COMPLETED:
         success_class = "failed"
     else:
         success_class = ""
@@ -119,7 +133,7 @@ def render_task_detail(
     )
 
     # Build progress section from todos
-    is_active = task.status in (TaskStatus.QUEUED, TaskStatus.IN_PROGRESS)
+    is_active = task.status in ACTIVE_STATUSES
     progress_section = ""
     if task.todos and is_active:
         progress_section = _render_progress_section(task.todos)
@@ -152,7 +166,7 @@ def render_task_detail(
 
         <div class="field">
             <div class="field-label">Subject</div>
-            <div class="field-value">{escaped_subject}</div>
+            <div class="field-value">{escaped_title}</div>
         </div>
 
         <div class="field">
@@ -368,16 +382,25 @@ def _sse_task_detail_script(conversation_id: str) -> str:
             // Update status
             var statusEl = document.getElementById('task-status');
             if (statusEl) {{
-                var display = task.status.replace('_', ' ').toUpperCase();
+                var display = task.status.replaceAll('_', ' ').toUpperCase();
                 var successText = '';
                 if (task.status === 'completed') {{
-                    successText = task.success
-                        ? ' - Success' : ' - Failed';
+                    if (task.completion_reason === 'success') {{
+                        successText = ' - Success';
+                    }} else if (task.completion_reason) {{
+                        successText = ' - ' + task.completion_reason
+                            .replaceAll('_', ' ');
+                    }} else {{
+                        successText = ' - Failed';
+                    }}
                 }}
                 statusEl.textContent = display + successText;
                 statusEl.className = 'status ' + task.status;
-                if (task.success === true) statusEl.className += ' success';
-                if (task.success === false) statusEl.className += ' failed';
+                if (task.completion_reason === 'success') {{
+                    statusEl.className += ' success';
+                }} else if (task.status === 'completed') {{
+                    statusEl.className += ' failed';
+                }}
             }}
 
             // Update model

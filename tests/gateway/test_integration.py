@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from airut.claude_output import StreamEvent, parse_stream_events
+from airut.dashboard.tracker import CompletionReason, TaskStatus
 from airut.gateway import (
     ConversationManager,
     EmailListener,
@@ -554,7 +555,7 @@ Follow-up question.
         # Verify the full chain was invoked
         assert len(received) == 1
         assert received[0].sender == "user@example.com"
-        assert received[0].subject == "Chain test"
+        assert received[0].display_title == "Chain test"
         assert received[0].content is msg
 
         # service.submit_message was called with (raw_message, handler)
@@ -765,7 +766,7 @@ class TestParallelExecution:
             body="Do something",
             conversation_id=None,
             model_hint=None,
-            subject="New request without ID",
+            display_title="New request without ID",
         )
         mock_adapter = MagicMock()
         mock_adapter.authenticate_and_parse.return_value = parsed
@@ -774,7 +775,7 @@ class TestParallelExecution:
         # Mock process_message to track calls
         with patch(
             "airut.gateway.service.gateway.process_message",
-            return_value=(True, None),
+            return_value=(CompletionReason.SUCCESS, None),
         ) as mock_process:
             service._process_message_worker(
                 sample_email_message, "test-task-id", handler
@@ -811,7 +812,7 @@ class TestParallelExecution:
             body="Follow-up",
             conversation_id=conv_id,
             model_hint=None,
-            subject=f"Re: [ID:{conv_id}] Follow-up",
+            display_title=f"Re: [ID:{conv_id}] Follow-up",
         )
         mock_adapter = MagicMock()
         mock_adapter.authenticate_and_parse.return_value = parsed
@@ -819,7 +820,7 @@ class TestParallelExecution:
 
         with patch(
             "airut.gateway.service.gateway.process_message",
-            return_value=(True, conv_id),
+            return_value=(CompletionReason.SUCCESS, conv_id),
         ) as mock_process:
             service._process_message_worker(
                 sample_email_message, "test-task-id", handler
@@ -1406,7 +1407,7 @@ class TestTaskIdTracking:
             body="Do something",
             conversation_id=None,
             model_hint=None,
-            subject="New request without ID",
+            display_title="New request without ID",
         )
         mock_adapter = MagicMock()
         mock_adapter.authenticate_and_parse.return_value = parsed
@@ -1421,7 +1422,7 @@ class TestTaskIdTracking:
         # then return. Real process_message updates tracker before ack.
         def mock_process_message(svc, p, task_id, handler, adapter):
             service.tracker.update_task_id(task_id, new_conv_id)
-            return (True, new_conv_id)
+            return (CompletionReason.SUCCESS, new_conv_id)
 
         with patch(
             "airut.gateway.service.gateway.process_message",
@@ -1436,7 +1437,7 @@ class TestTaskIdTracking:
         task = service.tracker.get_task(new_conv_id)
         assert task is not None
         assert task.status.value == "completed"
-        assert task.success is True
+        assert task.succeeded is True
 
     def test_process_message_worker_keeps_task_id_when_no_conv_id(
         self,
@@ -1456,7 +1457,7 @@ class TestTaskIdTracking:
             body="Do something",
             conversation_id=None,
             model_hint=None,
-            subject="New request",
+            display_title="New request",
         )
         mock_adapter = MagicMock()
         mock_adapter.authenticate_and_parse.return_value = parsed
@@ -1468,7 +1469,7 @@ class TestTaskIdTracking:
         # Mock process_message to return failure with no conv_id
         with patch(
             "airut.gateway.service.gateway.process_message",
-            return_value=(False, None),
+            return_value=(CompletionReason.EXECUTION_FAILED, None),
         ):
             service._process_message_worker(
                 sample_email_message, temp_task_id, handler
@@ -1478,18 +1479,24 @@ class TestTaskIdTracking:
         task = service.tracker.get_task(temp_task_id)
         assert task is not None
         assert task.status.value == "completed"
-        assert task.success is False
+        assert task.succeeded is False
 
 
 class TestDuplicateMessageRejection:
     """Tests for rejecting duplicate messages for active conversations."""
 
-    def test_rejects_duplicate_for_active_task(
+    def test_queues_duplicate_for_active_task(
         self,
         email_config: RepoServerConfig,
         sample_email_message,
     ) -> None:
-        """Test duplicate message is rejected when task is active."""
+        """Test duplicate message is queued when task is active.
+
+        The message is enqueued as PENDING, but the finally block of
+        _process_message_worker always completes the task. Then
+        _drain_pending tries to submit to the executor pool (which is
+        None in unit tests), causing an INTERNAL_ERROR completion.
+        """
         from airut.gateway.channel import ParsedMessage
         from airut.gateway.service import GatewayService
 
@@ -1504,7 +1511,8 @@ class TestDuplicateMessageRejection:
 
         # Add an active task for this conversation
         service.tracker.add_task(conv_id, "First request")
-        service.tracker.start_task(conv_id)
+        service.tracker.set_authenticating(conv_id)
+        service.tracker.set_executing(conv_id)
 
         # Worker receives raw msg; adapter returns parsed with same conv_id
         parsed = ParsedMessage(
@@ -1522,17 +1530,77 @@ class TestDuplicateMessageRejection:
         service.tracker.add_task(task_id, "(authenticating)")
         service._process_message_worker(sample_email_message, task_id, handler)
 
-        # Should send rejection reply via adapter
-        mock_adapter.send_rejection.assert_called_once()
-        call_args = mock_adapter.send_rejection.call_args
-        assert call_args[0][0] == parsed
-        assert call_args[0][1] == conv_id
-        assert "still being processed" in call_args[0][2]
+        # Message should be queued, not rejected
+        mock_adapter.send_rejection.assert_not_called()
 
-        # Task should be marked as failed
-        task = service.tracker.get_task(task_id)
+        # Task stays PENDING — waiting for _drain_pending to pick it up
+        task = service.tracker.get_task(conv_id)
         assert task is not None
-        assert task.success is False
+        assert task.status == TaskStatus.PENDING
+
+    def test_no_race_when_active_task_completes_before_lock(
+        self,
+        email_config: RepoServerConfig,
+        sample_email_message,
+    ) -> None:
+        """Atomic lock prevents TOCTOU race on enqueue.
+
+        If the active task completes before we acquire
+        ``_pending_messages_lock``, ``is_task_active`` (checked under
+        the lock) returns False and the message goes through normal
+        execution instead of being queued.
+        """
+        from airut.gateway.channel import ParsedMessage
+        from airut.gateway.service import GatewayService
+
+        config = ServerConfig(
+            global_config=GlobalConfig(),
+            repos={"test": email_config},
+        )
+        service = GatewayService(config)
+        handler = service.repo_handlers["test"]
+
+        conv_id = "race01"
+
+        # Task that was active but is now completed
+        service.tracker.add_task(conv_id, "Active task")
+        service.tracker.set_authenticating(conv_id)
+        service.tracker.set_executing(conv_id)
+        service.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
+
+        parsed = ParsedMessage(
+            sender=email_config.channel.authorized_senders[0],
+            body="Follow-up",
+            conversation_id=conv_id,
+            model_hint=None,
+        )
+
+        mock_adapter = MagicMock()
+        mock_adapter.authenticate_and_parse.return_value = parsed
+        handler.adapter = mock_adapter
+
+        task_id = "new-race"
+        service.tracker.add_task(task_id, "(authenticating)")
+
+        # Since is_task_active returns False under the lock,
+        # the message goes through normal execution (process_message)
+        # instead of being queued as pending.
+        with patch(
+            "airut.gateway.service.gateway.process_message",
+            return_value=(CompletionReason.SUCCESS, conv_id),
+        ) as mock_process:
+            service._process_message_worker(
+                sample_email_message, task_id, handler
+            )
+
+        # process_message was called (not queued)
+        mock_process.assert_called_once()
+
+        # Task should be completed successfully
+        task = service.tracker.get_task(conv_id)
+        assert task is not None
+        assert task.status == TaskStatus.COMPLETED
+        assert task.completion_reason == CompletionReason.SUCCESS
 
     def test_accepts_message_for_completed_task(
         self,
@@ -1554,8 +1622,9 @@ class TestDuplicateMessageRejection:
 
         # Add and complete a task
         service.tracker.add_task(conv_id, "First request")
-        service.tracker.start_task(conv_id)
-        service.tracker.complete_task(conv_id, success=True)
+        service.tracker.set_authenticating(conv_id)
+        service.tracker.set_executing(conv_id)
+        service.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
 
         # Worker receives raw msg; adapter returns parsed with same conv_id
         parsed = ParsedMessage(
@@ -1575,7 +1644,7 @@ class TestDuplicateMessageRejection:
         # Mock process_message to prevent actual execution
         with patch(
             "airut.gateway.service.gateway.process_message",
-            return_value=(True, conv_id),
+            return_value=(CompletionReason.SUCCESS, conv_id),
         ):
             service._process_message_worker(
                 sample_email_message, task_id, handler
@@ -1587,7 +1656,7 @@ class TestDuplicateMessageRejection:
         # Task should be completed successfully
         task = service.tracker.get_task(conv_id)
         assert task is not None
-        assert task.success is True
+        assert task.succeeded is True
 
     def test_accepts_new_conversation(
         self,
@@ -1623,7 +1692,7 @@ class TestDuplicateMessageRejection:
         # Mock process_message to simulate what it does: update task ID
         def mock_process(svc, parsed_msg, tid, handler, adapter):
             service.tracker.update_task_id(tid, "newconv1")
-            return (True, "newconv1")
+            return (CompletionReason.SUCCESS, "newconv1")
 
         with patch(
             "airut.gateway.service.gateway.process_message",
@@ -1639,7 +1708,7 @@ class TestDuplicateMessageRejection:
         # Task should be completed successfully with the new conv_id
         task = service.tracker.get_task("newconv1")
         assert task is not None
-        assert task.success is True
+        assert task.succeeded is True
 
 
 class TestRejectionReply:
@@ -1799,8 +1868,9 @@ class TestConversationResumeTaskTracking:
 
         # Simulate a previously completed conversation
         service.tracker.add_task(conv_id, "Original request")
-        service.tracker.start_task(conv_id)
-        service.tracker.complete_task(conv_id, success=True)
+        service.tracker.set_authenticating(conv_id)
+        service.tracker.set_executing(conv_id)
+        service.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
         task = service.tracker.get_task(conv_id)
         assert task is not None
         assert task.status.value == "completed"
@@ -1811,7 +1881,7 @@ class TestConversationResumeTaskTracking:
             body="Follow-up message",
             conversation_id=conv_id,
             model_hint=None,
-            subject="Re: [ID:aabb1122] Follow-up",
+            display_title="Re: [ID:aabb1122] Follow-up",
         )
         mock_adapter = MagicMock()
         mock_adapter.authenticate_and_parse.return_value = parsed
@@ -1826,7 +1896,7 @@ class TestConversationResumeTaskTracking:
         with (
             patch(
                 "airut.gateway.service.gateway.process_message",
-                return_value=(True, conv_id),
+                return_value=(CompletionReason.SUCCESS, conv_id),
             ),
             patch.object(
                 handler.conversation_manager, "exists", return_value=True
@@ -1843,7 +1913,7 @@ class TestConversationResumeTaskTracking:
         task = service.tracker.get_task(conv_id)
         assert task is not None
         assert task.status.value == "completed"
-        assert task.success is True
+        assert task.succeeded is True
 
     def test_resume_task_shows_in_progress_during_execution(
         self,
@@ -1855,7 +1925,6 @@ class TestConversationResumeTaskTracking:
         The user should see the task as in_progress under the real conv_id
         during execution, not as completed (stale) or under a temp ID.
         """
-        from airut.dashboard.tracker import TaskStatus
         from airut.gateway.channel import ParsedMessage
         from airut.gateway.service import GatewayService
 
@@ -1870,8 +1939,9 @@ class TestConversationResumeTaskTracking:
 
         # Previously completed
         service.tracker.add_task(conv_id, "First request")
-        service.tracker.start_task(conv_id)
-        service.tracker.complete_task(conv_id, success=True)
+        service.tracker.set_authenticating(conv_id)
+        service.tracker.set_executing(conv_id)
+        service.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
 
         # New message for same conversation
         parsed = ParsedMessage(
@@ -1879,7 +1949,7 @@ class TestConversationResumeTaskTracking:
             body="Another message",
             conversation_id=conv_id,
             model_hint=None,
-            subject="Re: [ID:ccdd4455] Another message",
+            display_title="Re: [ID:ccdd4455] Another message",
         )
         mock_adapter = MagicMock()
         mock_adapter.authenticate_and_parse.return_value = parsed
@@ -1901,7 +1971,7 @@ class TestConversationResumeTaskTracking:
             task_state_during_execution["temp_task_exists"] = (
                 temp_task is not None
             )
-            return (True, conv_id)
+            return (CompletionReason.SUCCESS, conv_id)
 
         with (
             patch(
@@ -1916,10 +1986,10 @@ class TestConversationResumeTaskTracking:
                 sample_email_message, temp_task_id, handler
             )
 
-        # During execution, conv_id task should have been IN_PROGRESS
+        # During execution, conv_id task should have been EXECUTING
         assert (
             task_state_during_execution["conv_task_status"]
-            == TaskStatus.IN_PROGRESS
+            == TaskStatus.EXECUTING
         )
         # The temp task should have been merged (not exist separately)
         assert task_state_during_execution["temp_task_exists"] is False
@@ -1943,15 +2013,16 @@ class TestConversationResumeTaskTracking:
         conv_id = "eeff6677"
 
         service.tracker.add_task(conv_id, "Original")
-        service.tracker.start_task(conv_id)
-        service.tracker.complete_task(conv_id, success=True)
+        service.tracker.set_authenticating(conv_id)
+        service.tracker.set_executing(conv_id)
+        service.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
 
         parsed = ParsedMessage(
             sender="user@example.com",
             body="Resume me",
             conversation_id=conv_id,
             model_hint=None,
-            subject="Re: [ID:eeff6677] Resume",
+            display_title="Re: [ID:eeff6677] Resume",
         )
         mock_adapter = MagicMock()
         mock_adapter.authenticate_and_parse.return_value = parsed
@@ -1963,7 +2034,7 @@ class TestConversationResumeTaskTracking:
         with (
             patch(
                 "airut.gateway.service.gateway.process_message",
-                return_value=(False, conv_id),
+                return_value=(CompletionReason.EXECUTION_FAILED, conv_id),
             ),
             patch.object(
                 handler.conversation_manager, "exists", return_value=True
@@ -1980,7 +2051,7 @@ class TestConversationResumeTaskTracking:
         task = service.tracker.get_task(conv_id)
         assert task is not None
         assert task.status.value == "completed"
-        assert task.success is False
+        assert task.succeeded is False
 
     def test_resume_exception_marks_conv_id_task_failed(
         self,
@@ -2001,15 +2072,16 @@ class TestConversationResumeTaskTracking:
         conv_id = "11223344"
 
         service.tracker.add_task(conv_id, "Original")
-        service.tracker.start_task(conv_id)
-        service.tracker.complete_task(conv_id, success=True)
+        service.tracker.set_authenticating(conv_id)
+        service.tracker.set_executing(conv_id)
+        service.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
 
         parsed = ParsedMessage(
             sender="user@example.com",
             body="Resume me",
             conversation_id=conv_id,
             model_hint=None,
-            subject="Re: [ID:11223344] Resume",
+            display_title="Re: [ID:11223344] Resume",
         )
         mock_adapter = MagicMock()
         mock_adapter.authenticate_and_parse.return_value = parsed
@@ -2038,7 +2110,7 @@ class TestConversationResumeTaskTracking:
         task = service.tracker.get_task(conv_id)
         assert task is not None
         assert task.status.value == "completed"
-        assert task.success is False
+        assert task.succeeded is False
 
     def test_resume_updates_subject_and_sender(
         self,
@@ -2059,15 +2131,16 @@ class TestConversationResumeTaskTracking:
         conv_id = "55667788"
 
         service.tracker.add_task(conv_id, "Original subject")
-        service.tracker.start_task(conv_id)
-        service.tracker.complete_task(conv_id, success=True)
+        service.tracker.set_authenticating(conv_id)
+        service.tracker.set_executing(conv_id)
+        service.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
 
         parsed = ParsedMessage(
             sender="alice@example.com",
             body="Follow-up",
             conversation_id=conv_id,
             model_hint=None,
-            subject="Re: [ID:55667788] Original subject",
+            display_title="Re: [ID:55667788] Original subject",
         )
         mock_adapter = MagicMock()
         mock_adapter.authenticate_and_parse.return_value = parsed
@@ -2079,7 +2152,7 @@ class TestConversationResumeTaskTracking:
         with (
             patch(
                 "airut.gateway.service.gateway.process_message",
-                return_value=(True, conv_id),
+                return_value=(CompletionReason.SUCCESS, conv_id),
             ),
             patch.object(
                 handler.conversation_manager, "exists", return_value=True
@@ -2092,7 +2165,7 @@ class TestConversationResumeTaskTracking:
         task = service.tracker.get_task(conv_id)
         assert task is not None
         # Subject should be the real subject, not "(authenticating)"
-        assert task.subject == "Re: [ID:55667788] Original subject"
+        assert task.display_title == "Re: [ID:55667788] Original subject"
         assert task.sender == "alice@example.com"
 
 
@@ -2139,10 +2212,10 @@ class TestUnauthorizedSenderTracking:
         task = service.tracker.get_task(temp_task_id)
         assert task is not None
         assert task.status.value == "completed"
-        assert task.success is False
+        assert task.succeeded is False
         # Subject should NOT remain "(authenticating)"
-        assert task.subject != "(authenticating)"
-        assert "(not authorized)" in task.subject
+        assert task.display_title != "(authenticating)"
+        assert "(not authorized)" in task.display_title
         assert task.sender == "bad@example.com"
 
     def test_unauthorized_records_sender_from_raw_email(
@@ -2195,13 +2268,13 @@ class TestUnauthorizedSenderTracking:
         raw_message = RawMessage(
             sender="hacker@malicious.com",
             content=email_msg,
-            subject="Please do something",
+            display_title="Please do something",
         )
         service._process_message_worker(raw_message, temp_task_id, handler)
 
         task = service.tracker.get_task(temp_task_id)
         assert task is not None
-        assert task.success is False
+        assert task.succeeded is False
         # Sender should be recorded even though auth failed
         assert "hacker@malicious.com" in task.sender
 
@@ -2252,14 +2325,14 @@ class TestUnauthorizedSenderTracking:
         raw_message = RawMessage(
             sender="spoofed@evil.com",
             content=email_msg,
-            subject="Spoofed message",
+            display_title="Spoofed message",
         )
         service._process_message_worker(raw_message, temp_task_id, handler)
 
         task = service.tracker.get_task(temp_task_id)
         assert task is not None
-        assert task.success is False
-        assert "(not authorized)" in task.subject
+        assert task.succeeded is False
+        assert "(not authorized)" in task.display_title
         assert "spoofed@evil.com" in task.sender
 
     def test_generic_exception_completes_task(
@@ -2297,6 +2370,6 @@ class TestUnauthorizedSenderTracking:
 
         task = service.tracker.get_task(temp_task_id)
         assert task is not None
-        assert task.success is False
+        assert task.succeeded is False
         # Subject stays as-is — we don't know who sent it
-        assert task.subject == "(authenticating)"
+        assert task.display_title == "(authenticating)"

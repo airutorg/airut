@@ -191,7 +191,7 @@ sys.exit(1)
                 task = service.tracker.wait_for_completion(conv_id, timeout=5.0)
 
                 if task:
-                    assert task.success is False, (
+                    assert task.succeeded is False, (
                         "Task should be marked as failed"
                     )
 

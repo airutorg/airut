@@ -23,7 +23,7 @@ from airut.claude_output.types import (
     ToolUseBlock,
 )
 from airut.conversation import ConversationMetadata
-from airut.dashboard.tracker import TaskState, TaskStatus
+from airut.dashboard.tracker import ACTIVE_STATUSES, TaskState
 from airut.dashboard.views.styles import actions_styles
 
 
@@ -51,7 +51,7 @@ def render_actions_page(
     Returns:
         HTML string for actions page.
     """
-    escaped_subject = html.escape(task.subject)
+    escaped_title = html.escape(task.display_title)
 
     # Build actions content
     has_replies = conversation is not None and len(conversation.replies) > 0
@@ -65,7 +65,7 @@ def render_actions_page(
     else:
         actions_content = render_actions_timeline(conversation, event_groups)
 
-    is_active = task.status in (TaskStatus.QUEUED, TaskStatus.IN_PROGRESS)
+    is_active = task.status in ACTIVE_STATUSES
     sse_script = (
         _sse_events_script(task.conversation_id, event_log_offset)
         if is_active
@@ -105,7 +105,7 @@ def render_actions_page(
     <div class="header">
         <a href="/conversation/{task.conversation_id}">&larr; Back</a>
         <h1>Actions: {task.conversation_id}</h1>
-        <span class="subtitle">{escaped_subject}</span>
+        <span class="subtitle">{escaped_title}</span>
     </div>
     <div class="terminal" id="events-container">
         {actions_content}

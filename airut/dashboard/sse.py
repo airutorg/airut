@@ -171,14 +171,18 @@ def _task_state_to_dict(task: TaskState) -> dict[str, Any]:
     """
     result: dict[str, Any] = {
         "conversation_id": task.conversation_id,
-        "subject": task.subject,
+        "display_title": task.display_title,
         "repo_id": task.repo_id,
         "sender": task.sender,
+        "authenticated_sender": task.authenticated_sender,
         "status": task.status.value,
+        "completion_reason": (
+            task.completion_reason.value if task.completion_reason else None
+        ),
+        "completion_detail": task.completion_detail,
         "queued_at": task.queued_at,
         "started_at": task.started_at,
         "completed_at": task.completed_at,
-        "success": task.success,
         "message_count": task.message_count,
         "model": task.model,
         "queue_duration": task.queue_duration(),

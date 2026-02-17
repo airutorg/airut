@@ -24,7 +24,7 @@ protocol handling (email IMAP/SMTP, etc.) via types in `gateway/channel.py`:
 
 - **`ParsedMessage`** — Protocol-agnostic dataclass produced by the channel
   adapter after authentication and parsing. Contains sender, body,
-  conversation_id, model_hint, attachments, subject, and channel_context.
+  conversation_id, model_hint, attachments, display_title, and channel_context.
 - **`AuthenticationError`** — Exception raised by `authenticate_and_parse()`
   when authentication or authorization fails. Carries `sender` (raw sender
   identity for dashboard visibility) and `reason` (human-readable rejection
@@ -41,7 +41,7 @@ protocol handling (email IMAP/SMTP, etc.) via types in `gateway/channel.py`:
 - **`ChannelStatus`** — Frozen dataclass with `health`, `message`, and
   `error_type` for structured health reporting.
 - **`RawMessage[T]`** — Generic dataclass wrapping a channel-specific payload
-  (`T`) with sender identity and display subject. The email channel uses
+  (`T`) with sender identity and display_title. The email channel uses
   `RawMessage[email.message.Message]`; the core uses `RawMessage[Any]`.
 - **`ChannelAdapter`** — `typing.Protocol` defining the interface between the
   core and channel implementations: `listener` property (a `ChannelListener`),
@@ -81,6 +81,53 @@ the appropriate adapter.
 - **SenderAuthenticator** — DMARC verification on trusted headers
 - **SenderAuthorizer** — Sender allowlist checking
 
+### Task Lifecycle
+
+Tasks progress through a 5-state lifecycle tracked by `TaskTracker`:
+
+```
+                    QUEUED
+                      │
+                      ▼
+                AUTHENTICATING ──→ COMPLETED (AUTH_FAILED / UNAUTHORIZED)
+                      │
+                      ├──→ EXECUTING ──→ COMPLETED (SUCCESS / EXECUTION_FAILED /
+                      │                              TIMEOUT / INTERNAL_ERROR)
+                      │
+                      ▼  (conversation busy)
+                   PENDING ──→ EXECUTING ──→ COMPLETED
+                      │
+                      └──→ COMPLETED (REJECTED, if queue full)
+```
+
+Transition methods enforce preconditions — `set_authenticating()` requires
+QUEUED, `set_pending()` requires AUTHENTICATING, `set_executing()` requires
+AUTHENTICATING or PENDING. Invalid transitions return False.
+
+Each task is assigned a `CompletionReason` when it reaches COMPLETED:
+
+| Reason             | Meaning                               |
+| ------------------ | ------------------------------------- |
+| `SUCCESS`          | Sandbox ran and produced a response   |
+| `AUTH_FAILED`      | DMARC verification failed             |
+| `UNAUTHORIZED`     | Sender not in allowlist               |
+| `EXECUTION_FAILED` | Container/sandbox failure             |
+| `TIMEOUT`          | Execution exceeded configured limit   |
+| `INTERNAL_ERROR`   | Unexpected exception (e.g. git clone) |
+| `REJECTED`         | Per-conversation pending queue full   |
+
+### Per-Conversation Message Queuing
+
+When a message arrives for a conversation that already has an active task
+(QUEUED, AUTHENTICATING, PENDING, or EXECUTING), the message is queued instead
+of rejected. Each conversation has a bounded pending queue
+(`MAX_PENDING_PER_CONVERSATION = 3`). When the active task completes,
+`_drain_pending()` pops the next message and submits it to the thread pool.
+Pending messages skip authentication (already verified at receive time).
+
+If the queue is full, the message is rejected with `send_rejection()` and
+completed with `CompletionReason.REJECTED`.
+
 ### Data Flow
 
 ```
@@ -93,15 +140,21 @@ ChannelListener thread:
   -> Message arrives on channel
   -> submit(raw_message)
     -> GatewayService.submit_message(raw_message, handler)
-      -> Register temp task in tracker
+      -> Register temp task in tracker (QUEUED)
       -> Submit to worker thread pool
 
 GatewayService._process_message_worker()  [worker thread]:
+  -> tracker.set_authenticating()                        → AUTHENTICATING
   -> ChannelAdapter.authenticate_and_parse()
     -> (email: DMARC + sender auth + MIME parsing)
-    -> raises AuthenticationError on failure (with sender + reason)
+    -> raises AuthenticationError on failure:
+       tracker.complete_task(AUTH_FAILED or UNAUTHORIZED) → COMPLETED
+  -> tracker.update_task_display_title(authenticated_sender=...)
   -> Reassign temp task ID to real conversation ID
-  -> Duplicate detection (reject if conversation already active)
+  -> If conversation already active:
+     -> If queue full: send_rejection(), complete_task(REJECTED)
+     -> Else: enqueue PendingMessage, tracker.set_pending() → PENDING, return
+  -> tracker.set_executing()                             → EXECUTING
   -> ConversationManager
     -> Initialize/resume git checkout
     -> ChannelAdapter.save_attachments()
@@ -109,8 +162,18 @@ GatewayService._process_message_worker()  [worker thread]:
     -> Spawn Podman container
     -> Mount conversation directories
     -> Run claude CLI
-  -> ChannelAdapter.send_reply()
-    -> (email: SMTP with threading headers)
+  -> tracker.complete_task(reason)                       → COMPLETED
+  -> ChannelAdapter.send_reply() or send_error()
+  -> _drain_pending(conv_id)
+    -> Pop first pending message
+    -> Submit _process_pending_message() to thread pool
+
+GatewayService._process_pending_message()  [worker thread]:
+  -> tracker.set_executing()                             → EXECUTING
+  -> (skips authentication — already done at receive time)
+  -> process_message() → CompletionReason
+  -> tracker.complete_task(reason)                       → COMPLETED
+  -> _drain_pending(conv_id)                  (chains to next pending)
 
 RepoHandler.stop()
   -> adapter.listener.stop()
@@ -550,16 +613,19 @@ thread pool.
 | Container execution | Per-conversation locks prevent parallel processing of same conversation |
 | Image builds        | Serialized via `_build_lock`; cached by content hash with staleness     |
 
-### Per-Conversation Locking
+### Per-Conversation Serialization
 
-Messages to the same conversation are serialized to prevent race conditions:
+Messages to the same conversation are serialized via the pending queue:
 
-1. Extract conversation ID from subject
-2. If existing conversation: acquire per-conversation lock before processing
-3. If new conversation: no lock needed (unique ID generated)
+1. Worker checks `tracker.is_task_active(conv_id)` after authentication
+2. If active: message is enqueued as `PendingMessage` (up to
+   `MAX_PENDING_PER_CONVERSATION = 3`), worker thread is freed immediately
+3. If not active: message proceeds to execution
+4. On completion: `_drain_pending()` submits the next queued message
 
-This allows parallel processing of different conversations while ensuring
-sequential processing within each conversation.
+This avoids blocking worker threads on conversation locks. With explicit
+queuing, worker slots are only consumed during actual execution, not while
+waiting for a conversation to become free.
 
 ## Future Enhancements
 

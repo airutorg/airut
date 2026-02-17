@@ -12,6 +12,7 @@ from unittest.mock import patch
 import pytest
 
 from airut.dashboard.tracker import (
+    CompletionReason,
     TaskState,
     TaskStatus,
     TaskTracker,
@@ -26,23 +27,27 @@ class TestTaskState:
     def test_default_values(self) -> None:
         """Test TaskState has correct defaults."""
         before = time.time()
-        task = TaskState(conversation_id="abc12345", subject="Test subject")
+        task = TaskState(
+            conversation_id="abc12345", display_title="Test subject"
+        )
         after = time.time()
 
         assert task.conversation_id == "abc12345"
-        assert task.subject == "Test subject"
+        assert task.display_title == "Test subject"
         assert task.status == TaskStatus.QUEUED
         assert before <= task.queued_at <= after
         assert task.started_at is None
         assert task.completed_at is None
-        assert task.success is None
+        assert task.completion_reason is None
         assert task.message_count == 1
         assert task.model is None
 
     def test_with_model(self) -> None:
         """Test TaskState with model specified."""
         task = TaskState(
-            conversation_id="abc12345", subject="Test subject", model="opus"
+            conversation_id="abc12345",
+            display_title="Test subject",
+            model="opus",
         )
 
         assert task.model == "opus"
@@ -51,7 +56,7 @@ class TestTaskState:
         """Test queue_duration when task hasn't started."""
         task = TaskState(
             conversation_id="abc",
-            subject="Test",
+            display_title="Test",
             queued_at=1000.0,
         )
 
@@ -63,10 +68,10 @@ class TestTaskState:
         """Test queue_duration when task has started."""
         task = TaskState(
             conversation_id="abc",
-            subject="Test",
+            display_title="Test",
             queued_at=1000.0,
             started_at=1030.0,
-            status=TaskStatus.IN_PROGRESS,
+            status=TaskStatus.EXECUTING,
         )
 
         # Queue duration should be fixed at 30 seconds
@@ -76,7 +81,7 @@ class TestTaskState:
         """Test execution_duration returns None when not started."""
         task = TaskState(
             conversation_id="abc",
-            subject="Test",
+            display_title="Test",
             queued_at=1000.0,
         )
 
@@ -86,10 +91,10 @@ class TestTaskState:
         """Test execution_duration when task is running."""
         task = TaskState(
             conversation_id="abc",
-            subject="Test",
+            display_title="Test",
             queued_at=1000.0,
             started_at=1030.0,
-            status=TaskStatus.IN_PROGRESS,
+            status=TaskStatus.EXECUTING,
         )
 
         with patch("airut.dashboard.tracker.time.time", return_value=1090.0):
@@ -99,12 +104,12 @@ class TestTaskState:
         """Test execution_duration when task is completed."""
         task = TaskState(
             conversation_id="abc",
-            subject="Test",
+            display_title="Test",
             queued_at=1000.0,
             started_at=1030.0,
             completed_at=1130.0,
             status=TaskStatus.COMPLETED,
-            success=True,
+            completion_reason=CompletionReason.SUCCESS,
         )
 
         # Should be fixed at 100 seconds
@@ -114,7 +119,7 @@ class TestTaskState:
         """Test total_duration for pending task."""
         task = TaskState(
             conversation_id="abc",
-            subject="Test",
+            display_title="Test",
             queued_at=1000.0,
         )
 
@@ -125,15 +130,54 @@ class TestTaskState:
         """Test total_duration for completed task."""
         task = TaskState(
             conversation_id="abc",
-            subject="Test",
+            display_title="Test",
             queued_at=1000.0,
             started_at=1030.0,
             completed_at=1130.0,
             status=TaskStatus.COMPLETED,
-            success=True,
+            completion_reason=CompletionReason.SUCCESS,
         )
 
         assert task.total_duration() == 130.0
+
+    def test_is_terminal(self) -> None:
+        """Test is_terminal property."""
+        task = TaskState(
+            conversation_id="abc",
+            display_title="Test",
+            status=TaskStatus.COMPLETED,
+            completion_reason=CompletionReason.SUCCESS,
+        )
+        assert task.is_terminal is True
+
+        task2 = TaskState(
+            conversation_id="def",
+            display_title="Test",
+            status=TaskStatus.EXECUTING,
+        )
+        assert task2.is_terminal is False
+
+    def test_succeeded(self) -> None:
+        """Test succeeded property."""
+        task = TaskState(
+            conversation_id="abc",
+            display_title="Test",
+            completion_reason=CompletionReason.SUCCESS,
+        )
+        assert task.succeeded is True
+
+        task2 = TaskState(
+            conversation_id="def",
+            display_title="Test",
+            completion_reason=CompletionReason.EXECUTION_FAILED,
+        )
+        assert task2.succeeded is False
+
+        task3 = TaskState(
+            conversation_id="ghi",
+            display_title="Test",
+        )
+        assert task3.succeeded is False
 
 
 class TestTaskTracker:
@@ -150,7 +194,7 @@ class TestTaskTracker:
         task = tracker.get_task("abc12345")
         assert task is not None
         assert task.conversation_id == "abc12345"
-        assert task.subject == "Test subject"
+        assert task.display_title == "Test subject"
         assert task.status == TaskStatus.QUEUED
         assert before <= task.queued_at <= after
         assert task.model is None
@@ -186,8 +230,9 @@ class TestTaskTracker:
         assert task.sender == ""
 
         # Mark completed, then resume with repo_id/sender
-        tracker.start_task("abc12345")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
         tracker.add_task(
             "abc12345", "Test", repo_id="airut", sender="user@example.com"
         )
@@ -207,8 +252,9 @@ class TestTaskTracker:
         first_queued_at = task_initial.queued_at
 
         # Mark as completed
-        tracker.start_task("abc12345")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         # Advance time to ensure queued_at differs on resume
         with patch(
@@ -224,7 +270,7 @@ class TestTaskTracker:
         assert task.queued_at > first_queued_at
         assert task.started_at is None
         assert task.completed_at is None
-        assert task.success is None
+        assert task.completion_reason is None
         assert task.message_count == 2
 
     def test_add_task_resume_with_model_update(self) -> None:
@@ -238,8 +284,9 @@ class TestTaskTracker:
         assert task.model == "sonnet"
 
         # Mark as completed
-        tracker.start_task("abc12345")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         # Resume with new model
         tracker.add_task("abc12345", "First subject", model="opus")
@@ -259,8 +306,9 @@ class TestTaskTracker:
         assert task.model == "opus"
 
         # Mark as completed
-        tracker.start_task("abc12345")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         # Resume without specifying model
         tracker.add_task("abc12345", "First subject")
@@ -269,34 +317,109 @@ class TestTaskTracker:
         assert task is not None
         assert task.model == "opus"  # Preserved from original
 
-    def test_start_task(self) -> None:
-        """Test starting a task."""
+    def test_set_authenticating(self) -> None:
+        """Test transitioning a task to AUTHENTICATING."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
 
-        before = time.time()
-        tracker.start_task("abc12345")
-        after = time.time()
+        result = tracker.set_authenticating("abc12345")
 
+        assert result is True
         task = tracker.get_task("abc12345")
         assert task is not None
-        assert task.status == TaskStatus.IN_PROGRESS
+        assert task.status == TaskStatus.AUTHENTICATING
+
+    def test_set_authenticating_nonexistent(self) -> None:
+        """Test set_authenticating on non-existent task returns False."""
+        tracker = TaskTracker()
+        assert tracker.set_authenticating("nonexistent") is False
+
+    def test_set_authenticating_rejects_non_queued(self) -> None:
+        """set_authenticating only works from QUEUED state."""
+        tracker = TaskTracker()
+        tracker.add_task("t", "T")
+        tracker.set_authenticating("t")
+        # Already AUTHENTICATING — can't transition again
+        assert tracker.set_authenticating("t") is False
+
+    def test_set_executing(self) -> None:
+        """Test transitioning a task to EXECUTING."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.set_authenticating("abc12345")
+
+        before = time.time()
+        result = tracker.set_executing("abc12345")
+        after = time.time()
+
+        assert result is True
+        task = tracker.get_task("abc12345")
+        assert task is not None
+        assert task.status == TaskStatus.EXECUTING
         assert task.started_at is not None
         assert before <= task.started_at <= after
 
-    def test_start_task_nonexistent(self) -> None:
-        """Test starting a non-existent task (no-op)."""
+    def test_set_executing_nonexistent(self) -> None:
+        """Test set_executing on non-existent task returns False."""
         tracker = TaskTracker()
-        tracker.start_task("nonexistent")  # Should not raise
+        assert tracker.set_executing("nonexistent") is False
+
+    def test_set_executing_rejects_queued(self) -> None:
+        """set_executing rejects tasks still in QUEUED state."""
+        tracker = TaskTracker()
+        tracker.add_task("t", "T")
+        assert tracker.set_executing("t") is False
+        task = tracker.get_task("t")
+        assert task is not None
+        assert task.status == TaskStatus.QUEUED
+
+    def test_set_executing_rejects_completed(self) -> None:
+        """set_executing rejects tasks in COMPLETED state."""
+        tracker = TaskTracker()
+        tracker.add_task("t", "T")
+        tracker.set_authenticating("t")
+        tracker.set_executing("t")
+        tracker.complete_task("t", CompletionReason.SUCCESS)
+        assert tracker.set_executing("t") is False
+
+    def test_set_pending(self) -> None:
+        """Test transitioning a task to PENDING."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.set_authenticating("abc12345")
+
+        result = tracker.set_pending("abc12345")
+
+        assert result is True
+        task = tracker.get_task("abc12345")
+        assert task is not None
+        assert task.status == TaskStatus.PENDING
+
+    def test_set_pending_nonexistent(self) -> None:
+        """Test set_pending on non-existent task returns False."""
+        tracker = TaskTracker()
+        assert tracker.set_pending("nonexistent") is False
+
+    def test_set_pending_rejects_queued(self) -> None:
+        """set_pending only works from AUTHENTICATING state."""
+        tracker = TaskTracker()
+        tracker.add_task("t", "T")
+        assert tracker.set_pending("t") is False
+        task = tracker.get_task("t")
+        assert task is not None
+        assert task.status == TaskStatus.QUEUED
 
     def test_complete_task_success(self) -> None:
         """Test completing a task successfully."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         before = time.time()
-        tracker.complete_task("abc12345", success=True, message_count=3)
+        tracker.complete_task(
+            "abc12345", CompletionReason.SUCCESS, message_count=3
+        )
         after = time.time()
 
         task = tracker.get_task("abc12345")
@@ -304,25 +427,38 @@ class TestTaskTracker:
         assert task.status == TaskStatus.COMPLETED
         assert task.completed_at is not None
         assert before <= task.completed_at <= after
-        assert task.success is True
+        assert task.completion_reason == CompletionReason.SUCCESS
+        assert task.succeeded is True
         assert task.message_count == 3
 
     def test_complete_task_failure(self) -> None:
         """Test completing a task with failure."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
-        tracker.complete_task("abc12345", success=False)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.EXECUTION_FAILED)
 
         task = tracker.get_task("abc12345")
         assert task is not None
         assert task.status == TaskStatus.COMPLETED
-        assert task.success is False
+        assert task.succeeded is False
 
     def test_complete_task_nonexistent(self) -> None:
-        """Test completing a non-existent task (no-op)."""
+        """Test completing a non-existent task returns False."""
         tracker = TaskTracker()
-        tracker.complete_task("nonexistent", success=True)  # Should not raise
+        result = tracker.complete_task("nonexistent", CompletionReason.SUCCESS)
+        assert result is False
+
+    def test_complete_task_from_queued_rejected(self) -> None:
+        """Completing a QUEUED task is rejected (invalid transition)."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        result = tracker.complete_task("abc12345", CompletionReason.SUCCESS)
+        assert result is False
+        task = tracker.get_task("abc12345")
+        assert task is not None
+        assert task.status == TaskStatus.QUEUED
 
     def test_get_task_nonexistent(self) -> None:
         """Test getting a non-existent task returns None."""
@@ -333,7 +469,8 @@ class TestTaskTracker:
         """Test updating a task ID successfully."""
         tracker = TaskTracker()
         tracker.add_task("new-12345678", "Test subject")
-        tracker.start_task("new-12345678")
+        tracker.set_authenticating("new-12345678")
+        tracker.set_executing("new-12345678")
 
         result = tracker.update_task_id("new-12345678", "abc12345")
 
@@ -342,8 +479,8 @@ class TestTaskTracker:
         task = tracker.get_task("abc12345")
         assert task is not None
         assert task.conversation_id == "abc12345"
-        assert task.subject == "Test subject"
-        assert task.status == TaskStatus.IN_PROGRESS
+        assert task.display_title == "Test subject"
+        assert task.status == TaskStatus.EXECUTING
 
     def test_update_task_id_old_not_found(self) -> None:
         """Test updating task ID when old ID doesn't exist."""
@@ -370,7 +507,8 @@ class TestTaskTracker:
         """Test reassigning a temp task to a new conv_id (rename)."""
         tracker = TaskTracker()
         tracker.add_task("new-12345678", "Test subject", sender="user@ex.com")
-        tracker.start_task("new-12345678")
+        tracker.set_authenticating("new-12345678")
+        tracker.set_executing("new-12345678")
 
         result = tracker.reassign_task("new-12345678", "abc12345")
 
@@ -379,9 +517,9 @@ class TestTaskTracker:
         task = tracker.get_task("abc12345")
         assert task is not None
         assert task.conversation_id == "abc12345"
-        assert task.subject == "Test subject"
+        assert task.display_title == "Test subject"
         assert task.sender == "user@ex.com"
-        assert task.status == TaskStatus.IN_PROGRESS
+        assert task.status == TaskStatus.EXECUTING
 
     def test_reassign_task_merge_with_existing(self) -> None:
         """Test reassigning temp task to an existing completed conv_id."""
@@ -389,15 +527,17 @@ class TestTaskTracker:
 
         # Existing completed task
         tracker.add_task("abc12345", "Original subject", sender="old@ex.com")
-        tracker.start_task("abc12345")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
         existing_task = tracker.get_task("abc12345")
         assert existing_task is not None
         original_msg_count = existing_task.message_count
 
-        # New temp task (in progress)
+        # New temp task (executing)
         tracker.add_task("new-temp", "Follow-up", sender="new@ex.com")
-        tracker.start_task("new-temp")
+        tracker.set_authenticating("new-temp")
+        tracker.set_executing("new-temp")
 
         result = tracker.reassign_task("new-temp", "abc12345")
 
@@ -406,11 +546,11 @@ class TestTaskTracker:
         task = tracker.get_task("abc12345")
         assert task is not None
         # State should be transferred from temp task
-        assert task.status == TaskStatus.IN_PROGRESS
-        assert task.subject == "Follow-up"
+        assert task.status == TaskStatus.EXECUTING
+        assert task.display_title == "Follow-up"
         assert task.sender == "new@ex.com"
         assert task.completed_at is None
-        assert task.success is None
+        assert task.completion_reason is None
         assert task.message_count == original_msg_count + 1
 
     def test_reassign_task_merge_transfers_model(self) -> None:
@@ -418,11 +558,13 @@ class TestTaskTracker:
         tracker = TaskTracker()
 
         tracker.add_task("abc12345", "Original")
-        tracker.start_task("abc12345")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         tracker.add_task("new-temp", "Follow-up", model="opus")
-        tracker.start_task("new-temp")
+        tracker.set_authenticating("new-temp")
+        tracker.set_executing("new-temp")
 
         tracker.reassign_task("new-temp", "abc12345")
 
@@ -451,47 +593,50 @@ class TestTaskTracker:
 
         assert clock.version > version_before
 
-    def test_update_task_subject_success(self) -> None:
-        """Test updating a task's subject."""
+    def test_update_task_display_title_success(self) -> None:
+        """Test updating a task's display title."""
         tracker = TaskTracker()
         tracker.add_task("new-12345678", "(authenticating)")
-        tracker.start_task("new-12345678")
+        tracker.set_authenticating("new-12345678")
+        tracker.set_executing("new-12345678")
 
-        result = tracker.update_task_subject(
-            "new-12345678", "Fix the login bug", sender="user@example.com"
+        result = tracker.update_task_display_title(
+            "new-12345678",
+            "Fix the login bug",
+            sender="user@example.com",
         )
 
         assert result is True
         task = tracker.get_task("new-12345678")
         assert task is not None
-        assert task.subject == "Fix the login bug"
+        assert task.display_title == "Fix the login bug"
         assert task.sender == "user@example.com"
 
-    def test_update_task_subject_without_sender(self) -> None:
-        """Test updating subject without changing sender."""
+    def test_update_task_display_title_without_sender(self) -> None:
+        """Test updating display title without changing sender."""
         tracker = TaskTracker()
         tracker.add_task(
             "abc12345", "(authenticating)", sender="original@example.com"
         )
 
-        result = tracker.update_task_subject("abc12345", "New subject")
+        result = tracker.update_task_display_title("abc12345", "New subject")
 
         assert result is True
         task = tracker.get_task("abc12345")
         assert task is not None
-        assert task.subject == "New subject"
+        assert task.display_title == "New subject"
         assert task.sender == "original@example.com"  # Preserved
 
-    def test_update_task_subject_nonexistent(self) -> None:
-        """Test updating subject on non-existent task."""
+    def test_update_task_display_title_nonexistent(self) -> None:
+        """Test updating display title on non-existent task."""
         tracker = TaskTracker()
 
-        result = tracker.update_task_subject("nonexistent", "Subject")
+        result = tracker.update_task_display_title("nonexistent", "Subject")
 
         assert result is False
 
-    def test_update_task_subject_ticks_clock(self) -> None:
-        """Test that update_task_subject ticks the version clock."""
+    def test_update_task_display_title_ticks_clock(self) -> None:
+        """Test that update_task_display_title ticks the version clock."""
         from airut.dashboard.versioned import VersionClock
 
         clock = VersionClock()
@@ -499,7 +644,7 @@ class TestTaskTracker:
         tracker.add_task("abc12345", "(authenticating)")
         version_before = clock.version
 
-        tracker.update_task_subject("abc12345", "Real subject")
+        tracker.update_task_display_title("abc12345", "Real subject")
 
         assert clock.version > version_before
 
@@ -530,11 +675,29 @@ class TestTaskTracker:
 
         assert tracker.is_task_active("abc12345") is True
 
-    def test_is_task_active_in_progress(self) -> None:
-        """Test is_task_active returns True for in-progress task."""
+    def test_is_task_active_executing(self) -> None:
+        """Test is_task_active returns True for executing task."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+
+        assert tracker.is_task_active("abc12345") is True
+
+    def test_is_task_active_authenticating(self) -> None:
+        """Test is_task_active returns True for authenticating task."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.set_authenticating("abc12345")
+
+        assert tracker.is_task_active("abc12345") is True
+
+    def test_is_task_active_pending(self) -> None:
+        """Test is_task_active returns True for pending task."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.set_authenticating("abc12345")
+        tracker.set_pending("abc12345")
 
         assert tracker.is_task_active("abc12345") is True
 
@@ -542,8 +705,9 @@ class TestTaskTracker:
         """Test is_task_active returns False for completed task."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         assert tracker.is_task_active("abc12345") is False
 
@@ -559,13 +723,19 @@ class TestTaskTracker:
 
         # Add tasks with explicit timestamps to control ordering
         tracker._tasks["first"] = TaskState(
-            conversation_id="first", subject="First", queued_at=1000.0
+            conversation_id="first",
+            display_title="First",
+            queued_at=1000.0,
         )
         tracker._tasks["second"] = TaskState(
-            conversation_id="second", subject="Second", queued_at=2000.0
+            conversation_id="second",
+            display_title="Second",
+            queued_at=2000.0,
         )
         tracker._tasks["middle"] = TaskState(
-            conversation_id="middle", subject="Middle", queued_at=1500.0
+            conversation_id="middle",
+            display_title="Middle",
+            queued_at=1500.0,
         )
 
         tasks = tracker.get_all_tasks()
@@ -581,19 +751,21 @@ class TestTaskTracker:
         # Add tasks in different states
         tracker.add_task("queued1", "Queued 1")
         tracker.add_task("queued2", "Queued 2")
-        tracker.add_task("progress1", "Progress 1")
-        tracker.start_task("progress1")
+        tracker.add_task("exec1", "Exec 1")
+        tracker.set_authenticating("exec1")
+        tracker.set_executing("exec1")
         tracker.add_task("done1", "Done 1")
-        tracker.start_task("done1")
-        tracker.complete_task("done1", success=True)
+        tracker.set_authenticating("done1")
+        tracker.set_executing("done1")
+        tracker.complete_task("done1", CompletionReason.SUCCESS)
 
         queued = tracker.get_tasks_by_status(TaskStatus.QUEUED)
         assert len(queued) == 2
         assert {t.conversation_id for t in queued} == {"queued1", "queued2"}
 
-        in_progress = tracker.get_tasks_by_status(TaskStatus.IN_PROGRESS)
-        assert len(in_progress) == 1
-        assert in_progress[0].conversation_id == "progress1"
+        executing = tracker.get_tasks_by_status(TaskStatus.EXECUTING)
+        assert len(executing) == 1
+        assert executing[0].conversation_id == "exec1"
 
         completed = tracker.get_tasks_by_status(TaskStatus.COMPLETED)
         assert len(completed) == 1
@@ -606,15 +778,19 @@ class TestTaskTracker:
         tracker.add_task("q1", "Q1")
         tracker.add_task("q2", "Q2")
         tracker.add_task("p1", "P1")
-        tracker.start_task("p1")
+        tracker.set_authenticating("p1")
+        tracker.set_executing("p1")
         tracker.add_task("c1", "C1")
-        tracker.start_task("c1")
-        tracker.complete_task("c1", success=True)
+        tracker.set_authenticating("c1")
+        tracker.set_executing("c1")
+        tracker.complete_task("c1", CompletionReason.SUCCESS)
 
         counts = tracker.get_counts()
         assert counts == {
             "queued": 2,
-            "in_progress": 1,
+            "authenticating": 0,
+            "pending": 0,
+            "executing": 1,
             "completed": 1,
         }
 
@@ -626,12 +802,12 @@ class TestTaskTracker:
         for i in range(5):
             tracker._tasks[f"task{i}"] = TaskState(
                 conversation_id=f"task{i}",
-                subject=f"Task {i}",
+                display_title=f"Task {i}",
                 queued_at=1000.0 + i,
                 started_at=1001.0 + i,
                 completed_at=1002.0 + i,
                 status=TaskStatus.COMPLETED,
-                success=True,
+                completion_reason=CompletionReason.SUCCESS,
             )
             tracker._evict_old_completed()
 
@@ -651,8 +827,9 @@ class TestTaskTracker:
                 for i in range(10):
                     task_id = f"task{start_id}_{i}"
                     tracker.add_task(task_id, f"Subject {task_id}")
-                    tracker.start_task(task_id)
-                    tracker.complete_task(task_id, success=True)
+                    tracker.set_authenticating(task_id)
+                    tracker.set_executing(task_id)
+                    tracker.complete_task(task_id, CompletionReason.SUCCESS)
                     tracker.get_task(task_id)
                     tracker.get_all_tasks()
                     tracker.get_counts()
@@ -669,26 +846,28 @@ class TestTaskTracker:
         assert len(errors) == 0
 
     def test_wait_for_completion_already_completed(self) -> None:
-        """Test wait_for_completion returns immediately if already completed."""
+        """Test wait_for_completion returns immediately if completed."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
-        tracker.complete_task("abc12345", success=True)
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         task = tracker.wait_for_completion("abc12345", timeout=1.0)
         assert task is not None
         assert task.status == TaskStatus.COMPLETED
-        assert task.success is True
+        assert task.succeeded is True
 
     def test_wait_for_completion_blocks_until_complete(self) -> None:
-        """Test wait_for_completion blocks and returns when task completes."""
+        """Test wait_for_completion blocks and returns on completion."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         def complete_later() -> None:
             time.sleep(0.1)
-            tracker.complete_task("abc12345", success=True)
+            tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         t = threading.Thread(target=complete_later)
         t.start()
@@ -698,17 +877,18 @@ class TestTaskTracker:
 
         assert task is not None
         assert task.status == TaskStatus.COMPLETED
-        assert task.success is True
+        assert task.succeeded is True
 
     def test_wait_for_completion_timeout(self) -> None:
         """Test wait_for_completion returns on timeout."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
 
         task = tracker.wait_for_completion("abc12345", timeout=0.1)
         assert task is not None
-        assert task.status == TaskStatus.IN_PROGRESS
+        assert task.status == TaskStatus.EXECUTING
 
     def test_wait_for_completion_nonexistent(self) -> None:
         """Test wait_for_completion returns None for non-existent task."""
@@ -722,7 +902,8 @@ class TestTaskTracker:
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
         tracker.add_task("t2", "Task 2")
-        tracker.start_task("t2")
+        tracker.set_authenticating("t2")
+        tracker.set_executing("t2")
 
         snap = tracker.get_snapshot()
         assert snap.version > 0
@@ -731,8 +912,8 @@ class TestTaskTracker:
         assert snap.value[0].conversation_id == "t2"
         assert snap.value[1].conversation_id == "t1"
         # Copies are independent of tracker state
-        tracker.complete_task("t2", success=True)
-        assert snap.value[0].status == TaskStatus.IN_PROGRESS
+        tracker.complete_task("t2", CompletionReason.SUCCESS)
+        assert snap.value[0].status == TaskStatus.EXECUTING
 
     def test_get_snapshot_empty(self) -> None:
         """Test get_snapshot with no tasks."""
@@ -805,14 +986,15 @@ class TestTaskTracker:
 
     def test_task_state_todos_default_none(self) -> None:
         """Test TaskState.todos defaults to None."""
-        task = TaskState(conversation_id="abc", subject="Test")
+        task = TaskState(conversation_id="abc", display_title="Test")
         assert task.todos is None
 
     def test_complete_task_clears_todos(self) -> None:
         """Test that completing a task clears its todos."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
         tracker.update_todos(
             "abc12345",
             [TodoItem(content="Step 1", status=TodoStatus.IN_PROGRESS)],
@@ -823,7 +1005,7 @@ class TestTaskTracker:
         assert task is not None
         assert task.todos is not None
 
-        tracker.complete_task("abc12345", success=True)
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
 
         task = tracker.get_task("abc12345")
         assert task is not None
@@ -833,7 +1015,8 @@ class TestTaskTracker:
         """Test that a failed task also clears its todos."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
-        tracker.start_task("abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
         tracker.update_todos(
             "abc12345",
             [
@@ -842,11 +1025,28 @@ class TestTaskTracker:
             ],
         )
 
-        tracker.complete_task("abc12345", success=False)
+        tracker.complete_task("abc12345", CompletionReason.EXECUTION_FAILED)
 
         task = tracker.get_task("abc12345")
         assert task is not None
         assert task.todos is None
+
+    def test_complete_task_with_detail(self) -> None:
+        """Test completing a task with a detail string."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task(
+            "abc12345",
+            CompletionReason.TIMEOUT,
+            detail="timeout after 300s",
+        )
+
+        task = tracker.get_task("abc12345")
+        assert task is not None
+        assert task.completion_reason == CompletionReason.TIMEOUT
+        assert task.completion_detail == "timeout after 300s"
 
 
 class TestTodoItem:
@@ -890,5 +1090,21 @@ class TestTaskStatus:
     def test_status_values(self) -> None:
         """Test TaskStatus has expected values."""
         assert TaskStatus.QUEUED.value == "queued"
-        assert TaskStatus.IN_PROGRESS.value == "in_progress"
+        assert TaskStatus.AUTHENTICATING.value == "authenticating"
+        assert TaskStatus.PENDING.value == "pending"
+        assert TaskStatus.EXECUTING.value == "executing"
         assert TaskStatus.COMPLETED.value == "completed"
+
+
+class TestCompletionReason:
+    """Tests for CompletionReason enum."""
+
+    def test_reason_values(self) -> None:
+        """Test CompletionReason has expected values."""
+        assert CompletionReason.SUCCESS.value == "success"
+        assert CompletionReason.AUTH_FAILED.value == "auth_failed"
+        assert CompletionReason.UNAUTHORIZED.value == "unauthorized"
+        assert CompletionReason.EXECUTION_FAILED.value == "execution_failed"
+        assert CompletionReason.TIMEOUT.value == "timeout"
+        assert CompletionReason.INTERNAL_ERROR.value == "internal_error"
+        assert CompletionReason.REJECTED.value == "rejected"

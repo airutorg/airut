@@ -8,16 +8,16 @@
 These tests validate that the task tracker correctly reflects task state
 throughout all major gateway scenarios:
 
-1. New conversation: queued → in_progress → completed (success)
+1. New conversation: queued → executing → completed (success)
 2. Conversation resume: existing completed task transitions back through
-   in_progress → completed
+   executing → completed
 3. Unauthorized sender: task appears with "(not authorized)" and completes
    as failed
 4. Execution error: task tracks failure correctly
 5. Concurrent messages: multiple tasks tracked independently
 6. Dashboard /api/tracker endpoint returns correct state
 7. Model tracking: model is recorded in tracker
-8. Task subject and sender are updated after authentication
+8. Task display_title and sender are updated after authentication
 """
 
 import json
@@ -72,11 +72,11 @@ class TestTaskTrackerNewConversation:
         create_email,
         extract_conversation_id,
     ) -> None:
-        """Tracker transitions: queued → in_progress → completed.
+        """Tracker transitions: queued → executing → completed.
 
         Validates:
-        - Task is created with correct subject and sender
-        - Task transitions to completed with success=True
+        - Task is created with correct display_title and sender
+        - Task transitions to completed with succeeded=True
         - Conversation ID in tracker matches email subject ID
         - Message count is 1 for new conversation
         - Model is recorded in tracker
@@ -116,9 +116,9 @@ events = [
 
             # Validate final task state
             assert task.status == TaskStatus.COMPLETED
-            assert task.success is True
+            assert task.succeeded is True
             assert task.conversation_id == conv_id
-            assert "Track this task" in task.subject
+            assert "Track this task" in task.display_title
             assert task.sender == "user@test.local"
             assert task.message_count == 1
             assert task.model is not None  # Model should be set
@@ -130,23 +130,23 @@ events = [
             # Validate counts
             counts = service.tracker.get_counts()
             assert counts["completed"] >= 1
-            assert counts["in_progress"] == 0
+            assert counts["executing"] == 0
             assert counts["queued"] == 0
 
         finally:
             service.stop()
             service_thread.join(timeout=10.0)
 
-    def test_task_subject_updated_from_authenticating(
+    def test_task_display_title_updated_from_authenticating(
         self,
         integration_env: IntegrationEnvironment,
         create_email,
         extract_conversation_id,
     ) -> None:
-        """Task subject updates from '(authenticating)' to real subject.
+        """Task display_title updates from '(authenticating)' to real title.
 
         This was a regression in the protocol-agnostic decoupling where tasks
-        would remain stuck with '(authenticating)' as the subject forever.
+        would remain stuck with '(authenticating)' as the display_title forever.
         """
         mock_code = """
 events = [
@@ -156,7 +156,7 @@ events = [
 ]
 """
         msg = create_email(
-            subject="Verify subject update",
+            subject="Verify display_title update",
             body=mock_code,
         )
         integration_env.email_server.inject_message(msg)
@@ -179,11 +179,11 @@ events = [
             task = service.tracker.wait_for_completion(conv_id, timeout=5.0)
             assert task is not None
 
-            # CRITICAL: Subject must NOT be "(authenticating)"
-            assert task.subject != "(authenticating)", (
-                "Task subject was never updated from placeholder"
+            # CRITICAL: display_title must NOT be "(authenticating)"
+            assert task.display_title != "(authenticating)", (
+                "Task display_title was never updated from placeholder"
             )
-            assert "Verify subject update" in task.subject
+            assert "Verify display_title update" in task.display_title
 
             # Sender must be set
             assert task.sender == "user@test.local"
@@ -243,7 +243,7 @@ events = [
                 conv_id, timeout=5.0
             )
             assert task_after_first is not None
-            assert task_after_first.success is True
+            assert task_after_first.succeeded is True
             assert task_after_first.message_count == 1
 
             # Clear outbox for second message
@@ -278,7 +278,7 @@ events = [
                 conv_id, timeout=5.0
             )
             assert task_after_resume is not None
-            assert task_after_resume.success is True
+            assert task_after_resume.succeeded is True
 
             # CRITICAL: message_count should be 2 after resume
             assert task_after_resume.message_count == 2, (
@@ -313,8 +313,8 @@ class TestTaskTrackerUnauthorized:
         """Test that unauthorized sender creates a failed task with sender info.
 
         This was a regression where unauthorized senders were invisible in
-        the dashboard because the task stayed with '(authenticating)' and
-        no sender.
+        the dashboard because the task stayed with '(authenticating)' as
+        display_title and no sender.
         """
         msg = create_email(
             subject="Unauthorized request",
@@ -342,33 +342,33 @@ class TestTaskTrackerUnauthorized:
                     for t in tasks
                     if t.status == TaskStatus.COMPLETED
                     and (
-                        t.subject == "(not authorized)"
+                        t.display_title == "(not authorized)"
                         or t.sender == "hacker@evil.com"
                     )
                 ],
             )
             assert auth_tasks, "No auth rejection task found. Tasks: " + repr(
                 [
-                    (t.conversation_id, t.subject, t.sender)
+                    (t.conversation_id, t.display_title, t.sender)
                     for t in service.tracker.get_all_tasks()
                 ]
             )
 
             task = auth_tasks[0]
 
-            # CRITICAL: Task should be completed (not stuck in_progress)
+            # CRITICAL: Task should be completed (not stuck executing)
             assert task.status == TaskStatus.COMPLETED, (
                 f"Auth failure task stuck in {task.status.value}"
             )
-            assert task.success is False
+            assert task.succeeded is False
 
             # CRITICAL: Sender should be visible for security auditing
             assert task.sender == "hacker@evil.com", (
                 f"Sender not recorded: {task.sender!r}"
             )
 
-            # Subject should indicate rejection
-            assert task.subject == "(not authorized)"
+            # display_title should indicate rejection
+            assert task.display_title == "(not authorized)"
 
         finally:
             service.stop()
@@ -405,18 +405,18 @@ class TestTaskTrackerUnauthorized:
                     t
                     for t in tasks
                     if t.status == TaskStatus.COMPLETED
-                    and t.subject == "(not authorized)"
+                    and t.display_title == "(not authorized)"
                 ],
             )
             assert auth_tasks, "No DMARC rejection task found. Tasks: " + repr(
                 [
-                    (t.conversation_id, t.subject, t.sender)
+                    (t.conversation_id, t.display_title, t.sender)
                     for t in service.tracker.get_all_tasks()
                 ]
             )
 
             task = auth_tasks[0]
-            assert task.success is False
+            assert task.succeeded is False
 
         finally:
             service.stop()
@@ -458,8 +458,8 @@ sys.exit(1)
                 task = service.tracker.wait_for_completion(conv_id, timeout=5.0)
                 assert task is not None
                 assert task.status == TaskStatus.COMPLETED
-                assert task.success is False
-                assert task.subject == "Crash test task"
+                assert task.succeeded is False
+                assert task.display_title == "Crash test task"
                 assert task.sender == "user@test.local"
 
         finally:
@@ -582,7 +582,7 @@ events = [
                 "Expected at least 2 completed tasks. "
                 + repr(
                     [
-                        (t.conversation_id, t.subject)
+                        (t.conversation_id, t.display_title)
                         for t in service.tracker.get_all_tasks()
                     ]
                 )
@@ -670,16 +670,16 @@ events = [
 
                 # Validate task data
                 assert api_task["status"] == "completed"
-                assert api_task["success"] is True
+                assert api_task["completion_reason"] == "success"
                 assert api_task["sender"] == "user@test.local"
-                assert api_task["subject"] == "API tracker test"
+                assert api_task["display_title"] == "API tracker test"
                 assert api_task["message_count"] == 1
                 assert api_task["model"] is not None
                 assert api_task["repo_id"] == "test"
 
                 # Validate counts match
                 assert data["counts"]["completed"] >= 1
-                assert data["counts"]["in_progress"] == 0
+                assert data["counts"]["executing"] == 0
                 assert data["counts"]["queued"] == 0
 
                 # Test /api/conversations endpoint matches
@@ -871,16 +871,16 @@ events = [
 class TestTaskTrackerNoStuckTasks:
     """Test that tasks never get stuck in intermediate states."""
 
-    def test_no_tasks_stuck_in_queued_or_in_progress(
+    def test_no_tasks_stuck_in_queued_or_executing(
         self,
         integration_env: IntegrationEnvironment,
         create_email,
     ) -> None:
-        """Test that after processing, no tasks remain queued or in_progress.
+        """Test that after processing, no tasks remain queued or executing.
 
         Sends multiple messages (including one that will fail) and verifies
         that all end up in COMPLETED state — none stuck in QUEUED or
-        IN_PROGRESS.
+        EXECUTING.
         """
         # Good message
         good_code = """
@@ -928,13 +928,13 @@ events = [
             stuck_tasks = [
                 t
                 for t in all_tasks
-                if t.status in (TaskStatus.QUEUED, TaskStatus.IN_PROGRESS)
+                if t.status in (TaskStatus.QUEUED, TaskStatus.EXECUTING)
             ]
             assert len(stuck_tasks) == 0, (
                 "Tasks stuck in non-terminal state: "
                 + repr(
                     [
-                        (t.conversation_id, t.subject, t.status.value)
+                        (t.conversation_id, t.display_title, t.status.value)
                         for t in stuck_tasks
                     ]
                 )
@@ -943,7 +943,7 @@ events = [
             # All tasks should be completed
             for t in all_tasks:
                 assert t.status == TaskStatus.COMPLETED, (
-                    f"Task {t.conversation_id} ({t.subject}) "
+                    f"Task {t.conversation_id} ({t.display_title}) "
                     f"not completed: {t.status.value}"
                 )
 

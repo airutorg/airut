@@ -225,7 +225,7 @@ class EmailChannelAdapter(ChannelAdapter):
             body=clean_body,
             conversation_id=conv_id,
             model_hint=model_hint,
-            subject=subject or "(no subject)",
+            display_title=subject or "(no subject)",
             channel_context=channel_context,
             original_message_id=email_msg.get("Message-ID"),
             original_references=references,

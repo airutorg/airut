@@ -8,7 +8,7 @@
 import html
 import re
 
-from airut.dashboard.tracker import TaskState, TaskStatus
+from airut.dashboard.tracker import ACTIVE_STATUSES, TaskState
 from airut.dashboard.views.styles import network_styles
 
 
@@ -34,7 +34,7 @@ def render_network_page(
     Returns:
         HTML string for network logs page.
     """
-    escaped_subject = html.escape(task.subject)
+    escaped_title = html.escape(task.display_title)
 
     # Build network logs content
     if log_content is None:
@@ -44,7 +44,7 @@ def render_network_page(
     else:
         logs_html = render_network_log_lines(log_content)
 
-    is_active = task.status in (TaskStatus.QUEUED, TaskStatus.IN_PROGRESS)
+    is_active = task.status in ACTIVE_STATUSES
     sse_script = (
         _sse_network_script(task.conversation_id, network_log_offset)
         if is_active
@@ -71,7 +71,7 @@ def render_network_page(
     <div class="header">
         <a href="/conversation/{task.conversation_id}">&larr; Back</a>
         <h1>Network Logs: {task.conversation_id}</h1>
-        <span class="subtitle">{escaped_subject}</span>
+        <span class="subtitle">{escaped_title}</span>
     </div>
     <div class="terminal" id="logs-container">
         {logs_html}

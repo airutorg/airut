@@ -14,6 +14,7 @@ import pytest
 
 from airut.claude_output import StreamEvent, parse_stream_events
 from airut.claude_output.types import Usage
+from airut.dashboard.tracker import CompletionReason
 from airut.gateway.channel import ParsedMessage
 from airut.gateway.config import RepoConfig
 from airut.gateway.service import build_recovery_prompt
@@ -341,11 +342,11 @@ class TestProcessMessage:
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(
+            reason, conv_id = process_message(
                 svc, parsed, "task1", handler, adapter
             )
 
-        assert success is True
+        assert reason == CompletionReason.SUCCESS
         assert conv_id == "conv1"
         adapter.send_reply.assert_called_once()
 
@@ -355,10 +356,10 @@ class TestProcessMessage:
         svc, handler, _, adapter = self._setup_svc(email_config, tmp_path)
         parsed = _make_parsed_message(body="")
 
-        success, conv_id = process_message(
+        reason, conv_id = process_message(
             svc, parsed, "task1", handler, adapter
         )
-        assert success is False
+        assert reason != CompletionReason.SUCCESS
         adapter.send_error.assert_called_once()
 
     def test_execution_failure(self, email_config: Any, tmp_path: Path) -> None:
@@ -385,10 +386,10 @@ class TestProcessMessage:
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(
+            reason, conv_id = process_message(
                 svc, parsed, "task1", handler, adapter
             )
-        assert success is False
+        assert reason == CompletionReason.EXECUTION_FAILED
         assert conv_id == "conv1"
 
     def test_container_timeout(self, email_config: Any, tmp_path: Path) -> None:
@@ -402,10 +403,10 @@ class TestProcessMessage:
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(
+            reason, conv_id = process_message(
                 svc, parsed, "task1", handler, adapter
             )
-        assert success is False
+        assert reason == CompletionReason.TIMEOUT
 
     def test_git_clone_error(self, email_config: Any, tmp_path: Path) -> None:
         from airut.gateway import GitCloneError
@@ -415,10 +416,10 @@ class TestProcessMessage:
             "clone failed"
         )
         parsed = _make_parsed_message(body="Do something")
-        success, conv_id = process_message(
+        reason, conv_id = process_message(
             svc, parsed, "task1", handler, adapter
         )
-        assert success is False
+        assert reason != CompletionReason.SUCCESS
         assert conv_id is None
 
     def test_unexpected_error(self, email_config: Any, tmp_path: Path) -> None:
@@ -430,10 +431,10 @@ class TestProcessMessage:
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(
+            reason, conv_id = process_message(
                 svc, parsed, "task1", handler, adapter
             )
-        assert success is False
+        assert reason == CompletionReason.INTERNAL_ERROR
 
     def test_resume_existing_conversation(
         self, email_config: Any, tmp_path: Path
@@ -453,10 +454,10 @@ class TestProcessMessage:
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(
+            reason, conv_id = process_message(
                 svc, parsed, "conv1", handler, adapter
             )
-        assert success is True
+        assert reason == CompletionReason.SUCCESS
         # Mirror should be updated before resuming
         handler.conversation_manager.mirror.update_mirror.assert_called_once()
         # Should not send acknowledgment for resumed conversations
@@ -635,8 +636,8 @@ class TestProcessMessage:
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, _ = process_message(svc, parsed, "task1", handler, adapter)
-        assert success is False
+            reason, _ = process_message(svc, parsed, "task1", handler, adapter)
+        assert reason == CompletionReason.EXECUTION_FAILED
         # Check that reply uses the short error format via adapter
         call_args = adapter.send_reply.call_args
         response_text = call_args[0][2]  # 3rd positional arg
@@ -661,8 +662,8 @@ class TestProcessMessage:
                 return_value="Error summary text",
             ),
         ):
-            success, _ = process_message(svc, parsed, "task1", handler, adapter)
-        assert success is False
+            reason, _ = process_message(svc, parsed, "task1", handler, adapter)
+        assert reason == CompletionReason.EXECUTION_FAILED
         # Claude output is included when error_summary exists
         call_args = adapter.send_reply.call_args
         response_text = call_args[0][2]  # 3rd positional arg
@@ -699,11 +700,11 @@ class TestProcessMessage:
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(
+            reason, conv_id = process_message(
                 svc, parsed, "task1", handler, adapter
             )
 
-        assert success is False
+        assert reason == CompletionReason.EXECUTION_FAILED
         mock_cs.add_reply.assert_called_once()
         call_args = mock_cs.add_reply.call_args
         assert call_args[0][0] == "conv1"  # conversation_id
@@ -722,11 +723,11 @@ class TestProcessMessage:
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(
+            reason, conv_id = process_message(
                 svc, parsed, "task1", handler, adapter
             )
 
-        assert success is False
+        assert reason != CompletionReason.SUCCESS
         mock_cs.add_reply.assert_called_once()
         call_args = mock_cs.add_reply.call_args
         assert call_args[0][0] == "conv1"  # conversation_id
@@ -743,11 +744,11 @@ class TestProcessMessage:
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(
+            reason, conv_id = process_message(
                 svc, parsed, "task1", handler, adapter
             )
 
-        assert success is False
+        assert reason != CompletionReason.SUCCESS
         mock_cs.add_reply.assert_called_once()
         call_args = mock_cs.add_reply.call_args
         assert call_args[0][0] == "conv1"  # conversation_id
@@ -765,11 +766,11 @@ class TestProcessMessage:
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(
+            reason, conv_id = process_message(
                 svc, parsed, "task1", handler, adapter
             )
 
-        assert success is False
+        assert reason != CompletionReason.SUCCESS
         assert conv_id == "conv1"
 
     def test_prompt_too_long_retries_with_new_session(
@@ -831,11 +832,11 @@ class TestProcessMessage:
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(
+            reason, conv_id = process_message(
                 svc, parsed, "task1", handler, adapter
             )
 
-        assert success is True
+        assert reason == CompletionReason.SUCCESS
         # Should have created two tasks: first attempt + retry
         assert svc.sandbox.create_task.call_count == 2
         # First task: called with session_id
@@ -867,11 +868,11 @@ class TestProcessMessage:
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(
+            reason, conv_id = process_message(
                 svc, parsed, "task1", handler, adapter
             )
 
-        assert success is False
+        assert reason != CompletionReason.SUCCESS
         # Should only create one task (no retry)
         assert svc.sandbox.create_task.call_count == 1
 
@@ -934,11 +935,11 @@ class TestProcessMessage:
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(
+            reason, conv_id = process_message(
                 svc, parsed, "task1", handler, adapter
             )
 
-        assert success is True
+        assert reason == CompletionReason.SUCCESS
         assert svc.sandbox.create_task.call_count == 2
         first_call = mock_task1.execute.call_args
         assert first_call[1]["session_id"] == "old-session-id"
@@ -964,11 +965,11 @@ class TestProcessMessage:
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_cs,
         ):
-            success, conv_id = process_message(
+            reason, conv_id = process_message(
                 svc, parsed, "task1", handler, adapter
             )
 
-        assert success is False
+        assert reason != CompletionReason.SUCCESS
         # Should only create one task (no retry)
         assert svc.sandbox.create_task.call_count == 1
 
@@ -1051,11 +1052,11 @@ class TestBuildImageErrors:
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_ss,
         ):
-            success, conv_id = process_message(
+            reason, conv_id = process_message(
                 svc, parsed, "task1", handler, adapter
             )
 
-        assert success is False
+        assert reason != CompletionReason.SUCCESS
         assert conv_id == "conv1"
         # Error reply should be sent via adapter
         adapter.send_error.assert_called_once()
@@ -1080,11 +1081,11 @@ class TestBuildImageErrors:
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_ss,
         ):
-            success, conv_id = process_message(
+            reason, conv_id = process_message(
                 svc, parsed, "task1", handler, adapter
             )
 
-        assert success is False
+        assert reason != CompletionReason.SUCCESS
         assert conv_id == "conv1"
         adapter.send_error.assert_called_once()
         error_msg = adapter.send_error.call_args[0][2]
@@ -1109,11 +1110,11 @@ class TestBuildImageErrors:
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_ss,
         ):
-            success, conv_id = process_message(
+            reason, conv_id = process_message(
                 svc, parsed, "task1", handler, adapter
             )
 
-        assert success is False
+        assert reason != CompletionReason.SUCCESS
         assert conv_id == "conv1"
         adapter.send_error.assert_called_once()
         error_msg = adapter.send_error.call_args[0][2]
@@ -1195,11 +1196,11 @@ class TestAllowlistParseError:
             "airut.gateway.service.message_processing.ConversationStore",
             return_value=mock_ss,
         ):
-            success, conv_id = process_message(
+            reason, conv_id = process_message(
                 svc, parsed, "task1", handler, adapter
             )
 
-        assert success is False
+        assert reason != CompletionReason.SUCCESS
         assert conv_id == "conv1"
         adapter.send_error.assert_called_once()
         error_msg = adapter.send_error.call_args[0][2]
@@ -1299,11 +1300,11 @@ class TestConvertReplacementMap:
                 return_value=mock_ss,
             ),
         ):
-            success, conv_id = process_message(
+            reason, conv_id = process_message(
                 svc, parsed, "task1", handler, adapter
             )
 
-        assert success is True
+        assert reason == CompletionReason.SUCCESS
         assert conv_id == "conv1"
 
         # Verify NetworkSandboxConfig was passed to create_task

@@ -231,7 +231,7 @@ class TestPollingLoop:
         assert isinstance(raw_msg, RawMessage)
         assert raw_msg.content is msg
         assert raw_msg.sender == "user@example.com"
-        assert raw_msg.subject == "Test"
+        assert raw_msg.display_title == "Test"
 
     def test_reconnects_on_imap_error(self) -> None:
         """Polling loop reconnects on IMAPConnectionError."""
@@ -718,7 +718,7 @@ class TestFullLifecycle:
             cl._thread.join(timeout=5)
 
         assert len(received_messages) == 1
-        assert received_messages[0].subject == "Tracked"
+        assert received_messages[0].display_title == "Tracked"
         assert received_messages[0].content is msg
 
         cl.stop()

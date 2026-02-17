@@ -116,7 +116,7 @@ events = [
             task = service.tracker.wait_for_completion(conv_id, timeout=5.0)
             assert task is not None, f"Task {conv_id} not completed"
             assert task.status == TaskStatus.COMPLETED
-            assert task.success is True
+            assert task.succeeded is True
 
             # CRITICAL: Todos must be cleared after completion
             assert task.todos is None, (
@@ -196,7 +196,7 @@ sys.exit(1)
                 task = service.tracker.wait_for_completion(conv_id, timeout=5.0)
                 assert task is not None
                 assert task.status == TaskStatus.COMPLETED
-                assert task.success is False
+                assert task.succeeded is False
 
                 # CRITICAL: Todos must be cleared even on failure
                 assert task.todos is None, (
@@ -273,7 +273,7 @@ events = [
                 conv_id, timeout=5.0
             )
             assert task_after_first is not None
-            assert task_after_first.success is True
+            assert task_after_first.succeeded is True
 
             # CRITICAL: Todos must be cleared after first completion
             assert task_after_first.todos is None, (
@@ -314,7 +314,7 @@ events = [
                 conv_id, timeout=5.0
             )
             assert task_after_resume is not None
-            assert task_after_resume.success is True
+            assert task_after_resume.succeeded is True
             assert task_after_resume.message_count == 2
 
             # CRITICAL: No stale todos from previous execution

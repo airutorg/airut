@@ -31,7 +31,12 @@ from airut.conversation import (
     create_conversation_layout,
     prepare_conversation,
 )
-from airut.dashboard.tracker import TaskTracker, TodoItem, TodoStatus
+from airut.dashboard.tracker import (
+    CompletionReason,
+    TaskTracker,
+    TodoItem,
+    TodoStatus,
+)
 from airut.gateway.channel import ChannelAdapter, ParsedMessage
 from airut.gateway.config import ReplacementMap, RepoConfig
 from airut.gateway.conversation import GitCloneError
@@ -262,7 +267,7 @@ def process_message(
     task_id: str,
     repo_handler: RepoHandler,
     adapter: ChannelAdapter,
-) -> tuple[bool, str | None]:
+) -> tuple[CompletionReason, str | None]:
     """Process a parsed message from any channel.
 
     Args:
@@ -273,7 +278,7 @@ def process_message(
         adapter: Channel adapter for sending replies.
 
     Returns:
-        Tuple of (success, conversation_id).
+        Tuple of (CompletionReason, conversation_id).
     """
     repo_id = repo_handler.config.repo_id
     conv_id = parsed.conversation_id
@@ -294,7 +299,7 @@ def process_message(
             "Your message appears to be empty. "
             "Please send a new message with instructions.",
         )
-        return False, None
+        return CompletionReason.EXECUTION_FAILED, None
 
     conversation_store: ConversationStore | None = None
     prompt = parsed.body
@@ -588,7 +593,7 @@ def process_message(
                 is_error=True,
             )
             conversation_store.add_reply(conv_id, reply)
-            return False, conv_id
+            return CompletionReason.TIMEOUT, conv_id
         else:
             response_body = (
                 "An error occurred while processing your message. "
@@ -625,7 +630,9 @@ def process_message(
             parsed.sender,
             conv_id,
         )
-        return result.outcome == Outcome.SUCCESS, conv_id
+        if result.outcome == Outcome.SUCCESS:
+            return CompletionReason.SUCCESS, conv_id
+        return CompletionReason.EXECUTION_FAILED, conv_id
 
     except GitCloneError as e:
         logger.exception(
@@ -640,7 +647,7 @@ def process_message(
             f"`{e}`"
         )
         adapter.send_error(parsed, conv_id, error_msg)
-        return False, None
+        return CompletionReason.INTERNAL_ERROR, None
     except Exception as e:
         logger.exception(
             "Repo '%s': unexpected error processing message: %s",
@@ -676,7 +683,7 @@ def process_message(
                     "Failed to persist error to conversation: %s",
                     persist_err,
                 )
-        return False, conv_id
+        return CompletionReason.INTERNAL_ERROR, conv_id
 
 
 def _convert_replacement_map(

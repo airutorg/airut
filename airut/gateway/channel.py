@@ -71,8 +71,9 @@ class ParsedMessage:
     into the container at /inbox). No cleanup is needed -- files accumulate
     naturally and are garbage-collected with the conversation."""
 
-    subject: str = ""
-    """Short display title for the task tracker (e.g. email subject line).
+    display_title: str = ""
+    """Short display title for the task tracker (e.g. email subject line,
+    first line of Slack message).
 
     Shown on the dashboard to identify the task. If empty, the tracker
     falls back to a generic placeholder."""
@@ -98,14 +99,14 @@ class RawMessage[ContentT]:
         sender: Raw sender identity as presented by the channel
             (e.g. email From header, Slack user ID). Not yet verified.
         content: Channel-specific payload (e.g. ``email.message.Message``).
-        subject: Optional display title (e.g. email subject line).
+        display_title: Optional display title (e.g. email subject line).
             Used by the task tracker before authentication completes.
             Falls back to a truncated ``sender`` if empty.
     """
 
     sender: str
     content: ContentT
-    subject: str = ""
+    display_title: str = ""
 
 
 class ChannelHealth(Enum):
@@ -290,7 +291,7 @@ class ChannelAdapter(Protocol):
     ) -> None:
         """Send a rejection notification when a message cannot be processed.
 
-        Called when a duplicate message arrives for a conversation that
-        already has an active task.
+        Called when the per-conversation pending queue is full and the
+        message cannot be accepted.
         """
         ...

@@ -494,8 +494,9 @@ def _get_active_task_counts() -> tuple[int, int] | None:
     then fetches ``/api/health`` to get task counts.
 
     Returns:
-        ``(in_progress, queued)`` tuple, or None if the service is not
-        reachable or not configured.
+        ``(running, waiting)`` tuple, or None if the service is not
+        reachable or not configured.  ``running`` counts executing +
+        authenticating tasks; ``waiting`` counts queued + pending.
     """
     config_path = get_config_path()
     if not config_path.exists():
@@ -515,12 +516,22 @@ def _get_active_task_counts() -> tuple[int, int] | None:
     if not isinstance(tasks, dict):
         return None
 
-    in_progress = tasks.get("in_progress")
-    queued = tasks.get("queued")
-    if not isinstance(in_progress, int) or not isinstance(queued, int):
-        return None
+    executing = tasks.get("executing", 0)
+    queued = tasks.get("queued", 0)
+    # authenticating and pending may be absent on older servers that
+    # only report executing/queued/completed — default to 0.
+    authenticating = tasks.get("authenticating", 0)
+    pending = tasks.get("pending", 0)
 
-    return in_progress, queued
+    # Validate all four fields uniformly.
+    for value in (executing, queued, authenticating, pending):
+        if not isinstance(value, int):
+            return None
+
+    # Count all non-completed statuses as active.
+    running = executing + authenticating
+    waiting = queued + pending
+    return running, waiting
 
 
 def _has_version_mismatch() -> bool:
@@ -592,13 +603,13 @@ def cmd_update(argv: list[str]) -> int:
     if service_was_installed and _is_service_running() and not force:
         counts = _get_active_task_counts()
         if counts is not None:
-            in_progress, queued = counts
-            active = in_progress + queued
+            running, waiting = counts
+            active = running + waiting
 
             if active > 0 and wait:
                 print(
                     f"  {s.yellow('Tasks in flight:')} "
-                    f"{in_progress} running, {queued} queued."
+                    f"{running} running, {waiting} queued."
                 )
                 print(f"  {s.dim('Waiting for tasks to complete...')}")
 
@@ -608,15 +619,15 @@ def cmd_update(argv: list[str]) -> int:
                     if counts is None:
                         # Service went away — safe to proceed.
                         break
-                    in_progress, queued = counts
-                    active = in_progress + queued
+                    running, waiting = counts
+                    active = running + waiting
                     if active > 0:
                         print(
                             f"  {
                                 s.dim(
                                     f'  Still waiting: '
-                                    f'{in_progress} running, '
-                                    f'{queued} queued...'
+                                    f'{running} running, '
+                                    f'{waiting} queued...'
                                 )
                             }"
                         )
@@ -626,7 +637,7 @@ def cmd_update(argv: list[str]) -> int:
             elif active > 0:
                 print(
                     f"  {s.red('Cannot update:')} "
-                    f"{in_progress} running, {queued} queued task(s)."
+                    f"{running} running, {waiting} queued task(s)."
                 )
                 print(
                     f"  Use {s.cyan('airut update --wait')} to wait, "

@@ -121,13 +121,23 @@ def _sse_live_script() -> str:
             if (status === 'queued') {
                 timeLabel = 'Waiting: '
                     + formatDuration(task.queue_duration);
-            } else if (status === 'in_progress') {
+            } else if (status === 'authenticating') {
+                timeLabel = 'Authenticating...';
+            } else if (status === 'pending') {
+                timeLabel = 'Queued behind active task';
+            } else if (status === 'executing') {
                 timeLabel = 'Running: '
                     + formatDuration(task.execution_duration);
             } else if (status === 'completed') {
-                if (task.success) {
+                var reason = task.completion_reason || '';
+                if (reason === 'success') {
                     sc = 'success';
                     icon = '<span class="status-icon">&#x2713;</span>';
+                } else if (reason === 'auth_failed'
+                    || reason === 'unauthorized'
+                    || reason === 'rejected') {
+                    sc = 'failed';
+                    icon = '<span class="status-icon">&#x2298;</span>';
                 } else {
                     sc = 'failed';
                     icon = '<span class="status-icon">&#x2717;</span>';
@@ -135,9 +145,9 @@ def _sse_live_script() -> str:
                 timeLabel = 'Took: '
                     + formatDuration(task.execution_duration);
             }
-            var subject = escapeHtml(task.subject || '');
-            var truncated = subject.length > 50
-                ? subject.substring(0, 50) + '...' : subject;
+            var title = escapeHtml(task.display_title || '');
+            var truncated = title.length > 50
+                ? title.substring(0, 50) + '...' : title;
             var badge = '';
             if (task.repo_id) {
                 badge = '<span class="repo-badge">'
@@ -153,7 +163,7 @@ def _sse_live_script() -> str:
                 + '<div class="task-id">'
                 + '<a href="/conversation/' + cid + '">[' + cid + ']</a>'
                 + ' ' + badge + icon + '</div>'
-                + '<div class="task-subject" title="' + subject + '">'
+                + '<div class="task-subject" title="' + title + '">'
                 + truncated + '</div>'
                 + sender
                 + '<div class="task-time">' + timeLabel + '</div></div>';
@@ -183,34 +193,40 @@ def _sse_live_script() -> str:
                 reposContainer.innerHTML = renderRepos(state.repos);
             }
 
-            // Categorize tasks
-            var queued = [], inProgress = [], completed = [];
+            // Categorize tasks into 3 columns
+            var pending = [], executing = [], completed = [];
             (state.tasks || []).forEach(function(t) {
-                if (t.status === 'queued') queued.push(t);
-                else if (t.status === 'in_progress') inProgress.push(t);
-                else if (t.status === 'completed') completed.push(t);
+                if (t.status === 'queued'
+                    || t.status === 'authenticating'
+                    || t.status === 'pending') {
+                    pending.push(t);
+                } else if (t.status === 'executing') {
+                    executing.push(t);
+                } else if (t.status === 'completed') {
+                    completed.push(t);
+                }
             });
 
             // Update columns
-            var qCol = document.getElementById('queued-header');
-            if (qCol) qCol.textContent = 'Queued (' + queued.length + ')';
-            var qList = document.getElementById('queued-list');
-            if (qList) qList.innerHTML = renderTaskList(queued, 'queued');
+            var qCol = document.getElementById('pending-header');
+            if (qCol) qCol.textContent = 'Pending (' + pending.length + ')';
+            var qList = document.getElementById('pending-list');
+            if (qList) qList.innerHTML = renderTaskList(pending, 'pending');
 
-            var pCol = document.getElementById('in-progress-header');
+            var pCol = document.getElementById('executing-header');
             if (pCol) {
                 pCol.textContent = (
-                    'In Progress (' + inProgress.length + ')'
+                    'Executing (' + executing.length + ')'
                 );
             }
-            var pList = document.getElementById('in-progress-list');
+            var pList = document.getElementById('executing-list');
             if (pList) {
-                pList.innerHTML = renderTaskList(inProgress, 'in-progress');
+                pList.innerHTML = renderTaskList(executing, 'executing');
             }
 
             var cCol = document.getElementById('completed-header');
             if (cCol) {
-                cCol.textContent = 'Completed (' + completed.length + ')';
+                cCol.textContent = 'Done (' + completed.length + ')';
             }
             var cList = document.getElementById('completed-list');
             if (cList) {
@@ -262,8 +278,8 @@ def _sse_live_script() -> str:
 
 def render_dashboard(
     counts: dict[str, int],
-    queued: list[TaskState],
-    in_progress: list[TaskState],
+    pending: list[TaskState],
+    executing: list[TaskState],
     completed: list[TaskState],
     version_info: VersionInfo | None,
     repo_states: list[RepoState] | None = None,
@@ -277,8 +293,8 @@ def render_dashboard(
 
     Args:
         counts: Task counts by status.
-        queued: List of queued tasks.
-        in_progress: List of in-progress tasks.
+        pending: List of pending tasks (queued + authenticating + pending).
+        executing: List of executing tasks.
         completed: List of completed tasks.
         version_info: Optional version information.
         repo_states: Optional list of repository states.
@@ -287,6 +303,11 @@ def render_dashboard(
     Returns:
         HTML string for dashboard page.
     """
+    pending_count = (
+        counts.get("queued", 0)
+        + counts.get("authenticating", 0)
+        + counts.get("pending", 0)
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -309,24 +330,24 @@ def render_dashboard(
     <div id="repos-container">{render_repos_section(repo_states)}</div>
     <div class="dashboard">
         <div class="column">
-            <div id="queued-header" class="column-header queued">
-                Queued ({counts["queued"]})
+            <div id="pending-header" class="column-header pending">
+                Pending ({pending_count})
             </div>
-            <div id="queued-list">
-                {render_task_list(queued, "queued")}
+            <div id="pending-list">
+                {render_task_list(pending, "pending")}
             </div>
         </div>
         <div class="column">
-            <div id="in-progress-header" class="column-header in-progress">
-                In Progress ({counts["in_progress"]})
+            <div id="executing-header" class="column-header executing">
+                Executing ({counts.get("executing", 0)})
             </div>
-            <div id="in-progress-list">
-                {render_task_list(in_progress, "in-progress")}
+            <div id="executing-list">
+                {render_task_list(executing, "executing")}
             </div>
         </div>
         <div class="column">
             <div id="completed-header" class="column-header completed">
-                Completed ({counts["completed"]})
+                Done ({counts.get("completed", 0)})
             </div>
             <div id="completed-list">
                 {render_task_list(completed, "completed")}
