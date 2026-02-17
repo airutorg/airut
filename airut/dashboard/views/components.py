@@ -347,14 +347,11 @@ def render_stop_script(task: TaskState) -> str:
             }})
             .then(function(data) {{
                 if (data.success) {{
+                    btn.textContent = 'Stop signal sent';
                     resultDiv.textContent = (
-                        'Task stopped successfully. Page will refresh...'
+                        'Stop signal delivered. Waiting for task to stop...'
                     );
-                    resultDiv.className = 'stop-result success';
-                    // Refresh after 2 seconds
-                    setTimeout(function() {{
-                        window.location.reload();
-                    }}, 2000);
+                    resultDiv.className = 'stop-result info';
                 }} else {{
                     var msg = (
                         data.message || data.error || 'Failed to stop task'

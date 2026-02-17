@@ -437,6 +437,17 @@ def _sse_task_detail_script(conversation_id: str) -> str:
             var msgEl = document.getElementById('task-message-count');
             if (msgEl) msgEl.textContent = task.message_count || 0;
 
+            // Hide stop button when task is no longer executing
+            if (task.status !== 'executing') {{
+                var stopBtn = document.getElementById('stop-btn');
+                if (stopBtn) stopBtn.style.display = 'none';
+                var stopResult = document.getElementById('stop-result');
+                if (stopResult) {{
+                    stopResult.textContent = '';
+                    stopResult.className = 'stop-result';
+                }}
+            }}
+
             // Update todo progress
             renderTodos(task.todos || null);
         }}

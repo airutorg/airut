@@ -576,7 +576,9 @@ class RequestHandlers:
             success = self.stop_callback(conversation_id)
             if success:
                 return Response(
-                    json.dumps({"success": True, "message": "Task stopped"}),
+                    json.dumps(
+                        {"success": True, "message": "Stop signal sent"}
+                    ),
                     content_type="application/json",
                 )
             else:

@@ -596,9 +596,9 @@ def _task_detail_specific() -> str:
             border-radius: 4px;
             font-size: 14px;
         }
-        .stop-result.success {
-            background: #dff0d8;
-            color: #3c763d;
+        .stop-result.info {
+            background: #d9edf7;
+            color: #31708f;
         }
         .stop-result.error {
             background: #f2dede;

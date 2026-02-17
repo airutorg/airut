@@ -1521,7 +1521,7 @@ class TestStopEndpoint:
         assert response.status_code == 200
         data = response.get_json()
         assert data["success"] is True
-        assert data["message"] == "Task stopped"
+        assert data["message"] == "Stop signal sent"
 
     def test_stop_endpoint_not_found(self) -> None:
         """Test stop endpoint with non-existent task."""
