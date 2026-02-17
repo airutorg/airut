@@ -887,8 +887,16 @@ _SUBCOMMAND_HELP: dict[str, str] = {
         "Stop and remove the airut systemd user service."
     ),
     "run-gateway": (
-        "usage: airut run-gateway [--resilient] [--debug]\n\n"
-        "Start the email gateway service (normally managed by systemd)."
+        "usage: airut run-gateway [--config PATH] [--resilient]"
+        " [--debug]\n\n"
+        "Start the email gateway service"
+        " (normally managed by systemd).\n\n"
+        "options:\n"
+        "  --config PATH  Path to airut.yaml config file\n"
+        "                 (default: ~/.config/airut/airut.yaml)\n"
+        "  --resilient    Stay alive on boot failure"
+        " (error on dashboard)\n"
+        "  --debug        Enable debug logging"
     ),
 }
 

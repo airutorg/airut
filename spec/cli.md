@@ -204,10 +204,18 @@ Stop and remove the airut systemd user service.
 ### run-gateway
 
 ```
-airut run-gateway [--resilient] [--debug]
+airut run-gateway [--config PATH] [--resilient] [--debug]
 ```
 
 Start the email gateway service. Normally invoked by systemd, not run directly.
+
+**Options:**
+
+| Flag            | Behavior                                                         |
+| --------------- | ---------------------------------------------------------------- |
+| `--config PATH` | Use a custom config file instead of `~/.config/airut/airut.yaml` |
+| `--resilient`   | Stay alive on boot failure, show error on dashboard              |
+| `--debug`       | Enable debug logging                                             |
 
 Delegates immediately to `airut.gateway.service:main()` with the remaining
 arguments. See [gateway-architecture.md](gateway-architecture.md) for the

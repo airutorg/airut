@@ -725,6 +725,16 @@ def main(argv: list[str] | None = None) -> int:
             "exiting. Useful for systemd services to avoid restart loops."
         ),
     )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to airut.yaml config file"
+            " (default: ~/.config/airut/airut.yaml)"
+        ),
+    )
     args = parser.parse_args(argv)
 
     configure_logging(
@@ -735,7 +745,7 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("Airut Gateway Service starting...")
 
     try:
-        config = ServerConfig.from_yaml()
+        config = ServerConfig.from_yaml(config_path=args.config)
     except (ValueError, Exception) as e:
         logger.critical("Configuration error: %s", e)
         return 1
