@@ -6,11 +6,10 @@
 """Task (conversation) detail page view."""
 
 import html
-from typing import Any
 
 from airut.conversation import ConversationMetadata
 from airut.dashboard.formatters import format_duration, format_timestamp
-from airut.dashboard.tracker import TaskState, TaskStatus
+from airut.dashboard.tracker import TaskState, TaskStatus, TodoItem, TodoStatus
 from airut.dashboard.views.components import (
     render_action_buttons,
     render_conversation_replies_section,
@@ -19,11 +18,11 @@ from airut.dashboard.views.components import (
 from airut.dashboard.views.styles import task_detail_styles
 
 
-def _render_progress_section(todos: list[dict[str, Any]]) -> str:
+def _render_progress_section(todos: list[TodoItem]) -> str:
     """Render the checklist-style progress section.
 
     Args:
-        todos: List of todo dicts from TodoWrite tool_input.
+        todos: List of :class:`TodoItem` instances.
 
     Returns:
         HTML string for the progress section.
@@ -33,15 +32,14 @@ def _render_progress_section(todos: list[dict[str, Any]]) -> str:
 
     items: list[str] = []
     for todo in todos:
-        status = todo.get("status", "pending")
-        content = html.escape(todo.get("content", ""))
-        active_form = html.escape(todo.get("activeForm", content))
+        content = html.escape(todo.content)
+        active_form = html.escape(todo.active_form or todo.content)
 
-        if status == "completed":
+        if todo.status == TodoStatus.COMPLETED:
             icon = '<span class="todo-icon completed">&#x2713;</span>'
             css_class = "completed"
             label = content
-        elif status == "in_progress":
+        elif todo.status == TodoStatus.IN_PROGRESS:
             icon = '<span class="todo-spinner"></span>'
             css_class = "in-progress"
             label = active_form
@@ -344,82 +342,12 @@ def _sse_task_detail_script(conversation_id: str) -> str:
                     }}
                     if (!task) return;
 
-                    // Update status
-                    var statusEl = document.getElementById(
-                        'task-status');
-                    if (statusEl) {{
-                        var display = task.status.replace(
-                            '_', ' ').toUpperCase();
-                        var successText = '';
-                        if (task.status === 'completed') {{
-                            successText = task.success
-                                ? ' - Success' : ' - Failed';
-                        }}
-                        statusEl.textContent = display
-                            + successText;
-                        statusEl.className = 'status '
-                            + task.status;
-                        if (task.success === true) {{
-                            statusEl.className += ' success';
-                        }}
-                        if (task.success === false) {{
-                            statusEl.className += ' failed';
-                        }}
-                    }}
-
-                    // Update model
-                    var modelEl = document.getElementById('task-model');
-                    if (modelEl) modelEl.textContent = task.model || '-';
-
-                    // Update timestamps
-                    var startedEl = document.getElementById(
-                        'task-started-at');
-                    if (startedEl) {{
-                        startedEl.textContent = formatTimestamp(
-                            task.started_at);
-                    }}
-
-                    var completedEl = document.getElementById(
-                        'task-completed-at');
-                    if (completedEl) {{
-                        completedEl.textContent = formatTimestamp(
-                            task.completed_at);
-                    }}
-
-                    // Update durations
-                    var queueEl = document.getElementById(
-                        'task-queue-time');
-                    if (queueEl) {{
-                        queueEl.textContent = formatDuration(
-                            task.queue_duration);
-                    }}
-
-                    var execEl = document.getElementById(
-                        'task-exec-time');
-                    if (execEl) {{
-                        execEl.textContent = formatDuration(
-                            task.execution_duration);
-                    }}
-
-                    var totalEl = document.getElementById(
-                        'task-total-time');
-                    if (totalEl) {{
-                        totalEl.textContent = formatDuration(
-                            task.total_duration);
-                    }}
-
-                    // Update message count
-                    var msgEl = document.getElementById('task-message-count');
-                    if (msgEl) msgEl.textContent = task.message_count || 0;
-
-                    // Update todo progress
-                    renderTodos(task.todos || null);
+                    updateTaskFromData(task);
 
                     // If completed, close stream and reload for full data
                     if (task.status === 'completed') {{
                         source.close();
                         if (status) status.textContent = 'Complete';
-                        // Reload to get full conversation data
                         setTimeout(function() {{ location.reload(); }}, 1000);
                     }}
 
@@ -434,6 +362,60 @@ def _sse_task_detail_script(conversation_id: str) -> str:
             }};
 
             if (status) status.textContent = 'Live';
+        }}
+
+        function updateTaskFromData(task) {{
+            // Update status
+            var statusEl = document.getElementById('task-status');
+            if (statusEl) {{
+                var display = task.status.replace('_', ' ').toUpperCase();
+                var successText = '';
+                if (task.status === 'completed') {{
+                    successText = task.success
+                        ? ' - Success' : ' - Failed';
+                }}
+                statusEl.textContent = display + successText;
+                statusEl.className = 'status ' + task.status;
+                if (task.success === true) statusEl.className += ' success';
+                if (task.success === false) statusEl.className += ' failed';
+            }}
+
+            // Update model
+            var modelEl = document.getElementById('task-model');
+            if (modelEl) modelEl.textContent = task.model || '-';
+
+            // Update timestamps
+            var startedEl = document.getElementById('task-started-at');
+            if (startedEl) {{
+                startedEl.textContent = formatTimestamp(task.started_at);
+            }}
+            var completedEl = document.getElementById('task-completed-at');
+            if (completedEl) {{
+                completedEl.textContent = formatTimestamp(
+                    task.completed_at);
+            }}
+
+            // Update durations
+            var queueEl = document.getElementById('task-queue-time');
+            if (queueEl) {{
+                queueEl.textContent = formatDuration(task.queue_duration);
+            }}
+            var execEl = document.getElementById('task-exec-time');
+            if (execEl) {{
+                execEl.textContent = formatDuration(
+                    task.execution_duration);
+            }}
+            var totalEl = document.getElementById('task-total-time');
+            if (totalEl) {{
+                totalEl.textContent = formatDuration(task.total_duration);
+            }}
+
+            // Update message count
+            var msgEl = document.getElementById('task-message-count');
+            if (msgEl) msgEl.textContent = task.message_count || 0;
+
+            // Update todo progress
+            renderTodos(task.todos || null);
         }}
 
         function startTaskPolling() {{
@@ -451,9 +433,13 @@ def _sse_task_detail_script(conversation_id: str) -> str:
                             break;
                         }}
                     }}
-                    if (task && task.status === 'completed') {{
+                    if (!task) return;
+                    updateTaskFromData(task);
+                    if (task.status === 'completed') {{
                         if (status) status.textContent = 'Complete';
-                        window.location.reload();
+                        setTimeout(function() {{
+                            window.location.reload();
+                        }}, 1000);
                     }}
                 }}).catch(function() {{ /* ignore fetch errors */ }});
             }}, 5000);

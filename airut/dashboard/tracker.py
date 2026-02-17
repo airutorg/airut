@@ -15,7 +15,6 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
 
 from airut.dashboard.versioned import VersionClock, Versioned
 
@@ -47,6 +46,47 @@ class BootPhase(Enum):
     REPOS = "repos"
     READY = "ready"
     FAILED = "failed"
+
+
+class TodoStatus(Enum):
+    """Status of a single todo item."""
+
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+
+
+@dataclass(frozen=True)
+class TodoItem:
+    """A single todo item from Claude's TodoWrite tool.
+
+    Defines the contract for todo progress data tracked by the dashboard.
+    Immutable snapshot — new lists replace old ones on each TodoWrite
+    event.
+
+    Attributes:
+        content: Imperative description of the task (e.g., "Run tests").
+        status: Todo item status.
+        active_form: Present-continuous form shown during execution
+            (e.g., "Running tests").  Defaults to *content* if not
+            provided by the tool.
+    """
+
+    content: str
+    status: TodoStatus
+    active_form: str = ""
+
+    def to_dict(self) -> dict[str, str]:
+        """Serialize to a JSON-compatible dict.
+
+        Returns:
+            Dict with ``content``, ``status``, and ``activeForm`` keys.
+        """
+        return {
+            "content": self.content,
+            "status": self.status.value,
+            "activeForm": self.active_form or self.content,
+        }
 
 
 @dataclass(frozen=True)
@@ -131,7 +171,7 @@ class TaskState:
     success: bool | None = None
     message_count: int = 1
     model: str | None = None
-    todos: list[dict[str, Any]] | None = None
+    todos: list[TodoItem] | None = None
 
     def queue_duration(self) -> float:
         """Calculate time spent in queue.
@@ -384,16 +424,15 @@ class TaskTracker:
             self._clock.tick()
             return True
 
-    def update_todos(
-        self, conversation_id: str, todos: list[dict[str, Any]]
-    ) -> bool:
+    def update_todos(self, conversation_id: str, todos: list[TodoItem]) -> bool:
         """Update the in-progress todo list for a task.
 
         Called when Claude emits a TodoWrite tool use during execution.
 
         Args:
             conversation_id: Conversation identifier to update.
-            todos: List of todo dicts from TodoWrite tool_input.
+            todos: List of ``TodoItem`` instances parsed from the
+                TodoWrite tool_input.
 
         Returns:
             True if the task was found and updated, False otherwise.

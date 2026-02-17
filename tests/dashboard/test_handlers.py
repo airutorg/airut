@@ -23,7 +23,13 @@ from airut.conversation import (
     ReplySummary,
 )
 from airut.dashboard.server import DashboardServer
-from airut.dashboard.tracker import TaskState, TaskStatus, TaskTracker
+from airut.dashboard.tracker import (
+    TaskState,
+    TaskStatus,
+    TaskTracker,
+    TodoItem,
+    TodoStatus,
+)
 from airut.sandbox import EventLog
 from tests.dashboard.conftest import parse_events as _parse_events
 
@@ -784,13 +790,19 @@ class TestTodoProgressDisplay:
         tracker.update_todos(
             "abc12345",
             [
-                {"content": "Run tests", "status": "completed"},
-                {
-                    "content": "Fix bugs",
-                    "status": "in_progress",
-                    "activeForm": "Fixing bugs",
-                },
-                {"content": "Deploy", "status": "pending"},
+                TodoItem(
+                    content="Run tests",
+                    status=TodoStatus.COMPLETED,
+                ),
+                TodoItem(
+                    content="Fix bugs",
+                    status=TodoStatus.IN_PROGRESS,
+                    active_form="Fixing bugs",
+                ),
+                TodoItem(
+                    content="Deploy",
+                    status=TodoStatus.PENDING,
+                ),
             ],
         )
 
@@ -815,7 +827,7 @@ class TestTodoProgressDisplay:
         tracker.start_task("abc12345")
         tracker.update_todos(
             "abc12345",
-            [{"content": "Done", "status": "completed"}],
+            [TodoItem(content="Done", status=TodoStatus.COMPLETED)],
         )
         tracker.complete_task("abc12345", success=True)
 
@@ -851,7 +863,7 @@ class TestTodoProgressDisplay:
         tracker.add_task("abc12345", "Test Subject")
         tracker.update_todos(
             "abc12345",
-            [{"content": "Step 1", "status": "pending"}],
+            [TodoItem(content="Step 1", status=TodoStatus.PENDING)],
         )
 
         server = DashboardServer(tracker)
@@ -895,6 +907,21 @@ class TestTodoProgressDisplay:
         response = client.get("/conversation/abc12345")
         html = response.get_data(as_text=True)
         assert "renderTodos" in html
+
+    def test_task_detail_polling_fallback_updates_todos(self) -> None:
+        """Polling fallback JS calls updateTaskFromData (including todos)."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test Subject")
+        tracker.start_task("abc12345")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/abc12345")
+        html = response.get_data(as_text=True)
+        # Polling fallback must use the shared updateTaskFromData function
+        assert "updateTaskFromData" in html
+        assert "startTaskPolling" in html
 
 
 class TestLoadPastTasks:

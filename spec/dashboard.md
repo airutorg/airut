@@ -247,7 +247,10 @@ Single task view with three sections:
 **Progress section** (active tasks only) — live-updating checklist of Claude's
 TodoWrite items. Shows completed (checkmark), in-progress (spinner with
 activeForm label), and pending (circle) items. Updated in real-time via the
-global SSE state stream.
+global SSE state stream, with automatic fallback to ETag-based polling when SSE
+is unavailable. Todo state is tracked as a list of `TodoItem` dataclass
+instances (`content`, `status`, `active_form`) — a typed contract independent of
+the Claude output parser types.
 
 **Task Details card** — model, timestamps (queued, started, completed), duration
 breakdowns (queue time, execution time, total), message count, total cost, and

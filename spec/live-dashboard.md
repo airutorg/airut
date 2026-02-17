@@ -185,7 +185,7 @@ the task has completed, allowing the client to stop polling.
 | Page           | SSE Source                              | Polling Fallback                               | Behavior                                                     |
 | -------------- | --------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------ |
 | Main dashboard | `/api/events/stream`                    | `/api/conversations` (ETag, reload)            | Updates task lists, boot, repos                              |
-| Task detail    | `/api/events/stream`                    | `/api/conversations` (reload on completion)    | Updates status, timing, todo progress; reloads on completion |
+| Task detail    | `/api/events/stream`                    | `/api/conversations` (ETag, inline + reload)   | Updates status, timing, todo progress; reloads on completion |
 | Actions viewer | `/api/conversation/{id}/events/stream`  | `/api/conversation/{id}/events/poll` (append)  | Appends events to timeline                                   |
 | Network viewer | `/api/conversation/{id}/network/stream` | `/api/conversation/{id}/network/poll` (append) | Appends log lines                                            |
 | Repo detail    | `/api/events/stream`                    | `/api/repos` (ETag, reload)                    | Updates status badge, error section                          |

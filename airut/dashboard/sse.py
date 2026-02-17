@@ -186,7 +186,7 @@ def _task_state_to_dict(task: TaskState) -> dict[str, Any]:
         "total_duration": task.total_duration(),
     }
     if task.todos is not None:
-        result["todos"] = task.todos
+        result["todos"] = [t.to_dict() for t in task.todos]
     return result
 
 

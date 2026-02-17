@@ -9,10 +9,14 @@ import threading
 import time
 from unittest.mock import patch
 
+import pytest
+
 from airut.dashboard.tracker import (
     TaskState,
     TaskStatus,
     TaskTracker,
+    TodoItem,
+    TodoStatus,
 )
 
 
@@ -741,13 +745,13 @@ class TestTaskTracker:
         """Test get_snapshot deep copies todos so mutations don't leak."""
         tracker = TaskTracker()
         tracker.add_task("t1", "Task 1")
-        todos = [{"content": "Step 1", "status": "pending"}]
+        todos = [TodoItem(content="Step 1", status=TodoStatus.PENDING)]
         tracker.update_todos("t1", todos)
 
         snap = tracker.get_snapshot()
         assert snap.value[0].todos == todos
         # Mutate the original list — snapshot should be unaffected
-        todos.append({"content": "Step 2", "status": "pending"})
+        todos.append(TodoItem(content="Step 2", status=TodoStatus.PENDING))
         assert snap.value[0].todos is not None
         assert len(snap.value[0].todos) == 1
 
@@ -761,8 +765,8 @@ class TestTaskTracker:
         version_before = clock.version
 
         todos = [
-            {"content": "Run tests", "status": "in_progress"},
-            {"content": "Fix bugs", "status": "pending"},
+            TodoItem(content="Run tests", status=TodoStatus.IN_PROGRESS),
+            TodoItem(content="Fix bugs", status=TodoStatus.PENDING),
         ]
         result = tracker.update_todos("abc12345", todos)
 
@@ -776,7 +780,8 @@ class TestTaskTracker:
         """Test updating todos on non-existent task returns False."""
         tracker = TaskTracker()
         result = tracker.update_todos(
-            "nonexistent", [{"content": "X", "status": "pending"}]
+            "nonexistent",
+            [TodoItem(content="X", status=TodoStatus.PENDING)],
         )
         assert result is False
 
@@ -785,21 +790,58 @@ class TestTaskTracker:
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test")
         tracker.update_todos(
-            "abc12345", [{"content": "A", "status": "pending"}]
+            "abc12345",
+            [TodoItem(content="A", status=TodoStatus.PENDING)],
         )
         tracker.update_todos(
-            "abc12345", [{"content": "B", "status": "completed"}]
+            "abc12345",
+            [TodoItem(content="B", status=TodoStatus.COMPLETED)],
         )
         task = tracker.get_task("abc12345")
         assert task is not None
         assert task.todos is not None
         assert len(task.todos) == 1
-        assert task.todos[0]["content"] == "B"
+        assert task.todos[0].content == "B"
 
     def test_task_state_todos_default_none(self) -> None:
         """Test TaskState.todos defaults to None."""
         task = TaskState(conversation_id="abc", subject="Test")
         assert task.todos is None
+
+
+class TestTodoItem:
+    """Tests for TodoItem dataclass."""
+
+    def test_default_active_form(self) -> None:
+        """Test active_form defaults to empty string."""
+        item = TodoItem(content="Run tests", status=TodoStatus.PENDING)
+        assert item.active_form == ""
+
+    def test_to_dict(self) -> None:
+        """Test to_dict serialization."""
+        item = TodoItem(
+            content="Run tests",
+            status=TodoStatus.IN_PROGRESS,
+            active_form="Running tests",
+        )
+        d = item.to_dict()
+        assert d == {
+            "content": "Run tests",
+            "status": "in_progress",
+            "activeForm": "Running tests",
+        }
+
+    def test_to_dict_active_form_defaults_to_content(self) -> None:
+        """Test to_dict uses content when active_form is empty."""
+        item = TodoItem(content="Deploy", status=TodoStatus.PENDING)
+        d = item.to_dict()
+        assert d["activeForm"] == "Deploy"
+
+    def test_immutable(self) -> None:
+        """Test TodoItem is frozen (immutable)."""
+        item = TodoItem(content="Test", status=TodoStatus.PENDING)
+        with pytest.raises(AttributeError):
+            item.content = "Changed"  # type: ignore[misc]
 
 
 class TestTaskStatus:

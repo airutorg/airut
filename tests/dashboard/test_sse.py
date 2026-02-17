@@ -29,6 +29,8 @@ from airut.dashboard.tracker import (
     TaskState,
     TaskStatus,
     TaskTracker,
+    TodoItem,
+    TodoStatus,
 )
 from airut.dashboard.versioned import VersionClock, VersionedStore
 from airut.sandbox import EventLog, NetworkLog
@@ -281,14 +283,22 @@ class TestTaskStateToDictWithTodos:
             queued_at=1000.0,
             started_at=1010.0,
             todos=[
-                {"content": "Step 1", "status": "completed"},
-                {"content": "Step 2", "status": "in_progress"},
+                TodoItem(
+                    content="Step 1",
+                    status=TodoStatus.COMPLETED,
+                ),
+                TodoItem(
+                    content="Step 2",
+                    status=TodoStatus.IN_PROGRESS,
+                    active_form="Doing Step 2",
+                ),
             ],
         )
         result = _task_state_to_dict(task)
         assert "todos" in result
         assert len(result["todos"]) == 2
         assert result["todos"][0]["content"] == "Step 1"
+        assert result["todos"][1]["activeForm"] == "Doing Step 2"
 
     def test_task_without_todos(self) -> None:
         """Test converting task without todos omits the field."""

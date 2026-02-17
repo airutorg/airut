@@ -31,7 +31,7 @@ from airut.conversation import (
     create_conversation_layout,
     prepare_conversation,
 )
-from airut.dashboard.tracker import TaskTracker
+from airut.dashboard.tracker import TaskTracker, TodoItem, TodoStatus
 from airut.gateway.channel import ChannelAdapter, ParsedMessage
 from airut.gateway.config import ReplacementMap, RepoConfig
 from airut.gateway.conversation import GitCloneError
@@ -70,6 +70,7 @@ def _make_todo_callback(
     Returns:
         Callback suitable for ``task.execute(on_event=...)``.
     """
+    status_map = {s.value: s for s in TodoStatus}
 
     def on_event(event: StreamEvent) -> None:
         for block in event.content_blocks:
@@ -77,9 +78,24 @@ def _make_todo_callback(
                 isinstance(block, ToolUseBlock)
                 and block.tool_name == "TodoWrite"
             ):
-                todos = block.tool_input.get("todos")
-                if isinstance(todos, list):
-                    tracker.update_todos(conversation_id, todos)
+                raw = block.tool_input.get("todos")
+                if isinstance(raw, list):
+                    items = [
+                        TodoItem(
+                            content=t.get("content", ""),
+                            status=status_map.get(
+                                t.get("status", ""),
+                                TodoStatus.PENDING,
+                            ),
+                            active_form=t.get(
+                                "activeForm",
+                                t.get("content", ""),
+                            ),
+                        )
+                        for t in raw
+                        if isinstance(t, dict)
+                    ]
+                    tracker.update_todos(conversation_id, items)
 
     return on_event
 

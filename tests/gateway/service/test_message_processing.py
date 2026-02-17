@@ -136,7 +136,11 @@ class TestMakeTodoCallback:
             StreamEvent,
             ToolUseBlock,
         )
-        from airut.dashboard.tracker import TaskTracker
+        from airut.dashboard.tracker import (
+            TaskTracker,
+            TodoItem,
+            TodoStatus,
+        )
         from airut.gateway.service.message_processing import (
             _make_todo_callback,
         )
@@ -146,7 +150,7 @@ class TestMakeTodoCallback:
 
         callback = _make_todo_callback(tracker, "abc12345")
 
-        todos = [
+        todos_raw = [
             {"content": "Run tests", "status": "in_progress"},
             {"content": "Fix bugs", "status": "pending"},
         ]
@@ -158,7 +162,7 @@ class TestMakeTodoCallback:
                 ToolUseBlock(
                     tool_id="t1",
                     tool_name="TodoWrite",
-                    tool_input={"todos": todos},
+                    tool_input={"todos": todos_raw},
                 ),
             ),
             raw="{}",
@@ -167,7 +171,13 @@ class TestMakeTodoCallback:
 
         task = tracker.get_task("abc12345")
         assert task is not None
-        assert task.todos == todos
+        assert task.todos is not None
+        assert len(task.todos) == 2
+        assert isinstance(task.todos[0], TodoItem)
+        assert task.todos[0].content == "Run tests"
+        assert task.todos[0].status == TodoStatus.IN_PROGRESS
+        assert task.todos[1].content == "Fix bugs"
+        assert task.todos[1].status == TodoStatus.PENDING
 
     def test_ignores_non_todowrite_events(self) -> None:
         """Callback ignores tool uses that aren't TodoWrite."""
