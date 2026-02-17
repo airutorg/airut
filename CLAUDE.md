@@ -238,7 +238,9 @@ airut/                        - Library code
   conversation/             - Conversation directory layout and preparation
   dashboard/                - Web dashboard server
   gateway/                  - Protocol-agnostic gateway service
-    channel.py              - ChannelAdapter protocol + ParsedMessage
+    channel.py              - Channel protocols (ChannelAdapter, ChannelListener, ChannelConfig)
+    config.py               - Gateway configuration dataclasses
+    conversation.py         - ConversationManager (git checkout, state persistence)
     email/                  - Email channel implementation
     service/                - Core orchestration (GatewayService, RepoHandler)
   gh/                       - GitHub API wrappers
@@ -249,7 +251,7 @@ airut/                        - Library code
   sandbox/                  - Sandboxed execution (container, proxy, session, image)
   version.py                - Version info, install source, upstream updates
 scripts/                    - CLI tools
-  airut.py                  - Email gateway entry point (uv run airut)
+  airut.py                  - Gateway entry point (uv run airut)
   ci.py, pr.py              - CI/PR tools
   install_services.py       - Migration stub for legacy updater
   check_licenses.py         - Runtime dependency license compliance
@@ -258,12 +260,12 @@ spec/                       - Design specifications (see spec/README.md)
 tests/                      - Unit tests (100% coverage required)
   claude_output/            - Claude output parser tests
   conversation/             - Conversation layout tests
-  test_dns.py               - DNS resolver tests
   sandbox/                  - Sandbox execution tests
   dashboard/                - Dashboard tests
   gateway/                  - Gateway tests
     email/                  - Email channel tests
     service/                - Core service tests
+  integration/              - End-to-end integration tests (ci.py --workflow e2e)
 workflows/                  - Step-by-step operational guides
 ```
 
@@ -271,7 +273,7 @@ workflows/                  - Step-by-step operational guides
 
 - `scripts/ci.py` — local CI runner (runs all checks)
 - `scripts/pr.py` — PR workflow (CI status and review comments)
-- `scripts/airut.py` — email gateway entry point (`uv run airut`)
+- `scripts/airut.py` — gateway entry point (`uv run airut`)
 
 ## Standards
 

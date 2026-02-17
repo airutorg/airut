@@ -43,6 +43,11 @@ protocol handling (email IMAP/SMTP, etc.) via types in `gateway/channel.py`:
 - **`RawMessage[T]`** — Generic dataclass wrapping a channel-specific payload
   (`T`) with sender identity and display_title. The email channel uses
   `RawMessage[email.message.Message]`; the core uses `RawMessage[Any]`.
+- **`ChannelConfig`** — `typing.Protocol` defining the configuration interface
+  for channel implementations. Requires `channel_type` (e.g., `"email"`) and
+  `channel_info` (human-readable summary for dashboard display) properties. All
+  channel config dataclasses (e.g., `EmailChannelConfig`) implement this
+  protocol.
 - **`ChannelAdapter`** — `typing.Protocol` defining the interface between the
   core and channel implementations: `listener` property (a `ChannelListener`),
   `authenticate_and_parse()`, `save_attachments()`, `send_acknowledgment()`,
@@ -50,8 +55,8 @@ protocol handling (email IMAP/SMTP, etc.) via types in `gateway/channel.py`:
 
 Each channel implements `ChannelAdapter` (e.g., `EmailChannelAdapter` in
 `gateway/email/adapter.py`). The core works entirely through `ParsedMessage`,
-`ChannelListener`, and `ChannelAdapter` — it imports nothing from
-channel-specific subpackages. A factory function `create_adapter()` in
+`ChannelConfig`, `ChannelListener`, and `ChannelAdapter` — it imports nothing
+from channel-specific subpackages. A factory function `create_adapter()` in
 `gateway/service/adapter_factory.py` dispatches on channel config type to create
 the appropriate adapter.
 

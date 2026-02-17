@@ -129,7 +129,7 @@ config.
 Each repo gets fully isolated storage. No files are shared between repos.
 
 ```
-~/email-service-storage/
+~/.local/state/airut/
 ├── airut/                        # Per-repo storage root
 │   ├── git-mirror/               # Shared across conversations for this repo
 │   └── conversations/
@@ -157,7 +157,7 @@ GatewayService (orchestrator)
 │   ├── "airut" → RepoHandler
 │   │   ├── config: RepoServerConfig
 │   │   ├── adapter: EmailChannelAdapter    (per-repo channel adapter)
-│   │   │   ├── listener: EmailListener     (per-repo IMAP)
+│   │   │   ├── listener: EmailChannelListener (per-repo IMAP)
 │   │   │   ├── responder: EmailResponder   (per-repo SMTP)
 │   │   │   ├── authenticator: SenderAuthenticator
 │   │   │   └── authorizer: SenderAuthorizer
@@ -245,8 +245,11 @@ class GlobalConfig:
 
 
 @dataclass(frozen=True)
-class EmailChannelConfig:
-    """Email channel configuration (nested under email: in YAML)."""
+class EmailChannelConfig(ChannelConfig):
+    """Email channel configuration (nested under email: in YAML).
+
+    Implements the ChannelConfig protocol (channel_type, channel_info).
+    """
 
     imap_server: str
     smtp_server: str
@@ -273,7 +276,7 @@ class RepoServerConfig:
 
     repo_id: str
     git_repo_url: str
-    email: EmailChannelConfig
+    channel: EmailChannelConfig  # ChannelConfig implementation
     secrets: dict[str, str]
     masked_secrets: dict[str, MaskedSecret]
     signing_credentials: dict[str, SigningCredential]
