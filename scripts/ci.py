@@ -16,18 +16,26 @@ Usage:
     uv run scripts/ci.py --verbose # Show output even on success
     uv run scripts/ci.py --step-timeout 600  # Use 10-minute timeout per step
     uv run scripts/ci.py --step-timeout 0    # Disable timeout
+    uv run scripts/ci.py --timeout 120       # Set overall timeout to 2 minutes
+    uv run scripts/ci.py --timeout 0         # Disable overall timeout
 """
 
 import argparse
 import logging
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 
 
 # Default timeout per CI step (5 minutes)
 # Can be overridden with --step-timeout flag
 DEFAULT_STEP_TIMEOUT_SECONDS = 300
+
+# Default overall timeout for the entire CI run (90 seconds).
+# Based on measured execution time of ~56s with 50% buffer.
+# Can be overridden with --timeout flag.
+DEFAULT_TIMEOUT_SECONDS = 90
 
 
 logger = logging.getLogger(__name__)
@@ -139,7 +147,11 @@ def colorize(text: str, color: str) -> str:
 
 
 def run_step(
-    step: Step, fix_mode: bool, verbose: bool, step_timeout: int
+    step: Step,
+    fix_mode: bool,
+    verbose: bool,
+    step_timeout: int,
+    deadline: float | None = None,
 ) -> tuple[bool, str]:
     """Run a single CI step.
 
@@ -148,6 +160,9 @@ def run_step(
         fix_mode: If True and step has fix_command, run that instead
         verbose: If True, always return full output
         step_timeout: Timeout in seconds for the step (0 = no timeout)
+        deadline: Monotonic clock deadline for overall CI run (None = no
+            deadline). The effective step timeout is capped to the remaining
+            time before the deadline.
 
     Returns:
         Tuple of (success, output_to_display)
@@ -158,6 +173,19 @@ def run_step(
     else:
         command = step.command
 
+    # Calculate effective timeout: min of step timeout and remaining deadline
+    effective_timeout: float | None = None
+    if step_timeout > 0:
+        effective_timeout = float(step_timeout)
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            remaining = 0.1  # Let subprocess start and fail immediately
+        if effective_timeout is None:
+            effective_timeout = remaining
+        else:
+            effective_timeout = min(effective_timeout, remaining)
+
     # Run the command with timeout (if enabled)
     try:
         result = subprocess.run(
@@ -165,7 +193,7 @@ def run_step(
             shell=True,
             capture_output=True,
             text=True,
-            timeout=step_timeout if step_timeout > 0 else None,
+            timeout=effective_timeout,
         )
     except subprocess.TimeoutExpired:
         error_msg = (
@@ -202,11 +230,41 @@ def run_step(
     return False, output
 
 
+def _format_overall_timeout_message(elapsed: float, timeout: int) -> str:
+    """Format the error message shown when overall CI timeout is exceeded."""
+    return (
+        f"OVERALL CI TIMEOUT: ci.py exceeded {timeout}s "
+        f"(elapsed: {elapsed:.0f}s).\n"
+        "\n"
+        "─── IMPORTANT: Read carefully ───\n"
+        "\n"
+        "1. MOST LIKELY: A test is hanging. Investigate which test is\n"
+        "   stuck by running the test suite directly with verbose output\n"
+        "   and a per-test timeout (e.g. pytest --timeout=10 -v).\n"
+        "\n"
+        '2. DO NOT assume this is "flaky" or a transient issue.\n'
+        "   Non-deterministic test durations are a bug. If tests sometimes\n"
+        "   take much longer than usual, that variance itself must be\n"
+        "   investigated and fixed (e.g. missing mocks, real network calls,\n"
+        "   unbounded retries, sleep() in tests).\n"
+        "\n"
+        "3. ONLY after thorough investigation confirms that total execution\n"
+        "   time has legitimately and consistently increased (new tests,\n"
+        "   heavier checks), update DEFAULT_TIMEOUT_SECONDS in ci.py.\n"
+        "   Set it to the measured time + 50%% buffer.\n"
+        "\n"
+        f"Current default: --timeout {timeout}\n"
+        f"Override once:   ci.py --timeout {timeout * 2}\n"
+        "Disable:         ci.py --timeout 0"
+    )
+
+
 def run_ci(
     workflows: list[str] | None = None,
     fix_mode: bool = False,
     verbose: bool = False,
     step_timeout: int = DEFAULT_STEP_TIMEOUT_SECONDS,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
 ) -> int:
     """Run CI checks.
 
@@ -215,6 +273,7 @@ def run_ci(
         fix_mode: If True, run fix commands where available
         verbose: If True, show output even on success
         step_timeout: Timeout in seconds per step (0 = no timeout)
+        timeout: Overall timeout in seconds for entire CI run (0 = no timeout)
 
     Returns:
         Exit code (0 for success, 1 for failure)
@@ -228,11 +287,26 @@ def run_ci(
         print(colorize("No steps to run for specified workflow(s)", YELLOW))
         return 2
 
+    start_time = time.monotonic()
+    deadline: float | None = None
+    if timeout > 0:
+        deadline = start_time + timeout
+
     failed_steps: list[tuple[Step, str]] = []
     passed_count = 0
+    timed_out = False
 
     for step in steps_to_run:
-        success, output = run_step(step, fix_mode, verbose, step_timeout)
+        # Check overall deadline before starting a new step
+        if deadline is not None:
+            elapsed = time.monotonic() - start_time
+            if elapsed >= timeout:
+                timed_out = True
+                break
+
+        success, output = run_step(
+            step, fix_mode, verbose, step_timeout, deadline
+        )
 
         if success:
             print(colorize(f"✓ {step.name}", GREEN))
@@ -242,6 +316,19 @@ def run_ci(
         else:
             print(colorize(f"✗ {step.name}", RED))
             failed_steps.append((step, output))
+            # Check if the failure was caused by the overall deadline
+            if deadline is not None and time.monotonic() >= deadline:
+                timed_out = True
+                break
+
+    if timed_out:
+        elapsed = time.monotonic() - start_time
+        print()
+        print(colorize("✗ TIMEOUT", RED + BOLD))
+        print("─" * 60)
+        print(_format_overall_timeout_message(elapsed, timeout))
+        print("─" * 60)
+        return 1
 
     # Print failure details
     for step, output in failed_steps:
@@ -259,9 +346,14 @@ def run_ci(
     # Print summary
     total = len(steps_to_run)
     failed = len(failed_steps)
+    elapsed = time.monotonic() - start_time
     print()
     if failed == 0:
-        print(colorize(f"All {total} checks passed", GREEN + BOLD))
+        print(
+            colorize(
+                f"All {total} checks passed ({elapsed:.0f}s)", GREEN + BOLD
+            )
+        )
         return 0
     else:
         print(
@@ -305,6 +397,16 @@ def main() -> int:
             "0 = no timeout)"
         ),
     )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=DEFAULT_TIMEOUT_SECONDS,
+        help=(
+            "Overall timeout in seconds for the entire CI run "
+            f"(default: {DEFAULT_TIMEOUT_SECONDS}, "
+            "0 = no timeout)"
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -313,6 +415,7 @@ def main() -> int:
         fix_mode=args.fix,
         verbose=args.verbose,
         step_timeout=args.step_timeout,
+        timeout=args.timeout,
     )
 
 
