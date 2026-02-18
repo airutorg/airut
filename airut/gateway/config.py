@@ -792,6 +792,14 @@ class RepoServerConfig:
                 f"configured"
             )
 
+        unknown = self.channels.keys() - CHANNEL_KEYS
+        if unknown:
+            raise ValueError(
+                f"Repo '{self.repo_id}': unknown channel type(s): "
+                f"{', '.join(sorted(unknown))}. "
+                f"Supported: {', '.join(sorted(CHANNEL_KEYS))}"
+            )
+
         channel_summary = ", ".join(
             f"{ct}={cc.channel_info}" for ct, cc in self.channels.items()
         )
@@ -984,11 +992,11 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
 
     # Detect channel blocks dynamically instead of hardcoding email
     # as mandatory.  At least one channel must be present.
-    found_channels = CHANNEL_KEYS & raw.keys()
-    if not found_channels:
+    if not (CHANNEL_KEYS & raw.keys()):
+        hint = " or ".join(f"{k}:" for k in sorted(CHANNEL_KEYS))
         raise ConfigError(
             f"{prefix}: no channel configured "
-            f"(add email: or slack:). "
+            f"(add {hint}). "
             f"See config/airut.example.yaml for the current format."
         )
 

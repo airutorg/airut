@@ -514,6 +514,18 @@ def test_repo_server_config_empty_channels() -> None:
         )
 
 
+def test_repo_server_config_unknown_channel_key() -> None:
+    """RepoServerConfig rejects unrecognized channel keys."""
+    mock_config = MagicMock(spec=EmailChannelConfig)
+    mock_config.channel_info = "test"
+    with pytest.raises(ValueError, match="unknown channel type"):
+        RepoServerConfig(
+            repo_id="test",
+            git_repo_url="https://example.com/r.git",
+            channels={"typo": mock_config},
+        )
+
+
 def test_repo_server_config_empty_repo_url(tmp_path: Path) -> None:
     """Test repo server configuration with empty repository URL."""
     work_dir = tmp_path / "work"
@@ -805,18 +817,22 @@ class TestServerConfigValidation:
     def test_non_email_channel_skipped_in_inbox_check(
         self, tmp_path: Path
     ) -> None:
-        """Non-email channels are skipped during IMAP inbox validation."""
+        """Non-EmailChannelConfig channels skip IMAP inbox validation.
+
+        Even when keyed as "email", a channel that is not an
+        EmailChannelConfig instance is skipped during inbox
+        deduplication.  Validates the isinstance() guard in
+        ServerConfig.__post_init__.
+        """
         r1 = self._repo("a", tmp_path)
-        # Simulate a non-email channel config
+        # Build a RepoServerConfig then swap channels via
+        # object.__setattr__ (frozen dataclass).
+        r2 = self._repo("b", tmp_path, username="unique@example.com")
         mock_channel = MagicMock(spec=[])
-        mock_channel.channel_type = "slack"
-        mock_channel.channel_info = "slack-channel"
-        r2 = RepoServerConfig(
-            repo_id="b",
-            git_repo_url="https://example.com/repo.git",
-            channels={"slack": mock_channel},
-        )
-        # Should not raise — the non-email repo is skipped
+        mock_channel.channel_type = "email"
+        mock_channel.channel_info = "mock-imap"
+        object.__setattr__(r2, "channels", {"email": mock_channel})
+        # Should not raise — non-EmailChannelConfig is skipped
         ServerConfig(global_config=GlobalConfig(), repos={"a": r1, "b": r2})
 
     def test_duplicate_inbox_rejected(self, tmp_path: Path) -> None:
