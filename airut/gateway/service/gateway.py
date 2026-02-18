@@ -37,6 +37,7 @@ from airut.dashboard.tracker import (
     MAX_PENDING_PER_CONVERSATION,
     BootPhase,
     BootState,
+    ChannelInfo,
     CompletionReason,
     RepoState,
     RepoStatus,
@@ -49,7 +50,7 @@ from airut.gateway.channel import (
     ParsedMessage,
     RawMessage,
 )
-from airut.gateway.config import ServerConfig
+from airut.gateway.config import RepoServerConfig, ServerConfig
 from airut.gateway.service.message_processing import (
     process_message,
 )
@@ -60,6 +61,26 @@ from airut.version import GitVersionInfo, get_git_version_info
 
 
 logger = logging.getLogger(__name__)
+
+
+def _build_channel_infos(
+    config: RepoServerConfig,
+) -> tuple[ChannelInfo, ...]:
+    """Build a tuple of ChannelInfo from a repo config's channels.
+
+    Args:
+        config: Per-repo server configuration.
+
+    Returns:
+        Tuple of ChannelInfo for dashboard display.
+    """
+    return tuple(
+        ChannelInfo(
+            channel_type=channel_type,
+            info=channel_config.channel_info,
+        )
+        for channel_type, channel_config in config.channels.items()
+    )
 
 
 @dataclass
@@ -360,7 +381,7 @@ class GatewayService:
                 error_message=error_msg,
                 error_type=error_type,
                 git_repo_url=repo_config.git_repo_url,
-                channel_info=repo_config.channel_info,
+                channels=_build_channel_infos(repo_config),
                 storage_dir=str(repo_config.storage_dir),
             )
 
@@ -382,7 +403,7 @@ class GatewayService:
                     repo_id=repo_id,
                     status=RepoStatus.LIVE,
                     git_repo_url=config.git_repo_url,
-                    channel_info=config.channel_info,
+                    channels=_build_channel_infos(config),
                     storage_dir=str(config.storage_dir),
                 )
                 logger.info("Repo '%s': started successfully", repo_id)
@@ -395,7 +416,7 @@ class GatewayService:
                     error_message=error_msg,
                     error_type=error_type,
                     git_repo_url=config.git_repo_url,
-                    channel_info=config.channel_info,
+                    channels=_build_channel_infos(config),
                     storage_dir=str(config.storage_dir),
                 )
                 logger.error(
@@ -560,6 +581,7 @@ class GatewayService:
         self,
         raw_message: RawMessage[Any],
         repo_handler: RepoHandler,
+        adapter: ChannelAdapter,
     ) -> bool:
         """Submit a raw message for authentication and processing.
 
@@ -569,6 +591,7 @@ class GatewayService:
         Args:
             raw_message: Channel-agnostic raw message envelope.
             repo_handler: The repo handler that received this message.
+            adapter: The originating channel adapter.
 
         Returns:
             True if message was submitted, False if pool not ready.
@@ -597,6 +620,7 @@ class GatewayService:
             raw_message,
             task_id,
             repo_handler,
+            adapter,
         )
 
         with self._futures_lock:
@@ -629,10 +653,10 @@ class GatewayService:
         raw_message: RawMessage[Any],
         task_id: str,
         repo_handler: RepoHandler,
+        adapter: ChannelAdapter,
     ) -> None:
         """Worker thread entry point for message processing."""
         self.tracker.set_authenticating(task_id)
-        adapter = repo_handler.adapter
 
         reason = CompletionReason.INTERNAL_ERROR
         detail = ""

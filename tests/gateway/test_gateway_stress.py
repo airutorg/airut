@@ -25,6 +25,7 @@ from unittest.mock import MagicMock, patch
 
 from airut.dashboard.tracker import (
     BootPhase,
+    ChannelInfo,
     CompletionReason,
     RepoState,
     RepoStatus,
@@ -80,7 +81,7 @@ class TestWorkerLifecycleRealTracker:
             model_hint=None,
             display_title="Build the feature",
         )
-        handler.adapter.authenticate_and_parse.return_value = parsed
+        handler.adapters["email"].authenticate_and_parse.return_value = parsed
         handler.conversation_manager.exists.return_value = False
 
         task_id = "new-aabb0011"
@@ -96,7 +97,10 @@ class TestWorkerLifecycleRealTracker:
             side_effect=fake_process,
         ):
             svc._process_message_worker(
-                RawMessage(sender="test", content=None), task_id, handler
+                RawMessage(sender="test", content=None),
+                task_id,
+                handler,
+                handler.adapters["email"],
             )
 
         # Task stays under its task_id (never renamed)
@@ -112,17 +116,20 @@ class TestWorkerLifecycleRealTracker:
         """AuthenticationError records sender and marks task failed."""
         svc, handler = _make_gateway_real_tracker(email_config, tmp_path)
 
-        handler.adapter.authenticate_and_parse.side_effect = (
-            AuthenticationError(
-                sender="evil@hacker.com",
-                reason="DMARC check failed",
-            )
+        handler.adapters[
+            "email"
+        ].authenticate_and_parse.side_effect = AuthenticationError(
+            sender="evil@hacker.com",
+            reason="DMARC check failed",
         )
 
         task_id = "new-auth-fail"
         svc.tracker.add_task(task_id, "(authenticating)", repo_id="test")
         svc._process_message_worker(
-            RawMessage(sender="test", content=None), task_id, handler
+            RawMessage(sender="test", content=None),
+            task_id,
+            handler,
+            handler.adapters["email"],
         )
 
         task = svc.tracker.get_task(task_id)
@@ -138,14 +145,19 @@ class TestWorkerLifecycleRealTracker:
         """Non-auth exception leaves subject as-is."""
         svc, handler = _make_gateway_real_tracker(email_config, tmp_path)
 
-        handler.adapter.authenticate_and_parse.side_effect = RuntimeError(
+        handler.adapters[
+            "email"
+        ].authenticate_and_parse.side_effect = RuntimeError(
             "IMAP socket closed"
         )
 
         task_id = "new-crash-00"
         svc.tracker.add_task(task_id, "(authenticating)", repo_id="test")
         svc._process_message_worker(
-            RawMessage(sender="test", content=None), task_id, handler
+            RawMessage(sender="test", content=None),
+            task_id,
+            handler,
+            handler.adapters["email"],
         )
 
         task = svc.tracker.get_task(task_id)
@@ -174,7 +186,7 @@ class TestWorkerLifecycleRealTracker:
             model_hint=None,
             display_title="Re: [ID:existing01] Follow-up",
         )
-        handler.adapter.authenticate_and_parse.return_value = parsed
+        handler.adapters["email"].authenticate_and_parse.return_value = parsed
         handler.conversation_manager.exists.return_value = True
 
         temp_id = "new-resume01"
@@ -185,7 +197,10 @@ class TestWorkerLifecycleRealTracker:
             return_value=(CompletionReason.SUCCESS, conv_id),
         ):
             svc._process_message_worker(
-                RawMessage(sender="test", content=None), temp_id, handler
+                RawMessage(sender="test", content=None),
+                temp_id,
+                handler,
+                handler.adapters["email"],
             )
 
         # Task stays under temp_id with conversation_id assigned
@@ -224,16 +239,19 @@ class TestDuplicateRejectionStress:
             conversation_id=conv_id,
             model_hint=None,
         )
-        handler.adapter.authenticate_and_parse.return_value = parsed
+        handler.adapters["email"].authenticate_and_parse.return_value = parsed
 
         temp_id = "new-dup-q"
         svc.tracker.add_task(temp_id, "(authenticating)")
         svc._process_message_worker(
-            RawMessage(sender="test", content=None), temp_id, handler
+            RawMessage(sender="test", content=None),
+            temp_id,
+            handler,
+            handler.adapters["email"],
         )
 
         # New behavior: messages for active conversations are queued
-        handler.adapter.send_rejection.assert_not_called()
+        handler.adapters["email"].send_rejection.assert_not_called()
         task = svc.tracker.get_task(temp_id)
         assert task is not None
         assert task.status == TaskStatus.PENDING
@@ -258,16 +276,19 @@ class TestDuplicateRejectionStress:
             conversation_id=conv_id,
             model_hint=None,
         )
-        handler.adapter.authenticate_and_parse.return_value = parsed
+        handler.adapters["email"].authenticate_and_parse.return_value = parsed
 
         temp_id = "new-dup-ip"
         svc.tracker.add_task(temp_id, "(authenticating)")
         svc._process_message_worker(
-            RawMessage(sender="test", content=None), temp_id, handler
+            RawMessage(sender="test", content=None),
+            temp_id,
+            handler,
+            handler.adapters["email"],
         )
 
         # New behavior: messages for active conversations are queued
-        handler.adapter.send_rejection.assert_not_called()
+        handler.adapters["email"].send_rejection.assert_not_called()
         task = svc.tracker.get_task(temp_id)
         assert task is not None
         assert task.status == TaskStatus.PENDING
@@ -293,7 +314,7 @@ class TestDuplicateRejectionStress:
             conversation_id=conv_id,
             model_hint=None,
         )
-        handler.adapter.authenticate_and_parse.return_value = parsed
+        handler.adapters["email"].authenticate_and_parse.return_value = parsed
         handler.conversation_manager.exists.return_value = True
 
         temp_id = "new-dup-ok"
@@ -307,10 +328,13 @@ class TestDuplicateRejectionStress:
             side_effect=fake_process,
         ):
             svc._process_message_worker(
-                RawMessage(sender="test", content=None), temp_id, handler
+                RawMessage(sender="test", content=None),
+                temp_id,
+                handler,
+                handler.adapters["email"],
             )
 
-        handler.adapter.send_rejection.assert_not_called()
+        handler.adapters["email"].send_rejection.assert_not_called()
 
     def test_no_conv_id_never_triggers_duplicate_check(
         self, email_config, tmp_path: Path
@@ -324,7 +348,7 @@ class TestDuplicateRejectionStress:
             conversation_id=None,
             model_hint=None,
         )
-        handler.adapter.authenticate_and_parse.return_value = parsed
+        handler.adapters["email"].authenticate_and_parse.return_value = parsed
         handler.conversation_manager.exists.return_value = False
 
         temp_id = "new-fresh01"
@@ -339,10 +363,13 @@ class TestDuplicateRejectionStress:
             side_effect=fake_process,
         ):
             svc._process_message_worker(
-                RawMessage(sender="test", content=None), temp_id, handler
+                RawMessage(sender="test", content=None),
+                temp_id,
+                handler,
+                handler.adapters["email"],
             )
 
-        handler.adapter.send_rejection.assert_not_called()
+        handler.adapters["email"].send_rejection.assert_not_called()
 
 
 # ===================================================================
@@ -584,7 +611,7 @@ class TestSubmitMessageEdgeCases:
         svc._executor_pool.submit.return_value = mock_future
 
         msg = make_message()
-        result = svc.submit_message(msg, handler)
+        result = svc.submit_message(msg, handler, handler.adapters["email"])
 
         assert result is True
         # There should be exactly one task (with a uuid-based task_id)
@@ -601,7 +628,7 @@ class TestSubmitMessageEdgeCases:
         mock_future = MagicMock()
         svc._executor_pool.submit.return_value = mock_future
 
-        svc.submit_message(make_message(), handler)
+        svc.submit_message(make_message(), handler, handler.adapters["email"])
         assert mock_future in svc._pending_futures
 
 
@@ -684,7 +711,7 @@ class TestBootStateEdgeCases:
         def fake_start(**kwargs):
             svc._running = False
 
-        handler.adapter.listener.start.side_effect = fake_start
+        handler.adapters["email"].listener.start.side_effect = fake_start
         svc.start()
 
         assert BootPhase.PROXY in phases_seen
@@ -697,7 +724,9 @@ class TestBootStateEdgeCases:
             email_config, tmp_path, dashboard_enabled=True
         )
 
-        handler.adapter.listener.start.side_effect = RuntimeError("fail")
+        handler.adapters["email"].listener.start.side_effect = RuntimeError(
+            "fail"
+        )
 
         with (
             patch("airut.gateway.service.gateway.DashboardServer") as mock_ds,
@@ -782,14 +811,22 @@ class TestMultiRepoInteractions:
                     repo_id="test",
                     status=RepoStatus.LIVE,
                     git_repo_url="https://example.com/r1",
-                    channel_info="imap.example.com",
+                    channels=(
+                        ChannelInfo(
+                            channel_type="email", info="imap.example.com"
+                        ),
+                    ),
                     storage_dir="/s/test",
                 ),
                 RepoState(
                     repo_id="failed-repo",
                     status=RepoStatus.FAILED,
                     git_repo_url="https://example.com/r2",
-                    channel_info="imap2.example.com",
+                    channels=(
+                        ChannelInfo(
+                            channel_type="email", info="imap2.example.com"
+                        ),
+                    ),
                     storage_dir="/s/failed",
                 ),
             )
@@ -876,7 +913,7 @@ class TestWorkerEdgeCases:
             model_hint=None,
             display_title="Empty body",
         )
-        handler.adapter.authenticate_and_parse.return_value = parsed
+        handler.adapters["email"].authenticate_and_parse.return_value = parsed
         handler.conversation_manager.exists.return_value = False
 
         temp_id = "new-empty01"
@@ -890,7 +927,10 @@ class TestWorkerEdgeCases:
             side_effect=fake_process,
         ) as mock_process:
             svc._process_message_worker(
-                RawMessage(sender="test", content=None), temp_id, handler
+                RawMessage(sender="test", content=None),
+                temp_id,
+                handler,
+                handler.adapters["email"],
             )
 
         # process_message is called — it handles empty body detection
@@ -909,7 +949,7 @@ class TestWorkerEdgeCases:
             model_hint=None,
             display_title="",
         )
-        handler.adapter.authenticate_and_parse.return_value = parsed
+        handler.adapters["email"].authenticate_and_parse.return_value = parsed
         handler.conversation_manager.exists.return_value = False
 
         temp_id = "new-nosub01"
@@ -924,7 +964,10 @@ class TestWorkerEdgeCases:
             side_effect=fake_process,
         ):
             svc._process_message_worker(
-                RawMessage(sender="test", content=None), temp_id, handler
+                RawMessage(sender="test", content=None),
+                temp_id,
+                handler,
+                handler.adapters["email"],
             )
 
         # display_title should be "(no subject)" since parsed.display_title
@@ -960,7 +1003,7 @@ class TestWorkerEdgeCases:
             model_hint=None,
             display_title="Re: resume",
         )
-        handler.adapter.authenticate_and_parse.return_value = parsed
+        handler.adapters["email"].authenticate_and_parse.return_value = parsed
         # exists=True means this is a resumed conversation; the worker
         # will acquire a conversation lock and call process_message inside it
         handler.conversation_manager.exists.return_value = True
@@ -973,7 +1016,10 @@ class TestWorkerEdgeCases:
             side_effect=RuntimeError("kaboom"),
         ):
             svc._process_message_worker(
-                RawMessage(sender="test", content=None), temp_id, handler
+                RawMessage(sender="test", content=None),
+                temp_id,
+                handler,
+                handler.adapters["email"],
             )
 
         # Task stays under temp_id and should be completed (failed)
@@ -1020,7 +1066,7 @@ class TestQueueFullRejection:
                     parsed=MagicMock(conversation_id=conv_id),
                     task_id=f"pending-{i}",
                     repo_handler=handler,
-                    adapter=handler.adapter,
+                    adapter=handler.adapters["email"],
                 )
             )
         svc._pending_messages[conv_id] = queue
@@ -1033,17 +1079,20 @@ class TestQueueFullRejection:
             model_hint=None,
             display_title="Overflow message",
         )
-        handler.adapter.authenticate_and_parse.return_value = parsed
+        handler.adapters["email"].authenticate_and_parse.return_value = parsed
 
         temp_id = "new-overflow"
         svc.tracker.add_task(temp_id, "(authenticating)", repo_id="test")
         svc._process_message_worker(
-            RawMessage(sender="test", content=None), temp_id, handler
+            RawMessage(sender="test", content=None),
+            temp_id,
+            handler,
+            handler.adapters["email"],
         )
 
         # Should have called send_rejection
-        handler.adapter.send_rejection.assert_called_once()
-        call_args = handler.adapter.send_rejection.call_args
+        handler.adapters["email"].send_rejection.assert_called_once()
+        call_args = handler.adapters["email"].send_rejection.call_args
         assert call_args[0][0] is parsed
         assert call_args[0][1] == conv_id
         assert "Too many messages queued" in call_args[0][2]

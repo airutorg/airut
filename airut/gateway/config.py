@@ -720,11 +720,16 @@ class EmailChannelConfig(ChannelConfig):
         return self.imap_server
 
 
+#: Channel type keys recognized in server config.
+#: Extend as new channel types are added.
+CHANNEL_KEYS = {"email"}
+
+
 @dataclass(frozen=True)
 class RepoServerConfig:
     """Per-repo server-side configuration.
 
-    Contains the channel configuration, secrets, and shared settings for a
+    Contains the channel configurations, secrets, and shared settings for a
     single repository.  Loaded from the ``repos.<name>`` section of the
     server config file.
 
@@ -734,7 +739,8 @@ class RepoServerConfig:
     Attributes:
         repo_id: Repository identifier (key from ``repos`` mapping).
         git_repo_url: Git repository URL to clone from.
-        channel: Channel configuration (email, Slack, etc.).
+        channels: Channel configurations keyed by channel type
+            (e.g. ``{"email": EmailChannelConfig(...)}``)
         secrets: Per-repo secrets pool for ``!secret`` resolution.
         masked_secrets: Secrets with scope restrictions for proxy replacement.
         signing_credentials: Signing credentials for proxy re-signing.
@@ -745,7 +751,7 @@ class RepoServerConfig:
 
     repo_id: str
     git_repo_url: str
-    channel: EmailChannelConfig
+    channels: dict[str, ChannelConfig]
     secrets: dict[str, str] = field(default_factory=dict)
     masked_secrets: dict[str, MaskedSecret] = field(default_factory=dict)
     signing_credentials: dict[str, SigningCredential] = field(
@@ -780,22 +786,20 @@ class RepoServerConfig:
                 f"Repo '{self.repo_id}': git.repo_url cannot be empty"
             )
 
-        logger.info(
-            "Repo '%s' config loaded: channel=%s, info=%s",
-            self.repo_id,
-            self.channel_type,
-            self.channel_info,
+        if not self.channels:
+            raise ValueError(
+                f"Repo '{self.repo_id}': at least one channel must be "
+                f"configured"
+            )
+
+        channel_summary = ", ".join(
+            f"{ct}={cc.channel_info}" for ct, cc in self.channels.items()
         )
-
-    @property
-    def channel_type(self) -> str:
-        """Return the channel type string (delegated to channel config)."""
-        return self.channel.channel_type
-
-    @property
-    def channel_info(self) -> str:
-        """Return channel info for dashboard (delegated to channel config)."""
-        return self.channel.channel_info
+        logger.info(
+            "Repo '%s' config loaded: channels=[%s]",
+            self.repo_id,
+            channel_summary,
+        )
 
     @property
     def storage_dir(self) -> Path:
@@ -829,17 +833,20 @@ class ServerConfig:
         # Validate no duplicate IMAP inboxes (for email-channel repos)
         seen_inboxes: dict[tuple[str, str], str] = {}
         for repo_id, repo in self.repos.items():
-            if not isinstance(repo.channel, EmailChannelConfig):
+            email_config = repo.channels.get("email")
+            if email_config is None or not isinstance(
+                email_config, EmailChannelConfig
+            ):
                 continue
             inbox_key = (
-                repo.channel.imap_server.lower(),
-                repo.channel.username.lower(),
+                email_config.imap_server.lower(),
+                email_config.username.lower(),
             )
             if inbox_key in seen_inboxes:
                 raise ConfigError(
                     f"Repo '{repo_id}' and repo '{seen_inboxes[inbox_key]}' "
                     f"share the same IMAP inbox "
-                    f"({repo.channel.imap_server}/{repo.channel.username}). "
+                    f"({email_config.imap_server}/{email_config.username}). "
                     f"Each repo must have its own inbox."
                 )
             seen_inboxes[inbox_key] = repo_id
@@ -975,17 +982,16 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
             f"See config/airut.example.yaml for the current format."
         )
 
-    # Channel selection: exactly one channel block must be present.
-    # Currently only email is supported.
-    if "email" not in raw:
+    # Detect channel blocks dynamically instead of hardcoding email
+    # as mandatory.  At least one channel must be present.
+    found_channels = CHANNEL_KEYS & raw.keys()
+    if not found_channels:
         raise ConfigError(
-            f"{prefix}: no channel configuration found. "
-            f"Add an 'email:' block with IMAP/SMTP settings. "
+            f"{prefix}: no channel configured "
+            f"(add email: or slack:). "
             f"See config/airut.example.yaml for the current format."
         )
 
-    email = raw.get("email", {})
-    imap = email.get("imap", {})
     network = raw.get("network", {})
 
     # Resolve per-repo secrets
@@ -995,6 +1001,44 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
     # Resolve masked secrets
     raw_masked = raw.get("masked_secrets", {})
     masked_secrets = _resolve_masked_secrets(raw_masked, prefix)
+
+    # Resolve signing credentials
+    raw_signing = raw.get("signing_credentials", {})
+    signing_credentials = _resolve_signing_credentials(raw_signing, prefix)
+
+    # Parse each channel block
+    channels: dict[str, ChannelConfig] = {}
+    if "email" in raw:
+        channels["email"] = _parse_email_channel_config(raw["email"], prefix)
+
+    return RepoServerConfig(
+        repo_id=repo_id,
+        git_repo_url=_resolve(
+            raw.get("git", {}).get("repo_url"),
+            str,
+            required=f"{prefix}.git.repo_url",
+        ),
+        channels=channels,
+        secrets=secrets,
+        masked_secrets=masked_secrets,
+        signing_credentials=signing_credentials,
+        network_sandbox_enabled=_resolve(
+            network.get("sandbox_enabled"), bool, default=True
+        ),
+    )
+
+
+def _parse_email_channel_config(email: dict, prefix: str) -> EmailChannelConfig:
+    """Parse an email channel config block.
+
+    Args:
+        email: Raw YAML dict for the ``email:`` block.
+        prefix: Config path prefix for error messages.
+
+    Returns:
+        EmailChannelConfig instance.
+    """
+    imap = email.get("imap", {})
 
     # Resolve Microsoft OAuth2 config (optional block)
     ms_oauth2 = email.get("microsoft_oauth2", {})
@@ -1010,11 +1054,7 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
 
     has_oauth2 = ms_tenant_id or ms_client_id or ms_client_secret
 
-    # Resolve signing credentials
-    raw_signing = raw.get("signing_credentials", {})
-    signing_credentials = _resolve_signing_credentials(raw_signing, prefix)
-
-    email_config = EmailChannelConfig(
+    return EmailChannelConfig(
         imap_server=_resolve(
             email.get("imap_server"),
             str,
@@ -1067,22 +1107,6 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
         microsoft_oauth2_tenant_id=ms_tenant_id,
         microsoft_oauth2_client_id=ms_client_id,
         microsoft_oauth2_client_secret=ms_client_secret,
-    )
-
-    return RepoServerConfig(
-        repo_id=repo_id,
-        git_repo_url=_resolve(
-            raw.get("git", {}).get("repo_url"),
-            str,
-            required=f"{prefix}.git.repo_url",
-        ),
-        channel=email_config,
-        secrets=secrets,
-        masked_secrets=masked_secrets,
-        signing_credentials=signing_credentials,
-        network_sandbox_enabled=_resolve(
-            network.get("sandbox_enabled"), bool, default=True
-        ),
     )
 
 

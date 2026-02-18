@@ -81,8 +81,9 @@ settings. Per-repo config is nested under `repos.<repo_id>`:
 **Important:** All email-specific fields (`authorized_senders`,
 `trusted_authserv_id`, `microsoft_internal_auth_fallback`, `imap`) must be
 nested under `email:`. Placing them at the repo level is a hard error with a
-migration hint. A repo must have an `email:` block (the only currently supported
-channel).
+migration hint. A repo must have at least one channel block configured (e.g.
+`email:`). Multiple channels can coexist under the same repo — each runs its own
+listener and feeds messages through the shared processing pipeline.
 
 The `container_env` block is replaced by `secrets` — a named pool of values that
 repos can reference via `!secret`:
@@ -120,9 +121,9 @@ for details and
 ## Multi-Repo Support
 
 The server supports multiple repositories. Each repo is defined under `repos:`
-in the server config with its own `email:` block (IMAP/SMTP, authorized senders,
-auth settings), storage directory, and secrets pool. See `multi-repo.md` for the
-full design.
+in the server config with its own channel blocks (e.g. `email:` for IMAP/SMTP),
+storage directory, and secrets pool. A repo can have multiple channel blocks
+configured simultaneously. See `multi-repo.md` for the full design.
 
 ## Proxy Manager Lifecycle
 

@@ -536,7 +536,10 @@ class RequestHandlers:
                 "error_message": r.error_message,
                 "error_type": r.error_type,
                 "git_repo_url": r.git_repo_url,
-                "channel_info": r.channel_info,
+                "channels": [
+                    {"type": ch.channel_type, "info": ch.info}
+                    for ch in r.channels
+                ],
                 "storage_dir": r.storage_dir,
                 "initialized_at": r.initialized_at,
             }

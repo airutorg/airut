@@ -24,6 +24,7 @@ from airut.dashboard.sse import (
 from airut.dashboard.tracker import (
     BootPhase,
     BootState,
+    ChannelInfo,
     CompletionReason,
     RepoState,
     RepoStatus,
@@ -196,7 +197,9 @@ class TestRepoStateToDictConversion:
             repo_id="test-repo",
             status=RepoStatus.LIVE,
             git_repo_url="https://github.com/test/repo",
-            channel_info="imap.example.com",
+            channels=(
+                ChannelInfo(channel_type="email", info="imap.example.com"),
+            ),
             storage_dir="/storage/test",
             initialized_at=1000.0,
         )
@@ -216,7 +219,9 @@ class TestRepoStateToDictConversion:
             error_message="Auth failed",
             error_type="IMAPConnectionError",
             git_repo_url="https://github.com/test/repo",
-            channel_info="imap.example.com",
+            channels=(
+                ChannelInfo(channel_type="email", info="imap.example.com"),
+            ),
             storage_dir="/storage/broken",
         )
         result = _repo_state_to_dict(state)
@@ -365,7 +370,9 @@ class TestBuildStateSnapshot:
                 repo_id="repo1",
                 status=RepoStatus.LIVE,
                 git_repo_url="https://github.com/test/repo1",
-                channel_info="imap.example.com",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
                 storage_dir="/storage/repo1",
             ),
         )

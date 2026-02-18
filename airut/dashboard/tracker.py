@@ -148,6 +148,19 @@ class BootState:
 
 
 @dataclass(frozen=True)
+class ChannelInfo:
+    """Per-channel info for dashboard display.
+
+    Attributes:
+        channel_type: Channel type identifier (e.g. ``"email"``, ``"slack"``).
+        info: Short description (e.g. ``"imap.example.com"``).
+    """
+
+    channel_type: str
+    info: str
+
+
+@dataclass(frozen=True)
 class RepoState:
     """State of a repository in the gateway.
 
@@ -159,7 +172,7 @@ class RepoState:
         error_message: Human-readable error message if failed, None if live.
         error_type: Exception type name if failed, None if live.
         git_repo_url: URL of the git repository.
-        channel_info: Channel-specific connection info (e.g. IMAP server).
+        channels: Per-channel info for dashboard display.
         storage_dir: Path to storage directory.
         initialized_at: Unix timestamp when status was recorded.
     """
@@ -169,7 +182,7 @@ class RepoState:
     error_message: str | None = None
     error_type: str | None = None
     git_repo_url: str = ""
-    channel_info: str = ""
+    channels: tuple[ChannelInfo, ...] = ()
     storage_dir: str = ""
     initialized_at: float = field(default_factory=time.time)
 

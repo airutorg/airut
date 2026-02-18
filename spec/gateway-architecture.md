@@ -56,18 +56,21 @@ protocol handling (email IMAP/SMTP, etc.) via types in `gateway/channel.py`:
 Each channel implements `ChannelAdapter` (e.g., `EmailChannelAdapter` in
 `gateway/email/adapter.py`). The core works entirely through `ParsedMessage`,
 `ChannelConfig`, `ChannelListener`, and `ChannelAdapter` — it imports nothing
-from channel-specific subpackages. A factory function `create_adapter()` in
-`gateway/service/adapter_factory.py` dispatches on channel config type to create
-the appropriate adapter.
+from channel-specific subpackages. A factory function `create_adapters()` in
+`gateway/service/adapter_factory.py` dispatches on each channel config type to
+create adapters. A single repo can have multiple channels configured
+simultaneously (e.g. both email and Slack); each channel runs its own listener
+and feeds messages through the same processing pipeline.
 
 ### Components
 
 **Protocol-agnostic core** (`gateway/service/`):
 
 - **GatewayService** — Orchestration, thread pool, lifecycle management
-- **RepoHandler** — Per-repo state: channel adapter, conversation manager.
-  Delegates listener lifecycle entirely to `adapter.listener.start()` /
-  `adapter.listener.stop()`. Has zero channel-specific imports.
+- **RepoHandler** — Per-repo state: channel adapters dict, conversation manager.
+  Delegates listener lifecycle to each adapter's `listener.start()` /
+  `listener.stop()`. Has zero channel-specific imports. The `adapters` dict is
+  keyed by channel type (e.g. `{"email": EmailChannelAdapter}`).
 - **ConversationManager** — Git checkout management and state persistence
 - **Sandbox** — Container lifecycle, network isolation, and execution
   (`airut/sandbox/`)
@@ -144,14 +147,15 @@ completed with `CompletionReason.REJECTED`.
 
 ```
 RepoHandler.start_listener()
-  -> adapter.listener.start(submit=handler._submit_message)
-    -> ChannelListener spawns internal thread
-    -> (email: EmailChannelListener connects IMAP, runs poll/IDLE loop)
+  -> for each (channel_type, adapter) in handler.adapters:
+       adapter.listener.start(submit=lambda msg: handler._submit_message(msg, adapter))
+       -> ChannelListener spawns internal thread
+       -> (email: EmailChannelListener connects IMAP, runs poll/IDLE loop)
 
 ChannelListener thread:
   -> Message arrives on channel
   -> submit(raw_message)
-    -> GatewayService.submit_message(raw_message, handler)
+    -> GatewayService.submit_message(raw_message, handler, adapter)
       -> task_id = uuid4().hex[:12]  (stable, never changes)
       -> tracker.add_task(task_id, ...)                  → QUEUED
       -> Submit to worker thread pool
@@ -193,8 +197,9 @@ GatewayService._process_pending_message()  [worker thread]:
     -> _drain_pending(conv_id)                (chains to next pending)
 
 RepoHandler.stop()
-  -> adapter.listener.stop()
-    -> (email: interrupt IDLE, join thread, close IMAP connection)
+  -> for each adapter in handler.adapters:
+       adapter.listener.stop()
+       -> (email: interrupt IDLE, join thread, close IMAP connection)
 ```
 
 ## Conversation State Management

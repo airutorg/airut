@@ -1978,6 +1978,7 @@ class TestSSELivePages:
     def test_repo_detail_no_meta_refresh(self) -> None:
         """Repo detail page no longer uses meta-refresh."""
         from airut.dashboard.tracker import (
+            ChannelInfo,
             RepoState,
             RepoStatus,
         )
@@ -1990,7 +1991,9 @@ class TestSSELivePages:
                 repo_id="test-repo",
                 status=RepoStatus.LIVE,
                 git_repo_url="https://github.com/test/repo",
-                channel_info="imap.example.com",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
                 storage_dir="/storage/test",
             ),
         )
@@ -2568,7 +2571,7 @@ class TestPollingFallbackJS:
 
     def test_repo_detail_has_polling_fallback(self) -> None:
         """Repo detail page JS includes polling fallback."""
-        from airut.dashboard.tracker import RepoState, RepoStatus
+        from airut.dashboard.tracker import ChannelInfo, RepoState, RepoStatus
         from airut.dashboard.versioned import VersionClock, VersionedStore
 
         tracker = TaskTracker()
@@ -2578,7 +2581,9 @@ class TestPollingFallbackJS:
                 repo_id="test-repo",
                 status=RepoStatus.LIVE,
                 git_repo_url="https://github.com/test/repo",
-                channel_info="imap.example.com",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
                 storage_dir="/storage/test",
             ),
         )
