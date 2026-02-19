@@ -263,6 +263,121 @@ def extract_conversation_id() -> Callable[[str], str | None]:
     return _extract
 
 
+@pytest.fixture
+def slack_env(tmp_path: Path) -> Generator[IntegrationEnvironment]:
+    """Create a Slack-only integration test environment.
+
+    Provides:
+    - Git repository for conversations
+    - TestSlackServer (fake Slack Web API + Socket Mode)
+    - ServerConfig with Slack channel
+
+    The ``create_adapters`` factory is patched so that
+    ``SlackChannelConfig`` is handled by building an adapter with
+    the test server's fake ``WebClient`` and a fake listener whose
+    ``submit`` callback feeds into the ``TestSlackServer``.
+
+    Yields:
+        IntegrationEnvironment with ``slack_server`` set.
+    """
+    env = IntegrationEnvironment.create_slack(
+        tmp_path,
+        container_command=MOCK_CONTAINER_COMMAND,
+    )
+
+    try:
+        with patch(
+            "airut.gateway.service.repo_handler.create_adapters",
+            new=_create_slack_adapter_factory(env),
+        ):
+            yield env
+    finally:
+        env.cleanup()
+
+
+def _create_slack_adapter_factory(
+    env: IntegrationEnvironment,
+):
+    """Build a patched ``create_adapters`` that uses test fakes.
+
+    Returns a function with the same signature as
+    ``airut.gateway.service.adapter_factory.create_adapters`` but
+    constructs the ``SlackChannelAdapter`` with the test server's
+    ``FakeWebClient`` and a ``SlackChannelListener`` wired to the
+    ``FakeSocketModeHandler``.
+    """
+    from airut.gateway.channel import ChannelAdapter
+    from airut.gateway.config import EmailChannelConfig, RepoServerConfig
+    from airut.gateway.email.adapter import EmailChannelAdapter
+    from airut.gateway.slack.adapter import SlackChannelAdapter
+    from airut.gateway.slack.authorizer import SlackAuthorizer
+    from airut.gateway.slack.config import SlackChannelConfig
+    from airut.gateway.slack.listener import SlackChannelListener
+    from airut.gateway.slack.thread_store import SlackThreadStore
+
+    assert env.slack_server is not None
+    slack_server = env.slack_server
+
+    def create_adapters(config: RepoServerConfig) -> dict[str, ChannelAdapter]:
+        from airut.gateway.config import get_storage_dir
+
+        adapters: dict[str, ChannelAdapter] = {}
+        for channel_type, channel_config in config.channels.items():
+            if isinstance(channel_config, EmailChannelConfig):
+                adapters[channel_type] = EmailChannelAdapter.from_config(
+                    channel_config, repo_id=config.repo_id
+                )
+            elif isinstance(channel_config, SlackChannelConfig):
+                client = slack_server.web_client
+                authorizer = SlackAuthorizer(
+                    client=client,  # type: ignore[arg-type]
+                    rules=channel_config.authorized,
+                    workspace_team_id=slack_server.workspace_team_id,
+                )
+                state_dir = get_storage_dir(config.repo_id)
+                thread_store = SlackThreadStore(state_dir)
+
+                from slack_bolt import App
+
+                app = App(
+                    token=channel_config.bot_token,
+                    token_verification_enabled=False,
+                    ssl_check_enabled=False,
+                )
+                listener = SlackChannelListener(
+                    config=channel_config,
+                    app=app,
+                    handler=slack_server.handler,  # type: ignore[arg-type]
+                )
+
+                adapter = SlackChannelAdapter(
+                    config=channel_config,
+                    client=client,  # type: ignore[arg-type]
+                    authorizer=authorizer,
+                    thread_store=thread_store,
+                    slack_listener=listener,
+                    repo_id=config.repo_id,
+                )
+                adapters[channel_type] = adapter
+
+                # Wire the submit callback from the listener to
+                # the test server so inject_user_message() works.
+                original_start = listener.start
+
+                def patched_start(submit, _original=original_start):
+                    slack_server.set_submit_callback(submit)
+                    _original(submit)
+
+                listener.start = patched_start  # type: ignore[assignment]
+            else:
+                raise ValueError(
+                    f"Unknown channel config: {type(channel_config).__name__}"
+                )
+        return adapters
+
+    return create_adapters
+
+
 def find_task_for_conversation(tracker, conv_id: str):
     """Find the most recent task for a conversation.
 

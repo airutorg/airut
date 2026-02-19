@@ -23,8 +23,10 @@ from airut.gateway.config import (
     ServerConfig,
     get_storage_dir,
 )
+from airut.gateway.slack.config import SlackChannelConfig
 
 from .email_server import TestEmailServer
+from .slack_server import TestSlackServer
 
 
 logger = logging.getLogger(__name__)
@@ -128,6 +130,7 @@ class IntegrationEnvironment:
     mitmproxy_confdir: Path
     repo_root: Path
     egress_network: str
+    slack_server: TestSlackServer | None = None
 
     @classmethod
     def create(
@@ -347,8 +350,106 @@ class IntegrationEnvironment:
             egress_network=egress_network,
         )
 
+    @classmethod
+    def create_slack(
+        cls,
+        tmp_path: Path,
+        authorized_rules: tuple[dict[str, str | bool], ...] = (
+            {"workspace_members": True},
+        ),
+        dashboard_enabled: bool = True,
+        container_command: str = "podman",
+    ) -> "IntegrationEnvironment":
+        """Create a Slack-only integration test environment.
+
+        Creates a ``TestSlackServer`` instead of email infrastructure.
+        The Slack adapter is injected into the service via a patched
+        ``create_adapters`` factory.
+
+        Args:
+            tmp_path: Temporary directory for test files.
+            authorized_rules: Slack authorization rules.
+            dashboard_enabled: Whether to enable the dashboard.
+            container_command: Container runtime command.
+
+        Returns:
+            A started IntegrationEnvironment with Slack channel.
+        """
+        import uuid
+
+        egress_network = f"airut-egress-{uuid.uuid4().hex[:8]}"
+
+        master_repo = create_test_repo(tmp_path / "master_repo")
+        storage_dir = get_storage_dir("test")
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        mitmproxy_confdir = tmp_path / "mitmproxy-confdir"
+
+        docker_dir = tmp_path / "docker"
+        docker_dir.mkdir(exist_ok=True)
+        (docker_dir / "airut-entrypoint.sh").write_text(
+            '#!/usr/bin/env bash\nexec claude "$@"\n'
+        )
+
+        proxy_dir = tmp_path / "proxy"
+        proxy_dir.mkdir(exist_ok=True)
+        (proxy_dir / "proxy.dockerfile").write_text("FROM scratch\n")
+
+        # Start Slack server (no email server needed, but we still
+        # need a TestEmailServer instance to satisfy the dataclass)
+        slack_srv = TestSlackServer()
+        slack_srv.start()
+
+        # Email server is unused but required by the dataclass.
+        # Create a dummy one that won't actually be started.
+        email_server = TestEmailServer(username="test", password="test")
+        smtp_port, imap_port = email_server.start()
+
+        global_config = GlobalConfig(
+            max_concurrent_executions=2,
+            shutdown_timeout_seconds=5,
+            dashboard_enabled=dashboard_enabled,
+            dashboard_host="127.0.0.1",
+            dashboard_port=0,
+            container_command=container_command,
+        )
+
+        slack_config = SlackChannelConfig(
+            bot_token="xoxb-fake-bot-token",
+            app_token="xapp-fake-app-token",
+            authorized=authorized_rules,
+        )
+
+        repo_config = RepoServerConfig(
+            repo_id="test",
+            git_repo_url=str(master_repo),
+            channels={"slack": slack_config},
+        )
+
+        config = ServerConfig(
+            global_config=global_config,
+            repos={"test": repo_config},
+        )
+
+        logger.info(
+            "Created Slack integration environment: repo=%s",
+            master_repo,
+        )
+
+        return cls(
+            master_repo=master_repo,
+            storage_dir=storage_dir,
+            email_server=email_server,
+            smtp_port=smtp_port,
+            imap_port=imap_port,
+            config=config,
+            mitmproxy_confdir=mitmproxy_confdir,
+            repo_root=tmp_path,
+            egress_network=egress_network,
+            slack_server=slack_srv,
+        )
+
     def create_service(self):
-        """Create an GatewayService with this environment's config."""
+        """Create a GatewayService with this environment's config."""
         from airut.gateway.service import GatewayService
 
         return GatewayService(
@@ -361,3 +462,5 @@ class IntegrationEnvironment:
         """Stop servers and clean up resources."""
         logger.info("Cleaning up integration environment")
         self.email_server.stop()
+        if self.slack_server is not None:
+            self.slack_server.stop()
