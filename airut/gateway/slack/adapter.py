@@ -55,6 +55,14 @@ _TABLE_PATTERN = re.compile(
     re.MULTILINE,
 )
 
+#: Regex matching fenced code block opening with a language hint.
+_CODE_FENCE_LANG_PATTERN = re.compile(r"^```\w+", re.MULTILINE)
+
+#: Regex matching Markdown horizontal rules (``---``, ``***``, ``___``).
+_HORIZONTAL_RULE_PATTERN = re.compile(
+    r"^[ ]{0,3}(?:[-]{3,}|[*]{3,}|[_]{3,})[ \t]*$", re.MULTILINE
+)
+
 
 @dataclass
 class SlackParsedMessage(ParsedMessage):
@@ -334,8 +342,8 @@ class SlackChannelAdapter(ChannelAdapter):
         if usage_footer:
             body = f"{response_text}\n\n_{usage_footer}_"
 
-        # Convert tables to code blocks
-        body = _convert_tables(body)
+        # Sanitize Markdown for Slack rendering
+        body = _sanitize_for_slack(body)
 
         # Send message(s)
         try:
@@ -455,6 +463,73 @@ def _convert_tables(text: str) -> str:
         return f"```\n{table_text}\n```"
 
     return _TABLE_PATTERN.sub(_replace_table, text)
+
+
+def _strip_code_fence_languages(text: str) -> str:
+    """Strip language hints from fenced code block openings.
+
+    Slack's ``markdown`` block renders code fences but does not support
+    syntax highlighting.  A fence like ````` ```python ````` renders the
+    language tag as visible text.  This function strips the tag, leaving
+    a plain ````` ``` ````` fence.
+
+    Args:
+        text: Markdown text potentially containing fenced code blocks.
+
+    Returns:
+        Text with language hints removed from code fences.
+    """
+    return _CODE_FENCE_LANG_PATTERN.sub("```", text)
+
+
+def _convert_horizontal_rules(text: str) -> str:
+    """Convert Markdown horizontal rules to a plain-text separator.
+
+    Slack's ``markdown`` block does not render horizontal rules
+    (``---``, ``***``, ``___``).  We replace them with a Unicode
+    em-dash line that provides a visual break.  Only processes lines
+    outside fenced code blocks.
+
+    Args:
+        text: Markdown text potentially containing horizontal rules.
+
+    Returns:
+        Text with horizontal rules replaced by a plain separator.
+    """
+    lines = text.split("\n")
+    result: list[str] = []
+    in_fence = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            result.append(line)
+        elif not in_fence and _HORIZONTAL_RULE_PATTERN.match(line):
+            result.append("———")
+        else:
+            result.append(line)
+
+    return "\n".join(result)
+
+
+def _sanitize_for_slack(text: str) -> str:
+    """Apply all Slack-specific Markdown sanitization.
+
+    Converts or strips Markdown features not supported by Slack's
+    ``markdown`` block type: tables, syntax-highlighted code fences,
+    and horizontal rules.
+
+    Args:
+        text: Raw Markdown response text.
+
+    Returns:
+        Sanitized text suitable for Slack ``markdown`` blocks.
+    """
+    text = _convert_tables(text)
+    text = _strip_code_fence_languages(text)
+    text = _convert_horizontal_rules(text)
+    return text
 
 
 def _split_blocks(text: str) -> list[str]:

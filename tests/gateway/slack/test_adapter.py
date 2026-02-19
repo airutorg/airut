@@ -16,9 +16,12 @@ from airut.gateway.channel import AuthenticationError, RawMessage
 from airut.gateway.slack.adapter import (
     SlackChannelAdapter,
     SlackParsedMessage,
+    _convert_horizontal_rules,
     _convert_tables,
+    _sanitize_for_slack,
     _send_long_message,
     _split_blocks,
+    _strip_code_fence_languages,
     _upload_file,
 )
 from airut.gateway.slack.authorizer import SlackAuthorizer
@@ -854,6 +857,108 @@ class TestCleanupConversations:
 
         # Should not raise
         adapter.cleanup_conversations({"conv1"})
+
+
+class TestStripCodeFenceLanguages:
+    def test_strips_language_tag(self) -> None:
+        text = "```python\nprint('hi')\n```"
+        result = _strip_code_fence_languages(text)
+        assert result == "```\nprint('hi')\n```"
+
+    def test_strips_multiple_languages(self) -> None:
+        text = "```javascript\nconst x = 1;\n```\n\n```rust\nfn main() {}\n```"
+        result = _strip_code_fence_languages(text)
+        assert "```javascript" not in result
+        assert "```rust" not in result
+        assert result == "```\nconst x = 1;\n```\n\n```\nfn main() {}\n```"
+
+    def test_leaves_plain_code_fence(self) -> None:
+        text = "```\nplain code\n```"
+        assert _strip_code_fence_languages(text) == text
+
+    def test_leaves_inline_backticks(self) -> None:
+        text = "Use `code` here"
+        assert _strip_code_fence_languages(text) == text
+
+    def test_leaves_non_code_text(self) -> None:
+        text = "No code blocks here"
+        assert _strip_code_fence_languages(text) == text
+
+
+class TestConvertHorizontalRules:
+    def test_converts_dashes(self) -> None:
+        text = "Before\n\n---\n\nAfter"
+        result = _convert_horizontal_rules(text)
+        assert "———" in result
+        assert "---" not in result
+
+    def test_converts_asterisks(self) -> None:
+        text = "Before\n\n***\n\nAfter"
+        result = _convert_horizontal_rules(text)
+        assert "———" in result
+        assert "***" not in result
+
+    def test_converts_underscores(self) -> None:
+        text = "Before\n\n___\n\nAfter"
+        result = _convert_horizontal_rules(text)
+        assert "———" in result
+        assert "___" not in result
+
+    def test_converts_long_rule(self) -> None:
+        text = "Before\n\n----------\n\nAfter"
+        result = _convert_horizontal_rules(text)
+        assert "———" in result
+
+    def test_preserves_hr_inside_code_block(self) -> None:
+        text = "```\n---\n```"
+        result = _convert_horizontal_rules(text)
+        assert "---" in result
+        assert "———" not in result
+
+    def test_preserves_dashes_in_text(self) -> None:
+        text = "This is a normal -- dash in text"
+        assert _convert_horizontal_rules(text) == text
+
+    def test_leaves_regular_text(self) -> None:
+        text = "Just text\n\nMore text"
+        assert _convert_horizontal_rules(text) == text
+
+    def test_leading_spaces_allowed(self) -> None:
+        text = "Before\n\n   ---\n\nAfter"
+        result = _convert_horizontal_rules(text)
+        assert "———" in result
+
+
+class TestSanitizeForSlack:
+    def test_applies_all_sanitizations(self) -> None:
+        text = (
+            "# Title\n\n"
+            "```python\nprint('hi')\n```\n\n"
+            "---\n\n"
+            "| A | B |\n|---|---|\n| 1 | 2 |\n"
+        )
+        result = _sanitize_for_slack(text)
+        # Tables wrapped in code fences
+        assert "```\n| A | B |" in result
+        # Language tag stripped
+        assert "```python" not in result
+        # Horizontal rule converted
+        assert "———" in result
+
+    def test_no_changes_for_supported_markdown(self) -> None:
+        text = "**bold** and *italic* and `code`"
+        assert _sanitize_for_slack(text) == text
+
+    def test_hr_not_converted_inside_table_code_block(self) -> None:
+        """HR inside table code fence is preserved after sanitization.
+
+        After table conversion, the --- separator row is inside a
+        code fence and should not be treated as a horizontal rule.
+        """
+        text = "| A | B |\n|---|---|\n| 1 | 2 |\n"
+        result = _sanitize_for_slack(text)
+        # The table is in a code fence, so the --- row stays
+        assert "|---|---|" in result
 
 
 class TestSplitBlocksTruncation:

@@ -176,12 +176,22 @@ Not supported: tables, horizontal rules, syntax highlighting, task lists.
 Note that a single `markdown` block may result in multiple blocks after Slack's
 translation step.
 
-**Table handling**: Since Markdown tables are not rendered by the `markdown`
-block, the adapter converts tables to fenced code blocks (monospaced plain text)
-before sending. This preserves alignment and readability. The conversion happens
-in `send_reply()` — scan the response for Markdown table patterns (lines with
-`|` separators and a header-divider row of `|---|`) and wrap them in
-```` ``` ```` blocks.
+**Markdown sanitization**: The adapter sanitizes unsupported Markdown features
+before sending via `_sanitize_for_slack()` in `send_reply()`. This applies the
+following transformations in order:
+
+1. **Tables** → fenced code blocks. Markdown table patterns (lines with `|`
+   separators and a header-divider row of `|---|`) are wrapped in ```` ``` ````
+   blocks to preserve alignment as monospaced plain text.
+2. **Code fence language hints** → stripped. A fence like ```` ```python ````
+   becomes plain ```` ``` ```` since Slack does not support syntax highlighting
+   and would render the language tag as visible text.
+3. **Horizontal rules** → em-dash separator (`———`). Rules (`---`, `***`, `___`)
+   are replaced with a Unicode em-dash line. Rules inside fenced code blocks are
+   preserved.
+
+Task lists (`- [ ]`, `- [x]`) degrade gracefully — the checkbox syntax appears
+as literal text within a list item, which is readable without conversion.
 
 ### Message Size Limits
 
@@ -616,15 +626,15 @@ The listener registers event handlers via the Bolt SDK's `Assistant` middleware:
 The `SlackChannelAdapter` implements all `ChannelAdapter` methods from
 `gateway/channel.py`:
 
-| ChannelAdapter method      | Slack implementation                                                                                                                            |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `listener` (property)      | Returns the `SlackChannelListener` instance                                                                                                     |
-| `authenticate_and_parse()` | Check authorization rules via `SlackAuthorizer`, extract body and file metadata from event payload, resolve conversation ID from thread mapping |
-| `save_attachments()`       | Download files listed in `SlackParsedMessage.slack_file_urls` using bot token, save to `inbox_dir`                                              |
-| `send_acknowledgment()`    | Register thread mapping, `chat.postMessage` with confirmation text and optional dashboard link (status is set by the listener before dispatch)  |
-| `send_reply()`             | Convert tables to code blocks, split if >12K chars, `chat.postMessage` with `markdown` blocks, upload outbox files, set thread title            |
-| `send_error()`             | `chat.postMessage` with error text in thread                                                                                                    |
-| `send_rejection()`         | `chat.postMessage` with rejection reason in thread, with optional dashboard link                                                                |
+| ChannelAdapter method      | Slack implementation                                                                                                                                                                  |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `listener` (property)      | Returns the `SlackChannelListener` instance                                                                                                                                           |
+| `authenticate_and_parse()` | Check authorization rules via `SlackAuthorizer`, extract body and file metadata from event payload, resolve conversation ID from thread mapping                                       |
+| `save_attachments()`       | Download files listed in `SlackParsedMessage.slack_file_urls` using bot token, save to `inbox_dir`                                                                                    |
+| `send_acknowledgment()`    | Register thread mapping, `chat.postMessage` with confirmation text and optional dashboard link (status is set by the listener before dispatch)                                        |
+| `send_reply()`             | Sanitize unsupported Markdown (tables, code fence languages, horizontal rules), split if >12K chars, `chat.postMessage` with `markdown` blocks, upload outbox files, set thread title |
+| `send_error()`             | `chat.postMessage` with error text in thread                                                                                                                                          |
+| `send_rejection()`         | `chat.postMessage` with rejection reason in thread, with optional dashboard link                                                                                                      |
 
 ### `SlackParsedMessage`
 
