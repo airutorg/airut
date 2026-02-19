@@ -270,8 +270,8 @@ class TestSendAcknowledgment:
         # Message sent
         client.chat_postMessage.assert_called_once()
         call_kw = client.chat_postMessage.call_args[1]
-        assert "received" in call_kw["text"]
-        assert "sonnet" in call_kw["text"]
+        assert "started working" in call_kw["text"]
+        assert "reply shortly" in call_kw["text"]
 
     def test_sends_ack_with_dashboard_url(self, tmp_path: Path) -> None:
         adapter, client, _, _ = _make_adapter(tmp_path)

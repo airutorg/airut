@@ -305,14 +305,15 @@ class SlackChannelAdapter(ChannelAdapter):
             conversation_id,
         )
 
-        # Build acknowledgment text
-        text = (
-            f"Your request has been received and is now being "
-            f"processed by {model}."
-        )
+        # Build acknowledgment text (aligned with email channel)
         if dashboard_url:
             task_url = f"{dashboard_url}/conversation/{conversation_id}"
-            text += f" {task_url}"
+            text = (
+                f"I've started working on this and will reply shortly. "
+                f"See progress at {task_url}"
+            )
+        else:
+            text = "I've started working on this and will reply shortly."
 
         try:
             self._client.chat_postMessage(
