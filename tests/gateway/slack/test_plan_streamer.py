@@ -15,6 +15,7 @@ from airut.dashboard.tracker import TodoItem, TodoStatus
 from airut.gateway.slack.plan_streamer import (
     SlackPlanStreamer,
     _build_task_chunks,
+    _content_id,
 )
 
 
@@ -43,6 +44,19 @@ def _make_items(*statuses: TodoStatus) -> list[TodoItem]:
     ]
 
 
+class TestContentId:
+    def test_deterministic(self) -> None:
+        assert _content_id("Run tests") == _content_id("Run tests")
+
+    def test_different_for_different_content(self) -> None:
+        assert _content_id("Run tests") != _content_id("Fix lint")
+
+    def test_returns_8_hex_chars(self) -> None:
+        result = _content_id("anything")
+        assert len(result) == 8
+        int(result, 16)  # Must be valid hex
+
+
 class TestBuildTaskChunks:
     def test_maps_statuses_correctly(self) -> None:
         items = _make_items(
@@ -55,17 +69,40 @@ class TestBuildTaskChunks:
         assert len(chunks) == 3
         assert all(isinstance(c, TaskUpdateChunk) for c in chunks)
 
-        assert chunks[0].id == "task_0"
+        assert chunks[0].id == _content_id("Task 0")
         assert chunks[0].title == "Working on task 0"
         assert chunks[0].status == "pending"
 
-        assert chunks[1].id == "task_1"
+        assert chunks[1].id == _content_id("Task 1")
         assert chunks[1].title == "Working on task 1"
         assert chunks[1].status == "in_progress"
 
-        assert chunks[2].id == "task_2"
+        assert chunks[2].id == _content_id("Task 2")
         assert chunks[2].title == "Working on task 2"
         assert chunks[2].status == "complete"
+
+    def test_ids_stable_across_reordering(self) -> None:
+        """IDs stay the same when items are reordered."""
+        items_a = [
+            TodoItem(content="Run tests", status=TodoStatus.PENDING),
+            TodoItem(content="Fix lint", status=TodoStatus.IN_PROGRESS),
+        ]
+        items_b = list(reversed(items_a))
+
+        chunks_a = _build_task_chunks(items_a)
+        chunks_b = _build_task_chunks(items_b)
+
+        # Same content → same ID regardless of position.
+        assert chunks_a[0].id == chunks_b[1].id  # "Run tests"
+        assert chunks_a[1].id == chunks_b[0].id  # "Fix lint"
+
+    def test_duplicate_content_gets_unique_ids(self) -> None:
+        items = [
+            TodoItem(content="Deploy", status=TodoStatus.PENDING),
+            TodoItem(content="Deploy", status=TodoStatus.PENDING),
+        ]
+        chunks = _build_task_chunks(items)
+        assert chunks[0].id != chunks[1].id
 
     def test_empty_list(self) -> None:
         chunks = _build_task_chunks([])

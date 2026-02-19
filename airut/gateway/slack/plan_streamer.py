@@ -13,6 +13,7 @@ a plan block in the thread, updated in real time as Claude works.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from typing import TYPE_CHECKING
@@ -127,12 +128,26 @@ class SlackPlanStreamer:
             logger.warning("Failed to stop plan stream (non-fatal): %s", e)
 
 
+def _content_id(content: str) -> str:
+    """Derive a stable task ID from the item's content string.
+
+    Uses an 8-character hex prefix of the SHA-256 hash.  This keeps
+    task IDs stable across ``update()`` calls even when the list is
+    reordered, items are inserted, or items are removed — which is
+    required by Slack's streaming plan API (it matches tasks by ID
+    across ``appendStream`` calls).
+    """
+    return hashlib.sha256(content.encode()).hexdigest()[:8]
+
+
 def _build_task_chunks(items: list[TodoItem]) -> list[TaskUpdateChunk]:
     """Convert TodoItems to Slack TaskUpdateChunk objects.
 
-    Uses positional index as the task ID.  Since we send the full
-    list on every update and Slack replaces the plan view, positional
-    IDs are stable within each call.
+    Derives task IDs from each item's ``content`` field so that the
+    same logical task keeps the same ID across successive ``update()``
+    calls.  Slack's streaming plan API uses the ``id`` to track and
+    update individual task cards in place; positional indices would
+    break when the list is reordered.
 
     Args:
         items: Todo items from Claude's TodoWrite.
@@ -140,11 +155,22 @@ def _build_task_chunks(items: list[TodoItem]) -> list[TaskUpdateChunk]:
     Returns:
         List of ``TaskUpdateChunk`` objects for the streaming API.
     """
-    return [
-        TaskUpdateChunk(
-            id=f"task_{i}",
-            title=item.active_form or item.content,
-            status=_STATUS_MAP.get(item.status, "pending"),
+    seen: set[str] = set()
+    chunks: list[TaskUpdateChunk] = []
+    for item in items:
+        task_id = _content_id(item.content)
+        # Handle duplicate content strings by appending a suffix.
+        base_id = task_id
+        counter = 2
+        while task_id in seen:
+            task_id = f"{base_id}_{counter}"
+            counter += 1
+        seen.add(task_id)
+        chunks.append(
+            TaskUpdateChunk(
+                id=task_id,
+                title=item.active_form or item.content,
+                status=_STATUS_MAP.get(item.status, "pending"),
+            )
         )
-        for i, item in enumerate(items)
-    ]
+    return chunks
