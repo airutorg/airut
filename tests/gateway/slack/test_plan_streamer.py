@@ -54,6 +54,10 @@ def _stream_expired_error() -> SlackApiError:
     return SlackApiError(message="expired", response=resp)
 
 
+#: Patch target for threading.Timer used by the keepalive.
+_TIMER_PATCH = "airut.gateway.slack.plan_streamer.threading.Timer"
+
+
 class TestContentId:
     def test_deterministic(self) -> None:
         assert _content_id("Run tests") == _content_id("Run tests")
@@ -136,7 +140,8 @@ class TestBuildTaskChunks:
 
 
 class TestSlackPlanStreamerUpdate:
-    def test_first_update_starts_stream(self) -> None:
+    @patch(_TIMER_PATCH)
+    def test_first_update_starts_stream(self, _timer_cls: MagicMock) -> None:
         streamer, client = _make_streamer()
         items = _make_items(TodoStatus.IN_PROGRESS)
 
@@ -152,7 +157,8 @@ class TestSlackPlanStreamerUpdate:
         chunks = stream.append.call_args[1]["chunks"]
         assert len(chunks) == 1
 
-    def test_subsequent_update_appends(self) -> None:
+    @patch(_TIMER_PATCH)
+    def test_subsequent_update_appends(self, _timer_cls: MagicMock) -> None:
         streamer, client = _make_streamer()
         stream = client.chat_stream.return_value
 
@@ -172,7 +178,8 @@ class TestSlackPlanStreamerUpdate:
 
         assert stream.append.call_count == 2
 
-    def test_debounce_skips_rapid_updates(self) -> None:
+    @patch(_TIMER_PATCH)
+    def test_debounce_skips_rapid_updates(self, _timer_cls: MagicMock) -> None:
         streamer, client = _make_streamer()
         stream = client.chat_stream.return_value
 
@@ -192,7 +199,8 @@ class TestSlackPlanStreamerUpdate:
         # Should still be 1 — debounced
         assert stream.append.call_count == 1
 
-    def test_api_error_non_fatal(self) -> None:
+    @patch(_TIMER_PATCH)
+    def test_api_error_non_fatal(self, _timer_cls: MagicMock) -> None:
         streamer, client = _make_streamer()
         stream = client.chat_stream.return_value
         stream.append.side_effect = SlackApiError(
@@ -203,7 +211,10 @@ class TestSlackPlanStreamerUpdate:
         # Should not raise
         streamer.update(_make_items(TodoStatus.PENDING))
 
-    def test_start_stream_api_error_non_fatal(self) -> None:
+    @patch(_TIMER_PATCH)
+    def test_start_stream_api_error_non_fatal(
+        self, _timer_cls: MagicMock
+    ) -> None:
         streamer, client = _make_streamer()
         client.chat_stream.side_effect = SlackApiError(
             message="error",
@@ -213,7 +224,10 @@ class TestSlackPlanStreamerUpdate:
         # Should not raise (caught by the outer try/except)
         streamer.update(_make_items(TodoStatus.PENDING))
 
-    def test_stream_expired_restarts_stream(self) -> None:
+    @patch(_TIMER_PATCH)
+    def test_stream_expired_restarts_stream(
+        self, _timer_cls: MagicMock
+    ) -> None:
         """When Slack expires the stream, a new one is started."""
         streamer, client = _make_streamer()
         old_stream = client.chat_stream.return_value
@@ -243,7 +257,10 @@ class TestSlackPlanStreamerUpdate:
         assert client.chat_stream.call_count == 2
         new_stream.append.assert_called_once()
 
-    def test_stream_expired_retry_failure_non_fatal(self) -> None:
+    @patch(_TIMER_PATCH)
+    def test_stream_expired_retry_failure_non_fatal(
+        self, _timer_cls: MagicMock
+    ) -> None:
         """If the retry after stream expiry also fails, it's non-fatal."""
         streamer, client = _make_streamer()
         old_stream = client.chat_stream.return_value
@@ -270,7 +287,8 @@ class TestSlackPlanStreamerUpdate:
 
 
 class TestSlackPlanStreamerFinalize:
-    def test_stops_active_stream(self) -> None:
+    @patch(_TIMER_PATCH)
+    def test_stops_active_stream(self, _timer_cls: MagicMock) -> None:
         streamer, client = _make_streamer()
         stream = client.chat_stream.return_value
 
@@ -279,14 +297,16 @@ class TestSlackPlanStreamerFinalize:
 
         stream.stop.assert_called_once()
 
-    def test_noop_when_never_started(self) -> None:
+    @patch(_TIMER_PATCH)
+    def test_noop_when_never_started(self, _timer_cls: MagicMock) -> None:
         streamer, client = _make_streamer()
 
         # Should not raise or make API calls
         streamer.finalize()
         client.chat_stream.assert_not_called()
 
-    def test_api_error_non_fatal(self) -> None:
+    @patch(_TIMER_PATCH)
+    def test_api_error_non_fatal(self, _timer_cls: MagicMock) -> None:
         streamer, client = _make_streamer()
         stream = client.chat_stream.return_value
         stream.stop.side_effect = SlackApiError(
@@ -299,7 +319,10 @@ class TestSlackPlanStreamerFinalize:
         # Should not raise
         streamer.finalize()
 
-    def test_stream_expired_on_finalize_is_silent(self) -> None:
+    @patch(_TIMER_PATCH)
+    def test_stream_expired_on_finalize_is_silent(
+        self, _timer_cls: MagicMock
+    ) -> None:
         """Finalizing an already-expired stream is a no-op."""
         streamer, client = _make_streamer()
         stream = client.chat_stream.return_value
@@ -309,6 +332,167 @@ class TestSlackPlanStreamerFinalize:
 
         # Should not raise or warn — the stream was already stopped.
         streamer.finalize()
+
+    @patch(_TIMER_PATCH)
+    def test_finalize_cancels_keepalive(self, timer_cls: MagicMock) -> None:
+        """Finalize cancels the pending keepalive timer."""
+        streamer, _client = _make_streamer()
+        timer_instance = timer_cls.return_value
+
+        streamer.update(_make_items(TodoStatus.IN_PROGRESS))
+        streamer.finalize()
+
+        timer_instance.cancel.assert_called()
+
+
+class TestKeepalive:
+    @patch(_TIMER_PATCH)
+    def test_update_schedules_keepalive(self, timer_cls: MagicMock) -> None:
+        """Each successful update() starts a keepalive timer."""
+        streamer, _client = _make_streamer()
+        timer_instance = timer_cls.return_value
+
+        streamer.update(_make_items(TodoStatus.PENDING))
+
+        timer_cls.assert_called_once()
+        # Timer target is _keepalive_tick.
+        assert timer_cls.call_args[0][1] == streamer._keepalive_tick
+        timer_instance.start.assert_called_once()
+
+    @patch(_TIMER_PATCH)
+    def test_keepalive_timer_is_daemon(self, timer_cls: MagicMock) -> None:
+        """Keepalive timer should be a daemon thread."""
+        streamer, _client = _make_streamer()
+        timer_instance = timer_cls.return_value
+
+        streamer.update(_make_items(TodoStatus.PENDING))
+
+        assert timer_instance.daemon is True
+
+    @patch(_TIMER_PATCH)
+    def test_keepalive_tick_resends_last_chunks(
+        self, timer_cls: MagicMock
+    ) -> None:
+        """The keepalive tick re-sends the last task state."""
+        streamer, client = _make_streamer()
+        stream = client.chat_stream.return_value
+
+        streamer.update(_make_items(TodoStatus.IN_PROGRESS))
+        assert stream.append.call_count == 1
+
+        # Simulate the timer firing by calling _keepalive_tick directly.
+        streamer._keepalive_tick()
+
+        assert stream.append.call_count == 2
+        # The second append used the same chunks as the first.
+        first_chunks = stream.append.call_args_list[0][1]["chunks"]
+        second_chunks = stream.append.call_args_list[1][1]["chunks"]
+        assert first_chunks == second_chunks
+
+    @patch(_TIMER_PATCH)
+    def test_keepalive_tick_reschedules(self, timer_cls: MagicMock) -> None:
+        """After a successful keepalive, a new timer is scheduled."""
+        streamer, _client = _make_streamer()
+
+        streamer.update(_make_items(TodoStatus.IN_PROGRESS))
+        initial_call_count = timer_cls.call_count
+
+        streamer._keepalive_tick()
+
+        # A new Timer was created for the next keepalive.
+        assert timer_cls.call_count == initial_call_count + 1
+
+    @patch(_TIMER_PATCH)
+    def test_keepalive_tick_noop_without_stream(
+        self, timer_cls: MagicMock
+    ) -> None:
+        """Keepalive tick does nothing if stream was never started."""
+        streamer, client = _make_streamer()
+        stream = client.chat_stream.return_value
+
+        # Never called update(), so _stream is None.
+        streamer._keepalive_tick()
+
+        stream.append.assert_not_called()
+
+    @patch(_TIMER_PATCH)
+    def test_keepalive_tick_api_error_non_fatal(
+        self, timer_cls: MagicMock
+    ) -> None:
+        """Keepalive append failure doesn't raise."""
+        streamer, client = _make_streamer()
+        stream = client.chat_stream.return_value
+
+        streamer.update(_make_items(TodoStatus.IN_PROGRESS))
+
+        # Make the keepalive append fail.
+        stream.append.side_effect = SlackApiError(
+            message="error",
+            response=MagicMock(status_code=500, data={}),
+        )
+
+        # Should not raise.
+        streamer._keepalive_tick()
+
+    @patch(_TIMER_PATCH)
+    def test_keepalive_cancelled_on_stream_expiry_recovery(
+        self, timer_cls: MagicMock
+    ) -> None:
+        """When stream expires and restarts, old timer is cancelled."""
+        streamer, client = _make_streamer()
+        old_stream = client.chat_stream.return_value
+        timer_instance = timer_cls.return_value
+
+        with patch(
+            "airut.gateway.slack.plan_streamer.time.monotonic",
+            side_effect=[0.0, 0.0, 1.0, 1.0],
+        ):
+            streamer.update(_make_items(TodoStatus.PENDING))
+
+            old_stream.append.side_effect = _stream_expired_error()
+            new_stream = MagicMock()
+            client.chat_stream.return_value = new_stream
+
+            streamer.update(_make_items(TodoStatus.IN_PROGRESS))
+
+        # Timer was cancelled during expiry recovery, then rescheduled.
+        timer_instance.cancel.assert_called()
+
+    @patch(_TIMER_PATCH)
+    def test_debounced_update_refreshes_chunks_for_keepalive(
+        self, _timer_cls: MagicMock
+    ) -> None:
+        """Debounced update() still updates _last_chunks.
+
+        When a rapid update is debounced (no API call), the keepalive
+        should re-send the *latest* items, not stale data from the
+        previous successful append.
+        """
+        streamer, client = _make_streamer()
+        stream = client.chat_stream.return_value
+
+        initial_items = _make_items(TodoStatus.PENDING)
+        updated_items = _make_items(TodoStatus.IN_PROGRESS)
+
+        # call 1: first update() now=0.0 (stream is None, no debounce)
+        # call 2: _last_append_time = 0.0
+        # call 3: second update() now=0.1 (debounced)
+        with patch(
+            "airut.gateway.slack.plan_streamer.time.monotonic",
+            side_effect=[0.0, 0.0, 0.1],
+        ):
+            streamer.update(initial_items)
+            streamer.update(updated_items)
+
+        # Only one real append happened (the first).
+        assert stream.append.call_count == 1
+
+        # Now simulate keepalive firing.
+        streamer._keepalive_tick()
+
+        # The keepalive should use the debounced (newer) chunks.
+        keepalive_chunks = stream.append.call_args_list[1][1]["chunks"]
+        assert keepalive_chunks[0].status == "in_progress"
 
 
 class TestIsStreamExpired:
