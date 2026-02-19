@@ -44,6 +44,32 @@ class TestCreateAdapters:
         )
         assert result == {"email": mock_cls.from_config.return_value}
 
+    def test_creates_slack_adapter(self) -> None:
+        """create_adapters returns SlackChannelAdapter dict."""
+        from airut.gateway.config import RepoServerConfig
+        from airut.gateway.slack.config import SlackChannelConfig
+
+        slack_config = SlackChannelConfig(
+            bot_token="xoxb-test-factory",
+            app_token="xapp-test-factory",
+            authorized=({"workspace_members": True},),
+        )
+
+        config = MagicMock(spec=RepoServerConfig)
+        config.channels = {"slack": slack_config}
+        config.repo_id = "test-repo"
+
+        with patch(
+            "airut.gateway.slack.adapter.SlackChannelAdapter"
+        ) as mock_cls:
+            mock_cls.from_config.return_value = MagicMock()
+            result = create_adapters(config)
+
+        mock_cls.from_config.assert_called_once_with(
+            slack_config, repo_id="test-repo"
+        )
+        assert result == {"slack": mock_cls.from_config.return_value}
+
     def test_unknown_channel_config_raises(self) -> None:
         """create_adapters raises ValueError for unknown channel config."""
         from airut.gateway.config import RepoServerConfig

@@ -2,7 +2,8 @@
 
 Protocol-agnostic gateway for interacting with codebases via Claude Code.
 Enables authorized users to send instructions via messaging channels (email,
-etc.) and receive Claude's responses with full conversation state management.
+Slack, etc.) and receive Claude's responses with full conversation state
+management.
 
 ## Overview
 
@@ -20,7 +21,8 @@ security.
 
 The gateway separates protocol-agnostic orchestration (conversation management,
 sandbox execution, session resumption, dashboard tracking) from channel-specific
-protocol handling (email IMAP/SMTP, etc.) via types in `gateway/channel.py`:
+protocol handling (email IMAP/SMTP, Slack Socket Mode, etc.) via types in
+`gateway/channel.py`:
 
 - **`ParsedMessage`** — Protocol-agnostic dataclass produced by the channel
   adapter after authentication and parsing. Contains sender, body,
@@ -42,7 +44,8 @@ protocol handling (email IMAP/SMTP, etc.) via types in `gateway/channel.py`:
   `error_type` for structured health reporting.
 - **`RawMessage[T]`** — Generic dataclass wrapping a channel-specific payload
   (`T`) with sender identity and display_title. The email channel uses
-  `RawMessage[email.message.Message]`; the core uses `RawMessage[Any]`.
+  `RawMessage[email.message.Message]`; the Slack channel uses
+  `RawMessage[dict[str, Any]]`; the core uses `RawMessage[Any]`.
 - **`ChannelConfig`** — `typing.Protocol` defining the configuration interface
   for channel implementations. Requires `channel_type` (e.g., `"email"`) and
   `channel_info` (human-readable summary for dashboard display) properties. All
@@ -54,7 +57,8 @@ protocol handling (email IMAP/SMTP, etc.) via types in `gateway/channel.py`:
   `send_reply()`, `send_error()`, `send_rejection()`.
 
 Each channel implements `ChannelAdapter` (e.g., `EmailChannelAdapter` in
-`gateway/email/adapter.py`). The core works entirely through `ParsedMessage`,
+`gateway/email/adapter.py`, `SlackChannelAdapter` in
+`gateway/slack/adapter.py`). The core works entirely through `ParsedMessage`,
 `ChannelConfig`, `ChannelListener`, and `ChannelAdapter` — it imports nothing
 from channel-specific subpackages. A factory function `create_adapters()` in
 `gateway/service/adapter_factory.py` dispatches on each channel config type to
@@ -70,7 +74,8 @@ and feeds messages through the same processing pipeline.
 - **RepoHandler** — Per-repo state: channel adapters dict, conversation manager.
   Delegates listener lifecycle to each adapter's `listener.start()` /
   `listener.stop()`. Has zero channel-specific imports. The `adapters` dict is
-  keyed by channel type (e.g. `{"email": EmailChannelAdapter}`).
+  keyed by channel type (e.g.
+  `{"email": EmailChannelAdapter, "slack": SlackChannelAdapter}`).
 - **ConversationManager** — Git checkout management and state persistence
 - **Sandbox** — Container lifecycle, network isolation, and execution
   (`airut/sandbox/`)
@@ -88,6 +93,21 @@ and feeds messages through the same processing pipeline.
 - **EmailResponder** — SMTP reply construction with threading support
 - **SenderAuthenticator** — DMARC verification on trusted headers
 - **SenderAuthorizer** — Sender allowlist checking
+
+**Slack channel** (`gateway/slack/`):
+
+- **SlackChannelAdapter** — Implements `ChannelAdapter` for Slack. Owns all
+  Slack sub-components (listener, authorizer, thread store) via `from_config()`
+  factory.
+- **SlackChannelListener** — Implements `ChannelListener` for Slack. Wraps the
+  Bolt SDK's `SocketModeHandler` with connection health tracking (close/error
+  listeners on the underlying WebSocket).
+- **SlackAuthorizer** — Authorization via workspace membership, user groups, or
+  user IDs with TTL-cached API data.
+- **SlackThreadStore** — Thread-to-conversation mapping with atomic JSON
+  persistence.
+
+See [slack-channel.md](slack-channel.md) for the full Slack channel spec.
 
 ### Task Lifecycle
 
@@ -151,6 +171,7 @@ RepoHandler.start_listener()
        adapter.listener.start(submit=lambda msg: handler._submit_message(msg, adapter))
        -> ChannelListener spawns internal thread
        -> (email: EmailChannelListener connects IMAP, runs poll/IDLE loop)
+       -> (slack: SlackChannelListener connects Socket Mode WebSocket)
 
 ChannelListener thread:
   -> Message arrives on channel
@@ -164,6 +185,7 @@ GatewayService._process_message_worker()  [worker thread]:
   -> tracker.set_authenticating(task_id)                 → AUTHENTICATING
   -> ChannelAdapter.authenticate_and_parse()
     -> (email: DMARC + sender auth + MIME parsing)
+    -> (slack: workspace/group/user authorization + event payload extraction)
     -> raises AuthenticationError on failure:
        tracker.complete_task(task_id, AUTH_FAILED/UNAUTHORIZED) → COMPLETED
   -> tracker.update_task_display_title(task_id, authenticated_sender=...)
@@ -200,6 +222,7 @@ RepoHandler.stop()
   -> for each adapter in handler.adapters:
        adapter.listener.stop()
        -> (email: interrupt IDLE, join thread, close IMAP connection)
+       -> (slack: close Socket Mode WebSocket)
 ```
 
 ## Conversation State Management
@@ -508,17 +531,17 @@ semantics, and loading flow.
 
 ### Authentication and Authorization
 
-Two logically separate layers, both required. See
-[authentication.md](authentication.md) for detailed design.
+Each channel implements its own authentication and authorization model
+appropriate to the transport:
 
-1. **Authentication** (`SenderAuthenticator`): Verifies sender identity via
-   DMARC on trusted `Authentication-Results` headers.
-2. **Authorization** (`SenderAuthorizer`): Checks authenticated sender against
-   the allowed sender list.
+- **Email**: DMARC verification on trusted `Authentication-Results` headers,
+  then sender allowlist matching. See [authentication.md](authentication.md).
+- **Slack**: Pre-authenticated via Socket Mode WebSocket (app-level token), then
+  authorization via workspace membership, user group, or user ID rules. See
+  [slack-channel.md](slack-channel.md#authorization-model).
 
-**Rationale**: Separating authentication from authorization allows extending
-either layer independently (e.g., adding domain-based rules to authorization
-without touching DMARC logic).
+Both channels enforce deny-by-default (at least one rule must match) and
+separate authentication from authorization.
 
 ### Credential Management
 
@@ -530,6 +553,10 @@ without touching DMARC logic).
     `client_id`, and `client_secret` (all supporting `!env` tags). Uses MSAL
     Client Credentials flow with XOAUTH2 SASL mechanism for both IMAP and SMTP.
     When OAuth2 is configured, the `password` field is optional.
+- **Slack credentials**: Bot token (`xoxb-...`) and app-level token (`xapp-...`)
+  in server config under `slack.bot_token` and `slack.app_token`. Both support
+  `!env` tags and are registered with `SecretFilter` for log redaction. See
+  [slack-channel.md](slack-channel.md#credential-management).
 - **Git credentials**: `GH_TOKEN` in `container_env:` with
   `gh auth git-credential` helper (no SSH keys mounted)
 - **AI service credentials**: Configured in `container_env:` (e.g.,
@@ -543,8 +570,8 @@ full list.
 
 | Risk                  | Mitigation                                                                         |
 | --------------------- | ---------------------------------------------------------------------------------- |
-| Unauthorized access   | Sender whitelist + mandatory DMARC/SPF verification                                |
-| Email spoofing        | Always-on DMARC checks (no disable option)                                         |
+| Unauthorized access   | Per-channel auth: DMARC + sender allowlist (email), workspace/group rules (Slack)  |
+| Identity spoofing     | DMARC (email), platform-enforced identity via Socket Mode (Slack)                  |
 | Command injection     | Claude Code runs in isolated container                                             |
 | Data exfiltration     | Network allowlist via mitmproxy (see [network-sandbox](../doc/network-sandbox.md)) |
 | Resource exhaustion   | Execution timeout + conversation GC                                                |
@@ -563,11 +590,20 @@ full list.
 - **Timeout**: Kill container, reply "Execution timed out after 300 seconds"
 - **Build failure**: Reply "System Error: Container image unavailable"
 
-### Email Failures
+### Channel Failures
+
+**Email:**
 
 - **IMAP disconnect**: Retry with exponential backoff (10s, 30s, 60s, 300s)
 - **SMTP send failure**: Log error, retry once, then mark conversation as failed
 - **Parse error**: Reply "Could not parse your message. Please resend."
+
+**Slack:**
+
+- **WebSocket disconnect**: Bolt SDK auto-reconnects; listener marks health as
+  DEGRADED until reconnected
+- **Slack API failure**: Log error, reply with error message in thread
+- **Rate limiting**: Handled by Slack SDK's built-in retry logic
 
 ### Conversation Limit
 
@@ -599,11 +635,11 @@ task automatically runs with those changes. Persistent mounts (`/workspace`,
 - **Consistency**: Same environment as interactive usage
 - **Credential isolation**: Each conversation has separate Claude session
 
-### Why Email Instead of Web UI?
+### Why Messaging Channels Instead of Web UI?
 
 - **Asynchronous**: User doesn't need to wait for Claude's response
-- **Accessible**: Works from any email client (phone, desktop, web)
-- **Stateful**: Email threading provides natural conversation history
+- **Accessible**: Works from existing tools (email clients, Slack)
+- **Stateful**: Thread-based channels provide natural conversation history
 - **Simple**: No custom client needed, no authentication UI
 
 ### Why Quote Stripping?
@@ -622,8 +658,8 @@ thread pool.
 
 - **Worker pool**: `ThreadPoolExecutor` with configurable size
   (`MAX_CONCURRENT_EXECUTIONS`, default: 3)
-- **Message flow**: IMAP polling runs in main thread; messages are submitted to
-  the worker pool for parallel execution
+- **Message flow**: Channel listeners run in internal threads; messages are
+  submitted to the worker pool for parallel execution
 - **Graceful shutdown**: Waits for pending executions with configurable timeout
   (`SHUTDOWN_TIMEOUT_SECONDS`, default: 60)
 
@@ -660,7 +696,7 @@ been implemented.
 
 ## Not In Scope
 
-- **Web UI for task submission**: Channel-based interfaces only (email, etc.)
+- **Web UI for task submission**: Channel-based interfaces only (email, Slack)
 - **Real-time chat**: Channels are asynchronous
 - **Collaboration**: Single authorized sender per deployment
 - **Conversation export**: Use git log for audit trail

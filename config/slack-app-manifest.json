@@ -1,0 +1,45 @@
+{
+  "display_information": {
+    "name": "Airut",
+    "description": "Headless Claude Code interaction",
+    "background_color": "#1a1a2e"
+  },
+  "features": {
+    "assistant_view": {
+      "assistant_description": "Interact with Claude Code",
+      "suggested_prompts": []
+    },
+    "bot_user": {
+      "display_name": "Airut",
+      "always_online": true
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "assistant:write",
+        "chat:write",
+        "im:history",
+        "users:read",
+        "files:read",
+        "files:write",
+        "usergroups:read"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "bot_events": [
+        "assistant_thread_started",
+        "assistant_thread_context_changed",
+        "message.im"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": false
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": true,
+    "token_rotation_enabled": false
+  }
+}

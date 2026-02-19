@@ -61,7 +61,7 @@ resolved values are registered for log redaction.
 The server config (`~/.config/airut/airut.yaml`) retains deployment-specific
 settings. Per-repo config is nested under `repos.<repo_id>`:
 
-- `email.*` — Channel-specific email settings nested under `email:`:
+- `email.*` — Email channel settings nested under `email:`:
   - `email.imap_server`, `email.smtp_server` — Mail server connectivity
   - `email.username`, `email.password` — Credentials
   - `email.from` — Sender address
@@ -72,18 +72,23 @@ settings. Per-repo config is nested under `repos.<repo_id>`:
     becomes optional when OAuth2 is configured.
   - `email.microsoft_internal_auth_fallback` — Fallback auth for internal M365
   - `email.imap.*` — Polling and idle configuration
+- `slack.*` — Slack channel settings nested under `slack:`:
+  - `slack.bot_token` — Bot User OAuth Token (`xoxb-...`)
+  - `slack.app_token` — App-level token for Socket Mode (`xapp-...`)
+  - `slack.authorized` — Authorization rules: `workspace_members`, `user_group`,
+    `user_id`. See [slack-channel.md](slack-channel.md#authorization-rules)
 - `git.repo_url` — Repository to clone
 - `execution.*` — `max_concurrent`, `shutdown_timeout`,
   `conversation_max_age_days`
 - `dashboard.*` — Web UI configuration
 - `container_command` — Container runtime (podman/docker)
 
-**Important:** All email-specific fields (`authorized_senders`,
-`trusted_authserv_id`, `microsoft_internal_auth_fallback`, `imap`) must be
-nested under `email:`. Placing them at the repo level is a hard error with a
-migration hint. A repo must have at least one channel block configured (e.g.
-`email:`). Multiple channels can coexist under the same repo — each runs its own
-listener and feeds messages through the shared processing pipeline.
+**Important:** All channel-specific fields must be nested under their channel
+block (`email:` or `slack:`). Placing email fields at the repo level is a hard
+error with a migration hint. A repo must have at least one channel block
+configured (e.g. `email:`, `slack:`, or both). Multiple channels can coexist
+under the same repo — each runs its own listener and feeds messages through the
+shared processing pipeline.
 
 The `container_env` block is replaced by `secrets` — a named pool of values that
 repos can reference via `!secret`:
