@@ -98,11 +98,11 @@ the request immediately, then works asynchronously and replies when done.
 1. **Acknowledgment**: When a message is received, the listener's `user_message`
    handler calls `set_status("is working on this...")` to show a loading
    indicator immediately (before dispatching to the worker thread). Later,
-   `send_acknowledgment()` posts a message to the thread: "Your request has been
-   received and is now being processed by {model}." If a dashboard URL is
-   configured, the message includes a link to track progress. This message is
-   always sent (not just when dashboard is configured) because these requests
-   take a long time and a short confirmation sets the right expectation.
+   `send_acknowledgment()` posts a message to the thread: "I've started working
+   on this and will reply shortly." If a dashboard URL is configured, the
+   message includes a link to track progress. This message is always sent (not
+   just when dashboard is configured) because these requests take a long time
+   and a short confirmation sets the right expectation.
 2. **Execution**: Claude Code runs in a container via the sandbox. No streaming
    of intermediate output to Slack.
 3. **Reply**: The complete response is posted to the thread via

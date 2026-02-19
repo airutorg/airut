@@ -309,8 +309,9 @@ name)
 **Implementation**: Model is passed to Claude Code via `--model` CLI parameter,
 not embedded in settings.json.
 
-**Acknowledgment**: The auto-reply includes the model being used: "Your request
-has been received and is now being processed by opus."
+**Acknowledgment**: The auto-reply confirms work has started: "I've started
+working on this and will reply shortly." If a dashboard URL is configured, a
+progress link is appended.
 
 ### Conversation Identification
 
