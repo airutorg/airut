@@ -169,11 +169,15 @@ class SlackPlanStreamer:
             now = time.monotonic()
             elapsed = now - self._last_append_time
 
-            # Debounce: skip if too soon after last append (unless first)
+            # Debounce: skip the API call if too soon after last append
+            # (unless this is the very first call).  Still update
+            # _last_chunks so the keepalive always re-sends the latest
+            # state, not stale data from the previous successful append.
             if (
                 self._stream is not None
                 and elapsed < _MIN_APPEND_INTERVAL_SECONDS
             ):
+                self._last_chunks = _build_task_chunks(items)
                 return
 
             chunks = _build_task_chunks(items)

@@ -458,6 +458,42 @@ class TestKeepalive:
         # Timer was cancelled during expiry recovery, then rescheduled.
         timer_instance.cancel.assert_called()
 
+    @patch(_TIMER_PATCH)
+    def test_debounced_update_refreshes_chunks_for_keepalive(
+        self, _timer_cls: MagicMock
+    ) -> None:
+        """Debounced update() still updates _last_chunks.
+
+        When a rapid update is debounced (no API call), the keepalive
+        should re-send the *latest* items, not stale data from the
+        previous successful append.
+        """
+        streamer, client = _make_streamer()
+        stream = client.chat_stream.return_value
+
+        initial_items = _make_items(TodoStatus.PENDING)
+        updated_items = _make_items(TodoStatus.IN_PROGRESS)
+
+        # call 1: first update() now=0.0 (stream is None, no debounce)
+        # call 2: _last_append_time = 0.0
+        # call 3: second update() now=0.1 (debounced)
+        with patch(
+            "airut.gateway.slack.plan_streamer.time.monotonic",
+            side_effect=[0.0, 0.0, 0.1],
+        ):
+            streamer.update(initial_items)
+            streamer.update(updated_items)
+
+        # Only one real append happened (the first).
+        assert stream.append.call_count == 1
+
+        # Now simulate keepalive firing.
+        streamer._keepalive_tick()
+
+        # The keepalive should use the debounced (newer) chunks.
+        keepalive_chunks = stream.append.call_args_list[1][1]["chunks"]
+        assert keepalive_chunks[0].status == "in_progress"
+
 
 class TestIsStreamExpired:
     def test_matches_stream_expired_error(self) -> None:
