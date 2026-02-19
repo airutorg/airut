@@ -249,10 +249,16 @@ SDK's `ChatStream` helper. The email adapter returns `None` from
 - `TodoStatus.IN_PROGRESS` → `"in_progress"`
 - `TodoStatus.COMPLETED` → `"complete"` (note: Slack uses `"complete"`, not
   `"completed"`)
-- Positional index → `id` (`"task_0"`, `"task_1"`, ...)
+- SHA-256 hash of `item.content` (first 8 hex chars) → `id`
+
+**Task ID stability**: Slack's streaming plan API tracks individual task cards
+by `id` across `appendStream` calls. IDs must remain stable for a given logical
+task even when the list is reordered, items are inserted, or items are removed.
+A content-hash scheme ensures the same task content always produces the same ID.
+Duplicate content strings get a `_N` suffix for uniqueness.
 
 Since `TodoWrite` replaces the entire list on each call, the full task list is
-sent on every `update()`. Slack replaces the plan view atomically.
+sent on every `update()`.
 
 **Debouncing**: Rapid `TodoWrite` events (within 500ms) are coalesced — only the
 latest state is sent. This prevents rate limiting when Claude emits many
