@@ -302,7 +302,7 @@ class SlackChannelAdapter(ChannelAdapter):
         )
         if dashboard_url:
             task_url = f"{dashboard_url}/conversation/{conversation_id}"
-            text += f" <{task_url}|Track progress>"
+            text += f" {task_url}"
 
         try:
             self._client.chat_postMessage(
@@ -413,7 +413,7 @@ class SlackChannelAdapter(ChannelAdapter):
         text = f"Your message could not be processed.\n\nReason: {reason}"
         if dashboard_url:
             task_url = f"{dashboard_url}/conversation/{conversation_id}"
-            text += f"\n\nConversation: <{task_url}|{conversation_id}>"
+            text += f"\n\nConversation: {task_url}"
         else:
             text += f"\n\nConversation ID: {conversation_id}"
 

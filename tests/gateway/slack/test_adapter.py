@@ -283,7 +283,11 @@ class TestSendAcknowledgment:
             parsed, "conv1", "opus", "https://dash.example.com"
         )
         call_kw = client.chat_postMessage.call_args[1]
-        assert "dash.example.com/conversation/conv1" in call_kw["text"]
+        text = call_kw["text"]
+        assert "https://dash.example.com/conversation/conv1" in text
+        # Bare URL, no mrkdwn link syntax (Slack auto-links bare URLs)
+        assert "<" not in text
+        assert ">" not in text
 
     def test_api_failure_non_fatal(self, tmp_path: Path) -> None:
         adapter, client, _, _ = _make_adapter(tmp_path)
@@ -468,7 +472,11 @@ class TestSendRejection:
             parsed, "conv1", "busy", "https://dash.example.com"
         )
         call_kw = client.chat_postMessage.call_args[1]
-        assert "dash.example.com/conversation/conv1" in call_kw["text"]
+        text = call_kw["text"]
+        assert "https://dash.example.com/conversation/conv1" in text
+        # Bare URL, no mrkdwn link syntax (Slack auto-links bare URLs)
+        assert "<" not in text
+        assert ">" not in text
 
     def test_api_failure_non_fatal(self, tmp_path: Path) -> None:
         adapter, client, _, _ = _make_adapter(tmp_path)
