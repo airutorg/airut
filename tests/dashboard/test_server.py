@@ -15,6 +15,7 @@ from airut.dashboard.server import DashboardServer
 from airut.dashboard.tracker import (
     BootPhase,
     BootState,
+    ChannelInfo,
     CompletionReason,
     RepoState,
     RepoStatus,
@@ -93,7 +94,9 @@ class TestDashboardServer:
                 repo_id="repo1",
                 status=RepoStatus.LIVE,
                 git_repo_url="https://github.com/test/repo1",
-                channel_info="imap.example.com",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
                 storage_dir="/storage/repo1",
             ),
             RepoState(
@@ -102,7 +105,9 @@ class TestDashboardServer:
                 error_message="Auth failed",
                 error_type="IMAPConnectionError",
                 git_repo_url="https://github.com/test/repo2",
-                channel_info="imap.example.com",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
                 storage_dir="/storage/repo2",
             ),
         ]
@@ -284,7 +289,9 @@ class TestDashboardServer:
                 repo_id="repo1",
                 status=RepoStatus.LIVE,
                 git_repo_url="https://github.com/test/repo1",
-                channel_info="imap.example.com",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
                 storage_dir="/storage/repo1",
                 initialized_at=1000.0,
             ),
@@ -294,7 +301,9 @@ class TestDashboardServer:
                 error_message="Auth failed",
                 error_type="IMAPConnectionError",
                 git_repo_url="https://github.com/test/repo2",
-                channel_info="imap.example.com",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
                 storage_dir="/storage/repo2",
                 initialized_at=1001.0,
             ),
@@ -332,7 +341,9 @@ class TestDashboardServer:
                 repo_id="test-repo",
                 status=RepoStatus.LIVE,
                 git_repo_url="https://github.com/test/repo",
-                channel_info="imap.example.com",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
                 storage_dir="/storage/test-repo",
             ),
         ]
@@ -362,7 +373,9 @@ class TestDashboardServer:
                 error_message="Connection refused",
                 error_type="IMAPConnectionError",
                 git_repo_url="https://github.com/test/repo",
-                channel_info="imap.example.com",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
                 storage_dir="/storage/failed-repo",
             ),
         ]
@@ -398,7 +411,9 @@ class TestDashboardServer:
                 repo_id="repo1",
                 status=RepoStatus.LIVE,
                 git_repo_url="https://github.com/test/repo1",
-                channel_info="imap.example.com",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
                 storage_dir="/storage/repo1",
             ),
             RepoState(
@@ -407,7 +422,9 @@ class TestDashboardServer:
                 error_message="Auth failed",
                 error_type="IMAPConnectionError",
                 git_repo_url="https://github.com/test/repo2",
-                channel_info="imap.example.com",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
                 storage_dir="/storage/repo2",
             ),
         ]
@@ -938,7 +955,9 @@ class TestDashboardServer:
                 repo_id="r1",
                 status=RepoStatus.LIVE,
                 git_repo_url="https://example.com/r1",
-                channel_info="imap.example.com",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
                 storage_dir="/s/r1",
             ),
         ]

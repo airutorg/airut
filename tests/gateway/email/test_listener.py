@@ -22,9 +22,9 @@ from airut.gateway.email.listener import (
 
 def test_listener_init(email_config):
     """Test listener initialization."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
-    assert listener.config == email_config.channel
+    assert listener.config == email_config.channels["email"]
     assert listener.connection is None
     assert listener._idle_tag is None
     assert listener._interrupted is False
@@ -40,7 +40,7 @@ def test_listener_init(email_config):
 
 def test_connect_success(email_config):
     """Test successful IMAP connection."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     with patch("imaplib.IMAP4_SSL") as mock_imap:
         mock_conn = MagicMock()
@@ -49,19 +49,20 @@ def test_connect_success(email_config):
         listener.connect()
 
         mock_imap.assert_called_once_with(
-            email_config.channel.imap_server,
-            email_config.channel.imap_port,
+            email_config.channels["email"].imap_server,
+            email_config.channels["email"].imap_port,
             timeout=10,
         )
         mock_conn.login.assert_called_once_with(
-            email_config.channel.username, email_config.channel.password
+            email_config.channels["email"].username,
+            email_config.channels["email"].password,
         )
         assert listener.connection == mock_conn
 
 
 def test_connect_oauth2_xoauth2(microsoft_oauth2_email_config):
     """Test IMAP connection with Microsoft OAuth2 uses XOAUTH2."""
-    listener = EmailListener(microsoft_oauth2_email_config.channel)
+    listener = EmailListener(microsoft_oauth2_email_config.channels["email"])
     assert listener._token_provider is not None
 
     with (
@@ -90,27 +91,27 @@ def test_connect_oauth2_xoauth2(microsoft_oauth2_email_config):
         # Non-empty challenge (server error) returns empty bytes to abort
         assert auth_fn(b"some-error-json") == b""
         mock_gen.assert_called_once_with(
-            microsoft_oauth2_email_config.channel.username
+            microsoft_oauth2_email_config.channels["email"].username
         )
 
 
 def test_listener_init_no_token_provider(email_config):
     """Test listener without OAuth2 config has no token provider."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
     assert listener._token_provider is None
     listener.close()
 
 
 def test_listener_init_with_token_provider(microsoft_oauth2_email_config):
     """Test listener with OAuth2 config creates token provider."""
-    listener = EmailListener(microsoft_oauth2_email_config.channel)
+    listener = EmailListener(microsoft_oauth2_email_config.channels["email"])
     assert listener._token_provider is not None
     listener.close()
 
 
 def test_connect_retry_success(email_config):
     """Test connection succeeds after retry."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     with patch("imaplib.IMAP4_SSL") as mock_imap:
         mock_conn = MagicMock()
@@ -129,7 +130,7 @@ def test_connect_retry_success(email_config):
 
 def test_connect_retry_exhausted(email_config):
     """Test connection fails after max retries."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     with patch("imaplib.IMAP4_SSL") as mock_imap:
         mock_imap.side_effect = imaplib.IMAP4.error("Connection refused")
@@ -145,7 +146,7 @@ def test_connect_retry_exhausted(email_config):
 
 def test_connect_oserror_retry(email_config):
     """Test connection retries on OSError."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     with patch("imaplib.IMAP4_SSL") as mock_imap:
         mock_conn = MagicMock()
@@ -161,7 +162,7 @@ def test_connect_oserror_retry(email_config):
 
 def test_fetch_unread_success(email_config, sample_email_bytes):
     """Test fetching unread messages."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -189,7 +190,7 @@ def test_fetch_unread_success(email_config, sample_email_bytes):
 
 def test_fetch_unread_empty_inbox(email_config):
     """Test fetching with no unread messages."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -204,7 +205,7 @@ def test_fetch_unread_empty_inbox(email_config):
 
 def test_fetch_unread_not_connected(email_config):
     """Test fetching without connection."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     with pytest.raises(
         IMAPConnectionError, match="Not connected to IMAP server"
@@ -214,7 +215,7 @@ def test_fetch_unread_not_connected(email_config):
 
 def test_fetch_unread_search_fails(email_config):
     """Test fetching when IMAP search fails."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -228,7 +229,7 @@ def test_fetch_unread_search_fails(email_config):
 
 def test_fetch_unread_imap_error(email_config):
     """Test fetching when IMAP error occurs."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -241,7 +242,7 @@ def test_fetch_unread_imap_error(email_config):
 
 def test_fetch_unread_oserror(email_config):
     """Test fetching wraps OSError (socket timeout) in IMAPConnectionError."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -254,7 +255,7 @@ def test_fetch_unread_oserror(email_config):
 
 def test_fetch_unread_skip_failed_message(email_config, sample_email_bytes):
     """Test fetching skips messages that fail to fetch."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -276,7 +277,7 @@ def test_fetch_unread_malformed_response_bytes_not_tuple(
     email_config, sample_email_bytes
 ):
     """Test fetching handles malformed response where data[0] is bytes."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -298,7 +299,7 @@ def test_fetch_unread_malformed_response_bytes_not_tuple(
 
 def test_fetch_unread_malformed_response_non_bytes_body(email_config, caplog):
     """Test fetching handles malformed response where body is not bytes."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -318,7 +319,7 @@ def test_fetch_unread_malformed_response_non_bytes_body(email_config, caplog):
 
 def test_disconnect_success(email_config):
     """Test successful disconnect."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -331,7 +332,7 @@ def test_disconnect_success(email_config):
 
 def test_disconnect_not_connected(email_config):
     """Test disconnect when not connected."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     # Should not raise error
     listener.disconnect()
@@ -340,7 +341,7 @@ def test_disconnect_not_connected(email_config):
 
 def test_disconnect_with_error(email_config):
     """Test disconnect handles logout errors gracefully."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     mock_conn.logout.side_effect = Exception("Logout failed")
@@ -354,7 +355,7 @@ def test_disconnect_with_error(email_config):
 
 def test_mark_as_read_success(email_config):
     """Test marking message as read."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -370,7 +371,7 @@ def test_mark_as_read_success(email_config):
 
 def test_mark_as_read_non_ok_status(email_config):
     """Test marking as read with non-OK status."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -387,7 +388,7 @@ def test_mark_as_read_non_ok_status(email_config):
 
 def test_mark_as_read_not_connected(email_config):
     """Test marking as read when not connected."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     with pytest.raises(
         IMAPConnectionError, match="Not connected to IMAP server"
@@ -397,7 +398,7 @@ def test_mark_as_read_not_connected(email_config):
 
 def test_mark_as_read_imap_error(email_config):
     """Test marking as read with IMAP error."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -412,7 +413,7 @@ def test_mark_as_read_imap_error(email_config):
 
 def test_delete_message_success(email_config):
     """Test deleting message."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -430,7 +431,7 @@ def test_delete_message_success(email_config):
 
 def test_delete_message_non_ok_status(email_config):
     """Test deleting with non-OK status."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -449,7 +450,7 @@ def test_delete_message_non_ok_status(email_config):
 
 def test_delete_message_not_connected(email_config):
     """Test deleting when not connected."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     with pytest.raises(
         IMAPConnectionError, match="Not connected to IMAP server"
@@ -459,7 +460,7 @@ def test_delete_message_not_connected(email_config):
 
 def test_delete_message_imap_error(email_config):
     """Test deleting with IMAP error."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -475,7 +476,7 @@ def test_delete_message_imap_error(email_config):
 
 def test_idle_start_success(email_config):
     """Test entering IDLE mode."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -497,7 +498,7 @@ def test_idle_start_success(email_config):
 
 def test_idle_start_not_connected(email_config):
     """Test IDLE start without connection."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     with pytest.raises(
         IMAPConnectionError, match="Not connected to IMAP server"
@@ -507,7 +508,7 @@ def test_idle_start_not_connected(email_config):
 
 def test_idle_start_not_accepted(email_config):
     """Test IDLE start when server doesn't accept IDLE."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -531,7 +532,7 @@ def test_idle_start_has_pending_messages(email_config):
     fetch_unread() and IDLE: idle_start() detects the pending message
     and returns True without entering IDLE.
     """
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -551,7 +552,7 @@ def test_idle_start_has_pending_messages(email_config):
 
 def test_idle_start_imap_error(email_config):
     """Test IDLE start with IMAP error."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -567,7 +568,7 @@ def test_idle_start_imap_error(email_config):
 
 def test_idle_wait_notification_received(email_config):
     """Test IDLE wait receives notification."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -592,7 +593,7 @@ def test_idle_wait_notification_received(email_config):
 
 def test_idle_wait_timeout(email_config):
     """Test IDLE wait timeout."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -612,7 +613,7 @@ def test_idle_wait_timeout(email_config):
 
 def test_idle_wait_not_connected(email_config):
     """Test IDLE wait without connection."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     with pytest.raises(
         IMAPConnectionError, match="Not connected to IMAP server"
@@ -624,7 +625,7 @@ def test_idle_wait_not_connected(email_config):
 
 def test_idle_wait_oserror(email_config):
     """Test IDLE wait with OS error."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -643,7 +644,7 @@ def test_idle_wait_oserror(email_config):
 
 def test_idle_done_success(email_config):
     """Test exiting IDLE mode."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -660,7 +661,7 @@ def test_idle_done_success(email_config):
 
 def test_idle_done_not_connected(email_config):
     """Test IDLE done without connection."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     with pytest.raises(
         IMAPConnectionError, match="Not connected to IMAP server"
@@ -670,7 +671,7 @@ def test_idle_done_not_connected(email_config):
 
 def test_idle_done_unexpected_response(email_config):
     """Test IDLE done with unexpected response (logs warning)."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -689,7 +690,7 @@ def test_idle_done_unexpected_response(email_config):
 
 def test_idle_done_imap_error(email_config):
     """Test IDLE done with IMAP error."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -706,7 +707,7 @@ def test_idle_done_imap_error(email_config):
 
 def test_idle_done_oserror(email_config):
     """Test IDLE done with OS error."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -723,7 +724,7 @@ def test_idle_done_oserror(email_config):
 
 def test_idle_done_drains_buffered_notifications(email_config):
     """Test IDLE done drains buffered untagged responses."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -745,7 +746,7 @@ def test_idle_done_drains_buffered_notifications(email_config):
 
 def test_idle_done_fallback_ok_match(email_config):
     """Test IDLE done fallback OK match when tag is not set."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -762,7 +763,7 @@ def test_idle_done_fallback_ok_match(email_config):
 
 def test_idle_done_unexpected_non_ok_response(email_config, caplog):
     """Test IDLE done with unexpected non-OK, non-untagged response."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -780,7 +781,7 @@ def test_idle_done_unexpected_non_ok_response(email_config, caplog):
 
 def test_idle_done_non_ok_tagged_response(email_config, caplog):
     """Test IDLE done with non-OK status in tagged response."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -800,7 +801,7 @@ def test_idle_done_non_ok_tagged_response(email_config, caplog):
 
 def test_interrupt_sets_flag_and_signals(email_config):
     """Test interrupt sets flag and sends signal to pipe."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     assert listener._interrupted is False
 
@@ -817,7 +818,7 @@ def test_interrupt_sets_flag_and_signals(email_config):
 
 def test_interrupt_multiple_times(email_config):
     """Test interrupt can be called multiple times safely."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     # Call interrupt multiple times
     listener.interrupt()
@@ -831,7 +832,7 @@ def test_interrupt_multiple_times(email_config):
 
 def test_interrupt_with_closed_pipe(email_config):
     """Test interrupt handles closed pipe gracefully."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     # Close the write end of the pipe
     assert listener._interrupt_write is not None
@@ -848,7 +849,7 @@ def test_interrupt_with_closed_pipe(email_config):
 
 def test_close_cleans_up_fds(email_config):
     """Test close cleans up all resources."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     # Store references to check they're closed
     assert listener._interrupt_read is not None
@@ -871,7 +872,7 @@ def test_close_cleans_up_fds(email_config):
 
 def test_close_with_connection(email_config):
     """Test close disconnects IMAP connection."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -884,7 +885,7 @@ def test_close_with_connection(email_config):
 
 def test_close_idempotent(email_config):
     """Test close can be called multiple times safely."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     listener.close()
     listener.close()  # Should not raise
@@ -896,7 +897,7 @@ def test_close_idempotent(email_config):
 
 def test_idle_wait_returns_false_when_interrupted(email_config):
     """Test idle_wait returns False immediately when already interrupted."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -912,7 +913,7 @@ def test_idle_wait_returns_false_when_interrupted(email_config):
 
 def test_idle_wait_interrupted_by_signal(email_config):
     """Test idle_wait returns False when interrupt signal received."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -938,7 +939,7 @@ def test_idle_wait_interrupted_by_signal(email_config):
 
 def test_idle_wait_with_both_fds_readable(email_config):
     """Test idle_wait prioritizes interrupt over IMAP notification."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -969,7 +970,7 @@ def test_idle_wait_with_both_fds_readable(email_config):
 
 def test_idle_wait_without_interrupt_pipe(email_config):
     """Test idle_wait works when interrupt pipe is None."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -997,7 +998,7 @@ def test_idle_wait_without_interrupt_pipe(email_config):
 
 def test_interrupt_oserror_on_write(email_config):
     """Test interrupt handles OSError during write gracefully."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     # Close the write fd to cause OSError on write
     assert listener._interrupt_write is not None
@@ -1019,7 +1020,7 @@ def test_interrupt_oserror_on_write(email_config):
 
 def test_close_oserror_on_close_fds(email_config):
     """Test close handles OSError when closing file descriptors."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     # Close the fds ourselves first to simulate already-closed state
     assert listener._interrupt_read is not None
@@ -1037,7 +1038,7 @@ def test_close_oserror_on_close_fds(email_config):
 
 def test_idle_wait_oserror_draining_interrupt_pipe(email_config):
     """Test idle_wait handles OSError when draining interrupt pipe."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -1067,7 +1068,7 @@ def test_idle_wait_oserror_draining_interrupt_pipe(email_config):
 
 def test_interrupt_shuts_down_socket(email_config):
     """Test interrupt calls socket.shutdown to unblock readline."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     mock_sock = MagicMock()
@@ -1084,7 +1085,7 @@ def test_interrupt_shuts_down_socket(email_config):
 
 def test_interrupt_handles_socket_shutdown_oserror(email_config):
     """Test interrupt handles OSError during socket shutdown gracefully."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     mock_sock = MagicMock()
@@ -1103,7 +1104,7 @@ def test_interrupt_handles_socket_shutdown_oserror(email_config):
 
 def test_interrupt_no_connection(email_config):
     """Test interrupt works without connection."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     # No connection set
     assert listener.connection is None
@@ -1118,7 +1119,7 @@ def test_interrupt_no_connection(email_config):
 
 def test_interrupt_socket_returns_none(email_config):
     """Test interrupt handles socket() returning None."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     mock_conn.socket.return_value = None
@@ -1134,7 +1135,7 @@ def test_interrupt_socket_returns_none(email_config):
 
 def test_disconnect_skips_logout_when_interrupted(email_config):
     """Test disconnect skips logout when already interrupted."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -1149,7 +1150,7 @@ def test_disconnect_skips_logout_when_interrupted(email_config):
 
 def test_disconnect_calls_logout_when_not_interrupted(email_config):
     """Test disconnect calls logout when not interrupted."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     listener.connection = mock_conn
@@ -1166,7 +1167,7 @@ def test_disconnect_logs_warning_only_when_not_interrupted(
     email_config, caplog
 ):
     """Test disconnect only logs warning for errors when not interrupted."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     mock_conn.logout.side_effect = Exception("Connection lost")
@@ -1183,7 +1184,7 @@ def test_disconnect_no_warning_when_interrupted_with_error(
     email_config, caplog
 ):
     """Test disconnect does not log warning when interrupted, even on error."""
-    listener = EmailListener(email_config.channel)
+    listener = EmailListener(email_config.channels["email"])
 
     mock_conn = MagicMock()
     # logout shouldn't be called, but if it were to fail, we should not warn
@@ -1202,7 +1203,7 @@ def test_connect_oauth2_token_error_retries(microsoft_oauth2_email_config):
     """Test OAuth2 token errors are retried in connect()."""
     from airut.gateway.email.microsoft_oauth2 import MicrosoftOAuth2TokenError
 
-    listener = EmailListener(microsoft_oauth2_email_config.channel)
+    listener = EmailListener(microsoft_oauth2_email_config.channels["email"])
     assert listener._token_provider is not None
 
     with (
@@ -1230,7 +1231,7 @@ def test_connect_oauth2_token_error_exhausted(microsoft_oauth2_email_config):
     """Test OAuth2 token errors raise IMAPConnectionError after retries."""
     from airut.gateway.email.microsoft_oauth2 import MicrosoftOAuth2TokenError
 
-    listener = EmailListener(microsoft_oauth2_email_config.channel)
+    listener = EmailListener(microsoft_oauth2_email_config.channels["email"])
     assert listener._token_provider is not None
 
     with (

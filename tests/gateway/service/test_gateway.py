@@ -38,7 +38,7 @@ class TestGatewayServiceInit:
         )
 
         with (
-            patch("airut.gateway.service.repo_handler.create_adapter"),
+            patch("airut.gateway.service.repo_handler.create_adapters"),
             patch("airut.gateway.service.repo_handler.ConversationManager"),
             patch("airut.gateway.service.gateway.capture_version_info") as mv,
             patch("airut.gateway.service.gateway.TaskTracker"),
@@ -65,7 +65,7 @@ class TestGatewayServiceInit:
         )
 
         with (
-            patch("airut.gateway.service.repo_handler.create_adapter"),
+            patch("airut.gateway.service.repo_handler.create_adapters"),
             patch("airut.gateway.service.repo_handler.ConversationManager"),
             patch("airut.gateway.service.gateway.capture_version_info") as mv,
             patch("airut.gateway.service.gateway.TaskTracker"),
@@ -92,7 +92,8 @@ class TestSubmitMessage:
     def test_no_pool(self, email_config, tmp_path: Path) -> None:
         svc, handler = make_service(email_config, tmp_path)
         msg = make_message()
-        assert svc.submit_message(msg, handler) is False
+        adapter = handler.adapters["email"]
+        assert svc.submit_message(msg, handler, adapter) is False
 
     def test_submits_successfully(self, email_config, tmp_path: Path) -> None:
         svc, handler = make_service(email_config, tmp_path)
@@ -101,7 +102,8 @@ class TestSubmitMessage:
         svc._executor_pool.submit.return_value = mock_future
 
         msg = make_message()
-        result = svc.submit_message(msg, handler)
+        adapter = handler.adapters["email"]
+        result = svc.submit_message(msg, handler, adapter)
         assert result is True
         assert mock_future in svc._pending_futures
 
@@ -114,7 +116,8 @@ class TestSubmitMessage:
         svc._executor_pool.submit.return_value = mock_future
 
         msg = make_message()
-        svc.submit_message(msg, handler)
+        adapter = handler.adapters["email"]
+        svc.submit_message(msg, handler, adapter)
         task_id = svc.tracker.add_task.call_args[0][0]
         assert len(task_id) == 12  # uuid4().hex[:12]
 
@@ -176,11 +179,15 @@ class TestProcessMessageWorker:
 
         svc, handler = make_service(email_config, tmp_path)
         msg = make_message()
-        handler.adapter.authenticate_and_parse.side_effect = (
-            AuthenticationError(sender="bad@evil.com", reason="not authorized")
+        handler.adapters[
+            "email"
+        ].authenticate_and_parse.side_effect = AuthenticationError(
+            sender="bad@evil.com", reason="not authorized"
         )
 
-        svc._process_message_worker(msg, "task-1", handler)
+        svc._process_message_worker(
+            msg, "task-1", handler, handler.adapters["email"]
+        )
 
         svc.tracker.set_authenticating.assert_called_once_with("task-1")
         svc.tracker.complete_task.assert_called_once_with(
@@ -197,14 +204,18 @@ class TestProcessMessageWorker:
             display_title="Test",
             sender="user@test.local",
         )
-        handler.adapter.authenticate_and_parse.return_value = mock_parsed
+        handler.adapters[
+            "email"
+        ].authenticate_and_parse.return_value = mock_parsed
         svc.tracker.has_active_task.return_value = True
 
         msg = make_message()
-        svc._process_message_worker(msg, "task-1", handler)
+        svc._process_message_worker(
+            msg, "task-1", handler, handler.adapters["email"]
+        )
 
         # Should queue, not reject
-        handler.adapter.send_rejection.assert_not_called()
+        handler.adapters["email"].send_rejection.assert_not_called()
         svc.tracker.set_pending.assert_called_once()
         # Task should NOT be completed (stays PENDING until drained)
         svc.tracker.complete_task.assert_not_called()
@@ -215,7 +226,9 @@ class TestProcessMessageWorker:
         svc, handler = make_service(email_config, tmp_path)
         handler.conversation_manager.exists.return_value = False
         mock_parsed = MagicMock(conversation_id=None)
-        handler.adapter.authenticate_and_parse.return_value = mock_parsed
+        handler.adapters[
+            "email"
+        ].authenticate_and_parse.return_value = mock_parsed
         svc.tracker.has_active_task.return_value = False
 
         msg = make_message()
@@ -223,7 +236,9 @@ class TestProcessMessageWorker:
             "airut.gateway.service.gateway.process_message",
             return_value=(CompletionReason.SUCCESS, "conv1"),
         ):
-            svc._process_message_worker(msg, "new-123", handler)
+            svc._process_message_worker(
+                msg, "new-123", handler, handler.adapters["email"]
+            )
         svc.tracker.set_authenticating.assert_called_once_with("new-123")
         svc.tracker.set_executing.assert_called_once()
         svc.tracker.complete_task.assert_called_once_with(
@@ -238,7 +253,9 @@ class TestProcessMessageWorker:
         svc, handler = make_service(email_config, tmp_path)
         handler.conversation_manager.exists.return_value = True
         mock_parsed = MagicMock(conversation_id="aabb1122")
-        handler.adapter.authenticate_and_parse.return_value = mock_parsed
+        handler.adapters[
+            "email"
+        ].authenticate_and_parse.return_value = mock_parsed
         svc.tracker.has_active_task.return_value = False
 
         msg = make_message()
@@ -246,7 +263,9 @@ class TestProcessMessageWorker:
             "airut.gateway.service.gateway.process_message",
             return_value=(CompletionReason.SUCCESS, "conv1"),
         ):
-            svc._process_message_worker(msg, "task-conv1", handler)
+            svc._process_message_worker(
+                msg, "task-conv1", handler, handler.adapters["email"]
+            )
         svc.tracker.complete_task.assert_called_once_with(
             "task-conv1", CompletionReason.SUCCESS, ""
         )
@@ -257,7 +276,9 @@ class TestProcessMessageWorker:
         svc, handler = make_service(email_config, tmp_path)
         handler.conversation_manager.exists.return_value = False
         mock_parsed = MagicMock(conversation_id=None)
-        handler.adapter.authenticate_and_parse.return_value = mock_parsed
+        handler.adapters[
+            "email"
+        ].authenticate_and_parse.return_value = mock_parsed
         svc.tracker.has_active_task.return_value = False
 
         msg = make_message()
@@ -265,7 +286,9 @@ class TestProcessMessageWorker:
             "airut.gateway.service.gateway.process_message",
             side_effect=RuntimeError("boom"),
         ):
-            svc._process_message_worker(msg, "task1", handler)
+            svc._process_message_worker(
+                msg, "task1", handler, handler.adapters["email"]
+            )
         svc.tracker.complete_task.assert_called_once_with(
             "task1", CompletionReason.INTERNAL_ERROR, ""
         )
@@ -277,7 +300,9 @@ class TestProcessMessageWorker:
         svc, handler = make_service(email_config, tmp_path)
         handler.conversation_manager.exists.return_value = False
         mock_parsed = MagicMock(conversation_id=None)
-        handler.adapter.authenticate_and_parse.return_value = mock_parsed
+        handler.adapters[
+            "email"
+        ].authenticate_and_parse.return_value = mock_parsed
         svc.tracker.has_active_task.return_value = False
 
         msg = make_message()
@@ -285,7 +310,9 @@ class TestProcessMessageWorker:
             "airut.gateway.service.gateway.process_message",
             return_value=(CompletionReason.EXECUTION_FAILED, "real-conv-id"),
         ):
-            svc._process_message_worker(msg, "temp-123", handler)
+            svc._process_message_worker(
+                msg, "temp-123", handler, handler.adapters["email"]
+            )
         svc.tracker.complete_task.assert_called_once_with(
             "temp-123", CompletionReason.EXECUTION_FAILED, ""
         )
@@ -298,7 +325,9 @@ class TestProcessMessageWorker:
         svc, handler = make_service(email_config, tmp_path)
         handler.conversation_manager.exists.return_value = False
         mock_parsed = MagicMock(conversation_id=None)
-        handler.adapter.authenticate_and_parse.return_value = mock_parsed
+        handler.adapters[
+            "email"
+        ].authenticate_and_parse.return_value = mock_parsed
         svc.tracker.has_active_task.return_value = False
 
         msg = make_message()
@@ -306,7 +335,9 @@ class TestProcessMessageWorker:
             "airut.gateway.service.gateway.process_message",
             return_value=(CompletionReason.EXECUTION_FAILED, None),
         ):
-            svc._process_message_worker(msg, "task1", handler)
+            svc._process_message_worker(
+                msg, "task1", handler, handler.adapters["email"]
+            )
         svc.tracker.complete_task.assert_called_once_with(
             "task1", CompletionReason.EXECUTION_FAILED, ""
         )
@@ -333,7 +364,7 @@ class TestProcessMessageWorker:
             display_title="Fix the login bug",
             channel_context="",
         )
-        handler.adapter.authenticate_and_parse.return_value = parsed
+        handler.adapters["email"].authenticate_and_parse.return_value = parsed
         handler.conversation_manager.exists.return_value = False
         svc.tracker.has_active_task.return_value = False
 
@@ -342,7 +373,9 @@ class TestProcessMessageWorker:
             "airut.gateway.service.gateway.process_message",
             return_value=(CompletionReason.SUCCESS, "conv1"),
         ):
-            svc._process_message_worker(msg, "new-abc", handler)
+            svc._process_message_worker(
+                msg, "new-abc", handler, handler.adapters["email"]
+            )
 
         # The tracker should have been told to update the display_title
         # from "(authenticating)" to the real title and sender
@@ -366,12 +399,16 @@ class TestProcessMessageWorker:
         from airut.dashboard.tracker import CompletionReason
 
         svc, handler = make_service(email_config, tmp_path)
-        handler.adapter.authenticate_and_parse.side_effect = RuntimeError(
+        handler.adapters[
+            "email"
+        ].authenticate_and_parse.side_effect = RuntimeError(
             "IMAP connection lost"
         )
 
         msg = make_message()
-        svc._process_message_worker(msg, "new-7f2fdf9f", handler)
+        svc._process_message_worker(
+            msg, "new-7f2fdf9f", handler, handler.adapters["email"]
+        )
 
         svc.tracker.set_authenticating.assert_called_once_with("new-7f2fdf9f")
         svc.tracker.complete_task.assert_called_once_with(
@@ -397,7 +434,7 @@ class TestProcessMessageWorker:
             model_hint=None,
             display_title="Re: [ID:aabb1122] Follow-up",
         )
-        handler.adapter.authenticate_and_parse.return_value = parsed
+        handler.adapters["email"].authenticate_and_parse.return_value = parsed
         handler.conversation_manager.exists.return_value = True
         svc.tracker.has_active_task.return_value = False
 
@@ -406,7 +443,9 @@ class TestProcessMessageWorker:
             "airut.gateway.service.gateway.process_message",
             return_value=(CompletionReason.SUCCESS, "aabb1122"),
         ):
-            svc._process_message_worker(msg, "new-deadbeef", handler)
+            svc._process_message_worker(
+                msg, "new-deadbeef", handler, handler.adapters["email"]
+            )
 
         # Task should have had conversation_id set
         svc.tracker.set_conversation_id.assert_called_with(
@@ -428,15 +467,17 @@ class TestProcessMessageWorker:
         from airut.gateway.channel import AuthenticationError
 
         svc, handler = make_service(email_config, tmp_path)
-        handler.adapter.authenticate_and_parse.side_effect = (
-            AuthenticationError(
-                sender="hacker@evil.com",
-                reason="sender not authorized",
-            )
+        handler.adapters[
+            "email"
+        ].authenticate_and_parse.side_effect = AuthenticationError(
+            sender="hacker@evil.com",
+            reason="sender not authorized",
         )
 
         msg = make_message(sender="hacker@evil.com")
-        svc._process_message_worker(msg, "new-unauth01", handler)
+        svc._process_message_worker(
+            msg, "new-unauth01", handler, handler.adapters["email"]
+        )
 
         # Display title should have been updated from "(authenticating)"
         svc.tracker.update_task_display_title.assert_called_once_with(
@@ -452,12 +493,14 @@ class TestProcessMessageWorker:
         from airut.dashboard.tracker import CompletionReason
 
         svc, handler = make_service(email_config, tmp_path)
-        handler.adapter.authenticate_and_parse.side_effect = RuntimeError(
-            "IMAP disconnect"
-        )
+        handler.adapters[
+            "email"
+        ].authenticate_and_parse.side_effect = RuntimeError("IMAP disconnect")
 
         msg = make_message()
-        svc._process_message_worker(msg, "new-crash01", handler)
+        svc._process_message_worker(
+            msg, "new-crash01", handler, handler.adapters["email"]
+        )
 
         # Non-auth exceptions should NOT update display_title
         svc.tracker.update_task_display_title.assert_not_called()
@@ -489,7 +532,7 @@ class TestDrainPending:
             parsed=parsed,
             task_id="conv1",
             repo_handler=handler,
-            adapter=handler.adapter,
+            adapter=handler.adapters["email"],
         )
         svc._pending_messages["conv1"] = collections.deque([pending])
 
@@ -516,7 +559,7 @@ class TestDrainPending:
             parsed=parsed,
             task_id="pending-task-1",
             repo_handler=handler,
-            adapter=handler.adapter,
+            adapter=handler.adapters["email"],
         )
         svc._pending_messages["conv1"] = collections.deque([pending])
 
@@ -542,13 +585,13 @@ class TestDrainPending:
             parsed=parsed1,
             task_id="task-1",
             repo_handler=handler,
-            adapter=handler.adapter,
+            adapter=handler.adapters["email"],
         )
         pending2 = PendingMessage(
             parsed=parsed2,
             task_id="task-2",
             repo_handler=handler,
-            adapter=handler.adapter,
+            adapter=handler.adapters["email"],
         )
         svc._pending_messages["conv1"] = collections.deque([pending1, pending2])
 
@@ -577,7 +620,7 @@ class TestProcessPendingMessage:
             parsed=parsed,
             task_id="task-1",
             repo_handler=handler,
-            adapter=handler.adapter,
+            adapter=handler.adapters["email"],
         )
 
         with patch(
@@ -604,7 +647,7 @@ class TestProcessPendingMessage:
             parsed=parsed,
             task_id="task-2",
             repo_handler=handler,
-            adapter=handler.adapter,
+            adapter=handler.adapters["email"],
         )
 
         with patch(
@@ -631,7 +674,7 @@ class TestProcessPendingMessage:
             parsed=parsed,
             task_id="task-3",
             repo_handler=handler,
-            adapter=handler.adapter,
+            adapter=handler.adapters["email"],
         )
 
         with patch(
@@ -655,7 +698,7 @@ class TestProcessPendingMessage:
             parsed=parsed,
             task_id="task-4",
             repo_handler=handler,
-            adapter=handler.adapter,
+            adapter=handler.adapters["email"],
         )
 
         with patch(
@@ -681,7 +724,7 @@ class TestProcessPendingMessage:
             parsed=parsed,
             task_id="task-5",
             repo_handler=handler,
-            adapter=handler.adapter,
+            adapter=handler.adapters["email"],
         )
 
         with (
@@ -705,12 +748,12 @@ class TestStartStop:
         def fake_start(**kwargs):
             svc._running = False
 
-        handler.adapter.listener.start.side_effect = fake_start
+        handler.adapters["email"].listener.start.side_effect = fake_start
 
         svc.start()
 
         handler.conversation_manager.mirror.update_mirror.assert_called_once()
-        handler.adapter.listener.start.assert_called_once()
+        handler.adapters["email"].listener.start.assert_called_once()
         assert svc._executor_pool is not None
 
     def test_start_with_dashboard(self, email_config, tmp_path: Path) -> None:
@@ -721,7 +764,7 @@ class TestStartStop:
         def fake_start(**kwargs):
             svc._running = False
 
-        handler.adapter.listener.start.side_effect = fake_start
+        handler.adapters["email"].listener.start.side_effect = fake_start
 
         with (
             patch("airut.gateway.service.gateway.DashboardServer") as mock_ds,
@@ -734,7 +777,7 @@ class TestStartStop:
         svc, handler = make_service(email_config, tmp_path)
         svc.stop()
         svc.stop()  # Second call should be no-op
-        handler.adapter.listener.stop.assert_called_once()
+        handler.adapters["email"].listener.stop.assert_called_once()
 
     def test_stop_without_start(self, email_config, tmp_path: Path) -> None:
         """stop() before start() completes without error."""
@@ -742,7 +785,7 @@ class TestStartStop:
         svc.stop()
         assert svc._running is False
         assert svc._stopped is True
-        handler.adapter.listener.stop.assert_called_once()
+        handler.adapters["email"].listener.stop.assert_called_once()
 
     def test_stop_waits_for_pending(self, email_config, tmp_path: Path) -> None:
         svc, _ = make_service(email_config, tmp_path)
@@ -809,7 +852,7 @@ class TestRepoHandlerInitError:
 
         # Make RepoHandler init fail by patching ConversationManager
         with (
-            patch("airut.gateway.service.repo_handler.create_adapter"),
+            patch("airut.gateway.service.repo_handler.create_adapters"),
             patch(
                 "airut.gateway.service.repo_handler.ConversationManager",
                 side_effect=RuntimeError("Git clone failed"),
@@ -846,7 +889,7 @@ class TestRepoHandlerInitError:
         )
 
         with (
-            patch("airut.gateway.service.repo_handler.create_adapter"),
+            patch("airut.gateway.service.repo_handler.create_adapters"),
             patch(
                 "airut.gateway.service.repo_handler.ConversationManager",
                 side_effect=RuntimeError("Git clone failed"),
@@ -910,7 +953,7 @@ class TestStartRepoInitFailure:
         update_global(svc, dashboard_enabled=False)
 
         # Make the repo fail during start_listener
-        handler.adapter.listener.start.side_effect = RuntimeError(
+        handler.adapters["email"].listener.start.side_effect = RuntimeError(
             "Connection refused"
         )
 
@@ -931,7 +974,9 @@ class TestStartRepoInitFailure:
         mock_handler2.config = MagicMock()
         mock_handler2.config.repo_id = "repo2"
         mock_handler2.config.git_repo_url = "https://example.com/repo2"
-        mock_handler2.config.channel_info = "imap2.example.com"
+        mock_handler2.config.channels = {
+            "email": MagicMock(channel_info="imap2.example.com")
+        }
         mock_handler2.config.storage_dir = tmp_path / "s2"
         mock_handler2.start_listener.side_effect = RuntimeError("Auth failed")
         svc.repo_handlers["repo2"] = mock_handler2
@@ -966,7 +1011,7 @@ class TestBootState:
         def fake_start(**kwargs):
             svc._running = False
 
-        handler.adapter.listener.start.side_effect = fake_start
+        handler.adapters["email"].listener.start.side_effect = fake_start
 
         svc.start()
 
@@ -985,7 +1030,7 @@ class TestBootState:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_enabled=False)
 
-        handler.adapter.listener.start.side_effect = RuntimeError(
+        handler.adapters["email"].listener.start.side_effect = RuntimeError(
             "Connection refused"
         )
 
@@ -1008,7 +1053,7 @@ class TestBootState:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_enabled=False)
 
-        handler.adapter.listener.start.side_effect = RuntimeError(
+        handler.adapters["email"].listener.start.side_effect = RuntimeError(
             "Connection refused"
         )
 
@@ -1030,7 +1075,9 @@ class TestBootState:
             email_config, tmp_path, dashboard_enabled=True
         )
 
-        handler.adapter.listener.start.side_effect = RuntimeError("fail")
+        handler.adapters["email"].listener.start.side_effect = RuntimeError(
+            "fail"
+        )
 
         with (
             patch("airut.gateway.service.gateway.DashboardServer") as mock_ds,
@@ -1072,7 +1119,7 @@ class TestBootState:
 class TestStateProviders:
     def test_get_repo_states(self, email_config, tmp_path: Path) -> None:
         """_get_repo_states returns dirs based on repos_store."""
-        from airut.dashboard.tracker import RepoState, RepoStatus
+        from airut.dashboard.tracker import ChannelInfo, RepoState, RepoStatus
 
         svc, _ = make_service(email_config, tmp_path)
         svc._repos_store.update(
@@ -1081,7 +1128,11 @@ class TestStateProviders:
                     repo_id="r1",
                     status=RepoStatus.LIVE,
                     git_repo_url="https://example.com/r1",
-                    channel_info="imap.example.com",
+                    channels=(
+                        ChannelInfo(
+                            channel_type="email", info="imap.example.com"
+                        ),
+                    ),
                     storage_dir="/s/r1",
                 ),
             )
@@ -1092,7 +1143,7 @@ class TestStateProviders:
 
     def test_get_work_dirs(self, email_config, tmp_path: Path) -> None:
         """_get_work_dirs returns dirs for live repos only."""
-        from airut.dashboard.tracker import RepoState, RepoStatus
+        from airut.dashboard.tracker import ChannelInfo, RepoState, RepoStatus
 
         svc, handler = make_service(email_config, tmp_path)
         svc._repos_store.update(
@@ -1101,7 +1152,11 @@ class TestStateProviders:
                     repo_id="test",
                     status=RepoStatus.LIVE,
                     git_repo_url="https://example.com/r1",
-                    channel_info="imap.example.com",
+                    channels=(
+                        ChannelInfo(
+                            channel_type="email", info="imap.example.com"
+                        ),
+                    ),
                     storage_dir="/s/test",
                 ),
             )
@@ -1114,7 +1169,7 @@ class TestStateProviders:
         self, email_config, tmp_path: Path
     ) -> None:
         """_get_work_dirs excludes repos that failed to start."""
-        from airut.dashboard.tracker import RepoState, RepoStatus
+        from airut.dashboard.tracker import ChannelInfo, RepoState, RepoStatus
 
         svc, _ = make_service(email_config, tmp_path)
         svc._repos_store.update(
@@ -1123,7 +1178,11 @@ class TestStateProviders:
                     repo_id="test",
                     status=RepoStatus.FAILED,
                     git_repo_url="https://example.com/r1",
-                    channel_info="imap.example.com",
+                    channels=(
+                        ChannelInfo(
+                            channel_type="email", info="imap.example.com"
+                        ),
+                    ),
                     storage_dir="/s/test",
                 ),
             )
@@ -1521,7 +1580,7 @@ class TestUpstreamDnsResolution:
         )
 
         with (
-            patch("airut.gateway.service.repo_handler.create_adapter"),
+            patch("airut.gateway.service.repo_handler.create_adapters"),
             patch("airut.gateway.service.repo_handler.ConversationManager"),
             patch("airut.gateway.service.gateway.capture_version_info") as mv,
             patch("airut.gateway.service.gateway.TaskTracker"),
@@ -1551,7 +1610,7 @@ class TestUpstreamDnsResolution:
         )
 
         with (
-            patch("airut.gateway.service.repo_handler.create_adapter"),
+            patch("airut.gateway.service.repo_handler.create_adapters"),
             patch("airut.gateway.service.repo_handler.ConversationManager"),
             patch("airut.gateway.service.gateway.capture_version_info") as mv,
             patch("airut.gateway.service.gateway.TaskTracker"),
@@ -1579,7 +1638,7 @@ class TestUpstreamDnsResolution:
         )
 
         with (
-            patch("airut.gateway.service.repo_handler.create_adapter"),
+            patch("airut.gateway.service.repo_handler.create_adapters"),
             patch("airut.gateway.service.repo_handler.ConversationManager"),
             patch("airut.gateway.service.gateway.capture_version_info") as mv,
             patch("airut.gateway.service.gateway.TaskTracker"),

@@ -88,7 +88,8 @@ class TestSubmitMessageBeforePool:
         )
 
         repo_handler = list(service.repo_handlers.values())[0]
-        result = service.submit_message(raw, repo_handler)
+        adapter = repo_handler.adapters["email"]
+        result = service.submit_message(raw, repo_handler, adapter)
         assert result is False
 
 
@@ -314,7 +315,7 @@ class TestDrainAfterPoolShutdown:
             parsed=parsed,
             task_id=task_id,
             repo_handler=repo_handler,
-            adapter=repo_handler.adapter,
+            adapter=repo_handler.adapters["email"],
         )
         service._pending_messages[conv_id] = collections.deque([pending])
 

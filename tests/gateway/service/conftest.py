@@ -73,7 +73,7 @@ def update_repo(handler: Any, **overrides: Any) -> None:
     """Update repo config with new values (frozen dataclass)."""
     for key, value in overrides.items():
         if key in _EMAIL_FIELDS:
-            object.__setattr__(handler.config.channel, key, value)
+            object.__setattr__(handler.config.channels["email"], key, value)
         else:
             object.__setattr__(handler.config, key, value)
 
@@ -111,7 +111,7 @@ def make_service(
 
     with (
         patch(
-            "airut.gateway.service.repo_handler.create_adapter"
+            "airut.gateway.service.repo_handler.create_adapters"
         ) as mock_create,
         patch("airut.gateway.service.repo_handler.ConversationManager"),
         patch("airut.gateway.service.gateway.capture_version_info") as mock_ver,
@@ -123,7 +123,7 @@ def make_service(
         ),
     ):
         mock_adapter = MagicMock()
-        mock_create.return_value = mock_adapter
+        mock_create.return_value = {"email": mock_adapter}
         mock_ver.return_value = (MagicMock(git_sha="abc1234"), MagicMock())
         svc = GatewayService(server_config, repo_root=tmp_path)
 

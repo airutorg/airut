@@ -16,10 +16,11 @@ class TestSubmitMessage:
         """Raw message is forwarded to service.submit_message."""
         svc, handler = make_service(email_config, tmp_path)
         svc.submit_message = MagicMock(return_value=True)
+        adapter = handler.adapters["email"]
 
         msg = make_message()
-        assert handler._submit_message(msg) is True
-        svc.submit_message.assert_called_once_with(msg, handler)
+        assert handler._submit_message(msg, adapter) is True
+        svc.submit_message.assert_called_once_with(msg, handler, adapter)
 
     def test_returns_false_when_pool_not_ready(
         self, email_config, tmp_path: Path
@@ -27,22 +28,23 @@ class TestSubmitMessage:
         """Returns False when service.submit_message returns False."""
         svc, handler = make_service(email_config, tmp_path)
         svc.submit_message = MagicMock(return_value=False)
+        adapter = handler.adapters["email"]
 
         msg = make_message()
-        assert handler._submit_message(msg) is False
+        assert handler._submit_message(msg, adapter) is False
 
 
 class TestStartListener:
     def test_updates_mirror_and_starts_listener(
         self, email_config, tmp_path: Path
     ) -> None:
-        """start_listener updates git mirror and starts adapter listener."""
+        """start_listener updates mirror and starts listeners."""
         svc, handler = make_service(email_config, tmp_path)
 
         handler.start_listener()
 
         handler.conversation_manager.mirror.update_mirror.assert_called_once()
-        handler.adapter.listener.start.assert_called_once()
+        handler.adapters["email"].listener.start.assert_called_once()
 
     def test_submit_callback_forwards_to_service(
         self, email_config, tmp_path: Path
@@ -54,20 +56,21 @@ class TestStartListener:
         handler.start_listener()
 
         # Extract the submit callback passed to listener.start
-        call_args = handler.adapter.listener.start.call_args
+        adapter = handler.adapters["email"]
+        call_args = adapter.listener.start.call_args
         submit_fn = call_args[1]["submit"]
 
         msg = make_message()
         result = submit_fn(msg)
         assert result is True
-        svc.submit_message.assert_called_once_with(msg, handler)
+        svc.submit_message.assert_called_once_with(msg, handler, adapter)
 
 
 class TestStop:
     def test_stops_listener(self, email_config, tmp_path: Path) -> None:
-        """stop() delegates to adapter.listener.stop()."""
+        """stop() delegates to each adapter's listener.stop()."""
         svc, handler = make_service(email_config, tmp_path)
 
         handler.stop()
 
-        handler.adapter.listener.stop.assert_called_once()
+        handler.adapters["email"].listener.stop.assert_called_once()

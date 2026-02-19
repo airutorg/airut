@@ -16,10 +16,10 @@ from airut.gateway.channel import ChannelAdapter
 from airut.gateway.config import RepoServerConfig
 
 
-def create_adapter(config: RepoServerConfig) -> ChannelAdapter:
-    """Create the appropriate channel adapter for a repo config.
+def create_adapters(config: RepoServerConfig) -> dict[str, ChannelAdapter]:
+    """Create channel adapters for all configured channels.
 
-    Dispatches on the channel config type to create the correct
+    Dispatches on each channel config type to create the correct
     adapter implementation. Currently only email is supported; new
     channel types (Slack, etc.) add ``elif`` branches here.
 
@@ -30,16 +30,19 @@ def create_adapter(config: RepoServerConfig) -> ChannelAdapter:
         config: Per-repo server configuration.
 
     Returns:
-        ChannelAdapter implementation for the configured channel.
+        Mapping of channel type to adapter implementation.
     """
     from airut.gateway.config import EmailChannelConfig
     from airut.gateway.email.adapter import EmailChannelAdapter
 
-    if isinstance(config.channel, EmailChannelConfig):
-        return EmailChannelAdapter.from_config(
-            config.channel, repo_id=config.repo_id
-        )
-
-    raise ValueError(
-        f"Unknown channel config type: {type(config.channel).__name__}"
-    )
+    adapters: dict[str, ChannelAdapter] = {}
+    for channel_type, channel_config in config.channels.items():
+        if isinstance(channel_config, EmailChannelConfig):
+            adapters[channel_type] = EmailChannelAdapter.from_config(
+                channel_config, repo_id=config.repo_id
+            )
+        else:
+            raise ValueError(
+                f"Unknown channel config type: {type(channel_config).__name__}"
+            )
+    return adapters

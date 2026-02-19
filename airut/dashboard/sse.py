@@ -152,7 +152,10 @@ def _repo_state_to_dict(repo_state: RepoState) -> dict[str, Any]:
         "error_message": repo_state.error_message,
         "error_type": repo_state.error_type,
         "git_repo_url": repo_state.git_repo_url,
-        "channel_info": repo_state.channel_info,
+        "channels": [
+            {"type": ch.channel_type, "info": ch.info}
+            for ch in repo_state.channels
+        ],
         "storage_dir": repo_state.storage_dir,
         "initialized_at": repo_state.initialized_at,
     }

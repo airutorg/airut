@@ -7,9 +7,9 @@ each with its own email inbox, authorization, secrets, and storage.
 
 1. **Multiple repositories per server.** A single Airut daemon manages tasks for
    several independent Git repositories.
-2. **Per-repo email inbox.** Each repository pulls tasks from its own IMAP
-   inbox. Repos must not share an inbox — that would create a shared task queue
-   and violate isolation.
+2. **Per-repo channels.** Each repository has one or more channel adapters (e.g.
+   email). Email channels must not share an IMAP inbox — that would create a
+   shared task queue and violate isolation.
 3. **Per-repo authorization.** Each repo has its own `authorized_senders` list
    and `trusted_authserv_id`. Different people can be authorized for different
    repos.
@@ -115,6 +115,8 @@ At config load time:
 - **No duplicate inboxes:** No two repos may share the same
   `(imap_server, username)` pair. This enforces the "no shared task queue"
   constraint.
+- **At least one channel per repo:** Each repo must have at least one channel
+  block (e.g. `email:`). Channel keys must match recognized types.
 - **At least one repo:** The `repos` mapping must have at least one entry.
 
 ## Repo Configuration
@@ -156,11 +158,12 @@ GatewayService (orchestrator)
 ├── repos: dict[str, RepoHandler]
 │   ├── "airut" → RepoHandler
 │   │   ├── config: RepoServerConfig
-│   │   ├── adapter: EmailChannelAdapter    (per-repo channel adapter)
-│   │   │   ├── listener: EmailChannelListener (per-repo IMAP)
-│   │   │   ├── responder: EmailResponder   (per-repo SMTP)
-│   │   │   ├── authenticator: SenderAuthenticator
-│   │   │   └── authorizer: SenderAuthorizer
+│   │   ├── adapters: dict[str, ChannelAdapter]
+│   │   │   └── "email" → EmailChannelAdapter
+│   │   │       ├── listener: EmailChannelListener (per-repo IMAP)
+│   │   │       ├── responder: EmailResponder   (per-repo SMTP)
+│   │   │       ├── authenticator: SenderAuthenticator
+│   │   │       └── authorizer: SenderAuthorizer
 │   │   ├── conversation_manager: ConversationManager (per-repo storage)
 │   │   └── sandbox: Sandbox                (per-repo mirror for images)
 │   └── "another-repo" → RepoHandler
@@ -205,10 +208,10 @@ Signal handling: `SIGTERM`/`SIGINT` sets `running = False` and calls
 
 ```python
 class RepoHandler:
-    """Per-repo components and listener thread."""
+    """Per-repo components and listener threads."""
 
     config: RepoServerConfig
-    adapter: ChannelAdapter  # e.g., EmailChannelAdapter
+    adapters: dict[str, ChannelAdapter]  # keyed by channel type
     conversation_manager: ConversationManager
     sandbox: Sandbox
 ```
@@ -276,7 +279,7 @@ class RepoServerConfig:
 
     repo_id: str
     git_repo_url: str
-    channel: EmailChannelConfig  # ChannelConfig implementation
+    channels: dict[str, ChannelConfig]  # keyed by channel type
     secrets: dict[str, str]
     masked_secrets: dict[str, MaskedSecret]
     signing_credentials: dict[str, SigningCredential]

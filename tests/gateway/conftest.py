@@ -44,18 +44,30 @@ def email_config(tmp_path: Path, master_repo: Path):
     return RepoServerConfig(
         repo_id="test",
         git_repo_url=str(master_repo),
-        channel=EmailChannelConfig(
-            imap_server="imap.example.com",
-            imap_port=993,
-            smtp_server="smtp.example.com",
-            smtp_port=587,
-            username="test@example.com",
-            password="test_password",
-            from_address="Test Service <test@example.com>",
-            authorized_senders=["authorized@example.com"],
-            trusted_authserv_id="mx.example.com",
-        ),
+        channels={
+            "email": EmailChannelConfig(
+                imap_server="imap.example.com",
+                imap_port=993,
+                smtp_server="smtp.example.com",
+                smtp_port=587,
+                username="test@example.com",
+                password="test_password",
+                from_address="Test Service <test@example.com>",
+                authorized_senders=["authorized@example.com"],
+                trusted_authserv_id="mx.example.com",
+            )
+        },
     )
+
+
+@pytest.fixture
+def email_channel(email_config):
+    """Return the EmailChannelConfig from the test config."""
+    from airut.gateway.config import EmailChannelConfig
+
+    ch = email_config.channels["email"]
+    assert isinstance(ch, EmailChannelConfig)
+    return ch
 
 
 @pytest.fixture
@@ -73,18 +85,20 @@ def microsoft_oauth2_email_config(tmp_path: Path, master_repo: Path):
         yield RepoServerConfig(
             repo_id="test",
             git_repo_url=str(master_repo),
-            channel=EmailChannelConfig(
-                imap_server="outlook.office365.com",
-                imap_port=993,
-                smtp_server="smtp.office365.com",
-                smtp_port=587,
-                username="test@company.com",
-                password="",
-                from_address="Test Service <test@company.com>",
-                authorized_senders=["authorized@company.com"],
-                trusted_authserv_id="mx.company.com",
-                microsoft_oauth2_tenant_id="test-tenant-id",
-                microsoft_oauth2_client_id="test-client-id",
-                microsoft_oauth2_client_secret="test-client-secret",
-            ),
+            channels={
+                "email": EmailChannelConfig(
+                    imap_server="outlook.office365.com",
+                    imap_port=993,
+                    smtp_server="smtp.office365.com",
+                    smtp_port=587,
+                    username="test@company.com",
+                    password="",
+                    from_address="Test Service <test@company.com>",
+                    authorized_senders=["authorized@company.com"],
+                    trusted_authserv_id="mx.company.com",
+                    microsoft_oauth2_tenant_id="test-tenant-id",
+                    microsoft_oauth2_client_id="test-client-id",
+                    microsoft_oauth2_client_secret="test-client-secret",
+                )
+            },
         )

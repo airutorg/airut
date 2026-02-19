@@ -19,6 +19,7 @@ from airut.dashboard.sse import SSEConnectionManager
 from airut.dashboard.tracker import (
     BootPhase,
     BootState,
+    ChannelInfo,
     RepoState,
     RepoStatus,
     TaskState,
@@ -35,6 +36,7 @@ from airut.dashboard.versioned import (
 __all__ = [
     "BootPhase",
     "BootState",
+    "ChannelInfo",
     "DashboardServer",
     "RepoState",
     "RepoStatus",
