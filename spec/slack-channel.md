@@ -121,23 +121,20 @@ the email adapter but adapted for the Slack interaction model:
 
 ```
 User is interacting with this session via Slack and will receive your
-reply as a Slack message. After the reply, everything not in /workspace,
-/inbox, and /storage is reset. Markdown formatting is supported in your
-responses. To send files back to the user, place them in the /outbox
-directory root (no subdirectories). Use /storage to persist files across
-messages.
+last reply as a Slack message. After the reply, everything not in
+/workspace, /inbox, and /storage is reset. Markdown formatting (except
+tables) is supported in your responses. To send files back to the user, place them
+in the /outbox directory root (no subdirectories). Use /storage to
+persist files across messages.
 
-IMPORTANT: The user cannot see intermediate output during execution.
-They will only see your final reply. Do not assume the user can respond
-to clarifying questions quickly -- if you need to make a judgment call,
-proceed with your best assessment and explain your reasoning in the
-reply.
+IMPORTANT: AskUserQuestion and plan mode tools (EnterPlanMode/
+ExitPlanMode) do not work over Slack. If you need clarification, include
+questions in your response text and the user will reply via Slack.
 ```
 
-The key difference from the email channel context is the note about intermediate
-output not being visible — this prevents Claude from adopting a conversational
-back-and-forth style and instead encourages comprehensive, self-contained
-responses (matching the async execution model).
+The Slack channel context mirrors the email channel context, with "Slack"
+replacing "email" references. Both channels use the same async execution model
+where interactive tools (AskUserQuestion, plan mode) are unavailable.
 
 ### Message Formatting
 

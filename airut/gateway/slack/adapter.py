@@ -200,20 +200,19 @@ class SlackChannelAdapter(ChannelAdapter):
 
         # Build channel context
         channel_context = (
-            "User is interacting with this session via Slack and will "
-            "receive your reply as a Slack message. "
+            "User is interacting with this session via Slack "
+            "and will receive your last reply as a Slack message. "
             "After the reply, everything not in /workspace, /inbox, "
             "and /storage is reset. "
-            "Markdown formatting is supported in your responses. "
+            "Markdown formatting (except tables) is supported "
+            "in your responses. "
             "To send files back to the user, place them in the "
             "/outbox directory root (no subdirectories). "
             "Use /storage to persist files across messages.\n\n"
-            "IMPORTANT: The user cannot see intermediate output during "
-            "execution. They will only see your final reply. Do not "
-            "assume the user can respond to clarifying questions "
-            "quickly -- if you need to make a judgment call, proceed "
-            "with your best assessment and explain your reasoning in "
-            "the reply."
+            "IMPORTANT: AskUserQuestion and plan mode tools "
+            "(EnterPlanMode/ExitPlanMode) do not work over Slack. "
+            "If you need clarification, include questions in "
+            "your response text and the user will reply via Slack."
         )
 
         return SlackParsedMessage(
