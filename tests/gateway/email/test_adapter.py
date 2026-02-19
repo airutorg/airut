@@ -757,6 +757,18 @@ class TestListenerProperty:
             _ = adapter.listener
 
 
+class TestCleanupConversations:
+    def test_noop(self) -> None:
+        """Email adapter has no per-conversation state to clean up."""
+        adapter, _, _, _ = _make_adapter()
+        # Should not raise or have any side effects
+        adapter.cleanup_conversations({"conv1", "conv2"})
+
+    def test_noop_empty_set(self) -> None:
+        adapter, _, _, _ = _make_adapter()
+        adapter.cleanup_conversations(set())
+
+
 class TestFromConfig:
     def test_creates_all_components(self) -> None:
         with (

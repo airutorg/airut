@@ -295,3 +295,21 @@ class ChannelAdapter(Protocol):
         message cannot be accepted.
         """
         ...
+
+    def cleanup_conversations(self, active_conversation_ids: set[str]) -> None:
+        """Remove adapter state for conversations not in the active set.
+
+        Called by the garbage collector after pruning old conversations.
+        Adapters that maintain per-conversation state (e.g. thread
+        mappings) should discard entries referencing conversation IDs
+        not present in *active_conversation_ids*.
+
+        Adapters without per-conversation state may implement this as
+        a no-op.
+
+        Args:
+            active_conversation_ids: Conversation IDs that still exist.
+                Any adapter state referencing IDs outside this set
+                should be cleaned up.
+        """
+        ...

@@ -54,7 +54,7 @@ protocol handling (email IMAP/SMTP, Slack Socket Mode, etc.) via types in
 - **`ChannelAdapter`** — `typing.Protocol` defining the interface between the
   core and channel implementations: `listener` property (a `ChannelListener`),
   `authenticate_and_parse()`, `save_attachments()`, `send_acknowledgment()`,
-  `send_reply()`, `send_error()`, `send_rejection()`.
+  `send_reply()`, `send_error()`, `send_rejection()`, `cleanup_conversations()`.
 
 Each channel implements `ChannelAdapter` (e.g., `EmailChannelAdapter` in
 `gateway/email/adapter.py`, `SlackChannelAdapter` in
@@ -278,12 +278,12 @@ Storage uses XDG state directory: `~/.local/state/airut/<repo_id>/`.
 
 ### Lifecycle
 
-| Event                    | Action                                                                                                             |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| **New conversation**     | Generate 8-char ID, create `conversations/{id}/`, clone from mirror to `workspace/`                                |
-| **Resume conversation**  | Verify workspace exists, load session from `conversation.json`, preserve local state                               |
-| **User requests sync**   | Claude runs `git fetch origin && git rebase origin/main` manually in workspace                                     |
-| **Conversation timeout** | Garbage collect conversations with no activity for 7 days (configurable via `execution.conversation_max_age_days`) |
+| Event                    | Action                                                                                                                                                                                                                                                                                                      |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **New conversation**     | Generate 8-char ID, create `conversations/{id}/`, clone from mirror to `workspace/`                                                                                                                                                                                                                         |
+| **Resume conversation**  | Verify workspace exists, load session from `conversation.json`, preserve local state                                                                                                                                                                                                                        |
+| **User requests sync**   | Claude runs `git fetch origin && git rebase origin/main` manually in workspace                                                                                                                                                                                                                              |
+| **Conversation timeout** | Garbage collect conversations with no activity for 7 days (configurable via `execution.conversation_max_age_days`). After deletion, `ChannelAdapter.cleanup_conversations()` is called with the surviving conversation IDs so adapters can prune stale per-conversation state (e.g. Slack thread mappings). |
 
 **Critical**: Conversations do NOT auto-sync with master to preserve Claude's
 work in progress. User must explicitly instruct Claude to update.

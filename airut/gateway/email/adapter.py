@@ -471,6 +471,9 @@ class EmailChannelAdapter(ChannelAdapter):
         except SMTPSendError as e:
             logger.warning("Failed to send rejection reply (non-fatal): %s", e)
 
+    def cleanup_conversations(self, active_conversation_ids: set[str]) -> None:
+        """No-op: email adapter has no per-conversation state to clean up."""
+
     def _build_reply_headers(
         self,
         parsed: EmailParsedMessage,

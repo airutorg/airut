@@ -84,3 +84,83 @@ class TestSlackThreadStore:
             store.register("D123", "ts1", "conv1")
         # Data is in memory even though save failed
         assert store.get_conversation_id("D123", "ts1") == "conv1"
+
+
+class TestRetainOnly:
+    def test_removes_stale_entries(self, tmp_path: Path) -> None:
+        store = SlackThreadStore(tmp_path)
+        store.register("D123", "ts1", "conv1")
+        store.register("D123", "ts2", "conv2")
+        store.register("D456", "ts3", "conv3")
+
+        removed = store.retain_only({"conv1", "conv3"})
+
+        assert removed == 1
+        assert store.get_conversation_id("D123", "ts1") == "conv1"
+        assert store.get_conversation_id("D123", "ts2") is None
+        assert store.get_conversation_id("D456", "ts3") == "conv3"
+
+    def test_removes_all_when_empty_active_set(self, tmp_path: Path) -> None:
+        store = SlackThreadStore(tmp_path)
+        store.register("D123", "ts1", "conv1")
+        store.register("D123", "ts2", "conv2")
+
+        removed = store.retain_only(set())
+
+        assert removed == 2
+        assert store.get_conversation_id("D123", "ts1") is None
+        assert store.get_conversation_id("D123", "ts2") is None
+
+    def test_noop_when_all_active(self, tmp_path: Path) -> None:
+        store = SlackThreadStore(tmp_path)
+        store.register("D123", "ts1", "conv1")
+        store.register("D123", "ts2", "conv2")
+
+        removed = store.retain_only({"conv1", "conv2"})
+
+        assert removed == 0
+        assert store.get_conversation_id("D123", "ts1") == "conv1"
+        assert store.get_conversation_id("D123", "ts2") == "conv2"
+
+    def test_noop_on_empty_store(self, tmp_path: Path) -> None:
+        store = SlackThreadStore(tmp_path)
+
+        removed = store.retain_only({"conv1"})
+
+        assert removed == 0
+
+    def test_persists_after_pruning(self, tmp_path: Path) -> None:
+        store = SlackThreadStore(tmp_path)
+        store.register("D123", "ts1", "conv1")
+        store.register("D123", "ts2", "conv2")
+
+        store.retain_only({"conv1"})
+
+        # Reload from disk
+        store2 = SlackThreadStore(tmp_path)
+        assert store2.get_conversation_id("D123", "ts1") == "conv1"
+        assert store2.get_conversation_id("D123", "ts2") is None
+
+    def test_json_file_updated(self, tmp_path: Path) -> None:
+        store = SlackThreadStore(tmp_path)
+        store.register("D123", "ts1", "conv1")
+        store.register("D123", "ts2", "conv2")
+
+        store.retain_only({"conv2"})
+
+        json_path = tmp_path / "slack_threads.json"
+        with open(json_path) as f:
+            data = json.load(f)
+        assert data == {"D123:ts2": "conv2"}
+
+    def test_no_disk_write_when_nothing_removed(self, tmp_path: Path) -> None:
+        """No disk write when retain_only removes nothing."""
+        from unittest.mock import patch
+
+        store = SlackThreadStore(tmp_path)
+        store.register("D123", "ts1", "conv1")
+
+        with patch.object(store, "_save") as mock_save:
+            store.retain_only({"conv1"})
+
+        mock_save.assert_not_called()

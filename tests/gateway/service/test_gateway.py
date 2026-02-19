@@ -1272,6 +1272,73 @@ class TestGarbageCollectorThread:
 
         handler.conversation_manager.delete.assert_not_called()
 
+    def test_calls_cleanup_conversations_after_deletion(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, conversation_max_age_days=7)
+
+        conv_path = tmp_path / "old_conv"
+        conv_path.mkdir()
+        old_time = time.time() - (8 * 24 * 60 * 60)
+        os.utime(conv_path, (old_time, old_time))
+
+        # First list_all: pre-deletion scan; second: surviving set
+        handler.conversation_manager.list_all.side_effect = [
+            ["conv1", "conv2"],
+            ["conv2"],
+        ]
+        handler.conversation_manager.get_workspace_path.return_value = conv_path
+
+        svc._shutdown_event.wait = MagicMock(side_effect=[False, True])
+        svc._garbage_collector_thread()
+
+        adapter = handler.adapters["email"]
+        adapter.cleanup_conversations.assert_called_once_with({"conv2"})
+
+    def test_calls_cleanup_conversations_when_nothing_deleted(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, conversation_max_age_days=7)
+
+        conv_path = tmp_path / "recent_conv"
+        conv_path.mkdir()
+
+        handler.conversation_manager.list_all.side_effect = [
+            ["conv1"],
+            ["conv1"],
+        ]
+        handler.conversation_manager.get_workspace_path.return_value = conv_path
+
+        svc._shutdown_event.wait = MagicMock(side_effect=[False, True])
+        svc._garbage_collector_thread()
+
+        adapter = handler.adapters["email"]
+        adapter.cleanup_conversations.assert_called_once_with({"conv1"})
+
+    def test_cleanup_error_does_not_abort_gc(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, conversation_max_age_days=7)
+
+        conv_path = tmp_path / "recent_conv"
+        conv_path.mkdir()
+
+        handler.conversation_manager.list_all.side_effect = [
+            ["conv1"],
+            ["conv1"],
+        ]
+        handler.conversation_manager.get_workspace_path.return_value = conv_path
+
+        adapter = handler.adapters["email"]
+        adapter.cleanup_conversations.side_effect = OSError("disk full")
+
+        svc._shutdown_event.wait = MagicMock(side_effect=[False, True])
+        # Should not raise despite cleanup failure
+        svc._garbage_collector_thread()
+
 
 class TestMain:
     def test_config_error(self) -> None:

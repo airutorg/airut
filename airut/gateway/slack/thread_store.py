@@ -102,3 +102,27 @@ class SlackThreadStore:
         with self._lock:
             self._data[self._key(channel_id, thread_ts)] = conv_id
             self._save()
+
+    def retain_only(self, active_conversation_ids: set[str]) -> int:
+        """Remove entries whose conversation ID is not in the active set.
+
+        Used by the garbage collector to prune thread mappings for
+        conversations that no longer exist.
+
+        Args:
+            active_conversation_ids: Conversation IDs to keep.
+
+        Returns:
+            Number of entries removed.
+        """
+        with self._lock:
+            to_remove = [
+                key
+                for key, conv_id in self._data.items()
+                if conv_id not in active_conversation_ids
+            ]
+            for key in to_remove:
+                del self._data[key]
+            if to_remove:
+                self._save()
+        return len(to_remove)

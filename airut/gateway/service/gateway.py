@@ -953,6 +953,19 @@ class GatewayService:
                                 conv_mgr.delete(conv_id)
                                 total_removed += 1
 
+                    # Notify adapters so they can prune stale state
+                    # (e.g. Slack thread-to-conversation mappings).
+                    remaining = set(conv_mgr.list_all())
+                    for adapter in handler.adapters.values():
+                        try:
+                            adapter.cleanup_conversations(remaining)
+                        except Exception as e:
+                            logger.warning(
+                                "Adapter cleanup failed for repo '%s': %s",
+                                repo_id,
+                                e,
+                            )
+
                 if total_removed > 0:
                     logger.info(
                         "Garbage collection complete. Removed %d conversations",
