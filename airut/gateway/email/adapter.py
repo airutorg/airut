@@ -21,6 +21,7 @@ from airut.gateway.channel import (
     AuthenticationError,
     ChannelAdapter,
     ParsedMessage,
+    PlanStreamer,
     RawMessage,
 )
 from airut.gateway.config import EmailChannelConfig
@@ -470,6 +471,12 @@ class EmailChannelAdapter(ChannelAdapter):
             )
         except SMTPSendError as e:
             logger.warning("Failed to send rejection reply (non-fatal): %s", e)
+
+    def create_plan_streamer(
+        self, parsed: ParsedMessage
+    ) -> PlanStreamer | None:
+        """Email does not support plan streaming."""
+        return None
 
     def cleanup_conversations(self, active_conversation_ids: set[str]) -> None:
         """No-op: email adapter has no per-conversation state to clean up."""

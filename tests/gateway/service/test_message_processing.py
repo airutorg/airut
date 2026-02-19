@@ -228,6 +228,128 @@ class TestMakeTodoCallback:
         assert task is not None
         assert task.todos is None
 
+    def test_forwards_to_plan_streamer(self) -> None:
+        """Callback forwards TodoWrite items to the plan streamer."""
+        from unittest.mock import MagicMock
+
+        from airut.claude_output.types import (
+            EventType,
+            StreamEvent,
+            ToolUseBlock,
+        )
+        from airut.dashboard.tracker import TaskTracker
+        from airut.gateway.service.message_processing import (
+            _make_todo_callback,
+        )
+
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        mock_streamer = MagicMock()
+
+        callback = _make_todo_callback(
+            tracker, "abc12345", plan_streamer=mock_streamer
+        )
+
+        todos_raw = [
+            {"content": "Run tests", "status": "in_progress"},
+        ]
+        event = StreamEvent(
+            event_type=EventType.ASSISTANT,
+            subtype="",
+            session_id="s1",
+            content_blocks=(
+                ToolUseBlock(
+                    tool_id="t1",
+                    tool_name="TodoWrite",
+                    tool_input={"todos": todos_raw},
+                ),
+            ),
+            raw="{}",
+        )
+        callback(event)
+
+        mock_streamer.update.assert_called_once()
+        items = mock_streamer.update.call_args[0][0]
+        assert len(items) == 1
+        assert items[0].content == "Run tests"
+
+    def test_no_plan_streamer_no_error(self) -> None:
+        """Callback works with plan_streamer=None (default)."""
+        from airut.claude_output.types import (
+            EventType,
+            StreamEvent,
+            ToolUseBlock,
+        )
+        from airut.dashboard.tracker import TaskTracker
+        from airut.gateway.service.message_processing import (
+            _make_todo_callback,
+        )
+
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+
+        callback = _make_todo_callback(tracker, "abc12345")
+
+        todos_raw = [{"content": "Run tests", "status": "pending"}]
+        event = StreamEvent(
+            event_type=EventType.ASSISTANT,
+            subtype="",
+            session_id="s1",
+            content_blocks=(
+                ToolUseBlock(
+                    tool_id="t1",
+                    tool_name="TodoWrite",
+                    tool_input={"todos": todos_raw},
+                ),
+            ),
+            raw="{}",
+        )
+        # Should not raise
+        callback(event)
+
+        task = tracker.get_task("abc12345")
+        assert task is not None
+        assert task.todos is not None
+
+    def test_plan_streamer_not_called_for_non_todowrite(self) -> None:
+        """Plan streamer is not called for non-TodoWrite events."""
+        from unittest.mock import MagicMock
+
+        from airut.claude_output.types import (
+            EventType,
+            StreamEvent,
+            ToolUseBlock,
+        )
+        from airut.dashboard.tracker import TaskTracker
+        from airut.gateway.service.message_processing import (
+            _make_todo_callback,
+        )
+
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        mock_streamer = MagicMock()
+
+        callback = _make_todo_callback(
+            tracker, "abc12345", plan_streamer=mock_streamer
+        )
+
+        event = StreamEvent(
+            event_type=EventType.ASSISTANT,
+            subtype="",
+            session_id="s1",
+            content_blocks=(
+                ToolUseBlock(
+                    tool_id="t1",
+                    tool_name="Bash",
+                    tool_input={"command": "ls"},
+                ),
+            ),
+            raw="{}",
+        )
+        callback(event)
+
+        mock_streamer.update.assert_not_called()
+
     def test_ignores_invalid_todos_value(self) -> None:
         """Callback ignores TodoWrite with non-list todos."""
         from airut.claude_output.types import (

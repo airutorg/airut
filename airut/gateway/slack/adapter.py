@@ -25,11 +25,13 @@ from airut.gateway.channel import (
     AuthenticationError,
     ChannelAdapter,
     ParsedMessage,
+    PlanStreamer,
     RawMessage,
 )
 from airut.gateway.slack.authorizer import SlackAuthorizer
 from airut.gateway.slack.config import SlackChannelConfig
 from airut.gateway.slack.listener import SlackChannelListener
+from airut.gateway.slack.plan_streamer import SlackPlanStreamer
 from airut.gateway.slack.thread_store import SlackThreadStore
 
 
@@ -436,6 +438,29 @@ class SlackChannelAdapter(ChannelAdapter):
             )
         except SlackApiError as e:
             logger.warning("Failed to send Slack rejection (non-fatal): %s", e)
+
+    def create_plan_streamer(
+        self, parsed: ParsedMessage
+    ) -> PlanStreamer | None:
+        """Create a plan streamer for real-time task progress.
+
+        Returns a ``SlackPlanStreamer`` that streams ``TodoWrite``
+        progress to the Slack thread via plan blocks.
+
+        Args:
+            parsed: Parsed message (must be a ``SlackParsedMessage``).
+
+        Returns:
+            A ``SlackPlanStreamer``, or ``None`` if the parsed message
+            is not a ``SlackParsedMessage``.
+        """
+        if not isinstance(parsed, SlackParsedMessage):
+            return None
+        return SlackPlanStreamer(
+            client=self._client,
+            channel=parsed.slack_channel_id,
+            thread_ts=parsed.slack_thread_ts,
+        )
 
     def cleanup_conversations(self, active_conversation_ids: set[str]) -> None:
         """Remove thread mappings for conversations no longer active."""

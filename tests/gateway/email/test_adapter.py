@@ -757,6 +757,21 @@ class TestListenerProperty:
             _ = adapter.listener
 
 
+class TestCreatePlanStreamer:
+    def test_returns_none(self) -> None:
+        """Email does not support plan streaming."""
+        from airut.gateway.channel import ParsedMessage
+
+        adapter, _, _, _ = _make_adapter()
+        parsed = ParsedMessage(
+            sender="user@example.com",
+            body="text",
+            conversation_id=None,
+            model_hint=None,
+        )
+        assert adapter.create_plan_streamer(parsed) is None
+
+
 class TestCleanupConversations:
     def test_noop(self) -> None:
         """Email adapter has no per-conversation state to clean up."""

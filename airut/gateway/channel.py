@@ -15,7 +15,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+
+if TYPE_CHECKING:
+    from airut.dashboard.tracker import TodoItem
 
 
 class AuthenticationError(Exception):
@@ -296,6 +300,24 @@ class ChannelAdapter(Protocol):
         """
         ...
 
+    def create_plan_streamer(
+        self, parsed: ParsedMessage
+    ) -> PlanStreamer | None:
+        """Create a plan streamer for real-time task progress.
+
+        Returns a ``PlanStreamer`` that streams ``TodoWrite`` progress
+        to the user's channel during execution.  Returns ``None`` if
+        the channel does not support plan streaming.
+
+        Args:
+            parsed: The parsed message (used to extract channel-specific
+                threading info).
+
+        Returns:
+            A ``PlanStreamer`` instance, or ``None``.
+        """
+        ...
+
     def cleanup_conversations(self, active_conversation_ids: set[str]) -> None:
         """Remove adapter state for conversations not in the active set.
 
@@ -311,5 +333,40 @@ class ChannelAdapter(Protocol):
             active_conversation_ids: Conversation IDs that still exist.
                 Any adapter state referencing IDs outside this set
                 should be cleaned up.
+        """
+        ...
+
+
+class PlanStreamer(Protocol):
+    """Interface for streaming task progress to a channel.
+
+    Streams ``TodoItem`` updates from Claude's ``TodoWrite`` tool use
+    to the user's channel in real time.  Implementations manage the
+    stream lifecycle (start on first update, stop on finalize).
+
+    The gateway core creates a ``PlanStreamer`` per execution and passes
+    it to the ``on_event`` callback.  Channels that don't support
+    streaming return ``None`` from their adapter and the callback skips
+    the plan streamer path.
+    """
+
+    def update(self, items: list[TodoItem]) -> None:
+        """Send updated task list to the channel.
+
+        Called on each ``TodoWrite`` event with the full (replaced)
+        todo list.  Implementations should start a stream lazily on
+        the first call.
+
+        Args:
+            items: Complete todo list from the latest ``TodoWrite``.
+        """
+        ...
+
+    def finalize(self) -> None:
+        """Stop the stream.
+
+        Called when execution completes (success or error).  Must be
+        safe to call even if ``update`` was never called (no-op in
+        that case).
         """
         ...
