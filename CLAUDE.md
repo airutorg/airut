@@ -30,6 +30,7 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
 - `spec/authentication.md` — DMARC verification and sender authorization
 - `spec/repo-config.md` — repo config schema and server/repo split
 - `spec/multi-repo.md` — multi-repository support design
+- `spec/slack-channel.md` — Slack channel implementation (Socket Mode)
 - `spec/integration-tests.md` — end-to-end test specification
 - `spec/sandbox.md` — sandbox library for safe containerized Claude Code
   execution
@@ -254,6 +255,7 @@ airut/                        - Library code
     config.py               - Gateway configuration dataclasses
     conversation.py         - ConversationManager (git checkout, state persistence)
     email/                  - Email channel implementation
+    slack/                  - Slack channel implementation (Socket Mode)
     service/                - Core orchestration (GatewayService, RepoHandler)
   gh/                       - GitHub API wrappers
   git_mirror.py             - Git mirror cache
@@ -275,6 +277,7 @@ tests/                      - Unit tests (100% coverage required)
   dashboard/                - Dashboard tests
   gateway/                  - Gateway tests
     email/                  - Email channel tests
+    slack/                  - Slack channel tests
     service/                - Core service tests
   integration/              - End-to-end integration tests (ci.py --workflow e2e)
 workflows/                  - Step-by-step operational guides

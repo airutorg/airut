@@ -1,6 +1,13 @@
-# Email Authentication and Authorization
+# Authentication and Authorization
 
-Two logically separate layers protect the email gateway from unauthorized use.
+Each channel implements authentication and authorization appropriate to its
+transport. This spec covers the email channel's DMARC-based model. For Slack's
+authorization model (workspace membership, user groups, user IDs), see
+[slack-channel.md](slack-channel.md#authorization-model).
+
+## Email Channel
+
+Two logically separate layers protect the email channel from unauthorized use.
 Both must pass before a message is processed.
 
 ## Authentication (`SenderAuthenticator`)

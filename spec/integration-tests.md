@@ -1,7 +1,8 @@
 # Integration Tests
 
-End-to-end integration tests for the Airut Email Gateway Service. Exercises the
-complete email-to-response flow with minimal mocking.
+End-to-end integration tests for the Airut Gateway Service. Currently covers the
+email channel; Slack integration tests are an open item (see
+[slack-channel.md](slack-channel.md#open-items)).
 
 ## Architecture
 

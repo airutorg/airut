@@ -28,6 +28,7 @@ from airut.gateway.config import (
     _EnvVar,
     _make_loader,
     _make_repo_loader,
+    _parse_slack_channel_config,
     _raw_resolve,
     _resolve,
     _resolve_container_env,
@@ -2639,3 +2640,232 @@ class TestRepoServerConfigSigningCredentials:
 
         assert "AKIAIOSFODNN7EXAMPLE" in SecretFilter._secrets
         assert "wJalrXUtnFEMI" in SecretFilter._secrets
+
+
+# ---------------------------------------------------------------------------
+# Slack channel config parsing
+# ---------------------------------------------------------------------------
+
+
+class TestParseSlackChannelConfig:
+    def test_basic_parsing(self) -> None:
+        from airut.gateway.slack.config import SlackChannelConfig
+
+        raw = {
+            "bot_token": "xoxb-test-slack-token-1",
+            "app_token": "xapp-test-slack-token-1",
+            "authorized": [{"workspace_members": True}],
+        }
+        config = _parse_slack_channel_config(raw, "repos.test")
+        assert isinstance(config, SlackChannelConfig)
+        assert config.bot_token == "xoxb-test-slack-token-1"
+        assert config.app_token == "xapp-test-slack-token-1"
+        assert config.authorized == ({"workspace_members": True},)
+
+    def test_user_id_rule(self) -> None:
+        from airut.gateway.slack.config import SlackChannelConfig
+
+        raw = {
+            "bot_token": "xoxb-test-slack-token-2",
+            "app_token": "xapp-test-slack-token-2",
+            "authorized": [{"user_id": "U12345678"}],
+        }
+        config = _parse_slack_channel_config(raw, "repos.test")
+        assert isinstance(config, SlackChannelConfig)
+        assert config.authorized == ({"user_id": "U12345678"},)
+
+    def test_user_group_rule(self) -> None:
+        from airut.gateway.slack.config import SlackChannelConfig
+
+        raw = {
+            "bot_token": "xoxb-test-slack-token-3",
+            "app_token": "xapp-test-slack-token-3",
+            "authorized": [{"user_group": "engineering"}],
+        }
+        config = _parse_slack_channel_config(raw, "repos.test")
+        assert isinstance(config, SlackChannelConfig)
+        assert config.authorized == ({"user_group": "engineering"},)
+
+    def test_missing_bot_token_raises(self) -> None:
+        raw = {
+            "app_token": "xapp-test-slack-token-4",
+            "authorized": [{"workspace_members": True}],
+        }
+        with pytest.raises(ConfigError, match="bot_token"):
+            _parse_slack_channel_config(raw, "repos.test")
+
+    def test_missing_app_token_raises(self) -> None:
+        raw = {
+            "bot_token": "xoxb-test-slack-token-5",
+            "authorized": [{"workspace_members": True}],
+        }
+        with pytest.raises(ConfigError, match="app_token"):
+            _parse_slack_channel_config(raw, "repos.test")
+
+    def test_missing_authorized_raises(self) -> None:
+        raw = {
+            "bot_token": "xoxb-test-slack-token-6",
+            "app_token": "xapp-test-slack-token-6",
+        }
+        with pytest.raises(ConfigError, match="authorized is required"):
+            _parse_slack_channel_config(raw, "repos.test")
+
+    def test_empty_authorized_raises(self) -> None:
+        raw = {
+            "bot_token": "xoxb-test-slack-token-7",
+            "app_token": "xapp-test-slack-token-7",
+            "authorized": [],
+        }
+        with pytest.raises(ConfigError, match="cannot be empty"):
+            _parse_slack_channel_config(raw, "repos.test")
+
+    def test_authorized_not_list_raises(self) -> None:
+        raw = {
+            "bot_token": "xoxb-test-slack-token-8",
+            "app_token": "xapp-test-slack-token-8",
+            "authorized": "not_a_list",
+        }
+        with pytest.raises(ConfigError, match="must be a list"):
+            _parse_slack_channel_config(raw, "repos.test")
+
+    def test_invalid_rule_key_raises(self) -> None:
+        raw = {
+            "bot_token": "xoxb-test-slack-token-9",
+            "app_token": "xapp-test-slack-token-9",
+            "authorized": [{"invalid_key": "value"}],
+        }
+        with pytest.raises(ConfigError, match="unknown rule type"):
+            _parse_slack_channel_config(raw, "repos.test")
+
+    def test_multi_key_rule_raises(self) -> None:
+        raw = {
+            "bot_token": "xoxb-test-slack-token-10",
+            "app_token": "xapp-test-slack-token-10",
+            "authorized": [{"workspace_members": True, "user_id": "U123"}],
+        }
+        with pytest.raises(ConfigError, match="single-key"):
+            _parse_slack_channel_config(raw, "repos.test")
+
+    def test_env_var_resolution(self) -> None:
+        from airut.gateway.slack.config import SlackChannelConfig
+
+        with patch.dict("os.environ", {"SLACK_BOT_CFG": "xoxb-env-token"}):
+            raw = {
+                "bot_token": _EnvVar("SLACK_BOT_CFG"),
+                "app_token": "xapp-test-slack-token-11",
+                "authorized": [{"workspace_members": True}],
+            }
+            config = _parse_slack_channel_config(raw, "repos.test")
+            assert isinstance(config, SlackChannelConfig)
+            assert config.bot_token == "xoxb-env-token"
+
+    def test_multiple_rules(self) -> None:
+        from airut.gateway.slack.config import SlackChannelConfig
+
+        raw = {
+            "bot_token": "xoxb-test-slack-token-12",
+            "app_token": "xapp-test-slack-token-12",
+            "authorized": [
+                {"workspace_members": True},
+                {"user_group": "eng"},
+                {"user_id": "U123"},
+            ],
+        }
+        config = _parse_slack_channel_config(raw, "repos.test")
+        assert isinstance(config, SlackChannelConfig)
+        assert len(config.authorized) == 3
+
+    def test_null_user_id_value_raises(self) -> None:
+        raw = {
+            "bot_token": "xoxb-test-slack-token-13",
+            "app_token": "xapp-test-slack-token-13",
+            "authorized": [{"user_id": None}],
+        }
+        with pytest.raises(ConfigError, match="value is required"):
+            _parse_slack_channel_config(raw, "repos.test")
+
+    def test_workspace_members_false_warns(self) -> None:
+        from unittest.mock import patch
+
+        raw = {
+            "bot_token": "xoxb-test-slack-token-wmf",
+            "app_token": "xapp-test-slack-token-wmf",
+            "authorized": [{"workspace_members": False}],
+        }
+        with patch("airut.gateway.config.logger") as mock_logger:
+            config = _parse_slack_channel_config(raw, "repos.test")
+
+        mock_logger.warning.assert_any_call(
+            "%s.slack.authorized[%d]: workspace_members: false "
+            "has no effect (rule never matches); remove it or "
+            "set to true",
+            "repos.test",
+            0,
+        )
+        assert config.authorized == ({"workspace_members": False},)
+
+
+def test_repo_server_config_slack_channel(
+    master_repo: Path, tmp_path: Path
+) -> None:
+    """ServerConfig.from_yaml parses a Slack channel block."""
+    from airut.gateway.slack.config import SlackChannelConfig
+
+    yaml_text = f"""\
+repos:
+  test-slack:
+    slack:
+      bot_token: xoxb-test-slack-token-sv
+      app_token: xapp-test-slack-token-sv
+      authorized:
+        - workspace_members: true
+    git:
+      repo_url: {master_repo.as_uri()}
+"""
+    config_path = tmp_path / "airut.yaml"
+    config_path.write_text(yaml_text)
+
+    server = ServerConfig.from_yaml(config_path)
+    repo = server.repos["test-slack"]
+    assert "slack" in repo.channels
+    slack_config = repo.channels["slack"]
+    assert isinstance(slack_config, SlackChannelConfig)
+    assert slack_config.bot_token == "xoxb-test-slack-token-sv"
+
+
+def test_repo_server_config_dual_channel(
+    master_repo: Path, tmp_path: Path
+) -> None:
+    """A repo can have both email and Slack channels simultaneously."""
+    from airut.gateway.slack.config import SlackChannelConfig
+
+    yaml_text = f"""\
+repos:
+  dual:
+    email:
+      imap_server: imap.test.com
+      smtp_server: smtp.test.com
+      username: user@test.com
+      password: pass123
+      from: "Bot <bot@test.com>"
+      authorized_senders:
+        - auth@test.com
+      trusted_authserv_id: mx.test.com
+    slack:
+      bot_token: xoxb-test-slack-token-dual
+      app_token: xapp-test-slack-token-dual
+      authorized:
+        - workspace_members: true
+    git:
+      repo_url: {master_repo.as_uri()}
+"""
+    config_path = tmp_path / "airut.yaml"
+    config_path.write_text(yaml_text)
+
+    server = ServerConfig.from_yaml(config_path)
+    repo = server.repos["dual"]
+    assert len(repo.channels) == 2
+    assert "email" in repo.channels
+    assert "slack" in repo.channels
+    assert isinstance(repo.channels["email"], EmailChannelConfig)
+    assert isinstance(repo.channels["slack"], SlackChannelConfig)

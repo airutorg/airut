@@ -179,6 +179,25 @@ repos:
     #     scopes:
     #       - "*.amazonaws.com"
 
+    # Slack channel (optional, can coexist with email).
+    # See config/slack-app-manifest.json for app setup.
+    #
+    # slack:
+    #   # Bot token (xoxb-...) from OAuth & Permissions page.
+    #   bot_token: !env SLACK_BOT_TOKEN
+    #
+    #   # App-level token (xapp-...) for Socket Mode.
+    #   app_token: !env SLACK_APP_TOKEN
+    #
+    #   # Authorization rules (evaluated in order, first match wins).
+    #   authorized:
+    #     # Allow all full workspace members:
+    #     - workspace_members: true
+    #     # Or restrict to a user group (requires usergroups:read scope):
+    #     # - user_group: engineering
+    #     # Or restrict to specific users:
+    #     # - user_id: U12345678
+
   # -------------------------------------------------------------------------
   # Example: additional repository (uncomment to use)
   # -------------------------------------------------------------------------

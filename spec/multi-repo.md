@@ -1,18 +1,20 @@
 # Multi-Repository Support
 
 A single Airut daemon manages tasks for multiple independent Git repositories,
-each with its own email inbox, authorization, secrets, and storage.
+each with its own messaging channels, authorization, secrets, and storage.
 
 ## Goals
 
 1. **Multiple repositories per server.** A single Airut daemon manages tasks for
    several independent Git repositories.
 2. **Per-repo channels.** Each repository has one or more channel adapters (e.g.
-   email). Email channels must not share an IMAP inbox — that would create a
-   shared task queue and violate isolation.
-3. **Per-repo authorization.** Each repo has its own `authorized_senders` list
-   and `trusted_authserv_id`. Different people can be authorized for different
-   repos.
+   email, Slack). Email channels must not share an IMAP inbox — that would
+   create a shared task queue and violate isolation. Each Slack app (bot token)
+   maps to one repo.
+3. **Per-repo authorization.** Each repo has its own authorization rules. Email
+   uses `authorized_senders` and `trusted_authserv_id`; Slack uses `authorized`
+   rules (workspace members, user groups, user IDs). Different people can be
+   authorized for different repos.
 4. **No shared state between repos.** Storage, git mirrors, conversations,
    secrets, and email accounts are fully isolated per repo. The only shared
    resources are the global task limit and infrastructure (dashboard, proxy
@@ -68,6 +70,12 @@ repos:
         use_idle: true
         idle_reconnect_interval: 1740
 
+    slack:
+      bot_token: !env SLACK_BOT_TOKEN_AIRUT
+      app_token: !env SLACK_APP_TOKEN_AIRUT
+      authorized:
+        - workspace_members: true
+
     # Per-repo secrets pool
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: !env CLAUDE_CODE_OAUTH_TOKEN
@@ -102,9 +110,9 @@ repos:
   `secrets`, `masked_secrets`, and `signing_credentials` alike.
 - **SMTP is per-repo.** Replies come from the same email address that receives
   tasks for that repo.
-- **`email.authorized_senders` is a list** supporting multiple senders per repo
-  with optional domain wildcards (e.g., `*@company.com`). Each repo is
-  independent.
+- **Authorization is per-repo and per-channel.** Email uses
+  `email.authorized_senders` (address patterns). Slack uses `slack.authorized`
+  (workspace/group/user rules). Each repo is independent.
 - **`email.trusted_authserv_id` is per-repo** since email settings differ per
   repo.
 
@@ -116,7 +124,7 @@ At config load time:
   `(imap_server, username)` pair. This enforces the "no shared task queue"
   constraint.
 - **At least one channel per repo:** Each repo must have at least one channel
-  block (e.g. `email:`). Channel keys must match recognized types.
+  block (`email:`, `slack:`, or both). Channel keys must match recognized types.
 - **At least one repo:** The `repos` mapping must have at least one entry.
 
 ## Repo Configuration
@@ -159,11 +167,15 @@ GatewayService (orchestrator)
 │   ├── "airut" → RepoHandler
 │   │   ├── config: RepoServerConfig
 │   │   ├── adapters: dict[str, ChannelAdapter]
-│   │   │   └── "email" → EmailChannelAdapter
-│   │   │       ├── listener: EmailChannelListener (per-repo IMAP)
-│   │   │       ├── responder: EmailResponder   (per-repo SMTP)
-│   │   │       ├── authenticator: SenderAuthenticator
-│   │   │       └── authorizer: SenderAuthorizer
+│   │   │   ├── "email" → EmailChannelAdapter
+│   │   │   │   ├── listener: EmailChannelListener (per-repo IMAP)
+│   │   │   │   ├── responder: EmailResponder   (per-repo SMTP)
+│   │   │   │   ├── authenticator: SenderAuthenticator
+│   │   │   │   └── authorizer: SenderAuthorizer
+│   │   │   └── "slack" → SlackChannelAdapter
+│   │   │       ├── listener: SlackChannelListener (Socket Mode)
+│   │   │       ├── authorizer: SlackAuthorizer
+│   │   │       └── thread_store: SlackThreadStore
 │   │   ├── conversation_manager: ConversationManager (per-repo storage)
 │   │   └── sandbox: Sandbox                (per-repo mirror for images)
 │   └── "another-repo" → RepoHandler
@@ -186,18 +198,20 @@ GatewayService (orchestrator)
 
 ### Listener Threading Model
 
-Each repo's listener runs in its own daemon thread:
+Each channel listener runs in its own internal thread(s):
 
 ```
-Main thread:                startup → spawn listener threads → wait for shutdown
-Thread "airut-listener":    poll_loop() or idle_loop()
-Thread "other-listener":    poll_loop() or idle_loop()
-Worker threads (shared):    message processing + Claude execution
+Main thread:                    startup → start listeners → wait for shutdown
+Thread "airut-email-listener":  IMAP poll_loop() or idle_loop()
+Thread "airut-slack-listener":  Socket Mode WebSocket (managed by Bolt SDK)
+Thread "other-email-listener":  IMAP poll_loop() or idle_loop()
+Worker threads (shared):        message processing + Claude execution
 ```
 
 Messages from any listener are submitted to the shared `ThreadPoolExecutor`,
 which enforces the global `max_concurrent` limit. Listener threads are
-lightweight (mostly blocked in IDLE or sleep) and don't compete with workers.
+lightweight (mostly blocked in IDLE, sleep, or WebSocket recv) and don't compete
+with workers.
 
 Signal handling: `SIGTERM`/`SIGINT` sets `running = False` and calls
 `interrupt()` on all listeners.
@@ -303,21 +317,22 @@ Its `from_mirror()` receives the per-repo `secrets`, `masked_secrets`, and
 `TaskState` gains two new fields:
 
 - `repo_id: str` — which repository this task belongs to
-- `sender: str` — email address of the person who sent the task
+- `sender: str` — identity of the person who sent the task (email address or
+  Slack user ID)
 
 Dashboard UI changes:
 
 - Task cards show repo name as a badge/tag
-- Task cards show sender email
+- Task cards show sender identity
 - Task detail view includes repo and sender
 - No filtering by repo (keep it simple for now)
 
-## Email Protocol
+## Channel Protocols
 
-No changes to the email protocol itself. Conversation IDs, subject tagging,
-model selection via subaddressing, and threading all work the same. The only
-difference is that each repo has its own email address, so users send to
-different addresses for different repos.
+No changes to individual channel protocols. Email conversation IDs, subject
+tagging, model selection via subaddressing, and threading all work the same.
+Slack thread mapping and authorization rules are per-repo. The only difference
+is that each repo has its own channel credentials (email address, Slack app).
 
 ## Migration
 

@@ -41,6 +41,7 @@ from airut.logging import SecretFilter
 
 
 if TYPE_CHECKING:
+    from airut.gateway.slack.config import SlackChannelConfig
     from airut.git_mirror import GitMirrorCache
 
 
@@ -722,7 +723,7 @@ class EmailChannelConfig(ChannelConfig):
 
 #: Channel type keys recognized in server config.
 #: Extend as new channel types are added.
-CHANNEL_KEYS = {"email"}
+CHANNEL_KEYS = {"email", "slack"}
 
 
 @dataclass(frozen=True)
@@ -1018,6 +1019,8 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
     channels: dict[str, ChannelConfig] = {}
     if "email" in raw:
         channels["email"] = _parse_email_channel_config(raw["email"], prefix)
+    if "slack" in raw:
+        channels["slack"] = _parse_slack_channel_config(raw["slack"], prefix)
 
     return RepoServerConfig(
         repo_id=repo_id,
@@ -1115,6 +1118,84 @@ def _parse_email_channel_config(email: dict, prefix: str) -> EmailChannelConfig:
         microsoft_oauth2_tenant_id=ms_tenant_id,
         microsoft_oauth2_client_id=ms_client_id,
         microsoft_oauth2_client_secret=ms_client_secret,
+    )
+
+
+def _parse_slack_channel_config(
+    slack: dict, prefix: str
+) -> "SlackChannelConfig":
+    """Parse a Slack channel config block.
+
+    Args:
+        slack: Raw YAML dict for the ``slack:`` block.
+        prefix: Config path prefix for error messages.
+
+    Returns:
+        SlackChannelConfig instance.
+    """
+    from airut.gateway.slack.config import SlackChannelConfig
+
+    bot_token = _resolve(
+        slack.get("bot_token"),
+        str,
+        required=f"{prefix}.slack.bot_token",
+    )
+    app_token = _resolve(
+        slack.get("app_token"),
+        str,
+        required=f"{prefix}.slack.app_token",
+    )
+
+    # Parse authorization rules
+    raw_authorized = slack.get("authorized")
+    if raw_authorized is None:
+        raise ConfigError(
+            f"{prefix}.slack.authorized is required "
+            f"(at least one authorization rule)"
+        )
+    if not isinstance(raw_authorized, list):
+        raise ConfigError(f"{prefix}.slack.authorized must be a list")
+    if not raw_authorized:
+        raise ConfigError(f"{prefix}.slack.authorized cannot be empty")
+
+    authorized: list[dict[str, str | bool]] = []
+    for i, rule in enumerate(raw_authorized):
+        if not isinstance(rule, dict) or len(rule) != 1:
+            raise ConfigError(
+                f"{prefix}.slack.authorized[{i}] must be a single-key "
+                f"mapping (workspace_members, user_group, or user_id)"
+            )
+        key = next(iter(rule))
+        if key not in ("workspace_members", "user_group", "user_id"):
+            raise ConfigError(
+                f"{prefix}.slack.authorized[{i}]: unknown rule "
+                f"type '{key}' (expected workspace_members, "
+                f"user_group, or user_id)"
+            )
+        value = rule[key]
+        if key == "workspace_members":
+            coerced = _coerce_bool(value)
+            if not coerced:
+                logger.warning(
+                    "%s.slack.authorized[%d]: workspace_members: false "
+                    "has no effect (rule never matches); remove it or "
+                    "set to true",
+                    prefix,
+                    i,
+                )
+            authorized.append({key: coerced})
+        else:
+            resolved = _raw_resolve(value)
+            if resolved is None:
+                raise ConfigError(
+                    f"{prefix}.slack.authorized[{i}].{key} value is required"
+                )
+            authorized.append({key: resolved})
+
+    return SlackChannelConfig(
+        bot_token=bot_token,
+        app_token=app_token,
+        authorized=tuple(authorized),
     )
 
 
