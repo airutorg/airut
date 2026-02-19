@@ -207,6 +207,18 @@ For Claude responses that exceed the single-block limit:
 3. **Fallback**: For extremely long responses, upload as a text/markdown file
    attachment in the thread.
 
+### Block Validation Fallback
+
+Slack's `markdown` block type may reject certain content with an
+`invalid_blocks` error even when the content is within size limits. When this
+happens, the adapter retries the message as plain text (using the `text`
+parameter with no `blocks` payload). Plain-text messages support up to 40,000
+characters and use Slack's mrkdwn formatting, which covers most common Markdown
+constructs. Content beyond 40,000 characters is truncated by Slack, which is
+acceptable compared to a complete delivery failure. This fallback applies to
+every `chat.postMessage` call in the message delivery pipeline (single-message,
+multi-message split, etc.).
+
 ### File Handling
 
 **Inbound** (user -> bot): Users can attach files in the Slack DM. The adapter

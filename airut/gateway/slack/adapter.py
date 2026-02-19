@@ -41,6 +41,9 @@ _MAX_BLOCK_CHARS = 12000
 #: Maximum total characters before splitting into multiple messages.
 _MAX_MESSAGE_CHARS = 13000
 
+#: Maximum characters for a plain-text (no blocks) message before truncation.
+_MAX_TEXT_CHARS = 40000
+
 #: Maximum length for thread title.
 _MAX_TITLE_LENGTH = 60
 
@@ -577,6 +580,54 @@ def _split_blocks(text: str) -> list[str]:
     return blocks
 
 
+def _is_invalid_blocks(error: SlackApiError) -> bool:
+    """Check whether a Slack API error is an ``invalid_blocks`` rejection."""
+    resp = error.response
+    return isinstance(resp, dict) and resp.get("error") == "invalid_blocks"
+
+
+def _post_with_fallback(
+    client: WebClient,
+    channel: str,
+    thread_ts: str,
+    text: str,
+    blocks: list[dict[str, str]],
+) -> None:
+    """Post a message with ``markdown`` blocks, falling back to plain text.
+
+    If Slack rejects the blocks payload with ``invalid_blocks``, retry the
+    same message as plain text (mrkdwn) without blocks.  Plain-text messages
+    support up to 40 000 characters; content beyond that is truncated by
+    Slack, which is an acceptable degradation compared to a complete failure.
+
+    Args:
+        client: Slack ``WebClient``.
+        channel: Channel ID.
+        thread_ts: Thread timestamp.
+        text: Plain-text body (used as mrkdwn fallback).
+        blocks: Block Kit ``markdown`` blocks to try first.
+    """
+    try:
+        client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            blocks=blocks,
+            text=text[:200],  # fallback text for notifications
+        )
+    except SlackApiError as exc:
+        if not _is_invalid_blocks(exc):
+            raise
+        logger.warning(
+            "Slack rejected blocks payload (invalid_blocks), "
+            "retrying as plain text"
+        )
+        client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text=text[:_MAX_TEXT_CHARS],
+        )
+
+
 def _send_long_message(
     client: WebClient,
     channel: str,
@@ -590,6 +641,10 @@ def _send_long_message(
     2. If total exceeds ~13K chars, split into multiple messages.
     3. If extremely long, upload as file attachment.
 
+    Each ``chat.postMessage`` call uses :func:`_post_with_fallback` so that
+    an ``invalid_blocks`` error triggers a plain-text retry rather than a
+    hard failure.
+
     Args:
         client: Slack ``WebClient``.
         channel: Channel ID.
@@ -601,16 +656,11 @@ def _send_long_message(
     if len(text) <= _MAX_MESSAGE_CHARS:
         # Single message with multiple blocks
         block_kit = [{"type": "markdown", "text": block} for block in blocks]
-        client.chat_postMessage(
-            channel=channel,
-            thread_ts=thread_ts,
-            blocks=block_kit,
-            text=text[:200],  # fallback text for notifications
-        )
+        _post_with_fallback(client, channel, thread_ts, text, block_kit)
     elif len(text) <= _MAX_MESSAGE_CHARS * 5:
         # Multiple messages
-        message_blocks: list[list[dict[str, str]]] = []
-        current_message: list[dict[str, str]] = []
+        message_blocks: list[list[tuple[str, dict[str, str]]]] = []
+        current_message: list[tuple[str, dict[str, str]]] = []
         current_length = 0
 
         for block in blocks:
@@ -619,19 +669,16 @@ def _send_long_message(
                     message_blocks.append(current_message)
                 current_message = []
                 current_length = 0
-            current_message.append({"type": "markdown", "text": block})
+            current_message.append((block, {"type": "markdown", "text": block}))
             current_length += len(block)
 
         if current_message:
             message_blocks.append(current_message)
 
-        for msg_blocks in message_blocks:
-            client.chat_postMessage(
-                channel=channel,
-                thread_ts=thread_ts,
-                blocks=msg_blocks,
-                text="(continued)",
-            )
+        for msg_entries in message_blocks:
+            plain = "\n\n".join(raw for raw, _ in msg_entries)
+            kit = [blk for _, blk in msg_entries]
+            _post_with_fallback(client, channel, thread_ts, plain, kit)
     else:
         # Fallback: upload as file
         client.files_upload_v2(
