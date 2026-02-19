@@ -1099,3 +1099,35 @@ class TestSendLongMessageFallback:
         assert "blocks" in first_kw
         second_kw = client.chat_postMessage.call_args_list[1][1]
         assert "blocks" not in second_kw
+
+
+class TestCreatePlanStreamer:
+    def test_returns_streamer_for_slack_message(self, tmp_path: Path) -> None:
+        from airut.gateway.slack.plan_streamer import SlackPlanStreamer
+
+        adapter, client, _, _ = _make_adapter(tmp_path)
+        parsed = SlackParsedMessage(
+            sender="U123",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="D456",
+            slack_thread_ts="ts1",
+        )
+
+        streamer = adapter.create_plan_streamer(parsed)
+        assert isinstance(streamer, SlackPlanStreamer)
+
+    def test_returns_none_for_non_slack_message(self, tmp_path: Path) -> None:
+        from airut.gateway.channel import ParsedMessage
+
+        adapter, _, _, _ = _make_adapter(tmp_path)
+        wrong = ParsedMessage(
+            sender="U123",
+            body="text",
+            conversation_id=None,
+            model_hint=None,
+        )
+
+        result = adapter.create_plan_streamer(wrong)
+        assert result is None

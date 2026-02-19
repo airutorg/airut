@@ -37,7 +37,7 @@ from airut.dashboard.tracker import (
     TodoItem,
     TodoStatus,
 )
-from airut.gateway.channel import ChannelAdapter, ParsedMessage
+from airut.gateway.channel import ChannelAdapter, ParsedMessage, PlanStreamer
 from airut.gateway.config import ReplacementMap, RepoConfig
 from airut.gateway.conversation import GitCloneError
 from airut.gateway.service.usage_stats import extract_usage_stats
@@ -64,13 +64,17 @@ _REPO_CONTAINER_DIR = ".airut/container"
 
 
 def _make_todo_callback(
-    tracker: TaskTracker, task_id: str
+    tracker: TaskTracker,
+    task_id: str,
+    plan_streamer: PlanStreamer | None = None,
 ) -> Callable[[StreamEvent], None]:
     """Build an on_event callback that captures TodoWrite events.
 
     Args:
         tracker: Task tracker to update.
         task_id: Task ID to update todos for.
+        plan_streamer: Optional plan streamer to forward todo updates
+            to the user's channel in real time.
 
     Returns:
         Callback suitable for ``task.execute(on_event=...)``.
@@ -101,6 +105,8 @@ def _make_todo_callback(
                         if isinstance(t, dict)
                     ]
                     tracker.update_todos(task_id, items)
+                    if plan_streamer is not None:
+                        plan_streamer.update(items)
 
     return on_event
 
@@ -302,6 +308,7 @@ def process_message(
         return CompletionReason.EXECUTION_FAILED, None
 
     conversation_store: ConversationStore | None = None
+    plan_streamer: PlanStreamer | None = None
     prompt = parsed.body
 
     try:
@@ -484,7 +491,10 @@ def process_message(
                 conv_id,
             )
 
-        todo_callback = _make_todo_callback(service.tracker, task_id)
+        plan_streamer = adapter.create_plan_streamer(parsed)
+        todo_callback = _make_todo_callback(
+            service.tracker, task_id, plan_streamer
+        )
 
         try:
             result = task.execute(
@@ -552,6 +562,10 @@ def process_message(
                 prompt = recovery_prompt
             finally:
                 service.unregister_active_task(conv_id)
+
+        # Finalize plan stream before sending the reply
+        if plan_streamer is not None:
+            plan_streamer.finalize()
 
         # Extract response and usage stats, record reply summary
         if result.outcome == Outcome.SUCCESS:
@@ -657,6 +671,8 @@ def process_message(
         adapter.send_error(parsed, conv_id, error_msg)
         return CompletionReason.INTERNAL_ERROR, None
     except Exception as e:
+        if plan_streamer is not None:
+            plan_streamer.finalize()
         logger.exception(
             "Repo '%s': unexpected error processing message: %s",
             repo_id,

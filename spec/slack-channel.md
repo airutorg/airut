@@ -219,6 +219,53 @@ acceptable compared to a complete delivery failure. This fallback applies to
 every `chat.postMessage` call in the message delivery pipeline (single-message,
 multi-message split, etc.).
 
+### Task Progress Streaming
+
+Claude's `TodoWrite` tool emits task progress during execution. The Slack
+channel streams this progress to the user's thread in real time using Slack's
+chat streaming API (`chat.startStream` / `chat.appendStream` /
+`chat.stopStream`) with `task_display_mode="plan"`.
+
+**Architecture**: The `PlanStreamer` protocol in `channel.py` defines the
+channel-agnostic interface. `SlackPlanStreamer` implements it using the Slack
+SDK's `ChatStream` helper. The email adapter returns `None` from
+`create_plan_streamer()` (email has no streaming equivalent).
+
+**Lifecycle**:
+
+1. `process_message()` calls `adapter.create_plan_streamer(parsed)` before
+   execution. For Slack, this returns a `SlackPlanStreamer`; for email, `None`.
+2. The `PlanStreamer` is passed to `_make_todo_callback()`, which forwards each
+   `TodoWrite` event to `plan_streamer.update(items)`.
+3. The stream is started **lazily** on the first `update()` call — if Claude
+   never uses `TodoWrite`, no stream is created.
+4. After execution completes (success, failure, or exception),
+   `plan_streamer.finalize()` stops the stream.
+
+**TodoItem to Slack mapping**: Each `TodoItem` maps to a `TaskUpdateChunk`:
+
+- `item.active_form` (or `item.content`) → `title`
+- `TodoStatus.PENDING` → `"pending"`
+- `TodoStatus.IN_PROGRESS` → `"in_progress"`
+- `TodoStatus.COMPLETED` → `"complete"` (note: Slack uses `"complete"`, not
+  `"completed"`)
+- Positional index → `id` (`"task_0"`, `"task_1"`, ...)
+
+Since `TodoWrite` replaces the entire list on each call, the full task list is
+sent on every `update()`. Slack replaces the plan view atomically.
+
+**Debouncing**: Rapid `TodoWrite` events (within 500ms) are coalesced — only the
+latest state is sent. This prevents rate limiting when Claude emits many
+TodoWrite calls in quick succession.
+
+**Error handling**: All streaming API failures are non-fatal (logged as
+warnings). Losing plan updates is acceptable; the final reply and dashboard
+remain unaffected.
+
+**Separate message**: The plan stream message is a distinct message in the
+thread, separate from the final reply. It appears before the reply and shows
+progress as Claude works.
+
 ### File Handling
 
 **Inbound** (user -> bot): Users can attach files in the Slack DM. The adapter
@@ -521,8 +568,9 @@ The Slack channel implements the three channel protocols defined in
   `channel_info` for dashboard display.
 - **`ChannelListener`** — `SlackChannelListener` implements `start(submit)`,
   `stop()`, and `status` using the Bolt SDK's Socket Mode handler.
-- **`ChannelAdapter`** — `SlackChannelAdapter` implements all seven adapter
-  methods (`listener` property + six message handling methods).
+- **`ChannelAdapter`** — `SlackChannelAdapter` implements all eight adapter
+  methods (`listener` property + six message handling methods +
+  `create_plan_streamer`).
 
 `RepoHandler` remains fully channel-agnostic, calling `adapter.listener.start()`
 / `adapter.listener.stop()` with no channel-specific code paths.
@@ -536,6 +584,7 @@ airut/gateway/slack/
 +-- config.py          # SlackChannelConfig (implements ChannelConfig)
 +-- listener.py        # SlackChannelListener (implements ChannelListener)
 +-- authorizer.py      # Authorization rule evaluation + user info cache
++-- plan_streamer.py   # SlackPlanStreamer (implements PlanStreamer)
 +-- thread_store.py    # Thread-to-conversation mapping persistence
 ```
 
@@ -834,10 +883,6 @@ Work remaining after the initial Slack channel implementation:
 - **Documentation under `doc/`**: Add Slack setup and configuration guide to
   `doc/` (parallel to the existing email/M365 documentation). Include app
   creation walkthrough, token configuration, and authorization rule examples.
-- **Task progress via plan blocks**: Stream real-time TodoWrite progress to
-  Slack threads using `chat.startStream` / `chat.appendStream` /
-  `chat.stopStream`. The dashboard's SSE infrastructure already captures these
-  events.
 - **Suggested prompts**: Configurable prompts shown when opening the Chat tab
   (`set_suggested_prompts()` in the `thread_started` handler). Requires adding
   `slack.suggested_prompts` to config parsing.
