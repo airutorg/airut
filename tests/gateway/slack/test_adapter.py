@@ -127,7 +127,7 @@ class TestAuthenticateAndParse:
 
         result = adapter.authenticate_and_parse(msg)
         assert "Slack" in result.channel_context
-        assert "intermediate output" in result.channel_context
+        assert "AskUserQuestion" in result.channel_context
 
     def test_display_title_truncated(self, tmp_path: Path) -> None:
         adapter, _, authorizer, _ = _make_adapter(tmp_path)
