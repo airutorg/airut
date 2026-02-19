@@ -311,8 +311,8 @@ class TestMakeTodoCallback:
         assert task is not None
         assert task.todos is not None
 
-    def test_plan_streamer_not_called_for_non_todowrite(self) -> None:
-        """Plan streamer is not called for non-TodoWrite events."""
+    def test_non_todowrite_calls_update_action(self) -> None:
+        """Non-TodoWrite tool use forwards action summary to streamer."""
         from unittest.mock import MagicMock
 
         from airut.claude_output.types import (
@@ -349,6 +349,40 @@ class TestMakeTodoCallback:
         callback(event)
 
         mock_streamer.update.assert_not_called()
+        mock_streamer.update_action.assert_called_once_with("Running: ls")
+
+    def test_non_todowrite_no_streamer_no_error(self) -> None:
+        """Non-TodoWrite tool use without streamer doesn't error."""
+        from airut.claude_output.types import (
+            EventType,
+            StreamEvent,
+            ToolUseBlock,
+        )
+        from airut.dashboard.tracker import TaskTracker
+        from airut.gateway.service.message_processing import (
+            _make_todo_callback,
+        )
+
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+
+        callback = _make_todo_callback(tracker, "abc12345")
+
+        event = StreamEvent(
+            event_type=EventType.ASSISTANT,
+            subtype="",
+            session_id="s1",
+            content_blocks=(
+                ToolUseBlock(
+                    tool_id="t1",
+                    tool_name="Read",
+                    tool_input={"file_path": "/workspace/main.py"},
+                ),
+            ),
+            raw="{}",
+        )
+        # Should not raise.
+        callback(event)
 
     def test_ignores_invalid_todos_value(self) -> None:
         """Callback ignores TodoWrite with non-list todos."""

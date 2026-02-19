@@ -3,16 +3,22 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Slack plan streamer for real-time TodoWrite progress.
+"""Slack plan streamer for real-time task and action progress.
 
-Streams ``TodoItem`` updates to a Slack thread using the
-``chat.startStream`` / ``chat.appendStream`` / ``chat.stopStream``
-API via the SDK's ``ChatStream`` helper.  Task progress appears as
-a plan block in the thread, updated in real time as Claude works.
+Streams ``TodoItem`` updates and live action summaries to a Slack
+thread using the ``chat.startStream`` / ``chat.appendStream`` /
+``chat.stopStream`` API via the SDK's ``ChatStream`` helper.  Task
+progress appears as a plan block in the thread, updated in real
+time as Claude works.
+
+When Claude uses ``TodoWrite``, the plan block shows the todo list
+with the latest action annotated on the first in-progress task.
+When Claude does *not* use ``TodoWrite``, a single synthetic task
+provides live activity feedback (e.g. "Reading src/main.py").
 
 A background keepalive timer re-sends the latest task state
 periodically so Slack does not expire the stream during long gaps
-between ``TodoWrite`` events.
+between events.
 """
 
 from __future__ import annotations
@@ -93,6 +99,10 @@ class SlackPlanStreamer:
         self._lock = threading.Lock()
         self._keepalive_timer: threading.Timer | None = None
 
+        # Action tracking state.
+        self._todo_items: list[TodoItem] = []
+        self._action_summary: str = ""
+
     def _start_stream(self) -> ChatStream:
         """Start the chat stream on first use.
 
@@ -166,8 +176,12 @@ class SlackPlanStreamer:
             items: Complete todo list from the latest ``TodoWrite``.
         """
         with self._lock:
+            self._todo_items = list(items)
+
             now = time.monotonic()
             elapsed = now - self._last_append_time
+
+            chunks = _build_task_chunks(items, self._action_summary)
 
             # Debounce: skip the API call if too soon after last append
             # (unless this is the very first call).  Still update
@@ -177,47 +191,95 @@ class SlackPlanStreamer:
                 self._stream is not None
                 and elapsed < _MIN_APPEND_INTERVAL_SECONDS
             ):
-                self._last_chunks = _build_task_chunks(items)
+                self._last_chunks = chunks
                 return
 
-            chunks = _build_task_chunks(items)
+            self._append_chunks(chunks)
 
-            try:
-                if self._stream is None:
+    def update_action(self, summary: str) -> None:
+        """Send a live action status to the Slack thread.
+
+        When todo items exist, the summary is shown as the ``details``
+        field on the first in-progress task.  Otherwise, a single
+        synthetic task is created to provide activity feedback.
+
+        Args:
+            summary: One-line action description.
+        """
+        with self._lock:
+            self._action_summary = summary
+
+            now = time.monotonic()
+            elapsed = now - self._last_append_time
+
+            if self._todo_items:
+                chunks = _build_task_chunks(
+                    self._todo_items, self._action_summary
+                )
+            else:
+                chunks = [
+                    TaskUpdateChunk(
+                        id="action",
+                        title=summary,
+                        status="in_progress",
+                    )
+                ]
+
+            # Debounce: skip the API call if too soon after last
+            # append (unless this is the very first call).
+            if (
+                self._stream is not None
+                and elapsed < _MIN_APPEND_INTERVAL_SECONDS
+            ):
+                self._last_chunks = chunks
+                return
+
+            self._append_chunks(chunks)
+
+    def _append_chunks(self, chunks: list[TaskUpdateChunk]) -> None:
+        """Send chunks to the stream, handling startup and recovery.
+
+        Caller must hold ``_lock``.
+        """
+        try:
+            if self._stream is None:
+                stream = self._start_stream()
+                stream.append(chunks=chunks)
+            else:
+                self._stream.append(chunks=chunks)
+            self._last_append_time = time.monotonic()
+            self._last_chunks = chunks
+            self._schedule_keepalive()
+        except SlackApiError as e:
+            if _is_stream_expired(e):
+                logger.info(
+                    "Plan stream expired (idle timeout); starting a new stream"
+                )
+                self._stream = None
+                self._cancel_keepalive()
+                try:
                     stream = self._start_stream()
                     stream.append(chunks=chunks)
-                else:
-                    self._stream.append(chunks=chunks)
-                self._last_append_time = time.monotonic()
-                self._last_chunks = chunks
-                self._schedule_keepalive()
-            except SlackApiError as e:
-                if _is_stream_expired(e):
-                    logger.info(
-                        "Plan stream expired (idle timeout); "
-                        "starting a new stream"
-                    )
-                    self._stream = None
-                    self._cancel_keepalive()
-                    try:
-                        stream = self._start_stream()
-                        stream.append(chunks=chunks)
-                        self._last_append_time = time.monotonic()
-                        self._last_chunks = chunks
-                        self._schedule_keepalive()
-                    except SlackApiError as retry_err:
-                        logger.warning(
-                            "Failed to restart plan stream (non-fatal): %s",
-                            retry_err,
-                        )
-                else:
+                    self._last_append_time = time.monotonic()
+                    self._last_chunks = chunks
+                    self._schedule_keepalive()
+                except SlackApiError as retry_err:
                     logger.warning(
-                        "Failed to stream plan update (non-fatal): %s",
-                        e,
+                        "Failed to restart plan stream (non-fatal): %s",
+                        retry_err,
                     )
+            else:
+                logger.warning(
+                    "Failed to stream plan update (non-fatal): %s",
+                    e,
+                )
 
     def finalize(self) -> None:
         """Stop the stream and cancel keepalive timer.
+
+        If the stream was used in no-plan mode (action-only, no
+        ``TodoWrite``), the synthetic action task is marked complete
+        before stopping.
 
         Safe to call even if the stream was never started (no-op).
         If the stream already expired server-side, the error is
@@ -230,7 +292,19 @@ class SlackPlanStreamer:
                 return
 
             try:
-                self._stream.stop()
+                # In no-plan mode, mark the synthetic action task as
+                # complete so the UI shows a clean finished state.
+                if not self._todo_items and self._action_summary:
+                    final_chunks = [
+                        TaskUpdateChunk(
+                            id="action",
+                            title=self._action_summary,
+                            status="complete",
+                        )
+                    ]
+                    self._stream.stop(chunks=final_chunks)
+                else:
+                    self._stream.stop()
             except SlackApiError as e:
                 if _is_stream_expired(e):
                     logger.debug("Plan stream already expired; nothing to stop")
@@ -265,7 +339,10 @@ def _content_id(content: str) -> str:
     return hashlib.sha256(content.encode()).hexdigest()[:8]
 
 
-def _build_task_chunks(items: list[TodoItem]) -> list[TaskUpdateChunk]:
+def _build_task_chunks(
+    items: list[TodoItem],
+    action_summary: str = "",
+) -> list[TaskUpdateChunk]:
     """Convert TodoItems to Slack TaskUpdateChunk objects.
 
     Derives task IDs from each item's ``content`` field so that the
@@ -274,14 +351,21 @@ def _build_task_chunks(items: list[TodoItem]) -> list[TaskUpdateChunk]:
     update individual task cards in place; positional indices would
     break when the list is reordered.
 
+    When *action_summary* is non-empty it is attached as the
+    ``details`` field on the first in-progress task, showing what
+    Claude is currently doing within that task step.
+
     Args:
         items: Todo items from Claude's TodoWrite.
+        action_summary: Optional one-line action description to
+            attach to the first in-progress task.
 
     Returns:
         List of ``TaskUpdateChunk`` objects for the streaming API.
     """
     seen: set[str] = set()
     chunks: list[TaskUpdateChunk] = []
+    action_attached = False
     for item in items:
         task_id = _content_id(item.content)
         # Handle duplicate content strings by appending a suffix.
@@ -291,11 +375,22 @@ def _build_task_chunks(items: list[TodoItem]) -> list[TaskUpdateChunk]:
             task_id = f"{base_id}_{counter}"
             counter += 1
         seen.add(task_id)
+
+        details: str | None = None
+        if (
+            action_summary
+            and not action_attached
+            and item.status == TodoStatus.IN_PROGRESS
+        ):
+            details = action_summary
+            action_attached = True
+
         chunks.append(
             TaskUpdateChunk(
                 id=task_id,
                 title=item.active_form or item.content,
                 status=_STATUS_MAP.get(item.status, "pending"),
+                details=details,
             )
         )
     return chunks

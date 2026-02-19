@@ -235,12 +235,24 @@ SDK's `ChatStream` helper. The email adapter returns `None` from
 
 1. `process_message()` calls `adapter.create_plan_streamer(parsed)` before
    execution. For Slack, this returns a `SlackPlanStreamer`; for email, `None`.
-2. The `PlanStreamer` is passed to `_make_todo_callback()`, which forwards each
-   `TodoWrite` event to `plan_streamer.update(items)`.
-3. The stream is started **lazily** on the first `update()` call — if Claude
-   never uses `TodoWrite`, no stream is created.
+2. The `PlanStreamer` is passed to `_make_todo_callback()`, which forwards
+   `TodoWrite` events to `plan_streamer.update(items)` and other tool use events
+   to `plan_streamer.update_action(summary)`.
+3. The stream is started **lazily** on the first `update()` or `update_action()`
+   call — if Claude never uses any tools, no stream is created.
 4. After execution completes (success, failure, or exception),
    `plan_streamer.finalize()` stops the stream.
+
+**Action streaming**: Non-`TodoWrite` tool use events produce one-line action
+summaries via `summarize_action()` (in `airut/gateway/action_summary.py`) and
+are forwarded to `plan_streamer.update_action(summary)`. Two modes:
+
+- **With plan (TodoWrite used)**: The action summary is shown as the `details`
+  field on the first `in_progress` task in the plan block — e.g., "Reading
+  src/main.py" appears under the currently active task.
+- **No-plan mode (no TodoWrite)**: A single synthetic task with `id="action"` is
+  created, using the action summary as its title. On `finalize()`, this task is
+  marked `"complete"` for clean visual closure.
 
 **TodoItem to Slack mapping**: Each `TodoItem` maps to a `TaskUpdateChunk`:
 
@@ -250,6 +262,7 @@ SDK's `ChatStream` helper. The email adapter returns `None` from
 - `TodoStatus.COMPLETED` → `"complete"` (note: Slack uses `"complete"`, not
   `"completed"`)
 - SHA-256 hash of `item.content` (first 8 hex chars) → `id`
+- Action summary → `details` (on first in-progress task only)
 
 **Task ID stability**: Slack's streaming plan API tracks individual task cards
 by `id` across `appendStream` calls. IDs must remain stable for a given logical
@@ -260,9 +273,10 @@ Duplicate content strings get a `_N` suffix for uniqueness.
 Since `TodoWrite` replaces the entire list on each call, the full task list is
 sent on every `update()`.
 
-**Debouncing**: Rapid `TodoWrite` events (within 500ms) are coalesced — only the
-latest state is sent. This prevents rate limiting when Claude emits many
-TodoWrite calls in quick succession.
+**Debouncing**: Rapid `update()` and `update_action()` calls (within 500ms) are
+coalesced — only the latest state is sent. This prevents rate limiting when
+Claude emits many tool calls in quick succession. The debounced state is still
+stored in `_last_chunks` so the keepalive re-sends fresh data.
 
 **Keepalive**: Slack auto-expires a streaming session after a period of
 inactivity (undocumented, likely 30–60 s). A background daemon timer re-sends

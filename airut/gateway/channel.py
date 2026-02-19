@@ -362,6 +362,21 @@ class PlanStreamer(Protocol):
         """
         ...
 
+    def update_action(self, summary: str) -> None:
+        """Send a live action status to the channel.
+
+        Called on each non-``TodoWrite`` tool use event with a short
+        description of the current action (e.g. "Reading src/main.py").
+
+        If the plan stream has todo items, the summary is shown as the
+        ``details`` field on the first in-progress task.  Otherwise a
+        single synthetic task is created to provide activity feedback.
+
+        Args:
+            summary: One-line action description.
+        """
+        ...
+
     def finalize(self) -> None:
         """Stop the stream.
 
