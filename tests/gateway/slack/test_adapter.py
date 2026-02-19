@@ -18,6 +18,8 @@ from airut.gateway.slack.adapter import (
     SlackParsedMessage,
     _convert_horizontal_rules,
     _convert_tables,
+    _is_invalid_blocks,
+    _post_with_fallback,
     _sanitize_for_slack,
     _send_long_message,
     _split_blocks,
@@ -971,3 +973,129 @@ class TestSplitBlocksTruncation:
         blocks = _split_blocks(text)
         assert len(blocks) >= 1
         assert "[truncated]" in blocks[0]
+
+
+def _make_invalid_blocks_error() -> SlackApiError:
+    """Create a ``SlackApiError`` with ``invalid_blocks`` response."""
+    return SlackApiError(
+        message="The request to the Slack API failed.",
+        response={"ok": False, "error": "invalid_blocks"},
+    )
+
+
+class TestIsInvalidBlocks:
+    def test_detects_invalid_blocks(self) -> None:
+        err = _make_invalid_blocks_error()
+        assert _is_invalid_blocks(err) is True
+
+    def test_rejects_other_errors(self) -> None:
+        err = SlackApiError(
+            message="fail",
+            response={"ok": False, "error": "channel_not_found"},
+        )
+        assert _is_invalid_blocks(err) is False
+
+    def test_rejects_non_dict_response(self) -> None:
+        err = SlackApiError(
+            message="fail",
+            response=MagicMock(status_code=500, data={}),
+        )
+        assert _is_invalid_blocks(err) is False
+
+
+class TestPostWithFallback:
+    def test_posts_blocks_on_success(self) -> None:
+        """When blocks are accepted, no fallback is needed."""
+        client = MagicMock(spec=WebClient)
+        blocks = [{"type": "markdown", "text": "hello"}]
+        _post_with_fallback(client, "C1", "ts1", "hello", blocks)
+        assert client.chat_postMessage.call_count == 1
+        call_kw = client.chat_postMessage.call_args[1]
+        assert call_kw["blocks"] == blocks
+
+    def test_falls_back_to_plain_text_on_invalid_blocks(self) -> None:
+        """On invalid_blocks, retries with plain text."""
+        client = MagicMock(spec=WebClient)
+        client.chat_postMessage.side_effect = [
+            _make_invalid_blocks_error(),
+            MagicMock(),  # plain-text retry succeeds
+        ]
+        blocks = [{"type": "markdown", "text": "hello"}]
+        _post_with_fallback(client, "C1", "ts1", "hello", blocks)
+
+        assert client.chat_postMessage.call_count == 2
+        # Second call should be plain text (no blocks key)
+        second_call_kw = client.chat_postMessage.call_args_list[1][1]
+        assert "blocks" not in second_call_kw
+        assert second_call_kw["text"] == "hello"
+
+    def test_plain_text_truncated_at_limit(self) -> None:
+        """Plain-text fallback truncates at 40K chars."""
+        from airut.gateway.slack.adapter import _MAX_TEXT_CHARS
+
+        client = MagicMock(spec=WebClient)
+        long_text = "A" * (_MAX_TEXT_CHARS + 5000)
+        client.chat_postMessage.side_effect = [
+            _make_invalid_blocks_error(),
+            MagicMock(),
+        ]
+        blocks = [{"type": "markdown", "text": long_text}]
+        _post_with_fallback(client, "C1", "ts1", long_text, blocks)
+
+        second_call_kw = client.chat_postMessage.call_args_list[1][1]
+        assert len(second_call_kw["text"]) == _MAX_TEXT_CHARS
+
+    def test_reraises_non_invalid_blocks_error(self) -> None:
+        """Non-invalid_blocks errors propagate normally."""
+        client = MagicMock(spec=WebClient)
+        client.chat_postMessage.side_effect = SlackApiError(
+            message="fail",
+            response={"ok": False, "error": "channel_not_found"},
+        )
+        blocks = [{"type": "markdown", "text": "hello"}]
+        with pytest.raises(SlackApiError, match="fail"):
+            _post_with_fallback(client, "C1", "ts1", "hello", blocks)
+
+
+class TestSendLongMessageFallback:
+    def test_single_message_falls_back_on_invalid_blocks(self) -> None:
+        """Short messages fall back to plain text on invalid_blocks."""
+        client = MagicMock(spec=WebClient)
+        client.chat_postMessage.side_effect = [
+            _make_invalid_blocks_error(),
+            MagicMock(),  # plain-text retry
+        ]
+        _send_long_message(client, "C1", "ts1", "short text")
+        assert client.chat_postMessage.call_count == 2
+        second_kw = client.chat_postMessage.call_args_list[1][1]
+        assert "blocks" not in second_kw
+        assert second_kw["text"] == "short text"
+
+    def test_multi_message_falls_back_on_invalid_blocks(self) -> None:
+        """Multi-message splits also fall back per-message."""
+        client = MagicMock(spec=WebClient)
+        # Build text that triggers multi-message path (>13K, <=65K)
+        paragraphs = [f"Para {i}: " + "X" * 5000 for i in range(6)]
+        text = "\n\n".join(paragraphs)
+
+        # First message blocks fail, then plain text succeeds;
+        # remaining messages succeed with blocks
+        client.chat_postMessage.side_effect = [
+            _make_invalid_blocks_error(),
+            MagicMock(),  # plain text retry for first chunk
+            MagicMock(),  # second chunk blocks OK
+            MagicMock(),  # third chunk blocks OK
+            MagicMock(),  # etc.
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+        ]
+        _send_long_message(client, "C1", "ts1", text)
+
+        # The first call used blocks and failed, second was plain text,
+        # then remaining chunks used blocks successfully
+        first_kw = client.chat_postMessage.call_args_list[0][1]
+        assert "blocks" in first_kw
+        second_kw = client.chat_postMessage.call_args_list[1][1]
+        assert "blocks" not in second_kw
