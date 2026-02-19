@@ -47,6 +47,10 @@ _MAX_TITLE_LENGTH = 60
 #: Maximum attachment download size (100 MB).
 _MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 
+#: Regex matching Markdown autolinks: ``<https://...>`` or ``<http://...>``.
+#: Captures the URL inside the angle brackets for replacement.
+_AUTOLINK_PATTERN = re.compile(r"<(https?://[^>]+)>")
+
 #: Regex matching Markdown table blocks (header row + separator + data).
 _TABLE_PATTERN = re.compile(
     r"^(\|[^\n]+\|\n)"  # header row
@@ -334,8 +338,9 @@ class SlackChannelAdapter(ChannelAdapter):
         if usage_footer:
             body = f"{response_text}\n\n_{usage_footer}_"
 
-        # Convert tables to code blocks
+        # Convert Markdown constructs incompatible with Slack
         body = _convert_tables(body)
+        body = _convert_autolinks(body)
 
         # Send message(s)
         try:
@@ -445,6 +450,26 @@ def _convert_tables(text: str) -> str:
         return f"```\n{table_text}\n```"
 
     return _TABLE_PATTERN.sub(_replace_table, text)
+
+
+def _convert_autolinks(text: str) -> str:
+    """Convert Markdown autolinks to bare URLs.
+
+    Standard Markdown autolinks (``<https://example.com>``) conflict with
+    Slack's ``markdown`` block syntax, which uses angle brackets for entity
+    references.  Slack auto-links bare URLs, so stripping the brackets
+    preserves the intended behavior.
+
+    Only converts ``http://`` and ``https://`` URLs to avoid interfering
+    with other angle-bracket content (e.g. HTML tags in code blocks).
+
+    Args:
+        text: Markdown text potentially containing autolinks.
+
+    Returns:
+        Text with autolinks converted to bare URLs.
+    """
+    return _AUTOLINK_PATTERN.sub(r"\1", text)
 
 
 def _split_blocks(text: str) -> list[str]:

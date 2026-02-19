@@ -16,6 +16,7 @@ from airut.gateway.channel import AuthenticationError, RawMessage
 from airut.gateway.slack.adapter import (
     SlackChannelAdapter,
     SlackParsedMessage,
+    _convert_autolinks,
     _convert_tables,
     _send_long_message,
     _split_blocks,
@@ -377,6 +378,31 @@ class TestSendReply:
         call_kw = client.assistant_threads_setTitle.call_args[1]
         assert call_kw["title"] == "Fix the login bug"
 
+    def test_converts_autolinks_in_reply(self, tmp_path: Path) -> None:
+        adapter, client, _, _ = _make_adapter(tmp_path)
+        parsed = SlackParsedMessage(
+            sender="U123",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="D456",
+            slack_thread_ts="ts1",
+            display_title="Test",
+        )
+
+        adapter.send_reply(
+            parsed,
+            "conv1",
+            "**PR:** <https://github.com/org/repo/pull/1>",
+            "",
+            [],
+        )
+
+        call_kw = client.chat_postMessage.call_args[1]
+        block_text = call_kw["blocks"][0]["text"]
+        assert "<https://" not in block_text
+        assert "https://github.com/org/repo/pull/1" in block_text
+
     def test_api_failure_raises(self, tmp_path: Path) -> None:
         adapter, client, _, _ = _make_adapter(tmp_path)
         client.chat_postMessage.side_effect = SlackApiError(
@@ -549,6 +575,45 @@ class TestConvertTables:
         assert "```" in result
         assert "Before table" in result
         assert "After table" in result
+
+
+class TestConvertAutolinks:
+    def test_converts_https_autolink(self) -> None:
+        text = "**PR:** <https://github.com/org/repo/pull/27>"
+        result = _convert_autolinks(text)
+        assert result == "**PR:** https://github.com/org/repo/pull/27"
+
+    def test_converts_http_autolink(self) -> None:
+        text = "See <http://example.com/path>"
+        result = _convert_autolinks(text)
+        assert result == "See http://example.com/path"
+
+    def test_converts_multiple_autolinks(self) -> None:
+        text = (
+            "**PR:** <https://github.com/org/repo/pull/27>\n"
+            "**Preview:** <https://abc123.pages.dev>"
+        )
+        result = _convert_autolinks(text)
+        assert result == (
+            "**PR:** https://github.com/org/repo/pull/27\n"
+            "**Preview:** https://abc123.pages.dev"
+        )
+
+    def test_leaves_bare_urls_unchanged(self) -> None:
+        text = "Visit https://example.com for details"
+        assert _convert_autolinks(text) == text
+
+    def test_leaves_non_url_angle_brackets(self) -> None:
+        text = "Use `<div>` in HTML and x < y > z"
+        assert _convert_autolinks(text) == text
+
+    def test_leaves_empty_text(self) -> None:
+        assert _convert_autolinks("") == ""
+
+    def test_preserves_surrounding_formatting(self) -> None:
+        text = "Check _<https://example.com>_ for details"
+        result = _convert_autolinks(text)
+        assert result == "Check _https://example.com_ for details"
 
 
 class TestSplitBlocks:
