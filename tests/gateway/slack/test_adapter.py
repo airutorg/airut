@@ -828,6 +828,34 @@ class TestTypeCheckErrors:
             adapter.send_rejection(wrong, "c1", "reason", None)
 
 
+class TestCleanupConversations:
+    def test_removes_stale_thread_mappings(self, tmp_path: Path) -> None:
+        adapter, _, _, thread_store = _make_adapter(tmp_path)
+        thread_store.register("D123", "ts1", "conv1")
+        thread_store.register("D123", "ts2", "conv2")
+        thread_store.register("D456", "ts3", "conv3")
+
+        adapter.cleanup_conversations({"conv1", "conv3"})
+
+        assert thread_store.get_conversation_id("D123", "ts1") == "conv1"
+        assert thread_store.get_conversation_id("D123", "ts2") is None
+        assert thread_store.get_conversation_id("D456", "ts3") == "conv3"
+
+    def test_noop_when_all_active(self, tmp_path: Path) -> None:
+        adapter, _, _, thread_store = _make_adapter(tmp_path)
+        thread_store.register("D123", "ts1", "conv1")
+
+        adapter.cleanup_conversations({"conv1"})
+
+        assert thread_store.get_conversation_id("D123", "ts1") == "conv1"
+
+    def test_noop_on_empty_store(self, tmp_path: Path) -> None:
+        adapter, _, _, _ = _make_adapter(tmp_path)
+
+        # Should not raise
+        adapter.cleanup_conversations({"conv1"})
+
+
 class TestSplitBlocksTruncation:
     def test_long_line_truncated_with_marker(self) -> None:
         """Lines exceeding block limit get [truncated] marker."""

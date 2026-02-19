@@ -426,6 +426,16 @@ class SlackChannelAdapter(ChannelAdapter):
         except SlackApiError as e:
             logger.warning("Failed to send Slack rejection (non-fatal): %s", e)
 
+    def cleanup_conversations(self, active_conversation_ids: set[str]) -> None:
+        """Remove thread mappings for conversations no longer active."""
+        removed = self._thread_store.retain_only(active_conversation_ids)
+        if removed:
+            logger.info(
+                "Repo '%s': pruned %d stale thread mappings",
+                self._repo_id,
+                removed,
+            )
+
 
 def _convert_tables(text: str) -> str:
     """Convert Markdown tables to fenced code blocks.

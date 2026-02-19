@@ -677,11 +677,22 @@ class SlackThreadStore:
 
     def register(self, channel_id: str, thread_ts: str, conv_id: str) -> None:
         """Register a new thread-to-conversation mapping and persist."""
+
+    def retain_only(self, active_conversation_ids: set[str]) -> int:
+        """Remove entries whose conversation ID is not in the active set."""
 ```
 
 The store uses a simple JSON file in the repo's state directory, matching the
 email adapter's file-based persistence pattern. The file is small (one entry per
 conversation) and loaded into memory at startup.
+
+**Pruning.** The garbage collector calls
+`ChannelAdapter.cleanup_conversations()` after each per-repo sweep, passing the
+set of surviving conversation IDs. The Slack adapter delegates to
+`SlackThreadStore.retain_only()`, which removes any thread mapping whose
+conversation ID is not in the active set and persists the result. This keeps the
+thread store in sync with the conversation directory without the store needing
+to know about conversation lifecycle directly.
 
 ### Adapter Factory Integration
 
@@ -811,8 +822,6 @@ Work remaining after the initial Slack channel implementation:
 - **Suggested prompts**: Configurable prompts shown when opening the Chat tab
   (`set_suggested_prompts()` in the `thread_started` handler). Requires adding
   `slack.suggested_prompts` to config parsing.
-- **Thread store pruning**: The in-memory thread mapping grows without bound.
-  Add eviction for threads older than `conversation_max_age_days`.
 - **Slack integration tests**: End-to-end tests with a mock Socket Mode server,
   parallel to the email integration tests.
 - **Model selection**: Email uses subaddressing (`airut+opus@`); Slack currently
