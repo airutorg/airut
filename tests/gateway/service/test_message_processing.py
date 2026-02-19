@@ -421,6 +421,10 @@ class TestProcessMessage:
         )
         assert reason != CompletionReason.SUCCESS
         assert conv_id is None
+        # Error message must be plain text (no backticks) for Slack compat
+        error_text = adapter.send_error.call_args[0][2]
+        assert "`" not in error_text
+        assert "clone failed" in error_text
 
     def test_unexpected_error(self, email_config: Any, tmp_path: Path) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
@@ -435,6 +439,10 @@ class TestProcessMessage:
                 svc, parsed, "task1", handler, adapter
             )
         assert reason == CompletionReason.INTERNAL_ERROR
+        # Error message must be plain text (no backticks) for Slack compat
+        error_text = adapter.send_error.call_args[0][2]
+        assert "`" not in error_text
+        assert "RuntimeError: unexpected" in error_text
 
     def test_resume_existing_conversation(
         self, email_config: Any, tmp_path: Path
@@ -671,6 +679,8 @@ class TestProcessMessage:
         response_text = call_args[0][2]  # 3rd positional arg
         assert "Claude output:" in response_text
         assert "Error summary text" in response_text
+        # No code fences — plain text for Slack compatibility
+        assert "```" not in response_text
 
     def test_execution_failure_persists_session(
         self, email_config: Any, tmp_path: Path

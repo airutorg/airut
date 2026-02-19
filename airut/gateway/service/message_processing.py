@@ -609,9 +609,7 @@ def process_message(
             )
             error_summary = extract_error_summary(result.events)
             if error_summary:
-                response_body += (
-                    f"\n\nClaude output:\n```\n{error_summary}\n```"
-                )
+                response_body += f"\n\nClaude output:\n{error_summary}"
             logger.error(
                 "Repo '%s': execution failed for conversation %s: %s",
                 repo_id,
@@ -651,8 +649,7 @@ def process_message(
         error_msg = (
             "An error occurred while processing your message: "
             "unable to create workspace. "
-            "To retry, send your message again.\n\n"
-            f"`{e}`"
+            f"To retry, send your message again.\n\n{e}"
         )
         adapter.send_error(parsed, conv_id, error_msg)
         return CompletionReason.INTERNAL_ERROR, None
@@ -664,8 +661,7 @@ def process_message(
         )
         error_msg = (
             "An error occurred while processing your message. "
-            "To retry, send your message again.\n\n"
-            f"`{type(e).__name__}: {e}`"
+            f"To retry, send your message again.\n\n{type(e).__name__}: {e}"
         )
         adapter.send_error(parsed, conv_id, error_msg)
         if conv_id and conversation_store:
