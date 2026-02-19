@@ -476,15 +476,13 @@ class MinimalIMAPServer:
                         logger.debug("IDLE loop error: %s", e)
                         break
 
-        except Exception as e:
-            logger.debug("IMAP client error: %s", e)
-        except asyncio.CancelledError:
-            logger.debug("IMAP client task cancelled for %s", addr)
+        except (Exception, asyncio.CancelledError) as e:
+            logger.debug("IMAP client error/cancelled for %s: %s", addr, e)
         finally:
             try:
-                if not writer.transport.is_closing():
-                    writer.close()
-                    await writer.wait_closed()
+                transport = writer.transport
+                if transport and not transport.is_closing():
+                    transport.close()
             except Exception:
                 pass
             logger.debug("IMAP client disconnected from %s", addr)
@@ -524,15 +522,17 @@ class MinimalIMAPServer:
         if self._server:
             self._server.close()
             await self._server.wait_closed()
-            for task in self._client_tasks:
+            tasks = set(self._client_tasks)
+            for task in tasks:
                 task.cancel()
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*self._client_tasks, return_exceptions=True),
-                    timeout=2.0,
-                )
-            except TimeoutError:
-                logger.debug("Timed out waiting for client tasks to cancel")
+            if tasks:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*tasks, return_exceptions=True),
+                        timeout=2.0,
+                    )
+                except TimeoutError:
+                    logger.debug("Timed out waiting for client tasks to cancel")
             self._client_tasks.clear()
             logger.info("IMAP server stopped")
 
@@ -624,13 +624,26 @@ class TestEmailServer:
                 imap_port_holder.append(port)
                 started.set()
                 # Keep running until stopped
-                while True:
-                    await asyncio.sleep(1)
+                try:
+                    while True:
+                        await asyncio.sleep(1)
+                except asyncio.CancelledError:
+                    pass
 
             try:
                 self._loop.run_until_complete(start_and_signal())
             except Exception as e:
                 logger.debug("IMAP event loop stopped: %s", e)
+            finally:
+                # Cancel any remaining tasks to prevent
+                # "Task was destroyed but it is pending!" warnings
+                pending = asyncio.all_tasks(self._loop)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    self._loop.run_until_complete(
+                        asyncio.gather(*pending, return_exceptions=True)
+                    )
 
         self._thread = threading.Thread(target=run_imap, daemon=True)
         self._thread.start()
@@ -655,14 +668,15 @@ class TestEmailServer:
             self._smtp_controller.stop()
             logger.info("SMTP server stopped")
 
-        if self._loop and self._imap_server:
+        loop = self._loop
+        if loop and self._imap_server:
             # Schedule IMAP server stop
-            imap_server = self._imap_server  # Local var for closure
+            imap_server = self._imap_server
 
             async def stop_imap():
                 await imap_server.stop()
 
-            future = asyncio.run_coroutine_threadsafe(stop_imap(), self._loop)
+            future = asyncio.run_coroutine_threadsafe(stop_imap(), loop)
             try:
                 future.result(timeout=5.0)
             except Exception as e:
@@ -670,10 +684,15 @@ class TestEmailServer:
                 future.cancel()
 
             # Stop the event loop
-            self._loop.call_soon_threadsafe(self._loop.stop)
+            loop.call_soon_threadsafe(loop.stop)
 
         if self._thread:
             self._thread.join(timeout=5.0)
+
+        # Close the event loop after the thread has exited to prevent
+        # "unclosed event loop" ResourceWarnings during garbage collection.
+        if loop and not loop.is_closed():
+            loop.close()
 
         logger.info("Test email server stopped")
 
