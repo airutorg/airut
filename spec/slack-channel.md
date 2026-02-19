@@ -264,6 +264,12 @@ sent on every `update()`.
 latest state is sent. This prevents rate limiting when Claude emits many
 TodoWrite calls in quick succession.
 
+**Stream expiry recovery**: Slack auto-expires a streaming session after a
+period of inactivity. When `appendStream` returns
+`message_not_in_streaming_state`, the streamer discards the dead stream and
+starts a fresh one (a new plan message in the thread). This ensures remaining
+`TodoWrite` updates still reach the user even after long gaps between updates.
+
 **Error handling**: All streaming API failures are non-fatal (logged as
 warnings). Losing plan updates is acceptable; the final reply and dashboard
 remain unaffected.
