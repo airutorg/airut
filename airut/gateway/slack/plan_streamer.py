@@ -33,6 +33,10 @@ logger = logging.getLogger(__name__)
 #: Minimum interval between stream appends to avoid rate limiting.
 _MIN_APPEND_INTERVAL_SECONDS = 0.5
 
+#: Slack error returned when ``appendStream`` is called on a message
+#: whose streaming session has expired (server-side idle timeout).
+_STREAM_EXPIRED_ERROR = "message_not_in_streaming_state"
+
 #: Map from internal TodoStatus to Slack task_update status strings.
 _STATUS_MAP: dict[TodoStatus, str] = {
     TodoStatus.PENDING: "pending",
@@ -92,6 +96,11 @@ class SlackPlanStreamer:
         append task updates.  Debounces rapid calls to respect rate
         limits.
 
+        If Slack returns ``message_not_in_streaming_state`` (the
+        server expired the stream due to inactivity), the old stream
+        is discarded and a fresh one is started so remaining updates
+        still reach the user (as a new plan message in the thread).
+
         Args:
             items: Complete todo list from the latest ``TodoWrite``.
         """
@@ -112,12 +121,31 @@ class SlackPlanStreamer:
                 self._stream.append(chunks=chunks)
             self._last_append_time = time.monotonic()
         except SlackApiError as e:
-            logger.warning("Failed to stream plan update (non-fatal): %s", e)
+            if _is_stream_expired(e):
+                logger.info(
+                    "Plan stream expired (idle timeout); starting a new stream"
+                )
+                self._stream = None
+                try:
+                    stream = self._start_stream()
+                    stream.append(chunks=chunks)
+                    self._last_append_time = time.monotonic()
+                except SlackApiError as retry_err:
+                    logger.warning(
+                        "Failed to restart plan stream (non-fatal): %s",
+                        retry_err,
+                    )
+            else:
+                logger.warning(
+                    "Failed to stream plan update (non-fatal): %s", e
+                )
 
     def finalize(self) -> None:
         """Stop the stream.
 
         Safe to call even if the stream was never started (no-op).
+        If the stream already expired server-side, the error is
+        silently ignored.
         """
         if self._stream is None:
             return
@@ -125,7 +153,23 @@ class SlackPlanStreamer:
         try:
             self._stream.stop()
         except SlackApiError as e:
-            logger.warning("Failed to stop plan stream (non-fatal): %s", e)
+            if _is_stream_expired(e):
+                logger.debug("Plan stream already expired; nothing to stop")
+            else:
+                logger.warning("Failed to stop plan stream (non-fatal): %s", e)
+
+
+def _is_stream_expired(err: SlackApiError) -> bool:
+    """Check whether a Slack API error indicates the stream expired.
+
+    Slack auto-expires a streaming session after a period of inactivity.
+    Subsequent ``appendStream`` or ``stopStream`` calls return the
+    ``message_not_in_streaming_state`` error code.
+    """
+    try:
+        return err.response.data.get("error") == _STREAM_EXPIRED_ERROR
+    except AttributeError:
+        return False
 
 
 def _content_id(content: str) -> str:

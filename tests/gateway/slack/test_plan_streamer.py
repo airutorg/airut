@@ -16,6 +16,7 @@ from airut.gateway.slack.plan_streamer import (
     SlackPlanStreamer,
     _build_task_chunks,
     _content_id,
+    _is_stream_expired,
 )
 
 
@@ -42,6 +43,15 @@ def _make_items(*statuses: TodoStatus) -> list[TodoItem]:
         )
         for i, status in enumerate(statuses)
     ]
+
+
+def _stream_expired_error() -> SlackApiError:
+    """Create a SlackApiError for stream expiry."""
+    resp = MagicMock(
+        status_code=400,
+        data={"ok": False, "error": "message_not_in_streaming_state"},
+    )
+    return SlackApiError(message="expired", response=resp)
 
 
 class TestContentId:
@@ -203,6 +213,61 @@ class TestSlackPlanStreamerUpdate:
         # Should not raise (caught by the outer try/except)
         streamer.update(_make_items(TodoStatus.PENDING))
 
+    def test_stream_expired_restarts_stream(self) -> None:
+        """When Slack expires the stream, a new one is started."""
+        streamer, client = _make_streamer()
+        old_stream = client.chat_stream.return_value
+
+        # Patch monotonic for the full sequence:
+        #   call 1: first update() now=0.0 (stream is None, no debounce)
+        #   call 2: _last_append_time = 0.0
+        #   call 3: second update() now=1.0 (elapsed=1.0 > 0.5)
+        #   call 4: _last_append_time = 1.0 (after successful retry)
+        with patch(
+            "airut.gateway.slack.plan_streamer.time.monotonic",
+            side_effect=[0.0, 0.0, 1.0, 1.0],
+        ):
+            streamer.update(_make_items(TodoStatus.PENDING))
+            assert client.chat_stream.call_count == 1
+
+            # The second append fails with stream-expired error.
+            old_stream.append.side_effect = _stream_expired_error()
+
+            # Provide a fresh stream mock for the retry.
+            new_stream = MagicMock()
+            client.chat_stream.return_value = new_stream
+
+            streamer.update(_make_items(TodoStatus.IN_PROGRESS))
+
+        # chat_stream was called again to create a replacement stream.
+        assert client.chat_stream.call_count == 2
+        new_stream.append.assert_called_once()
+
+    def test_stream_expired_retry_failure_non_fatal(self) -> None:
+        """If the retry after stream expiry also fails, it's non-fatal."""
+        streamer, client = _make_streamer()
+        old_stream = client.chat_stream.return_value
+
+        # Patch monotonic for the full sequence:
+        #   call 1: first update() now=0.0 (stream is None)
+        #   call 2: _last_append_time = 0.0
+        #   call 3: second update() now=1.0 (elapsed=1.0 > 0.5)
+        with patch(
+            "airut.gateway.slack.plan_streamer.time.monotonic",
+            side_effect=[0.0, 0.0, 1.0],
+        ):
+            streamer.update(_make_items(TodoStatus.PENDING))
+
+            old_stream.append.side_effect = _stream_expired_error()
+            # Retry also fails.
+            client.chat_stream.side_effect = SlackApiError(
+                message="error",
+                response=MagicMock(status_code=500, data={}),
+            )
+
+            # Should not raise.
+            streamer.update(_make_items(TodoStatus.IN_PROGRESS))
+
 
 class TestSlackPlanStreamerFinalize:
     def test_stops_active_stream(self) -> None:
@@ -233,3 +298,33 @@ class TestSlackPlanStreamerFinalize:
 
         # Should not raise
         streamer.finalize()
+
+    def test_stream_expired_on_finalize_is_silent(self) -> None:
+        """Finalizing an already-expired stream is a no-op."""
+        streamer, client = _make_streamer()
+        stream = client.chat_stream.return_value
+        stream.stop.side_effect = _stream_expired_error()
+
+        streamer.update(_make_items(TodoStatus.IN_PROGRESS))
+
+        # Should not raise or warn — the stream was already stopped.
+        streamer.finalize()
+
+
+class TestIsStreamExpired:
+    def test_matches_stream_expired_error(self) -> None:
+        assert _is_stream_expired(_stream_expired_error()) is True
+
+    def test_rejects_other_errors(self) -> None:
+        err = SlackApiError(
+            message="other",
+            response=MagicMock(status_code=500, data={"error": "other"}),
+        )
+        assert _is_stream_expired(err) is False
+
+    def test_handles_missing_data(self) -> None:
+        err = SlackApiError(
+            message="weird",
+            response=MagicMock(spec=[]),
+        )
+        assert _is_stream_expired(err) is False
