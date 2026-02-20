@@ -116,14 +116,16 @@ class TestSummarizeAction:
         long_cmd = "x" * 200
         result = summarize_action(_block("Bash", command=long_cmd))
         assert result is not None
-        assert len(result) <= 90  # "Running: " + 80 chars
+        # "Running: " (9 chars) + truncated command (max 80 chars) = 89
+        assert len(result) <= 89
         assert result.endswith("\u2026")
 
     def test_truncates_long_path(self) -> None:
         long_path = "/workspace/" + "a" * 200
         result = summarize_action(_block("Read", file_path=long_path))
         assert result is not None
-        assert len(result) <= 89  # "Reading " + 80 chars + ellipsis
+        # "Reading " (8 chars) + truncated path (max 80 chars) = 88
+        assert len(result) <= 88
         assert result.endswith("\u2026")
 
     def test_bash_description_preferred_over_command(self) -> None:

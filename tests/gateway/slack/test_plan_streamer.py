@@ -399,10 +399,10 @@ class TestSlackPlanStreamerUpdateAction:
         assert keepalive_chunks[0].title == "Reading file B"
 
     @patch(_TIMER_PATCH)
-    def test_update_preserves_action_summary(
+    def test_update_includes_current_action_summary(
         self, _timer_cls: MagicMock
     ) -> None:
-        """update() after update_action() preserves the action summary."""
+        """update() includes the current action summary, then clears it."""
         streamer, client = _make_streamer()
         stream = client.chat_stream.return_value
 
@@ -416,6 +416,33 @@ class TestSlackPlanStreamerUpdateAction:
         # The update() should include the action summary as details.
         chunks = stream.append.call_args_list[1][1]["chunks"]
         assert chunks[0].details == "Running pytest"
+
+    @patch(_TIMER_PATCH)
+    def test_update_clears_stale_action_summary(
+        self, _timer_cls: MagicMock
+    ) -> None:
+        """Subsequent update() does not carry forward a stale action."""
+        streamer, client = _make_streamer()
+        stream = client.chat_stream.return_value
+
+        # Time sequence: action(0.0), update(1.0), update(2.0)
+        with patch(
+            "airut.gateway.slack.plan_streamer.time.monotonic",
+            side_effect=[0.0, 0.0, 1.0, 1.0, 2.0, 2.0],
+        ):
+            streamer.update_action("Running pytest")
+            streamer.update(
+                _make_items(TodoStatus.IN_PROGRESS, TodoStatus.PENDING)
+            )
+            # Second update — action should have been cleared.
+            streamer.update(
+                _make_items(TodoStatus.COMPLETED, TodoStatus.IN_PROGRESS)
+            )
+
+        # Third append: second update() should have no details.
+        chunks = stream.append.call_args_list[2][1]["chunks"]
+        assert chunks[0].details is None  # completed task
+        assert chunks[1].details is None  # in-progress, but no stale action
 
     @patch(_TIMER_PATCH)
     def test_action_api_error_non_fatal(self, _timer_cls: MagicMock) -> None:

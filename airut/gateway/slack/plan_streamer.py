@@ -63,20 +63,28 @@ _STATUS_MAP: dict[TodoStatus, str] = {
 
 
 class SlackPlanStreamer:
-    """Streams TodoWrite progress to a Slack thread via plan blocks.
+    """Streams task and action progress to a Slack thread via plan blocks.
 
     Uses the Slack SDK's ``ChatStream`` helper for automatic buffering
     and state management.  The stream is started lazily on the first
-    ``update()`` call, avoiding unnecessary API calls when Claude
-    never uses ``TodoWrite``.
+    ``update()`` or ``update_action()`` call.
 
-    Includes debouncing: rapid ``update()`` calls within
+    Two display modes:
+
+    - **Plan mode** (``update()`` called): Todo items appear as a
+      plan block.  The latest action summary from ``update_action()``
+      is shown as the ``details`` field on the first in-progress task.
+    - **No-plan mode** (only ``update_action()`` called): A single
+      synthetic task shows live activity (e.g. "Reading src/main.py"),
+      marked ``complete`` on ``finalize()``.
+
+    Includes debouncing: rapid calls within
     ``_MIN_APPEND_INTERVAL_SECONDS`` are coalesced, sending only the
     latest state.
 
     A background keepalive timer re-sends the last task state every
     ``_KEEPALIVE_INTERVAL_SECONDS`` to prevent Slack from expiring
-    the stream when Claude is busy (no ``TodoWrite`` for a while).
+    the stream during long gaps between events.
 
     Args:
         client: Slack ``WebClient`` for API calls.
@@ -182,6 +190,11 @@ class SlackPlanStreamer:
             elapsed = now - self._last_append_time
 
             chunks = _build_task_chunks(items, self._action_summary)
+
+            # Clear the action summary so it doesn't leak into a
+            # newly-started task on the next update().  The next
+            # update_action() call will set a fresh summary.
+            self._action_summary = ""
 
             # Debounce: skip the API call if too soon after last append
             # (unless this is the very first call).  Still update
