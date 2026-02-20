@@ -12,9 +12,10 @@ progress appears as a plan block in the thread, updated in real
 time as Claude works.
 
 When Claude uses ``TodoWrite``, the plan block shows the todo list
-with the latest action annotated on the first in-progress task.
-When Claude does *not* use ``TodoWrite``, a single synthetic task
-provides live activity feedback (e.g. "Reading src/main.py").
+with a dedicated action task (showing the latest tool use) inserted
+after the first in-progress task.  When Claude does *not* use
+``TodoWrite``, a single synthetic task provides live activity
+feedback (e.g. "Reading src/main.py").
 
 A background keepalive timer re-sends the latest task state
 periodically so Slack does not expire the stream during long gaps
@@ -72,8 +73,8 @@ class SlackPlanStreamer:
     Two display modes:
 
     - **Plan mode** (``update()`` called): Todo items appear as a
-      plan block.  The latest action summary from ``update_action()``
-      is shown as the ``details`` field on the first in-progress task.
+      plan block.  A dedicated action task showing the latest tool use
+      is inserted after the first in-progress task.
     - **No-plan mode** (only ``update_action()`` called): A single
       synthetic task shows live activity (e.g. "Reading src/main.py"),
       marked ``complete`` on ``finalize()``.
@@ -212,8 +213,8 @@ class SlackPlanStreamer:
     def update_action(self, summary: str) -> None:
         """Send a live action status to the Slack thread.
 
-        When todo items exist, the summary is shown as the ``details``
-        field on the first in-progress task.  Otherwise, a single
+        When todo items exist, a dedicated action task is inserted
+        after the first in-progress task.  Otherwise, a single
         synthetic task is created to provide activity feedback.
 
         Args:
@@ -364,21 +365,23 @@ def _build_task_chunks(
     update individual task cards in place; positional indices would
     break when the list is reordered.
 
-    When *action_summary* is non-empty it is attached as the
-    ``details`` field on the first in-progress task, showing what
-    Claude is currently doing within that task step.
+    When *action_summary* is non-empty a dedicated action task
+    (``id="action"``, ``status="in_progress"``) is inserted after the
+    first in-progress todo task.  This uses the ``title`` field (which
+    Slack *replaces* on each append) rather than ``details`` (which
+    Slack *appends*), avoiding unbounded text growth.
 
     Args:
         items: Todo items from Claude's TodoWrite.
         action_summary: Optional one-line action description to
-            attach to the first in-progress task.
+            show as a dedicated task after the first in-progress task.
 
     Returns:
         List of ``TaskUpdateChunk`` objects for the streaming API.
     """
     seen: set[str] = set()
     chunks: list[TaskUpdateChunk] = []
-    action_attached = False
+    action_inserted = False
     for item in items:
         task_id = _content_id(item.content)
         # Handle duplicate content strings by appending a suffix.
@@ -389,21 +392,29 @@ def _build_task_chunks(
             counter += 1
         seen.add(task_id)
 
-        details: str | None = None
-        if (
-            action_summary
-            and not action_attached
-            and item.status == TodoStatus.IN_PROGRESS
-        ):
-            details = action_summary
-            action_attached = True
-
         chunks.append(
             TaskUpdateChunk(
                 id=task_id,
                 title=item.active_form or item.content,
                 status=_STATUS_MAP.get(item.status, "pending"),
-                details=details,
             )
         )
+
+        # Insert a dedicated action task after the first in-progress
+        # todo item.  Uses title (replaced by Slack) not details
+        # (appended by Slack).
+        if (
+            action_summary
+            and not action_inserted
+            and item.status == TodoStatus.IN_PROGRESS
+        ):
+            chunks.append(
+                TaskUpdateChunk(
+                    id="action",
+                    title=action_summary,
+                    status="in_progress",
+                )
+            )
+            action_inserted = True
+
     return chunks

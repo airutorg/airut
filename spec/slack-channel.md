@@ -247,12 +247,16 @@ SDK's `ChatStream` helper. The email adapter returns `None` from
 summaries via `summarize_action()` (in `airut/gateway/action_summary.py`) and
 are forwarded to `plan_streamer.update_action(summary)`. Two modes:
 
-- **With plan (TodoWrite used)**: The action summary is shown as the `details`
-  field on the first `in_progress` task in the plan block — e.g., "Reading
-  src/main.py" appears under the currently active task.
+- **With plan (TodoWrite used)**: A dedicated action task (`id="action"`,
+  `status="in_progress"`) is inserted after the first `in_progress` todo task,
+  showing the current action as its `title` — e.g., "Reading src/main.py".
 - **No-plan mode (no TodoWrite)**: A single synthetic task with `id="action"` is
   created, using the action summary as its title. On `finalize()`, this task is
   marked `"complete"` for clean visual closure.
+
+**Important**: The action uses the `title` field (which Slack *replaces* on each
+`appendStream` call), not the `details` field (which Slack *appends*). Using
+`details` would cause unbounded text growth across updates.
 
 **TodoItem to Slack mapping**: Each `TodoItem` maps to a `TaskUpdateChunk`:
 
@@ -262,7 +266,6 @@ are forwarded to `plan_streamer.update_action(summary)`. Two modes:
 - `TodoStatus.COMPLETED` → `"complete"` (note: Slack uses `"complete"`, not
   `"completed"`)
 - SHA-256 hash of `item.content` (first 8 hex chars) → `id`
-- Action summary → `details` (on first in-progress task only)
 
 **Task ID stability**: Slack's streaming plan API tracks individual task cards
 by `id` across `appendStream` calls. IDs must remain stable for a given logical
