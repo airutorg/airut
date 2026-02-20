@@ -12,14 +12,13 @@ rejected, and only valid workspace members can interact.
 
 import sys
 import threading
-import time
 from pathlib import Path
 
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 
-from .conftest import MOCK_CONTAINER_COMMAND
+from .conftest import MOCK_CONTAINER_COMMAND, wait_for_task
 from .environment import IntegrationEnvironment
 
 
@@ -30,6 +29,21 @@ events = [
     generate_result_event(session_id, "Unreachable"),
 ]
 """
+
+
+def _is_unauthorized_task(task, sender: str) -> bool:
+    """Check if a task was completed as unauthorized for *sender*."""
+    from airut.dashboard.tracker import CompletionReason, TaskStatus
+
+    return (
+        task.status == TaskStatus.COMPLETED
+        and task.completion_reason
+        in (
+            CompletionReason.UNAUTHORIZED,
+            CompletionReason.AUTH_FAILED,
+        )
+        and task.sender == sender
+    )
 
 
 class TestSlackAuthorization:
@@ -55,11 +69,16 @@ class TestSlackAuthorization:
                 thread_ts="1700000000.000020",
             )
 
-            # Should not get a response with Claude's output
-            # Wait briefly to see if anything arrives
-            time.sleep(3.0)
+            task = wait_for_task(
+                service.tracker,
+                lambda t: _is_unauthorized_task(t, "U_UNKNOWN"),
+                timeout=10.0,
+            )
+            assert task is not None, (
+                "Unregistered user should be rejected by tracker"
+            )
 
-            # Check that no execution happened (no "should not reach" text)
+            # Verify no execution happened
             posted = slack_env.slack_server.get_posted_texts()
             for text in posted:
                 assert "should not reach" not in text.lower(), (
@@ -92,7 +111,12 @@ class TestSlackAuthorization:
                 thread_ts="1700000000.000021",
             )
 
-            time.sleep(3.0)
+            task = wait_for_task(
+                service.tracker,
+                lambda t: _is_unauthorized_task(t, "U_BOT_USER"),
+                timeout=10.0,
+            )
+            assert task is not None, "Bot user should be rejected by tracker"
 
             posted = slack_env.slack_server.get_posted_texts()
             for text in posted:
@@ -126,7 +150,14 @@ class TestSlackAuthorization:
                 thread_ts="1700000000.000022",
             )
 
-            time.sleep(3.0)
+            task = wait_for_task(
+                service.tracker,
+                lambda t: _is_unauthorized_task(t, "U_DEACTIVATED"),
+                timeout=10.0,
+            )
+            assert task is not None, (
+                "Deactivated user should be rejected by tracker"
+            )
 
             posted = slack_env.slack_server.get_posted_texts()
             for text in posted:

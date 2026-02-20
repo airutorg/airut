@@ -107,47 +107,22 @@ events = [
                 thread_ts="1700000000.000081",
             )
 
-            # Wait for any message or file upload in the thread
-            import time
-
-            deadline = time.monotonic() + 30.0
-            while time.monotonic() < deadline:
-                uploads = slack_env.slack_server.get_sent_messages(
-                    method="files_upload_v2"
-                )
-                if uploads:
-                    break
-
-                posts = slack_env.slack_server.get_sent_messages(
-                    method="chat_postMessage"
-                )
-                if any(
-                    "started working" not in m.kwargs.get("text", "").lower()
-                    for m in posts
-                    if m.kwargs.get("text")
-                ):
-                    # Got a regular post instead of upload — also acceptable
-                    # (adapter may split into multiple messages instead)
-                    break
-
-                time.sleep(0.5)
-
-            # Either file upload or multiple messages is acceptable
-            uploads = slack_env.slack_server.get_sent_messages(
-                method="files_upload_v2"
+            # Wait for either a file upload or a content post (not the ack).
+            # The adapter may upload long output as a file or split
+            # into multiple messages — both are acceptable.
+            result = slack_env.slack_server.wait_for_sent(
+                predicate=lambda m: (
+                    m.method == "files_upload_v2"
+                    or (
+                        m.method == "chat_postMessage"
+                        and "started working"
+                        not in m.kwargs.get("text", "").lower()
+                    )
+                ),
+                timeout=30.0,
             )
-            posts = slack_env.slack_server.get_sent_messages(
-                method="chat_postMessage"
-            )
-            # Filter out ack messages
-            content_posts = [
-                p
-                for p in posts
-                if "started working" not in p.kwargs.get("text", "").lower()
-            ]
-
-            assert len(uploads) >= 1 or len(content_posts) >= 2, (
-                "Expected file upload or multiple messages for very long output"
+            assert result is not None, (
+                "Expected file upload or content message for very long output"
             )
 
         finally:

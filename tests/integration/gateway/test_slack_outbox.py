@@ -134,23 +134,19 @@ events = [
             )
             assert reply is not None
 
-            # Wait for file uploads (happen after reply in send_reply)
-            import time
-
-            deadline = time.monotonic() + 10.0
-            while time.monotonic() < deadline:
-                uploads = slack_env.slack_server.get_sent_messages(
-                    method="files_upload_v2"
-                )
-                if len(uploads) >= 2:
-                    break
-                time.sleep(0.2)
-
-            uploads = slack_env.slack_server.get_sent_messages(
-                method="files_upload_v2"
+            # Wait for the second file upload (they happen after reply)
+            server = slack_env.slack_server
+            second_upload = server.wait_for_sent(
+                predicate=lambda m: (
+                    m.method == "files_upload_v2"
+                    and len(server.get_sent_messages(method="files_upload_v2"))
+                    >= 2
+                ),
+                timeout=10.0,
             )
-            assert len(uploads) >= 2, (
-                f"Expected 2 file uploads, got {len(uploads)}"
+            assert second_upload is not None, (
+                "Expected 2 file uploads, got "
+                f"{len(server.get_sent_messages(method='files_upload_v2'))}"
             )
 
         finally:

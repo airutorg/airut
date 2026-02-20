@@ -429,6 +429,37 @@ def wait_for_conv_completion(
         time.sleep(min(0.1, remaining))
 
 
+def wait_for_task(
+    tracker,
+    predicate: "Callable[[TaskState], bool]",
+    timeout: float = 10.0,
+) -> "TaskState | None":
+    """Wait for any task matching *predicate* to appear in the tracker.
+
+    Polls ``get_all_tasks()`` until a task satisfying *predicate* is
+    found, using short sleeps between polls.
+
+    Args:
+        tracker: TaskTracker instance.
+        predicate: Function that returns True for the desired task.
+        timeout: Maximum seconds to wait.
+
+    Returns:
+        The first matching TaskState, or None on timeout.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    while True:
+        for task in tracker.get_all_tasks():
+            if predicate(task):
+                return task
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        time.sleep(min(0.1, remaining))
+
+
 def get_message_text(msg: MIMEMultipart | MIMEText | Any) -> str:
     """Extract text content from an email message.
 
