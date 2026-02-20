@@ -219,87 +219,72 @@ acceptable compared to a complete delivery failure. This fallback applies to
 every `chat.postMessage` call in the message delivery pipeline (single-message,
 multi-message split, etc.).
 
-### Task Progress Streaming
+### Task Progress Display
 
 Claude's `TodoWrite` tool emits task progress during execution. The Slack
-channel streams this progress to the user's thread in real time using Slack's
-chat streaming API (`chat.startStream` / `chat.appendStream` /
-`chat.stopStream`) with `task_display_mode="plan"`.
+channel displays this progress in the user's thread in real time by posting a
+message and updating it in place via `chat.postMessage` / `chat.update`.
+
+Only `TodoWrite` events trigger message updates — individual tool use events
+(Read, Bash, etc.) are not streamed to Slack. This keeps the progress display
+focused on the plan overview and avoids rate limiting from high-frequency tool
+calls.
 
 **Architecture**: The `PlanStreamer` protocol in `channel.py` defines the
-channel-agnostic interface. `SlackPlanStreamer` implements it using the Slack
-SDK's `ChatStream` helper. The email adapter returns `None` from
-`create_plan_streamer()` (email has no streaming equivalent).
+channel-agnostic interface with two methods: `update(items)` for `TodoWrite`
+events and `finalize()` for completion. `SlackPlanStreamer` implements it by
+posting a `mrkdwn`-formatted message with emoji status indicators and updating
+it via `chat.update`. The email adapter returns `None` from
+`create_plan_streamer()` (email has no progress display equivalent).
+
+**Why not chat streaming**: Slack's `chat.startStream` / `appendStream` /
+`chat.stopStream` API with `task_display_mode="plan"` was initially used but
+abandoned because: (1) plan blocks / task cards don't render on mobile Slack
+clients, (2) streams require keepalive timers to prevent server-side idle
+expiry, adding fragile complexity, and (3) `chat.update` gives full control over
+message formatting with standard `mrkdwn` that renders consistently everywhere.
 
 **Lifecycle**:
 
 1. `process_message()` calls `adapter.create_plan_streamer(parsed)` before
    execution. For Slack, this returns a `SlackPlanStreamer`; for email, `None`.
 2. The `PlanStreamer` is passed to `_make_todo_callback()`, which forwards
-   `TodoWrite` events to `plan_streamer.update(items)` and other tool use events
-   to `plan_streamer.update_action(summary)`.
-3. The stream is started **lazily** on the first `update()` or `update_action()`
-   call — if Claude never uses any tools, no stream is created.
+   `TodoWrite` events to `plan_streamer.update(items)`.
+3. The message is posted **lazily** on the first `update()` call — if Claude
+   never uses `TodoWrite`, no progress message is created.
 4. After execution completes (success, failure, or exception),
-   `plan_streamer.finalize()` stops the stream.
+   `plan_streamer.finalize()` flushes any pending debounced update.
 
-**Action streaming**: Non-`TodoWrite` tool use events produce one-line action
-summaries via `summarize_action()` (in `airut/gateway/action_summary.py`) and
-are forwarded to `plan_streamer.update_action(summary)`. Two modes:
+**Rendering**: Each `TodoItem` is rendered as a `mrkdwn` line with an emoji
+prefix:
 
-- **With plan (TodoWrite used)**: A dedicated action task (`id="action"`,
-  `status="in_progress"`) is inserted after the first `in_progress` todo task,
-  showing the current action as its `title` — e.g., "Reading src/main.py".
-- **No-plan mode (no TodoWrite)**: A single synthetic task with `id="action"` is
-  created, using the action summary as its title. On `finalize()`, this task is
-  marked `"complete"` for clean visual closure.
+- `TodoStatus.PENDING` → `⚪` (white circle)
+- `TodoStatus.IN_PROGRESS` → `🔵` (blue circle)
+- `TodoStatus.COMPLETED` → `✅` (white check mark)
 
-**Important**: The action uses the `title` field (which Slack *replaces* on each
-`appendStream` call), not the `details` field (which Slack *appends*). Using
-`details` would cause unbounded text growth across updates.
+The message uses `section` blocks with `mrkdwn` text type, which renders
+consistently on both desktop and mobile Slack clients. Using blocks (rather than
+plain `text`) avoids the "(edited)" indicator that Slack shows on text-only
+message updates.
 
-**TodoItem to Slack mapping**: Each `TodoItem` maps to a `TaskUpdateChunk`:
+**Block size limits**: A single Slack `section` block supports up to 3000
+characters. For long todo lists, the rendered text is split across multiple
+`section` blocks at line boundaries via `_build_blocks()`.
 
-- `item.active_form` (or `item.content`) → `title`
-- `TodoStatus.PENDING` → `"pending"`
-- `TodoStatus.IN_PROGRESS` → `"in_progress"`
-- `TodoStatus.COMPLETED` → `"complete"` (note: Slack uses `"complete"`, not
-  `"completed"`)
-- SHA-256 hash of `item.content` (first 8 hex chars) → `id`
+**Debouncing**: Rapid `update()` calls (within 1 second) are coalesced — only
+the latest state is sent. This prevents rate limiting when Claude emits many
+`TodoWrite` calls in quick succession. The debounced state is stored in
+`_last_text` and flushed by `finalize()`.
 
-**Task ID stability**: Slack's streaming plan API tracks individual task cards
-by `id` across `appendStream` calls. IDs must remain stable for a given logical
-task even when the list is reordered, items are inserted, or items are removed.
-A content-hash scheme ensures the same task content always produces the same ID.
-Duplicate content strings get a `_N` suffix for uniqueness.
+**Error handling**: All `chat.postMessage` and `chat.update` failures are
+non-fatal (logged as warnings). Losing plan updates is acceptable; the final
+reply and dashboard remain unaffected. If the initial `chat.postMessage` fails,
+`finalize()` does not retry — it only flushes updates for messages that were
+successfully posted.
 
-Since `TodoWrite` replaces the entire list on each call, the full task list is
-sent on every `update()`.
-
-**Debouncing**: Rapid `update()` and `update_action()` calls (within 500ms) are
-coalesced — only the latest state is sent. This prevents rate limiting when
-Claude emits many tool calls in quick succession. The debounced state is still
-stored in `_last_chunks` so the keepalive re-sends fresh data.
-
-**Keepalive**: Slack auto-expires a streaming session after a period of
-inactivity (undocumented, likely 30–60 s). A background daemon timer re-sends
-the last task state every 20 s to keep the stream alive during long gaps between
-`TodoWrite` events (e.g., while Claude is executing tools). The timer is
-cancelled on `finalize()` and rescheduled after each successful append.
-
-**Stream expiry recovery**: If a keepalive is missed or Slack expires the stream
-despite the keepalive (e.g., transient network issue), and `appendStream`
-returns `message_not_in_streaming_state`, the streamer discards the dead stream
-and starts a fresh one (a new plan message in the thread). This is a fallback —
-the keepalive should prevent expiry in normal operation.
-
-**Error handling**: All streaming API failures are non-fatal (logged as
-warnings). Losing plan updates is acceptable; the final reply and dashboard
-remain unaffected.
-
-**Separate message**: The plan stream message is a distinct message in the
-thread, separate from the final reply. It appears before the reply and shows
-progress as Claude works.
+**Separate message**: The plan message is a distinct message in the thread,
+separate from the final reply. It appears before the reply and shows progress as
+Claude works.
 
 ### File Handling
 

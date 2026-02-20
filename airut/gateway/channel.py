@@ -305,9 +305,9 @@ class ChannelAdapter(Protocol):
     ) -> PlanStreamer | None:
         """Create a plan streamer for real-time task progress.
 
-        Returns a ``PlanStreamer`` that streams ``TodoWrite`` progress
+        Returns a ``PlanStreamer`` that displays ``TodoWrite`` progress
         to the user's channel during execution.  Returns ``None`` if
-        the channel does not support plan streaming.
+        the channel does not support progress display.
 
         Args:
             parsed: The parsed message (used to extract channel-specific
@@ -338,58 +338,38 @@ class ChannelAdapter(Protocol):
 
 
 class PlanStreamer(Protocol):
-    """Interface for streaming task and action progress to a channel.
+    """Interface for showing task progress in a channel.
 
-    Streams two kinds of updates in real time:
+    Displays ``TodoWrite`` updates in real time as a progress
+    indicator.  Only ``TodoWrite`` events trigger updates — individual
+    tool use events (Read, Bash, etc.) are not forwarded.
 
-    - **Todo list** (``update``): Full task list from ``TodoWrite``
-      events, shown as a plan block.
-    - **Action status** (``update_action``): One-line descriptions
-      of tool use events (e.g. "Reading src/main.py"), shown as a
-      dedicated task after the current in-progress task, or as a
-      standalone activity indicator when no plan exists.
-
-    Implementations manage the stream lifecycle (start lazily on
-    first ``update`` or ``update_action``, stop on ``finalize``).
+    Implementations manage the message lifecycle (post lazily on
+    first ``update``, finalize on completion).
 
     The gateway core creates a ``PlanStreamer`` per execution and passes
     it to the ``on_event`` callback.  Channels that don't support
-    streaming return ``None`` from their adapter and the callback skips
-    the plan streamer path.
+    progress display return ``None`` from their adapter and the callback
+    skips the plan streamer path.
     """
 
     def update(self, items: list[TodoItem]) -> None:
         """Send updated task list to the channel.
 
         Called on each ``TodoWrite`` event with the full (replaced)
-        todo list.  Implementations should start a stream lazily on
-        the first call.
+        todo list.  Implementations should post the message lazily on
+        the first call and update it in place on subsequent calls.
 
         Args:
             items: Complete todo list from the latest ``TodoWrite``.
         """
         ...
 
-    def update_action(self, summary: str) -> None:
-        """Send a live action status to the channel.
-
-        Called on each non-``TodoWrite`` tool use event with a short
-        description of the current action (e.g. "Reading src/main.py").
-
-        If the plan stream has todo items, a dedicated action task is
-        inserted after the first in-progress task.  Otherwise a single
-        synthetic task is created to provide activity feedback.
-
-        Args:
-            summary: One-line action description.
-        """
-        ...
-
     def finalize(self) -> None:
-        """Stop the stream.
+        """Finalize the progress display.
 
-        Called when execution completes (success or error).  Must be
-        safe to call even if ``update`` was never called (no-op in
-        that case).
+        Flushes any pending debounced update.  Called when execution
+        completes (success or error).  Must be safe to call even if
+        ``update`` was never called (no-op in that case).
         """
         ...
