@@ -11,11 +11,14 @@ thread using the ``chat.startStream`` / ``chat.appendStream`` /
 progress appears as a plan block in the thread, updated in real
 time as Claude works.
 
-When Claude uses ``TodoWrite``, the plan block shows the todo list
-with a dedicated action task (showing the latest tool use) inserted
-after the first in-progress task.  When Claude does *not* use
-``TodoWrite``, a single synthetic task provides live activity
-feedback (e.g. "Reading src/main.py").
+When Claude uses ``TodoWrite``, the plan block shows the todo list.
+The current action (latest tool use) is shown in the ``details``
+field of the first in-progress task.  The action text is included
+in the task's content hash so each action change produces a new
+task ID — Slack replaces the old card with the new one, preventing
+the ``details`` field from accumulating text across appends.  When
+Claude does *not* use ``TodoWrite``, a single synthetic task
+provides live activity feedback.
 
 A background keepalive timer re-sends the latest task state
 periodically so Slack does not expire the stream during long gaps
@@ -73,8 +76,8 @@ class SlackPlanStreamer:
     Two display modes:
 
     - **Plan mode** (``update()`` called): Todo items appear as a
-      plan block.  A dedicated action task showing the latest tool use
-      is inserted after the first in-progress task.
+      plan block.  The current action is shown in the ``details``
+      field of the first in-progress task.
     - **No-plan mode** (only ``update_action()`` called): A single
       synthetic task shows live activity (e.g. "Reading src/main.py"),
       marked ``complete`` on ``finalize()``.
@@ -213,9 +216,10 @@ class SlackPlanStreamer:
     def update_action(self, summary: str) -> None:
         """Send a live action status to the Slack thread.
 
-        When todo items exist, a dedicated action task is inserted
-        after the first in-progress task.  Otherwise, a single
-        synthetic task is created to provide activity feedback.
+        When todo items exist, the action summary is shown in the
+        ``details`` field of the first in-progress task.  Otherwise,
+        a single synthetic task is created to provide activity
+        feedback.
 
         Args:
             summary: One-line action description.
@@ -341,16 +345,24 @@ def _is_stream_expired(err: SlackApiError) -> bool:
         return False
 
 
-def _content_id(content: str) -> str:
-    """Derive a stable task ID from the item's content string.
+def _content_id(item: TodoItem, action: str = "") -> str:
+    """Derive a stable task ID from an item's content, active form, and action.
 
-    Uses an 8-character hex prefix of the SHA-256 hash.  This keeps
-    task IDs stable across ``update()`` calls even when the list is
-    reordered, items are inserted, or items are removed — which is
-    required by Slack's streaming plan API (it matches tasks by ID
-    across ``appendStream`` calls).
+    Uses an 8-character hex prefix of the SHA-256 hash of the
+    ``content``, ``active_form``, and optional *action* suffix.
+    This keeps task IDs stable across ``update()`` calls when
+    nothing changes, but produces a **new** ID when Claude rewrites
+    a task or the current action changes.  In Slack's plan block
+    the old task card (now absent) is replaced by the new one.
+
+    Args:
+        item: The todo item.
+        action: Optional action summary appended to the first
+            in-progress task.  Included in the hash so that each
+            new action produces a fresh task ID.
     """
-    return hashlib.sha256(content.encode()).hexdigest()[:8]
+    key = f"{item.content}\0{item.active_form}\0{action}"
+    return hashlib.sha256(key.encode()).hexdigest()[:8]
 
 
 def _build_task_chunks(
@@ -359,31 +371,47 @@ def _build_task_chunks(
 ) -> list[TaskUpdateChunk]:
     """Convert TodoItems to Slack TaskUpdateChunk objects.
 
-    Derives task IDs from each item's ``content`` field so that the
-    same logical task keeps the same ID across successive ``update()``
-    calls.  Slack's streaming plan API uses the ``id`` to track and
-    update individual task cards in place; positional indices would
-    break when the list is reordered.
+    Derives task IDs from each item's ``content``, ``active_form``,
+    and (for the first in-progress task) the current *action_summary*.
+    Including the action in the hash means each new action produces a
+    new task ID, so Slack replaces the old card with the new one —
+    preventing the ``details`` field from accumulating text across
+    successive ``appendStream`` calls.
 
-    When *action_summary* is non-empty a dedicated action task
-    (``id="action"``, ``status="in_progress"``) is inserted after the
-    first in-progress todo task.  This uses the ``title`` field (which
-    Slack *replaces* on each append) rather than ``details`` (which
-    Slack *appends*), avoiding unbounded text growth.
+    When *action_summary* is non-empty, it is set as the ``details``
+    field on the first in-progress task.
 
     Args:
         items: Todo items from Claude's TodoWrite.
         action_summary: Optional one-line action description to
-            show as a dedicated task after the first in-progress task.
+            show in the ``details`` field of the first in-progress
+            task.
 
     Returns:
         List of ``TaskUpdateChunk`` objects for the streaming API.
     """
     seen: set[str] = set()
     chunks: list[TaskUpdateChunk] = []
-    action_inserted = False
+    action_attached = False
     for item in items:
-        task_id = _content_id(item.content)
+        title = item.active_form or item.content
+
+        # Attach the action summary to the first in-progress task
+        # as ``details``.  The action is included in the content
+        # hash so the task ID changes with each new action, causing
+        # Slack to replace the card (fresh details, no accumulation).
+        action_for_hash = ""
+        details: str | None = None
+        if (
+            action_summary
+            and not action_attached
+            and item.status == TodoStatus.IN_PROGRESS
+        ):
+            details = action_summary
+            action_for_hash = action_summary
+            action_attached = True
+
+        task_id = _content_id(item, action_for_hash)
         # Handle duplicate content strings by appending a suffix.
         base_id = task_id
         counter = 2
@@ -395,26 +423,10 @@ def _build_task_chunks(
         chunks.append(
             TaskUpdateChunk(
                 id=task_id,
-                title=item.active_form or item.content,
+                title=title,
                 status=_STATUS_MAP.get(item.status, "pending"),
+                details=details,
             )
         )
-
-        # Insert a dedicated action task after the first in-progress
-        # todo item.  Uses title (replaced by Slack) not details
-        # (appended by Slack).
-        if (
-            action_summary
-            and not action_inserted
-            and item.status == TodoStatus.IN_PROGRESS
-        ):
-            chunks.append(
-                TaskUpdateChunk(
-                    id="action",
-                    title=action_summary,
-                    status="in_progress",
-                )
-            )
-            action_inserted = True
 
     return chunks

@@ -247,16 +247,16 @@ SDK's `ChatStream` helper. The email adapter returns `None` from
 summaries via `summarize_action()` (in `airut/gateway/action_summary.py`) and
 are forwarded to `plan_streamer.update_action(summary)`. Two modes:
 
-- **With plan (TodoWrite used)**: A dedicated action task (`id="action"`,
-  `status="in_progress"`) is inserted after the first `in_progress` todo task,
-  showing the current action as its `title` — e.g., "Reading src/main.py".
+- **With plan (TodoWrite used)**: The action summary is set as the `details`
+  field on the first `in_progress` todo task. The action text is included in the
+  task's content hash, so each new action produces a **new task ID**, causing
+  Slack to replace the old card with the new one. This prevents the `details`
+  field from accumulating text across successive `appendStream` calls (Slack
+  appends `details` rather than replacing it, but a new task ID means a fresh
+  card).
 - **No-plan mode (no TodoWrite)**: A single synthetic task with `id="action"` is
   created, using the action summary as its title. On `finalize()`, this task is
   marked `"complete"` for clean visual closure.
-
-**Important**: The action uses the `title` field (which Slack *replaces* on each
-`appendStream` call), not the `details` field (which Slack *appends*). Using
-`details` would cause unbounded text growth across updates.
 
 **TodoItem to Slack mapping**: Each `TodoItem` maps to a `TaskUpdateChunk`:
 
@@ -265,13 +265,14 @@ are forwarded to `plan_streamer.update_action(summary)`. Two modes:
 - `TodoStatus.IN_PROGRESS` → `"in_progress"`
 - `TodoStatus.COMPLETED` → `"complete"` (note: Slack uses `"complete"`, not
   `"completed"`)
-- SHA-256 hash of `item.content` (first 8 hex chars) → `id`
+- SHA-256 hash of `item.content` + `item.active_form` (first 8 hex chars) → `id`
 
 **Task ID stability**: Slack's streaming plan API tracks individual task cards
-by `id` across `appendStream` calls. IDs must remain stable for a given logical
-task even when the list is reordered, items are inserted, or items are removed.
-A content-hash scheme ensures the same task content always produces the same ID.
-Duplicate content strings get a `_N` suffix for uniqueness.
+by `id` across `appendStream` calls. IDs are derived from `content`,
+`active_form`, and (for the first in-progress task) the current action summary.
+An unchanged task keeps the same ID across reordering, but a rewritten task or a
+new action produces a new ID — causing the old task card to be replaced in the
+plan block. Duplicate items get a `_N` suffix for uniqueness.
 
 Since `TodoWrite` replaces the entire list on each call, the full task list is
 sent on every `update()`.

@@ -60,15 +60,51 @@ _TIMER_PATCH = "airut.gateway.slack.plan_streamer.threading.Timer"
 
 class TestContentId:
     def test_deterministic(self) -> None:
-        assert _content_id("Run tests") == _content_id("Run tests")
+        item = TodoItem(content="Run tests", status=TodoStatus.PENDING)
+        assert _content_id(item) == _content_id(item)
 
     def test_different_for_different_content(self) -> None:
-        assert _content_id("Run tests") != _content_id("Fix lint")
+        a = TodoItem(content="Run tests", status=TodoStatus.PENDING)
+        b = TodoItem(content="Fix lint", status=TodoStatus.PENDING)
+        assert _content_id(a) != _content_id(b)
 
     def test_returns_8_hex_chars(self) -> None:
-        result = _content_id("anything")
+        item = TodoItem(content="anything", status=TodoStatus.PENDING)
+        result = _content_id(item)
         assert len(result) == 8
         int(result, 16)  # Must be valid hex
+
+    def test_different_active_form_produces_different_id(self) -> None:
+        """Changing active_form alone changes the ID."""
+        a = TodoItem(
+            content="Run tests",
+            status=TodoStatus.PENDING,
+            active_form="Running tests",
+        )
+        b = TodoItem(
+            content="Run tests",
+            status=TodoStatus.PENDING,
+            active_form="Executing test suite",
+        )
+        assert _content_id(a) != _content_id(b)
+
+    def test_status_does_not_affect_id(self) -> None:
+        """Status changes alone do NOT change the ID."""
+        a = TodoItem(content="Run tests", status=TodoStatus.PENDING)
+        b = TodoItem(content="Run tests", status=TodoStatus.COMPLETED)
+        assert _content_id(a) == _content_id(b)
+
+    def test_action_changes_id(self) -> None:
+        """Including an action suffix produces a different ID."""
+        item = TodoItem(content="Run tests", status=TodoStatus.IN_PROGRESS)
+        assert _content_id(item) != _content_id(item, action="Reading main.py")
+
+    def test_different_actions_produce_different_ids(self) -> None:
+        """Different action summaries produce different IDs."""
+        item = TodoItem(content="Run tests", status=TodoStatus.IN_PROGRESS)
+        id_a = _content_id(item, action="Reading main.py")
+        id_b = _content_id(item, action="Editing config.yaml")
+        assert id_a != id_b
 
 
 class TestBuildTaskChunks:
@@ -83,15 +119,15 @@ class TestBuildTaskChunks:
         assert len(chunks) == 3
         assert all(isinstance(c, TaskUpdateChunk) for c in chunks)
 
-        assert chunks[0].id == _content_id("Task 0")
+        assert chunks[0].id == _content_id(items[0])
         assert chunks[0].title == "Working on task 0"
         assert chunks[0].status == "pending"
 
-        assert chunks[1].id == _content_id("Task 1")
+        assert chunks[1].id == _content_id(items[1])
         assert chunks[1].title == "Working on task 1"
         assert chunks[1].status == "in_progress"
 
-        assert chunks[2].id == _content_id("Task 2")
+        assert chunks[2].id == _content_id(items[2])
         assert chunks[2].title == "Working on task 2"
         assert chunks[2].status == "complete"
 
@@ -106,9 +142,32 @@ class TestBuildTaskChunks:
         chunks_a = _build_task_chunks(items_a)
         chunks_b = _build_task_chunks(items_b)
 
-        # Same content → same ID regardless of position.
+        # Same content+active_form → same ID regardless of position.
         assert chunks_a[0].id == chunks_b[1].id  # "Run tests"
         assert chunks_a[1].id == chunks_b[0].id  # "Fix lint"
+
+    def test_rewritten_task_gets_new_id(self) -> None:
+        """When Claude rewrites a task, it gets a new ID."""
+        original = [
+            TodoItem(
+                content="Run tests",
+                status=TodoStatus.IN_PROGRESS,
+                active_form="Running tests",
+            ),
+        ]
+        rewritten = [
+            TodoItem(
+                content="Run tests",
+                status=TodoStatus.IN_PROGRESS,
+                active_form="Executing full test suite",
+            ),
+        ]
+
+        chunks_a = _build_task_chunks(original)
+        chunks_b = _build_task_chunks(rewritten)
+
+        # Different active_form → different ID.
+        assert chunks_a[0].id != chunks_b[0].id
 
     def test_duplicate_content_gets_unique_ids(self) -> None:
         items = [
@@ -138,8 +197,8 @@ class TestBuildTaskChunks:
         chunks = _build_task_chunks(items)
         assert chunks[0].title == "Running tests"
 
-    def test_action_summary_inserts_task_after_first_in_progress(self) -> None:
-        """Action summary inserts a separate task after first in-progress."""
+    def test_action_summary_in_details_of_first_in_progress(self) -> None:
+        """Action summary is set as details on first in-progress task."""
         items = _make_items(
             TodoStatus.COMPLETED,
             TodoStatus.IN_PROGRESS,
@@ -147,44 +206,53 @@ class TestBuildTaskChunks:
         )
         chunks = _build_task_chunks(items, action_summary="Reading main.py")
 
-        # 3 todo items + 1 action task = 4 chunks.
-        assert len(chunks) == 4
+        # Still 3 chunks — no dedicated action task.
+        assert len(chunks) == 3
         assert chunks[0].status == "complete"  # Task 0
+        assert chunks[0].details is None
         assert chunks[1].status == "in_progress"  # Task 1
-        assert chunks[2].id == "action"  # action task
-        assert chunks[2].title == "Reading main.py"
-        assert chunks[2].status == "in_progress"
-        assert chunks[3].status == "pending"  # Task 2
+        assert chunks[1].title == "Working on task 1"  # title unchanged
+        assert chunks[1].details == "Reading main.py"
+        assert chunks[2].status == "pending"  # Task 2
+        assert chunks[2].details is None
 
-    def test_action_task_only_after_first_in_progress(self) -> None:
-        """Only one action task is inserted (after the first in-progress)."""
+    def test_action_changes_task_id(self) -> None:
+        """Action summary changes the in-progress task's ID."""
+        items = _make_items(TodoStatus.IN_PROGRESS)
+
+        chunks_without = _build_task_chunks(items)
+        chunks_with = _build_task_chunks(items, action_summary="Reading file")
+
+        assert chunks_without[0].id != chunks_with[0].id
+
+    def test_action_only_on_first_in_progress(self) -> None:
+        """Action details only set on first in-progress task."""
         items = _make_items(
             TodoStatus.IN_PROGRESS,
             TodoStatus.IN_PROGRESS,
         )
         chunks = _build_task_chunks(items, action_summary="Editing file")
 
-        # 2 todo items + 1 action task = 3 chunks.
-        assert len(chunks) == 3
-        assert chunks[0].status == "in_progress"  # Task 0
-        assert chunks[1].id == "action"
-        assert chunks[1].title == "Editing file"
-        assert chunks[2].status == "in_progress"  # Task 1
+        assert len(chunks) == 2
+        assert chunks[0].details == "Editing file"
+        assert chunks[1].details is None
 
-    def test_no_action_summary_no_extra_task(self) -> None:
-        """Without action_summary, no action task is inserted."""
+    def test_no_action_summary_no_details(self) -> None:
+        """Without action_summary, details are None."""
         items = _make_items(TodoStatus.IN_PROGRESS)
         chunks = _build_task_chunks(items)
 
         assert len(chunks) == 1
+        assert chunks[0].title == "Working on task 0"
+        assert chunks[0].details is None
 
     def test_action_summary_skipped_when_no_in_progress(self) -> None:
-        """If no in-progress task exists, no action task is inserted."""
+        """If no in-progress task exists, action is not attached."""
         items = _make_items(TodoStatus.PENDING, TodoStatus.COMPLETED)
         chunks = _build_task_chunks(items, action_summary="Running tests")
 
         assert len(chunks) == 2
-        assert all(c.id != "action" for c in chunks)
+        assert all(c.details is None for c in chunks)
 
 
 class TestSlackPlanStreamerUpdate:
@@ -354,10 +422,10 @@ class TestSlackPlanStreamerUpdateAction:
         assert chunks[0].status == "in_progress"
 
     @patch(_TIMER_PATCH)
-    def test_action_with_todo_items_inserts_action_task(
+    def test_action_with_todo_items_in_details(
         self, _timer_cls: MagicMock
     ) -> None:
-        """When todos exist, action is a separate task after in-progress."""
+        """When todos exist, action is in details of in-progress task."""
         streamer, client = _make_streamer()
         stream = client.chat_stream.return_value
 
@@ -369,12 +437,10 @@ class TestSlackPlanStreamerUpdateAction:
             streamer.update_action("Running pytest")
 
         assert stream.append.call_count == 2
-        # Second call: todo task + action task.
         chunks = stream.append.call_args_list[1][1]["chunks"]
-        assert len(chunks) == 2
-        assert chunks[0].status == "in_progress"  # todo task
-        assert chunks[1].id == "action"
-        assert chunks[1].title == "Running pytest"
+        assert len(chunks) == 1
+        assert chunks[0].title == "Working on task 0"  # title unchanged
+        assert chunks[0].details == "Running pytest"
 
     @patch(_TIMER_PATCH)
     def test_action_debounced(self, _timer_cls: MagicMock) -> None:
@@ -412,10 +478,10 @@ class TestSlackPlanStreamerUpdateAction:
         assert keepalive_chunks[0].title == "Reading file B"
 
     @patch(_TIMER_PATCH)
-    def test_update_includes_current_action_task(
+    def test_update_includes_current_action_in_details(
         self, _timer_cls: MagicMock
     ) -> None:
-        """update() includes action task from current summary, then clears."""
+        """update() sets action as details on in-progress task."""
         streamer, client = _make_streamer()
         stream = client.chat_stream.return_value
 
@@ -426,12 +492,10 @@ class TestSlackPlanStreamerUpdateAction:
             streamer.update_action("Running pytest")
             streamer.update(_make_items(TodoStatus.IN_PROGRESS))
 
-        # The update() should include the action task.
         chunks = stream.append.call_args_list[1][1]["chunks"]
-        assert len(chunks) == 2
-        assert chunks[0].status == "in_progress"  # todo task
-        assert chunks[1].id == "action"
-        assert chunks[1].title == "Running pytest"
+        assert len(chunks) == 1
+        assert chunks[0].title == "Working on task 0"
+        assert chunks[0].details == "Running pytest"
 
     @patch(_TIMER_PATCH)
     def test_update_clears_stale_action_summary(
@@ -455,10 +519,11 @@ class TestSlackPlanStreamerUpdateAction:
                 _make_items(TodoStatus.COMPLETED, TodoStatus.IN_PROGRESS)
             )
 
-        # Third append: no action task (summary was cleared).
+        # Third append: no action in details.
         chunks = stream.append.call_args_list[2][1]["chunks"]
-        assert len(chunks) == 2  # just 2 todo tasks, no action
-        assert all(c.id != "action" for c in chunks)
+        assert len(chunks) == 2
+        assert chunks[0].details is None
+        assert chunks[1].details is None
 
     @patch(_TIMER_PATCH)
     def test_action_api_error_non_fatal(self, _timer_cls: MagicMock) -> None:
