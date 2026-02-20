@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "airut"
 dynamic = ["version"]
-description = "Headless Claude Code interaction via email"
+description = "Sandboxed Claude Code over email and Slack"
 license = "MIT"
 readme = "PYPI_README.md"
 requires-python = ">=3.13,<3.15"

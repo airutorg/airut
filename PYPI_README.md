@@ -1,28 +1,34 @@
 # Airut
 
-Headless Claude Code interaction via email. Named "Airut" (Finnish:
+Sandboxed Claude Code over email and Slack. Named "Airut" (Finnish:
 herald/messenger).
 
-Send an email with instructions, receive Claude Code's response. Airut runs
-Claude Code in isolated containers, maintains conversation state, and handles
-the full email-to-PR workflow.
+Send a message — email or Slack — with instructions, and get results back in the
+same thread. Starting a new task is as simple as starting a new conversation.
+Airut handles everything behind the scenes: workspace creation, container
+isolation, network sandboxing, session persistence, and cleanup.
+
+Self-hosted: your code and conversations never leave your infrastructure.
 
 ```
-You → Email → Airut → Claude Code (container) → PR → Email reply → You
+You → Email/Slack → Airut → Claude Code (container) → PR → Reply → You
 ```
 
 ## Key Features
 
-- **Defense-in-depth sandboxing** — container isolation, surrogate credentials,
-  and network allowlist limit blast radius in case of agent misbehavior
-- **Email-native authentication** — DMARC verification with sender allowlist, no
-  API keys to manage
-- **Model selection via subaddressing** — choose the model per email (e.g.,
-  `airut+haiku@example.com` for fast/cheap, `airut+opus@example.com` for complex
-  tasks)
-- **Conversation threading** — reply to continue conversations across sessions
-- **File attachments** — send files to the agent, receive files back
-- **Web dashboard** — monitor running tasks and view network activity logs
+- **Zero-friction tasking** — send a message to start a task. No workspace
+  setup, no session management, no cleanup.
+- **Defense-in-depth sandboxing** — container isolation, network allowlist via
+  proxy, and credential masking limit blast radius when agents run with full
+  autonomy.
+- **Conversation persistence** — reply to continue where you left off. Claude
+  Code session context is maintained across messages.
+- **Task-to-PR foundation** — combined with proper repo configuration
+  (`CLAUDE.md`, CI tooling, branch protection), enables end-to-end autonomous
+  workflows where agents push PRs for human review.
+- **Email and Slack channels** — authenticate via DMARC (email) or workspace
+  membership (Slack), with sender authorization per repo.
+- **Web dashboard** — monitor running tasks and view network activity logs.
 
 ## Quick Start
 
@@ -30,7 +36,9 @@ You → Email → Airut → Claude Code (container) → PR → Email reply → Y
 
 - Linux (dedicated VM recommended, Debian 13 tested)
 - [uv](https://docs.astral.sh/uv/), Git, and Podman (rootless)
-- Dedicated email account with IMAP/SMTP access
+- At least one channel per repository:
+  - **Email**: Dedicated email account with IMAP/SMTP access
+  - **Slack**: Slack workspace with app installation permissions
 
 ### Install
 
@@ -76,10 +84,9 @@ airut update
 
 ## How It Works
 
-Each email conversation runs in an isolated container with its own git
-workspace, Claude Code session, and sandboxed network. The recommended workflow
-has agents push PRs for your review — you review, leave comments, and reply to
-the email to iterate.
+Each conversation runs in an isolated container with its own git workspace,
+Claude Code session, and sandboxed network. The recommended workflow has agents
+push PRs for your review — you review, leave comments, and reply to iterate.
 
 ```
 You: "Add user authentication"
@@ -88,7 +95,7 @@ Agent: works → pushes PR → replies with PR link
     ↓
 You: review PR, leave comments
     ↓
-You: reply to email "Address the review comments"
+You: reply "Address the review comments"
     ↓
 Agent: reads comments → fixes → updates PR → replies
     ↓
@@ -98,9 +105,9 @@ You: approve and merge
 ## Sandbox Library
 
 The `airut.sandbox` module is a standalone library for safe containerized
-execution of headless Claude Code. It can be used independently of the email
-gateway to run Claude Code in isolated containers from any Python application —
-CI pipelines, automation scripts, custom integrations, or your own agent
+execution of headless Claude Code. It can be used independently of the gateway
+to run Claude Code in isolated containers from any Python application — CI
+pipelines, automation scripts, custom integrations, or your own agent
 orchestrator.
 
 **Core capabilities:**
@@ -155,11 +162,11 @@ Full documentation is available on GitHub:
 - [Architecture](https://github.com/airutorg/airut/blob/main/doc/architecture.md)
   — system architecture and data flow
 - [Security Model](https://github.com/airutorg/airut/blob/main/doc/security.md)
-  — email auth, container isolation, credential handling
+  — channel auth, container isolation, credential handling
 - [Repo Onboarding](https://github.com/airutorg/airut/blob/main/doc/repo-onboarding.md)
   — how to onboard a new repository
 - [Agentic Operation](https://github.com/airutorg/airut/blob/main/doc/agentic-operation.md)
-  — email-to-PR workflow patterns
+  — message-to-PR workflow patterns
 
 ## Links
 
