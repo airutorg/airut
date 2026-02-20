@@ -5,26 +5,26 @@
 
 """Tests for SlackPlanStreamer."""
 
+from __future__ import annotations
+
+from typing import cast
 from unittest.mock import MagicMock, patch
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
-from slack_sdk.models.messages.chunk import TaskUpdateChunk
 
 from airut.dashboard.tracker import TodoItem, TodoStatus
 from airut.gateway.slack.plan_streamer import (
     SlackPlanStreamer,
-    _build_task_chunks,
-    _content_id,
-    _is_stream_expired,
+    _build_blocks,
+    _render_plan,
 )
 
 
 def _make_streamer() -> tuple[SlackPlanStreamer, MagicMock]:
     """Create a plan streamer with a mock WebClient."""
     client = MagicMock(spec=WebClient)
-    stream_mock = MagicMock()
-    client.chat_stream.return_value = stream_mock
+    client.chat_postMessage.return_value = {"ts": "msg_ts_1"}
     streamer = SlackPlanStreamer(
         client=client,
         channel="D123",
@@ -45,87 +45,25 @@ def _make_items(*statuses: TodoStatus) -> list[TodoItem]:
     ]
 
 
-def _stream_expired_error() -> SlackApiError:
-    """Create a SlackApiError for stream expiry."""
-    resp = MagicMock(
-        status_code=400,
-        data={"ok": False, "error": "message_not_in_streaming_state"},
-    )
-    return SlackApiError(message="expired", response=resp)
-
-
-#: Patch target for threading.Timer used by the keepalive.
-_TIMER_PATCH = "airut.gateway.slack.plan_streamer.threading.Timer"
-
-
-class TestContentId:
-    def test_deterministic(self) -> None:
-        assert _content_id("Run tests") == _content_id("Run tests")
-
-    def test_different_for_different_content(self) -> None:
-        assert _content_id("Run tests") != _content_id("Fix lint")
-
-    def test_returns_8_hex_chars(self) -> None:
-        result = _content_id("anything")
-        assert len(result) == 8
-        int(result, 16)  # Must be valid hex
-
-
-class TestBuildTaskChunks:
-    def test_maps_statuses_correctly(self) -> None:
+class TestRenderPlan:
+    def test_renders_statuses_with_emojis(self) -> None:
         items = _make_items(
             TodoStatus.PENDING,
             TodoStatus.IN_PROGRESS,
             TodoStatus.COMPLETED,
         )
-        chunks = _build_task_chunks(items)
+        text = _render_plan(items)
 
-        assert len(chunks) == 3
-        assert all(isinstance(c, TaskUpdateChunk) for c in chunks)
+        assert "\u26aa  Working on task 0" in text
+        assert "\U0001f535  Working on task 1" in text
+        assert "\u2705  Working on task 2" in text
 
-        assert chunks[0].id == _content_id("Task 0")
-        assert chunks[0].title == "Working on task 0"
-        assert chunks[0].status == "pending"
-
-        assert chunks[1].id == _content_id("Task 1")
-        assert chunks[1].title == "Working on task 1"
-        assert chunks[1].status == "in_progress"
-
-        assert chunks[2].id == _content_id("Task 2")
-        assert chunks[2].title == "Working on task 2"
-        assert chunks[2].status == "complete"
-
-    def test_ids_stable_across_reordering(self) -> None:
-        """IDs stay the same when items are reordered."""
-        items_a = [
-            TodoItem(content="Run tests", status=TodoStatus.PENDING),
-            TodoItem(content="Fix lint", status=TodoStatus.IN_PROGRESS),
-        ]
-        items_b = list(reversed(items_a))
-
-        chunks_a = _build_task_chunks(items_a)
-        chunks_b = _build_task_chunks(items_b)
-
-        # Same content → same ID regardless of position.
-        assert chunks_a[0].id == chunks_b[1].id  # "Run tests"
-        assert chunks_a[1].id == chunks_b[0].id  # "Fix lint"
-
-    def test_duplicate_content_gets_unique_ids(self) -> None:
-        items = [
-            TodoItem(content="Deploy", status=TodoStatus.PENDING),
-            TodoItem(content="Deploy", status=TodoStatus.PENDING),
-        ]
-        chunks = _build_task_chunks(items)
-        assert chunks[0].id != chunks[1].id
-
-    def test_empty_list(self) -> None:
-        chunks = _build_task_chunks([])
-        assert chunks == []
-
-    def test_falls_back_to_content_when_no_active_form(self) -> None:
+    def test_falls_back_to_content_when_no_active_form(
+        self,
+    ) -> None:
         items = [TodoItem(content="Run tests", status=TodoStatus.PENDING)]
-        chunks = _build_task_chunks(items)
-        assert chunks[0].title == "Run tests"
+        text = _render_plan(items)
+        assert "Run tests" in text
 
     def test_uses_active_form_over_content(self) -> None:
         items = [
@@ -135,605 +73,159 @@ class TestBuildTaskChunks:
                 active_form="Running tests",
             )
         ]
-        chunks = _build_task_chunks(items)
-        assert chunks[0].title == "Running tests"
+        text = _render_plan(items)
+        assert "Running tests" in text
 
-    def test_action_summary_inserts_task_after_first_in_progress(self) -> None:
-        """Action summary inserts a separate task after first in-progress."""
-        items = _make_items(
-            TodoStatus.COMPLETED,
-            TodoStatus.IN_PROGRESS,
-            TodoStatus.PENDING,
-        )
-        chunks = _build_task_chunks(items, action_summary="Reading main.py")
+    def test_empty_list(self) -> None:
+        text = _render_plan([])
+        assert text == ""
 
-        # 3 todo items + 1 action task = 4 chunks.
-        assert len(chunks) == 4
-        assert chunks[0].status == "complete"  # Task 0
-        assert chunks[1].status == "in_progress"  # Task 1
-        assert chunks[2].id == "action"  # action task
-        assert chunks[2].title == "Reading main.py"
-        assert chunks[2].status == "in_progress"
-        assert chunks[3].status == "pending"  # Task 2
 
-    def test_action_task_only_after_first_in_progress(self) -> None:
-        """Only one action task is inserted (after the first in-progress)."""
-        items = _make_items(
-            TodoStatus.IN_PROGRESS,
-            TodoStatus.IN_PROGRESS,
-        )
-        chunks = _build_task_chunks(items, action_summary="Editing file")
+class TestBuildBlocks:
+    def test_single_block_for_short_text(self) -> None:
+        blocks = _build_blocks("short text")
+        assert len(blocks) == 1
+        assert blocks[0]["type"] == "section"
+        inner = cast(dict[str, str], blocks[0]["text"])
+        assert inner["text"] == "short text"
 
-        # 2 todo items + 1 action task = 3 chunks.
-        assert len(chunks) == 3
-        assert chunks[0].status == "in_progress"  # Task 0
-        assert chunks[1].id == "action"
-        assert chunks[1].title == "Editing file"
-        assert chunks[2].status == "in_progress"  # Task 1
+    def test_splits_long_text_into_multiple_blocks(self) -> None:
+        # Build text that exceeds 3000 chars.
+        lines = [f"Line {i}: {'x' * 80}" for i in range(50)]
+        text = "\n".join(lines)
+        assert len(text) > 3000
 
-    def test_no_action_summary_no_extra_task(self) -> None:
-        """Without action_summary, no action task is inserted."""
-        items = _make_items(TodoStatus.IN_PROGRESS)
-        chunks = _build_task_chunks(items)
+        blocks = _build_blocks(text)
+        assert len(blocks) > 1
+        for block in blocks:
+            inner = cast(dict[str, str], block["text"])
+            assert len(inner["text"]) <= 3000
 
-        assert len(chunks) == 1
-
-    def test_action_summary_skipped_when_no_in_progress(self) -> None:
-        """If no in-progress task exists, no action task is inserted."""
-        items = _make_items(TodoStatus.PENDING, TodoStatus.COMPLETED)
-        chunks = _build_task_chunks(items, action_summary="Running tests")
-
-        assert len(chunks) == 2
-        assert all(c.id != "action" for c in chunks)
+    def test_no_empty_blocks(self) -> None:
+        blocks = _build_blocks("")
+        # Empty string fits in one block.
+        assert len(blocks) == 1
 
 
 class TestSlackPlanStreamerUpdate:
-    @patch(_TIMER_PATCH)
-    def test_first_update_starts_stream(self, _timer_cls: MagicMock) -> None:
+    def test_first_update_posts_message(self) -> None:
         streamer, client = _make_streamer()
         items = _make_items(TodoStatus.IN_PROGRESS)
 
         streamer.update(items)
 
-        client.chat_stream.assert_called_once_with(
-            channel="D123",
-            thread_ts="ts1",
-            task_display_mode="plan",
-        )
-        stream = client.chat_stream.return_value
-        stream.append.assert_called_once()
-        chunks = stream.append.call_args[1]["chunks"]
-        assert len(chunks) == 1
+        client.chat_postMessage.assert_called_once()
+        kw = client.chat_postMessage.call_args[1]
+        assert kw["channel"] == "D123"
+        assert kw["thread_ts"] == "ts1"
+        assert "blocks" in kw
 
-    @patch(_TIMER_PATCH)
-    def test_subsequent_update_appends(self, _timer_cls: MagicMock) -> None:
+    def test_subsequent_update_calls_chat_update(self) -> None:
         streamer, client = _make_streamer()
-        stream = client.chat_stream.return_value
 
-        # Patch monotonic for the entire sequence:
-        # call 1: update() reads now=0.0 (first update, stream is None)
-        # call 2: _last_append_time set to 0.0
-        # call 3: update() reads now=1.0 (second update, elapsed=1.0 > 0.5)
-        # call 4: _last_append_time set to 1.0
         with patch(
             "airut.gateway.slack.plan_streamer.time.monotonic",
-            side_effect=[0.0, 0.0, 1.0, 1.0],
+            side_effect=[0.0, 0.0, 2.0, 2.0],
         ):
             streamer.update(_make_items(TodoStatus.PENDING))
             streamer.update(
                 _make_items(TodoStatus.IN_PROGRESS, TodoStatus.PENDING)
             )
 
-        assert stream.append.call_count == 2
+        client.chat_postMessage.assert_called_once()
+        client.chat_update.assert_called_once()
+        kw = client.chat_update.call_args[1]
+        assert kw["channel"] == "D123"
+        assert kw["ts"] == "msg_ts_1"
 
-    @patch(_TIMER_PATCH)
-    def test_debounce_skips_rapid_updates(self, _timer_cls: MagicMock) -> None:
+    def test_debounce_skips_rapid_updates(self) -> None:
         streamer, client = _make_streamer()
-        stream = client.chat_stream.return_value
 
-        # Patch monotonic for the entire sequence:
-        # call 1: first update() reads now=0.0 (stream is None, no debounce)
-        # call 2: _last_append_time set to 0.0
-        # call 3: second update() reads now=0.1 (elapsed=0.1 < 0.5)
         with patch(
             "airut.gateway.slack.plan_streamer.time.monotonic",
             side_effect=[0.0, 0.0, 0.1],
         ):
             streamer.update(_make_items(TodoStatus.PENDING))
-            assert stream.append.call_count == 1
-
             streamer.update(_make_items(TodoStatus.IN_PROGRESS))
 
-        # Should still be 1 — debounced
-        assert stream.append.call_count == 1
+        client.chat_postMessage.assert_called_once()
+        client.chat_update.assert_not_called()
 
-    @patch(_TIMER_PATCH)
-    def test_api_error_non_fatal(self, _timer_cls: MagicMock) -> None:
+    def test_api_error_non_fatal(self) -> None:
         streamer, client = _make_streamer()
-        stream = client.chat_stream.return_value
-        stream.append.side_effect = SlackApiError(
-            message="error",
-            response=MagicMock(status_code=500, data={}),
-        )
-
-        # Should not raise
-        streamer.update(_make_items(TodoStatus.PENDING))
-
-    @patch(_TIMER_PATCH)
-    def test_start_stream_api_error_non_fatal(
-        self, _timer_cls: MagicMock
-    ) -> None:
-        streamer, client = _make_streamer()
-        client.chat_stream.side_effect = SlackApiError(
-            message="error",
-            response=MagicMock(status_code=500, data={}),
-        )
-
-        # Should not raise (caught by the outer try/except)
-        streamer.update(_make_items(TodoStatus.PENDING))
-
-    @patch(_TIMER_PATCH)
-    def test_stream_expired_restarts_stream(
-        self, _timer_cls: MagicMock
-    ) -> None:
-        """When Slack expires the stream, a new one is started."""
-        streamer, client = _make_streamer()
-        old_stream = client.chat_stream.return_value
-
-        # Patch monotonic for the full sequence:
-        #   call 1: first update() now=0.0 (stream is None, no debounce)
-        #   call 2: _last_append_time = 0.0
-        #   call 3: second update() now=1.0 (elapsed=1.0 > 0.5)
-        #   call 4: _last_append_time = 1.0 (after successful retry)
-        with patch(
-            "airut.gateway.slack.plan_streamer.time.monotonic",
-            side_effect=[0.0, 0.0, 1.0, 1.0],
-        ):
-            streamer.update(_make_items(TodoStatus.PENDING))
-            assert client.chat_stream.call_count == 1
-
-            # The second append fails with stream-expired error.
-            old_stream.append.side_effect = _stream_expired_error()
-
-            # Provide a fresh stream mock for the retry.
-            new_stream = MagicMock()
-            client.chat_stream.return_value = new_stream
-
-            streamer.update(_make_items(TodoStatus.IN_PROGRESS))
-
-        # chat_stream was called again to create a replacement stream.
-        assert client.chat_stream.call_count == 2
-        new_stream.append.assert_called_once()
-
-    @patch(_TIMER_PATCH)
-    def test_stream_expired_retry_failure_non_fatal(
-        self, _timer_cls: MagicMock
-    ) -> None:
-        """If the retry after stream expiry also fails, it's non-fatal."""
-        streamer, client = _make_streamer()
-        old_stream = client.chat_stream.return_value
-
-        # Patch monotonic for the full sequence:
-        #   call 1: first update() now=0.0 (stream is None)
-        #   call 2: _last_append_time = 0.0
-        #   call 3: second update() now=1.0 (elapsed=1.0 > 0.5)
-        with patch(
-            "airut.gateway.slack.plan_streamer.time.monotonic",
-            side_effect=[0.0, 0.0, 1.0],
-        ):
-            streamer.update(_make_items(TodoStatus.PENDING))
-
-            old_stream.append.side_effect = _stream_expired_error()
-            # Retry also fails.
-            client.chat_stream.side_effect = SlackApiError(
-                message="error",
-                response=MagicMock(status_code=500, data={}),
-            )
-
-            # Should not raise.
-            streamer.update(_make_items(TodoStatus.IN_PROGRESS))
-
-
-class TestSlackPlanStreamerUpdateAction:
-    @patch(_TIMER_PATCH)
-    def test_action_starts_stream_in_no_plan_mode(
-        self, _timer_cls: MagicMock
-    ) -> None:
-        """update_action() starts a stream with a synthetic task."""
-        streamer, client = _make_streamer()
-        stream = client.chat_stream.return_value
-
-        streamer.update_action("Reading main.py")
-
-        client.chat_stream.assert_called_once()
-        stream.append.assert_called_once()
-        chunks = stream.append.call_args[1]["chunks"]
-        assert len(chunks) == 1
-        assert chunks[0].id == "action"
-        assert chunks[0].title == "Reading main.py"
-        assert chunks[0].status == "in_progress"
-
-    @patch(_TIMER_PATCH)
-    def test_action_with_todo_items_inserts_action_task(
-        self, _timer_cls: MagicMock
-    ) -> None:
-        """When todos exist, action is a separate task after in-progress."""
-        streamer, client = _make_streamer()
-        stream = client.chat_stream.return_value
-
-        with patch(
-            "airut.gateway.slack.plan_streamer.time.monotonic",
-            side_effect=[0.0, 0.0, 1.0, 1.0],
-        ):
-            streamer.update(_make_items(TodoStatus.IN_PROGRESS))
-            streamer.update_action("Running pytest")
-
-        assert stream.append.call_count == 2
-        # Second call: todo task + action task.
-        chunks = stream.append.call_args_list[1][1]["chunks"]
-        assert len(chunks) == 2
-        assert chunks[0].status == "in_progress"  # todo task
-        assert chunks[1].id == "action"
-        assert chunks[1].title == "Running pytest"
-
-    @patch(_TIMER_PATCH)
-    def test_action_debounced(self, _timer_cls: MagicMock) -> None:
-        """Rapid update_action() calls are debounced."""
-        streamer, client = _make_streamer()
-        stream = client.chat_stream.return_value
-
-        with patch(
-            "airut.gateway.slack.plan_streamer.time.monotonic",
-            side_effect=[0.0, 0.0, 0.1],
-        ):
-            streamer.update_action("Reading file A")
-            streamer.update_action("Reading file B")
-
-        assert stream.append.call_count == 1
-
-    @patch(_TIMER_PATCH)
-    def test_debounced_action_updates_last_chunks(
-        self, _timer_cls: MagicMock
-    ) -> None:
-        """Debounced action still updates _last_chunks for keepalive."""
-        streamer, client = _make_streamer()
-        stream = client.chat_stream.return_value
-
-        with patch(
-            "airut.gateway.slack.plan_streamer.time.monotonic",
-            side_effect=[0.0, 0.0, 0.1],
-        ):
-            streamer.update_action("Reading file A")
-            streamer.update_action("Reading file B")
-
-        # Keepalive should use latest action.
-        streamer._keepalive_tick()
-        keepalive_chunks = stream.append.call_args_list[1][1]["chunks"]
-        assert keepalive_chunks[0].title == "Reading file B"
-
-    @patch(_TIMER_PATCH)
-    def test_update_includes_current_action_task(
-        self, _timer_cls: MagicMock
-    ) -> None:
-        """update() includes action task from current summary, then clears."""
-        streamer, client = _make_streamer()
-        stream = client.chat_stream.return_value
-
-        with patch(
-            "airut.gateway.slack.plan_streamer.time.monotonic",
-            side_effect=[0.0, 0.0, 1.0, 1.0],
-        ):
-            streamer.update_action("Running pytest")
-            streamer.update(_make_items(TodoStatus.IN_PROGRESS))
-
-        # The update() should include the action task.
-        chunks = stream.append.call_args_list[1][1]["chunks"]
-        assert len(chunks) == 2
-        assert chunks[0].status == "in_progress"  # todo task
-        assert chunks[1].id == "action"
-        assert chunks[1].title == "Running pytest"
-
-    @patch(_TIMER_PATCH)
-    def test_update_clears_stale_action_summary(
-        self, _timer_cls: MagicMock
-    ) -> None:
-        """Subsequent update() does not carry forward a stale action."""
-        streamer, client = _make_streamer()
-        stream = client.chat_stream.return_value
-
-        # Time sequence: action(0.0), update(1.0), update(2.0)
-        with patch(
-            "airut.gateway.slack.plan_streamer.time.monotonic",
-            side_effect=[0.0, 0.0, 1.0, 1.0, 2.0, 2.0],
-        ):
-            streamer.update_action("Running pytest")
-            streamer.update(
-                _make_items(TodoStatus.IN_PROGRESS, TodoStatus.PENDING)
-            )
-            # Second update — action should have been cleared.
-            streamer.update(
-                _make_items(TodoStatus.COMPLETED, TodoStatus.IN_PROGRESS)
-            )
-
-        # Third append: no action task (summary was cleared).
-        chunks = stream.append.call_args_list[2][1]["chunks"]
-        assert len(chunks) == 2  # just 2 todo tasks, no action
-        assert all(c.id != "action" for c in chunks)
-
-    @patch(_TIMER_PATCH)
-    def test_action_api_error_non_fatal(self, _timer_cls: MagicMock) -> None:
-        """API error on update_action() doesn't raise."""
-        streamer, client = _make_streamer()
-        stream = client.chat_stream.return_value
-        stream.append.side_effect = SlackApiError(
+        client.chat_postMessage.side_effect = SlackApiError(
             message="error",
             response=MagicMock(status_code=500, data={}),
         )
 
         # Should not raise.
-        streamer.update_action("Reading file")
+        streamer.update(_make_items(TodoStatus.PENDING))
 
 
 class TestSlackPlanStreamerFinalize:
-    @patch(_TIMER_PATCH)
-    def test_stops_active_stream(self, _timer_cls: MagicMock) -> None:
+    def test_flushes_debounced_update(self) -> None:
+        """Finalize sends the last debounced state."""
         streamer, client = _make_streamer()
-        stream = client.chat_stream.return_value
 
-        streamer.update(_make_items(TodoStatus.IN_PROGRESS))
+        with patch(
+            "airut.gateway.slack.plan_streamer.time.monotonic",
+            side_effect=[0.0, 0.0, 0.1],
+        ):
+            streamer.update(_make_items(TodoStatus.PENDING))
+            streamer.update(_make_items(TodoStatus.IN_PROGRESS))
+
+        client.chat_update.assert_not_called()
+
         streamer.finalize()
+        client.chat_update.assert_called_once()
+        # Should show the latest (in_progress) state.
+        text = client.chat_update.call_args[1]["blocks"][0]["text"]["text"]
+        assert "\U0001f535" in text
 
-        stream.stop.assert_called_once_with()
-
-    @patch(_TIMER_PATCH)
-    def test_noop_when_never_started(self, _timer_cls: MagicMock) -> None:
+    def test_noop_when_never_started(self) -> None:
         streamer, client = _make_streamer()
 
-        # Should not raise or make API calls
         streamer.finalize()
-        client.chat_stream.assert_not_called()
+        client.chat_postMessage.assert_not_called()
+        client.chat_update.assert_not_called()
 
-    @patch(_TIMER_PATCH)
-    def test_api_error_non_fatal(self, _timer_cls: MagicMock) -> None:
+    def test_noop_when_post_failed(self) -> None:
+        """Finalize is a no-op if the initial post never succeeded."""
         streamer, client = _make_streamer()
-        stream = client.chat_stream.return_value
-        stream.stop.side_effect = SlackApiError(
+        client.chat_postMessage.side_effect = SlackApiError(
             message="error",
             response=MagicMock(status_code=500, data={}),
         )
 
-        streamer.update(_make_items(TodoStatus.IN_PROGRESS))
-
-        # Should not raise
-        streamer.finalize()
-
-    @patch(_TIMER_PATCH)
-    def test_stream_expired_on_finalize_is_silent(
-        self, _timer_cls: MagicMock
-    ) -> None:
-        """Finalizing an already-expired stream is a no-op."""
-        streamer, client = _make_streamer()
-        stream = client.chat_stream.return_value
-        stream.stop.side_effect = _stream_expired_error()
-
-        streamer.update(_make_items(TodoStatus.IN_PROGRESS))
-
-        # Should not raise or warn — the stream was already stopped.
-        streamer.finalize()
-
-    @patch(_TIMER_PATCH)
-    def test_finalize_cancels_keepalive(self, timer_cls: MagicMock) -> None:
-        """Finalize cancels the pending keepalive timer."""
-        streamer, _client = _make_streamer()
-        timer_instance = timer_cls.return_value
-
-        streamer.update(_make_items(TodoStatus.IN_PROGRESS))
-        streamer.finalize()
-
-        timer_instance.cancel.assert_called()
-
-    @patch(_TIMER_PATCH)
-    def test_finalize_no_plan_mode_marks_complete(
-        self, _timer_cls: MagicMock
-    ) -> None:
-        """In no-plan mode, finalize marks the action task complete."""
-        streamer, client = _make_streamer()
-        stream = client.chat_stream.return_value
-
-        streamer.update_action("Running tests")
-        streamer.finalize()
-
-        # stop() should be called with final chunks
-        stream.stop.assert_called_once()
-        final_chunks = stream.stop.call_args[1]["chunks"]
-        assert len(final_chunks) == 1
-        assert final_chunks[0].id == "action"
-        assert final_chunks[0].status == "complete"
-        assert final_chunks[0].title == "Running tests"
-
-    @patch(_TIMER_PATCH)
-    def test_finalize_plan_mode_no_final_chunks(
-        self, _timer_cls: MagicMock
-    ) -> None:
-        """When todos exist, finalize calls stop() without chunks."""
-        streamer, client = _make_streamer()
-        stream = client.chat_stream.return_value
-
-        with patch(
-            "airut.gateway.slack.plan_streamer.time.monotonic",
-            side_effect=[0.0, 0.0, 1.0, 1.0],
-        ):
-            streamer.update(_make_items(TodoStatus.IN_PROGRESS))
-            streamer.update_action("Reading file")
-
-        streamer.finalize()
-        stream.stop.assert_called_once_with()
-
-
-class TestKeepalive:
-    @patch(_TIMER_PATCH)
-    def test_update_schedules_keepalive(self, timer_cls: MagicMock) -> None:
-        """Each successful update() starts a keepalive timer."""
-        streamer, _client = _make_streamer()
-        timer_instance = timer_cls.return_value
-
         streamer.update(_make_items(TodoStatus.PENDING))
 
-        timer_cls.assert_called_once()
-        # Timer target is _keepalive_tick.
-        assert timer_cls.call_args[0][1] == streamer._keepalive_tick
-        timer_instance.start.assert_called_once()
+        # _message_ts is None because the post failed.
+        # Finalize should not attempt another post.
+        streamer.finalize()
+        client.chat_update.assert_not_called()
+        # Only the original failed attempt, no retry.
+        client.chat_postMessage.assert_called_once()
 
-    @patch(_TIMER_PATCH)
-    def test_keepalive_timer_is_daemon(self, timer_cls: MagicMock) -> None:
-        """Keepalive timer should be a daemon thread."""
-        streamer, _client = _make_streamer()
-        timer_instance = timer_cls.return_value
-
-        streamer.update(_make_items(TodoStatus.PENDING))
-
-        assert timer_instance.daemon is True
-
-    @patch(_TIMER_PATCH)
-    def test_keepalive_tick_resends_last_chunks(
-        self, timer_cls: MagicMock
-    ) -> None:
-        """The keepalive tick re-sends the last task state."""
+    def test_api_error_non_fatal(self) -> None:
         streamer, client = _make_streamer()
-        stream = client.chat_stream.return_value
-
-        streamer.update(_make_items(TodoStatus.IN_PROGRESS))
-        assert stream.append.call_count == 1
-
-        # Simulate the timer firing by calling _keepalive_tick directly.
-        streamer._keepalive_tick()
-
-        assert stream.append.call_count == 2
-        # The second append used the same chunks as the first.
-        first_chunks = stream.append.call_args_list[0][1]["chunks"]
-        second_chunks = stream.append.call_args_list[1][1]["chunks"]
-        assert first_chunks == second_chunks
-
-    @patch(_TIMER_PATCH)
-    def test_keepalive_tick_reschedules(self, timer_cls: MagicMock) -> None:
-        """After a successful keepalive, a new timer is scheduled."""
-        streamer, _client = _make_streamer()
-
-        streamer.update(_make_items(TodoStatus.IN_PROGRESS))
-        initial_call_count = timer_cls.call_count
-
-        streamer._keepalive_tick()
-
-        # A new Timer was created for the next keepalive.
-        assert timer_cls.call_count == initial_call_count + 1
-
-    @patch(_TIMER_PATCH)
-    def test_keepalive_tick_noop_without_stream(
-        self, timer_cls: MagicMock
-    ) -> None:
-        """Keepalive tick does nothing if stream was never started."""
-        streamer, client = _make_streamer()
-        stream = client.chat_stream.return_value
-
-        # Never called update(), so _stream is None.
-        streamer._keepalive_tick()
-
-        stream.append.assert_not_called()
-
-    @patch(_TIMER_PATCH)
-    def test_keepalive_tick_api_error_non_fatal(
-        self, timer_cls: MagicMock
-    ) -> None:
-        """Keepalive append failure doesn't raise."""
-        streamer, client = _make_streamer()
-        stream = client.chat_stream.return_value
-
         streamer.update(_make_items(TodoStatus.IN_PROGRESS))
 
-        # Make the keepalive append fail.
-        stream.append.side_effect = SlackApiError(
+        client.chat_update.side_effect = SlackApiError(
             message="error",
             response=MagicMock(status_code=500, data={}),
         )
 
         # Should not raise.
-        streamer._keepalive_tick()
+        streamer.finalize()
 
-    @patch(_TIMER_PATCH)
-    def test_keepalive_cancelled_on_stream_expiry_recovery(
-        self, timer_cls: MagicMock
-    ) -> None:
-        """When stream expires and restarts, old timer is cancelled."""
+    def test_no_double_update_when_nothing_debounced(self) -> None:
+        """If no update was debounced, finalize doesn't re-send."""
         streamer, client = _make_streamer()
-        old_stream = client.chat_stream.return_value
-        timer_instance = timer_cls.return_value
+        streamer.update(_make_items(TodoStatus.IN_PROGRESS))
 
-        with patch(
-            "airut.gateway.slack.plan_streamer.time.monotonic",
-            side_effect=[0.0, 0.0, 1.0, 1.0],
-        ):
-            streamer.update(_make_items(TodoStatus.PENDING))
+        # The initial post set _last_text. Finalize would flush
+        # it, but we should verify it actually calls update.
+        streamer.finalize()
 
-            old_stream.append.side_effect = _stream_expired_error()
-            new_stream = MagicMock()
-            client.chat_stream.return_value = new_stream
-
-            streamer.update(_make_items(TodoStatus.IN_PROGRESS))
-
-        # Timer was cancelled during expiry recovery, then rescheduled.
-        timer_instance.cancel.assert_called()
-
-    @patch(_TIMER_PATCH)
-    def test_debounced_update_refreshes_chunks_for_keepalive(
-        self, _timer_cls: MagicMock
-    ) -> None:
-        """Debounced update() still updates _last_chunks.
-
-        When a rapid update is debounced (no API call), the keepalive
-        should re-send the *latest* items, not stale data from the
-        previous successful append.
-        """
-        streamer, client = _make_streamer()
-        stream = client.chat_stream.return_value
-
-        initial_items = _make_items(TodoStatus.PENDING)
-        updated_items = _make_items(TodoStatus.IN_PROGRESS)
-
-        # call 1: first update() now=0.0 (stream is None, no debounce)
-        # call 2: _last_append_time = 0.0
-        # call 3: second update() now=0.1 (debounced)
-        with patch(
-            "airut.gateway.slack.plan_streamer.time.monotonic",
-            side_effect=[0.0, 0.0, 0.1],
-        ):
-            streamer.update(initial_items)
-            streamer.update(updated_items)
-
-        # Only one real append happened (the first).
-        assert stream.append.call_count == 1
-
-        # Now simulate keepalive firing.
-        streamer._keepalive_tick()
-
-        # The keepalive should use the debounced (newer) chunks.
-        keepalive_chunks = stream.append.call_args_list[1][1]["chunks"]
-        assert keepalive_chunks[0].status == "in_progress"
-
-
-class TestIsStreamExpired:
-    def test_matches_stream_expired_error(self) -> None:
-        assert _is_stream_expired(_stream_expired_error()) is True
-
-    def test_rejects_other_errors(self) -> None:
-        err = SlackApiError(
-            message="other",
-            response=MagicMock(status_code=500, data={"error": "other"}),
-        )
-        assert _is_stream_expired(err) is False
-
-    def test_handles_missing_data(self) -> None:
-        err = SlackApiError(
-            message="weird",
-            response=MagicMock(spec=[]),
-        )
-        assert _is_stream_expired(err) is False
+        # chat_update is called (flushing the latest state).
+        client.chat_update.assert_called_once()

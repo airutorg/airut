@@ -444,8 +444,8 @@ class SlackChannelAdapter(ChannelAdapter):
     ) -> PlanStreamer | None:
         """Create a plan streamer for real-time task progress.
 
-        Returns a ``SlackPlanStreamer`` that streams ``TodoWrite``
-        progress to the Slack thread via plan blocks.
+        Returns a ``SlackPlanStreamer`` that displays ``TodoWrite``
+        progress in the Slack thread via message updates.
 
         Args:
             parsed: Parsed message (must be a ``SlackParsedMessage``).
