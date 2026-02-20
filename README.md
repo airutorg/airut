@@ -8,46 +8,53 @@
 
 # Airut
 
-Headless Claude Code interaction via email. Named "Airut" (Finnish:
+Sandboxed Claude Code over email and Slack. Named "Airut" (Finnish:
 herald/messenger). Created by Pyry Haulos.
 
 ## What It Does
 
-Send an email with instructions, receive Claude Code's response. Airut runs
-Claude Code in isolated containers, maintains conversation state, and handles
-the full email-to-PR workflow.
+Send a message — email or Slack — with instructions, and get results back in the
+same thread. Starting a new task is as simple as starting a new conversation.
+Airut handles everything behind the scenes: workspace creation, container
+isolation, network sandboxing, session persistence, and cleanup.
+
+Self-hosted: your code and conversations never leave your infrastructure.
 
 ```
-You → Email → Airut → Claude Code (container) → PR → Email reply → You
+You → Email/Slack → Airut → Claude Code (container) → PR → Reply → You
 ```
+
+**This project is developed entirely through its own workflow** — from the first
+working version onward, all development has been done by sending instructions to
+Airut and reviewing the resulting PRs.
 
 **Key features:**
 
-- **Defense-in-depth sandboxing**: Container isolation, surrogate credentials,
-  and network allowlist significantly limit blast radius in case of agent
-  misbehavior. Agents run in permissive mode to complete tasks end-to-end, while
-  security controls bound what they can access and where data can go.
-- **Email-native authentication**: DMARC verification with sender allowlist — no
-  API keys to manage
-- **Model selection via subaddressing**: Control costs by choosing the model per
-  email (e.g., `airut+haiku@example.com` for fast/cheap,
-  `airut+opus@example.com` for complex tasks)
-- **Conversation threading**: Reply to continue conversations; `[ID:xyz123]`
-  tracks state across sessions
-- **File attachments**: Send files to `/inbox`; receive files from `/outbox`
-- **Web dashboard**: Monitor running tasks and view network activity logs
+- **Zero-friction tasking**: Send a message to start a task. No workspace setup,
+  no session management, no cleanup. Airut provisions an isolated environment
+  automatically and tears it down when done.
+- **Defense-in-depth sandboxing**: Container isolation, network allowlist via
+  proxy, and credential masking limit blast radius when agents run with full
+  autonomy.
+- **Conversation persistence**: Reply to continue where you left off. Claude
+  Code session context is maintained across messages — iterate, don't
+  re-explain.
+- **Task-to-PR foundation**: Combined with proper repo configuration
+  (`CLAUDE.md`, CI tooling, branch protection), enables end-to-end autonomous
+  workflows where agents push PRs for human review.
+- **Email and Slack channels**: Authenticate via DMARC (email) or workspace
+  membership (Slack), with sender authorization per repo.
+- **Web dashboard**: Monitor running tasks and view network activity logs.
 
-## Why Email?
+## Why Email and Slack?
 
-### A Super-Optimized Communication Medium
+### Mature Tools You Already Use
 
-Email clients have been refined over decades for managing multiple asynchronous
-communications. For many of us, the inbox is already where our task list lives.
-Agent interactions integrate naturally into this workflow — you get the benefits
-of decades of compounded investment in email tooling: threading, search,
-filters, mobile clients, and notification systems.
+Email and Slack are optimized for asynchronous communication — threading,
+search, notifications, and mobile clients all work out of the box. Agent
+interactions integrate naturally into the tools your team already lives in.
 
-Using email also dramatically lowers the barrier to engage with an agent. Send a
+This also dramatically lowers the barrier to engage with an agent. Send a
 message from any device, get results when ready. No terminal session to keep
 open, no custom client to install.
 
@@ -55,13 +62,14 @@ open, no custom client to install.
 
 Running multiple Claude Code agents requires isolation — each needs its own
 workspace, session state, and credentials. Airut provides this automatically:
-each email conversation is fully isolated, and a configurable thread pool
-manages concurrent execution.
+each conversation is fully isolated, and a configurable thread pool manages
+concurrent execution. Start as many conversations as you want; Airut handles the
+rest.
 
 ### Code Review as Feedback
 
 The recommended workflow has agents push PRs for review. You review the PR,
-leave comments, then reply to the email. The agent reads review feedback and
+leave comments, then reply to the thread. The agent reads review feedback and
 iterates. This provides:
 
 - Human oversight before code lands
@@ -75,20 +83,16 @@ Agent: works → pushes PR → replies with PR link
     ↓
 You: review PR, leave comments
     ↓
-You: reply to email "Address the review comments"
+You: reply "Address the review comments"
     ↓
 Agent: reads comments → fixes → updates PR → replies
     ↓
 You: approve and merge
 ```
 
-**Proof of concept:** This project itself is developed exclusively via the email
-workflow — from the first working version onward, all development has been done
-by sending instructions to Airut and reviewing the resulting PRs.
-
 **Example project:** The
 [airut.org website](https://github.com/airutorg/website) is a minimal
-Airut-managed repository that demonstrates the email-to-deploy workflow with
+Airut-managed repository that demonstrates the message-to-deploy workflow with
 Cloudflare Pages. Its `.airut/` directory and `CLAUDE.md` serve as a good
 starting point for onboarding your own projects.
 
@@ -98,7 +102,7 @@ starting point for onboarding your own projects.
 
 - **[doc/architecture.md](doc/architecture.md)** — System architecture and data
   flow
-- **[doc/security.md](doc/security.md)** — Security model (email auth,
+- **[doc/security.md](doc/security.md)** — Security model (channel auth,
   isolation, credentials)
 - **[doc/execution-sandbox.md](doc/execution-sandbox.md)** — Container isolation
   and resource limits
@@ -108,13 +112,22 @@ starting point for onboarding your own projects.
   configuration
 - **[doc/repo-onboarding.md](doc/repo-onboarding.md)** — Onboarding new
   repositories
-- **[doc/agentic-operation.md](doc/agentic-operation.md)** — Email-to-PR
+- **[doc/agentic-operation.md](doc/agentic-operation.md)** — Message-to-PR
   workflow patterns
+
+### Channel Setup
+
+- **[doc/email-setup.md](doc/email-setup.md)** — Email provider selection,
+  DMARC, and authorization
+- **[doc/slack-setup.md](doc/slack-setup.md)** — Slack app creation, tokens, and
+  authorization rules
+- **[doc/m365-oauth2.md](doc/m365-oauth2.md)** — Microsoft 365 OAuth2 for email
+  (IMAP/SMTP)
 
 ### Implementation Specifications
 
-- **[spec/](spec/README.md)** — Detailed specs for email protocol, config
-  schema, dashboard, and tooling
+- **[spec/](spec/README.md)** — Detailed specs for channels, config schema,
+  dashboard, and tooling
 
 ### Agent Instructions
 
@@ -126,7 +139,9 @@ starting point for onboarding your own projects.
 
 - Linux (dedicated VM recommended, Debian 13 tested)
 - [uv](https://docs.astral.sh/uv/), Git, and Podman (rootless)
-- Dedicated email account with IMAP/SMTP access (one per repository)
+- At least one channel per repository:
+  - **Email**: Dedicated email account with IMAP/SMTP access
+  - **Slack**: Slack workspace with app installation permissions
 
 ### Install and Configure
 
@@ -135,13 +150,13 @@ uv tool install airut          # Install from PyPI
 airut init                     # Generate config at ~/.config/airut/airut.yaml
 ```
 
-Edit `~/.config/airut/airut.yaml` with your email, repo, and secrets. See
-[deployment.md](doc/deployment.md) for the full guide including email providers,
-secrets management, and git credentials.
+Edit `~/.config/airut/airut.yaml` with your channel credentials, repo, and
+secrets. See [deployment.md](doc/deployment.md) for the full guide including
+channel setup, secrets management, and git credentials.
 
 [Onboard your repository](doc/repo-onboarding.md) by creating the `.airut/`
 directory with `airut.yaml`, container Dockerfile, and network allowlist. Create
-or update `CLAUDE.md` with instructions for the email-to-PR workflow.
+or update `CLAUDE.md` with instructions for the message-to-PR workflow.
 
 ### Deploy
 
@@ -151,7 +166,9 @@ airut install-service          # Install and start systemd service
 airut check                    # Verify everything is running
 ```
 
-### Send Your First Email
+### Send Your First Message
+
+**Email:**
 
 ```
 To: airut@example.com
@@ -159,6 +176,8 @@ Subject: Fix the typo in README
 
 Please fix the typo in the README file.
 ```
+
+**Slack:** Open a new chat with your Airut app and type your instructions.
 
 ### Update
 

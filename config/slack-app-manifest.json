@@ -1,12 +1,12 @@
 {
   "display_information": {
     "name": "Airut",
-    "description": "Headless Claude Code interaction",
+    "description": "Sandboxed Claude Code over Slack",
     "background_color": "#1a1a2e"
   },
   "features": {
     "assistant_view": {
-      "assistant_description": "Interact with Claude Code",
+      "assistant_description": "Send a message to start a task. Airut runs Claude Code in a sandboxed container and replies with results.",
       "suggested_prompts": []
     },
     "bot_user": {

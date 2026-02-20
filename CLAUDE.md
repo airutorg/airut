@@ -2,8 +2,8 @@
 
 ## Project Overview
 
-Airut is a protocol-agnostic gateway for headless Claude Code interaction.
-Supports email and Slack as channels. Named "Airut" (Finnish: herald/messenger).
+Airut is a self-hosted gateway that runs sandboxed Claude Code over email and
+Slack. Named "Airut" (Finnish: herald/messenger).
 
 Network requests from containers are sandboxed; if requests fail, check
 `.airut/network-allowlist.yaml`. See `doc/network-sandbox.md` for details.
