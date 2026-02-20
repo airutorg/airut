@@ -138,8 +138,8 @@ class TestBuildTaskChunks:
         chunks = _build_task_chunks(items)
         assert chunks[0].title == "Running tests"
 
-    def test_action_summary_on_first_in_progress(self) -> None:
-        """Action summary attaches to first in-progress task."""
+    def test_action_summary_inserts_task_after_first_in_progress(self) -> None:
+        """Action summary inserts a separate task after first in-progress."""
         items = _make_items(
             TodoStatus.COMPLETED,
             TodoStatus.IN_PROGRESS,
@@ -147,34 +147,44 @@ class TestBuildTaskChunks:
         )
         chunks = _build_task_chunks(items, action_summary="Reading main.py")
 
-        assert chunks[0].details is None  # completed
-        assert chunks[1].details == "Reading main.py"  # in_progress
-        assert chunks[2].details is None  # pending
+        # 3 todo items + 1 action task = 4 chunks.
+        assert len(chunks) == 4
+        assert chunks[0].status == "complete"  # Task 0
+        assert chunks[1].status == "in_progress"  # Task 1
+        assert chunks[2].id == "action"  # action task
+        assert chunks[2].title == "Reading main.py"
+        assert chunks[2].status == "in_progress"
+        assert chunks[3].status == "pending"  # Task 2
 
-    def test_action_summary_only_on_first_in_progress(self) -> None:
-        """Only the first in-progress task gets the action summary."""
+    def test_action_task_only_after_first_in_progress(self) -> None:
+        """Only one action task is inserted (after the first in-progress)."""
         items = _make_items(
             TodoStatus.IN_PROGRESS,
             TodoStatus.IN_PROGRESS,
         )
         chunks = _build_task_chunks(items, action_summary="Editing file")
 
-        assert chunks[0].details == "Editing file"
-        assert chunks[1].details is None
+        # 2 todo items + 1 action task = 3 chunks.
+        assert len(chunks) == 3
+        assert chunks[0].status == "in_progress"  # Task 0
+        assert chunks[1].id == "action"
+        assert chunks[1].title == "Editing file"
+        assert chunks[2].status == "in_progress"  # Task 1
 
-    def test_no_action_summary_no_details(self) -> None:
-        """Without action_summary, no details are set."""
+    def test_no_action_summary_no_extra_task(self) -> None:
+        """Without action_summary, no action task is inserted."""
         items = _make_items(TodoStatus.IN_PROGRESS)
         chunks = _build_task_chunks(items)
 
-        assert chunks[0].details is None
+        assert len(chunks) == 1
 
     def test_action_summary_skipped_when_no_in_progress(self) -> None:
-        """If no in-progress task exists, action summary is not attached."""
+        """If no in-progress task exists, no action task is inserted."""
         items = _make_items(TodoStatus.PENDING, TodoStatus.COMPLETED)
         chunks = _build_task_chunks(items, action_summary="Running tests")
 
-        assert all(c.details is None for c in chunks)
+        assert len(chunks) == 2
+        assert all(c.id != "action" for c in chunks)
 
 
 class TestSlackPlanStreamerUpdate:
@@ -344,10 +354,10 @@ class TestSlackPlanStreamerUpdateAction:
         assert chunks[0].status == "in_progress"
 
     @patch(_TIMER_PATCH)
-    def test_action_with_todo_items_uses_details(
+    def test_action_with_todo_items_inserts_action_task(
         self, _timer_cls: MagicMock
     ) -> None:
-        """When todos exist, action is shown as details on in-progress task."""
+        """When todos exist, action is a separate task after in-progress."""
         streamer, client = _make_streamer()
         stream = client.chat_stream.return_value
 
@@ -359,9 +369,12 @@ class TestSlackPlanStreamerUpdateAction:
             streamer.update_action("Running pytest")
 
         assert stream.append.call_count == 2
-        # Second call should have details on the in-progress task
+        # Second call: todo task + action task.
         chunks = stream.append.call_args_list[1][1]["chunks"]
-        assert chunks[0].details == "Running pytest"
+        assert len(chunks) == 2
+        assert chunks[0].status == "in_progress"  # todo task
+        assert chunks[1].id == "action"
+        assert chunks[1].title == "Running pytest"
 
     @patch(_TIMER_PATCH)
     def test_action_debounced(self, _timer_cls: MagicMock) -> None:
@@ -399,10 +412,10 @@ class TestSlackPlanStreamerUpdateAction:
         assert keepalive_chunks[0].title == "Reading file B"
 
     @patch(_TIMER_PATCH)
-    def test_update_includes_current_action_summary(
+    def test_update_includes_current_action_task(
         self, _timer_cls: MagicMock
     ) -> None:
-        """update() includes the current action summary, then clears it."""
+        """update() includes action task from current summary, then clears."""
         streamer, client = _make_streamer()
         stream = client.chat_stream.return_value
 
@@ -413,9 +426,12 @@ class TestSlackPlanStreamerUpdateAction:
             streamer.update_action("Running pytest")
             streamer.update(_make_items(TodoStatus.IN_PROGRESS))
 
-        # The update() should include the action summary as details.
+        # The update() should include the action task.
         chunks = stream.append.call_args_list[1][1]["chunks"]
-        assert chunks[0].details == "Running pytest"
+        assert len(chunks) == 2
+        assert chunks[0].status == "in_progress"  # todo task
+        assert chunks[1].id == "action"
+        assert chunks[1].title == "Running pytest"
 
     @patch(_TIMER_PATCH)
     def test_update_clears_stale_action_summary(
@@ -439,10 +455,10 @@ class TestSlackPlanStreamerUpdateAction:
                 _make_items(TodoStatus.COMPLETED, TodoStatus.IN_PROGRESS)
             )
 
-        # Third append: second update() should have no details.
+        # Third append: no action task (summary was cleared).
         chunks = stream.append.call_args_list[2][1]["chunks"]
-        assert chunks[0].details is None  # completed task
-        assert chunks[1].details is None  # in-progress, but no stale action
+        assert len(chunks) == 2  # just 2 todo tasks, no action
+        assert all(c.id != "action" for c in chunks)
 
     @patch(_TIMER_PATCH)
     def test_action_api_error_non_fatal(self, _timer_cls: MagicMock) -> None:
