@@ -113,7 +113,7 @@ events = [
                     method="chat_postMessage"
                 )
                 if _block_text_contains(m, "\u26aa")
-                or _block_text_contains(m, "\U0001f535")
+                or _block_text_contains(m, "\U0001f504")
                 or _block_text_contains(m, "\u2705")
             ]
             assert len(plan_posts) >= 1, (
@@ -170,7 +170,7 @@ events = [
                     method="chat_postMessage"
                 )
                 if _block_text_contains(m, "\u26aa")
-                or _block_text_contains(m, "\U0001f535")
+                or _block_text_contains(m, "\U0001f504")
                 or _block_text_contains(m, "\u2705")
             ]
             assert len(plan_posts) == 0, (
