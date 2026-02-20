@@ -2,25 +2,25 @@
 
 ## Motivation
 
-Airut enables headless Claude Code interaction over email, allowing users to
-delegate software engineering tasks to an AI agent. This shifts human feedback
-from reviewing individual agent actions (file edits, shell commands) to
-higher-level artifacts like pull requests.
+Airut enables headless Claude Code interaction over messaging channels (email
+and Slack), allowing users to delegate software engineering tasks to an AI
+agent. This shifts human feedback from reviewing individual agent actions (file
+edits, shell commands) to higher-level artifacts like pull requests.
 
 Running Claude Code with `--dangerously-skip-permissions` is necessary because
-interactive approval isn't feasible over email. This creates two security
-challenges:
+interactive approval isn't feasible over asynchronous channels. This creates two
+security challenges:
 
-1. **Request authorization** — How do we verify that incoming emails are from
-   trusted senders, not spoofed messages that could trigger unauthorized code
+1. **Request authorization** — How do we verify that incoming messages are from
+   trusted senders, not spoofed or unauthorized requests that could trigger code
    execution?
 
 2. **Execution containment** — How do we limit the blast radius when an agent
    executes arbitrary code, preventing credential theft, data exfiltration, or
    host compromise?
 
-The security model addresses these through email-native authentication (DMARC)
-and multi-layer sandboxing (container isolation, network allowlist).
+The security model addresses these through per-channel authentication and
+multi-layer sandboxing (container isolation, network allowlist).
 
 ## Core Principles
 
@@ -32,69 +32,113 @@ credentials). All network traffic routes through a proxy that enforces an
 allowlist, preventing data exfiltration even if the agent is compromised via
 prompt injection.
 
-**Email-native authentication (DMARC)** — Rather than inventing a custom
-authentication scheme, Airut leverages DMARC — the standard email authentication
-protocol that major providers already implement. This provides cryptographic
-verification of sender identity without requiring users to manage API keys or
-tokens.
+**Channel-native authentication** — Each channel uses its own authentication
+model. Email uses DMARC — the standard email authentication protocol that major
+providers already implement, providing cryptographic verification of sender
+identity. Slack uses Socket Mode — a pre-authenticated WebSocket where Slack
+guarantees sender identity at the platform level. Both approaches leverage
+existing infrastructure rather than inventing custom authentication.
 
 **Defense in depth** — Multiple independent security layers ensure that failure
-of any single control doesn't compromise the system. Email authentication +
-sender allowlist, container isolation + network sandbox, surrogate credentials +
-environment-only injection — each layer catches threats the others might miss.
+of any single control doesn't compromise the system. Channel authentication +
+sender authorization, container isolation + network sandbox, surrogate
+credentials + environment-only injection — each layer catches threats the others
+might miss.
 
 ## Security Layers
 
 The following diagram shows the security controls at each layer:
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         Email Layer                                 │
-│  ┌─────────────────────┐  ┌─────────────────────────────────────┐   │
-│  │ DMARC Authentication│  │ Sender Authorization (allowlist)    │   │
-│  └─────────────────────┘  └─────────────────────────────────────┘   │
-├─────────────────────────────────────────────────────────────────────┤
-│                       Execution Layer                               │
-│  ┌─────────────────────┐  ┌─────────────────────────────────────┐   │
-│  │ Container Isolation │  │ Filesystem Mount Restrictions       │   │
-│  └─────────────────────┘  └─────────────────────────────────────┘   │
-├─────────────────────────────────────────────────────────────────────┤
-│                        Network Layer                                │
-│  ┌─────────────────────┐  ┌─────────────────────────────────────┐   │
-│  │ Internal Network +  │  │ Proxy Allowlist Enforcement         │   │
-│  │ DNS Control         │  │ (HTTP/HTTPS + DNS)                  │   │
-│  └─────────────────────┘  └─────────────────────────────────────┘   │
-├─────────────────────────────────────────────────────────────────────┤
-│                       Credential Layer                              │
-│  ┌─────────────────────┐  ┌─────────────────────────────────────┐   │
-│  │ Environment-only    │  │ Surrogate Credentials               │   │
-│  │ secrets             │  │ (Masked Secrets + Signing Creds)    │   │
-│  └─────────────────────┘  └─────────────────────────────────────┘   │
-├─────────────────────────────────────────────────────────────────────┤
-│                       Dashboard Layer                               │
-│  ┌──────────────────────────────────────────────────────────────┐   │
-│  │ Localhost binding + reverse proxy authentication (external)  │   │
-│  └──────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                 Channel Authentication Layer                     │
+│  ┌───────────────────┐  ┌──────────────────────────────────┐     │
+│  │ Email: DMARC      │  │ Sender Authorization             │     │
+│  │ Slack: Socket Mode│  │ (allowlist / rules)              │     │
+│  └───────────────────┘  └──────────────────────────────────┘     │
+├──────────────────────────────────────────────────────────────────┤
+│                      Execution Layer                             │
+│  ┌───────────────────┐  ┌──────────────────────────────────┐     │
+│  │ Container         │  │ Filesystem Mount Restrictions    │     │
+│  │ Isolation         │  │                                  │     │
+│  └───────────────────┘  └──────────────────────────────────┘     │
+├──────────────────────────────────────────────────────────────────┤
+│                       Network Layer                              │
+│  ┌───────────────────┐  ┌──────────────────────────────────┐     │
+│  │ Internal Network +│  │ Proxy Allowlist Enforcement      │     │
+│  │ DNS Control       │  │ (HTTP/HTTPS + DNS)               │     │
+│  └───────────────────┘  └──────────────────────────────────┘     │
+├──────────────────────────────────────────────────────────────────┤
+│                     Credential Layer                             │
+│  ┌───────────────────┐  ┌──────────────────────────────────┐     │
+│  │ Environment-only  │  │ Surrogate Credentials            │     │
+│  │ secrets           │  │ (Masked Secrets + Signing Creds) │     │
+│  └───────────────────┘  └──────────────────────────────────┘     │
+├──────────────────────────────────────────────────────────────────┤
+│                     Dashboard Layer                              │
+│  ┌───────────────────────────────────────────────────────────┐   │
+│  │ Localhost binding + reverse proxy authentication (ext.)   │   │
+│  └───────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-## Email Authentication
+## Channel Authentication
 
-Airut verifies sender identity via DMARC before processing any message. This
+Each channel implements its own authentication model. The channel adapter is
+responsible for verifying sender identity and checking authorization before the
+core processes any message.
+
+### Email: DMARC Verification
+
+Airut verifies sender identity via DMARC before processing any email. This
 prevents spoofed emails from triggering code execution.
 
 The authentication flow validates the `From` header against
 `Authentication-Results` headers from the configured `trusted_authserv_id` (your
 mail server). Only the first (topmost) header is examined — lower headers may be
 attacker-injected. After authentication, the sender is checked against the
-per-repo allowlist.
+per-repo `authorized_senders` allowlist.
 
 Both layers must pass. A valid DMARC pass from an unauthorized sender is
 rejected.
 
-See [spec/authentication.md](../spec/authentication.md) for the full
-verification flow, From header parsing, Microsoft 365 quirks, and authorization
-details.
+See [email-setup.md](email-setup.md#dmarc-requirements) for DMARC setup and
+[spec/authentication.md](../spec/authentication.md) for the full verification
+flow, From header parsing, Microsoft 365 quirks, and authorization details.
+
+### Slack: Socket Mode + Authorization Rules
+
+Slack authentication is structurally different from email. The service
+establishes an outbound WebSocket connection using an app-level token
+(`xapp-...`). The connection is secured at two levels:
+
+**Transport security (MITM protection):** The Slack SDK connects to Slack's API
+over HTTPS (`https://slack.com/api/`) to obtain a `wss://` WebSocket URL via
+`apps.connections.open`. Both the HTTPS API call and the WebSocket connection
+use TLS with server certificate validation enforced — the SDK uses Python's
+`ssl.create_default_context()`, which enables certificate verification
+(`CERT_REQUIRED`), hostname checking, and the system CA bundle. A MITM attacker
+cannot intercept or tamper with the connection without a valid certificate for
+Slack's domain.
+
+**Application-level authentication:** The app-level token (`xapp-...`) is
+verified during the Socket Mode handshake. Once connected, all events arrive
+over this pre-authenticated channel with no per-event signature verification
+needed. The `user` field in Socket Mode events is guaranteed by Slack to be the
+actual sender — there is no equivalent of email spoofing. Identity is
+platform-enforced.
+
+After identity verification, the sender is checked against per-repo `authorized`
+rules. Baseline checks always reject bots, deactivated users, and external users
+(team_id mismatch). Then rules are evaluated in order (first match wins):
+`workspace_members`, `user_group`, or `user_id`.
+
+Both layers must pass. A valid Slack user who doesn't match any authorization
+rule is rejected.
+
+See [slack-setup.md](slack-setup.md#authorization-rules) for rule configuration
+and [spec/slack-channel.md](../spec/slack-channel.md) for the full
+specification.
 
 ## Execution Isolation
 
@@ -134,7 +178,9 @@ tags:
 repos:
   my-project:
     email:
-      password: !env EMAIL_PASSWORD
+      password: !env EMAIL_PASSWORD     # Channel credentials
+    slack:
+      bot_token: !env SLACK_BOT_TOKEN
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
       GH_TOKEN: !env GH_TOKEN
@@ -227,7 +273,7 @@ etc.) that handles user authentication before forwarding to the dashboard.
 
 The dashboard exposes:
 
-- Conversation IDs and email subjects
+- Conversation IDs and message subjects
 - Task timing and status
 - Session metadata and actions
 - Network activity logs
@@ -236,17 +282,19 @@ This is acceptable for a single-user system behind authentication.
 
 ## Attack Surface Analysis
 
-| Risk                  | Mitigation                                      |
-| --------------------- | ----------------------------------------------- |
-| Email spoofing        | DMARC verification on trusted headers           |
-| Unauthorized access   | Sender allowlist after authentication           |
-| Code execution escape | Podman container isolation                      |
-| Data exfiltration     | Network allowlist via proxy                     |
-| Credential theft      | Environment-only secrets, no host mounts        |
-| Cross-session attack  | Per-conversation isolation (workspace, network) |
-| Resource exhaustion   | Timeout, conversation limit, garbage collection |
-| Log leakage           | Automatic secret redaction                      |
-| Dashboard access      | Localhost binding, reverse proxy auth           |
+| Risk                  | Mitigation                                          |
+| --------------------- | --------------------------------------------------- |
+| Email spoofing        | DMARC verification on trusted headers               |
+| Slack identity misuse | Platform-enforced identity + authorization rules    |
+| Unauthorized access   | Sender allowlist (email) / authorized rules (Slack) |
+| Bot-to-bot loops      | Slack adapter rejects bot users; email uses DMARC   |
+| Code execution escape | Podman container isolation                          |
+| Data exfiltration     | Network allowlist via proxy                         |
+| Credential theft      | Environment-only secrets, no host mounts            |
+| Cross-session attack  | Per-conversation isolation (workspace, network)     |
+| Resource exhaustion   | Timeout, conversation limit, garbage collection     |
+| Log leakage           | Automatic secret redaction (passwords and tokens)   |
+| Dashboard access      | Localhost binding, reverse proxy auth               |
 
 ## Configuration Security
 
@@ -287,11 +335,24 @@ repos declare what they need, the server controls what's actually available.
 
 ## Fail-Secure Defaults
 
+**Email:**
+
 - Missing `trusted_authserv_id`: Authentication fails (reject all)
 - Empty `authorized_senders`: Authorization fails (reject all)
+- DMARC check failure: Message rejected (no processing)
+
+**Slack:**
+
+- TLS certificate validation failure: WebSocket connection refused (no events)
+- Invalid app token: Socket Mode connection fails (no events received)
+- Empty `authorized` rules: Config validation fails at startup
+- User info API failure: Authorization fails (reject request)
+- Unknown user group: Rule rejects all users (with warning in logs)
+
+**Shared:**
+
 - Proxy startup failure: Task aborts (no unproxied execution)
 - Secret resolution failure: Task aborts (no missing credentials)
-- DMARC check failure: Message rejected (no processing)
 
 ## Security Limitations
 
@@ -357,7 +418,7 @@ legitimate from malicious use of authorized channels.
    useless. This is the strongest mitigation for credential exfiltration.
 2. **Scope credentials to minimum** — A token that can only push to one repo
    limits exfiltration to that repo
-3. **Review agent outputs** — PRs, commits, and email replies are human review
+3. **Review agent outputs** — PRs, commits, and channel replies are human review
    points
 4. **Audit network logs** — `network-sandbox.log` shows all requests for
    forensic analysis
@@ -366,8 +427,8 @@ legitimate from malicious use of authorized channels.
 
 In practice, trusting all content the agent processes is not possible.
 Repository files may contain untrusted user input. Fetched web pages may have
-adversarial content. Email attachments may be crafted by attackers who know the
-system.
+adversarial content. Email attachments or Slack file uploads may be crafted by
+attackers who know the system.
 
 **Security is therefore statistical rather than absolute.** The goal is to:
 

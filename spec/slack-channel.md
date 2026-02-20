@@ -259,7 +259,7 @@ message formatting with standard `mrkdwn` that renders consistently everywhere.
 prefix:
 
 - `TodoStatus.PENDING` → `⚪` (white circle)
-- `TodoStatus.IN_PROGRESS` → `🔵` (blue circle)
+- `TodoStatus.IN_PROGRESS` → `🔄` (arrows counterclockwise)
 - `TodoStatus.COMPLETED` → `✅` (white check mark)
 
 The message uses `section` blocks with `mrkdwn` text type, which renders
@@ -900,14 +900,9 @@ core dependency, no special import handling is needed:
 
 Work remaining after the initial Slack channel implementation:
 
-- **Documentation under `doc/`**: Add Slack setup and configuration guide to
-  `doc/` (parallel to the existing email/M365 documentation). Include app
-  creation walkthrough, token configuration, and authorization rule examples.
 - **Suggested prompts**: Configurable prompts shown when opening the Chat tab
   (`set_suggested_prompts()` in the `thread_started` handler). Requires adding
   `slack.suggested_prompts` to config parsing.
-- **Slack integration tests**: End-to-end tests with a mock Socket Mode server,
-  parallel to the email integration tests.
 - **Model selection**: Email uses subaddressing (`airut+opus@`); Slack currently
   uses the repo default model. Could add command prefix or prompt-based
   selection.

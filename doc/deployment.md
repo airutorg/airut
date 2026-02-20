@@ -7,8 +7,11 @@ regular user (not root) using systemd user services and rootless Podman.
 
 - **Linux** (dedicated VM recommended, Debian 13 tested)
 - **[uv](https://docs.astral.sh/uv/)**, **Git**, and **Podman** (rootless)
-- **Dedicated email account** with IMAP/SMTP access — one per repository (see
-  [Email Setup](#email-setup) for details)
+- **At least one channel** per repository:
+  - **Email**: Dedicated email account with IMAP/SMTP access — one per
+    repository (see [email-setup.md](email-setup.md))
+  - **Slack**: Slack workspace with app installation permissions (see
+    [slack-setup.md](slack-setup.md))
 - **Git credentials** for fetching configured repositories (see below)
 
 ## Installation Steps
@@ -119,11 +122,14 @@ everything in one file:
 ```yaml
 repos:
   my-project:
-    email:
-      password: your-email-password  # Inline secret
     secrets:
       ANTHROPIC_API_KEY: sk-ant-...  # Inline secret
       GH_TOKEN: ghp_...
+    email:
+      password: your-email-password  # Inline secret
+    slack:
+      bot_token: xoxb-...
+      app_token: xapp-...
 ```
 
 Alternatively, use `!env` tags to load secrets from environment variables:
@@ -131,11 +137,14 @@ Alternatively, use `!env` tags to load secrets from environment variables:
 ```yaml
 repos:
   my-project:
-    email:
-      password: !env EMAIL_PASSWORD  # From environment
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
       GH_TOKEN: !env GH_TOKEN
+    email:
+      password: !env EMAIL_PASSWORD  # From environment
+    slack:
+      bot_token: !env SLACK_BOT_TOKEN
+      app_token: !env SLACK_APP_TOKEN
 ```
 
 Environment variables can be set in `~/.config/airut/.env` (next to
@@ -143,9 +152,11 @@ Environment variables can be set in `~/.config/airut/.env` (next to
 
 ```bash
 cat > ~/.config/airut/.env << 'EOF'
-EMAIL_PASSWORD=your-email-password
 ANTHROPIC_API_KEY=sk-ant-...
 GH_TOKEN=ghp_your-github-token
+EMAIL_PASSWORD=your-email-password   # If using email channel
+SLACK_BOT_TOKEN=xoxb-...            # If using Slack channel
+SLACK_APP_TOKEN=xapp-...
 EOF
 chmod 600 ~/.config/airut/.env
 ```
@@ -158,7 +169,7 @@ See [Configuration](#configuration) for full details.
 
 **Important:** The target repository must also be configured for Airut. See
 [repo-onboarding.md](repo-onboarding.md) for setting up the `.airut/` directory,
-`CLAUDE.md`, and the email-to-PR workflow in the target repo.
+`CLAUDE.md`, and the message-to-PR workflow in the target repo.
 
 ### 7. Validate Configuration
 
@@ -175,7 +186,7 @@ dependencies (git, podman) are installed and meet minimum version requirements.
 airut install-service
 ```
 
-This installs and starts `airut.service` — the email gateway service.
+This installs and starts `airut.service` — the gateway service.
 
 ### 9. Verify Installation
 
@@ -211,6 +222,7 @@ container_command: podman    # or docker
 
 repos:
   my-project:
+    # Channel configuration (at least one required)
     email:
       imap_server: mail.example.com
       imap_port: 993
@@ -226,6 +238,12 @@ repos:
         poll_interval: 30
         use_idle: true
         idle_reconnect_interval: 1740
+
+    slack:
+      bot_token: !env SLACK_BOT_TOKEN
+      app_token: !env SLACK_APP_TOKEN
+      authorized:
+        - workspace_members: true
 
     git:
       repo_url: https://github.com/your-org/repo.git
@@ -244,9 +262,11 @@ them in `~/.config/airut/.env` — automatically loaded by the service.
 Example `~/.config/airut/.env` file:
 
 ```bash
-EMAIL_PASSWORD=your-password
 ANTHROPIC_API_KEY=sk-ant-...
 GH_TOKEN=ghp_...
+EMAIL_PASSWORD=your-password       # If using email channel
+SLACK_BOT_TOKEN=xoxb-...          # If using Slack channel
+SLACK_APP_TOKEN=xapp-...
 ```
 
 Keep `.env` secure (`chmod 600`). The file should never be committed to version
@@ -319,73 +339,63 @@ for an overview and
 [spec/aws-sigv4-resigning.md](../spec/aws-sigv4-resigning.md) for the full
 specification.
 
-## Email Setup
+## Channel Setup
 
-### Dedicated Inbox Requirement
+Each repository needs at least one channel configured. Both can run
+simultaneously for the same repo — include both `email:` and `slack:` blocks to
+enable dual-channel operation.
 
-> **⚠️ Warning:** Each repository requires its own dedicated email
-> account/inbox. Airut treats the inbox as a work queue — it continuously polls
-> for messages, processes every email it finds, and **permanently deletes
-> messages** after processing.
->
-> **Never point Airut to an inbox used for other purposes** (such as your
-> personal email or a shared team inbox). Airut will attempt to process every
-> message and delete it.
+### Email
 
-### DMARC Requirements
+Email uses IMAP/SMTP with DMARC-based sender verification. Each repository
+requires a dedicated email account (Airut deletes messages after processing).
 
-Airut authenticates senders using DMARC verification on incoming emails. This
-requires:
+See [email-setup.md](email-setup.md) for the complete setup guide covering
+provider selection, DMARC configuration, authorization, and troubleshooting.
 
-1. **Your mail server must add `Authentication-Results` headers** — Most mail
-   providers (Gmail, Microsoft 365, Fastmail, etc.) do this automatically.
+**Quick reference** — add the `email:` block to your server config:
 
-2. **Configure `trusted_authserv_id`** — This must match the server identifier
-   in your mail provider's `Authentication-Results` header. Check an email's raw
-   headers to find this value.
+```yaml
+repos:
+  my-project:
+    email:
+      imap_server: mail.example.com
+      smtp_server: mail.example.com
+      username: airut
+      password: !env EMAIL_PASSWORD
+      from: "Airut <airut@example.com>"
+      authorized_senders:
+        - you@example.com
+      trusted_authserv_id: mail.example.com
 
-3. **Sender domains must have DMARC configured** — Emails from domains without
-   DMARC records will be rejected.
-
-### Testing Setup
-
-For local testing or development, you have several options:
-
-**Option 1: Gmail with App Password (simplest)**
-
-- Use a Gmail account for IMAP/SMTP
-- Generate an App Password (requires 2FA enabled)
-- Set `trusted_authserv_id: mx.google.com`
-- Limitation: Only works if senders use domains with DMARC (most corporate
-  domains and major providers have this)
-
-**Option 2: Fastmail or similar**
-
-- Fastmail, Proton, and similar providers include DMARC verification
-- Check their documentation for the correct `trusted_authserv_id`
-
-**Option 3: Self-hosted mail server**
-
-- Requires configuring OpenDMARC or similar
-- Most complex option, but gives full control
-
-### Verifying DMARC
-
-To check if a sender's domain has DMARC configured:
-
-```bash
-dig +short TXT _dmarc.example.com
+    git:
+      repo_url: https://github.com/your-org/repo.git
 ```
 
-A valid response indicates DMARC is configured. No response means emails from
-that domain cannot be authenticated.
+For Microsoft 365 with OAuth2, see [m365-oauth2.md](m365-oauth2.md).
 
-## Microsoft OAuth2 for M365 (IMAP/SMTP)
+### Slack
 
-If your mailbox is hosted on Microsoft 365, you can use OAuth2 instead of
-password authentication. See [m365-oauth2.md](m365-oauth2.md) for the complete
-step-by-step setup guide (app registration, service principal, mailbox
-permissions, Airut configuration, and troubleshooting).
+Slack uses Socket Mode (outbound WebSocket) — no inbound endpoints, public DNS,
+or TLS certificates needed. Each repository gets its own Slack app.
+
+See [slack-setup.md](slack-setup.md) for the complete setup guide covering app
+creation, token generation, authorization rules, and troubleshooting.
+
+**Quick reference** — add the `slack:` block to your server config:
+
+```yaml
+repos:
+  my-project:
+    slack:
+      bot_token: !env SLACK_BOT_TOKEN
+      app_token: !env SLACK_APP_TOKEN
+      authorized:
+        - workspace_members: true
+
+    git:
+      repo_url: https://github.com/your-org/repo.git
+```
 
 ## Service Management
 
@@ -451,7 +461,7 @@ For external access, consider:
 Whichever method you use, add authentication to protect the dashboard.
 
 Set `dashboard.base_url` in config to enable task links in acknowledgment
-emails.
+messages.
 
 ## Troubleshooting
 
@@ -465,16 +475,6 @@ journalctl --user -u airut -n 50
 # - Missing ~/.config/airut/.env or secrets
 # - Invalid YAML in ~/.config/airut/airut.yaml
 # - Podman not installed or not rootless
-```
-
-### IMAP Connection Issues
-
-```bash
-# Test IMAP manually
-openssl s_client -connect mail.example.com:993
-
-# Check if IDLE is supported
-# Look for "IDLE" in CAPABILITY response
 ```
 
 ### Git Mirror Failures
@@ -523,9 +523,9 @@ sudo loginctl enable-linger $USER
 
 ## Emergency Recovery (Break Glass)
 
-If the agent gets into a broken state that prevents email-driven recovery (e.g.,
-corrupted configuration, broken allowlist, expired tokens), you'll need to
-intervene manually via SSH.
+If the agent gets into a broken state that prevents channel-driven recovery
+(e.g., corrupted configuration, broken allowlist, expired tokens), you'll need
+to intervene manually via SSH.
 
 ### Common Recovery Scenarios
 
