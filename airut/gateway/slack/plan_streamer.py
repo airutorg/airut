@@ -105,6 +105,7 @@ class SlackPlanStreamer:
         self._stream: ChatStream | None = None
         self._last_append_time: float = 0.0
         self._last_chunks: list[TaskUpdateChunk] = []
+        self._has_pending: bool = False
         self._lock = threading.Lock()
         self._keepalive_timer: threading.Timer | None = None
 
@@ -159,6 +160,7 @@ class SlackPlanStreamer:
             try:
                 self._stream.append(chunks=self._last_chunks)
                 self._last_append_time = time.monotonic()
+                self._has_pending = False
                 self._schedule_keepalive()
             except SlackApiError:
                 # Stream likely expired between scheduling and firing.
@@ -201,11 +203,13 @@ class SlackPlanStreamer:
             # (unless this is the very first call).  Still update
             # _last_chunks so the keepalive always re-sends the latest
             # state, not stale data from the previous successful append.
+            # Mark pending so finalize() flushes if needed.
             if (
                 self._stream is not None
                 and elapsed < _MIN_APPEND_INTERVAL_SECONDS
             ):
                 self._last_chunks = chunks
+                self._has_pending = True
                 return
 
             self._append_chunks(chunks)
@@ -241,11 +245,13 @@ class SlackPlanStreamer:
 
             # Debounce: skip the API call if too soon after last
             # append (unless this is the very first call).
+            # Mark pending so finalize() flushes if needed.
             if (
                 self._stream is not None
                 and elapsed < _MIN_APPEND_INTERVAL_SECONDS
             ):
                 self._last_chunks = chunks
+                self._has_pending = True
                 return
 
             self._append_chunks(chunks)
@@ -263,6 +269,7 @@ class SlackPlanStreamer:
                 self._stream.append(chunks=chunks)
             self._last_append_time = time.monotonic()
             self._last_chunks = chunks
+            self._has_pending = False
             self._schedule_keepalive()
         except SlackApiError as e:
             if _is_stream_expired(e):
@@ -276,6 +283,7 @@ class SlackPlanStreamer:
                     stream.append(chunks=chunks)
                     self._last_append_time = time.monotonic()
                     self._last_chunks = chunks
+                    self._has_pending = False
                     self._schedule_keepalive()
                 except SlackApiError as retry_err:
                     logger.warning(
@@ -289,7 +297,11 @@ class SlackPlanStreamer:
                 )
 
     def finalize(self) -> None:
-        """Stop the stream and cancel keepalive timer.
+        """Flush any pending update, then stop the stream.
+
+        If a debounced update was not yet sent (and not yet picked up
+        by the keepalive timer), it is flushed now so the final task
+        state always reaches the user.
 
         If the stream was used in no-plan mode (action-only, no
         ``TodoWrite``), the synthetic action task is marked complete
@@ -304,6 +316,17 @@ class SlackPlanStreamer:
 
             if self._stream is None:
                 return
+
+            # Flush any debounced update so the final state is visible.
+            if self._has_pending and self._last_chunks:
+                try:
+                    self._stream.append(chunks=self._last_chunks)
+                except SlackApiError as e:
+                    logger.warning(
+                        "Failed to flush pending plan update (non-fatal): %s",
+                        e,
+                    )
+                self._has_pending = False
 
             try:
                 # In no-plan mode, mark the synthetic action task as

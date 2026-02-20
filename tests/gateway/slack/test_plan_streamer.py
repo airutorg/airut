@@ -569,6 +569,96 @@ class TestSlackPlanStreamerFinalize:
         streamer.finalize()
         stream.stop.assert_called_once_with()
 
+    @patch(_TIMER_PATCH)
+    def test_flushes_pending_debounced_update(
+        self, _timer_cls: MagicMock
+    ) -> None:
+        """Finalize sends the last debounced update before stopping."""
+        streamer, client = _make_streamer()
+        stream = client.chat_stream.return_value
+
+        # First update goes through, second is debounced.
+        with patch(
+            "airut.gateway.slack.plan_streamer.time.monotonic",
+            side_effect=[0.0, 0.0, 0.1],
+        ):
+            streamer.update(_make_items(TodoStatus.PENDING))
+            streamer.update(
+                _make_items(TodoStatus.COMPLETED, TodoStatus.COMPLETED)
+            )
+
+        # Only the first update was sent so far.
+        assert stream.append.call_count == 1
+
+        streamer.finalize()
+
+        # finalize() flushed the debounced update, then stopped.
+        assert stream.append.call_count == 2
+        flushed_chunks = stream.append.call_args_list[1][1]["chunks"]
+        assert len(flushed_chunks) == 2
+        assert flushed_chunks[0].status == "complete"
+        stream.stop.assert_called_once()
+
+    @patch(_TIMER_PATCH)
+    def test_no_flush_when_nothing_pending(self, _timer_cls: MagicMock) -> None:
+        """Finalize does not send an extra append when nothing is pending."""
+        streamer, client = _make_streamer()
+        stream = client.chat_stream.return_value
+
+        streamer.update(_make_items(TodoStatus.IN_PROGRESS))
+        assert stream.append.call_count == 1
+
+        streamer.finalize()
+
+        # No extra append — only stop.
+        assert stream.append.call_count == 1
+        stream.stop.assert_called_once()
+
+    @patch(_TIMER_PATCH)
+    def test_flush_failure_non_fatal(self, _timer_cls: MagicMock) -> None:
+        """If flushing the pending update fails, stop() is still called."""
+        streamer, client = _make_streamer()
+        stream = client.chat_stream.return_value
+
+        with patch(
+            "airut.gateway.slack.plan_streamer.time.monotonic",
+            side_effect=[0.0, 0.0, 0.1],
+        ):
+            streamer.update(_make_items(TodoStatus.PENDING))
+            streamer.update(_make_items(TodoStatus.COMPLETED))
+
+        # Make the flush append fail.
+        stream.append.side_effect = SlackApiError(
+            message="error",
+            response=MagicMock(status_code=500, data={}),
+        )
+
+        # Should not raise, and should still call stop().
+        streamer.finalize()
+        stream.stop.assert_called_once()
+
+    @patch(_TIMER_PATCH)
+    def test_keepalive_clears_pending(self, _timer_cls: MagicMock) -> None:
+        """When keepalive fires and sends pending chunks, pending is cleared."""
+        streamer, client = _make_streamer()
+        stream = client.chat_stream.return_value
+
+        with patch(
+            "airut.gateway.slack.plan_streamer.time.monotonic",
+            side_effect=[0.0, 0.0, 0.1],
+        ):
+            streamer.update(_make_items(TodoStatus.PENDING))
+            streamer.update(_make_items(TodoStatus.COMPLETED))
+
+        # Keepalive fires and sends the pending chunks.
+        streamer._keepalive_tick()
+        assert stream.append.call_count == 2
+
+        # Now finalize should NOT flush again (keepalive already sent).
+        streamer.finalize()
+        assert stream.append.call_count == 2
+        stream.stop.assert_called_once()
+
 
 class TestKeepalive:
     @patch(_TIMER_PATCH)

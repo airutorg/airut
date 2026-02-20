@@ -80,9 +80,9 @@ dependencies, and the data is small (one entry per conversation).
 ### Thread Titles
 
 The adapter sets a thread title (visible in the History tab) after the first
-successful reply. The title is derived from the user's first message (truncated)
-or from the conversation topic if Claude provides one. This helps users find and
-resume past conversations.
+successful reply. The title is derived from the first line of the user's first
+message, truncated to **60 characters**. This helps users find and resume past
+conversations.
 
 ### Status Indicators
 
@@ -203,9 +203,9 @@ For Claude responses that exceed the single-block limit:
    message, breaking at natural boundaries (paragraph breaks, code block
    boundaries). This keeps the response as one message in the thread.
 2. **Secondary strategy**: If the response exceeds ~13K characters total, split
-   into multiple messages in the same thread.
-3. **Fallback**: For extremely long responses, upload as a text/markdown file
-   attachment in the thread.
+   into multiple messages in the same thread (up to ~65K characters total).
+3. **Fallback**: For responses exceeding **65,000 characters**, upload as a
+   text/markdown file attachment in the thread.
 
 ### Block Validation Fallback
 
@@ -279,7 +279,10 @@ sent on every `update()`.
 **Debouncing**: Rapid `update()` and `update_action()` calls (within 500ms) are
 coalesced — only the latest state is sent. This prevents rate limiting when
 Claude emits many tool calls in quick succession. The debounced state is still
-stored in `_last_chunks` so the keepalive re-sends fresh data.
+stored in `_last_chunks` so the keepalive re-sends fresh data. If `finalize()`
+is called while a debounced update is pending (before the keepalive fires), the
+pending state is flushed immediately so the final task state always reaches the
+user.
 
 **Keepalive**: Slack auto-expires a streaming session after a period of
 inactivity (undocumented, likely 30–60 s). A background daemon timer re-sends
@@ -309,7 +312,7 @@ using the bot token) and saves to the conversation's `inbox/` directory via the
 `save_attachments()` method. File metadata (URLs, names) is extracted during
 `authenticate_and_parse()` and retained on the `SlackParsedMessage` for deferred
 download in `save_attachments()`, matching the email adapter's two-phase
-pattern.
+pattern. Individual attachments exceeding **100 MB** are skipped with a warning.
 
 **Outbound** (bot -> user): Files from `outbox/` are uploaded to the thread via
 Slack's `files_upload_v2` method (which handles the upload URL and completion
