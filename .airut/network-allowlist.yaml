@@ -57,3 +57,8 @@ url_prefixes:
   - host: results-receiver.actions.githubusercontent.com
     path: /rest/runs*
     methods: [GET, POST]
+
+  # Slack API documentation — read-only reference
+  - host: docs.slack.dev
+    path: ""
+    methods: [GET, HEAD]
