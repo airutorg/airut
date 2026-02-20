@@ -3,8 +3,7 @@
 ## Project Overview
 
 Airut is a protocol-agnostic gateway for headless Claude Code interaction.
-Currently supports email as a channel; designed for future channels (Slack,
-etc.). Named "Airut" (Finnish: herald/messenger).
+Supports email and Slack as channels. Named "Airut" (Finnish: herald/messenger).
 
 Network requests from containers are sandboxed; if requests fail, check
 `.airut/network-allowlist.yaml`. See `doc/network-sandbox.md` for details.
@@ -14,14 +13,16 @@ Network requests from containers are sandboxed; if requests fail, check
 High-level documentation in `doc/` (see `doc/README.md` for full list):
 
 - `doc/architecture.md` — system architecture and data flow
-- `doc/security.md` — security model (email auth, isolation, credentials)
+- `doc/security.md` — security model (channel auth, isolation, credentials)
 - `doc/execution-sandbox.md` — container isolation and resource limits
 - `doc/network-sandbox.md` — network allowlist and proxy architecture
 - `doc/deployment.md` — installation and server configuration
-- `doc/m365-oauth2.md` — Microsoft 365 OAuth2 setup for IMAP/SMTP
+- `doc/email-setup.md` — email channel setup (IMAP/SMTP, DMARC)
+- `doc/slack-setup.md` — Slack channel setup (Socket Mode, authorization rules)
+- `doc/m365-oauth2.md` — Microsoft 365 OAuth2 setup for email (IMAP/SMTP)
 - `doc/repo-onboarding.md` — onboarding new repositories
 - `doc/gerrit-onboarding.md` — Gerrit-specific onboarding
-- `doc/agentic-operation.md` — email-to-PR workflow patterns
+- `doc/agentic-operation.md` — message-to-PR workflow patterns
 
 Implementation specs in `spec/` (see `spec/README.md` for full list):
 

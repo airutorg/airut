@@ -14,7 +14,7 @@ For a minimal working example of `.airut/` configuration, see the
 Controls repo-specific behavior:
 
 ```yaml
-default_model: opus         # Claude model when not specified via subaddressing
+default_model: opus         # Claude model (overridable via email subaddressing)
 timeout: 6000               # Max container execution time (seconds)
 
 network:
@@ -71,13 +71,12 @@ directory). Run `airut init` to create a stub, or see
 `config/airut.example.yaml` in the repository for a documented example. It
 handles:
 
-- Mail server credentials (IMAP/SMTP) — **each repo needs a dedicated inbox**
-- Authorized senders and trusted authserv_id
-- Storage directory and git repo URL
+- Channel credentials (email: IMAP/SMTP; Slack: bot and app tokens)
+- Authorization configuration (email: sender allowlist; Slack: rules)
+- Git repo URL and storage directory
 - Secrets pool (values that `!secret` tags reference)
 
-> **Note:** Airut treats the IMAP inbox as a work queue. It polls for messages,
-> processes every email, and permanently deletes messages after processing.
-> Never use a shared or personal email account.
+A repo can have email, Slack, or both channels active simultaneously. See
+`doc/email-setup.md` and `doc/slack-setup.md` for channel-specific guides.
 
 See `spec/repo-config.md` for the full schema.

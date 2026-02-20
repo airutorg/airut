@@ -1,14 +1,16 @@
 # Repository Onboarding
 
-This guide explains how to onboard a new repository to Airut, enabling
-email-based Claude Code interaction.
+This guide explains how to onboard a new repository to Airut, enabling Claude
+Code interaction via email and/or Slack.
 
 ## Prerequisites
 
 - Airut server deployed (see [deployment.md](deployment.md))
-- **Dedicated email account** for the repository (see
-  [Dedicated Inbox Requirement](deployment.md#dedicated-inbox-requirement) —
-  Airut deletes processed messages)
+- **At least one channel configured:**
+  - **Email**: Dedicated email account (see [email-setup.md](email-setup.md) —
+    Airut deletes processed messages)
+  - **Slack**: Slack app installed to your workspace (see
+    [slack-setup.md](slack-setup.md))
 - Repository access for the agent's GitHub account
 - Claude API credentials
 
@@ -184,7 +186,7 @@ See the Airut repository's `.airut/container/` directory for a working example.
 ### 5. Write CLAUDE.md
 
 Create a `CLAUDE.md` in your repository root with operating instructions for the
-agent. A well-crafted `CLAUDE.md` enables the email-to-PR workflow — the agent
+agent. A well-crafted `CLAUDE.md` enables the message-to-PR workflow — the agent
 autonomously creates PRs, follows your project's conventions, and iterates on
 review feedback.
 
@@ -202,6 +204,9 @@ can be used as inspiration.
 ### 6. Configure Server
 
 Add the repository to your Airut server config (`~/.config/airut/airut.yaml`).
+Configure at least one channel (email, Slack, or both).
+
+**Email channel** (see [email-setup.md](email-setup.md) for full guide):
 
 > **Note:** The email account must be dedicated to this repository. Airut treats
 > the inbox as a work queue and permanently deletes messages after processing.
@@ -243,6 +248,36 @@ repos:
           - "Authorization"
 ```
 
+**Slack channel** (see [slack-setup.md](slack-setup.md) for full guide):
+
+```yaml
+repos:
+  your-repo:
+    slack:
+      bot_token: !env SLACK_BOT_TOKEN
+      app_token: !env SLACK_APP_TOKEN
+      authorized:
+        - workspace_members: true
+
+    git:
+      repo_url: https://github.com/your-org/your-repo.git
+
+    secrets:
+      ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
+
+    masked_secrets:
+      GH_TOKEN:
+        value: !env GH_TOKEN_YOUR_REPO
+        scopes:
+          - "api.github.com"
+          - "*.githubusercontent.com"
+        headers:
+          - "Authorization"
+```
+
+Both channels can coexist — include both `email:` and `slack:` blocks under the
+same repo. See [slack-setup.md](slack-setup.md) for the full Slack setup guide.
+
 For credentials that should only be usable with specific services, prefer
 `masked_secrets` over `secrets`. Headers use fnmatch patterns (`*` for all). For
 AWS credentials, use `signing_credentials` — the proxy re-signs requests instead
@@ -256,6 +291,8 @@ Add secrets to `~/.config/airut/.env`:
 
 ```bash
 YOUR_REPO_EMAIL_PASSWORD=password
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=xapp-...
 ANTHROPIC_API_KEY=sk-ant-...
 GH_TOKEN_YOUR_REPO=ghp_...
 ```
@@ -280,7 +317,7 @@ On GitHub, configure branch protection for `main`:
 
 ### 8. Test the Setup
 
-Send a test email:
+**Email:** Send a test email:
 
 ```
 To: your-repo-bot@example.com
@@ -290,11 +327,24 @@ Please verify you can access the repository by listing the files in the
 root directory.
 ```
 
-Expected response:
+Expected: acknowledgment email with dashboard link, then a reply with file
+listing.
 
-- Acknowledgment email with dashboard link
-- Reply with file listing
-- No errors in service logs
+**Slack:** Open the Airut app in Slack and click the **Chat tab**:
+
+```
+Please verify you can access the repository by listing the files in the
+root directory.
+```
+
+Expected: status indicator ("is getting ready..."), acknowledgment message, then
+a reply with file listing and thread title set.
+
+In both cases, check the service logs for errors:
+
+```bash
+journalctl --user -u airut -f
+```
 
 ## Alternative: Gerrit-Based Repositories
 
@@ -340,6 +390,7 @@ Verify:
 
 Check:
 
-- Conversation ID in subject (`[ID:xyz123]`)
+- **Email**: Conversation ID in subject (`[ID:xyz123]`)
+- **Slack**: Thread-to-conversation mapping in `slack_threads.json`
 - Session directory exists in storage
 - `conversation.json` has valid session ID

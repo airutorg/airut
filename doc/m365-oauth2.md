@@ -17,8 +17,8 @@ rather than a user, which is the correct approach for headless/daemon services.
 - **PowerShell** with the
   [ExchangeOnlineManagement](https://learn.microsoft.com/en-us/powershell/exchange/exchange-online-powershell)
   module for Exchange configuration
-- A dedicated mailbox for Airut (see
-  [Dedicated Inbox Requirement](deployment.md#dedicated-inbox-requirement))
+- A dedicated mailbox for Airut (see [email-setup.md](email-setup.md) — Airut
+  deletes processed messages)
 
 ## Step 1: Register the Application in Entra ID (Azure AD)
 

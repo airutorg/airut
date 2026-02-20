@@ -30,8 +30,8 @@ dashboard:
   host: 127.0.0.1
   port: 5200
 
-  # Public URL used in acknowledgment emails to link to task progress.
-  # Leave empty to omit task links from emails.
+  # Public URL used in acknowledgment messages to link to task progress.
+  # Leave empty to omit task links from messages.
   base_url: dashboard.example.com
 
 # Container runtime executable (podman or docker).
@@ -46,10 +46,10 @@ container_command: podman
 # ---------------------------------------------------------------------------
 # Repositories
 # ---------------------------------------------------------------------------
-# Each entry under repos: defines a separate email inbox + git repository.
-# Every repo gets its own IMAP listener thread, SMTP credentials, authorized
-# sender, and secrets pool.  Repos share the global executor pool and
-# dashboard.
+# Each entry under repos: defines a channel configuration + git repository.
+# A repo can have email, Slack, or both channels active simultaneously.
+# Every repo gets its own listeners, credentials, and secrets pool.
+# Repos share the global executor pool and dashboard.
 
 repos:
   # -------------------------------------------------------------------------
@@ -200,8 +200,10 @@ repos:
 
   # -------------------------------------------------------------------------
   # Example: additional repository (uncomment to use)
+  # A repo can use email, Slack, or both channels.
   # -------------------------------------------------------------------------
   # another-repo:
+  #   # Email channel
   #   email:
   #     imap_server: mail.example.com
   #     smtp_server: mail.example.com
@@ -211,6 +213,14 @@ repos:
   #     authorized_senders:
   #       - you@example.com
   #     trusted_authserv_id: mail.example.com
+  #
+  #   # Slack channel
+  #   slack:
+  #     bot_token: !env OTHER_SLACK_BOT_TOKEN
+  #     app_token: !env OTHER_SLACK_APP_TOKEN
+  #     authorized:
+  #       - workspace_members: true
+  #
   #   git:
   #     repo_url: https://github.com/you/another-repo.git
   #   secrets:

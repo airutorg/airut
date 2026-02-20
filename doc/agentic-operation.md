@@ -1,10 +1,10 @@
 # Agentic Operation
 
-This document describes how the Airut repository achieves autonomous email-to-PR
-workflows. While Airut provides the infrastructure (email handling, sandboxing,
-conversation management), **agentic operation requires proper configuration of
-the target repository** — including a well-crafted `CLAUDE.md`, workflow
-tooling, and GitHub branch protection.
+This document describes how the Airut repository achieves autonomous
+message-to-PR workflows. While Airut provides the infrastructure (message
+handling, sandboxing, conversation management), **agentic operation requires
+proper configuration of the target repository** — including a well-crafted
+`CLAUDE.md`, workflow tooling, and GitHub branch protection.
 
 This repository serves as a reference implementation. For a simpler starting
 point, the [airut.org website](https://github.com/airutorg/website) demonstrates
@@ -26,13 +26,14 @@ Successful agentic operation relies on:
 
 Airut handles the infrastructure that enables agentic operation:
 
-- **Conversation management** — Incoming messages trigger agent execution,
-  replies are sent automatically, conversation threading maintains context
+- **Conversation management** — Incoming messages (email or Slack) trigger agent
+  execution, replies are sent automatically, conversation threading maintains
+  context
 - **Container isolation** — Each conversation runs in a dedicated Podman
   container with controlled mounts (workspace, Claude session, inbox/outbox,
   storage). The container is ephemeral; only the mounted directories persist
   between tasks. Claude Code runs with `--dangerously-skip-permissions` since
-  interactive approval isn't possible in headless channels — the container
+  interactive approval isn't possible over asynchronous channels — the container
   sandbox provides the safety boundary instead
 - **Network sandbox** — All HTTP(S) traffic routed through a proxy that enforces
   an allowlist, preventing data exfiltration
@@ -121,7 +122,7 @@ autonomous behavior. These can be adapted for other repositories.
 
 #### PR Creation Mandate
 
-This is the core instruction that enables email-to-PR workflows:
+This is the core instruction that enables message-to-PR workflows:
 
 ```markdown
 ## CRITICAL: Always Create PRs
@@ -241,7 +242,7 @@ than fighting with git and GitHub.
 
 ### Standard Task Flow
 
-1. Agent receives task via email
+1. Agent receives task via email or Slack
 2. Creates feature branch from `origin/main`
 3. Makes changes, runs `ci.py --fix`
 4. Commits and pushes
@@ -252,15 +253,16 @@ than fighting with git and GitHub.
 ### Review Feedback Loop
 
 1. Human reviews PR, leaves comments (inline code review or PR comments)
-2. User replies to agent's email, optionally quoting or referencing specific
-   feedback
+2. User replies to the agent (email reply or Slack thread message), optionally
+   quoting or referencing specific feedback
 3. Agent runs `pr.py review -v` to fetch GitHub PR comments and code review
 4. Addresses feedback, pushes
 5. Waits for CI again
 
 Note: The agent does not receive GitHub notifications directly. The user must
-reply to the agent's email to trigger another execution cycle. The agent can
-then access all PR comments and code review via the GitHub API.
+send a follow-up message (email reply or Slack thread message) to trigger
+another execution cycle. The agent can then access all PR comments and code
+review via the GitHub API.
 
 ### Conflict Resolution
 
@@ -291,7 +293,7 @@ Agentic operation with Airut requires:
 
 | Component               | Purpose                                     |
 | ----------------------- | ------------------------------------------- |
-| Airut                   | Message handling, sandboxing, session state |
+| Airut                   | Channel handling, sandboxing, session state |
 | `CLAUDE.md`             | Workflow instructions and codebase docs     |
 | Workflow tools          | Reliable CI/PR operations                   |
 | Branch protection       | Human-in-the-loop checkpoint                |
