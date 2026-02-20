@@ -5,14 +5,17 @@
 
 """Integration tests for Slack plan streamer lifecycle.
 
-Tests that TodoWrite events from Claude execution are streamed to
-the Slack thread as plan blocks, and that the stream is finalized
-after execution completes.
+Tests that TodoWrite events from Claude execution produce plan
+messages posted and updated in the Slack thread via chat.postMessage
+and chat.update.
 """
+
+from __future__ import annotations
 
 import sys
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
@@ -22,6 +25,32 @@ from .conftest import wait_for_conv_completion
 from .environment import IntegrationEnvironment
 
 
+if TYPE_CHECKING:
+    from .slack_server import SentSlackMessage
+
+
+def _block_text_contains(msg: SentSlackMessage, needle: str) -> bool:
+    """Check if a message's text or block text contains a substring.
+
+    Handles both plain ``text`` kwargs and nested mrkdwn block
+    structures (``{"type": "section", "text": {"type": "mrkdwn",
+    "text": "..."}}``) used by the plan streamer.
+    """
+    needle_lower = needle.lower()
+    text = msg.kwargs.get("text", "")
+    if isinstance(text, str) and needle_lower in text.lower():
+        return True
+    for block in msg.kwargs.get("blocks", []):
+        if not isinstance(block, dict):
+            continue
+        block_text = block.get("text", "")
+        if isinstance(block_text, dict):
+            block_text = block_text.get("text", "")
+        if isinstance(block_text, str) and needle_lower in block_text.lower():
+            return True
+    return False
+
+
 class TestSlackPlanStreamer:
     """Test plan streamer integration with execution pipeline."""
 
@@ -29,7 +58,7 @@ class TestSlackPlanStreamer:
         self,
         slack_env: IntegrationEnvironment,
     ) -> None:
-        """TodoWrite events produce chat_stream.append calls."""
+        """TodoWrite events produce plan messages via chat.update."""
         assert slack_env.slack_server is not None
         slack_env.slack_server.register_user("U_ALICE", display_name="Alice")
 
@@ -65,49 +94,41 @@ events = [
                 thread_ts="1700000000.000060",
             )
 
-            # Wait for reply
+            # Wait for final reply
             reply = slack_env.slack_server.wait_for_sent(
                 predicate=lambda m: (
                     m.method == "chat_postMessage"
-                    and (
-                        "all steps" in m.kwargs.get("text", "").lower()
-                        or any(
-                            "all steps" in b.get("text", "").lower()
-                            for b in m.kwargs.get("blocks", [])
-                            if isinstance(b, dict)
-                        )
-                    )
+                    and _block_text_contains(m, "all steps")
                 ),
                 timeout=30.0,
             )
             assert reply is not None, "Did not receive reply"
 
-            # Check that plan stream was started and appended to
-            stream_msgs = slack_env.slack_server.get_sent_messages(
-                method="chat_stream.append"
-            )
-            # Should have at least one append (may coalesce due to debounce)
-            assert len(stream_msgs) >= 1, (
-                f"Expected plan stream append, got {len(stream_msgs)}"
-            )
-
-            # Check that stream was stopped
-            stop_msgs = slack_env.slack_server.get_sent_messages(
-                method="chat_stream.stop"
-            )
-            assert len(stop_msgs) >= 1, (
-                "Plan stream was not finalized (no stop call)"
+            # Plan streamer posts initial message and may update it.
+            # Look for plan-related postMessage calls (contain emoji
+            # status indicators from the rendered plan).
+            plan_posts = [
+                m
+                for m in slack_env.slack_server.get_sent_messages(
+                    method="chat_postMessage"
+                )
+                if _block_text_contains(m, "\u26aa")
+                or _block_text_contains(m, "\U0001f535")
+                or _block_text_contains(m, "\u2705")
+            ]
+            assert len(plan_posts) >= 1, (
+                f"Expected plan post, got {len(plan_posts)}"
             )
 
         finally:
             service.stop()
             service_thread.join(timeout=10.0)
 
-    def test_no_todos_no_stream(
+    def test_no_todos_no_plan_message(
         self,
         slack_env: IntegrationEnvironment,
     ) -> None:
-        """Execution without TodoWrite events does not start a stream."""
+        """Execution without TodoWrite events does not post plan updates."""
         assert slack_env.slack_server is not None
         slack_env.slack_server.register_user("U_BOB", display_name="Bob")
 
@@ -135,25 +156,25 @@ events = [
             reply = slack_env.slack_server.wait_for_sent(
                 predicate=lambda m: (
                     m.method == "chat_postMessage"
-                    and (
-                        "no todos" in m.kwargs.get("text", "").lower()
-                        or any(
-                            "no todos" in b.get("text", "").lower()
-                            for b in m.kwargs.get("blocks", [])
-                            if isinstance(b, dict)
-                        )
-                    )
+                    and _block_text_contains(m, "no todos")
                 ),
                 timeout=30.0,
             )
             assert reply is not None
 
-            # No stream operations should have happened
-            stream_msgs = slack_env.slack_server.get_sent_messages(
-                method="chat_stream.append"
-            )
-            assert len(stream_msgs) == 0, (
-                f"Expected no stream append, got {len(stream_msgs)}"
+            # No plan-related messages should have been posted
+            # (plan messages contain emoji status indicators).
+            plan_posts = [
+                m
+                for m in slack_env.slack_server.get_sent_messages(
+                    method="chat_postMessage"
+                )
+                if _block_text_contains(m, "\u26aa")
+                or _block_text_contains(m, "\U0001f535")
+                or _block_text_contains(m, "\u2705")
+            ]
+            assert len(plan_posts) == 0, (
+                f"Expected no plan messages, got {len(plan_posts)}"
             )
 
         finally:
@@ -200,14 +221,7 @@ events = [
             slack_env.slack_server.wait_for_sent(
                 predicate=lambda m: (
                     m.method == "chat_postMessage"
-                    and (
-                        "todos done" in m.kwargs.get("text", "").lower()
-                        or any(
-                            "todos done" in b.get("text", "").lower()
-                            for b in m.kwargs.get("blocks", [])
-                            if isinstance(b, dict)
-                        )
-                    )
+                    and _block_text_contains(m, "todos done")
                 ),
                 timeout=30.0,
             )

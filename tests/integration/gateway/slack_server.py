@@ -169,31 +169,16 @@ class FakeWebClient:
             "user_id": "U_BOT",
         }
 
-    # -- chat_stream (for plan streamer) --------------------------------
+    # -- chat.update (for plan streamer) --------------------------------
 
-    def chat_stream(self, **kwargs: Any) -> MagicMock:
-        """Return a fake ChatStream for plan blocks."""
-        stream = MagicMock()
-
-        def append_side_effect(**kw: Any) -> None:
-            self._server._record_sent(
-                SentSlackMessage(
-                    method="chat_stream.append",
-                    kwargs={**kwargs, **kw},
-                )
-            )
-
-        def stop_side_effect() -> None:
-            self._server._record_sent(
-                SentSlackMessage(
-                    method="chat_stream.stop",
-                    kwargs=kwargs,
-                )
-            )
-
-        stream.append = MagicMock(side_effect=append_side_effect)
-        stream.stop = MagicMock(side_effect=stop_side_effect)
-        return stream
+    def chat_update(self, **kwargs: Any) -> MagicMock:  # noqa: N802
+        """Record a chat.update call (used by plan streamer)."""
+        self._server._record_sent(
+            SentSlackMessage(method="chat_update", kwargs=kwargs)
+        )
+        resp = MagicMock()
+        resp.data = {"ok": True, "ts": kwargs.get("ts", str(time.time()))}
+        return resp
 
 
 # ------------------------------------------------------------------
@@ -455,5 +440,9 @@ class TestSlackServer:
             blocks = m.kwargs.get("blocks", [])
             for block in blocks:
                 if isinstance(block, dict) and "text" in block:
-                    texts.append(block["text"])
+                    block_text = block["text"]
+                    if isinstance(block_text, dict):
+                        texts.append(block_text.get("text", ""))
+                    else:
+                        texts.append(block_text)
         return texts
