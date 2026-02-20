@@ -434,6 +434,97 @@ class TestSlackPlanStreamerUpdateAction:
         assert chunks[1].title == "Running pytest"
 
     @patch(_TIMER_PATCH)
+    def test_action_only_to_plan_restarts_stream(
+        self, _timer_cls: MagicMock
+    ) -> None:
+        """Transition from action-only to plan mode restarts the stream.
+
+        When update_action() starts a stream with a standalone action
+        task and update() later introduces todo items, the old stream
+        must be stopped and a new one started.  Otherwise Slack
+        preserves the action task's original position (before any todo
+        items), causing the action to appear above the in-progress task.
+        """
+        streamer, client = _make_streamer()
+        first_stream = client.chat_stream.return_value
+
+        with patch(
+            "airut.gateway.slack.plan_streamer.time.monotonic",
+            side_effect=[0.0, 0.0, 1.0, 1.0],
+        ):
+            # Action-only mode: stream starts with standalone action.
+            streamer.update_action("Reading CLAUDE.md")
+            assert client.chat_stream.call_count == 1
+
+            # Now todos arrive — should restart the stream.
+            new_stream = MagicMock()
+            client.chat_stream.return_value = new_stream
+            streamer.update(_make_items(TodoStatus.IN_PROGRESS))
+
+        # Old stream was stopped.
+        first_stream.stop.assert_called_once()
+
+        # A new stream was started for the plan.
+        assert client.chat_stream.call_count == 2
+        new_stream.append.assert_called_once()
+
+        # The new stream's first append has correct ordering:
+        # todo task first, then action task.
+        chunks = new_stream.append.call_args[1]["chunks"]
+        assert chunks[0].status == "in_progress"  # todo task
+        assert chunks[1].id == "action"
+
+    @patch(_TIMER_PATCH)
+    def test_action_only_to_plan_stop_error_non_fatal(
+        self, _timer_cls: MagicMock
+    ) -> None:
+        """If stopping the action-only stream fails, update() still works."""
+        streamer, client = _make_streamer()
+        first_stream = client.chat_stream.return_value
+        first_stream.stop.side_effect = SlackApiError(
+            message="error",
+            response=MagicMock(status_code=500, data={}),
+        )
+
+        with patch(
+            "airut.gateway.slack.plan_streamer.time.monotonic",
+            side_effect=[0.0, 0.0, 1.0, 1.0],
+        ):
+            streamer.update_action("Reading file")
+
+            new_stream = MagicMock()
+            client.chat_stream.return_value = new_stream
+            # Should not raise despite stop() failure.
+            streamer.update(_make_items(TodoStatus.IN_PROGRESS))
+
+        # New stream was started and used.
+        assert client.chat_stream.call_count == 2
+        new_stream.append.assert_called_once()
+
+    @patch(_TIMER_PATCH)
+    def test_action_only_expired_before_plan_transition(
+        self, _timer_cls: MagicMock
+    ) -> None:
+        """Expired action-only stream is handled during plan transition."""
+        streamer, client = _make_streamer()
+        first_stream = client.chat_stream.return_value
+        first_stream.stop.side_effect = _stream_expired_error()
+
+        with patch(
+            "airut.gateway.slack.plan_streamer.time.monotonic",
+            side_effect=[0.0, 0.0, 1.0, 1.0],
+        ):
+            streamer.update_action("Reading file")
+
+            new_stream = MagicMock()
+            client.chat_stream.return_value = new_stream
+            streamer.update(_make_items(TodoStatus.IN_PROGRESS))
+
+        # Expired stop is silent; new stream started.
+        assert client.chat_stream.call_count == 2
+        new_stream.append.assert_called_once()
+
+    @patch(_TIMER_PATCH)
     def test_update_clears_stale_action_summary(
         self, _timer_cls: MagicMock
     ) -> None:

@@ -258,6 +258,14 @@ are forwarded to `plan_streamer.update_action(summary)`. Two modes:
 `appendStream` call), not the `details` field (which Slack *appends*). Using
 `details` would cause unbounded text growth across updates.
 
+**Action-only to plan transition**: When `update_action()` starts a stream
+before any `TodoWrite` (action-only mode), and `update()` later introduces todo
+items, the old stream is stopped and a fresh one is started. This is necessary
+because Slack preserves each task's position from its first `appendStream`
+appearance by `id`. Without a stream restart, the action task (originally at
+position 0 in the action-only stream) would remain above all todo items, even
+though the new chunk ordering places it after the first in-progress task.
+
 **TodoItem to Slack mapping**: Each `TodoItem` maps to a `TaskUpdateChunk`:
 
 - `item.active_form` (or `item.content`) → `title`

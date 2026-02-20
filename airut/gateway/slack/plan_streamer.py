@@ -111,6 +111,10 @@ class SlackPlanStreamer:
         # Action tracking state.
         self._todo_items: list[TodoItem] = []
         self._action_summary: str = ""
+        # True when the stream was started in action-only mode
+        # (no TodoWrite yet).  Cleared when update() restarts the
+        # stream for plan mode.
+        self._action_only_stream: bool = False
 
     def _start_stream(self) -> ChatStream:
         """Start the chat stream on first use.
@@ -172,6 +176,13 @@ class SlackPlanStreamer:
         append task updates.  Debounces rapid calls to respect rate
         limits.
 
+        If the stream was started in action-only mode (by
+        ``update_action()`` before any ``TodoWrite``), it is stopped
+        and a fresh stream is started.  Slack preserves task positions
+        by ``id`` from their first ``appendStream`` appearance, so
+        reusing the same stream would leave the action task above the
+        todo items.
+
         If Slack returns ``message_not_in_streaming_state`` (the
         server expired the stream due to inactivity), the old stream
         is discarded and a fresh one is started so remaining updates
@@ -186,6 +197,22 @@ class SlackPlanStreamer:
         """
         with self._lock:
             self._todo_items = list(items)
+
+            # Transition from action-only to plan mode: restart the
+            # stream so Slack assigns fresh positions to all tasks.
+            if self._action_only_stream and self._stream is not None:
+                self._cancel_keepalive()
+                try:
+                    self._stream.stop()
+                except SlackApiError as e:
+                    if not _is_stream_expired(e):
+                        logger.warning(
+                            "Failed to stop action-only stream (non-fatal): %s",
+                            e,
+                        )
+                self._stream = None
+                self._action_only_stream = False
+                self._last_append_time = 0.0
 
             now = time.monotonic()
             elapsed = now - self._last_append_time
@@ -238,6 +265,7 @@ class SlackPlanStreamer:
                         status="in_progress",
                     )
                 ]
+                self._action_only_stream = True
 
             # Debounce: skip the API call if too soon after last
             # append (unless this is the very first call).
