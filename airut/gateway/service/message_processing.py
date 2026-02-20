@@ -37,6 +37,7 @@ from airut.dashboard.tracker import (
     TodoItem,
     TodoStatus,
 )
+from airut.gateway.action_summary import summarize_action
 from airut.gateway.channel import ChannelAdapter, ParsedMessage, PlanStreamer
 from airut.gateway.config import ReplacementMap, RepoConfig
 from airut.gateway.conversation import GitCloneError
@@ -68,13 +69,20 @@ def _make_todo_callback(
     task_id: str,
     plan_streamer: PlanStreamer | None = None,
 ) -> Callable[[StreamEvent], None]:
-    """Build an on_event callback that captures TodoWrite events.
+    """Build an on_event callback that captures TodoWrite and action events.
+
+    Processes two categories of tool use events:
+
+    - **TodoWrite**: Updates the dashboard tracker and forwards the
+      full todo list to the plan streamer.
+    - **Other tools**: Produces a one-line action summary and forwards
+      it to the plan streamer for live progress display.
 
     Args:
         tracker: Task tracker to update.
         task_id: Task ID to update todos for.
-        plan_streamer: Optional plan streamer to forward todo updates
-            to the user's channel in real time.
+        plan_streamer: Optional plan streamer to forward todo and
+            action updates to the user's channel in real time.
 
     Returns:
         Callback suitable for ``task.execute(on_event=...)``.
@@ -83,10 +91,10 @@ def _make_todo_callback(
 
     def on_event(event: StreamEvent) -> None:
         for block in event.content_blocks:
-            if (
-                isinstance(block, ToolUseBlock)
-                and block.tool_name == "TodoWrite"
-            ):
+            if not isinstance(block, ToolUseBlock):
+                continue
+
+            if block.tool_name == "TodoWrite":
                 raw = block.tool_input.get("todos")
                 if isinstance(raw, list):
                     items = [
@@ -107,6 +115,10 @@ def _make_todo_callback(
                     tracker.update_todos(task_id, items)
                     if plan_streamer is not None:
                         plan_streamer.update(items)
+            elif plan_streamer is not None:
+                summary = summarize_action(block)
+                if summary:
+                    plan_streamer.update_action(summary)
 
     return on_event
 

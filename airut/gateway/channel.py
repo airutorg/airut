@@ -338,11 +338,19 @@ class ChannelAdapter(Protocol):
 
 
 class PlanStreamer(Protocol):
-    """Interface for streaming task progress to a channel.
+    """Interface for streaming task and action progress to a channel.
 
-    Streams ``TodoItem`` updates from Claude's ``TodoWrite`` tool use
-    to the user's channel in real time.  Implementations manage the
-    stream lifecycle (start on first update, stop on finalize).
+    Streams two kinds of updates in real time:
+
+    - **Todo list** (``update``): Full task list from ``TodoWrite``
+      events, shown as a plan block.
+    - **Action status** (``update_action``): One-line descriptions
+      of tool use events (e.g. "Reading src/main.py"), shown as
+      details on the current task or as a standalone activity
+      indicator when no plan exists.
+
+    Implementations manage the stream lifecycle (start lazily on
+    first ``update`` or ``update_action``, stop on ``finalize``).
 
     The gateway core creates a ``PlanStreamer`` per execution and passes
     it to the ``on_event`` callback.  Channels that don't support
@@ -359,6 +367,21 @@ class PlanStreamer(Protocol):
 
         Args:
             items: Complete todo list from the latest ``TodoWrite``.
+        """
+        ...
+
+    def update_action(self, summary: str) -> None:
+        """Send a live action status to the channel.
+
+        Called on each non-``TodoWrite`` tool use event with a short
+        description of the current action (e.g. "Reading src/main.py").
+
+        If the plan stream has todo items, the summary is shown as the
+        ``details`` field on the first in-progress task.  Otherwise a
+        single synthetic task is created to provide activity feedback.
+
+        Args:
+            summary: One-line action description.
         """
         ...
 
