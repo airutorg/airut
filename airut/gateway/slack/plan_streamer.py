@@ -40,7 +40,7 @@ _MAX_SECTION_TEXT = 3000
 #: Emoji indicators for each task status.
 _STATUS_EMOJI: dict[TodoStatus, str] = {
     TodoStatus.PENDING: "\u26aa",  # white circle
-    TodoStatus.IN_PROGRESS: "\U0001f535",  # blue circle
+    TodoStatus.IN_PROGRESS: "\U0001f504",  # arrows counterclockwise
     TodoStatus.COMPLETED: "\u2705",  # white check mark
 }
 
@@ -213,7 +213,7 @@ def _render_plan(items: list[TodoItem]) -> str:
     Each task gets an emoji prefix based on its status:
 
     - :white_circle: (``\u26aa``) Pending
-    - :large_blue_circle: (``\U0001f535``) In progress
+    - :arrows_counterclockwise: (``\U0001f504``) In progress
     - :white_check_mark: (``\u2705``) Completed
 
     Args:

@@ -55,7 +55,7 @@ class TestRenderPlan:
         text = _render_plan(items)
 
         assert "\u26aa  Working on task 0" in text
-        assert "\U0001f535  Working on task 1" in text
+        assert "\U0001f504  Working on task 1" in text
         assert "\u2705  Working on task 2" in text
 
     def test_falls_back_to_content_when_no_active_form(
@@ -180,7 +180,7 @@ class TestSlackPlanStreamerFinalize:
         client.chat_update.assert_called_once()
         # Should show the latest (in_progress) state.
         text = client.chat_update.call_args[1]["blocks"][0]["text"]["text"]
-        assert "\U0001f535" in text
+        assert "\U0001f504" in text
 
     def test_noop_when_never_started(self) -> None:
         streamer, client = _make_streamer()
