@@ -341,8 +341,9 @@ def sse_events_log_stream(
     yield format_sse_event("html", data, retry=1000)
 
     while True:
-        time.sleep(poll_interval)
-
+        # Check for new events first, then completion, then sleep.
+        # Checking before the sleep avoids a needless delay when the
+        # task is already done by the time the loop starts.
         events, new_offset = event_log.tail(offset)
         if events:
             offset = new_offset
@@ -370,6 +371,8 @@ def sse_events_log_stream(
         if time.monotonic() - last_heartbeat >= heartbeat_interval:
             yield format_sse_comment("heartbeat")
             last_heartbeat = time.monotonic()
+
+        time.sleep(poll_interval)
 
 
 def render_network_lines_html(lines: list[str]) -> str:
@@ -425,8 +428,9 @@ def sse_network_log_stream(
     yield format_sse_event("html", data, retry=1000)
 
     while True:
-        time.sleep(poll_interval)
-
+        # Check for new lines first, then completion, then sleep.
+        # Checking before the sleep avoids a needless delay when the
+        # task is already done by the time the loop starts.
         lines, new_offset = network_log.tail(offset)
         if lines:
             offset = new_offset
@@ -454,3 +458,5 @@ def sse_network_log_stream(
         if time.monotonic() - last_heartbeat >= heartbeat_interval:
             yield format_sse_comment("heartbeat")
             last_heartbeat = time.monotonic()
+
+        time.sleep(poll_interval)
