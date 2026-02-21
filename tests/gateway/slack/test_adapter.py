@@ -19,6 +19,7 @@ from airut.gateway.slack.adapter import (
     _convert_horizontal_rules,
     _convert_tables,
     _is_invalid_blocks,
+    _is_slack_file_url,
     _post_with_fallback,
     _sanitize_for_slack,
     _send_long_message,
@@ -189,7 +190,12 @@ class TestSaveAttachments:
             model_hint=None,
             slack_channel_id="D456",
             slack_thread_ts="ts1",
-            slack_file_urls=[("report.txt", "https://example.com/f")],
+            slack_file_urls=[
+                (
+                    "report.txt",
+                    "https://files.slack.com/files-pri/T1-F1/report.txt",
+                )
+            ],
         )
 
         mock_resp = MagicMock()
@@ -222,7 +228,12 @@ class TestSaveAttachments:
             model_hint=None,
             slack_channel_id="D456",
             slack_thread_ts="ts1",
-            slack_file_urls=[("report.txt", "https://example.com/f")],
+            slack_file_urls=[
+                (
+                    "report.txt",
+                    "https://files.slack.com/files-pri/T1-F1/report.txt",
+                )
+            ],
         )
 
         with patch(
@@ -677,7 +688,12 @@ class TestPathTraversal:
             model_hint=None,
             slack_channel_id="D456",
             slack_thread_ts="ts1",
-            slack_file_urls=[("../../etc/evil.sh", "https://example.com/f")],
+            slack_file_urls=[
+                (
+                    "../../etc/evil.sh",
+                    "https://files.slack.com/files-pri/T1-F1/evil.sh",
+                )
+            ],
         )
 
         mock_resp = MagicMock()
@@ -710,7 +726,9 @@ class TestPathTraversal:
             model_hint=None,
             slack_channel_id="D456",
             slack_thread_ts="ts1",
-            slack_file_urls=[("", "https://example.com/f")],
+            slack_file_urls=[
+                ("", "https://files.slack.com/files-pri/T1-F1/file")
+            ],
         )
 
         mock_resp = MagicMock()
@@ -742,7 +760,9 @@ class TestDownloadSizeLimit:
             model_hint=None,
             slack_channel_id="D456",
             slack_thread_ts="ts1",
-            slack_file_urls=[("big.bin", "https://example.com/big")],
+            slack_file_urls=[
+                ("big.bin", "https://files.slack.com/files-pri/T1-F1/big.bin")
+            ],
         )
 
         # Simulate a response larger than _MAX_DOWNLOAD_BYTES
@@ -1131,3 +1151,145 @@ class TestCreatePlanStreamer:
 
         result = adapter.create_plan_streamer(wrong)
         assert result is None
+
+
+class TestIsSlackFileUrl:
+    """Tests for URL validation of Slack file downloads."""
+
+    def test_accepts_files_slack_com(self) -> None:
+        url = "https://files.slack.com/files-pri/T024-F024/report.txt"
+        assert _is_slack_file_url(url) is True
+
+    def test_accepts_files_slack_com_download(self) -> None:
+        url = "https://files.slack.com/files-pri/T024-F024/download/report.txt"
+        assert _is_slack_file_url(url) is True
+
+    def test_accepts_legacy_slack_com(self) -> None:
+        url = "https://slack.com/files-pri/T024-F024/1.png"
+        assert _is_slack_file_url(url) is True
+
+    def test_rejects_http(self) -> None:
+        url = "http://files.slack.com/files-pri/T024-F024/report.txt"
+        assert _is_slack_file_url(url) is False
+
+    def test_rejects_arbitrary_host(self) -> None:
+        assert _is_slack_file_url("https://evil.com/file") is False
+
+    def test_rejects_internal_metadata(self) -> None:
+        assert _is_slack_file_url("http://169.254.169.254/metadata") is False
+
+    def test_rejects_localhost(self) -> None:
+        assert _is_slack_file_url("http://localhost:8080/secret") is False
+
+    def test_rejects_subdomain_impersonation(self) -> None:
+        assert _is_slack_file_url("https://files.slack.com.evil.com/f") is False
+
+    def test_rejects_empty_string(self) -> None:
+        assert _is_slack_file_url("") is False
+
+    def test_rejects_non_url(self) -> None:
+        assert _is_slack_file_url("not a url") is False
+
+    def test_rejects_ftp_scheme(self) -> None:
+        assert _is_slack_file_url("ftp://files.slack.com/file") is False
+
+    def test_rejects_slack_files_com(self) -> None:
+        """slack-files.com is for thumbnails, not private file downloads."""
+        assert _is_slack_file_url("https://slack-files.com/file") is False
+
+    def test_rejects_malformed_ipv6(self) -> None:
+        """Malformed URLs that cause urlparse ValueError are rejected."""
+        assert _is_slack_file_url("https://[invalid/file") is False
+
+
+class TestSaveAttachmentsUrlValidation:
+    """Tests that save_attachments rejects non-Slack URLs."""
+
+    def test_rejects_non_slack_url(self, tmp_path: Path) -> None:
+        """Files from non-Slack hosts are skipped (no download attempt)."""
+        adapter, _, _, _ = _make_adapter(tmp_path)
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+
+        parsed = SlackParsedMessage(
+            sender="U123",
+            body="see attached",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="D456",
+            slack_thread_ts="ts1",
+            slack_file_urls=[("evil.txt", "https://evil.com/steal-token")],
+        )
+
+        with patch(
+            "airut.gateway.slack.adapter.urllib.request.urlopen",
+        ) as mock_urlopen:
+            result = adapter.save_attachments(parsed, inbox)
+
+        assert result == []
+        mock_urlopen.assert_not_called()
+
+    def test_rejects_internal_ip(self, tmp_path: Path) -> None:
+        """URLs targeting internal IPs are rejected."""
+        adapter, _, _, _ = _make_adapter(tmp_path)
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+
+        parsed = SlackParsedMessage(
+            sender="U123",
+            body="file",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="D456",
+            slack_thread_ts="ts1",
+            slack_file_urls=[
+                ("meta.json", "http://169.254.169.254/latest/meta-data/")
+            ],
+        )
+
+        with patch(
+            "airut.gateway.slack.adapter.urllib.request.urlopen",
+        ) as mock_urlopen:
+            result = adapter.save_attachments(parsed, inbox)
+
+        assert result == []
+        mock_urlopen.assert_not_called()
+
+    def test_mixed_valid_and_invalid_urls(self, tmp_path: Path) -> None:
+        """Valid Slack URLs download; non-Slack URLs are skipped."""
+        adapter, _, _, _ = _make_adapter(tmp_path)
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+
+        parsed = SlackParsedMessage(
+            sender="U123",
+            body="files",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="D456",
+            slack_thread_ts="ts1",
+            slack_file_urls=[
+                ("evil.txt", "https://evil.com/steal"),
+                (
+                    "good.txt",
+                    "https://files.slack.com/files-pri/T1-F1/good.txt",
+                ),
+            ],
+        )
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"good data"
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch(
+            "airut.gateway.slack.adapter.urllib.request.urlopen",
+            return_value=mock_resp,
+        ) as mock_urlopen:
+            result = adapter.save_attachments(parsed, inbox)
+
+        # Only the valid Slack URL was downloaded
+        assert result == ["good.txt"]
+        mock_urlopen.assert_called_once()
+        assert (inbox / "good.txt").read_bytes() == b"good data"
+        assert not (inbox / "evil.txt").exists()

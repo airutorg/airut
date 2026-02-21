@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,6 +52,15 @@ _MAX_TITLE_LENGTH = 60
 
 #: Maximum attachment download size (100 MB).
 _MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
+
+#: Allowed hostnames for Slack file download URLs.  Only URLs on these
+#: hosts will be fetched during attachment download.  This prevents the
+#: bot token from being sent to non-Slack hosts if the event payload
+#: were ever to contain unexpected URLs.
+#:
+#: ``files.slack.com`` — current ``url_private`` / ``url_private_download``
+#: ``slack.com``       — legacy ``url_private`` format (``/files-pri/``)
+_SLACK_FILE_HOSTS: frozenset[str] = frozenset({"files.slack.com", "slack.com"})
 
 #: Regex matching Markdown table blocks (header row + separator + data).
 _TABLE_PATTERN = re.compile(
@@ -258,6 +268,15 @@ class SlackChannelAdapter(ChannelAdapter):
 
         for filename, url in parsed.slack_file_urls:
             try:
+                if not _is_slack_file_url(url):
+                    logger.warning(
+                        "Skipping Slack attachment %s: URL host not in "
+                        "allowed set %s",
+                        filename,
+                        _SLACK_FILE_HOSTS,
+                    )
+                    continue
+
                 req = urllib.request.Request(
                     url,
                     headers={"Authorization": f"Bearer {self._client.token}"},
@@ -471,6 +490,26 @@ class SlackChannelAdapter(ChannelAdapter):
                 self._repo_id,
                 removed,
             )
+
+
+def _is_slack_file_url(url: str) -> bool:
+    """Check whether a URL points to a known Slack file-hosting domain.
+
+    Only HTTPS URLs on :data:`_SLACK_FILE_HOSTS` are accepted.  This
+    prevents the bot token from being sent to arbitrary hosts if the
+    event payload contains unexpected URLs.
+
+    Args:
+        url: URL to validate.
+
+    Returns:
+        True if the URL is a valid Slack file URL.
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return False
+    return parsed.scheme == "https" and parsed.hostname in _SLACK_FILE_HOSTS
 
 
 def _convert_tables(text: str) -> str:
