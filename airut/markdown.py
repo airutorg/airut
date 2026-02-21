@@ -11,7 +11,8 @@ clients. Uses standard HTML tags without custom styling, letting email
 clients handle presentation.
 
 Supported syntax:
-- Headers: # (bold underline), ## (bold), ### (bold italic)
+- Headers: # (bold underline), ## (bold italic underline), ### (underline),
+  #### (italic underline), ##### (italic), ###### (bold)
 - Bold: **text** or __text__
 - Italic: *text* or _text_
 - Preformatted text: ```code blocks``` and `inline code`
@@ -153,8 +154,10 @@ def _convert_line(line: str) -> str:
     """
     # Handle headers (must be done before escaping)
     # Convert to inline styles to keep font size constant:
-    # # => bold underline, ## => bold, ### => bold italic
-    header_match = re.match(r"^(#{1,3})\s+(.+)$", line)
+    # # => bold underline, ## => bold italic underline,
+    # ### => underline, #### => italic underline, ##### => italic,
+    # ###### => bold
+    header_match = re.match(r"^(#{1,6})\s+(.+)$", line)
     if header_match:
         level = len(header_match.group(1))
         content = header_match.group(2)
@@ -162,9 +165,15 @@ def _convert_line(line: str) -> str:
         if level == 1:
             return f"<strong><u>{escaped_content}</u></strong>"
         elif level == 2:
+            return f"<strong><em><u>{escaped_content}</u></em></strong>"
+        elif level == 3:
+            return f"<u>{escaped_content}</u>"
+        elif level == 4:
+            return f"<em><u>{escaped_content}</u></em>"
+        elif level == 5:
+            return f"<em>{escaped_content}</em>"
+        else:  # level == 6
             return f"<strong>{escaped_content}</strong>"
-        else:  # level == 3
-            return f"<strong><em>{escaped_content}</em></strong>"
 
     # Handle empty lines
     if not line.strip():

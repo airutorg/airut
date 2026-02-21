@@ -62,8 +62,11 @@ class TestHeaders:
 
     Headers are converted to inline styles to keep font size constant:
     - # => bold underline
-    - ## => bold
-    - ### => bold italic
+    - ## => bold italic underline
+    - ### => underline
+    - #### => italic underline
+    - ##### => italic
+    - ###### => bold
     """
 
     def test_h1_header(self):
@@ -72,21 +75,36 @@ class TestHeaders:
         assert result == "<strong><u>Header 1</u></strong>"
 
     def test_h2_header(self):
-        """Test h2 header conversion to bold."""
+        """Test h2 header conversion to bold italic underline."""
         result = markdown_to_html("## Header 2")
-        assert result == "<strong>Header 2</strong>"
+        assert result == "<strong><em><u>Header 2</u></em></strong>"
 
     def test_h3_header(self):
-        """Test h3 header conversion to bold italic."""
+        """Test h3 header conversion to underline."""
         result = markdown_to_html("### Header 3")
-        assert result == "<strong><em>Header 3</em></strong>"
+        assert result == "<u>Header 3</u>"
+
+    def test_h4_header(self):
+        """Test h4 header conversion to italic underline."""
+        result = markdown_to_html("#### Header 4")
+        assert result == "<em><u>Header 4</u></em>"
+
+    def test_h5_header(self):
+        """Test h5 header conversion to italic."""
+        result = markdown_to_html("##### Header 5")
+        assert result == "<em>Header 5</em>"
+
+    def test_h6_header(self):
+        """Test h6 header conversion to bold."""
+        result = markdown_to_html("###### Header 6")
+        assert result == "<strong>Header 6</strong>"
 
     def test_header_with_inline_formatting(self):
         """Test header with bold and italic."""
         result = markdown_to_html("## **Bold** and *italic* header")
-        expected = "<strong>"
+        expected = "<strong><em><u>"
         expected += "<strong>Bold</strong> and <em>italic</em> header"
-        expected += "</strong>"
+        expected += "</u></em></strong>"
         assert result == expected
 
     def test_header_without_space(self):
@@ -661,7 +679,7 @@ See [docs](https://docs.example.com) for more.
         assert "<strong><u>Title</u></strong>" in result
         assert "<strong>paragraph</strong>" in result
         assert "<em>formatting</em>" in result
-        assert "<strong>Code Example</strong>" in result
+        assert "<strong><em><u>Code Example</u></em></strong>" in result
         assert "<pre>" in result
         assert "</pre>" in result
         assert '<a href="https://docs.example.com">docs</a>' in result
