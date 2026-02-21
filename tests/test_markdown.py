@@ -11,8 +11,10 @@ from airut.markdown import (
     _get_list_type,
     _is_separator_line,
     _is_table_line,
+    _remove_code_spans,
     _render_list,
     _render_table,
+    _split_table_cells,
     markdown_to_html,
 )
 
@@ -334,6 +336,177 @@ class TestTables:
         assert "<code>A</code>" in result
         assert "<code>value</code>" in result
 
+    def test_pipe_in_backtick_cell_not_split(self):
+        """Pipe inside backtick code in a table cell must not split the cell."""
+        text = "| Code | Desc |\n|---|---|\n| `a|b` | test |"
+        result = markdown_to_html(text)
+        assert "<table" in result
+        # The code span should render intact as a single cell
+        assert "<code>a|b</code>" in result
+        # Should have exactly 2 data cells in the data row
+        assert result.count("<td") == 2
+
+    def test_double_backtick_pipe_in_cell(self):
+        """Double-backtick code span with pipe must not split the cell."""
+        text = "| Code | Desc |\n|---|---|\n| ``a|b`` | test |"
+        result = markdown_to_html(text)
+        assert "<table" in result
+        assert "<code>a|b</code>" in result
+        assert result.count("<td") == 2
+
+    def test_multiple_pipes_in_code_cell(self):
+        """Multiple pipes inside backtick code in a table cell."""
+        text = "| Expr | Desc |\n|---|---|\n| `a|b|c` | union |"
+        result = markdown_to_html(text)
+        assert "<table" in result
+        assert "<code>a|b|c</code>" in result
+        assert result.count("<td") == 2
+
+    def test_multiple_code_spans_with_pipes_in_row(self):
+        """Multiple code spans with pipes in different cells of the same row."""
+        text = "| A | B |\n|---|---|\n| `x|y` | `a|b|c` |"
+        result = markdown_to_html(text)
+        assert "<code>x|y</code>" in result
+        assert "<code>a|b|c</code>" in result
+        assert result.count("<td") == 2
+
+    def test_unclosed_backtick_does_not_swallow_pipe(self):
+        """Unclosed backtick should not hide subsequent pipes."""
+        text = "| A | B |\n|---|---|\n| `unclosed | val |"
+        result = markdown_to_html(text)
+        assert "<table" in result
+        # With unclosed backtick, the pipe is still a separator
+        assert result.count("<td") == 2
+
+    def test_double_backtick_pipe_not_table_line(self):
+        """Line with pipe only inside double-backtick code is not a table."""
+        text = "Use ``a|b`` in your code"
+        result = markdown_to_html(text)
+        assert "<table" not in result
+        assert "<code>a|b</code>" in result
+
+    def test_table_with_mixed_code_and_text_pipes(self):
+        """Table cell mixing code-with-pipe and regular text."""
+        text = "| Expr | Note |\n|---|---|\n| `a|b` or c | info |"
+        result = markdown_to_html(text)
+        assert "<code>a|b</code>" in result
+        assert result.count("<td") == 2
+
+    def test_triple_backtick_code_span_with_pipe(self):
+        """Triple-backtick code span with pipe in a table cell."""
+        text = "| Code | Desc |\n|---|---|\n| ```a|b``` | test |"
+        result = markdown_to_html(text)
+        # Triple backtick on a table line is unusual, but should be handled.
+        # The ``` inside the cell is a code span delimiter, not a code fence,
+        # since we're within a table row.
+        assert "<table" in result
+
+
+class TestRemoveCodeSpans:
+    """Tests for _remove_code_spans helper."""
+
+    def test_single_backtick(self):
+        """Single-backtick code span replaced with X."""
+        assert _remove_code_spans("`foo`") == "X"
+
+    def test_double_backtick(self):
+        """Double-backtick code span replaced with X."""
+        assert _remove_code_spans("``foo``") == "X"
+
+    def test_triple_backtick(self):
+        """Triple-backtick code span replaced with X."""
+        assert _remove_code_spans("```foo```") == "X"
+
+    def test_pipe_inside_code_removed(self):
+        """Pipe inside code span is replaced along with the span."""
+        result = _remove_code_spans("`a|b`")
+        assert "|" not in result
+        assert result == "X"
+
+    def test_pipe_inside_double_backtick_removed(self):
+        """Pipe inside double-backtick code span is replaced."""
+        result = _remove_code_spans("``a|b``")
+        assert "|" not in result
+
+    def test_mixed_text_and_code(self):
+        """Code span in surrounding text."""
+        assert _remove_code_spans("before `code` after") == "before X after"
+
+    def test_multiple_code_spans(self):
+        """Multiple code spans replaced independently."""
+        result = _remove_code_spans("`a` and `b`")
+        assert result == "X and X"
+
+    def test_unmatched_backtick_kept(self):
+        """Unmatched opening backtick stays as literal text."""
+        result = _remove_code_spans("`unmatched text")
+        assert result == "`unmatched text"
+
+    def test_no_code_spans(self):
+        """Text without backticks is unchanged."""
+        assert _remove_code_spans("hello world") == "hello world"
+
+    def test_empty_string(self):
+        """Empty string returns empty string."""
+        assert _remove_code_spans("") == ""
+
+    def test_empty_code_span(self):
+        """Empty code span (adjacent backticks) — ``."""
+        # Single backtick pair with nothing inside: `` is actually
+        # two backticks = double-backtick opener, not empty single.
+        # But `​` (zero-width) is an edge case; just check no crash.
+        result = _remove_code_spans("``")
+        # Two backticks with no content between them: this is an
+        # unclosed double-backtick opener (no closing ``), so kept as-is.
+        assert result == "``"
+
+
+class TestSplitTableCells:
+    """Tests for _split_table_cells helper."""
+
+    def test_simple_row(self):
+        """Simple row with leading/trailing pipes."""
+        assert _split_table_cells("| A | B |") == ["A", "B"]
+
+    def test_no_leading_pipe(self):
+        """Row without leading pipe."""
+        assert _split_table_cells("A | B") == ["A", "B"]
+
+    def test_pipe_in_single_backtick(self):
+        """Pipe inside single-backtick code is not a separator."""
+        cells = _split_table_cells("| `a|b` | test |")
+        assert cells == ["`a|b`", "test"]
+
+    def test_pipe_in_double_backtick(self):
+        """Pipe inside double-backtick code is not a separator."""
+        cells = _split_table_cells("| ``a|b`` | test |")
+        assert cells == ["``a|b``", "test"]
+
+    def test_multiple_pipes_in_code(self):
+        """Multiple pipes inside backticks."""
+        cells = _split_table_cells("| `a|b|c` | val |")
+        assert cells == ["`a|b|c`", "val"]
+
+    def test_unclosed_backtick(self):
+        """Unclosed backtick does not consume rest of line."""
+        cells = _split_table_cells("| `unclosed | val |")
+        assert cells == ["`unclosed", "val"]
+
+    def test_empty_cells(self):
+        """Empty cells are returned as empty strings."""
+        cells = _split_table_cells("|  |  |")
+        assert cells == ["", ""]
+
+    def test_single_cell(self):
+        """Single cell table row."""
+        cells = _split_table_cells("| only |")
+        assert cells == ["only"]
+
+    def test_no_pipes(self):
+        """Row without any pipes returns whole content as single cell."""
+        cells = _split_table_cells("no pipes here")
+        assert cells == ["no pipes here"]
+
 
 class TestLists:
     """Tests for list conversion."""
@@ -527,8 +700,12 @@ class TestHelperFunctions:
         # Pipes in inline code should not trigger table detection
         assert _is_table_line("Use the `|` operator") is False
         assert _is_table_line("Pattern: `| A | B |` syntax") is False
+        # Double-backtick code with pipe should not trigger table detection
+        assert _is_table_line("Use ``a|b`` here") is False
+        assert _is_table_line("``x|y|z``") is False
         # But actual tables with code in cells should still be detected
         assert _is_table_line("| `code` | value |") is True
+        assert _is_table_line("| ``code`` | value |") is True
 
     def test_is_separator_line(self):
         """Test _is_separator_line function."""
