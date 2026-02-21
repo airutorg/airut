@@ -1,4 +1,4 @@
-name: E2E Tests
+name: Integration Tests
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  e2e-email-gateway:
+  integration-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -18,7 +18,7 @@ jobs:
       - run: uv python install 3.13
       - run: uv sync
 
-      - name: Run email gateway integration tests
+      - name: Run integration tests
         run: |
           uv run pytest tests/integration/ -n auto -v -x \
             -W error::pytest.PytestUnraisableExceptionWarning \

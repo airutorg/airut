@@ -95,15 +95,14 @@ The license check resolves the transitive closure of runtime dependencies (via
 ensures the license audit covers exactly what ships in a production install,
 without being affected by dev tooling licenses.
 
-#### From `e2e.yml`
+#### From `integration.yml`
 
-| Step                    | Command                                                   | Include |
-| ----------------------- | --------------------------------------------------------- | ------- |
-| E2E email gateway tests | `pytest tests/integration/ -v --allow-hosts=127.0.0.1...` | Yes     |
+| Step              | Command                                                   | Include |
+| ----------------- | --------------------------------------------------------- | ------- |
+| Integration tests | `pytest tests/integration/ -v --allow-hosts=127.0.0.1...` | Yes     |
 
-E2E email gateway tests run with a mock container tool (configured automatically
-by test fixtures) and require only localhost network access for the test email
-server.
+Integration tests run with a mock container tool (configured automatically by
+test fixtures) and require only localhost network access for the test servers.
 
 ### `--fix` Mode
 

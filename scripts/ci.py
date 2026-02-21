@@ -65,7 +65,7 @@ class Step:
 # code.yml: Lint, Format check, Type check, Markdown format check,
 #           Test coverage, Worktree clean check
 # security.yml: License check, Vulnerability scan
-# e2e.yml: E2E email gateway tests
+# integration.yml: Integration tests
 STEPS: list[Step] = [
     # code.yml steps
     Step(
@@ -117,16 +117,16 @@ STEPS: list[Step] = [
         command="uv run uv-secure uv.lock",
         workflow="security",
     ),
-    # e2e.yml steps
+    # integration.yml steps
     Step(
-        name="E2E email gateway tests",
+        name="Integration tests",
         command=(
             "uv run pytest tests/integration/ -n auto -v "
             "-W error::pytest.PytestUnraisableExceptionWarning "
             "-W error::RuntimeWarning "
             "--allow-hosts=127.0.0.1,localhost"
         ),
-        workflow="e2e",
+        workflow="integration",
     ),
 ]
 
@@ -371,7 +371,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--workflow",
-        choices=["code", "security", "e2e"],
+        choices=["code", "security", "integration"],
         action="append",
         dest="workflows",
         help="Run only steps from specified workflow (can be repeated)",

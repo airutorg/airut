@@ -280,7 +280,7 @@ tests/                      - Unit tests (100% coverage required)
     email/                  - Email channel tests
     slack/                  - Slack channel tests
     service/                - Core service tests
-  integration/              - End-to-end integration tests (ci.py --workflow e2e)
+  integration/              - Integration tests (ci.py --workflow integration)
 workflows/                  - Step-by-step operational guides
 ```
 
@@ -306,7 +306,7 @@ workflows/                  - Step-by-step operational guides
 - **Use mocks for external dependencies** - tests should use fixtures and mocks,
   not real files from gitignored directories
 - **Integration tests** live in `tests/integration/` and run via
-  `uv run scripts/ci.py --workflow e2e` (not included in default pytest)
+  `uv run scripts/ci.py --workflow integration` (not included in default pytest)
 
 ### Documentation
 
