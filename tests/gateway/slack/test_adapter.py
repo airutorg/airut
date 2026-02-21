@@ -20,6 +20,7 @@ from airut.gateway.slack.adapter import (
     _convert_tables,
     _is_invalid_blocks,
     _is_slack_file_url,
+    _linkify_bare_urls,
     _post_with_fallback,
     _sanitize_for_slack,
     _send_long_message,
@@ -951,6 +952,115 @@ class TestConvertHorizontalRules:
         assert "———" in result
 
 
+class TestLinkifyBareUrls:
+    def test_linkifies_bare_https_url(self) -> None:
+        text = "Visit https://example.com for details"
+        result = _linkify_bare_urls(text)
+        assert (
+            result
+            == "Visit [https://example.com](https://example.com) for details"
+        )
+
+    def test_linkifies_bare_http_url(self) -> None:
+        text = "See http://example.com here"
+        result = _linkify_bare_urls(text)
+        assert result == "See [http://example.com](http://example.com) here"
+
+    def test_linkifies_url_with_path(self) -> None:
+        text = "PR: https://github.com/org/repo/pull/29"
+        result = _linkify_bare_urls(text)
+        assert (
+            result
+            == "PR: [https://github.com/org/repo/pull/29](https://github.com/org/repo/pull/29)"
+        )
+
+    def test_preserves_existing_markdown_link(self) -> None:
+        text = "See [my link](https://example.com) here"
+        result = _linkify_bare_urls(text)
+        assert result == text
+
+    def test_preserves_url_as_link_text(self) -> None:
+        """Do not double-wrap ``[url](url)`` style links."""
+        text = "[https://example.com](https://example.com)"
+        result = _linkify_bare_urls(text)
+        assert result == text
+
+    def test_preserves_url_inside_code_fence(self) -> None:
+        text = "```\nhttps://example.com\n```"
+        result = _linkify_bare_urls(text)
+        assert result == text
+
+    def test_preserves_url_inside_inline_code(self) -> None:
+        text = "Use `https://example.com` for testing"
+        result = _linkify_bare_urls(text)
+        assert result == text
+
+    def test_linkifies_multiple_urls(self) -> None:
+        text = "See https://a.com and https://b.com"
+        result = _linkify_bare_urls(text)
+        assert result == (
+            "See [https://a.com](https://a.com)"
+            " and [https://b.com](https://b.com)"
+        )
+
+    def test_linkifies_url_after_bold(self) -> None:
+        """Reproduce the exact Slack mangling scenario."""
+        text = "**PR:** https://github.com/org/repo/pull/29"
+        result = _linkify_bare_urls(text)
+        assert result == (
+            "**PR:** [https://github.com/org/repo/pull/29]"
+            "(https://github.com/org/repo/pull/29)"
+        )
+
+    def test_real_world_slack_mangling_case(self) -> None:
+        """Full reproduction of the reported Slack rendering bug."""
+        text = (
+            "Done. Here's what was added:\n\n"
+            "**PR:** https://github.com/airutorg/website/pull/29\n"
+            "**Preview:** https://888abf88.airut-website.pages.dev"
+        )
+        result = _linkify_bare_urls(text)
+        assert result == (
+            "Done. Here's what was added:\n\n"
+            "**PR:** [https://github.com/airutorg/website/pull/29]"
+            "(https://github.com/airutorg/website/pull/29)\n"
+            "**Preview:** [https://888abf88.airut-website.pages.dev]"
+            "(https://888abf88.airut-website.pages.dev)"
+        )
+
+    def test_leaves_plain_text_unchanged(self) -> None:
+        text = "No URLs here, just plain text"
+        assert _linkify_bare_urls(text) == text
+
+    def test_url_with_query_string(self) -> None:
+        text = "Check https://example.com/search?q=hello&page=1 now"
+        result = _linkify_bare_urls(text)
+        assert result == (
+            "Check [https://example.com/search?q=hello&page=1]"
+            "(https://example.com/search?q=hello&page=1) now"
+        )
+
+    def test_url_with_fragment(self) -> None:
+        text = "See https://example.com/page#section for info"
+        result = _linkify_bare_urls(text)
+        assert result == (
+            "See [https://example.com/page#section]"
+            "(https://example.com/page#section) for info"
+        )
+
+    def test_url_at_end_of_line(self) -> None:
+        text = "Link: https://example.com"
+        result = _linkify_bare_urls(text)
+        assert result == "Link: [https://example.com](https://example.com)"
+
+    def test_url_at_start_of_line(self) -> None:
+        text = "https://example.com is the site"
+        result = _linkify_bare_urls(text)
+        assert (
+            result == "[https://example.com](https://example.com) is the site"
+        )
+
+
 class TestSanitizeForSlack:
     def test_applies_all_sanitizations(self) -> None:
         text = (
@@ -981,6 +1091,14 @@ class TestSanitizeForSlack:
         result = _sanitize_for_slack(text)
         # The table is in a code fence, so the --- row stays
         assert "|---|---|" in result
+
+    def test_linkifies_bare_urls(self) -> None:
+        text = "Visit https://example.com for info"
+        result = _sanitize_for_slack(text)
+        assert (
+            result
+            == "Visit [https://example.com](https://example.com) for info"
+        )
 
 
 class TestSplitBlocksTruncation:

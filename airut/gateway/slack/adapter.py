@@ -78,6 +78,14 @@ _HORIZONTAL_RULE_PATTERN = re.compile(
     r"^[ ]{0,3}(?:[-]{3,}|[*]{3,}|[_]{3,})[ \t]*$", re.MULTILINE
 )
 
+#: Regex matching bare URLs that are not already inside a Markdown link.
+#: Negative lookbehinds exclude URLs that follow ``](`` (link target) or
+#: ``[`` (link text start — simplified, handles ``[url](url)`` form).
+_BARE_URL_PATTERN = re.compile(
+    r"(?<!\]\()(?<!\[)"  # not preceded by ]( or [
+    r"(https?://[^\s)\]>]+)"  # URL: scheme + non-whitespace, not ) ] >
+)
+
 
 @dataclass
 class SlackParsedMessage(ParsedMessage):
@@ -580,12 +588,67 @@ def _convert_horizontal_rules(text: str) -> str:
     return "\n".join(result)
 
 
+def _linkify_bare_urls(text: str) -> str:
+    """Convert bare URLs to explicit Markdown links.
+
+    Wraps bare ``https://…`` and ``http://…`` URLs in Markdown link
+    syntax (``[url](url)``) so that Slack's ``markdown`` block renderer
+    treats them as explicit links rather than attempting auto-detection,
+    which can produce garbled output when URLs appear adjacent to bold
+    or other formatting.
+
+    URLs already inside Markdown links (``[text](url)``) and URLs
+    inside fenced code blocks or inline code spans are preserved.
+
+    Args:
+        text: Markdown text potentially containing bare URLs.
+
+    Returns:
+        Text with bare URLs wrapped in Markdown link syntax.
+    """
+    lines = text.split("\n")
+    result: list[str] = []
+    in_fence = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            result.append(line)
+        elif in_fence:
+            result.append(line)
+        else:
+            result.append(_linkify_line(line))
+
+    return "\n".join(result)
+
+
+def _linkify_line(line: str) -> str:
+    """Linkify bare URLs in a single line, preserving inline code spans.
+
+    Splits the line on inline code (backtick) boundaries so that URLs
+    inside code spans are never touched.
+
+    Args:
+        line: A single line of Markdown (not inside a fenced block).
+
+    Returns:
+        Line with bare URLs converted to ``[url](url)``.
+    """
+    # Split on inline code spans to avoid touching URLs inside them.
+    # Odd-indexed segments are inside backticks.
+    parts = line.split("`")
+    for i in range(0, len(parts), 2):  # even indices = outside code
+        parts[i] = _BARE_URL_PATTERN.sub(r"[\1](\1)", parts[i])
+    return "`".join(parts)
+
+
 def _sanitize_for_slack(text: str) -> str:
     """Apply all Slack-specific Markdown sanitization.
 
     Converts or strips Markdown features not supported by Slack's
     ``markdown`` block type: tables, syntax-highlighted code fences,
-    and horizontal rules.
+    horizontal rules, and bare URLs.
 
     Args:
         text: Raw Markdown response text.
@@ -596,6 +659,7 @@ def _sanitize_for_slack(text: str) -> str:
     text = _convert_tables(text)
     text = _strip_code_fence_languages(text)
     text = _convert_horizontal_rules(text)
+    text = _linkify_bare_urls(text)
     return text
 
 
