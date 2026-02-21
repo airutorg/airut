@@ -1,16 +1,20 @@
 # Integration Tests
 
-End-to-end integration tests for the Airut Gateway Service. Currently covers the
-email channel; Slack integration tests are an open item (see
-[slack-channel.md](slack-channel.md#open-items)).
+Integration tests for the Airut Gateway Service covering email and Slack
+channels.
 
 ## Architecture
 
-### Test Email Server
+### Test Servers
 
-In-process SMTP/IMAP server (`tests/integration/gateway/email_server.py`) using
-`aiosmtpd` for SMTP and a minimal custom IMAP implementation. Thread-safe
-message store shared between protocols.
+**Email** — In-process SMTP/IMAP server
+(`tests/integration/gateway/email_server.py`) using `aiosmtpd` for SMTP and a
+minimal custom IMAP implementation. Thread-safe message store shared between
+protocols.
+
+**Slack** — Mock Socket Mode server
+(`tests/integration/gateway/slack_server.py`) simulating Slack's WebSocket and
+Web API endpoints.
 
 ### Mock Container Tool
 
@@ -20,12 +24,13 @@ behavior (`mock_podman.py` → `mock_claude.py`). Response strategies: `echo`,
 
 ## CI Integration
 
-Tests run as part of E2E workflow (`.github/workflows/e2e.yml`). No environment
-variables needed - `conftest.py` configures `CONTAINER_COMMAND` at module load.
+Tests run as part of the integration workflow
+(`.github/workflows/integration.yml`). No environment variables needed -
+`conftest.py` configures `CONTAINER_COMMAND` at module load.
 
 ```bash
 # Run via local CI runner
-uv run scripts/ci.py --workflow e2e
+uv run scripts/ci.py --workflow integration
 
 # Run directly
 uv run pytest tests/integration/ -v --allow-hosts=127.0.0.1,localhost

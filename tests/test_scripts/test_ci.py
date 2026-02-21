@@ -626,10 +626,11 @@ class TestDriftDetection:
         missing = validation_steps - ci_step_names
         assert not missing, f"Steps in code.yml not in ci.py: {missing}"
 
-    def test_e2e_workflow_steps_match(self) -> None:
-        """Verify ci.py covers all test steps from e2e.yml."""
+    def test_integration_workflow_steps_match(self) -> None:
+        """Verify ci.py covers all test steps from integration.yml."""
         workflow_path = (
-            Path(__file__).parent.parent.parent / ".github/workflows/e2e.yml"
+            Path(__file__).parent.parent.parent
+            / ".github/workflows/integration.yml"
         )
         with open(workflow_path) as f:
             workflow = yaml.safe_load(f)
@@ -642,17 +643,17 @@ class TestDriftDetection:
                 if name.startswith("Run "):
                     workflow_steps.add(name)
 
-        # Get ci.py step names for e2e workflow
-        ci_step_names = {s.name for s in STEPS if s.workflow == "e2e"}
+        # Get ci.py step names for integration workflow
+        ci_step_names = {s.name for s in STEPS if s.workflow == "integration"}
 
         # Map workflow step names to ci.py step names
         expected_ci_names = set()
         for step_name in workflow_steps:
-            if "email gateway" in step_name.lower():
-                expected_ci_names.add("E2E email gateway tests")
+            if "integration" in step_name.lower():
+                expected_ci_names.add("Integration tests")
 
         missing = expected_ci_names - ci_step_names
-        assert not missing, f"E2E steps in e2e.yml not in ci.py: {missing}"
+        assert not missing, f"Steps in integration.yml not in ci.py: {missing}"
 
     def test_security_workflow_steps_match(self) -> None:
         """Verify ci.py covers all steps from security.yml."""
