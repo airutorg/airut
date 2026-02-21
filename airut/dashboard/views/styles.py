@@ -9,6 +9,9 @@ Provides CSS generation functions for the light-theme pages (dashboard,
 task detail, repo detail) and the dark-theme pages (actions viewer,
 network logs viewer). Each page composes its stylesheet from shared
 base styles plus page-specific rules.
+
+Light-theme pages automatically switch to dark mode via
+``@media (prefers-color-scheme: dark)`` to respect the OS preference.
 """
 
 
@@ -75,6 +78,230 @@ def _light_base() -> str:
             padding: 4px 10px;
             border-radius: 4px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }"""
+
+
+def _dark_mode_overrides() -> str:
+    """``prefers-color-scheme: dark`` overrides for light-theme pages.
+
+    Provides dark equivalents for every colour used across the light
+    base, logo, version-info, boot-state, repos, task-card, task-detail,
+    repo-detail, and conversation-detail styles.
+
+    Returns:
+        CSS string wrapped in a ``@media`` query.
+    """
+    return """\
+        @media (prefers-color-scheme: dark) {
+            body {
+                background: #1a1a1a;
+                color: #d4d4d4;
+            }
+            a { color: #6db3f2; }
+            .card {
+                background: #252526;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+            }
+            .field-label { color: #999; }
+            .refresh-notice { color: #777; }
+            .stream-status {
+                background: rgba(37,37,38,0.95);
+                color: #888;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+            }
+
+            /* Version info */
+            .version-info { color: #999; }
+            .version-sha {
+                background: #333;
+                color: #6db3f2;
+            }
+            .version-sha:hover { background: #3a3a3a; }
+            .version-status.up-to-date {
+                background: #1e3a1e;
+                color: #73c991;
+            }
+            .version-status.update-available {
+                background: #3a3520;
+                color: #dca35a;
+            }
+            .version-status.checking,
+            .version-status.check-failed {
+                background: #333;
+                color: #888;
+            }
+            .version-started { color: #888; }
+
+            /* Boot state */
+            .boot-banner {
+                box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+            }
+            .boot-progress {
+                background: #1a2a3a;
+                border-left-color: #5bc0de;
+            }
+            .boot-error {
+                background: #3c1f1f;
+                border-left-color: #d9534f;
+            }
+            .boot-error .boot-title { color: #f48771; }
+            .boot-progress .boot-title { color: #6db3f2; }
+            .boot-message { color: #aaa; }
+            .boot-traceback {
+                background: #1e1e1e;
+                border-color: #5a2a2a;
+                color: #f48771;
+            }
+
+            /* Repos section */
+            .repos-header { color: #999; }
+            .repo-card {
+                background: #252526;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+            }
+            .repo-name { color: #d4d4d4; }
+
+            /* Task cards / dashboard columns */
+            .column {
+                background: #252526;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+            }
+            .column-header { border-bottom-color: #444; }
+            .task {
+                background: #1e1e1e;
+                border-left-color: #555;
+            }
+            .task-id { color: #999; }
+            .task-id a { color: #6db3f2; }
+            .task-time { color: #888; }
+            .task-sender { color: #888; }
+            .task-subject { color: #d4d4d4; }
+            .repo-badge {
+                background: #333;
+                color: #aaa;
+            }
+            .conv-badge {
+                background: #333;
+                color: #999;
+            }
+            .conv-badge:hover { background: #3a3a3a; }
+            .empty { color: #777; }
+
+            /* Task detail page */
+            h2 { color: #ccc; }
+            .summary-item { background: #1e1e1e; }
+            .summary-value { color: #d4d4d4; }
+            .summary-label { color: #999; }
+            .reply {
+                background: #1e1e1e;
+            }
+            .reply-number { color: #d4d4d4; }
+            .reply-timestamp { color: #999; }
+            .reply-stat-label { color: #888; }
+            .reply-stat-value { color: #d4d4d4; }
+            .usage-grid { border-top-color: #444; }
+            .usage-label { color: #888; }
+            .usage-value { color: #aaa; }
+            .text-section { border-top-color: #444; }
+            .text-section-header { color: #999; }
+            .text-content {
+                background: #1a1a1a;
+                border-color: #444;
+                color: #d4d4d4;
+            }
+            .action-btn.primary {
+                background: #2a6496;
+            }
+            .action-btn.primary:hover {
+                background: #1e4e78;
+            }
+            .stop-result.info {
+                background: #1a2a3a;
+                color: #6db3f2;
+            }
+            .stop-result.error {
+                background: #3c1f1f;
+                color: #f48771;
+            }
+            .no-conversation { color: #777; }
+            .detail-item { background: #1e1e1e; }
+            .details-grid .field-label { color: #999; }
+            .todo-item.completed { color: #73c991; }
+            .todo-item.in-progress {
+                color: #6db3f2;
+                background: #1a2a3a;
+            }
+            .todo-item.pending { color: #777; }
+            .todo-icon.completed { color: #73c991; }
+            .todo-icon.pending { color: #555; }
+            .todo-spinner {
+                border-color: #5bc0de;
+                border-top-color: transparent;
+            }
+            .reply-list { border-top-color: #444; }
+
+            /* Status badges */
+            .status.queued,
+            .status.authenticating,
+            .status.pending {
+                background: #3a3520;
+                color: #dca35a;
+            }
+            .status.executing {
+                background: #1a2a3a;
+                color: #6db3f2;
+            }
+            .status.completed.success {
+                background: #1e3a1e;
+                color: #73c991;
+            }
+            .status.completed.failed {
+                background: #3c1f1f;
+                color: #f48771;
+            }
+
+            /* Repo detail page */
+            .back-link a { color: #6db3f2; }
+            .status-badge.live {
+                background: #1e3a1e;
+                color: #73c991;
+            }
+            .status-badge.failed {
+                background: #3c1f1f;
+                color: #f48771;
+            }
+            .detail-card {
+                background: #252526;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+            }
+            .detail-label { color: #999; }
+            .detail-value { color: #d4d4d4; }
+            .detail-value.mono {
+                background: #1e1e1e;
+            }
+            .error-section {
+                background: #2a1515;
+                border-left-color: #d9534f;
+            }
+            .error-type { color: #f48771; }
+            .error-message {
+                background: #1e1e1e;
+                color: #d4d4d4;
+            }
+
+            /* Conversation detail inline styles */
+            .task-row {
+                background: #1e1e1e;
+                border-left-color: #555;
+            }
+            .task-row-id a { color: #6db3f2; }
+            .task-row-time { color: #888; }
+
+            /* Column headers preserve their semantic colors in dark mode */
+            .column-header.queued,
+            .column-header.pending { border-color: #b8860b; color: #dca35a; }
+            .column-header.executing { border-color: #3a8db5; color: #6db3f2; }
+            .column-header.completed { border-color: #4a8c4a; color: #73c991; }
         }"""
 
 
@@ -424,6 +651,7 @@ def dashboard_styles() -> str:
             _boot_state_styles(),
             _repos_section_styles(),
             _task_card_styles(),
+            _dark_mode_overrides(),
         ]
     )
 
@@ -736,6 +964,7 @@ def task_detail_styles() -> str:
         [
             _light_base(),
             _task_detail_specific(),
+            _dark_mode_overrides(),
         ]
     )
 
@@ -843,6 +1072,7 @@ def repo_detail_styles() -> str:
         [
             _light_base(),
             _repo_detail_specific(),
+            _dark_mode_overrides(),
         ]
     )
 
