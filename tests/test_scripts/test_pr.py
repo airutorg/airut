@@ -421,6 +421,28 @@ class TestFormatReviewStatus:
         assert "PENDING" in result
 
 
+@pytest.fixture(autouse=True)
+def _mock_pr_lookup():
+    """Prevent real ``gh``/``git`` subprocess calls in cmd_ci/cmd_review.
+
+    ``cmd_ci`` and ``cmd_review`` call ``get_pr_info`` / ``get_current_pr``
+    to print the PR URL. Without mocking, every test invokes ``gh pr view``
+    and ``git fetch`` — adding ~1 s per test. Tests that explicitly test
+    PR-URL behaviour provide their own patches which take precedence.
+    """
+    with (
+        patch(
+            "airut.gh.pr.get_pr_info",
+            side_effect=RuntimeError("mocked"),
+        ),
+        patch(
+            "airut.gh.pr.get_current_pr",
+            side_effect=RuntimeError("mocked"),
+        ),
+    ):
+        yield
+
+
 class TestCmdCI:
     """Tests for cmd_ci function."""
 
