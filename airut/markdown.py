@@ -213,6 +213,41 @@ def _convert_inline(text: str) -> str:
     return text
 
 
+def _remove_code_spans(text: str) -> str:
+    """Replace inline code spans with a placeholder character.
+
+    Handles both single (`` ` ``) and multi-backtick (```` `` ````) delimiters.
+    Unmatched opening backticks are left as-is.
+
+    Args:
+        text: Input text.
+
+    Returns:
+        Text with code span contents replaced by ``X``.
+    """
+    result: list[str] = []
+    i = 0
+    while i < len(text):
+        if text[i] == "`":
+            # Determine backtick run length
+            tick_start = i
+            while i < len(text) and text[i] == "`":
+                i += 1
+            opener = text[tick_start:i]
+            # Look for matching closing backtick run
+            close_pos = text.find(opener, i)
+            if close_pos != -1:
+                result.append("X")
+                i = close_pos + len(opener)
+            else:
+                # No closing backticks — keep as literal text
+                result.append(opener)
+        else:
+            result.append(text[i])
+            i += 1
+    return "".join(result)
+
+
 def _is_table_line(line: str) -> bool:
     """Check if a line is part of a markdown table.
 
@@ -231,7 +266,7 @@ def _is_table_line(line: str) -> bool:
     # Replace inline code segments with placeholder before checking for pipes.
     # This prevents pipes inside `code` from triggering table detection
     # while preserving cell content so code-only cells remain non-empty.
-    line_without_code = re.sub(r"`[^`]*`", "X", stripped)
+    line_without_code = _remove_code_spans(stripped)
 
     # Table lines start and/or contain pipes
     # Separator lines look like |---|---|
@@ -259,6 +294,54 @@ def _is_separator_line(line: str) -> bool:
     return bool(re.match(r"^[\|\-:\s]+$", stripped)) and "-" in stripped
 
 
+def _split_table_cells(line: str) -> list[str]:
+    """Split a table row into cell contents, respecting inline code spans.
+
+    Pipes inside backtick-delimited code (single or multi-backtick) are not
+    treated as column separators.
+
+    Args:
+        line: A single table row string (e.g. ``| A | B |``).
+
+    Returns:
+        List of cell content strings (stripped of surrounding whitespace).
+    """
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+
+    cells: list[str] = []
+    current: list[str] = []
+    i = 0
+    while i < len(stripped):
+        ch = stripped[i]
+        if ch == "`":
+            # Determine backtick run length
+            tick_start = i
+            while i < len(stripped) and stripped[i] == "`":
+                i += 1
+            opener = stripped[tick_start:i]
+            current.append(opener)
+            # Scan for matching closing backtick run
+            close_pos = stripped.find(opener, i)
+            if close_pos != -1:
+                current.append(stripped[i:close_pos])
+                current.append(opener)
+                i = close_pos + len(opener)
+            # If no closing backticks, treat them as literal text
+        elif ch == "|":
+            cells.append("".join(current).strip())
+            current = []
+            i += 1
+        else:
+            current.append(ch)
+            i += 1
+    cells.append("".join(current).strip())
+    return cells
+
+
 def _render_table(lines: list[str]) -> str:
     """Render markdown table lines as HTML table.
 
@@ -281,15 +364,7 @@ def _render_table(lines: list[str]) -> str:
                 has_header = True
             continue
 
-        # Parse cells
-        stripped = line.strip()
-        # Remove leading/trailing pipes and split
-        if stripped.startswith("|"):
-            stripped = stripped[1:]
-        if stripped.endswith("|"):
-            stripped = stripped[:-1]
-
-        cells = [cell.strip() for cell in stripped.split("|")]
+        cells = _split_table_cells(line)
         rows.append(cells)
 
     if not rows:
