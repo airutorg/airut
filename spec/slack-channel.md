@@ -186,6 +186,12 @@ following transformations in order:
 3. **Horizontal rules** → em-dash separator (`———`). Rules (`---`, `***`, `___`)
    are replaced with a Unicode em-dash line. Rules inside fenced code blocks are
    preserved.
+4. **Bare URLs** → explicit Markdown links. Bare `https://…` and `http://…` URLs
+   are wrapped in `[url](url)` syntax so Slack's renderer treats them as
+   explicit links rather than auto-detecting them, which can produce garbled
+   output when URLs appear adjacent to bold or other formatting. URLs inside
+   fenced code blocks, inline code spans, and existing Markdown links are
+   preserved.
 
 Task lists (`- [ ]`, `- [x]`) degrade gracefully — the checkbox syntax appears
 as literal text within a list item, which is readable without conversion.
