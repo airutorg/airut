@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     ripgrep \
     librsvg2-bin \
+    imagemagick \
     && rm -rf /var/lib/apt/lists/*
 
 # Install GitHub CLI
