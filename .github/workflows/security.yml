@@ -20,3 +20,12 @@ jobs:
         run: uv run python scripts/check_licenses.py
       - name: Vulnerability scan
         run: uv run uv-secure uv.lock
+      - name: Proxy vulnerability scan
+        run: >-
+          uv run uv-secure airut/_bundled/proxy/uv.lock
+          --config airut/_bundled/proxy/pyproject.toml
+      - name: Proxy requirements.txt drift check
+        run: >-
+          uv export --format requirements-txt --no-dev --frozen
+          --no-emit-project --no-header --project airut/_bundled/proxy
+          | diff - airut/_bundled/proxy/requirements.txt

@@ -1,6 +1,7 @@
 FROM python:3.13-slim
 
-RUN pip install --no-cache-dir mitmproxy cryptography
+COPY requirements.txt /requirements.txt
+RUN pip install --no-cache-dir -r /requirements.txt
 
 COPY dns_responder.py /dns_responder.py
 COPY aws_signing.py /aws_signing.py
