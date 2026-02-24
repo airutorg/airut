@@ -9,7 +9,7 @@
 # Airut
 
 Sandboxed Claude Code over email and Slack. Named "Airut" (Finnish:
-herald/messenger). Created by Pyry Haulos.
+herald/messenger). Created by [Pyry Haulos](https://github.com/phaulos).
 
 ## What It Does
 
