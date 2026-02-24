@@ -52,6 +52,9 @@ airut/sandbox/
 
 airut/_bundled/proxy/
   proxy.dockerfile                # proxy container image
+  pyproject.toml                  # proxy dependency declarations
+  uv.lock                         # pinned transitive proxy dependencies
+  requirements.txt                # exported from uv.lock for pip install
   proxy_filter.py                 # mitmproxy allowlist/URL-prefix addon
   proxy-entrypoint.sh             # proxy container entrypoint
   dns_responder.py                # allowlist-enforcing DNS responder
@@ -127,6 +130,31 @@ simultaneously:
 - Subsequent tasks wait, then find the image already exists and reuse it
 
 Builds produce new tags, so they don't affect running containers.
+
+## Proxy Dependency Management
+
+The proxy container's Python dependencies (`mitmproxy`, `cryptography`, and
+their transitive closure) are managed via a standalone `pyproject.toml` and
+`uv.lock` in `airut/_bundled/proxy/`.
+
+**Files:**
+
+- `pyproject.toml` — declares top-level proxy dependencies
+- `uv.lock` — pinned transitive dependency graph (scanned by `uv-secure`)
+- `requirements.txt` — exported from `uv.lock` for `pip install` in the
+  Dockerfile
+
+**Updating proxy dependencies:**
+
+```bash
+cd airut/_bundled/proxy
+uv lock --upgrade                    # resolve latest versions
+uv export --format requirements-txt --no-dev --frozen --no-emit-project --no-header > requirements.txt
+```
+
+Both `uv.lock` and `requirements.txt` must be committed together. CI runs
+`uv-secure` against the proxy lockfile to detect known vulnerabilities, and a
+drift check verifies `requirements.txt` matches `uv.lock`.
 
 ## Entrypoint Contract
 

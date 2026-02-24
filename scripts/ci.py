@@ -64,7 +64,8 @@ class Step:
 # Workflow step name mapping (for drift detection):
 # code.yml: Lint, Format check, Type check, Markdown format check,
 #           Test coverage, Worktree clean check
-# security.yml: License check, Vulnerability scan
+# security.yml: License check, Vulnerability scan, Proxy vulnerability scan,
+#               Proxy requirements.txt drift check
 # integration.yml: Integration tests
 STEPS: list[Step] = [
     # code.yml steps
@@ -115,6 +116,23 @@ STEPS: list[Step] = [
     Step(
         name="Vulnerability scan",
         command="uv run uv-secure uv.lock",
+        workflow="security",
+    ),
+    Step(
+        name="Proxy vulnerability scan",
+        command=(
+            "uv run uv-secure airut/_bundled/proxy/uv.lock"
+            " --config airut/_bundled/proxy/pyproject.toml"
+        ),
+        workflow="security",
+    ),
+    Step(
+        name="Proxy requirements.txt drift check",
+        command=(
+            "uv export --format requirements-txt --no-dev --frozen"
+            " --no-emit-project --no-header --project airut/_bundled/proxy"
+            " | diff - airut/_bundled/proxy/requirements.txt"
+        ),
         workflow="security",
     ),
     # integration.yml steps
