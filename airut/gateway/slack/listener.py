@@ -133,6 +133,16 @@ class SlackChannelListener(ChannelListener):
                 "error events will not be tracked"
             )
 
+        message_listeners = getattr(client, "on_message_listeners", None)
+        if message_listeners is not None:
+            message_listeners.append(self._on_ws_message)
+            installed += 1
+        else:
+            logger.warning(
+                "Socket Mode client has no 'on_message_listeners'; "
+                "reconnect recovery will not be tracked"
+            )
+
         logger.debug("Installed %d connection health listener(s)", installed)
 
     def _on_ws_close(self, code: int, reason: str | None) -> None:
@@ -152,6 +162,18 @@ class SlackChannelListener(ChannelListener):
             message=f"WebSocket error: {error}",
         )
         logger.warning("Slack WebSocket error: %s", error)
+
+    def _on_ws_message(self, message: str) -> None:
+        """Handle WebSocket message — recover from degraded state.
+
+        After a close/error, the Bolt SDK auto-reconnects.  The first
+        message received on the new connection proves connectivity is
+        restored, so we flip back to CONNECTED.
+        """
+        if self._status.health != ChannelHealth.DEGRADED:
+            return
+        self._status = ChannelStatus(health=ChannelHealth.CONNECTED)
+        logger.info("Slack WebSocket recovered (message received)")
 
     def _register_handlers(self) -> None:
         """Register Agents & AI Apps event handlers on the Bolt app."""
