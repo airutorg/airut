@@ -389,11 +389,13 @@ replied to. Trailing quote blocks with no reply after them are replaced with
 **Usage statistics footer**: Successful response emails include a footer with
 execution statistics when available:
 
-- Cost: API cost in USD (e.g., `Cost: $0.0123`)
+- Cost: API cost in USD (e.g., `Cost: $0.0123`). Shown when `ANTHROPIC_API_KEY`
+  is configured (Claude Code uses API key over OAuth when both are present).
+  Hidden when only `CLAUDE_CODE_OAUTH_TOKEN` is set (subscription plan).
 - Web searches: Number of web search tool invocations
 - Web fetches: Number of web fetch tool invocations
 
-Example footer: `Cost: $0.0423 | Web searches: 2 | Web fetches: 1`
+Example footer: `Cost: $0.0423 · Web searches: 2 · Web fetches: 1`
 
 **Dashboard link**: When `DASHBOARD_BASE_URL` is configured, acknowledgment
 emails (sent when a task is queued) include a link to track progress:
