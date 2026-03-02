@@ -745,6 +745,63 @@ class TestProcessMessage:
         usage_footer = call_args[0][3]  # 4th positional arg
         assert usage_footer == ""
 
+    def test_cost_shown_with_api_key_only(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        """Cost shown when only ANTHROPIC_API_KEY is set."""
+        rc = _make_repo_config(
+            container_env={"ANTHROPIC_API_KEY": "sk-test"},
+        )
+        self._mock_repo_config.return_value = (rc, {})
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        parsed = _make_parsed_message(body="Check")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+        assert "Cost:" in str(adapter.send_reply.call_args)
+
+    def test_cost_hidden_with_oauth_only(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        """Cost hidden when only OAuth token is set."""
+        rc = _make_repo_config(
+            container_env={"CLAUDE_CODE_OAUTH_TOKEN": "tok"},
+        )
+        self._mock_repo_config.return_value = (rc, {})
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        parsed = _make_parsed_message(body="Check")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+        assert "Cost:" not in str(adapter.send_reply.call_args)
+
+    def test_cost_shown_with_both_api_key_and_oauth(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        """Cost shown when both are set (API key takes priority)."""
+        rc = _make_repo_config(
+            container_env={
+                "ANTHROPIC_API_KEY": "sk-test",
+                "CLAUDE_CODE_OAUTH_TOKEN": "tok",
+            },
+        )
+        self._mock_repo_config.return_value = (rc, {})
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        parsed = _make_parsed_message(body="Check")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+        assert "Cost:" in str(adapter.send_reply.call_args)
+
     def test_failure_with_stderr(
         self, email_config: Any, tmp_path: Path
     ) -> None:

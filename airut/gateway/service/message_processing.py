@@ -573,10 +573,16 @@ def process_message(
         # Extract response and usage stats, record reply summary
         if result.outcome == Outcome.SUCCESS:
             response_body = result.response_text
+            # Claude Code uses ANTHROPIC_API_KEY over OAuth when both are
+            # set, so only treat as subscription (hide cost) when OAuth is
+            # present without an API key.
             usage_stats = extract_usage_stats(
                 result.events,
                 is_subscription=bool(
                     repo_config.container_env.get("CLAUDE_CODE_OAUTH_TOKEN")
+                )
+                and not bool(
+                    repo_config.container_env.get("ANTHROPIC_API_KEY")
                 ),
             )
             logger.info(

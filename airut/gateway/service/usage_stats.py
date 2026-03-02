@@ -28,7 +28,7 @@ class UsageStats:
         total_cost_usd: Total cost in USD (if available).
         web_search_requests: Number of web search requests made.
         web_fetch_requests: Number of web fetch requests made.
-        is_subscription: True if using Claude Pro/Max (OAuth token).
+        is_subscription: True if using Claude Pro/Max (OAuth without API key).
     """
 
     total_cost_usd: float | None = None
