@@ -41,7 +41,7 @@ dev = [
 airut = "airut.cli:cli"
 
 [project.urls]
-Homepage = "https://github.com/airutorg/airut"
+Homepage = "https://airut.org"
 Repository = "https://github.com/airutorg/airut"
 Documentation = "https://github.com/airutorg/airut/tree/main/doc"
 
