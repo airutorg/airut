@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from airut.gateway.channel import RawMessage
+from airut.gateway.channel import ChannelSendError, RawMessage
 from airut.gateway.config import EmailChannelConfig
 from airut.gateway.email.adapter import (
     EmailChannelAdapter,
@@ -421,7 +421,7 @@ class TestSendReply:
         # Both calls fail
         responder.send_reply.side_effect = SMTPSendError("permanent fail")
 
-        with pytest.raises(SMTPSendError):
+        with pytest.raises(ChannelSendError):
             adapter.send_reply(parsed, "conv1", "Done", "", [])
 
 

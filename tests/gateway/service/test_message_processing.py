@@ -15,7 +15,7 @@ import pytest
 from airut.claude_output import StreamEvent, parse_stream_events
 from airut.claude_output.types import Usage
 from airut.dashboard.tracker import CompletionReason
-from airut.gateway.channel import ParsedMessage
+from airut.gateway.channel import ChannelSendError, ParsedMessage
 from airut.gateway.config import RepoConfig
 from airut.gateway.service import build_recovery_prompt
 from airut.gateway.service.message_processing import process_message
@@ -557,6 +557,23 @@ class TestProcessMessage:
                 svc, parsed, "task1", handler, adapter
             )
         assert reason == CompletionReason.INTERNAL_ERROR
+
+    def test_channel_send_error(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        adapter.send_reply.side_effect = ChannelSendError("SMTP rate limit")
+        parsed = _make_parsed_message(body="Do something")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            reason, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
+        assert reason == CompletionReason.CHANNEL_ERROR
+        assert conv_id == "conv1"
 
     def test_resume_existing_conversation(
         self, email_config: Any, tmp_path: Path

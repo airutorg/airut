@@ -733,6 +733,67 @@ sys.exit(1)
             service.stop()
             service_thread.join(timeout=10.0)
 
+    def test_channel_error_completion_reason(
+        self,
+        integration_env: IntegrationEnvironment,
+        create_email,
+    ) -> None:
+        """Channel send failure records CompletionReason.CHANNEL_ERROR."""
+        from airut.gateway.channel import ChannelSendError
+
+        mock_code = """
+events = [
+    generate_system_event(session_id),
+    generate_assistant_event("Channel error test"),
+    generate_result_event(session_id, "Done"),
+]
+"""
+        msg = create_email(subject="Channel error test", body=mock_code)
+        integration_env.email_server.inject_message(msg)
+
+        service = integration_env.create_service()
+
+        # Patch the email adapter's send_reply to simulate a delivery
+        # failure (e.g. SMTP rate limit) after successful execution.
+        email_adapter = service.repo_handlers["test"].adapters["email"]
+        original_send_reply = email_adapter.send_reply
+
+        def failing_send_reply(*args, **kwargs):
+            raise ChannelSendError("452 4.4.5 Rate limit exceeded")
+
+        email_adapter.send_reply = failing_send_reply
+
+        service_thread = threading.Thread(target=service.start, daemon=True)
+        service_thread.start()
+
+        try:
+            channel_error_tasks = _poll_tracker(
+                service.tracker,
+                lambda tasks: [
+                    t
+                    for t in tasks
+                    if t.status == TaskStatus.COMPLETED
+                    and t.completion_reason == CompletionReason.CHANNEL_ERROR
+                ],
+            )
+            assert channel_error_tasks, (
+                "No CHANNEL_ERROR completion reason found. Tasks: "
+                + repr(
+                    [
+                        (t.conversation_id, t.completion_reason)
+                        for t in service.tracker.get_all_tasks()
+                    ]
+                )
+            )
+
+            task = channel_error_tasks[0]
+            assert task.succeeded is False
+
+        finally:
+            email_adapter.send_reply = original_send_reply
+            service.stop()
+            service_thread.join(timeout=10.0)
+
 
 class TestTaskTimestamps:
     """Test that task timestamps are consistent and correct."""

@@ -24,6 +24,7 @@ from slack_sdk.errors import SlackApiError
 from airut.gateway.channel import (
     AuthenticationError,
     ChannelAdapter,
+    ChannelSendError,
     ParsedMessage,
     PlanStreamer,
     RawMessage,
@@ -363,7 +364,7 @@ class SlackChannelAdapter(ChannelAdapter):
             )
         except SlackApiError as e:
             logger.error("Failed to send Slack reply: %s", e)
-            raise
+            raise ChannelSendError(str(e)) from e
 
         # Upload outbox files
         for filepath in outbox_files:

@@ -56,6 +56,7 @@ class CompletionReason(Enum):
     UNAUTHORIZED = "unauthorized"
     EXECUTION_FAILED = "execution_failed"
     TIMEOUT = "timeout"
+    CHANNEL_ERROR = "channel_error"
     INTERNAL_ERROR = "internal_error"
     REJECTED = "rejected"
 

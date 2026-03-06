@@ -127,7 +127,8 @@ Tasks progress through a 5-state lifecycle tracked by `TaskTracker`:
                 AUTHENTICATING ──→ COMPLETED (AUTH_FAILED / UNAUTHORIZED)
                       │
                       ├──→ EXECUTING ──→ COMPLETED (SUCCESS / EXECUTION_FAILED /
-                      │                              TIMEOUT / INTERNAL_ERROR)
+                      │                              TIMEOUT / CHANNEL_ERROR /
+                      │                              INTERNAL_ERROR)
                       │
                       ▼  (conversation busy)
                    PENDING ──→ EXECUTING ──→ COMPLETED
@@ -141,15 +142,16 @@ AUTHENTICATING or PENDING. Invalid transitions return False.
 
 Each task is assigned a `CompletionReason` when it reaches COMPLETED:
 
-| Reason             | Meaning                               |
-| ------------------ | ------------------------------------- |
-| `SUCCESS`          | Sandbox ran and produced a response   |
-| `AUTH_FAILED`      | DMARC verification failed             |
-| `UNAUTHORIZED`     | Sender not in allowlist               |
-| `EXECUTION_FAILED` | Container/sandbox failure             |
-| `TIMEOUT`          | Execution exceeded configured limit   |
-| `INTERNAL_ERROR`   | Unexpected exception (e.g. git clone) |
-| `REJECTED`         | Per-conversation pending queue full   |
+| Reason             | Meaning                                      |
+| ------------------ | -------------------------------------------- |
+| `SUCCESS`          | Sandbox ran and produced a response          |
+| `AUTH_FAILED`      | DMARC verification failed                    |
+| `UNAUTHORIZED`     | Sender not in allowlist                      |
+| `EXECUTION_FAILED` | Container/sandbox failure                    |
+| `TIMEOUT`          | Execution exceeded configured limit          |
+| `CHANNEL_ERROR`    | Reply delivery failed (e.g. SMTP rate limit) |
+| `INTERNAL_ERROR`   | Unexpected exception (e.g. git clone)        |
+| `REJECTED`         | Per-conversation pending queue full          |
 
 ### Per-Conversation Message Queuing
 

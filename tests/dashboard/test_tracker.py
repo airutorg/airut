@@ -1050,5 +1050,6 @@ class TestCompletionReason:
         assert CompletionReason.UNAUTHORIZED.value == "unauthorized"
         assert CompletionReason.EXECUTION_FAILED.value == "execution_failed"
         assert CompletionReason.TIMEOUT.value == "timeout"
+        assert CompletionReason.CHANNEL_ERROR.value == "channel_error"
         assert CompletionReason.INTERNAL_ERROR.value == "internal_error"
         assert CompletionReason.REJECTED.value == "rejected"
