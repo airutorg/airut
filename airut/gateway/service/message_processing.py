@@ -37,7 +37,12 @@ from airut.dashboard.tracker import (
     TodoItem,
     TodoStatus,
 )
-from airut.gateway.channel import ChannelAdapter, ParsedMessage, PlanStreamer
+from airut.gateway.channel import (
+    ChannelAdapter,
+    ChannelSendError,
+    ParsedMessage,
+    PlanStreamer,
+)
 from airut.gateway.config import ReplacementMap, RepoConfig
 from airut.gateway.conversation import GitCloneError
 from airut.gateway.service.usage_stats import extract_usage_stats
@@ -679,6 +684,16 @@ def process_message(
         )
         adapter.send_error(parsed, conv_id, error_msg)
         return CompletionReason.INTERNAL_ERROR, None
+    except ChannelSendError as e:
+        if plan_streamer is not None:
+            plan_streamer.finalize()
+        logger.error(
+            "Repo '%s': channel send error for conversation %s: %s",
+            repo_id,
+            conv_id,
+            e,
+        )
+        return CompletionReason.CHANNEL_ERROR, conv_id
     except Exception as e:
         if plan_streamer is not None:
             plan_streamer.finalize()

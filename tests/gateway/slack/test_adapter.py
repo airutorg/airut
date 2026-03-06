@@ -12,7 +12,11 @@ import pytest
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
-from airut.gateway.channel import AuthenticationError, RawMessage
+from airut.gateway.channel import (
+    AuthenticationError,
+    ChannelSendError,
+    RawMessage,
+)
 from airut.gateway.slack.adapter import (
     SlackChannelAdapter,
     SlackParsedMessage,
@@ -409,7 +413,7 @@ class TestSendReply:
             display_title="Test",
         )
 
-        with pytest.raises(SlackApiError):
+        with pytest.raises(ChannelSendError):
             adapter.send_reply(parsed, "conv1", "Done", "", [])
 
 

@@ -20,6 +20,7 @@ from pathlib import Path
 from airut.gateway.channel import (
     AuthenticationError,
     ChannelAdapter,
+    ChannelSendError,
     ParsedMessage,
     PlanStreamer,
     RawMessage,
@@ -376,7 +377,7 @@ class EmailChannelAdapter(ChannelAdapter):
 
             except SMTPSendError as retry_error:
                 logger.critical("SMTP retry failed: %s", retry_error)
-                raise
+                raise ChannelSendError(str(retry_error)) from retry_error
 
     def send_error(
         self,

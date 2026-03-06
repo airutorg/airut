@@ -42,6 +42,15 @@ class AuthenticationError(Exception):
         super().__init__(reason or "authentication failed")
 
 
+class ChannelSendError(Exception):
+    """Raised when sending a reply through the channel fails.
+
+    Distinguishes channel delivery failures (SMTP rate limits, Slack API
+    errors) from internal processing errors so the dashboard can display
+    an appropriate status.
+    """
+
+
 @dataclass
 class ParsedMessage:
     """Protocol-agnostic parsed message.
