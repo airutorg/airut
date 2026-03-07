@@ -569,6 +569,74 @@ def test_extract_attachments_no_payload(tmp_path: Path) -> None:
     assert isinstance(filenames, list)
 
 
+def test_extract_attachments_path_traversal(tmp_path: Path) -> None:
+    """Test that path traversal filenames are sanitized."""
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+
+    msg = MIMEMultipart()
+    text_part = MIMEText("Body text")
+    msg.attach(text_part)
+
+    # Craft an attachment with a path traversal filename
+    attachment = MIMEText("malicious content")
+    attachment.add_header(
+        "Content-Disposition", "attachment", filename="../../../evil.txt"
+    )
+    msg.attach(attachment)
+
+    filenames = extract_attachments(msg, inbox_dir)
+
+    assert len(filenames) == 1
+    assert "evil.txt" in filenames
+
+    # File must be written inside inbox_dir, not outside
+    saved_file = inbox_dir / "evil.txt"
+    assert saved_file.exists()
+    assert saved_file.read_text() == "malicious content"
+
+    # Ensure no file was written outside inbox_dir
+    traversal_target = tmp_path / "evil.txt"
+    assert not traversal_target.exists()
+
+
+def test_extract_attachments_path_traversal_dotdot(tmp_path: Path) -> None:
+    """Test that a filename resolving to '..' after sanitization is skipped."""
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+
+    msg = MIMEMultipart()
+    text_part = MIMEText("Body text")
+    msg.attach(text_part)
+
+    # Filename that resolves to ".." after Path.name sanitization
+    attachment = MIMEText("malicious content")
+    attachment.add_header(
+        "Content-Disposition", "attachment", filename="../../../"
+    )
+    msg.attach(attachment)
+
+    filenames = extract_attachments(msg, inbox_dir)
+    assert len(filenames) == 0
+
+
+def test_extract_attachments_path_traversal_slash_only(tmp_path: Path) -> None:
+    """Test that a filename of '/' (empty after sanitization) is skipped."""
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+
+    msg = MIMEMultipart()
+    text_part = MIMEText("Body text")
+    msg.attach(text_part)
+
+    attachment = MIMEText("malicious content")
+    attachment.add_header("Content-Disposition", "attachment", filename="/")
+    msg.attach(attachment)
+
+    filenames = extract_attachments(msg, inbox_dir)
+    assert len(filenames) == 0
+
+
 def test_collect_outbox_files_with_files(tmp_path: Path) -> None:
     """Test collecting files from outbox directory."""
     outbox_dir = tmp_path / "outbox"
