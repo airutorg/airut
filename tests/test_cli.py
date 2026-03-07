@@ -863,6 +863,7 @@ def _check_patches(
     dotenv: bool = False,
     running_version: dict[str, str] | None = None,
     upstream_version: object | None = None,
+    cgroup_ok: bool = True,
 ):
     """Build a ``contextmanager`` that patches everything cmd_check needs.
 
@@ -922,7 +923,88 @@ def _check_patches(
         )
     )
     stack.enter_context(patch("airut.cli._use_color", return_value=False))
+    cgroup_detail = (
+        "cgroups v2: delegated (cpu memory pids)"
+        if cgroup_ok
+        else "cgroups v2: missing controllers (cpu memory pids)"
+    )
+    stack.enter_context(
+        patch(
+            "airut.cli._check_cgroups_v2",
+            return_value=(cgroup_ok, cgroup_detail),
+        )
+    )
     return config_path, stack
+
+
+class TestCheckCgroupsV2:
+    """Tests for _check_cgroups_v2."""
+
+    def test_all_controllers_present(self, tmp_path: Path) -> None:
+        """Returns ok when all required controllers are delegated."""
+        from airut.cli import _check_cgroups_v2
+
+        cgroup_file = tmp_path / "cgroup.controllers"
+        cgroup_file.write_text("cpuset cpu io memory hugetlb pids\n")
+
+        with patch(
+            "airut.cli.Path",
+            return_value=cgroup_file,
+        ):
+            ok, detail = _check_cgroups_v2()
+
+        assert ok is True
+        assert "cpu memory pids" in detail
+
+    def test_missing_controller(self, tmp_path: Path) -> None:
+        """Returns not ok when a required controller is missing."""
+        from airut.cli import _check_cgroups_v2
+
+        cgroup_file = tmp_path / "cgroup.controllers"
+        cgroup_file.write_text("cpuset cpu io hugetlb\n")
+
+        with patch(
+            "airut.cli.Path",
+            return_value=cgroup_file,
+        ):
+            ok, detail = _check_cgroups_v2()
+
+        assert ok is False
+        assert "missing controllers" in detail
+        assert "memory" in detail
+        assert "pids" in detail
+
+    def test_cgroup_file_not_found(self, tmp_path: Path) -> None:
+        """Returns not ok when cgroup controllers file doesn't exist."""
+        from airut.cli import _check_cgroups_v2
+
+        cgroup_file = tmp_path / "nonexistent" / "cgroup.controllers"
+
+        with patch(
+            "airut.cli.Path",
+            return_value=cgroup_file,
+        ):
+            ok, detail = _check_cgroups_v2()
+
+        assert ok is False
+        assert "not found" in detail
+
+    def test_cgroup_read_error(self, tmp_path: Path) -> None:
+        """Returns not ok when cgroup file can't be read."""
+        from airut.cli import _check_cgroups_v2
+
+        mock_path = MagicMock()
+        mock_path.exists.return_value = True
+        mock_path.read_text.side_effect = OSError("Permission denied")
+
+        with patch(
+            "airut.cli.Path",
+            return_value=mock_path,
+        ):
+            ok, detail = _check_cgroups_v2()
+
+        assert ok is False
+        assert "unable to read" in detail
 
 
 class TestCmdCheck:
@@ -1114,6 +1196,18 @@ repos:
             result = cmd_check([])
         assert result == 0
 
+    def test_cgroups_warning_when_missing(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Cgroups failure is shown as a warning (does not affect exit code)."""
+        _path, ctx = _check_patches(tmp_path, cgroup_ok=False)
+        with ctx:
+            result = cmd_check([])
+        out = capsys.readouterr().out
+        assert "!" in out
+        assert "missing controllers" in out
+        assert result == 0
+
     def test_version_mismatch_warning(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -1243,6 +1337,15 @@ repos:
             )
         )
         stack.enter_context(patch("airut.cli._use_color", return_value=False))
+        stack.enter_context(
+            patch(
+                "airut.cli._check_cgroups_v2",
+                return_value=(
+                    True,
+                    "cgroups v2: delegated (cpu memory pids)",
+                ),
+            )
+        )
         with stack:
             cmd_check([])
         mock_fetch.assert_called_once_with("http://127.0.0.1:5200")

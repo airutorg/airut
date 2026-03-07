@@ -31,6 +31,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 from airut.gateway.config import (
@@ -214,6 +215,50 @@ def _check_dependency(
     if min_version:
         return True, f"{name}: {version_str} (>= {_fmt_version(min_version)})"
     return True, f"{name}: {version_str}"
+
+
+# Required cgroup v2 controllers for container resource limits.
+_REQUIRED_CGROUP_CONTROLLERS = ("cpu", "memory", "pids")
+
+
+def _check_cgroups_v2() -> tuple[bool, str]:
+    """Check if cgroup v2 controllers are delegated to the current user.
+
+    Container resource limits (``--memory``, ``--cpus``, ``--pids-limit``)
+    require the ``cpu``, ``memory``, and ``pids`` controllers to be
+    delegated in the user's cgroup slice.
+
+    Returns:
+        ``(ok, detail)`` — *ok* is True when all required controllers
+        are available, *detail* is a human-readable status string.
+    """
+    uid = os.getuid()
+    cgroup_path = Path(
+        f"/sys/fs/cgroup/user.slice/user-{uid}.slice/cgroup.controllers"
+    )
+
+    if not cgroup_path.exists():
+        return False, (
+            "cgroups v2 controllers not found "
+            "(resource limits require cgroup v2 delegation)"
+        )
+
+    try:
+        controllers = cgroup_path.read_text().strip().split()
+    except OSError:
+        return False, "cgroups v2: unable to read controller list"
+
+    missing = [c for c in _REQUIRED_CGROUP_CONTROLLERS if c not in controllers]
+    if missing:
+        return False, (
+            f"cgroups v2: missing controllers: {', '.join(missing)} "
+            f"(have: {', '.join(controllers)})"
+        )
+
+    present = " ".join(
+        c for c in controllers if c in _REQUIRED_CGROUP_CONTROLLERS
+    )
+    return True, f"cgroups v2: delegated ({present})"
 
 
 # ── init subcommand ─────────────────────────────────────────────────
@@ -442,6 +487,15 @@ def cmd_check(argv: list[str]) -> int:
         else:
             print(f"  {s.red('✗')} {detail}")
             all_ok = False
+    print()
+
+    # ── Cgroups (informational) ─────────────────────────────────
+    print(s.bold("Cgroups"))
+    cgroup_ok, cgroup_detail = _check_cgroups_v2()
+    if cgroup_ok:
+        print(f"  {s.green('✓')} {cgroup_detail}")
+    else:
+        print(f"  {s.yellow('!')} {cgroup_detail}")
     print()
 
     # ── Service status (informational) ──────────────────────────

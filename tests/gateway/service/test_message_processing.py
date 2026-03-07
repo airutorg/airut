@@ -16,7 +16,7 @@ from airut.claude_output import StreamEvent, parse_stream_events
 from airut.claude_output.types import Usage
 from airut.dashboard.tracker import CompletionReason
 from airut.gateway.channel import ChannelSendError, ParsedMessage
-from airut.gateway.config import RepoConfig
+from airut.gateway.config import RepoConfig, ResourceLimits
 from airut.gateway.service import build_recovery_prompt
 from airut.gateway.service.message_processing import process_message
 from airut.sandbox import ExecutionResult, Outcome
@@ -33,14 +33,14 @@ def _parse_events(*raw_events: dict) -> list[StreamEvent]:
 def _make_repo_config(
     *,
     default_model: str = "sonnet",
-    timeout: int = 300,
+    timeout: int | None = 300,
     network_sandbox_enabled: bool = True,
     container_env: dict[str, str] | None = None,
 ) -> RepoConfig:
     """Create a RepoConfig for testing."""
     return RepoConfig(
         default_model=default_model,
-        timeout=timeout,
+        resource_limits=ResourceLimits(timeout=timeout),
         network_sandbox_enabled=network_sandbox_enabled,
         container_env=container_env or {},
     )
@@ -529,6 +529,37 @@ class TestProcessMessage:
                 svc, parsed, "task1", handler, adapter
             )
         assert reason == CompletionReason.TIMEOUT
+        error_msg = adapter.send_error.call_args[0][2]
+        assert "after 300 seconds" in error_msg
+
+    def test_container_timeout_no_timeout_value(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        """Timeout message is clean when no timeout value is configured."""
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        svc._mock_task.execute.return_value = _make_failure_result(
+            outcome=Outcome.TIMEOUT,
+        )
+        parsed = _make_parsed_message(body="Do something")
+
+        rc = _make_repo_config(timeout=None)
+        with (
+            patch(
+                "airut.gateway.service.message_processing.RepoConfig.from_mirror",
+                return_value=(rc, {}),
+            ),
+            patch(
+                "airut.gateway.service.message_processing.ConversationStore",
+                return_value=mock_cs,
+            ),
+        ):
+            reason, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
+        assert reason == CompletionReason.TIMEOUT
+        error_msg = adapter.send_error.call_args[0][2]
+        assert "The task was interrupted." in error_msg
+        assert "interrupted ." not in error_msg
 
     def test_git_clone_error(self, email_config: Any, tmp_path: Path) -> None:
         from airut.gateway import GitCloneError

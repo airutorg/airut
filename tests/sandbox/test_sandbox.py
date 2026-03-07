@@ -8,6 +8,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from airut.gateway.config import ResourceLimits
 from airut.sandbox.sandbox import Sandbox, SandboxConfig
 from airut.sandbox.task import Task
 from airut.sandbox.types import ContainerEnv, Mount
@@ -291,10 +292,35 @@ class TestSandboxCreateTask:
         assert task._proxy_manager is not None
 
     @patch("airut.sandbox.sandbox.ProxyManager")
-    def test_custom_timeout(
+    def test_custom_resource_limits(
         self, mock_pm_class: MagicMock, tmp_path: Path
     ) -> None:
-        """create_task() passes custom timeout to Task."""
+        """create_task() passes resource_limits to Task."""
+        config = SandboxConfig()
+        sandbox = Sandbox(config)
+
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
+
+        limits = ResourceLimits(
+            timeout=600, memory="4g", cpus=2, pids_limit=256
+        )
+        task = sandbox.create_task(
+            "task-123",
+            image_tag="airut:test",
+            mounts=[],
+            env=ContainerEnv(),
+            execution_context_dir=context_dir,
+            resource_limits=limits,
+        )
+
+        assert task._resource_limits == limits
+
+    @patch("airut.sandbox.sandbox.ProxyManager")
+    def test_default_resource_limits(
+        self, mock_pm_class: MagicMock, tmp_path: Path
+    ) -> None:
+        """create_task() uses empty ResourceLimits when not specified."""
         config = SandboxConfig()
         sandbox = Sandbox(config)
 
@@ -307,10 +333,9 @@ class TestSandboxCreateTask:
             mounts=[],
             env=ContainerEnv(),
             execution_context_dir=context_dir,
-            timeout_seconds=600,
         )
 
-        assert task._timeout_seconds == 600
+        assert task._resource_limits == ResourceLimits()
 
     @patch("airut.sandbox.sandbox.ProxyManager")
     def test_network_log_dir(

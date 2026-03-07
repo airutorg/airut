@@ -134,9 +134,10 @@ task.execute(prompt, session_id=..., model=..., on_event=...)
   |
   +- Run Claude Code container
   |    +- --cap-drop=ALL, --security-opt=no-new-privileges:true
+  |    +- Apply resource limits (--memory, --cpus, --pids-limit)
   |    +- Prompt on stdin, stream-json on stdout
   |    +- Parse each line as StreamEvent, invoke on_event callback
-  |    +- Wait with timeout
+  |    +- Wait with timeout (if configured)
   |
   +- Stop proxy (always, even on failure)
   |
@@ -144,6 +145,38 @@ task.execute(prompt, session_id=..., model=..., on_event=...)
   |
   +- Return ExecutionResult
 ```
+
+## Resource Limits
+
+Container resource limits are configured via `ResourceLimits` and passed through
+to podman flags. All limits are optional — when a field is `None`, the
+corresponding flag is not passed and no limit is enforced.
+
+| ResourceLimits field | Podman flags                 | Effect                     |
+| -------------------- | ---------------------------- | -------------------------- |
+| `timeout`            | `process.wait(timeout=N)`    | SIGKILL after N seconds    |
+| `memory`             | `--memory=X --memory-swap=X` | Hard memory limit, no swap |
+| `cpus`               | `--cpus=N`                   | CPU core limit (float)     |
+| `pids_limit`         | `--pids-limit=N`             | Fork bomb protection       |
+
+Setting `--memory-swap` equal to `--memory` disables swap for the container,
+preventing slow OOM thrashing.
+
+### Configuration Layers
+
+Resource limits flow from two configuration layers:
+
+1. **Server config** (`~/.config/airut/airut.yaml`) — optional ceilings
+2. **Repo config** (`.airut/airut.yaml`) — per-repo values, clamped to ceilings
+
+See `spec/repo-config.md` for the full resolution logic.
+
+### cgroup v2 Requirement
+
+Resource limits require cgroup v2 with the `cpu`, `memory`, and `pids`
+controllers delegated to the user running Airut. The `airut check` command
+verifies this. This is the default on Ubuntu 22.04+, Fedora 34+, Debian 12+, and
+RHEL 9+.
 
 ## Outcome Classification
 

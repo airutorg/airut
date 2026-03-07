@@ -20,6 +20,7 @@ from airut.gateway.config import (
     ReplacementEntry,
     RepoConfig,
     RepoServerConfig,
+    ResourceLimits,
     ServerConfig,
     SigningCredential,
     SigningCredentialEntry,
@@ -28,6 +29,7 @@ from airut.gateway.config import (
     _EnvVar,
     _make_loader,
     _make_repo_loader,
+    _parse_resource_limits,
     _parse_slack_channel_config,
     _raw_resolve,
     _resolve,
@@ -291,10 +293,12 @@ def test_global_config_defaults() -> None:
     assert config.dashboard_base_url is None
     assert config.container_command == "podman"
     assert config.upstream_dns is None
+    assert config.resource_limits is None
 
 
 def test_global_config_with_custom_values() -> None:
     """Test GlobalConfig with custom values."""
+    limits = ResourceLimits(timeout=3600, memory="8g", cpus=4, pids_limit=512)
     config = GlobalConfig(
         max_concurrent_executions=5,
         shutdown_timeout_seconds=120,
@@ -305,6 +309,7 @@ def test_global_config_with_custom_values() -> None:
         dashboard_base_url="https://dashboard.example.com",
         container_command="docker",
         upstream_dns="8.8.8.8",
+        resource_limits=limits,
     )
 
     assert config.max_concurrent_executions == 5
@@ -316,6 +321,7 @@ def test_global_config_with_custom_values() -> None:
     assert config.dashboard_base_url == "https://dashboard.example.com"
     assert config.container_command == "docker"
     assert config.upstream_dns == "8.8.8.8"
+    assert config.resource_limits == limits
 
 
 def test_global_config_invalid_max_concurrent() -> None:
@@ -864,6 +870,7 @@ class TestFromYaml:
         assert config.global_config.dashboard_port == 5200
         assert config.global_config.dashboard_base_url is None
         assert config.global_config.container_command == "podman"
+        assert config.global_config.resource_limits is None
 
         # Repo config
         email_ch = repo.channels["email"]
@@ -901,6 +908,7 @@ class TestFromYaml:
             == "https://dashboard.example.com"
         )
         assert config.global_config.container_command == "docker"
+        assert config.global_config.resource_limits is None
 
         # Repo config
         email_ch = repo.channels["email"]
@@ -915,6 +923,28 @@ class TestFromYaml:
             "GH_TOKEN": "ghp_tok",
             "R2_ACCOUNT_ID": "test-account",
         }
+
+    def test_server_resource_limits(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """resource_limits block is parsed from server config."""
+        yaml_content = (
+            _MINIMAL_YAML.format(repo_url=master_repo)
+            + "resource_limits:\n"
+            + "  timeout: 3600\n"
+            + "  memory: 8g\n"
+            + "  cpus: 4\n"
+            + "  pids_limit: 512\n"
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        config = ServerConfig.from_yaml(yaml_path)
+        rl = config.global_config.resource_limits
+        assert rl is not None
+        assert rl.timeout == 3600
+        assert rl.memory == "8g"
+        assert rl.cpus == 4
+        assert rl.pids_limit == 512
 
     def test_network_sandbox_enabled_default(
         self, master_repo: Path, tmp_path: Path
@@ -1271,6 +1301,167 @@ class TestFromYaml:
 # ---------------------------------------------------------------------------
 
 
+class TestResourceLimits:
+    """Tests for ResourceLimits dataclass."""
+
+    def test_defaults_all_none(self) -> None:
+        """Default ResourceLimits has all fields None."""
+        rl = ResourceLimits()
+        assert rl.timeout is None
+        assert rl.memory is None
+        assert rl.cpus is None
+        assert rl.pids_limit is None
+
+    def test_custom_values(self) -> None:
+        """Custom values are preserved."""
+        rl = ResourceLimits(timeout=600, memory="2g", cpus=4, pids_limit=256)
+        assert rl.timeout == 600
+        assert rl.memory == "2g"
+        assert rl.cpus == 4
+        assert rl.pids_limit == 256
+
+    def test_invalid_timeout(self) -> None:
+        """Timeout < 10 raises ValueError."""
+        with pytest.raises(ValueError, match="Timeout must be >= 10s: 5"):
+            ResourceLimits(timeout=5)
+
+    def test_float_cpus(self) -> None:
+        """Fractional CPU values are accepted."""
+        rl = ResourceLimits(cpus=1.5)
+        assert rl.cpus == 1.5
+
+    def test_invalid_cpus(self) -> None:
+        """CPUs < 0.01 raises ValueError."""
+        with pytest.raises(ValueError, match="CPUs must be >= 0.01: 0"):
+            ResourceLimits(cpus=0)
+
+    def test_invalid_pids_limit(self) -> None:
+        """PIDs limit < 1 raises ValueError."""
+        with pytest.raises(ValueError, match="PIDs limit must be >= 1: 0"):
+            ResourceLimits(pids_limit=0)
+
+    def test_invalid_memory_format(self) -> None:
+        """Invalid memory format raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid memory limit"):
+            ResourceLimits(memory="2x")
+
+    def test_zero_memory(self) -> None:
+        """Zero memory value raises ValueError."""
+        with pytest.raises(ValueError, match="must be greater than zero"):
+            ResourceLimits(memory="0m")
+
+    def test_valid_memory_formats(self) -> None:
+        """Various valid memory format strings."""
+        for mem in ("512m", "2g", "1024k", "100b", "4G", "256M"):
+            rl = ResourceLimits(memory=mem)
+            assert rl.memory == mem
+
+    def test_clamp_no_ceiling(self) -> None:
+        """Clamp with None ceiling returns self unchanged."""
+        rl = ResourceLimits(timeout=600, memory="4g", cpus=4, pids_limit=512)
+        clamped = rl.clamp(None)
+        assert clamped == rl
+
+    def test_clamp_below_ceiling(self) -> None:
+        """Values below ceiling are preserved."""
+        rl = ResourceLimits(timeout=300, memory="2g", cpus=2, pids_limit=128)
+        ceiling = ResourceLimits(
+            timeout=600, memory="4g", cpus=4, pids_limit=256
+        )
+        clamped = rl.clamp(ceiling)
+        assert clamped == rl
+
+    def test_clamp_above_ceiling(self) -> None:
+        """Values above ceiling are clamped."""
+        rl = ResourceLimits(timeout=600, memory="8g", cpus=8, pids_limit=1024)
+        ceiling = ResourceLimits(
+            timeout=300, memory="4g", cpus=4, pids_limit=256
+        )
+        clamped = rl.clamp(ceiling)
+        assert clamped.timeout == 300
+        assert clamped.memory == "4g"
+        assert clamped.cpus == 4
+        assert clamped.pids_limit == 256
+
+    def test_clamp_partial_ceiling(self) -> None:
+        """Only fields set in ceiling are clamped."""
+        rl = ResourceLimits(timeout=600, memory="8g", cpus=8, pids_limit=1024)
+        ceiling = ResourceLimits(timeout=300)  # only timeout ceiling
+        clamped = rl.clamp(ceiling)
+        assert clamped.timeout == 300
+        assert clamped.memory == "8g"  # unclamped
+        assert clamped.cpus == 8  # unclamped
+        assert clamped.pids_limit == 1024  # unclamped
+
+    def test_clamp_none_repo_values_unaffected(self) -> None:
+        """None repo values stay None even with ceiling set."""
+        rl = ResourceLimits()
+        ceiling = ResourceLimits(
+            timeout=300, memory="4g", cpus=4, pids_limit=256
+        )
+        clamped = rl.clamp(ceiling)
+        assert clamped == ResourceLimits()
+
+    def test_clamp_memory_byte_comparison(self) -> None:
+        """Memory clamping compares by byte value."""
+        rl = ResourceLimits(memory="8192m")  # 8GB in MB
+        ceiling = ResourceLimits(memory="4g")  # 4GB
+        clamped = rl.clamp(ceiling)
+        assert clamped.memory == "4g"
+
+    def test_clamp_memory_equal_preserves_repo_string(self) -> None:
+        """Equal byte values preserve the repo's original string."""
+        rl = ResourceLimits(memory="4096m")  # 4GB in MB
+        ceiling = ResourceLimits(memory="4g")  # 4GB
+        clamped = rl.clamp(ceiling)
+        assert clamped.memory == "4096m"  # repo string preserved
+
+    def test_clamp_float_cpus(self) -> None:
+        """Fractional CPU values are clamped correctly."""
+        rl = ResourceLimits(cpus=2.5)
+        ceiling = ResourceLimits(cpus=1.5)
+        clamped = rl.clamp(ceiling)
+        assert clamped.cpus == 1.5
+
+
+class TestParseResourceLimits:
+    """Tests for _parse_resource_limits."""
+
+    def test_none_input(self) -> None:
+        """None returns None."""
+        assert _parse_resource_limits(None) is None
+
+    def test_empty_dict(self) -> None:
+        """Empty dict returns None."""
+        assert _parse_resource_limits({}) is None
+
+    def test_full_block(self) -> None:
+        """Full resource_limits block."""
+        rl = _parse_resource_limits(
+            {"timeout": 600, "memory": "2g", "cpus": 2, "pids_limit": 256}
+        )
+        assert rl is not None
+        assert rl.timeout == 600
+        assert rl.memory == "2g"
+        assert rl.cpus == 2
+        assert rl.pids_limit == 256
+
+    def test_float_cpus(self) -> None:
+        """Fractional cpus value is parsed correctly."""
+        rl = _parse_resource_limits({"cpus": 1.5})
+        assert rl is not None
+        assert rl.cpus == 1.5
+
+    def test_partial_block(self) -> None:
+        """Partial block fills missing fields with None."""
+        rl = _parse_resource_limits({"memory": "4g"})
+        assert rl is not None
+        assert rl.timeout is None
+        assert rl.memory == "4g"
+        assert rl.cpus is None
+        assert rl.pids_limit is None
+
+
 class TestRepoConfigDirect:
     """Tests for direct RepoConfig construction."""
 
@@ -1278,27 +1469,24 @@ class TestRepoConfigDirect:
         """Defaults are sensible."""
         rc = RepoConfig()
         assert rc.default_model == "opus"
-        assert rc.timeout == 300
+        assert rc.resource_limits == ResourceLimits()
         assert rc.network_sandbox_enabled is True
         assert rc.container_env == {}
 
     def test_custom_values(self) -> None:
         """Custom values are preserved."""
+        limits = ResourceLimits(timeout=600, memory="4g")
         rc = RepoConfig(
             default_model="sonnet",
-            timeout=600,
+            resource_limits=limits,
             network_sandbox_enabled=False,
             container_env={"KEY": "val"},
         )
         assert rc.default_model == "sonnet"
-        assert rc.timeout == 600
+        assert rc.resource_limits.timeout == 600
+        assert rc.resource_limits.memory == "4g"
         assert rc.network_sandbox_enabled is False
         assert rc.container_env == {"KEY": "val"}
-
-    def test_invalid_timeout(self) -> None:
-        """Timeout < 10 raises ValueError."""
-        with pytest.raises(ValueError, match="Timeout must be >= 10s: 5"):
-            RepoConfig(timeout=5)
 
     def test_container_env_redaction(self) -> None:
         """Container env values are registered for log redaction."""
@@ -1315,7 +1503,7 @@ class TestRepoConfigFromRaw:
         raw: dict = {}
         rc, replacement_map = RepoConfig._from_raw(raw, {}, {})
         assert rc.default_model == "opus"
-        assert rc.timeout == 300
+        assert rc.resource_limits == ResourceLimits()
         assert rc.network_sandbox_enabled is True
         assert rc.container_env == {}
         assert replacement_map == {}
@@ -1324,7 +1512,12 @@ class TestRepoConfigFromRaw:
         """Full repo config with all fields."""
         raw = {
             "default_model": "sonnet",
-            "timeout": 6000,
+            "resource_limits": {
+                "timeout": 6000,
+                "memory": "4g",
+                "cpus": 2,
+                "pids_limit": 256,
+            },
             "network": {"sandbox_enabled": False},
             "container_env": {
                 "INLINE": "value",
@@ -1334,13 +1527,59 @@ class TestRepoConfigFromRaw:
         secrets = {"GH_TOKEN": "ghp_tok"}
         rc, replacement_map = RepoConfig._from_raw(raw, secrets, {})
         assert rc.default_model == "sonnet"
-        assert rc.timeout == 6000
+        assert rc.resource_limits.timeout == 6000
+        assert rc.resource_limits.memory == "4g"
+        assert rc.resource_limits.cpus == 2
+        assert rc.resource_limits.pids_limit == 256
         assert rc.network_sandbox_enabled is False
         assert rc.container_env == {
             "INLINE": "value",
             "FROM_SERVER": "ghp_tok",
         }
         assert replacement_map == {}
+
+    def test_legacy_top_level_timeout(self) -> None:
+        """Top-level timeout is used when resource_limits.timeout is not set."""
+        raw = {"timeout": 6000}
+        rc, _ = RepoConfig._from_raw(raw, {}, {})
+        assert rc.resource_limits.timeout == 6000
+
+    def test_resource_limits_timeout_takes_precedence(self) -> None:
+        """resource_limits.timeout takes precedence over top-level timeout."""
+        raw = {
+            "timeout": 300,
+            "resource_limits": {"timeout": 6000},
+        }
+        rc, _ = RepoConfig._from_raw(raw, {}, {})
+        assert rc.resource_limits.timeout == 6000
+
+    def test_server_resource_limits_clamp(self) -> None:
+        """Repo limits are clamped to server ceilings."""
+        raw = {
+            "resource_limits": {
+                "timeout": 7200,
+                "memory": "8g",
+                "cpus": 8,
+            },
+        }
+        server_limits = ResourceLimits(
+            timeout=3600, memory="4g", cpus=4, pids_limit=512
+        )
+        rc, _ = RepoConfig._from_raw(
+            raw, {}, {}, server_resource_limits=server_limits
+        )
+        assert rc.resource_limits.timeout == 3600
+        assert rc.resource_limits.memory == "4g"
+        assert rc.resource_limits.cpus == 4
+        # pids_limit not set in repo, stays None
+        assert rc.resource_limits.pids_limit is None
+
+    def test_no_server_limits_no_clamp(self) -> None:
+        """Without server limits, repo values are unclamped."""
+        raw = {"resource_limits": {"timeout": 7200, "memory": "8g"}}
+        rc, _ = RepoConfig._from_raw(raw, {}, {})
+        assert rc.resource_limits.timeout == 7200
+        assert rc.resource_limits.memory == "8g"
 
     def test_server_sandbox_false_overrides_repo_true(self) -> None:
         """Server sandbox_enabled=false disables even when repo is true."""
@@ -1465,7 +1704,34 @@ class TestRepoConfigFromMirror:
         rc, replacement_map = RepoConfig.from_mirror(mirror, {})
         mirror.read_file.assert_called_once_with(".airut/airut.yaml")
         assert rc.default_model == "sonnet"
+        assert rc.resource_limits.timeout == 600
         assert replacement_map == {}
+
+    def test_loads_resource_limits_from_mirror(self) -> None:
+        """Loads resource_limits block from git mirror."""
+        mirror = MagicMock()
+        mirror.read_file.return_value = (
+            "resource_limits:\n"
+            "  timeout: 3600\n"
+            "  memory: 4g\n"
+            "  cpus: 2\n"
+            "  pids_limit: 256\n"
+        )
+        rc, _ = RepoConfig.from_mirror(mirror, {})
+        assert rc.resource_limits.timeout == 3600
+        assert rc.resource_limits.memory == "4g"
+        assert rc.resource_limits.cpus == 2
+        assert rc.resource_limits.pids_limit == 256
+
+    def test_server_resource_limits_passed_through(self) -> None:
+        """Server resource limits are passed to _from_raw for clamping."""
+        mirror = MagicMock()
+        mirror.read_file.return_value = "resource_limits:\n  timeout: 7200\n"
+        server_limits = ResourceLimits(timeout=3600)
+        rc, _ = RepoConfig.from_mirror(
+            mirror, {}, server_resource_limits=server_limits
+        )
+        assert rc.resource_limits.timeout == 3600
 
     def test_mirror_read_error(self) -> None:
         """Mirror read failure raises ConfigError."""

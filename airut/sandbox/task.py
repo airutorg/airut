@@ -24,6 +24,7 @@ from typing import Protocol
 
 from airut.allowlist import Allowlist, serialize_allowlist_json
 from airut.claude_output import StreamEvent, parse_event
+from airut.gateway.config import ResourceLimits
 from airut.sandbox._network import get_network_args
 from airut.sandbox._output import build_execution_result
 from airut.sandbox._proxy import ProxyManager, _ContextProxy
@@ -96,7 +97,7 @@ class Task:
         execution_context_dir: Path,
         network_log_dir: Path | None,
         network_sandbox: NetworkSandboxConfig | None,
-        timeout_seconds: int,
+        resource_limits: ResourceLimits,
         container_command: str,
         proxy_manager: ProxyManager | None,
     ) -> None:
@@ -107,7 +108,7 @@ class Task:
         self._execution_context_dir = execution_context_dir
         self._network_log_dir = network_log_dir
         self._network_sandbox = network_sandbox
-        self._timeout_seconds = timeout_seconds
+        self._resource_limits = resource_limits
         self._container_command = container_command
         self._proxy_manager = proxy_manager
 
@@ -296,6 +297,16 @@ class Task:
         # Add Claude session state mount (sandbox-managed)
         cmd.extend(["-v", f"{self._claude_dir}:/root/.claude:rw"])
 
+        # Resource limits
+        limits = self._resource_limits
+        if limits.memory is not None:
+            cmd.extend(["--memory", limits.memory])
+            cmd.extend(["--memory-swap", limits.memory])
+        if limits.cpus is not None:
+            cmd.extend(["--cpus", str(limits.cpus)])
+        if limits.pids_limit is not None:
+            cmd.extend(["--pids-limit", str(limits.pids_limit)])
+
         # Network sandbox args
         if task_proxy is not None:
             cmd.extend(
@@ -381,7 +392,7 @@ class Task:
 
                 # Wait for process to complete with timeout
                 try:
-                    process.wait(timeout=self._timeout_seconds)
+                    process.wait(timeout=self._resource_limits.timeout)
                 except subprocess.TimeoutExpired:
                     logger.error(
                         "Container execution timed out, killing process"
