@@ -137,6 +137,14 @@ connection refused). The format is `ERROR {METHOD} {URL} -> {error message}`.
 The log file is created in the conversation directory and persists with the
 session. It is cleaned up automatically when conversations are pruned.
 
+### Stdout / Syslog Output
+
+Only denied requests and errors are written to the proxy container's stdout
+(which surfaces in syslog). Specifically, `BLOCKED` and `ERROR` lines are
+emitted to both stdout and the network log file, while `allowed` and `DNS` lines
+are written to the network log file only. This keeps syslog focused on
+actionable events while the network log retains the full audit trail.
+
 ## Crash Recovery
 
 On startup, `ProxyManager` cleans orphaned resources from previous unclean

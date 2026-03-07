@@ -181,10 +181,6 @@ def run_dns_server(
             if qtype != QTYPE_A:
                 # Only A queries supported; AAAA, MX, etc. get NOTIMP
                 type_label = qtype_name(qtype)
-                print(
-                    f"[dns] NOTIMP  {qname} type={qtype} from {addr[0]}",
-                    flush=True,
-                )
                 _log_to_file(
                     log_file,
                     f"DNS {type_label} {name} -> NOTIMP",
@@ -193,10 +189,6 @@ def run_dns_server(
                 continue
 
             # All A queries resolve to proxy IP — proxy enforces allowlist
-            print(
-                f"[dns] RESOLVE {name} -> {proxy_ip} (from {addr[0]})",
-                flush=True,
-            )
             _log_to_file(
                 log_file,
                 f"DNS A {name} -> {proxy_ip}",
