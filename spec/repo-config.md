@@ -20,9 +20,6 @@ resource_limits:
   cpus: 1.5                           # Container CPU limit (--cpus, float)
   pids_limit: 256                     # Container process limit (--pids-limit)
 
-# Legacy: top-level timeout still works (resource_limits.timeout takes precedence)
-# timeout: 6000
-
 network:
   sandbox_enabled: true                # Enforce .airut/network-allowlist.yaml
 
@@ -41,14 +38,12 @@ container_env:                         # Environment variables for containers
 | `resource_limits.memory`     | string  | *(none)* | Memory limit, e.g. `"2g"`, `"512m"`               |
 | `resource_limits.cpus`       | float   | *(none)* | CPU limit (>= 0.01, supports fractional cores)    |
 | `resource_limits.pids_limit` | int     | *(none)* | Process limit (>= 1)                              |
-| `timeout`                    | int     | *(none)* | Legacy alias for `resource_limits.timeout`        |
 | `network.sandbox_enabled`    | bool    | `true`   | Whether to enforce network allowlist              |
 | `container_env`              | mapping | `{}`     | Environment variables passed to containers        |
 
 All `resource_limits` fields are optional. When a field is not set (and no
 server ceiling applies), the corresponding podman flag is not passed and no
-limit is enforced. The top-level `timeout` field is supported for backwards
-compatibility; `resource_limits.timeout` takes precedence when both are set.
+limit is enforced.
 
 ### YAML Tags
 
@@ -151,8 +146,8 @@ secrets:
   R2_ACCESS_KEY_ID: !env R2_ACCESS_KEY_ID
 ```
 
-Fields moved to repo config: `execution.timeout` (now
-`resource_limits.timeout`), `execution.default_model`, `container_env`.
+Fields moved to repo config: `execution.default_model` (now `default_model`),
+`execution.timeout` (now `resource_limits.timeout`), `container_env`.
 
 ### Server-Side Network Sandbox Override
 

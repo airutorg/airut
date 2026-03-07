@@ -14,8 +14,13 @@
 # subaddressing (e.g. airut+opus@example.com).
 default_model: opus
 
-# Maximum time in seconds a Claude container may run before being killed.
-timeout: 6000
+# Container resource limits (all optional — omitted fields mean no limit).
+# Effective limits are clamped to server-side ceilings if configured.
+# resource_limits:
+#   timeout: 6000       # Max execution time in seconds (>= 10)
+#   memory: "4g"        # Memory limit, e.g. "2g", "512m"
+#   cpus: 2             # CPU limit (float, e.g. 1.5 for 1.5 cores)
+#   pids_limit: 256     # Process limit (fork bomb protection)
 
 network:
   # Enable the network sandbox (default: true).

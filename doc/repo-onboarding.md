@@ -38,8 +38,12 @@ Create `.airut/airut.yaml`:
 # Claude model (opus, sonnet, haiku)
 default_model: opus
 
-# Max execution time in seconds
-timeout: 300
+# Container resource limits (all optional — omitted fields mean no limit)
+# resource_limits:
+#   timeout: 300        # Max execution time in seconds (>= 10)
+#   memory: "4g"        # Memory limit, e.g. "2g", "512m"
+#   cpus: 2             # CPU limit (float, e.g. 1.5 for 1.5 cores)
+#   pids_limit: 256     # Process limit (fork bomb protection)
 
 network:
   # Enable network allowlist enforcement
