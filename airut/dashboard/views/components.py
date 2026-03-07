@@ -356,7 +356,8 @@ def render_stop_script(task: TaskState) -> str:
             resultDiv.className = 'stop-result';
 
             fetch('/api/conversation/{task.conversation_id}/stop', {{
-                method: 'POST'
+                method: 'POST',
+                headers: {{'X-Requested-With': 'XMLHttpRequest'}}
             }})
             .then(function(response) {{
                 return response.json();

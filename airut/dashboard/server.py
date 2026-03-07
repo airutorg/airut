@@ -36,6 +36,39 @@ from airut.version import GitVersionInfo
 
 logger = logging.getLogger(__name__)
 
+#: Security headers applied to every dashboard response.
+_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'"
+    ),
+}
+
+
+def _add_security_headers(response: Response) -> None:
+    """Add security headers to a response.
+
+    Applies defense-in-depth headers (CSP, X-Frame-Options, etc.)
+    to every response regardless of whether a reverse proxy also
+    sets them.
+    """
+    for name, value in _SECURITY_HEADERS.items():
+        response.headers[name] = value
+
+
+def _is_loopback(host: str) -> bool:
+    """Check whether *host* resolves to a loopback address.
+
+    Returns ``True`` for ``127.0.0.1``, ``::1``, and ``localhost``.
+    """
+    return host in ("127.0.0.1", "::1", "localhost")
+
 
 class DashboardServer:
     """WSGI dashboard server for task monitoring.
@@ -198,6 +231,12 @@ class DashboardServer:
             self.host,
             self.port,
         )
+        if not _is_loopback(self.host):
+            logger.warning(
+                "Dashboard bound to non-loopback address %s — "
+                "ensure a reverse proxy with authentication is in front",
+                self.host,
+            )
 
     def stop(self) -> None:
         """Stop the dashboard server."""
@@ -236,12 +275,15 @@ class DashboardServer:
         try:
             endpoint, values = adapter.match()
             handler = self._endpoint_handlers[endpoint]
-            return handler(request, **values)
+            response = handler(request, **values)
         except NotFound:
-            return Response("Not Found", status=404)
+            response = Response("Not Found", status=404)
         except Exception:
             logger.exception("Error handling request %s", request.path)
-            return Response("Internal Server Error", status=500)
+            response = Response("Internal Server Error", status=500)
+
+        _add_security_headers(response)
+        return response
 
     # Expose internal methods for tests
     def _task_to_dict(

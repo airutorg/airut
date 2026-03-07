@@ -337,6 +337,21 @@ synthetic IDs not known to the caller).
 
 - **No authentication**: Dashboard assumes it's behind a reverse proxy
 - **Localhost binding**: Default to 127.0.0.1 to prevent accidental exposure
+- **Non-loopback warning**: Logs a warning at startup if bound to a non-loopback
+  address (e.g., `0.0.0.0`), reminding operators to place a reverse proxy with
+  authentication in front
+- **Security response headers**: Every response includes defense-in-depth
+  headers regardless of reverse proxy configuration:
+  - `X-Content-Type-Options: nosniff` — prevents MIME sniffing
+  - `X-Frame-Options: DENY` — blocks iframe embedding (clickjacking)
+  - `Content-Security-Policy` — restricts resource loading origins and blocks
+    framing
+- **CSRF protection on mutating endpoints**: The
+  `POST /api/conversation/{id}/stop` endpoint requires an `X-Requested-With`
+  header. Browsers will not send custom headers on cross-origin requests without
+  a CORS preflight, and the dashboard sets no `Access-Control-Allow-*` headers,
+  so the preflight is denied. This prevents malicious websites from triggering
+  task stops via cross-origin POST
 - **Minimal actions**: Only action is stopping running tasks
 
 The dashboard exposes task IDs, conversation IDs, email subjects, and timing

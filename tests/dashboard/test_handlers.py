@@ -1550,7 +1550,10 @@ class TestStopEndpoint:
         server = DashboardServer(tracker, stop_callback=mock_stop)
         client = Client(server._wsgi_app)
 
-        response = client.post(f"/api/conversation/{task_id}/stop")
+        response = client.post(
+            f"/api/conversation/{task_id}/stop",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
         assert response.status_code == 200
         data = response.get_json()
         assert data["success"] is True
@@ -1566,7 +1569,10 @@ class TestStopEndpoint:
         server = DashboardServer(tracker, stop_callback=mock_stop)
         client = Client(server._wsgi_app)
 
-        response = client.post("/api/conversation/nonexistent/stop")
+        response = client.post(
+            "/api/conversation/nonexistent/stop",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
         assert response.status_code == 404
         data = response.get_json()
         assert "error" in data
@@ -1585,7 +1591,10 @@ class TestStopEndpoint:
         server = DashboardServer(tracker, stop_callback=mock_stop)
         client = Client(server._wsgi_app)
 
-        response = client.post(f"/api/conversation/{task_id}/stop")
+        response = client.post(
+            f"/api/conversation/{task_id}/stop",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
         assert response.status_code == 400
         data = response.get_json()
         assert "error" in data
@@ -1616,7 +1625,10 @@ class TestStopEndpoint:
         server = DashboardServer(tracker, stop_callback=mock_stop)
         client = Client(server._wsgi_app)
 
-        response = client.post(f"/api/conversation/{conv_id}/stop")
+        response = client.post(
+            f"/api/conversation/{conv_id}/stop",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
         assert response.status_code == 400
         data = response.get_json()
         # Error should mention both statuses present
@@ -1635,7 +1647,10 @@ class TestStopEndpoint:
         server = DashboardServer(tracker, stop_callback=None)
         client = Client(server._wsgi_app)
 
-        response = client.post(f"/api/conversation/{task_id}/stop")
+        response = client.post(
+            f"/api/conversation/{task_id}/stop",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
         assert response.status_code == 503
         data = response.get_json()
         assert "error" in data
@@ -1656,7 +1671,10 @@ class TestStopEndpoint:
         server = DashboardServer(tracker, stop_callback=mock_stop)
         client = Client(server._wsgi_app)
 
-        response = client.post(f"/api/conversation/{task_id}/stop")
+        response = client.post(
+            f"/api/conversation/{task_id}/stop",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
         assert response.status_code == 404
         data = response.get_json()
         assert data["success"] is False
@@ -1677,10 +1695,34 @@ class TestStopEndpoint:
         server = DashboardServer(tracker, stop_callback=mock_stop)
         client = Client(server._wsgi_app)
 
-        response = client.post(f"/api/conversation/{task_id}/stop")
+        response = client.post(
+            f"/api/conversation/{task_id}/stop",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+        )
         assert response.status_code == 500
         data = response.get_json()
         assert "error" in data
+
+    def test_stop_endpoint_rejects_without_custom_header(self) -> None:
+        """POST /stop without X-Requested-With returns 403."""
+        tracker = TaskTracker()
+        task_id = "abc12345"
+        tracker.add_task(task_id, "Test Task")
+        tracker.set_conversation_id(task_id, task_id)
+        tracker.set_authenticating(task_id)
+        tracker.set_executing(task_id)
+
+        def mock_stop(conv_id: str) -> bool:
+            return True
+
+        server = DashboardServer(tracker, stop_callback=mock_stop)
+        client = Client(server._wsgi_app)
+
+        # POST without X-Requested-With header (simulates cross-origin CSRF)
+        response = client.post(f"/api/conversation/{task_id}/stop")
+        assert response.status_code == 403
+        data = response.get_json()
+        assert "X-Requested-With" in data["error"]
 
     def test_task_detail_with_stop_button(self) -> None:
         """Test task detail page includes stop button for in-progress."""

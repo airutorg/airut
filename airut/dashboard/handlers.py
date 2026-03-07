@@ -617,6 +617,11 @@ class RequestHandlers:
     ) -> Response:
         """Handle conversation stop API endpoint.
 
+        Requires a ``X-Requested-With`` header to prevent cross-origin
+        CSRF.  Browsers will not send custom headers on a cross-origin
+        POST without a CORS preflight, and this server does not set any
+        ``Access-Control-Allow-*`` headers, so the preflight is denied.
+
         Args:
             request: Incoming request.
             conversation_id: Conversation ID to stop.
@@ -624,6 +629,13 @@ class RequestHandlers:
         Returns:
             JSON response with stop result.
         """
+        if not request.headers.get("X-Requested-With"):
+            return Response(
+                json.dumps({"error": "Missing X-Requested-With header"}),
+                status=403,
+                content_type="application/json",
+            )
+
         if self.stop_callback is None:
             return Response(
                 json.dumps({"error": "Stop functionality not available"}),
