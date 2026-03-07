@@ -270,6 +270,10 @@ def extract_attachments(
             if part.get_content_disposition() == "attachment":
                 filename = part.get_filename()
                 if filename:
+                    # Sanitize to prevent path traversal (e.g. "../../evil")
+                    filename = Path(filename).name
+                    if not filename or filename in (".", ".."):
+                        continue
                     filepath = inbox_dir / filename
                     payload = part.get_payload(decode=True)
                     if payload:
