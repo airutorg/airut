@@ -63,9 +63,13 @@ def _add_security_headers(response: Response) -> None:
 
 
 def _is_loopback(host: str) -> bool:
-    """Check whether *host* resolves to a loopback address.
+    """Check whether *host* is a common loopback address.
 
     Returns ``True`` for ``127.0.0.1``, ``::1``, and ``localhost``.
+    This is a conservative check — non-standard loopback addresses like
+    ``127.0.0.2`` (valid on Linux) will not match and will trigger the
+    startup warning.  This is intentional: false-positive warnings are
+    preferable to silently accepting a misconfigured bind address.
     """
     return host in ("127.0.0.1", "::1", "localhost")
 

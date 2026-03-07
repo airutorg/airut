@@ -1699,6 +1699,22 @@ class TestSecurityHeaders:
         finally:
             server._endpoint_handlers["index"] = original
 
+    def test_security_headers_on_sse_stream(self) -> None:
+        """SSE streaming responses include security headers."""
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        server = DashboardServer(tracker, clock=clock)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/events/stream")
+        assert response.status_code == 200
+        assert response.content_type == "text/event-stream"
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["X-Frame-Options"] == "DENY"
+        assert (
+            "default-src 'self'" in response.headers["Content-Security-Policy"]
+        )
+
 
 class TestStartupWarning:
     """Tests for non-loopback bind address warning."""
