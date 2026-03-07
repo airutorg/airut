@@ -155,10 +155,19 @@ def _handle_interactive_run(args: list[str]) -> int:
         elif arg == "--name" and i + 1 < len(args):
             i += 2
 
+        elif arg.startswith("--") and "=" in arg:
+            # Skip unknown --flag=value options (e.g. --cap-drop=ALL,
+            # --security-opt=no-new-privileges:true)
+            i += 1
+
+        elif arg.startswith("--") and i + 1 < len(args):
+            # Skip unknown --flag value options
+            i += 2
+
         else:
-            remaining = args[i:]
-            if remaining and not remaining[0].startswith("-"):
-                remaining = remaining[1:]
+            # Non-flag argument: this is the container image name,
+            # followed by the claude command and its arguments.
+            remaining = args[i + 1 :]  # skip image name
 
             session_id = None
             j = 0
