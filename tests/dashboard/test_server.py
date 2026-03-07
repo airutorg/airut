@@ -1638,3 +1638,158 @@ class TestUpdateEndpoint:
         assert data["release_url"] == (
             f"https://github.com/airutorg/airut/commit/{new_sha}"
         )
+
+
+class TestSecurityHeaders:
+    """Tests for defense-in-depth security headers."""
+
+    def test_security_headers_on_html_response(self) -> None:
+        """GET / includes security headers."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/")
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["X-Frame-Options"] == "DENY"
+        assert (
+            "frame-ancestors 'none'"
+            in response.headers["Content-Security-Policy"]
+        )
+
+    def test_security_headers_on_json_response(self) -> None:
+        """GET /api/health includes security headers."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/health")
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["X-Frame-Options"] == "DENY"
+        assert (
+            "default-src 'self'" in response.headers["Content-Security-Policy"]
+        )
+
+    def test_security_headers_on_404(self) -> None:
+        """Unknown routes include security headers."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/nonexistent")
+        assert response.status_code == 404
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["X-Frame-Options"] == "DENY"
+
+    def test_security_headers_on_500(self) -> None:
+        """Error responses include security headers."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+
+        def raise_error(*args, **kwargs):
+            raise RuntimeError("boom")
+
+        original = server._endpoint_handlers["index"]
+        server._endpoint_handlers["index"] = raise_error
+        try:
+            client = Client(server._wsgi_app)
+            response = client.get("/")
+            assert response.status_code == 500
+            assert response.headers["X-Content-Type-Options"] == "nosniff"
+        finally:
+            server._endpoint_handlers["index"] = original
+
+    def test_security_headers_on_sse_stream(self) -> None:
+        """SSE streaming responses include security headers."""
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        server = DashboardServer(tracker, clock=clock)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/events/stream")
+        assert response.status_code == 200
+        assert response.content_type == "text/event-stream"
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["X-Frame-Options"] == "DENY"
+        assert (
+            "default-src 'self'" in response.headers["Content-Security-Policy"]
+        )
+
+
+class TestStartupWarning:
+    """Tests for non-loopback bind address warning."""
+
+    def test_no_warning_for_localhost(self) -> None:
+        """No warning when bound to 127.0.0.1."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, host="127.0.0.1", port=15200)
+
+        with patch("airut.dashboard.server.make_server") as mock_make:
+            mock_server = MagicMock()
+            mock_make.return_value = mock_server
+
+            with patch("airut.dashboard.server.logger") as mock_logger:
+                server.start()
+
+                # No warning should be logged for loopback
+                warning_calls = [
+                    c
+                    for c in mock_logger.warning.call_args_list
+                    if "non-loopback" in str(c)
+                ]
+                assert len(warning_calls) == 0
+
+    def test_warning_for_non_loopback(self) -> None:
+        """Warning logged when bound to 0.0.0.0."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, host="0.0.0.0", port=15201)
+
+        with patch("airut.dashboard.server.make_server") as mock_make:
+            mock_server = MagicMock()
+            mock_make.return_value = mock_server
+
+            with patch("airut.dashboard.server.logger") as mock_logger:
+                server.start()
+
+                # Check warning was logged
+                warning_calls = [
+                    c
+                    for c in mock_logger.warning.call_args_list
+                    if "non-loopback" in str(c)
+                ]
+                assert len(warning_calls) == 1
+                assert "0.0.0.0" in str(warning_calls[0])
+
+
+class TestIsLoopback:
+    """Tests for _is_loopback helper."""
+
+    def test_ipv4_loopback(self) -> None:
+        """127.0.0.1 is loopback."""
+        from airut.dashboard.server import _is_loopback
+
+        assert _is_loopback("127.0.0.1") is True
+
+    def test_ipv6_loopback(self) -> None:
+        """::1 is loopback."""
+        from airut.dashboard.server import _is_loopback
+
+        assert _is_loopback("::1") is True
+
+    def test_localhost(self) -> None:
+        """Localhost is loopback."""
+        from airut.dashboard.server import _is_loopback
+
+        assert _is_loopback("localhost") is True
+
+    def test_all_interfaces(self) -> None:
+        """0.0.0.0 is not loopback."""
+        from airut.dashboard.server import _is_loopback
+
+        assert _is_loopback("0.0.0.0") is False
+
+    def test_external_ip(self) -> None:
+        """External IP is not loopback."""
+        from airut.dashboard.server import _is_loopback
+
+        assert _is_loopback("192.168.1.1") is False

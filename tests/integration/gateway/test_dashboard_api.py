@@ -122,6 +122,10 @@ events = [
             assert data["tasks"]["queued"] == 0
             assert data["repos"]["live"] >= 1
             assert "boot" in data
+            # Security headers on every response
+            assert r.headers["X-Content-Type-Options"] == "nosniff"
+            assert r.headers["X-Frame-Options"] == "DENY"
+            assert "default-src 'self'" in r.headers["Content-Security-Policy"]
             # ETag support
             etag = r.headers.get("ETag")
             assert etag is not None
@@ -200,14 +204,28 @@ events = [
             r = client.get("/api/task/nonexistent-task-id")
             assert r.status_code == 404
 
-            # ── POST /api/conversation/{id}/stop (not running) ───
+            # ── POST /api/conversation/{id}/stop (CSRF rejected) ──
             r = client.open(f"/api/conversation/{conv_id}/stop", method="POST")
+            assert r.status_code == 403
+            data = json.loads(r.get_data(as_text=True))
+            assert "X-Requested-With" in data["error"]
+
+            # ── POST /api/conversation/{id}/stop (not running) ───
+            r = client.open(
+                f"/api/conversation/{conv_id}/stop",
+                method="POST",
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
             assert r.status_code == 400
             data = json.loads(r.get_data(as_text=True))
             assert "not running" in data["error"].lower()
 
             # ── POST /api/conversation/{id}/stop (not found) ─────
-            r = client.open("/api/conversation/deadbeef/stop", method="POST")
+            r = client.open(
+                "/api/conversation/deadbeef/stop",
+                method="POST",
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
             assert r.status_code == 404
 
             # ── GET /api/repos ───────────────────────────────────
