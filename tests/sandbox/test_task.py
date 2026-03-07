@@ -609,6 +609,7 @@ class TestTaskWithProxy:
             network_name="test-net",
             proxy_container_name="test-proxy",
             proxy_ip="10.199.1.100",
+            subnet_octet=1,
         )
         mock_proxy_manager.start_proxy.return_value = mock_context_proxy
 
@@ -654,6 +655,7 @@ class TestTaskWithProxy:
             network_name="test-net",
             proxy_container_name="test-proxy",
             proxy_ip="10.199.1.100",
+            subnet_octet=1,
         )
         mock_proxy_manager.start_proxy.return_value = mock_context_proxy
 

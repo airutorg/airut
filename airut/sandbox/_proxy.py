@@ -79,11 +79,13 @@ class _ContextProxy:
         network_name: Per-context internal network name.
         proxy_container_name: Per-context proxy container name.
         proxy_ip: Static IP of the proxy on the internal network.
+        subnet_octet: Third octet of the allocated /24 subnet.
     """
 
     network_name: str
     proxy_container_name: str
     proxy_ip: str
+    subnet_octet: int
 
 
 class ProxyError(Exception):
@@ -121,8 +123,10 @@ class ProxyManager:
         self._allowlist_tmpfiles: dict[str, Path] = {}
         self._replacement_tmpfiles: dict[str, Path] = {}
         self._network_log_files: dict[str, Path] = {}
-        # Subnet allocator: next third-octet to try.
+        # Subnet allocator: next third-octet to try, and set of
+        # octets currently in use by active proxies.
         self._next_subnet_octet = 1
+        self._active_octets: set[int] = set()
 
     # ------------------------------------------------------------------
     # Sandbox lifecycle
@@ -211,7 +215,7 @@ class ProxyManager:
         )
 
         # Allocate subnet and create internal network with route to proxy
-        subnet, proxy_ip = self._allocate_subnet()
+        subnet, proxy_ip, subnet_octet = self._allocate_subnet()
         self._create_internal_network(
             network_name, subnet=subnet, proxy_ip=proxy_ip
         )
@@ -250,9 +254,10 @@ class ProxyManager:
             # Wait until mitmproxy is accepting connections
             self._wait_for_proxy_ready(container_name)
         except Exception:
-            # Clean up network, container, and temp files on any failure
+            # Clean up network, container, subnet, and temp files on failure
             self._remove_container(container_name)
             self._remove_network(network_name)
+            self._release_subnet(subnet_octet)
             self._cleanup_temp_file(context_id, self._allowlist_tmpfiles)
             self._cleanup_temp_file(context_id, self._replacement_tmpfiles)
             self._cleanup_network_log(context_id)
@@ -262,6 +267,7 @@ class ProxyManager:
             network_name=network_name,
             proxy_container_name=container_name,
             proxy_ip=proxy_ip,
+            subnet_octet=subnet_octet,
         )
         with self._lock:
             self._active_proxies[context_id] = proxy
@@ -286,6 +292,7 @@ class ProxyManager:
         logger.info("Stopping proxy for context %s", context_id)
         self._remove_container(proxy.proxy_container_name)
         self._remove_network(proxy.network_name)
+        self._release_subnet(proxy.subnet_octet)
         self._cleanup_temp_file(context_id, self._allowlist_tmpfiles)
         self._cleanup_temp_file(context_id, self._replacement_tmpfiles)
         # Note: we don't delete the network log file - it stays for
@@ -297,18 +304,44 @@ class ProxyManager:
     # Subnet allocation
     # ------------------------------------------------------------------
 
-    def _allocate_subnet(self) -> tuple[str, str]:
+    def _allocate_subnet(self) -> tuple[str, str, int]:
         """Allocate a /24 subnet and proxy IP for a new context network.
 
+        Scans from ``_next_subnet_octet`` forward (with wraparound),
+        skipping octets that are currently in use. Raises ``ProxyError``
+        if all 254 octets are exhausted.
+
         Returns:
-            Tuple of (subnet_cidr, proxy_ip).
+            Tuple of (subnet_cidr, proxy_ip, octet).
+
+        Raises:
+            ProxyError: If all 254 subnets are in use.
         """
         with self._lock:
             octet = self._next_subnet_octet
-            self._next_subnet_octet = (octet % 254) + 1
+            for _ in range(254):
+                if octet not in self._active_octets:
+                    self._active_octets.add(octet)
+                    self._next_subnet_octet = (octet % 254) + 1
+                    break
+                octet = (octet % 254) + 1
+            else:
+                raise ProxyError(
+                    "All 254 subnets are in use; cannot allocate a new "
+                    "context network"
+                )
         subnet = f"{_SUBNET_PREFIX}.{octet}.0{_SUBNET_MASK}"
         proxy_ip = f"{_SUBNET_PREFIX}.{octet}.{_PROXY_HOST_OCTET}"
-        return subnet, proxy_ip
+        return subnet, proxy_ip, octet
+
+    def _release_subnet(self, octet: int) -> None:
+        """Release a previously allocated subnet octet.
+
+        Args:
+            octet: Third octet of the /24 subnet to release.
+        """
+        with self._lock:
+            self._active_octets.discard(octet)
 
     # ------------------------------------------------------------------
     # Image and CA cert
