@@ -1,7 +1,7 @@
 # Airut Server Configuration
 #
 # Server-side settings: infrastructure, credentials, and operator controls.
-# Repo-specific behaviour (git identity, model, timeout, container env,
+# Repo-specific behaviour (git identity, model, resource limits, container env,
 # network) is in .airut/airut.yaml (loaded from each repo's git mirror).
 #
 # Run `airut init` to create a stub at ~/.config/airut/airut.yaml,
@@ -36,6 +36,15 @@ dashboard:
 
 # Container runtime executable (podman or docker).
 container_command: podman
+
+# Server-wide resource limit ceilings (all optional).
+# These are maximum values — repo configs cannot exceed them.
+# Omitted fields mean no ceiling for that dimension.
+# resource_limits:
+#   timeout: 7200       # Max allowed timeout (seconds)
+#   memory: "8g"        # Max allowed memory
+#   cpus: 4             # Max allowed CPUs
+#   pids_limit: 1024    # Max allowed process count
 
 # Network settings.
 # network:

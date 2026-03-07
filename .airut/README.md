@@ -15,7 +15,12 @@ Controls repo-specific behavior:
 
 ```yaml
 default_model: opus         # Claude model (overridable via email subaddressing)
-timeout: 6000               # Max container execution time (seconds)
+
+resource_limits:            # Container resource limits (all optional)
+  timeout: 6000             # Max execution time in seconds (>= 10)
+  memory: "4g"              # Memory limit, e.g. "2g", "512m"
+  cpus: 2                   # CPU limit (float, e.g. 1.5 for 1.5 cores)
+  pids_limit: 256           # Process limit (fork bomb protection)
 
 network:
   sandbox_enabled: true     # Enable network allowlist enforcement

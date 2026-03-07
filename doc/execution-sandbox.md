@@ -100,7 +100,8 @@ Containers run with rootless Podman:
 
 - **User**: root inside container (with `IS_SANDBOX=1` for Claude Code)
 - **Working directory**: `/workspace`
-- **Timeout**: Configurable per-repo (default 300s)
+- **Resource limits**: Configurable per-repo (memory, CPUs, process count,
+  timeout) — see [Resource Limits](#resource-limits)
 - **Capabilities**: All Linux capabilities dropped (`--cap-drop=ALL`)
 - **Privilege escalation**: Blocked (`--security-opt=no-new-privileges:true`)
 
@@ -115,7 +116,56 @@ build details.
 
 ## Resource Limits
 
-- **Timeout**: Configurable per-repo; container killed if exceeded
+Container resource limits are configured via the `resource_limits` block in
+`.airut/airut.yaml`. All fields are optional — when omitted, the corresponding
+podman flag is not passed and no limit is enforced.
+
+```yaml
+# .airut/airut.yaml (repo config)
+resource_limits:
+  timeout: 6000       # Max execution time in seconds (>= 10)
+  memory: "4g"        # Memory limit, e.g. "2g", "512m" (--memory)
+  cpus: 2             # CPU limit, supports fractional (--cpus)
+  pids_limit: 256     # Process limit, fork bomb protection (--pids-limit)
+```
+
+| Field        | Podman flag                  | Effect                       |
+| ------------ | ---------------------------- | ---------------------------- |
+| `timeout`    | `process.wait(timeout=N)`    | Container killed after N sec |
+| `memory`     | `--memory=X --memory-swap=X` | Hard memory limit, no swap   |
+| `cpus`       | `--cpus=N`                   | CPU core limit (float)       |
+| `pids_limit` | `--pids-limit=N`             | Max number of processes      |
+
+Setting `--memory-swap` equal to `--memory` disables swap, preventing slow OOM
+thrashing.
+
+### Two-Layer Configuration
+
+The server config (`~/.config/airut/airut.yaml`) can define ceiling values that
+cap what any repo can request:
+
+```yaml
+# ~/.config/airut/airut.yaml (server config)
+resource_limits:
+  timeout: 7200       # Max allowed timeout
+  memory: "8g"        # Max allowed memory
+  cpus: 4             # Max allowed CPUs
+  pids_limit: 1024    # Max allowed process count
+```
+
+For each field independently: `effective = min(repo_value, server_ceiling)`. If
+only the repo sets a value, it's used directly. If neither sets a value, no
+limit is enforced for that dimension.
+
+### cgroup v2 Requirement
+
+Memory, CPU, and process limits require cgroup v2 with `cpu`, `memory`, and
+`pids` controllers delegated to the user running Airut. Run `airut check` to
+verify. This is the default on Ubuntu 22.04+, Fedora 34+, Debian 12+, and RHEL
+9+.
+
+### Other Limits
+
 - **Conversation limit**: 100 active conversations (oldest garbage-collected)
 - **Conversation expiry**: 7 days without activity (configurable)
 

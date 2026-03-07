@@ -220,6 +220,14 @@ dashboard:
 
 container_command: podman    # or docker
 
+# Server-wide resource limit ceilings (all optional).
+# Repos cannot exceed these values. Omitted fields mean no ceiling.
+# resource_limits:
+#   timeout: 7200       # Max allowed timeout (seconds)
+#   memory: "8g"        # Max allowed memory
+#   cpus: 4             # Max allowed CPUs
+#   pids_limit: 1024    # Max allowed process count
+
 repos:
   my-project:
     # Channel configuration (at least one required)
