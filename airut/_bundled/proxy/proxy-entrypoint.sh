@@ -65,5 +65,6 @@ exec mitmdump \
     --set connection_strategy=lazy \
     --set confdir=/mitmproxy-confdir \
     --set flow_detail=0 \
+    --set termlog_verbosity=warn \
     --showhost \
     -s /proxy_filter.py

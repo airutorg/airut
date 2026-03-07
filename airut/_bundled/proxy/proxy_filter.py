@@ -243,8 +243,13 @@ class ProxyFilter:
         Use for denied requests, errors, and warnings that operators
         need to see in syslog. Routine allowed-request entries should
         use ``_log`` instead so they only appear in the network log.
+
+        Uses ``ctx.log.warn`` so the message survives
+        ``--set termlog_verbosity=warn`` which suppresses the noisy
+        INFO-level server-connect / client-connect / client-disconnect
+        messages emitted by mitmproxy internals.
         """
-        ctx.log.info(message)
+        ctx.log.warn(message)
         self._log(message)
 
     def _is_allowed(self, host: str, path: str, method: str = "") -> bool:

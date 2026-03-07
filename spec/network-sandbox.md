@@ -145,6 +145,11 @@ emitted to both stdout and the network log file, while `allowed` and `DNS` lines
 are written to the network log file only. This keeps syslog focused on
 actionable events while the network log retains the full audit trail.
 
+mitmproxy is started with `--set termlog_verbosity=warn` to suppress its
+internal INFO-level messages (server connect, client connect/disconnect) that
+would otherwise pollute syslog. The proxy addon uses `ctx.log.warn()` for its
+own stdout output so that `BLOCKED` and `ERROR` lines still pass through.
+
 ## Crash Recovery
 
 On startup, `ProxyManager` cleans orphaned resources from previous unclean
