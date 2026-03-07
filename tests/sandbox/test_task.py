@@ -419,6 +419,26 @@ class TestTaskExecute:
         assert call_args[1] == "run"
 
     @patch("airut.sandbox.task.subprocess.Popen")
+    def test_execute_container_security_options(
+        self, mock_popen: MagicMock, tmp_path: Path
+    ) -> None:
+        """execute() includes --cap-drop=ALL and --security-opt flags."""
+        task = _make_task(tmp_path)
+
+        mock_process = create_mock_popen(
+            returncode=0,
+            stdout='{"type": "result", "result": "test"}',
+            stderr="",
+        )
+        mock_popen.return_value = mock_process
+
+        task.execute("Test prompt")
+
+        call_args = mock_popen.call_args[0][0]
+        assert "--cap-drop=ALL" in call_args
+        assert "--security-opt=no-new-privileges:true" in call_args
+
+    @patch("airut.sandbox.task.subprocess.Popen")
     def test_execute_unexpected_error(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:

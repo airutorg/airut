@@ -101,6 +101,13 @@ Containers run with rootless Podman:
 - **User**: root inside container (with `IS_SANDBOX=1` for Claude Code)
 - **Working directory**: `/workspace`
 - **Timeout**: Configurable per-repo (default 300s)
+- **Capabilities**: All Linux capabilities dropped (`--cap-drop=ALL`)
+- **Privilege escalation**: Blocked (`--security-opt=no-new-privileges:true`)
+
+These security options are defense-in-depth measures. Rootless Podman already
+provides strong isolation, but explicitly dropping all capabilities and
+preventing privilege escalation ensures that even if a container escape
+vulnerability exists, the process cannot gain additional privileges.
 
 The container image is built in two layers — a repo-defined base image and a
 server overlay with the entrypoint. See [spec/image.md](../spec/image.md) for

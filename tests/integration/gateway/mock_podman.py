@@ -149,6 +149,12 @@ def _handle_interactive_run(args: list[str]) -> int:
         elif arg.startswith("--log-driver="):
             i += 1
 
+        elif arg.startswith("--cap-drop="):
+            i += 1
+
+        elif arg.startswith("--security-opt="):
+            i += 1
+
         elif arg == "--network" and i + 1 < len(args):
             i += 2
 
