@@ -77,7 +77,7 @@ class TestResourceLimits:
             "resource_limits:\n"
             "  timeout: 120\n"
             "  memory: 2g\n"
-            "  cpus: 2\n"
+            "  cpus: 1.5\n"
             "  pids_limit: 256\n",
         )
 
@@ -125,7 +125,7 @@ class TestResourceLimits:
             rl = captured_limits[0]
             assert rl.timeout == 120
             assert rl.memory == "2g"
-            assert rl.cpus == 2
+            assert rl.cpus == 1.5
             assert rl.pids_limit == 256
 
         finally:

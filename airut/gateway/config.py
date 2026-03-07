@@ -587,10 +587,17 @@ def _validate_memory(value: str) -> None:
             f"Invalid memory limit '{value}': "
             f"expected format like '512m', '2g', '1024k'"
         )
+    if int(value[:-1]) == 0:
+        raise ValueError(
+            f"Invalid memory limit '{value}': value must be greater than zero"
+        )
 
 
 def _parse_memory_bytes(value: str) -> int:
     """Parse a memory limit string to bytes for comparison.
+
+    The caller must ensure *value* has already been validated by
+    :func:`_validate_memory`; this function does not re-validate.
 
     Args:
         value: Memory limit string (e.g. "2g", "512m").
@@ -620,13 +627,14 @@ class ResourceLimits:
     Attributes:
         timeout: Max container execution time in seconds.
         memory: Memory limit for ``--memory`` (e.g. ``"2g"``).
-        cpus: CPU limit for ``--cpus``.
+        cpus: CPU limit for ``--cpus`` (supports fractional cores,
+            e.g. ``1.5``).
         pids_limit: Process limit for ``--pids-limit``.
     """
 
     timeout: int | None = None
     memory: str | None = None
-    cpus: int | None = None
+    cpus: float | None = None
     pids_limit: int | None = None
 
     def __post_init__(self) -> None:
@@ -637,8 +645,8 @@ class ResourceLimits:
         """
         if self.timeout is not None and self.timeout < 10:
             raise ValueError(f"Timeout must be >= 10s: {self.timeout}")
-        if self.cpus is not None and self.cpus < 1:
-            raise ValueError(f"CPUs must be >= 1: {self.cpus}")
+        if self.cpus is not None and self.cpus < 0.01:
+            raise ValueError(f"CPUs must be >= 0.01: {self.cpus}")
         if self.pids_limit is not None and self.pids_limit < 1:
             raise ValueError(f"PIDs limit must be >= 1: {self.pids_limit}")
         if self.memory is not None:
@@ -703,7 +711,7 @@ def _parse_resource_limits(raw: dict | None) -> ResourceLimits | None:
     return ResourceLimits(
         timeout=_resolve(raw.get("timeout"), int),
         memory=_resolve(raw.get("memory"), str),
-        cpus=_resolve(raw.get("cpus"), int),
+        cpus=_resolve(raw.get("cpus"), float),
         pids_limit=_resolve(raw.get("pids_limit"), int),
     )
 

@@ -1325,9 +1325,14 @@ class TestResourceLimits:
         with pytest.raises(ValueError, match="Timeout must be >= 10s: 5"):
             ResourceLimits(timeout=5)
 
+    def test_float_cpus(self) -> None:
+        """Fractional CPU values are accepted."""
+        rl = ResourceLimits(cpus=1.5)
+        assert rl.cpus == 1.5
+
     def test_invalid_cpus(self) -> None:
-        """CPUs < 1 raises ValueError."""
-        with pytest.raises(ValueError, match="CPUs must be >= 1: 0"):
+        """CPUs < 0.01 raises ValueError."""
+        with pytest.raises(ValueError, match="CPUs must be >= 0.01: 0"):
             ResourceLimits(cpus=0)
 
     def test_invalid_pids_limit(self) -> None:
@@ -1339,6 +1344,11 @@ class TestResourceLimits:
         """Invalid memory format raises ValueError."""
         with pytest.raises(ValueError, match="Invalid memory limit"):
             ResourceLimits(memory="2x")
+
+    def test_zero_memory(self) -> None:
+        """Zero memory value raises ValueError."""
+        with pytest.raises(ValueError, match="must be greater than zero"):
+            ResourceLimits(memory="0m")
 
     def test_valid_memory_formats(self) -> None:
         """Various valid memory format strings."""
@@ -1399,6 +1409,20 @@ class TestResourceLimits:
         clamped = rl.clamp(ceiling)
         assert clamped.memory == "4g"
 
+    def test_clamp_memory_equal_preserves_repo_string(self) -> None:
+        """Equal byte values preserve the repo's original string."""
+        rl = ResourceLimits(memory="4096m")  # 4GB in MB
+        ceiling = ResourceLimits(memory="4g")  # 4GB
+        clamped = rl.clamp(ceiling)
+        assert clamped.memory == "4096m"  # repo string preserved
+
+    def test_clamp_float_cpus(self) -> None:
+        """Fractional CPU values are clamped correctly."""
+        rl = ResourceLimits(cpus=2.5)
+        ceiling = ResourceLimits(cpus=1.5)
+        clamped = rl.clamp(ceiling)
+        assert clamped.cpus == 1.5
+
 
 class TestParseResourceLimits:
     """Tests for _parse_resource_limits."""
@@ -1421,6 +1445,12 @@ class TestParseResourceLimits:
         assert rl.memory == "2g"
         assert rl.cpus == 2
         assert rl.pids_limit == 256
+
+    def test_float_cpus(self) -> None:
+        """Fractional cpus value is parsed correctly."""
+        rl = _parse_resource_limits({"cpus": 1.5})
+        assert rl is not None
+        assert rl.cpus == 1.5
 
     def test_partial_block(self) -> None:
         """Partial block fills missing fields with None."""

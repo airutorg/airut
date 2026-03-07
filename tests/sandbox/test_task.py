@@ -557,8 +557,8 @@ class TestTaskExecute:
     def test_execute_resource_limits_cpus(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
-        """execute() adds --cpus flag."""
-        task = _make_task(tmp_path, resource_limits=ResourceLimits(cpus=4))
+        """execute() adds --cpus flag (supports fractional values)."""
+        task = _make_task(tmp_path, resource_limits=ResourceLimits(cpus=1.5))
 
         mock_process = create_mock_popen(
             returncode=0,
@@ -572,7 +572,7 @@ class TestTaskExecute:
         call_args = mock_popen.call_args[0][0]
         assert "--cpus" in call_args
         cpus_index = call_args.index("--cpus")
-        assert call_args[cpus_index + 1] == "4"
+        assert call_args[cpus_index + 1] == "1.5"
 
     @patch("airut.sandbox.task.subprocess.Popen")
     def test_execute_resource_limits_pids(
@@ -627,7 +627,7 @@ class TestTaskExecute:
         task = _make_task(
             tmp_path,
             resource_limits=ResourceLimits(
-                timeout=600, memory="4g", cpus=2, pids_limit=512
+                timeout=600, memory="4g", cpus=2.5, pids_limit=512
             ),
         )
 

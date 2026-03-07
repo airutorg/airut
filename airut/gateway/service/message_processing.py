@@ -616,13 +616,14 @@ def process_message(
             )
         elif result.outcome == Outcome.TIMEOUT:
             timeout_val = repo_config.resource_limits.timeout
-            timeout_desc = (
-                f"after {timeout_val} seconds"
-                if timeout_val is not None
-                else ""
-            )
+            if timeout_val is not None:
+                interrupted = (
+                    f"The task was interrupted after {timeout_val} seconds."
+                )
+            else:
+                interrupted = "The task was interrupted."
             error_msg = (
-                f"The task was interrupted {timeout_desc}. "
+                f"{interrupted} "
                 "Work done so far has been saved.\n\n"
                 "Reply to resume \u2014 you can ask about progress or "
                 "request next steps."

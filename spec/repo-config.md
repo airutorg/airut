@@ -17,7 +17,7 @@ default_model: opus                    # Default Claude model
 resource_limits:
   timeout: 6000                       # Max container execution time (seconds)
   memory: "4g"                        # Container memory limit (--memory)
-  cpus: 2                             # Container CPU limit (--cpus)
+  cpus: 1.5                           # Container CPU limit (--cpus, float)
   pids_limit: 256                     # Container process limit (--pids-limit)
 
 # Legacy: top-level timeout still works (resource_limits.timeout takes precedence)
@@ -39,7 +39,7 @@ container_env:                         # Environment variables for containers
 | `default_model`              | string  | `"opus"` | Claude model when not specified via subaddressing |
 | `resource_limits.timeout`    | int     | *(none)* | Max container execution time in seconds (>= 10)   |
 | `resource_limits.memory`     | string  | *(none)* | Memory limit, e.g. `"2g"`, `"512m"`               |
-| `resource_limits.cpus`       | int     | *(none)* | CPU limit (>= 1)                                  |
+| `resource_limits.cpus`       | float   | *(none)* | CPU limit (>= 0.01, supports fractional cores)    |
 | `resource_limits.pids_limit` | int     | *(none)* | Process limit (>= 1)                              |
 | `timeout`                    | int     | *(none)* | Legacy alias for `resource_limits.timeout`        |
 | `network.sandbox_enabled`    | bool    | `true`   | Whether to enforce network allowlist              |

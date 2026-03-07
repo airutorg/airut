@@ -156,7 +156,7 @@ corresponding flag is not passed and no limit is enforced.
 | -------------------- | ---------------------------- | -------------------------- |
 | `timeout`            | `process.wait(timeout=N)`    | SIGKILL after N seconds    |
 | `memory`             | `--memory=X --memory-swap=X` | Hard memory limit, no swap |
-| `cpus`               | `--cpus=N`                   | CPU core limit             |
+| `cpus`               | `--cpus=N`                   | CPU core limit (float)     |
 | `pids_limit`         | `--pids-limit=N`             | Fork bomb protection       |
 
 Setting `--memory-swap` equal to `--memory` disables swap for the container,
