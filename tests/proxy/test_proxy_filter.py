@@ -302,10 +302,10 @@ class TestProxyFilterLoad:
 
 
 class TestProxyFilterLog:
-    """Tests for ProxyFilter._log."""
+    """Tests for ProxyFilter._log and _log_loud."""
 
-    def test_log_to_ctx_and_file(self, tmp_path: Path) -> None:
-        """Logs to both ctx.log and file."""
+    def test_log_writes_to_file_only(self, tmp_path: Path) -> None:
+        """_log writes to file but not to mitmproxy/stdout."""
         log_path = tmp_path / "test.log"
         pf = ProxyFilter()
         pf._log_file = open(log_path, "w")
@@ -316,7 +316,7 @@ class TestProxyFilterLog:
         assert "test message" in log_path.read_text()
 
     def test_log_without_file(self) -> None:
-        """Logs to ctx.log only when no file."""
+        """_log is a no-op when no file."""
         pf = ProxyFilter()
         pf._log("test")  # Should not raise
 
@@ -326,6 +326,22 @@ class TestProxyFilterLog:
         pf._log_file = MagicMock()
         pf._log_file.write.side_effect = OSError("disk full")
         pf._log("test")  # Should not raise
+
+    def test_log_loud_writes_to_ctx_and_file(self, tmp_path: Path) -> None:
+        """_log_loud writes to both mitmproxy (stdout) and file."""
+        log_path = tmp_path / "test.log"
+        pf = ProxyFilter()
+        pf._log_file = open(log_path, "w")
+        try:
+            pf._log_loud("denied message")
+        finally:
+            pf._log_file.close()
+        assert "denied message" in log_path.read_text()
+
+    def test_log_loud_without_file(self) -> None:
+        """_log_loud logs to ctx.log even when no file."""
+        pf = ProxyFilter()
+        pf._log_loud("test")  # Should not raise
 
 
 # ---------------------------------------------------------------------------
@@ -745,16 +761,16 @@ class TestProxyFilterError:
         pf = ProxyFilter()
         flow = _flow(error_msg="connection failed")
         flow.metadata["allowlist_action"] = "BLOCKED"
-        with patch.object(pf, "_log") as mock_log:
+        with patch.object(pf, "_log_loud") as mock_log:
             pf.error(flow)
             mock_log.assert_not_called()
 
     def test_allowed_error_logged(self) -> None:
-        """Allowed requests' errors are logged."""
+        """Allowed requests' errors are logged to stdout."""
         pf = ProxyFilter()
         flow = _flow(error_msg="connection refused")
         flow.metadata["allowlist_action"] = "allowed"
-        with patch.object(pf, "_log") as mock_log:
+        with patch.object(pf, "_log_loud") as mock_log:
             pf.error(flow)
             mock_log.assert_called_once()
             assert "connection refused" in mock_log.call_args[0][0]
@@ -765,7 +781,7 @@ class TestProxyFilterError:
         flow = _flow()
         flow.error = None
         flow.metadata["allowlist_action"] = "allowed"
-        with patch.object(pf, "_log") as mock_log:
+        with patch.object(pf, "_log_loud") as mock_log:
             pf.error(flow)
             assert "unknown error" in mock_log.call_args[0][0]
 
@@ -952,12 +968,12 @@ class TestResignHeaderAuth:
         )
 
     def test_clock_skew_warning(self) -> None:
-        """Logs warning when clock skew detected."""
+        """Logs warning when clock skew detected (to stdout)."""
         pf = _pf_with_signing()
         flow = _aws_flow()
         # Override the x-amz-date with old timestamp
         flow.request.headers["x-amz-date"] = "20200101T000000Z"
-        with patch.object(pf, "_log") as mock_log:
+        with patch.object(pf, "_log_loud") as mock_log:
             pf._resign_header_auth(
                 flow, "mybucket.s3.amazonaws.com", SIGV4_AUTH
             )

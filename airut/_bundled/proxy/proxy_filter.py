@@ -229,14 +229,23 @@ class ProxyFilter:
             self.replacements = {}
 
     def _log(self, message: str) -> None:
-        """Log message to both mitmproxy and optional file."""
-        ctx.log.info(message)
+        """Log message to network log file only (not stdout/mitmproxy)."""
         if self._log_file is not None:
             try:
                 self._log_file.write(message + "\n")
                 self._log_file.flush()
             except OSError:
                 pass  # Best effort file logging
+
+    def _log_loud(self, message: str) -> None:
+        """Log message to both mitmproxy (stdout) and network log file.
+
+        Use for denied requests, errors, and warnings that operators
+        need to see in syslog. Routine allowed-request entries should
+        use ``_log`` instead so they only appear in the network log.
+        """
+        ctx.log.info(message)
+        self._log(message)
 
     def _is_allowed(self, host: str, path: str, method: str = "") -> bool:
         """Check if a host+path+method combination is allowed.
@@ -435,7 +444,7 @@ class ProxyFilter:
             is_skewed, drift_minutes = check_clock_skew(amz_date)
             if is_skewed:
                 proxy_time = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-                self._log(
+                self._log_loud(
                     f"WARNING: Container clock skew detected: "
                     f"x-amz-date={amz_date}, proxy-time={proxy_time} "
                     f"(drift={drift_minutes}m). Upstream rejection likely."
@@ -759,7 +768,7 @@ class ProxyFilter:
             # Block the request
             flow.metadata["allowlist_action"] = "BLOCKED"
             url = flow.request.pretty_url
-            self._log(f"BLOCKED {method} {url} -> 403")
+            self._log_loud(f"BLOCKED {method} {url} -> 403")
 
             # Distinguish method-blocked from host/path-blocked for
             # actionable agent feedback
@@ -891,7 +900,7 @@ class ProxyFilter:
 
         url = flow.request.pretty_url
         msg = flow.error.msg if flow.error else "unknown error"
-        self._log(f"ERROR {flow.request.method} {url} -> {msg}")
+        self._log_loud(f"ERROR {flow.request.method} {url} -> {msg}")
 
 
 addons = [ProxyFilter()]
