@@ -27,6 +27,7 @@ gateway can be deployed independently.
 
 import logging
 import os
+import re
 import secrets as secrets_module
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -562,6 +563,152 @@ def _resolve_string_list(value: object, *, required: str = "") -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Resource limits
+# ---------------------------------------------------------------------------
+
+#: Regex for validating memory limit strings (e.g. "512m", "2g", "1024k").
+_MEMORY_PATTERN = re.compile(r"^\d+[bkmgBKMG]$")
+
+
+def _validate_memory(value: str) -> None:
+    """Validate a memory limit string.
+
+    Accepts podman ``--memory`` format: a number followed by a unit
+    suffix (``b``, ``k``, ``m``, ``g``, case-insensitive).
+
+    Args:
+        value: Memory limit string.
+
+    Raises:
+        ValueError: If the format is invalid.
+    """
+    if not _MEMORY_PATTERN.match(value):
+        raise ValueError(
+            f"Invalid memory limit '{value}': "
+            f"expected format like '512m', '2g', '1024k'"
+        )
+
+
+def _parse_memory_bytes(value: str) -> int:
+    """Parse a memory limit string to bytes for comparison.
+
+    Args:
+        value: Memory limit string (e.g. "2g", "512m").
+
+    Returns:
+        Number of bytes.
+    """
+    unit = value[-1].lower()
+    number = int(value[:-1])
+    multipliers = {"b": 1, "k": 1024, "m": 1024**2, "g": 1024**3}
+    return number * multipliers[unit]
+
+
+@dataclass(frozen=True)
+class ResourceLimits:
+    """Container resource limits.
+
+    All fields are optional.  When ``None``, the corresponding
+    podman flag is not passed and no limit is enforced.
+
+    Used in two contexts:
+
+    - **Server config** — defines ceilings (maximums) for all repos.
+    - **Repo config** — defines per-repo limits, clamped to server
+      ceilings when both are set.
+
+    Attributes:
+        timeout: Max container execution time in seconds.
+        memory: Memory limit for ``--memory`` (e.g. ``"2g"``).
+        cpus: CPU limit for ``--cpus``.
+        pids_limit: Process limit for ``--pids-limit``.
+    """
+
+    timeout: int | None = None
+    memory: str | None = None
+    cpus: int | None = None
+    pids_limit: int | None = None
+
+    def __post_init__(self) -> None:
+        """Validate resource limit values.
+
+        Raises:
+            ValueError: If any field has an invalid value.
+        """
+        if self.timeout is not None and self.timeout < 10:
+            raise ValueError(f"Timeout must be >= 10s: {self.timeout}")
+        if self.cpus is not None and self.cpus < 1:
+            raise ValueError(f"CPUs must be >= 1: {self.cpus}")
+        if self.pids_limit is not None and self.pids_limit < 1:
+            raise ValueError(f"PIDs limit must be >= 1: {self.pids_limit}")
+        if self.memory is not None:
+            _validate_memory(self.memory)
+
+    def clamp(self, ceiling: "ResourceLimits | None") -> "ResourceLimits":
+        """Return a copy with values clamped to a ceiling.
+
+        For each field where both ``self`` and ``ceiling`` have a value,
+        the effective value is ``min(self, ceiling)``.  For memory,
+        comparison is done in bytes.
+
+        Args:
+            ceiling: Server-side maximum limits.  ``None`` or per-field
+                ``None`` means no ceiling for that field.
+
+        Returns:
+            New ResourceLimits with clamped values.
+        """
+        if ceiling is None:
+            return self
+
+        timeout = self.timeout
+        if timeout is not None and ceiling.timeout is not None:
+            timeout = min(timeout, ceiling.timeout)
+
+        memory = self.memory
+        if memory is not None and ceiling.memory is not None:
+            self_bytes = _parse_memory_bytes(memory)
+            ceil_bytes = _parse_memory_bytes(ceiling.memory)
+            if self_bytes > ceil_bytes:
+                memory = ceiling.memory
+
+        cpus = self.cpus
+        if cpus is not None and ceiling.cpus is not None:
+            cpus = min(cpus, ceiling.cpus)
+
+        pids_limit = self.pids_limit
+        if pids_limit is not None and ceiling.pids_limit is not None:
+            pids_limit = min(pids_limit, ceiling.pids_limit)
+
+        return ResourceLimits(
+            timeout=timeout,
+            memory=memory,
+            cpus=cpus,
+            pids_limit=pids_limit,
+        )
+
+
+def _parse_resource_limits(raw: dict | None) -> ResourceLimits | None:
+    """Parse a ``resource_limits`` YAML block.
+
+    Args:
+        raw: Raw mapping from YAML, or None.
+
+    Returns:
+        ResourceLimits instance, or None if input is None/empty.
+    """
+    if not raw:
+        return None
+
+    return ResourceLimits(
+        timeout=_resolve(raw.get("timeout"), int),
+        memory=_resolve(raw.get("memory"), str),
+        cpus=_resolve(raw.get("cpus"), int),
+        pids_limit=_resolve(raw.get("pids_limit"), int),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Server configuration
 # ---------------------------------------------------------------------------
 
@@ -581,6 +728,8 @@ class GlobalConfig:
         container_command: Container runtime command (podman or docker).
         upstream_dns: Upstream DNS server for proxy container resolution.
             ``None`` means auto-detect from ``/etc/resolv.conf``.
+        resource_limits: Server-wide resource limit ceilings.  Repo limits
+            are clamped to these values.  ``None`` means no ceilings.
     """
 
     max_concurrent_executions: int = 3
@@ -592,6 +741,7 @@ class GlobalConfig:
     dashboard_base_url: str | None = None
     container_command: str = "podman"
     upstream_dns: str | None = None
+    resource_limits: ResourceLimits | None = None
 
     def __post_init__(self) -> None:
         """Validate configuration.
@@ -932,6 +1082,7 @@ class ServerConfig:
                 raw.get("container_command"), str, default="podman"
             ),
             upstream_dns=_resolve(network.get("upstream_dns"), str),
+            resource_limits=_parse_resource_limits(raw.get("resource_limits")),
         )
 
         # Parse repos
@@ -1392,14 +1543,15 @@ class RepoConfig:
     Attributes:
         default_model: Default Claude model when not specified via
             email subaddressing.
-        timeout: Max container execution time in seconds.
+        resource_limits: Container resource limits (timeout, memory,
+            cpus, pids_limit).  All fields optional.
         network_sandbox_enabled: Whether to enable the network sandbox.
         container_env: Environment variables passed to Claude containers.
             All values are redacted from logs.
     """
 
     default_model: str = "opus"
-    timeout: int = 300
+    resource_limits: ResourceLimits = field(default_factory=ResourceLimits)
     network_sandbox_enabled: bool = True
     container_env: dict[str, str] = field(default_factory=dict)
 
@@ -1416,9 +1568,6 @@ class RepoConfig:
             if value:
                 SecretFilter.register_secret(value)
 
-        if self.timeout < 10:
-            raise ValueError(f"Timeout must be >= 10s: {self.timeout}")
-
     @classmethod
     def from_mirror(
         cls,
@@ -1428,6 +1577,7 @@ class RepoConfig:
         signing_credentials: dict[str, SigningCredential] | None = None,
         *,
         server_sandbox_enabled: bool = True,
+        server_resource_limits: ResourceLimits | None = None,
     ) -> tuple["RepoConfig", ReplacementMap]:
         """Load repo config from the git mirror.
 
@@ -1452,6 +1602,8 @@ class RepoConfig:
             server_sandbox_enabled: Server-side network sandbox setting.
                 The effective sandbox state is the logical AND of this
                 value and the repo config's ``network.sandbox_enabled``.
+            server_resource_limits: Server-side resource limit ceilings.
+                Repo limits are clamped to these maximums.
 
         Returns:
             Tuple of (RepoConfig, ReplacementMap). The ReplacementMap
@@ -1481,6 +1633,7 @@ class RepoConfig:
             masked_secrets or {},
             signing_credentials=signing_credentials or {},
             server_sandbox_enabled=server_sandbox_enabled,
+            server_resource_limits=server_resource_limits,
         )
 
     @classmethod
@@ -1492,6 +1645,7 @@ class RepoConfig:
         *,
         signing_credentials: dict[str, SigningCredential] | None = None,
         server_sandbox_enabled: bool = True,
+        server_resource_limits: ResourceLimits | None = None,
     ) -> tuple["RepoConfig", ReplacementMap]:
         """Build repo config from parsed YAML dict."""
         # Reject !secret tags outside container_env — they would be
@@ -1532,11 +1686,32 @@ class RepoConfig:
                 "re-enable the sandbox."
             )
 
+        # Build resource limits: resource_limits block takes precedence,
+        # with top-level timeout as fallback.
+        repo_limits = (
+            _parse_resource_limits(raw.get("resource_limits"))
+            or ResourceLimits()
+        )
+
+        # Backwards compat: top-level timeout fills in when
+        # resource_limits.timeout is not set.
+        top_level_timeout = _resolve(raw.get("timeout"), int)
+        if repo_limits.timeout is None and top_level_timeout is not None:
+            repo_limits = ResourceLimits(
+                timeout=top_level_timeout,
+                memory=repo_limits.memory,
+                cpus=repo_limits.cpus,
+                pids_limit=repo_limits.pids_limit,
+            )
+
+        # Clamp to server-side ceilings.
+        repo_limits = repo_limits.clamp(server_resource_limits)
+
         config = cls(
             default_model=_resolve(
                 raw.get("default_model"), str, default="opus"
             ),
-            timeout=_resolve(raw.get("timeout"), int, default=300),
+            resource_limits=repo_limits,
             network_sandbox_enabled=effective_sandbox,
             container_env=container_env,
         )

@@ -14,6 +14,7 @@ import pytest
 
 from airut.claude_output import StreamEvent
 from airut.claude_output.types import EventType
+from airut.gateway.config import ResourceLimits
 from airut.sandbox._proxy import ProxyManager
 from airut.sandbox.event_log import EventLog
 from airut.sandbox.network_log import NetworkLog
@@ -30,7 +31,7 @@ def _make_task(
     env: ContainerEnv | None = None,
     network_log_dir: Path | None = None,
     network_sandbox: NetworkSandboxConfig | None = None,
-    timeout_seconds: int = 300,
+    resource_limits: ResourceLimits | None = None,
     container_command: str = "podman",
     proxy_manager: ProxyManager | None = None,
 ) -> Task:
@@ -46,7 +47,7 @@ def _make_task(
         execution_context_dir=context_dir,
         network_log_dir=network_log_dir,
         network_sandbox=network_sandbox,
-        timeout_seconds=timeout_seconds,
+        resource_limits=resource_limits or ResourceLimits(),
         container_command=container_command,
         proxy_manager=proxy_manager,
     )
@@ -119,7 +120,7 @@ class TestTaskExecute:
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
         """execute() returns TIMEOUT outcome when container times out."""
-        task = _make_task(tmp_path, timeout_seconds=1)
+        task = _make_task(tmp_path, resource_limits=ResourceLimits(timeout=10))
 
         mock_process = create_mock_popen(raise_timeout=True)
         mock_popen.return_value = mock_process
@@ -527,6 +528,123 @@ class TestTaskExecute:
         task.execute("Test prompt")
 
         assert task._process is None
+
+    @patch("airut.sandbox.task.subprocess.Popen")
+    def test_execute_resource_limits_memory(
+        self, mock_popen: MagicMock, tmp_path: Path
+    ) -> None:
+        """execute() adds --memory and --memory-swap flags."""
+        task = _make_task(tmp_path, resource_limits=ResourceLimits(memory="2g"))
+
+        mock_process = create_mock_popen(
+            returncode=0,
+            stdout='{"type": "result", "result": "test"}',
+            stderr="",
+        )
+        mock_popen.return_value = mock_process
+
+        task.execute("Test prompt")
+
+        call_args = mock_popen.call_args[0][0]
+        assert "--memory" in call_args
+        memory_index = call_args.index("--memory")
+        assert call_args[memory_index + 1] == "2g"
+        assert "--memory-swap" in call_args
+        swap_index = call_args.index("--memory-swap")
+        assert call_args[swap_index + 1] == "2g"
+
+    @patch("airut.sandbox.task.subprocess.Popen")
+    def test_execute_resource_limits_cpus(
+        self, mock_popen: MagicMock, tmp_path: Path
+    ) -> None:
+        """execute() adds --cpus flag."""
+        task = _make_task(tmp_path, resource_limits=ResourceLimits(cpus=4))
+
+        mock_process = create_mock_popen(
+            returncode=0,
+            stdout='{"type": "result", "result": "test"}',
+            stderr="",
+        )
+        mock_popen.return_value = mock_process
+
+        task.execute("Test prompt")
+
+        call_args = mock_popen.call_args[0][0]
+        assert "--cpus" in call_args
+        cpus_index = call_args.index("--cpus")
+        assert call_args[cpus_index + 1] == "4"
+
+    @patch("airut.sandbox.task.subprocess.Popen")
+    def test_execute_resource_limits_pids(
+        self, mock_popen: MagicMock, tmp_path: Path
+    ) -> None:
+        """execute() adds --pids-limit flag."""
+        task = _make_task(
+            tmp_path, resource_limits=ResourceLimits(pids_limit=256)
+        )
+
+        mock_process = create_mock_popen(
+            returncode=0,
+            stdout='{"type": "result", "result": "test"}',
+            stderr="",
+        )
+        mock_popen.return_value = mock_process
+
+        task.execute("Test prompt")
+
+        call_args = mock_popen.call_args[0][0]
+        assert "--pids-limit" in call_args
+        pids_index = call_args.index("--pids-limit")
+        assert call_args[pids_index + 1] == "256"
+
+    @patch("airut.sandbox.task.subprocess.Popen")
+    def test_execute_no_resource_limit_flags_when_none(
+        self, mock_popen: MagicMock, tmp_path: Path
+    ) -> None:
+        """execute() omits resource limit flags when all limits are None."""
+        task = _make_task(tmp_path, resource_limits=ResourceLimits())
+
+        mock_process = create_mock_popen(
+            returncode=0,
+            stdout='{"type": "result", "result": "test"}',
+            stderr="",
+        )
+        mock_popen.return_value = mock_process
+
+        task.execute("Test prompt")
+
+        call_args = mock_popen.call_args[0][0]
+        assert "--memory" not in call_args
+        assert "--memory-swap" not in call_args
+        assert "--cpus" not in call_args
+        assert "--pids-limit" not in call_args
+
+    @patch("airut.sandbox.task.subprocess.Popen")
+    def test_execute_all_resource_limits(
+        self, mock_popen: MagicMock, tmp_path: Path
+    ) -> None:
+        """execute() adds all resource limit flags when all are set."""
+        task = _make_task(
+            tmp_path,
+            resource_limits=ResourceLimits(
+                timeout=600, memory="4g", cpus=2, pids_limit=512
+            ),
+        )
+
+        mock_process = create_mock_popen(
+            returncode=0,
+            stdout='{"type": "result", "result": "test"}',
+            stderr="",
+        )
+        mock_popen.return_value = mock_process
+
+        task.execute("Test prompt")
+
+        call_args = mock_popen.call_args[0][0]
+        assert "--memory" in call_args
+        assert "--memory-swap" in call_args
+        assert "--cpus" in call_args
+        assert "--pids-limit" in call_args
 
 
 class TestTaskStop:

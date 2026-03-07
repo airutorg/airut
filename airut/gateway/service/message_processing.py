@@ -354,6 +354,7 @@ def process_message(
             repo_handler.config.masked_secrets,
             repo_handler.config.signing_credentials,
             server_sandbox_enabled=repo_handler.config.network_sandbox_enabled,
+            server_resource_limits=service.global_config.resource_limits,
         )
 
         if is_new:
@@ -470,7 +471,7 @@ def process_message(
                 conversation_dir if network_sandbox is not None else None
             ),
             network_sandbox=network_sandbox,
-            timeout_seconds=repo_config.timeout,
+            resource_limits=repo_config.resource_limits,
         )
 
         # Register task for stop functionality
@@ -549,7 +550,7 @@ def process_message(
                     conversation_dir if network_sandbox is not None else None
                 ),
                 network_sandbox=network_sandbox,
-                timeout_seconds=repo_config.timeout,
+                resource_limits=repo_config.resource_limits,
             )
 
             # Persist recovery prompt for dashboard visibility
@@ -614,9 +615,14 @@ def process_message(
                 parsed, conv_id, response_body, usage_footer, outbox_files
             )
         elif result.outcome == Outcome.TIMEOUT:
+            timeout_val = repo_config.resource_limits.timeout
+            timeout_desc = (
+                f"after {timeout_val} seconds"
+                if timeout_val is not None
+                else ""
+            )
             error_msg = (
-                f"The task was interrupted after "
-                f"{repo_config.timeout} seconds. "
+                f"The task was interrupted {timeout_desc}. "
                 "Work done so far has been saved.\n\n"
                 "Reply to resume \u2014 you can ask about progress or "
                 "request next steps."

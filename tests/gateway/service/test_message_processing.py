@@ -16,7 +16,7 @@ from airut.claude_output import StreamEvent, parse_stream_events
 from airut.claude_output.types import Usage
 from airut.dashboard.tracker import CompletionReason
 from airut.gateway.channel import ChannelSendError, ParsedMessage
-from airut.gateway.config import RepoConfig
+from airut.gateway.config import RepoConfig, ResourceLimits
 from airut.gateway.service import build_recovery_prompt
 from airut.gateway.service.message_processing import process_message
 from airut.sandbox import ExecutionResult, Outcome
@@ -40,7 +40,7 @@ def _make_repo_config(
     """Create a RepoConfig for testing."""
     return RepoConfig(
         default_model=default_model,
-        timeout=timeout,
+        resource_limits=ResourceLimits(timeout=timeout),
         network_sandbox_enabled=network_sandbox_enabled,
         container_env=container_env or {},
     )
