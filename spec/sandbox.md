@@ -133,6 +133,7 @@ task.execute(prompt, session_id=..., model=..., on_event=...)
   |    +- Health check (poll ports 80/443)
   |
   +- Run Claude Code container
+  |    +- --cap-drop=ALL, --security-opt=no-new-privileges:true
   |    +- Prompt on stdin, stream-json on stdout
   |    +- Parse each line as StreamEvent, invoke on_event callback
   |    +- Wait with timeout

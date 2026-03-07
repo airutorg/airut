@@ -147,6 +147,8 @@ See [execution-sandbox.md](execution-sandbox.md) for full details.
 **Key properties:**
 
 - Each conversation runs in a dedicated Podman container
+- All Linux capabilities dropped (`--cap-drop=ALL`)
+- Privilege escalation blocked (`--security-opt=no-new-privileges:true`)
 - Controlled mount points (workspace, claude state, inbox, outbox)
 - No host credentials mounted (SSH keys, git config, etc.)
 - Session metadata stored outside container mounts
@@ -282,19 +284,19 @@ This is acceptable for a single-user system behind authentication.
 
 ## Attack Surface Analysis
 
-| Risk                  | Mitigation                                          |
-| --------------------- | --------------------------------------------------- |
-| Email spoofing        | DMARC verification on trusted headers               |
-| Slack identity misuse | Platform-enforced identity + authorization rules    |
-| Unauthorized access   | Sender allowlist (email) / authorized rules (Slack) |
-| Bot-to-bot loops      | Slack adapter rejects bot users; email uses DMARC   |
-| Code execution escape | Podman container isolation                          |
-| Data exfiltration     | Network allowlist via proxy                         |
-| Credential theft      | Environment-only secrets, no host mounts            |
-| Cross-session attack  | Per-conversation isolation (workspace, network)     |
-| Resource exhaustion   | Timeout, conversation limit, garbage collection     |
-| Log leakage           | Automatic secret redaction (passwords and tokens)   |
-| Dashboard access      | Localhost binding, reverse proxy auth               |
+| Risk                  | Mitigation                                                                    |
+| --------------------- | ----------------------------------------------------------------------------- |
+| Email spoofing        | DMARC verification on trusted headers                                         |
+| Slack identity misuse | Platform-enforced identity + authorization rules                              |
+| Unauthorized access   | Sender allowlist (email) / authorized rules (Slack)                           |
+| Bot-to-bot loops      | Slack adapter rejects bot users; email uses DMARC                             |
+| Code execution escape | Podman container isolation, all capabilities dropped, no privilege escalation |
+| Data exfiltration     | Network allowlist via proxy                                                   |
+| Credential theft      | Environment-only secrets, no host mounts                                      |
+| Cross-session attack  | Per-conversation isolation (workspace, network)                               |
+| Resource exhaustion   | Timeout, conversation limit, garbage collection                               |
+| Log leakage           | Automatic secret redaction (passwords and tokens)                             |
+| Dashboard access      | Localhost binding, reverse proxy auth                                         |
 
 ## Configuration Security
 

@@ -280,6 +280,8 @@ class Task:
             "--rm",
             "-i",
             "--log-driver=none",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges:true",
         ]
 
         # Pass environment variables to container
