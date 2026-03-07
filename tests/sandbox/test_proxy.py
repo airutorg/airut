@@ -34,10 +34,12 @@ class TestContextProxy:
             network_name="airut-conv-abc123",
             proxy_container_name="airut-proxy-abc123",
             proxy_ip="10.199.1.100",
+            subnet_octet=1,
         )
         assert proxy.network_name == "airut-conv-abc123"
         assert proxy.proxy_container_name == "airut-proxy-abc123"
         assert proxy.proxy_ip == "10.199.1.100"
+        assert proxy.subnet_octet == 1
 
     def test_frozen(self) -> None:
         """_ContextProxy is immutable (frozen dataclass)."""
@@ -45,6 +47,7 @@ class TestContextProxy:
             network_name="net",
             proxy_container_name="container",
             proxy_ip="10.0.0.1",
+            subnet_octet=1,
         )
         with pytest.raises(AttributeError):
             proxy.proxy_ip = "10.0.0.2"  # type: ignore[misc]
@@ -76,6 +79,7 @@ class TestProxyManagerInit:
         assert pm._replacement_tmpfiles == {}
         assert pm._network_log_files == {}
         assert pm._next_subnet_octet == 1
+        assert pm._active_octets == set()
 
     def test_custom_values(self) -> None:
         """ProxyManager accepts custom values."""
@@ -121,6 +125,7 @@ class TestProxyManagerShutdown:
             network_name="net-1",
             proxy_container_name="proxy-1",
             proxy_ip="10.199.1.100",
+            subnet_octet=1,
         )
 
         with (
@@ -139,6 +144,7 @@ class TestProxyManagerShutdown:
             network_name="net-1",
             proxy_container_name="proxy-1",
             proxy_ip="10.199.1.100",
+            subnet_octet=1,
         )
 
         with (
@@ -166,30 +172,123 @@ class TestAllocateSubnet:
     def test_first_allocation(self) -> None:
         """First allocation uses octet 1."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
-        subnet, proxy_ip = pm._allocate_subnet()
+        subnet, proxy_ip, octet = pm._allocate_subnet()
         assert subnet == "10.199.1.0/24"
         assert proxy_ip == "10.199.1.100"
+        assert octet == 1
 
     def test_increments_octet(self) -> None:
         """Subsequent allocations increment the octet."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
         pm._allocate_subnet()
-        subnet, proxy_ip = pm._allocate_subnet()
+        subnet, proxy_ip, octet = pm._allocate_subnet()
         assert subnet == "10.199.2.0/24"
         assert proxy_ip == "10.199.2.100"
+        assert octet == 2
 
     def test_wraps_at_254(self) -> None:
         """Octet wraps from 254 back to 1."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
         pm._next_subnet_octet = 254
-        subnet, proxy_ip = pm._allocate_subnet()
+        subnet, proxy_ip, octet = pm._allocate_subnet()
         assert subnet == "10.199.254.0/24"
         assert proxy_ip == "10.199.254.100"
+        assert octet == 254
 
         # Next allocation wraps to 1
-        subnet2, proxy_ip2 = pm._allocate_subnet()
+        subnet2, proxy_ip2, octet2 = pm._allocate_subnet()
         assert subnet2 == "10.199.1.0/24"
         assert proxy_ip2 == "10.199.1.100"
+        assert octet2 == 1
+
+    def test_no_duplicate_subnets(self) -> None:
+        """All 254 allocations produce unique subnets."""
+        pm = ProxyManager(upstream_dns="1.1.1.1")
+        allocated = []
+        for _ in range(254):
+            subnet, proxy_ip, octet = pm._allocate_subnet()
+            allocated.append((subnet, proxy_ip, octet))
+
+        # All octets are unique
+        octets = [o for _, _, o in allocated]
+        assert len(set(octets)) == 254
+        assert set(octets) == set(range(1, 255))
+
+        # All subnets and IPs are unique
+        subnets = [s for s, _, _ in allocated]
+        assert len(set(subnets)) == 254
+        ips = [ip for _, ip, _ in allocated]
+        assert len(set(ips)) == 254
+
+    def test_exhaustion_raises_after_254(self) -> None:
+        """255th allocation raises ProxyError when all are held."""
+        pm = ProxyManager(upstream_dns="1.1.1.1")
+        for _ in range(254):
+            pm._allocate_subnet()
+
+        with pytest.raises(ProxyError, match="All 254 subnets are in use"):
+            pm._allocate_subnet()
+
+    def test_release_allows_reuse(self) -> None:
+        """Releasing a subnet makes it available for reallocation."""
+        pm = ProxyManager(upstream_dns="1.1.1.1")
+        _, _, first_octet = pm._allocate_subnet()
+        pm._release_subnet(first_octet)
+
+        # Next allocation can reuse the freed octet (or any free one)
+        _, _, reused_octet = pm._allocate_subnet()
+        # After releasing 1, the counter moved to 2, so octet 2 gets
+        # allocated next.  The key invariant is: no error is raised.
+        assert 1 <= reused_octet <= 254
+
+    def test_release_after_exhaustion(self) -> None:
+        """Releasing one subnet after full exhaustion allows one more."""
+        pm = ProxyManager(upstream_dns="1.1.1.1")
+        octets = []
+        for _ in range(254):
+            _, _, octet = pm._allocate_subnet()
+            octets.append(octet)
+
+        # Exhausted
+        with pytest.raises(ProxyError):
+            pm._allocate_subnet()
+
+        # Free one and allocate again
+        pm._release_subnet(octets[100])
+        subnet, proxy_ip, octet = pm._allocate_subnet()
+        assert octet == octets[100]
+        assert subnet == f"10.199.{octet}.0/24"
+        assert proxy_ip == f"10.199.{octet}.100"
+
+    def test_wraparound_skips_held_subnets(self) -> None:
+        """Allocator wraps around and skips subnets that are still held."""
+        pm = ProxyManager(upstream_dns="1.1.1.1")
+        # Allocate octets 1..253, then release all except 1 and 2
+        held_octets = []
+        for _ in range(253):
+            _, _, octet = pm._allocate_subnet()
+            held_octets.append(octet)
+
+        for octet in held_octets[2:]:  # release 3..253
+            pm._release_subnet(octet)
+
+        # Counter is at 254. Allocate two more: should get 254, then 3
+        # (skipping 1 and 2 which are still held)
+        _, _, o1 = pm._allocate_subnet()
+        assert o1 == 254
+        pm._release_subnet(o1)
+
+        _, _, o2 = pm._allocate_subnet()
+        # Should skip 1 and 2, land on 3
+        # (counter wrapped from 254->1, 1 held, 2 held, 3 free)
+        assert o2 == 3
+
+    def test_release_is_idempotent(self) -> None:
+        """Releasing an already-released octet does not raise."""
+        pm = ProxyManager(upstream_dns="1.1.1.1")
+        _, _, octet = pm._allocate_subnet()
+        pm._release_subnet(octet)
+        pm._release_subnet(octet)  # no error
 
 
 class TestBuildImage:
@@ -828,7 +927,7 @@ class TestStartTaskProxy:
             patch.object(
                 pm,
                 "_allocate_subnet",
-                return_value=("10.199.1.0/24", "10.199.1.100"),
+                return_value=("10.199.1.0/24", "10.199.1.100", 1),
             ),
             patch.object(pm, "_create_internal_network"),
             patch.object(pm, "_run_proxy_container"),
@@ -865,7 +964,7 @@ class TestStartTaskProxy:
             patch.object(
                 pm,
                 "_allocate_subnet",
-                return_value=("10.199.1.0/24", "10.199.1.100"),
+                return_value=("10.199.1.0/24", "10.199.1.100", 1),
             ),
             patch.object(pm, "_create_internal_network"),
             patch.object(pm, "_run_proxy_container") as mock_run_proxy,
@@ -900,7 +999,7 @@ class TestStartTaskProxy:
             patch.object(
                 pm,
                 "_allocate_subnet",
-                return_value=("10.199.1.0/24", "10.199.1.100"),
+                return_value=("10.199.1.0/24", "10.199.1.100", 1),
             ),
             patch.object(pm, "_create_internal_network"),
             patch.object(
@@ -940,7 +1039,7 @@ class TestStartTaskProxy:
             patch.object(
                 pm,
                 "_allocate_subnet",
-                return_value=("10.199.1.0/24", "10.199.1.100"),
+                return_value=("10.199.1.0/24", "10.199.1.100", 1),
             ),
             patch.object(pm, "_create_internal_network"),
             patch.object(
@@ -962,6 +1061,115 @@ class TestStartTaskProxy:
         # Network log tracking should be cleaned up
         assert "task-1" not in pm._network_log_files
 
+    def test_concurrent_proxies_get_unique_subnets(self) -> None:
+        """Multiple concurrent start_proxy calls get distinct subnets."""
+        pm = ProxyManager(upstream_dns="1.1.1.1")
+
+        with (
+            patch.object(pm, "stop_proxy"),
+            patch.object(pm, "_create_internal_network"),
+            patch.object(pm, "_run_proxy_container"),
+            patch.object(pm, "_wait_for_proxy_ready"),
+        ):
+            p1 = pm.start_proxy(
+                "task-1", allowlist_json=b"[]", replacements_json=b"{}"
+            )
+            p2 = pm.start_proxy(
+                "task-2", allowlist_json=b"[]", replacements_json=b"{}"
+            )
+            p3 = pm.start_proxy(
+                "task-3", allowlist_json=b"[]", replacements_json=b"{}"
+            )
+
+        # Each proxy must have a distinct subnet
+        ips = {p1.proxy_ip, p2.proxy_ip, p3.proxy_ip}
+        assert len(ips) == 3
+
+        # Cleanup
+        for path in pm._allowlist_tmpfiles.values():
+            path.unlink(missing_ok=True)
+        for path in pm._replacement_tmpfiles.values():
+            path.unlink(missing_ok=True)
+
+    def test_stop_then_start_reuses_freed_subnet(self) -> None:
+        """Stopping a proxy frees its subnet for reuse by a new proxy."""
+        pm = ProxyManager(upstream_dns="1.1.1.1")
+
+        with (
+            patch.object(pm, "_create_internal_network"),
+            patch.object(pm, "_run_proxy_container"),
+            patch.object(pm, "_wait_for_proxy_ready"),
+            patch.object(pm, "_remove_container"),
+            patch.object(pm, "_remove_network"),
+        ):
+            # Fill all 254 subnets
+            for i in range(254):
+                pm.start_proxy(
+                    f"task-{i}",
+                    allowlist_json=b"[]",
+                    replacements_json=b"{}",
+                )
+
+            # 255th should fail
+            with pytest.raises(ProxyError, match="All 254 subnets"):
+                pm.start_proxy(
+                    "task-overflow",
+                    allowlist_json=b"[]",
+                    replacements_json=b"{}",
+                )
+
+            # Stop one proxy, then the same slot becomes available
+            pm.stop_proxy("task-42")
+
+            proxy = pm.start_proxy(
+                "task-new",
+                allowlist_json=b"[]",
+                replacements_json=b"{}",
+            )
+            assert (
+                proxy.subnet_octet
+                == pm._active_proxies["task-new"].subnet_octet
+            )
+
+        # Cleanup
+        for path in list(pm._allowlist_tmpfiles.values()):
+            path.unlink(missing_ok=True)
+        for path in list(pm._replacement_tmpfiles.values()):
+            path.unlink(missing_ok=True)
+
+    def test_failure_cleanup_releases_subnet(self) -> None:
+        """Failed start_proxy releases its subnet so it won't be leaked."""
+        pm = ProxyManager(upstream_dns="1.1.1.1")
+
+        with (
+            patch.object(pm, "stop_proxy"),
+            patch.object(pm, "_create_internal_network"),
+            patch.object(
+                pm,
+                "_run_proxy_container",
+                side_effect=ProxyError("container failed"),
+            ),
+            patch.object(pm, "_remove_container"),
+            patch.object(pm, "_remove_network"),
+        ):
+            with pytest.raises(ProxyError):
+                pm.start_proxy(
+                    "task-1",
+                    allowlist_json=b"[]",
+                    replacements_json=b"{}",
+                )
+
+        # Octet 1 was allocated then released on failure. The counter
+        # advanced to 2, so the next allocation gets 2. We can still
+        # allocate all 254 without hitting exhaustion, proving octet 1
+        # was properly freed.
+        octets = []
+        for _ in range(254):
+            _, _, octet = pm._allocate_subnet()
+            octets.append(octet)
+
+        assert len(set(octets)) == 254
+
 
 class TestStopTaskProxy:
     """Tests for ProxyManager.stop_proxy()."""
@@ -973,7 +1181,9 @@ class TestStopTaskProxy:
             network_name="airut-conv-task-1",
             proxy_container_name="airut-proxy-task-1",
             proxy_ip="10.199.1.100",
+            subnet_octet=1,
         )
+        pm._active_octets.add(1)
         # Track some temp files
         tmpfile = Path("/tmp/fake-allowlist.json")
         pm._allowlist_tmpfiles["task-1"] = tmpfile
@@ -994,6 +1204,8 @@ class TestStopTaskProxy:
         assert "task-1" not in pm._allowlist_tmpfiles
         assert "task-1" not in pm._replacement_tmpfiles
         assert "task-1" not in pm._network_log_files
+        # Subnet octet should be released
+        assert 1 not in pm._active_octets
 
     def test_noop_for_unknown_task(self) -> None:
         """Does nothing for unknown context_id."""
