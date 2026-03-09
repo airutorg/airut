@@ -282,6 +282,8 @@ def _repos_section_styles() -> str:
             height: 10px;
             border-radius: 50%;
             flex-shrink: 0;
+            position: relative;
+            top: 1px;
         }
         .repo-status-indicator.live {
             background: #5cb85c;
@@ -386,6 +388,8 @@ def _task_card_styles() -> str:
         .status-icon {
             font-size: 14px;
             margin-left: 4px;
+            position: relative;
+            top: 1px;
         }
         .conv-badge {
             display: inline-block;
