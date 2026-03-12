@@ -15,11 +15,29 @@
 #   - "/api" matches only "/api" exactly (no implicit prefix matching)
 
 # Domains: all paths and methods allowed (exact match unless wildcards used)
-domains:
-  - api.anthropic.com
+domains: []
 
 # URL patterns: domain + path pattern required (fnmatch wildcards supported)
 url_prefixes:
+  # Anthropic API — path-restricted to prevent exfiltration via /v1/files
+  # endpoint (attacker can use their own API key to upload material they can
+  # later fetch).  Only the paths Claude Code actually needs are allowed.
+  - host: api.anthropic.com
+    path: /v1/messages*
+    methods: [POST]
+  - host: api.anthropic.com
+    path: /api/oauth/*
+    methods: [GET]
+  - host: api.anthropic.com
+    path: /api/event_logging/*
+    methods: [POST]
+  - host: api.anthropic.com
+    path: /api/eval/*
+    methods: [POST]
+  - host: api.anthropic.com
+    path: /api/claude_code_*
+    methods: [GET]
+
   # Claude telemetry and error reporting (POST-only)
   - host: statsig.anthropic.com
     path: ""

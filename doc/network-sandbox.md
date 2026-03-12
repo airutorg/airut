@@ -187,11 +187,15 @@ fnmatch-style pattern matching:
 ```yaml
 # Domain entries: all paths and methods allowed
 domains:
-  - api.anthropic.com      # exact match
   - "*.github.com"         # matches api.github.com, NOT github.com
 
 # URL pattern entries: host + path pattern required, optional method filter
 url_prefixes:
+  # Anthropic API — path-restricted to prevent exfiltration via /v1/files
+  # (attacker can use their own API key to upload/fetch material)
+  - host: api.anthropic.com
+    path: /v1/messages*
+    methods: [POST]
   - host: api.github.com
     path: /repos/your-org/your-repo*   # matches /repos/your-org/your-repo and subpaths
   - host: api.github.com

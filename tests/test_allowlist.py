@@ -176,12 +176,12 @@ url_prefixes:
         )
         data = allowlist_path.read_bytes()
         al = parse_allowlist_yaml(data)
-        # Should have at least one domain and multiple url_prefixes
-        assert len(al.domains) >= 1
+        # api.anthropic.com is path-restricted, not a blanket domain
+        # entry — should have multiple url_prefixes
         assert len(al.url_patterns) >= 1
-        # Verify a known entry
-        domain_hosts = [d.host for d in al.domains]
-        assert "api.anthropic.com" in domain_hosts
+        # Verify api.anthropic.com is present as a url_pattern (not domain)
+        url_pattern_hosts = [p.host for p in al.url_patterns]
+        assert "api.anthropic.com" in url_pattern_hosts
 
 
 class TestSerializeAllowlistJson:
