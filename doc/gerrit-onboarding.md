@@ -55,10 +55,25 @@ container_env:
 Add your Gerrit server to `.airut/network-allowlist.yaml`:
 
 ```yaml
-domains:
-  - api.anthropic.com
-
 url_prefixes:
+  # Anthropic API — path-restricted to prevent exfiltration via /v1/files
+  # (attacker can use their own API key to upload/fetch material)
+  - host: api.anthropic.com
+    path: /v1/messages*
+    methods: [POST]
+  - host: api.anthropic.com
+    path: /api/oauth/*
+    methods: [GET]
+  - host: api.anthropic.com
+    path: /api/event_logging/*
+    methods: [POST]
+  - host: api.anthropic.com
+    path: /api/eval/*
+    methods: [POST]
+  - host: api.anthropic.com
+    path: /api/claude_code_*
+    methods: [GET]
+
   # Claude telemetry and error reporting (POST-only)
   - host: statsig.anthropic.com
     path: ""

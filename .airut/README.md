@@ -43,13 +43,16 @@ Defines which hosts containers can access. All HTTP(S) traffic is proxied and
 checked against this allowlist. See `doc/network-sandbox.md`.
 
 ```yaml
-# Full-domain entries: all paths and methods allowed
-domains:
-  - api.anthropic.com
-  - pypi.org
-
 # URL prefix entries: host + path required, optional method filter
 url_prefixes:
+  # Anthropic API — path-restricted to prevent exfiltration via /v1/files
+  # (attacker can use their own API key to upload/fetch material)
+  - host: api.anthropic.com
+    path: /v1/messages*
+    methods: [POST]
+  - host: api.anthropic.com
+    path: /api/oauth/*
+    methods: [GET]
   - host: api.github.com
     path: /repos/owner/repo*
   - host: api.github.com
