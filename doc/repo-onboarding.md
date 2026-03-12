@@ -11,7 +11,10 @@ Code interaction via email and/or Slack.
     Airut deletes processed messages)
   - **Slack**: Slack app installed to your workspace (see
     [slack-setup.md](slack-setup.md))
-- Repository access for the agent's GitHub account
+- **Dedicated GitHub account** for the agent with a properly scoped personal
+  access token (see [deployment.md](deployment.md#dedicated-github-account)).
+  For guidance on the `workflow` scope, see
+  [security.md](security.md#github-actions-workflow-escape)
 - Claude API credentials
 
 ## Example Project
@@ -400,7 +403,8 @@ journalctl --user -u airut | grep -i build
 
 Verify:
 
-- `GH_TOKEN` has repo access
+- `GH_TOKEN` has repo access (for `workflow` scope guidance, see
+  [security.md](security.md#github-actions-workflow-escape))
 - Token is passed via `!secret GH_TOKEN`
 - `gitconfig` uses `gh auth git-credential`
 
