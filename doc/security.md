@@ -297,6 +297,7 @@ This is acceptable for a single-user system behind authentication.
 | Resource exhaustion   | Timeout, conversation limit, garbage collection                               |
 | Log leakage           | Automatic secret redaction (passwords and tokens)                             |
 | Dashboard access      | Localhost binding, reverse proxy auth                                         |
+| Workflow escape       | Omit `workflow` scope from PAT, use `workflow_dispatch` triggers              |
 
 ## Configuration Security
 
@@ -424,6 +425,102 @@ legitimate from malicious use of authorized channels.
    points
 4. **Audit network logs** — `network-sandbox.log` shows all requests for
    forensic analysis
+
+### GitHub Actions Workflow Escape
+
+If the agent's `GH_TOKEN` has permission to push commits that modify
+`.github/workflows/`, the agent can escape the container sandbox entirely by
+committing a workflow file that runs arbitrary code on GitHub Actions runners.
+GitHub Actions runners have outbound internet access and can communicate with
+external hosts — the network sandbox does not apply to GitHub-hosted runners.
+
+**Threat model:** This threat vector is relevant when the
+[lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/)
+(coined by Simon Willison) is present — all three conditions simultaneously:
+
+1. **Access to private data** — The repository contains private code, secrets
+   accessible to Actions, or other sensitive material
+2. **Exposure to untrusted content** — The agent processes content controlled by
+   a potential attacker (repository files with user input, fetched web pages,
+   email attachments, Slack file uploads)
+3. **Ability to externally communicate** — The agent can exfiltrate data through
+   some channel. In this case, GitHub Actions runners have outbound internet
+   access — a workflow escape gives the attacker a runner that can communicate
+   with arbitrary external hosts, completely outside the network sandbox
+
+The workflow escape is the mechanism that provides capability (3): even though
+the container's network sandbox restricts outbound access, a pushed workflow
+file runs on a GitHub-hosted runner where no such restriction applies.
+
+**The escape has two paths**, both of which must be closed:
+
+- **Modify workflow files directly** — Push a new or altered workflow that runs
+  attacker-controlled code. Requires the `GH_TOKEN` to have the `workflow` scope
+  (classic PAT) or `Workflows: Read and write` permission (fine-grained PAT).
+- **Modify code that workflows execute** — Most CI workflows run repository code
+  (e.g., `uv run pytest`, `npm test`, build scripts). The agent can alter that
+  code to perform arbitrary actions when the workflow executes it, without
+  touching the workflow file at all. This only requires
+  `Contents: Read and write` (which the agent needs for normal git operations)
+  plus a workflow trigger the agent can activate (`on: pull_request` or
+  `on: push`).
+
+If the lethal trifecta is not present, the escape is not a meaningful threat.
+For example:
+
+- **Public repositories with no Actions secrets** — There is no private data to
+  exfiltrate (condition 1 absent). Workflow escape gives the attacker a runner
+  with outbound access but nothing sensitive to steal. (Note: if the repo's
+  Actions configuration grants access to organization secrets, this does not
+  apply.)
+- **Network sandbox blocks untrusted content** — If the agent only processes
+  trusted prompts and the network allowlist prevents fetching adversarial
+  content, prompt injection cannot be triggered in the first place (condition 2
+  absent).
+
+**Mitigations:**
+
+1. **Omit the workflow scope from the agent's `GH_TOKEN`** — GitHub enforces
+   this at the git push level, making it impossible for the agent to modify
+   workflow files regardless of what code runs in the container.
+   - **Classic PAT**: Ensure the `workflow` scope checkbox is unchecked. Grant
+     only `repo` scope.
+   - **Fine-grained PAT**: Grant `Contents: Read and write` for push access, but
+     do **not** grant `Workflows: Read and write`. `Metadata: Read` is set
+     automatically.
+   - **Note**: Existing classic PATs may have the `workflow` scope enabled by
+     default. Audit tokens at GitHub → Settings → Developer settings → Personal
+     access tokens.
+   - **Limitation**: This alone is not sufficient if workflows execute code from
+     the repository (which most CI workflows do — e.g., `uv run pytest`,
+     `npm test`). The agent cannot modify the workflow file itself, but it can
+     modify the code that the workflow runs. A compromised agent can alter test
+     files, build scripts, or application code to perform arbitrary actions when
+     the workflow executes them. Mitigation 2 addresses this.
+2. **Use `workflow_dispatch` instead of `pull_request` triggers** — Workflows
+   that use `on: workflow_dispatch` can only be triggered manually from the
+   GitHub UI or API by an authorized user. Even if the agent pushes malicious
+   code, the workflow will not run until a human explicitly triggers it.
+   Workflows with `on: pull_request` or `on: push` triggers run automatically
+   when the agent pushes code — and they execute code from the PR branch,
+   meaning any modified repo code runs on the Actions runner. Where feasible,
+   convert sensitive workflows (deployments, release pipelines, anything with
+   access to secrets or external systems) to use `workflow_dispatch`. Combined
+   with mitigation 1, this closes both the "modify the workflow" and "modify the
+   code the workflow runs" escape paths.
+
+**When is this relevant?** Evaluate whether the lethal trifecta is present:
+
+- If your repository is **public with no Actions secrets**: Low risk. No private
+  data to steal (condition 1 absent).
+- If your repository is **private or has Actions secrets**: Apply both
+  mitigations.
+- If the agent processes **untrusted content** (user-submitted issues, external
+  web pages, email attachments from untrusted senders): Apply both mitigations.
+- If the agent only processes **trusted prompts from authorized senders** and
+  the network sandbox prevents fetching adversarial content: Lower risk
+  (condition 2 absent), but mitigation 1 is still recommended as defense in
+  depth.
 
 ### Realistic Security Expectations
 

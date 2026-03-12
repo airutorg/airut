@@ -73,6 +73,36 @@ git ls-remote https://github.com/your-org/your-repo.git
 For private repositories, ensure the authenticated account has read access to
 all repos configured in `~/.config/airut/airut.yaml`.
 
+#### Dedicated GitHub Account
+
+Create a dedicated machine user account (e.g., `your-org-airut-bot`) for the
+agent rather than using a personal account. This limits blast radius: if the
+token is compromised, the attacker cannot access other repositories,
+organization settings, or resources that your personal account has access to.
+
+**Setup:**
+
+1. Create a new GitHub account for the agent
+2. Grant the account **collaborator access** to only the repositories the agent
+   will operate on (write access for pushing branches and creating PRs)
+3. Generate a **personal access token** for this account:
+   - **Fine-grained PAT** (recommended): Grant `Contents: Read and write` and
+     `Metadata: Read` for the target repositories. Consider whether to grant
+     `Workflows` permission — omitting it prevents the agent from modifying
+     `.github/workflows/` files, blocking a sandbox escape vector. This is
+     recommended when the
+     [lethal trifecta](security.md#github-actions-workflow-escape) is present
+     (private data + untrusted content + external communication). For public
+     repos with no Actions secrets, granting `Workflows` is lower risk.
+   - **Classic PAT**: Grant `repo` scope. Consider whether to enable the
+     `workflow` scope using the same criteria above. Note that existing classic
+     PATs may have `workflow` enabled by default — audit at GitHub → Settings →
+     Developer settings.
+4. Use this token as the `GH_TOKEN` in your server configuration
+
+The server's own git credentials (for fetching mirrors) can use a separate
+account or the same bot account with read access.
+
 **For Gerrit repositories**, use HTTP credentials with the git credential store
 instead of `gh`:
 
