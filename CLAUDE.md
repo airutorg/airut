@@ -47,6 +47,7 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
 - `spec/cli.md` — CLI subcommands, service management, self-update
 - `spec/pr-workflow-tool.md` — PR workflow automation (ci.py, pr.py)
 - `spec/local-ci-runner.md` — local CI runner for pre-push validation
+- `spec/airut-ci.md` — sandboxed CI service with GitHub webhook support
 
 ## Operational Workflows
 

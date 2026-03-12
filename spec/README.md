@@ -23,6 +23,10 @@ For high-level documentation, see [doc/](../doc/).
 - [sandbox.md](sandbox.md) — Sandbox library for safe containerized Claude Code
   execution
 
+## CI
+
+- [airut-ci.md](airut-ci.md) — Sandboxed CI service with GitHub webhook support
+
 ## Container
 
 - [image.md](image.md) — Two-layer container image build strategy
