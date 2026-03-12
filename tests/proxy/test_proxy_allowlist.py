@@ -464,6 +464,151 @@ class TestMethodFiltering:
         assert al._is_allowed("api.example.com", "/data", "DELETE") is False
 
 
+class TestAnthropicApiPathRestriction:
+    """Verify api.anthropic.com path restrictions block exfiltration.
+
+    The /v1/files endpoint allows uploading data with an attacker's own
+    API key.  The allowlist must block it while permitting the paths
+    Claude Code actually needs.
+    """
+
+    @staticmethod
+    def _build_allowlist() -> MockNetworkAllowlist:
+        """Build allowlist matching live .airut/network-allowlist.yaml."""
+        al = MockNetworkAllowlist()
+        al.domains = []
+        al.url_prefixes = [
+            {
+                "host": "api.anthropic.com",
+                "path": "/v1/messages*",
+                "methods": ["POST"],
+            },
+            {
+                "host": "api.anthropic.com",
+                "path": "/api/oauth/*",
+                "methods": ["GET"],
+            },
+            {
+                "host": "api.anthropic.com",
+                "path": "/api/event_logging/*",
+                "methods": ["POST"],
+            },
+            {
+                "host": "api.anthropic.com",
+                "path": "/api/eval/*",
+                "methods": ["POST"],
+            },
+            {
+                "host": "api.anthropic.com",
+                "path": "/api/claude_code_*",
+                "methods": ["GET"],
+            },
+        ]
+        return al
+
+    # --- Exfiltration paths: MUST be blocked ---
+
+    def test_files_post_blocked(self) -> None:
+        """POST /v1/files is blocked (upload exfiltration vector)."""
+        al = self._build_allowlist()
+        assert al._is_allowed("api.anthropic.com", "/v1/files", "POST") is False
+
+    def test_files_get_blocked(self) -> None:
+        """GET /v1/files is blocked."""
+        al = self._build_allowlist()
+        assert al._is_allowed("api.anthropic.com", "/v1/files", "GET") is False
+
+    def test_files_subpath_blocked(self) -> None:
+        """GET /v1/files/{id} is blocked."""
+        al = self._build_allowlist()
+        assert (
+            al._is_allowed("api.anthropic.com", "/v1/files/file-abc123", "GET")
+            is False
+        )
+
+    def test_files_content_blocked(self) -> None:
+        """GET /v1/files/{id}/content is blocked."""
+        al = self._build_allowlist()
+        assert (
+            al._is_allowed(
+                "api.anthropic.com",
+                "/v1/files/file-abc123/content",
+                "GET",
+            )
+            is False
+        )
+
+    def test_arbitrary_path_blocked(self) -> None:
+        """Arbitrary paths on api.anthropic.com are blocked."""
+        al = self._build_allowlist()
+        assert (
+            al._is_allowed("api.anthropic.com", "/v1/complete", "POST") is False
+        )
+        assert al._is_allowed("api.anthropic.com", "/anything", "GET") is False
+        assert al._is_allowed("api.anthropic.com", "/", "GET") is False
+
+    # --- Legitimate paths: MUST be allowed ---
+
+    def test_messages_allowed(self) -> None:
+        """POST /v1/messages is allowed."""
+        al = self._build_allowlist()
+        assert (
+            al._is_allowed("api.anthropic.com", "/v1/messages", "POST") is True
+        )
+
+    def test_messages_subpath_allowed(self) -> None:
+        """POST /v1/messages/batches is allowed."""
+        al = self._build_allowlist()
+        assert (
+            al._is_allowed("api.anthropic.com", "/v1/messages/batches", "POST")
+            is True
+        )
+
+    def test_messages_get_blocked(self) -> None:
+        """GET /v1/messages is blocked (POST-only)."""
+        al = self._build_allowlist()
+        assert (
+            al._is_allowed("api.anthropic.com", "/v1/messages", "GET") is False
+        )
+
+    def test_oauth_allowed(self) -> None:
+        """GET /api/oauth/* is allowed."""
+        al = self._build_allowlist()
+        assert (
+            al._is_allowed("api.anthropic.com", "/api/oauth/token", "GET")
+            is True
+        )
+
+    def test_event_logging_allowed(self) -> None:
+        """POST /api/event_logging/* is allowed."""
+        al = self._build_allowlist()
+        assert (
+            al._is_allowed(
+                "api.anthropic.com", "/api/event_logging/events", "POST"
+            )
+            is True
+        )
+
+    def test_eval_allowed(self) -> None:
+        """POST /api/eval/* is allowed."""
+        al = self._build_allowlist()
+        assert (
+            al._is_allowed("api.anthropic.com", "/api/eval/run", "POST") is True
+        )
+
+    def test_claude_code_metadata_allowed(self) -> None:
+        """GET /api/claude_code_* is allowed."""
+        al = self._build_allowlist()
+        assert (
+            al._is_allowed(
+                "api.anthropic.com",
+                "/api/claude_code_config",
+                "GET",
+            )
+            is True
+        )
+
+
 class TestMatchHeaderPattern:
     """Tests for _match_header_pattern function (case-insensitive matching)."""
 
