@@ -19,7 +19,7 @@ def create_mock_popen(
     stderr: str = "",
     raise_timeout: bool = False,
 ):
-    """Create a mock Popen object for Task tests.
+    """Create a mock Popen object for AgentTask tests.
 
     Returns a MagicMock that behaves like subprocess.Popen:
     - stdout is an iterator yielding lines with newlines

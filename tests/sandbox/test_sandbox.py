@@ -8,10 +8,9 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from airut.gateway.config import ResourceLimits
 from airut.sandbox.sandbox import Sandbox, SandboxConfig
-from airut.sandbox.task import Task
-from airut.sandbox.types import ContainerEnv, Mount
+from airut.sandbox.task import AgentTask, CommandTask
+from airut.sandbox.types import ContainerEnv, Mount, ResourceLimits
 
 
 class TestSandboxConfig:
@@ -135,6 +134,7 @@ class TestSandboxEnsureImage:
             "airut-repo:abc123",
             sandbox._overlay_images,
             24,
+            passthrough=False,
         )
 
     @patch("airut.sandbox.sandbox.build_overlay_image")
@@ -184,15 +184,43 @@ class TestSandboxEnsureImage:
         call_args = mock_build_repo.call_args
         assert call_args[0][2] == context
 
+    @patch("airut.sandbox.sandbox.build_overlay_image")
+    @patch("airut.sandbox.sandbox.build_repo_image")
+    @patch("airut.sandbox.sandbox.ProxyManager")
+    def test_passthrough_entrypoint(
+        self,
+        mock_pm_class: MagicMock,
+        mock_build_repo: MagicMock,
+        mock_build_overlay: MagicMock,
+    ) -> None:
+        """ensure_image(passthrough_entrypoint=True) passes passthrough flag."""
+        mock_build_repo.return_value = "airut-repo:abc123"
+        mock_build_overlay.return_value = "airut:def456"
+
+        config = SandboxConfig()
+        sandbox = Sandbox(config)
+
+        sandbox.ensure_image(
+            b"FROM ubuntu:24.04\n", {}, passthrough_entrypoint=True
+        )
+
+        mock_build_overlay.assert_called_once_with(
+            "podman",
+            "airut-repo:abc123",
+            sandbox._overlay_images,
+            24,
+            passthrough=True,
+        )
+
 
 class TestSandboxCreateTask:
     """Tests for Sandbox.create_task()."""
 
     @patch("airut.sandbox.sandbox.ProxyManager")
-    def test_returns_task(
+    def test_returns_agent_task(
         self, mock_pm_class: MagicMock, tmp_path: Path
     ) -> None:
-        """create_task() returns a Task instance."""
+        """create_task() returns an AgentTask instance."""
         config = SandboxConfig()
         sandbox = Sandbox(config)
 
@@ -207,14 +235,14 @@ class TestSandboxCreateTask:
             execution_context_dir=context_dir,
         )
 
-        assert isinstance(task, Task)
+        assert isinstance(task, AgentTask)
         assert task.execution_context_id == "task-123"
 
     @patch("airut.sandbox.sandbox.ProxyManager")
     def test_passes_mounts_and_env(
         self, mock_pm_class: MagicMock, tmp_path: Path
     ) -> None:
-        """create_task() passes mounts and env to Task."""
+        """create_task() passes mounts and env to AgentTask."""
         config = SandboxConfig()
         sandbox = Sandbox(config)
 
@@ -295,7 +323,7 @@ class TestSandboxCreateTask:
     def test_custom_resource_limits(
         self, mock_pm_class: MagicMock, tmp_path: Path
     ) -> None:
-        """create_task() passes resource_limits to Task."""
+        """create_task() passes resource_limits to AgentTask."""
         config = SandboxConfig()
         sandbox = Sandbox(config)
 
@@ -341,7 +369,7 @@ class TestSandboxCreateTask:
     def test_network_log_dir(
         self, mock_pm_class: MagicMock, tmp_path: Path
     ) -> None:
-        """create_task() passes network_log_dir to Task."""
+        """create_task() passes network_log_dir to AgentTask."""
         config = SandboxConfig()
         sandbox = Sandbox(config)
 
@@ -360,3 +388,124 @@ class TestSandboxCreateTask:
         )
 
         assert task._network_log_dir == log_dir
+
+
+class TestSandboxCreateCommandTask:
+    """Tests for Sandbox.create_command_task()."""
+
+    @patch("airut.sandbox.sandbox.ProxyManager")
+    def test_returns_command_task(
+        self, mock_pm_class: MagicMock, tmp_path: Path
+    ) -> None:
+        """create_command_task() returns a CommandTask instance."""
+        config = SandboxConfig()
+        sandbox = Sandbox(config)
+
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
+
+        task = sandbox.create_command_task(
+            "cmd-123",
+            image_tag="airut:test",
+            mounts=[],
+            env=ContainerEnv(),
+            execution_context_dir=context_dir,
+        )
+
+        assert isinstance(task, CommandTask)
+        assert task.execution_context_id == "cmd-123"
+
+    @patch("airut.sandbox.sandbox.ProxyManager")
+    def test_passes_mounts_and_env(
+        self, mock_pm_class: MagicMock, tmp_path: Path
+    ) -> None:
+        """create_command_task() passes mounts and env to CommandTask."""
+        config = SandboxConfig()
+        sandbox = Sandbox(config)
+
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
+
+        mounts = [
+            Mount(
+                host_path=tmp_path / "workspace",
+                container_path="/workspace",
+            )
+        ]
+        env = ContainerEnv(variables={"KEY": "value"})
+
+        task = sandbox.create_command_task(
+            "cmd-123",
+            image_tag="airut:test",
+            mounts=mounts,
+            env=env,
+            execution_context_dir=context_dir,
+        )
+
+        assert task._mounts == mounts
+        assert task._env == env
+
+    @patch("airut.sandbox.sandbox.ProxyManager")
+    def test_no_proxy_manager_without_network_sandbox(
+        self, mock_pm_class: MagicMock, tmp_path: Path
+    ) -> None:
+        """create_command_task() without network_sandbox has no proxy."""
+        config = SandboxConfig()
+        sandbox = Sandbox(config)
+
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
+
+        task = sandbox.create_command_task(
+            "cmd-123",
+            image_tag="airut:test",
+            mounts=[],
+            env=ContainerEnv(),
+            execution_context_dir=context_dir,
+        )
+
+        assert task._proxy_manager is None
+
+    @patch("airut.sandbox.sandbox.ProxyManager")
+    def test_default_resource_limits(
+        self, mock_pm_class: MagicMock, tmp_path: Path
+    ) -> None:
+        """create_command_task() uses default ResourceLimits."""
+        config = SandboxConfig()
+        sandbox = Sandbox(config)
+
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
+
+        task = sandbox.create_command_task(
+            "cmd-123",
+            image_tag="airut:test",
+            mounts=[],
+            env=ContainerEnv(),
+            execution_context_dir=context_dir,
+        )
+
+        assert task._resource_limits == ResourceLimits()
+
+    @patch("airut.sandbox.sandbox.ProxyManager")
+    def test_custom_resource_limits(
+        self, mock_pm_class: MagicMock, tmp_path: Path
+    ) -> None:
+        """create_command_task() passes resource_limits."""
+        config = SandboxConfig()
+        sandbox = Sandbox(config)
+
+        context_dir = tmp_path / "context"
+        context_dir.mkdir()
+
+        limits = ResourceLimits(timeout=120, memory="1g")
+        task = sandbox.create_command_task(
+            "cmd-123",
+            image_tag="airut:test",
+            mounts=[],
+            env=ContainerEnv(),
+            execution_context_dir=context_dir,
+            resource_limits=limits,
+        )
+
+        assert task._resource_limits == limits

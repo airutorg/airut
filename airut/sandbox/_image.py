@@ -135,6 +135,8 @@ def build_overlay_image(
     repo_tag: str,
     overlay_images: dict[str, _ImageInfo],
     max_age_hours: int,
+    *,
+    passthrough: bool = False,
 ) -> str:
     """Build the overlay image on top of the repo image.
 
@@ -145,6 +147,8 @@ def build_overlay_image(
         repo_tag: Tag of the repo image to use as base.
         overlay_images: Cache of built overlay images.
         max_age_hours: Maximum image age before rebuild.
+        passthrough: If True, use the passthrough entrypoint that
+            runs ``exec "$@"`` instead of ``exec claude "$@"``.
 
     Returns:
         Overlay image tag (e.g., ``airut:abcdef0123456789``).
@@ -152,7 +156,7 @@ def build_overlay_image(
     Raises:
         ImageBuildError: If build fails.
     """
-    entrypoint_content = get_entrypoint_content()
+    entrypoint_content = get_entrypoint_content(passthrough=passthrough)
 
     overlay_hash = _content_hash(repo_tag.encode() + entrypoint_content)
     tag = f"airut:{overlay_hash}"
