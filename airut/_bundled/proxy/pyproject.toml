@@ -8,6 +8,13 @@ dependencies = [
     "cryptography",
 ]
 
+[tool.uv]
+# Override mitmproxy 12.2.1's tornado<=6.5.2 pin to fix GHSA-78cv-mqj4-43f7
+# (cookie attribute injection). Safe override: tornado 6.5.5 is a patch
+# release with no breaking API changes. Remove when mitmproxy releases a
+# version that allows tornado >=6.5.5.
+override-dependencies = ["tornado>=6.5.5"]
+
 [tool.uv-secure.vulnerability_criteria]
 # Flask <=3.1.2 pinned by mitmproxy 12.2.1 (GHSA-68rp-wp8r-4726: missing
 # Vary: Cookie header). Low severity, not exploitable in proxy context since
