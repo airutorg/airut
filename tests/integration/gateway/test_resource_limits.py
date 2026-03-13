@@ -26,7 +26,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
-from airut.gateway.config import GlobalConfig, ResourceLimits
+from airut.gateway.config import GlobalConfig
+from airut.sandbox.types import ResourceLimits
 
 from .conftest import (
     get_message_text,

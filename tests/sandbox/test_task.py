@@ -3,7 +3,7 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Tests for lib/sandbox/task.py -- per-execution Task class."""
+"""Tests for lib/sandbox/task.py -- per-execution AgentTask class."""
 
 import signal
 import subprocess
@@ -14,12 +14,11 @@ import pytest
 
 from airut.claude_output import StreamEvent
 from airut.claude_output.types import EventType
-from airut.gateway.config import ResourceLimits
 from airut.sandbox._proxy import ProxyManager
 from airut.sandbox.event_log import EventLog
 from airut.sandbox.network_log import NetworkLog
-from airut.sandbox.task import NetworkSandboxConfig, SandboxError, Task
-from airut.sandbox.types import ContainerEnv, Mount, Outcome
+from airut.sandbox.task import AgentTask, NetworkSandboxConfig, SandboxError
+from airut.sandbox.types import ContainerEnv, Mount, Outcome, ResourceLimits
 from tests.sandbox.conftest import create_mock_popen
 
 
@@ -34,12 +33,12 @@ def _make_task(
     resource_limits: ResourceLimits | None = None,
     container_command: str = "podman",
     proxy_manager: ProxyManager | None = None,
-) -> Task:
-    """Create a Task with standard test params."""
+) -> AgentTask:
+    """Create an AgentTask with standard test params."""
     context_dir = tmp_path / "context"
     context_dir.mkdir(parents=True, exist_ok=True)
 
-    return Task(
+    return AgentTask(
         "test-task-id",
         image_tag=image_tag,
         mounts=mounts or [],
@@ -53,8 +52,8 @@ def _make_task(
     )
 
 
-class TestTaskInit:
-    """Tests for Task initialization."""
+class TestAgentTaskInit:
+    """Tests for AgentTask initialization."""
 
     def test_creates_claude_dir(self, tmp_path: Path) -> None:
         """Init creates claude/ subdirectory in execution_context_dir."""
@@ -87,10 +86,10 @@ class TestTaskInit:
         assert task.execution_context_id == "test-task-id"
 
 
-class TestTaskExecute:
-    """Tests for Task.execute() method."""
+class TestAgentTaskExecute:
+    """Tests for AgentTask.execute() method."""
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_success(
         self,
         mock_popen: MagicMock,
@@ -115,7 +114,7 @@ class TestTaskExecute:
         assert result.exit_code == 0
         assert result.session_id == "test-session-123"
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_timeout(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -129,7 +128,7 @@ class TestTaskExecute:
 
         assert result.outcome == Outcome.TIMEOUT
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_nonzero_exit(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -146,7 +145,7 @@ class TestTaskExecute:
         assert result.outcome == Outcome.CONTAINER_FAILED
         assert result.exit_code == 1
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_without_session_id(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -165,7 +164,7 @@ class TestTaskExecute:
         call_args = mock_popen.call_args[0][0]
         assert "--resume" not in call_args
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_with_session_id(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -192,7 +191,7 @@ class TestTaskExecute:
             == "c7886694-f2cb-4861-ad3c-fbe0964eb4df"
         )
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_model_parameter(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -213,7 +212,7 @@ class TestTaskExecute:
         model_index = call_args.index("--model")
         assert call_args[model_index + 1] == "opus"
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_default_model(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -234,7 +233,7 @@ class TestTaskExecute:
         model_index = call_args.index("--model")
         assert call_args[model_index + 1] == "sonnet"
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_container_env(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -261,7 +260,7 @@ class TestTaskExecute:
         assert "ANTHROPIC_API_KEY=sk-test-key-12345" in call_args
         assert "GH_TOKEN=ghp_testtoken" in call_args
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_empty_container_env(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -288,7 +287,7 @@ class TestTaskExecute:
         for name in ["ANTHROPIC_API_KEY", "GH_TOKEN"]:
             assert name not in env_names
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_mounts(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -321,7 +320,7 @@ class TestTaskExecute:
         assert f"{tmp_path / 'workspace'}:/workspace:rw" in command_str
         assert f"{tmp_path / 'config'}:/config:ro" in command_str
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_with_callback(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -352,7 +351,7 @@ class TestTaskExecute:
         assert events_received[1].event_type == EventType.ASSISTANT
         assert events_received[2].event_type == EventType.RESULT
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_callback_non_json_lines_skipped(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -380,7 +379,7 @@ class TestTaskExecute:
         # Only 2 valid JSON events should be received
         assert len(events_received) == 2
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_uses_image_tag(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -399,7 +398,7 @@ class TestTaskExecute:
         call_args = mock_popen.call_args[0][0]
         assert "airut:custom123" in call_args
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_custom_container_command(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -419,7 +418,7 @@ class TestTaskExecute:
         assert call_args[0] == "docker"
         assert call_args[1] == "run"
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_container_security_options(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -439,7 +438,7 @@ class TestTaskExecute:
         assert "--cap-drop=ALL" in call_args
         assert "--security-opt=no-new-privileges:true" in call_args
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_unexpected_error(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -451,7 +450,7 @@ class TestTaskExecute:
         with pytest.raises(SandboxError, match="execution failed"):
             task.execute("Test prompt")
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_mounts_claude_dir(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -471,7 +470,7 @@ class TestTaskExecute:
         command_str = " ".join(str(a) for a in call_args)
         assert "/root/.claude:rw" in command_str
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_sends_prompt_on_stdin(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -490,7 +489,7 @@ class TestTaskExecute:
         mock_process.stdin.write.assert_called_once_with("My test prompt")
         mock_process.stdin.close.assert_called_once()
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_resume_flag_before_prompt(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -511,11 +510,11 @@ class TestTaskExecute:
         prompt_index = call_args.index("-p")
         assert resume_index < prompt_index
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_clears_process_after_completion(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
-        """execute() clears _process reference after completion."""
+        """execute() clears process tracker after completion."""
         task = _make_task(tmp_path)
 
         mock_process = create_mock_popen(
@@ -527,9 +526,9 @@ class TestTaskExecute:
 
         task.execute("Test prompt")
 
-        assert task._process is None
+        assert task._process_tracker._process is None
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_resource_limits_memory(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -553,7 +552,7 @@ class TestTaskExecute:
         swap_index = call_args.index("--memory-swap")
         assert call_args[swap_index + 1] == "2g"
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_resource_limits_cpus(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -574,7 +573,7 @@ class TestTaskExecute:
         cpus_index = call_args.index("--cpus")
         assert call_args[cpus_index + 1] == "1.5"
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_resource_limits_pids(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -597,7 +596,7 @@ class TestTaskExecute:
         pids_index = call_args.index("--pids-limit")
         assert call_args[pids_index + 1] == "256"
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_no_resource_limit_flags_when_none(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -619,7 +618,7 @@ class TestTaskExecute:
         assert "--cpus" not in call_args
         assert "--pids-limit" not in call_args
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_all_resource_limits(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -647,8 +646,8 @@ class TestTaskExecute:
         assert "--pids-limit" in call_args
 
 
-class TestTaskStop:
-    """Tests for Task.stop() method."""
+class TestAgentTaskStop:
+    """Tests for AgentTask.stop() method."""
 
     def test_stop_no_running_process(self, tmp_path: Path) -> None:
         """stop() returns False when no process is running."""
@@ -664,7 +663,7 @@ class TestTaskStop:
         mock_process.send_signal = MagicMock()
         mock_process.wait = MagicMock(return_value=None)
 
-        task._process = mock_process
+        task._process_tracker._process = mock_process
 
         result = task.stop()
 
@@ -686,7 +685,7 @@ class TestTaskStop:
         )
         mock_process.kill = MagicMock()
 
-        task._process = mock_process
+        task._process_tracker._process = mock_process
 
         result = task.stop()
 
@@ -702,17 +701,17 @@ class TestTaskStop:
         mock_process = MagicMock()
         mock_process.send_signal.side_effect = OSError("Process error")
 
-        task._process = mock_process
+        task._process_tracker._process = mock_process
 
         result = task.stop()
 
         assert result is False
 
 
-class TestTaskWithProxy:
-    """Tests for Task execution with network sandbox."""
+class TestAgentTaskWithProxy:
+    """Tests for AgentTask execution with network sandbox."""
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_execute_starts_and_stops_proxy(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
@@ -758,7 +757,7 @@ class TestTaskWithProxy:
         mock_proxy_manager.start_proxy.assert_called_once()
         mock_proxy_manager.stop_proxy.assert_called_once_with("test-task-id")
 
-    @patch("airut.sandbox.task.subprocess.Popen")
+    @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_proxy_stopped_on_execution_failure(
         self, mock_popen: MagicMock, tmp_path: Path
     ) -> None:

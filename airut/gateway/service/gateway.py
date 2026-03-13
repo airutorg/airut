@@ -56,7 +56,7 @@ from airut.gateway.service.message_processing import (
 )
 from airut.gateway.service.repo_handler import RepoHandler
 from airut.logging import configure_logging
-from airut.sandbox import Sandbox, SandboxConfig, Task
+from airut.sandbox import AgentTask, Sandbox, SandboxConfig
 from airut.version import GitVersionInfo, get_git_version_info
 
 
@@ -537,7 +537,9 @@ class GatewayService:
 
         logger.info("Service stopped")
 
-    def register_active_task(self, conversation_id: str, task: Task) -> None:
+    def register_active_task(
+        self, conversation_id: str, task: AgentTask
+    ) -> None:
         """Register an active task for stop functionality.
 
         The dashboard stop button works by conversation ID, so active
@@ -545,7 +547,7 @@ class GatewayService:
 
         Args:
             conversation_id: Conversation this task belongs to.
-            task: Active sandbox Task.
+            task: Active sandbox AgentTask.
         """
         with self._active_tasks_lock:
             self._active_tasks[conversation_id] = task

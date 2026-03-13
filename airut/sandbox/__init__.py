@@ -3,12 +3,17 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Sandbox library for safe containerized execution of Claude Code.
+"""Sandbox library for safe containerized execution.
 
 The sandbox owns container lifecycle, network isolation, event logging,
 and error detection. Protocol layers (email, Slack, automation) define
 what Claude sees (prompts, repos, files, mounts); the sandbox handles
 how it runs safely.
+
+Two task types are provided:
+
+- ``AgentTask`` -- runs Claude Code in the sandbox.
+- ``CommandTask`` -- runs arbitrary commands in the sandbox.
 """
 
 from airut.sandbox._image import ImageBuildError
@@ -27,12 +32,20 @@ from airut.sandbox.secrets import (
     prepare_secrets,
 )
 from airut.sandbox.task import (
+    AgentTask,
+    CommandTask,
     EventCallback,
     NetworkSandboxConfig,
     SandboxError,
-    Task,
 )
-from airut.sandbox.types import ContainerEnv, ExecutionResult, Mount, Outcome
+from airut.sandbox.types import (
+    CommandResult,
+    ContainerEnv,
+    ExecutionResult,
+    Mount,
+    Outcome,
+    ResourceLimits,
+)
 
 
 __all__ = [
@@ -40,15 +53,18 @@ __all__ = [
     "Sandbox",
     "SandboxConfig",
     # task
-    "Task",
+    "AgentTask",
+    "CommandTask",
     "EventCallback",
     "NetworkSandboxConfig",
     "SandboxError",
     # types
+    "CommandResult",
     "ContainerEnv",
     "ExecutionResult",
     "Mount",
     "Outcome",
+    "ResourceLimits",
     # secrets
     "MaskedSecret",
     "PreparedSecrets",

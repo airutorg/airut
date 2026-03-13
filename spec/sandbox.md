@@ -18,9 +18,9 @@ it runs safely.
    (`airut/conversation/ConversationStore`), not the sandbox.
 3. **Typed interface**: No `Any` in the public API. Proper types for allowlists,
    secrets, environment variables, events, and errors.
-4. **Explicit lifecycle**: `Task` has an explicit lifecycle -- no context
-   managers. `execute()` runs the container; `stop()` interrupts from another
-   thread.
+4. **Explicit lifecycle**: `AgentTask` and `CommandTask` have explicit
+   lifecycles -- no context managers. `execute()` runs the container; `stop()`
+   interrupts from another thread.
 5. **Outcome classification**: The sandbox classifies results into a single
    `Outcome` enum (success and error kinds) so callers can match on outcome
    rather than parsing stdout/stderr strings.
@@ -46,23 +46,24 @@ string that scopes all persistent and runtime state. It groups:
 The sandbox does not know what the execution context ID represents. It could be
 a conversation, a CI run, a one-shot script -- the sandbox treats it as a
 grouping key for resources that should persist across multiple `execute()` calls
-on the same `Task`.
+on the same task.
 
 ### Concept Mapping
 
 Protocol layers map their own concepts to the sandbox's execution context:
 
-| Protocol layer | Protocol concept | Sandbox concept        |
-| -------------- | ---------------- | ---------------------- |
-| Email gateway  | Conversation ID  | `execution_context_id` |
-| CLI            | Run ID           | `execution_context_id` |
-| CI automation  | Job ID           | `execution_context_id` |
+| Protocol layer | Protocol concept | Sandbox concept        | Task type     |
+| -------------- | ---------------- | ---------------------- | ------------- |
+| Email gateway  | Conversation ID  | `execution_context_id` | `AgentTask`   |
+| CLI            | Run ID           | `execution_context_id` | `AgentTask`   |
+| CI automation  | Job ID           | `execution_context_id` | `CommandTask` |
 
 The gateway maps its conversation ID to the sandbox's execution context ID when
 creating a task:
 
 ```
-task = sandbox.create_task(execution_context_id=conv_id, ...)
+task = sandbox.create_task(execution_context_id=conv_id, ...)        # AgentTask
+task = sandbox.create_command_task(execution_context_id=job_id, ...) # CommandTask
 ```
 
 This mapping is the only place where protocol-specific knowledge touches the
@@ -76,16 +77,22 @@ sandbox API. Everything inside the sandbox operates on the opaque
 ```
 Caller (gateway, CLI, automation)
   |
-  +- Sandbox                    # Top-level facade
-  |    +- startup/shutdown      # Shared infrastructure
-  |    +- ensure_image()        # Two-layer image build
-  |    +- create_task()         # Per-execution task
+  +- Sandbox                        # Top-level facade
+  |    +- startup/shutdown          # Shared infrastructure
+  |    +- ensure_image()            # Two-layer image build
+  |    +- create_task()             # Per-execution AgentTask
+  |    +- create_command_task()     # Per-execution CommandTask
   |
-  +- Task                       # Per-execution
-       +- execute()             # Proxy start -> container run -> proxy stop
-       +- stop()                # Interrupt from another thread
-       +- event_log             # Append-only event log (events.jsonl)
-       +- network_log           # Read network activity
+  +- AgentTask                      # Claude Code execution
+  |    +- execute(prompt, ...)      # Proxy start -> container run -> proxy stop
+  |    +- stop()                    # Interrupt from another thread
+  |    +- event_log                 # Append-only event log (events.jsonl)
+  |    +- network_log               # Read network activity
+  |
+  +- CommandTask                    # Arbitrary command execution
+       +- execute(command)          # Proxy start -> container run -> proxy stop
+       +- stop()                    # Interrupt from another thread
+       +- network_log               # Read network activity
 ```
 
 ### Lifecycle Layers
@@ -101,28 +108,32 @@ Caller (gateway, CLI, automation)
 
 - Internal network (`airut-conv-{id}`) routing container traffic through proxy
 - Proxy container enforcing allowlist
-- Claude Code container with mounts, env, and Claude session state
+- Container with mounts, env, and (for AgentTask) Claude session state
 
 ### Owned State
 
 The sandbox creates and manages these files. Callers specify where to place them
-via `execution_context_dir` and `network_log_dir` in `create_task()`:
+via `execution_context_dir` and `network_log_dir` in `create_task()` /
+`create_command_task()`:
 
-| File                  | Purpose                                                     |
-| --------------------- | ----------------------------------------------------------- |
-| `events.jsonl`        | Append-only event log of Claude streaming output (EventLog) |
-| `claude/`             | Claude Code session state (mounted at `/root/.claude`)      |
-| `network-sandbox.log` | Proxy request log (allowed/blocked requests)                |
+| File                  | Task type   | Purpose                                                     |
+| --------------------- | ----------- | ----------------------------------------------------------- |
+| `events.jsonl`        | `AgentTask` | Append-only event log of Claude streaming output (EventLog) |
+| `claude/`             | `AgentTask` | Claude Code session state (mounted at `/root/.claude`)      |
+| `network-sandbox.log` | Both        | Proxy request log (allowed/blocked requests)                |
 
 The `claude/` subdirectory is created automatically inside
 `execution_context_dir` and mounted by the sandbox. It must **not** appear in
-the caller's mounts list.
+the caller's mounts list. `CommandTask` does not create `events.jsonl` or
+`claude/`.
 
 Conversation metadata (`conversation.json`) is **not** owned by the sandbox. It
 is managed by `airut/conversation/ConversationStore`, which the protocol layer
 (e.g., the email gateway) is responsible for calling.
 
 ## Execution Flow
+
+### AgentTask
 
 ```
 task.execute(prompt, session_id=..., model=..., on_event=...)
@@ -146,11 +157,31 @@ task.execute(prompt, session_id=..., model=..., on_event=...)
   +- Return ExecutionResult
 ```
 
+### CommandTask
+
+```
+task.execute(["make", "test"])
+  |
+  +- Start proxy (if network_sandbox configured)
+  |
+  +- Run container with command
+  |    +- --cap-drop=ALL, --security-opt=no-new-privileges:true
+  |    +- Apply resource limits (--memory, --cpus, --pids-limit)
+  |    +- Stream stdout to sys.stdout and on_output callback
+  |    +- Pass stderr through to parent process
+  |    +- Wait with timeout (if configured)
+  |
+  +- Stop proxy (always, even on failure)
+  |
+  +- Return CommandResult
+```
+
 ## Resource Limits
 
-Container resource limits are configured via `ResourceLimits` and passed through
-to podman flags. All limits are optional — when a field is `None`, the
-corresponding flag is not passed and no limit is enforced.
+Container resource limits are configured via `ResourceLimits`
+(`airut/sandbox/types.py`) and passed through to podman flags. Both `AgentTask`
+and `CommandTask` accept resource limits. All limits are optional -- when a
+field is `None`, the corresponding flag is not passed and no limit is enforced.
 
 | ResourceLimits field | Podman flags                 | Effect                     |
 | -------------------- | ---------------------------- | -------------------------- |
@@ -194,6 +225,20 @@ RHEL 9+.
 The sandbox never raises for expected execution failures. Only `SandboxError`
 (and subclasses `ImageBuildError`, `ProxyError`) are raised, for unexpected
 infrastructure failures.
+
+## CommandResult
+
+`CommandTask.execute()` returns `CommandResult` instead of `ExecutionResult`. It
+has no Claude-specific fields (no outcome classification, no session ID, no
+events):
+
+| Field         | Type   | Description                                 |
+| ------------- | ------ | ------------------------------------------- |
+| `exit_code`   | `int`  | Process exit code                           |
+| `stdout`      | `str`  | Raw stdout from the container               |
+| `stderr`      | `str`  | Raw stderr from the container               |
+| `duration_ms` | `int`  | Execution duration in milliseconds          |
+| `timed_out`   | `bool` | Whether the container was killed by timeout |
 
 ## Event Log
 
