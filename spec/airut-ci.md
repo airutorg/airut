@@ -27,9 +27,9 @@ inside this sandbox gives CI the same security guarantees as agent execution.
 2. **Independent service**: Airut CI is configured, deployed, and managed
    separately from the gateway. Separate config file, separate systemd unit,
    separate process. Shares the `airut` Python package.
-3. **Trusted command source**: The CI command to execute comes from the main
-   branch, not from the PR being tested. The agent cannot tamper with what CI
-   runs.
+3. **Trusted command source**: The CI command to execute comes from the server
+   configuration, not from the PR being tested. The agent cannot tamper with
+   what CI runs.
 4. **Minimal scope**: No dashboard in the initial implementation. GitHub commit
    statuses provide visibility. Dashboard added in a later stage.
 
@@ -74,7 +74,7 @@ Executor
   +- Update git mirror
   +- Set GitHub commit status → "pending"
   +- Checkout workspace at target SHA
-  +- Read CI command from main branch config
+  +- Read CI command from server config
   +- Start sandbox (container + proxy + secrets)
   +- Run command, capture stdout/stderr/exit code
   +- Set GitHub commit status → "success" or "failure"
@@ -90,6 +90,10 @@ command execution. Currently the sandbox is coupled to Claude Code at the
 execution layer (command construction, output parsing, result types). The
 infrastructure layer (container lifecycle, networking, resource limits) is
 already generic.
+
+**Spec cross-references**: Stage 1 changes require updating `spec/sandbox.md`
+(Task rename, new CommandTask) and `spec/image.md` (parameterized entrypoint
+contract). These updates are included in the Stage 1 implementation.
 
 #### 1.1 Extract `ResourceLimits` from Gateway Config
 
@@ -113,15 +117,14 @@ The function is parameterized on the command to run (instead of hardcoding
 
 ```
 _run_container(
-    container_command: str,
+    container_runtime: str,             # "podman" or "docker"
     image_tag: str,
-    mounts: list[Mount],
+    mounts: list[Mount],                # all mounts (caller + task-specific)
     env: ContainerEnv,
     resource_limits: ResourceLimits,
     network_args: list[str],
-    extra_mounts: list[tuple[Path, str]],   # e.g., claude/ dir
-    command: list[str],                      # e.g., ["claude", ...] or ["uv", "run", ...]
-    stdin_data: str | None,                  # prompt for Claude, None for CI
+    command: list[str],                 # e.g., ["claude", ...] or ["uv", "run", ...]
+    stdin_data: str | None,             # prompt for Claude, None for CI
     on_stdout_line: Callable[[str], None] | None,
     timeout: int | None,
     process_tracker: _ProcessTracker,
@@ -131,6 +134,10 @@ _run_container(
 `_RawResult` contains only generic fields: `stdout`, `stderr`, `exit_code`,
 `duration_ms`, `timed_out`.
 
+Each task class is responsible for assembling its own mounts list (including
+task-specific mounts like the `claude/` directory for `AgentTask`) and passing
+the complete list to `_run_container()`.
+
 #### 1.3 Refactor Task into AgentTask
 
 Rename `Task` to `AgentTask`. It wraps `_run_container()` and adds Claude-
@@ -138,9 +145,9 @@ specific behavior:
 
 - Constructs the `["claude", "--resume", ..., "--model", ..., "-p", "-", ...]`
   command
+- Adds the `claude/` session state directory to the mounts list
 - Parses stdout lines as `StreamEvent` via `parse_event()`
 - Appends events to `EventLog`
-- Manages the `claude/` session state directory
 - Calls `build_execution_result()` to produce `ExecutionResult`
 
 Public API remains the same:
@@ -149,6 +156,10 @@ Public API remains the same:
 AgentTask.execute(prompt, *, session_id, model, on_event) -> ExecutionResult
 AgentTask.stop() -> bool
 ```
+
+All existing tests in `tests/sandbox/` must be updated to use `AgentTask` and
+`create_task()` (which now returns `AgentTask`). New tests for `CommandTask` and
+`create_command_task()` are added alongside.
 
 #### 1.4 Add CommandTask
 
@@ -165,7 +176,7 @@ CommandTask(
     network_log_dir: Path | None,
     network_sandbox: NetworkSandboxConfig | None,
     resource_limits: ResourceLimits,
-    container_command: str,
+    container_runtime: str,
     proxy_manager: ProxyManager | None,
 )
 
@@ -211,11 +222,13 @@ get_entrypoint_content(command: str = "claude") -> bytes
 ```
 
 For agent tasks, continues to use `exec claude "$@"`. For command tasks, uses
-`exec "$@"` (pass-through to whatever command is specified).
+`exec "$@"` (pass-through to whatever command is specified). Both entrypoints
+retain `IS_SANDBOX=1` and CA certificate trust setup.
 
-`Sandbox.ensure_image()` accepts an optional `entrypoint_command` parameter. The
-overlay image hash incorporates the entrypoint content, so different entrypoints
-produce different overlay images (correctly cached separately).
+`Sandbox.ensure_image()` accepts an optional `entrypoint_command` parameter,
+which flows through to `build_overlay_image()`. The overlay image hash
+incorporates the entrypoint content, so different entrypoints produce different
+overlay images (correctly cached separately).
 
 #### 1.6 Update Sandbox.create_task()
 
@@ -259,6 +272,12 @@ Both services use `GitMirrorCache` for bare repo clones. The git mirror module
 is already standalone -- no changes needed. Both services instantiate their own
 `GitMirrorCache` instances.
 
+The CI service needs to clone workspaces at arbitrary SHAs (not just the default
+branch). `GitMirrorCache.clone_from_mirror()` currently resets to
+`origin/{default_branch}`. Add a `clone_at_ref()` method (or a `ref` parameter
+to `clone_from_mirror()`) that performs `git checkout <sha>` after cloning. The
+mirror must be fetched before cloning to ensure the target SHA is available.
+
 #### 2.4 Workspace Preparation
 
 Both services need to clone a workspace from the mirror at a specific ref.
@@ -285,16 +304,18 @@ resource_limits:             # server-wide ceilings (optional)
   timeout: 900
   memory: "8g"
 
+max_concurrent_jobs: 2       # thread pool size
+
 repos:
   my-project:
     git_url: "https://github.com/org/my-project.git"
     webhook_secret: !env WEBHOOK_SECRET
 
-    # CI command (read from main, not from PR branch)
+    # CI command -- specified in server config, executed in container
     command: ["uv", "run", "scripts/ci.py"]
 
-    # GitHub API token for commit status updates
-    # Needs: repo:status (or broader repo scope)
+    # GitHub API token for commit status updates and label checks
+    # Needs: repo:status (or broader repo scope for private repos)
     github_token: !env GH_TOKEN
 
     # Trigger rules
@@ -310,6 +331,13 @@ repos:
         value: !env GH_TOKEN
         scopes: ["api.github.com"]
         headers: ["Authorization"]
+
+    # Signing credentials for AWS SigV4 re-signing (optional)
+    # Same schema as gateway masked_secrets signing_credentials
+    # signing_credentials:
+    #   AWS_PROD:
+    #     type: aws-sigv4
+    #     ...
 
     # Protected files -- CI skipped if modified without approval
     integrity:
@@ -333,13 +361,18 @@ repos:
 HTTP server that receives GitHub webhook events. Responsibilities:
 
 - **HMAC validation**: Verify `X-Hub-Signature-256` header against
-  `webhook_secret`. Reject requests that fail validation.
-- **Event dispatch**: Route `pull_request` and `push` events to the executor.
-  Ignore other event types.
-- **Repo routing**: Match webhook to configured repo by repository full name
+  `webhook_secret` using constant-time comparison (`hmac.compare_digest()`).
+  Validation uses the raw request body (via `request.get_data()`) before
+  Werkzeug parses it. Reject requests that fail validation.
+- **Event dispatch**: Route `pull_request` events to the executor. Ignore other
+  event types.
+- **Repo routing**: Match webhook to configured repo by `repository.full_name`
   from the payload.
 - **Idempotency**: Track `X-GitHub-Delivery` header to deduplicate redelivered
-  webhooks.
+  webhooks. Delivery IDs are stored in a bounded set with a 1-hour TTL
+  (sufficient for GitHub's retry window). Deduplication state is in-memory and
+  does not survive service restarts (acceptable -- a redelivered webhook after
+  restart triggers a new job, which is harmless due to cancel-in-progress).
 
 The webhook server is a standalone WSGI application (Werkzeug), similar to the
 gateway's dashboard server. It runs in a background thread.
@@ -350,15 +383,17 @@ The executor manages CI job lifecycle:
 
 01. **Parse trigger**: Extract repo, SHA, PR number (if applicable), branch from
     webhook payload.
-02. **Integrity check**: Diff the PR against main. If any file matching
-    `integrity.protected_patterns` is modified, check if the PR has the
-    `integrity.approval_label`. If not, set commit status to "failure" with
-    description "CI requires approval: protected files modified" and skip
-    execution.
-03. **Update mirror**: Fetch latest from origin.
-04. **Prepare workspace**: Clone from mirror at the target SHA.
-05. **Read CI command**: The command comes from the CI service config (which
-    references what's in main). The workspace contains the PR code being tested.
+02. **Integrity check**: Extract the list of changed files and labels from the
+    `pull_request` webhook payload (both are included in the event). If any file
+    matches `integrity.protected_patterns` and the PR does not have the
+    `integrity.approval_label`, set commit status to "failure" with description
+    "CI requires approval: protected files modified" and skip execution.
+03. **Update mirror**: Fetch latest from origin. On failure, set commit status
+    to "error" with description "Git fetch failed" and abort the job.
+04. **Prepare workspace**: Clone from mirror at the target SHA. The mirror must
+    have the SHA after the fetch in step 3.
+05. **Read CI command**: The command is specified in the CI service's server
+    config. The workspace contains the PR code being tested.
 06. **Prepare sandbox**: Build/reuse container image from `.airut/container/`
     (read from main branch mirror). Resolve secrets and create network sandbox
     config.
@@ -383,7 +418,8 @@ CI job for that PR:
 #### 3.5 Concurrency
 
 - Thread pool with configurable `max_concurrent_jobs` (default: 2)
-- Jobs exceeding the limit are queued
+- Jobs exceeding the limit are queued (bounded queue, default 50; excess jobs
+  rejected with commit status "error: CI queue full")
 - Per-repo fair scheduling: round-robin across repos when multiple jobs are
   queued
 
@@ -402,7 +438,8 @@ POST /repos/{owner}/{repo}/statuses/{sha}
 ```
 
 The `github_token` in config needs `repo:status` scope (or `repo` for private
-repos).
+repos). For private repos, the token also needs read access for label checking
+in the integrity check.
 
 The `target_url` is omitted in Stage 3 (no dashboard). Stage 4 adds it.
 
@@ -418,10 +455,32 @@ CI stdout/stderr is stored in the execution context directory:
 └── job.json            # Job metadata (SHA, PR, status, duration, timestamps)
 ```
 
-Retention: configurable, default 7 days. A periodic cleanup thread removes old
-job directories.
+Retention: configurable (`log_retention_days`, default 7). A cleanup thread runs
+every hour and removes job directories older than the retention period. Cleanup
+skips directories for jobs that are currently running.
 
-#### 3.8 CLI
+#### 3.8 Service Lifecycle
+
+**Startup sequence:**
+
+1. Load and validate configuration
+2. Initialize git mirrors for all configured repos
+3. Start sandbox (proxy image, egress network named `airut-ci-egress`)
+4. Start webhook server (begins accepting requests)
+5. Log "CI service ready"
+
+The webhook server starts accepting requests only after sandbox initialization
+is complete. Webhooks arriving during startup receive HTTP 503.
+
+**Graceful shutdown** (SIGTERM/SIGINT):
+
+1. Stop accepting new webhooks (server returns 503)
+2. Wait for in-flight jobs to complete (configurable timeout, default 60s)
+3. If timeout exceeded, stop remaining jobs (SIGTERM → SIGKILL)
+4. Shut down sandbox (remove egress network)
+5. Exit
+
+#### 3.9 CLI
 
 ```
 airut-ci run-service [--config PATH]     # Start CI service
@@ -435,19 +494,19 @@ airut-ci uninstall-service               # Remove systemd unit
 #### Stage 4a: Shared Dashboard Components
 
 Before building the CI dashboard, extract reusable components from the gateway
-dashboard:
+dashboard into `airut/dashboard/shared/`:
 
 - **VersionClock + VersionedStore** (`dashboard/versioned.py`): Already generic.
   No changes needed.
 - **SSE infrastructure** (`dashboard/sse.py`): SSE message formatting, state
   stream generator, connection manager. Already generic.
 - **WSGI application base**: Security headers, ETag support, health endpoint
-  pattern. Extract into a shared base class or utility module.
+  pattern. Extract into `airut/dashboard/shared/wsgi.py`.
 - **Network log viewer**: The gateway dashboard's network log viewer
   (`/conversation/{id}/network` and SSE stream) can be reused for CI jobs. The
   `NetworkLog` class is already in the sandbox library.
 - **HTML rendering utilities**: Shared CSS, page layout template, card
-  components.
+  components. Extract into `airut/dashboard/shared/html.py`.
 
 Components that remain gateway-specific:
 
@@ -530,15 +589,20 @@ grant different access than agent secrets (e.g., deploy keys, registry tokens).
 
 ### Mitigation
 
-The CI command itself comes from the CI service's server configuration, which
-references a command that exists in the main branch. The workspace is checked
-out at the PR's SHA (the code being tested), but what command executes is
-controlled by the server operator, not the PR author.
+The CI command itself comes from the CI service's server configuration (e.g.,
+`command: ["uv", "run", "scripts/ci.py"]`). The workspace is checked out at the
+PR's SHA (the code being tested), but what command executes is controlled by the
+server operator, not the PR author.
 
 The container image (`.airut/container/Dockerfile`) and network allowlist
 (`.airut/network-allowlist.yaml`) are read from the main branch mirror, not from
 the PR branch. This is the same trust model the gateway already uses for network
 allowlists.
+
+Note: if a PR modifies `.airut/network-allowlist.yaml` and the approval label is
+granted, CI still runs with the **main branch** allowlist. The PR's modified
+allowlist only takes effect after merging. This is intentional -- the sandbox
+constraints for CI are always determined by what is trusted on main.
 
 ### Protected File Integrity
 
@@ -570,13 +634,14 @@ PR modifies protected file?
 CI jobs may need different secrets than agent tasks. The two services have
 completely independent secret configurations:
 
-| Concern           | Gateway                         | CI                              |
-| ----------------- | ------------------------------- | ------------------------------- |
-| Config file       | `~/.config/airut/airut.yaml`    | `~/.config/airut/airut-ci.yaml` |
-| Secrets           | Per-repo in gateway config      | Per-repo in CI config           |
-| Masked secrets    | Per-repo in gateway config      | Per-repo in CI config           |
-| Network allowlist | `.airut/network-allowlist.yaml` | Same (from main branch)         |
-| Container image   | `.airut/container/Dockerfile`   | Same (from main branch)         |
+| Concern             | Gateway                         | CI                              |
+| ------------------- | ------------------------------- | ------------------------------- |
+| Config file         | `~/.config/airut/airut.yaml`    | `~/.config/airut/airut-ci.yaml` |
+| Secrets             | Per-repo in gateway config      | Per-repo in CI config           |
+| Masked secrets      | Per-repo in gateway config      | Per-repo in CI config           |
+| Signing credentials | Per-repo in gateway config      | Per-repo in CI config           |
+| Network allowlist   | `.airut/network-allowlist.yaml` | Same (from main branch)         |
+| Container image     | `.airut/container/Dockerfile`   | Same (from main branch)         |
 
 This clean separation means:
 
@@ -590,14 +655,15 @@ This clean separation means:
 CI and gateway run as separate processes. Their sandbox instances are
 independent:
 
-| Resource            | Sharing                                         |
-| ------------------- | ----------------------------------------------- |
-| Proxy image         | Both build the same image; podman deduplicates  |
-| Egress network      | Separate instances (different names)            |
-| Container images    | Shared via podman image cache (same Dockerfile) |
-| Thread pools        | Separate (independent concurrency limits)       |
-| Git mirrors         | Separate instances (separate cache directories) |
-| Storage directories | Separate directory trees                        |
+| Resource            | Sharing                                               |
+| ------------------- | ----------------------------------------------------- |
+| Proxy image         | Both build the same image; podman deduplicates        |
+| Egress network      | Separate: `airut-egress` (gateway), `airut-ci-egress` |
+| Container images    | Repo images shared via podman cache; overlay images   |
+|                     | differ (different entrypoints)                        |
+| Thread pools        | Separate (independent concurrency limits)             |
+| Git mirrors         | Separate instances (separate cache directories)       |
+| Storage directories | Separate directory trees                              |
 
 This avoids coordination between the two services. The only shared state is the
 podman image cache, which is naturally deduplicated by content hash.
@@ -616,3 +682,6 @@ podman image cache, which is naturally deduplicated by content hash.
 - **Re-run from dashboard**: The dashboard is read-only monitoring. Re-runs are
   triggered by pushing to the PR or redelivering the webhook from GitHub.
 - **Webhook endpoint for non-GitHub sources**: Deferred to future work.
+- **Fork PRs**: Fork commits are not available in the main repo mirror. Fork PRs
+  require fetching from the fork remote, which introduces additional trust and
+  configuration concerns. Deferred to future work.
