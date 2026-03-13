@@ -1068,6 +1068,29 @@ def _actions_specific() -> str:
         .toggle-icon {
             font-size: 12px;
             color: #666;
+        }
+        .subagent-event {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            padding-left: 8px;
+            border-left: 2px solid #666;
+        }
+        .subagent-badge {
+            flex: 0 1 auto;
+            max-width: min(15%, 140px);
+            font-size: 10px;
+            color: #999;
+            font-family: "SF Mono", Consolas, monospace;
+            /* Truncate from the start so last chars stay visible */
+            direction: rtl;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .subagent-content {
+            flex: 1;
+            min-width: 0;
         }"""
 
 

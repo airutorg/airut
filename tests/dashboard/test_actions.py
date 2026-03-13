@@ -1079,6 +1079,356 @@ class TestActionsPageE2E:
         assert "reply-section" in html
 
 
+class TestSubagentRendering:
+    """Tests for subagent event annotation rendering."""
+
+    def test_subagent_event_wrapped(self, harness: DashboardHarness) -> None:
+        """Test event with parent_tool_use_id renders with subagent wrapper."""
+        harness.add_events(
+            {
+                "type": "assistant",
+                "parent_tool_use_id": "toolu_01UyWn7Tabcdef",
+                "message": {
+                    "content": [{"type": "text", "text": "Subagent work"}]
+                },
+            },
+            result_event(),
+        )
+
+        html = harness.get_html("/conversation/abc12345/actions")
+        assert "subagent-event" in html
+        assert "subagent-badge" in html
+        assert "Subagent work" in html
+
+    def test_root_event_no_wrapper(self, harness: DashboardHarness) -> None:
+        """Test event without parent_tool_use_id has no subagent wrapper."""
+        from airut.dashboard.views.actions import render_single_event
+        from tests.dashboard.conftest import parse_events
+
+        events = parse_events(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": "Root agent work"}]
+                },
+            },
+        )
+        event_html = render_single_event(events[0])
+        assert "subagent-event" not in event_html
+        assert "subagent-badge" not in event_html
+        assert "Root agent work" in event_html
+
+    def test_task_tool_shows_subagent_type_and_description(
+        self, harness: DashboardHarness
+    ) -> None:
+        """Test Task tool_use shows subagent_type, description, and model."""
+        harness.add_events(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "tu_task_1",
+                            "name": "Task",
+                            "input": {
+                                "subagent_type": "Explore",
+                                "description": "Search the codebase",
+                                "model": "claude-sonnet-4-20250514",
+                                "prompt": "Find all uses of foo",
+                            },
+                        }
+                    ]
+                },
+            },
+            result_event(),
+        )
+
+        html = harness.get_html("/conversation/abc12345/actions")
+        assert "Explore" in html
+        assert "Search the codebase" in html
+        assert "claude-sonnet-4-20250514" in html
+        assert "Find all uses of foo" in html
+
+    def test_task_tool_truncates_long_prompt(
+        self, harness: DashboardHarness
+    ) -> None:
+        """Test Task tool_use truncates long prompts."""
+        long_prompt = "x" * 300
+        harness.add_events(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "tu_task_2",
+                            "name": "Task",
+                            "input": {
+                                "description": "Long task",
+                                "prompt": long_prompt,
+                            },
+                        }
+                    ]
+                },
+            },
+            result_event(),
+        )
+
+        html = harness.get_html("/conversation/abc12345/actions")
+        assert "..." in html
+        # Should not contain the full 300-char prompt
+        assert long_prompt not in html
+
+    def test_subagent_badge_shows_full_id(
+        self, harness: DashboardHarness
+    ) -> None:
+        """Test subagent badge contains the full parent_tool_use_id.
+
+        CSS handles truncation from the left so last chars stay visible.
+        """
+        harness.add_events(
+            {
+                "type": "assistant",
+                "parent_tool_use_id": "toolu_01ABCDEF123456",
+                "message": {"content": [{"type": "text", "text": "Sub work"}]},
+            },
+            result_event(),
+        )
+
+        html = harness.get_html("/conversation/abc12345/actions")
+        # Full ID is in the badge text (CSS truncates visually)
+        assert "toolu_01ABCDEF123456" in html
+
+    def test_subagent_label_from_task_tool_use(
+        self, harness: DashboardHarness
+    ) -> None:
+        """Test subagent label is built from Task tool_use blocks."""
+        harness.add_events(
+            # Parent agent launches Task with subagent_type
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_01ExploreAABBCC",
+                            "name": "Task",
+                            "input": {
+                                "subagent_type": "Explore",
+                                "description": "Search code",
+                            },
+                        }
+                    ]
+                },
+            },
+            # Subagent event referencing the Task tool_use_id
+            {
+                "type": "assistant",
+                "parent_tool_use_id": "toolu_01ExploreAABBCC",
+                "message": {
+                    "content": [{"type": "text", "text": "Searching..."}]
+                },
+            },
+            result_event(),
+        )
+
+        html = harness.get_html("/conversation/abc12345/actions")
+        # Badge contains full label:id (CSS truncates visually)
+        assert "Explore:toolu_01ExploreAABBCC" in html
+
+    def test_multiple_subagents_different_colors(
+        self, harness: DashboardHarness
+    ) -> None:
+        """Test multiple subagents get deterministic colors from palette."""
+        from airut.dashboard.views.actions import (
+            _SUBAGENT_COLORS,
+            _subagent_color,
+        )
+
+        color_a = _subagent_color("toolu_aaaaaaaa")
+        color_b = _subagent_color("toolu_bbbbbbbb")
+        # Colors must be valid entries from the palette
+        assert color_a in _SUBAGENT_COLORS
+        assert color_b in _SUBAGENT_COLORS
+
+    def test_subagent_css_in_styles(self, harness: DashboardHarness) -> None:
+        """Test subagent CSS classes are present in the page styles."""
+        harness.add_events(result_event())
+
+        html = harness.get_html("/conversation/abc12345/actions")
+        assert ".subagent-event" in html
+        assert ".subagent-badge" in html
+        assert ".subagent-content" in html
+
+    def test_subagent_content_in_flex_layout(
+        self, harness: DashboardHarness
+    ) -> None:
+        """Test subagent event uses flex layout with badge and content."""
+        harness.add_events(
+            {
+                "type": "assistant",
+                "parent_tool_use_id": "toolu_01PQ5mb8tUsfHXFTGMUyWn7T",
+                "message": {
+                    "content": [{"type": "text", "text": "Working on it"}]
+                },
+            },
+            result_event(),
+        )
+
+        html = harness.get_html("/conversation/abc12345/actions")
+        assert "subagent-content" in html
+        assert "subagent-badge" in html
+
+    def test_realistic_subagent_lifecycle(
+        self, harness: DashboardHarness
+    ) -> None:
+        """Test full subagent lifecycle from real event stream data.
+
+        Exercises the complete flow: parent launches Task, subagent events
+        arrive with parent_tool_use_id, Task result returns to parent.
+        Event structure derived from actual Claude streaming output.
+        """
+        task_id = "toolu_01PQ5mb8tUsfHXFTGMUyWn7T"
+        harness.add_events(
+            # Parent: system init
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "sess_abc",
+                "model": "claude-opus-4-6",
+                "tools": ["Task", "Bash", "Read"],
+            },
+            # Parent: assistant launches Task
+            {
+                "type": "assistant",
+                "parent_tool_use_id": None,
+                "session_id": "sess_abc",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": task_id,
+                            "name": "Task",
+                            "input": {
+                                "description": "Summarize repo size",
+                                "subagent_type": "Explore",
+                                "prompt": "Summarize the repository.",
+                            },
+                        }
+                    ]
+                },
+            },
+            # Subagent: initial prompt forwarded
+            {
+                "type": "user",
+                "parent_tool_use_id": task_id,
+                "session_id": "sess_abc",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Summarize the repository.",
+                        }
+                    ]
+                },
+            },
+            # Subagent: tool call
+            {
+                "type": "assistant",
+                "parent_tool_use_id": task_id,
+                "session_id": "sess_abc",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_sub_bash_1",
+                            "name": "Bash",
+                            "input": {
+                                "command": "find /workspace -type f | wc -l",
+                                "description": "Count files",
+                            },
+                        }
+                    ]
+                },
+            },
+            # Subagent: tool result
+            {
+                "type": "user",
+                "parent_tool_use_id": task_id,
+                "session_id": "sess_abc",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_sub_bash_1",
+                            "content": "289",
+                            "is_error": False,
+                        }
+                    ]
+                },
+            },
+            # Parent: Task tool result (subagent complete)
+            {
+                "type": "user",
+                "parent_tool_use_id": None,
+                "session_id": "sess_abc",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": task_id,
+                            "content": "Repository has 289 files.",
+                        }
+                    ]
+                },
+            },
+            # Parent: final assistant text
+            {
+                "type": "assistant",
+                "parent_tool_use_id": None,
+                "session_id": "sess_abc",
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "The repo has 289 files."}
+                    ]
+                },
+            },
+            result_event(
+                duration_ms=35976,
+                total_cost_usd=0.15,
+                num_turns=2,
+            ),
+        )
+
+        html = harness.get_html("/conversation/abc12345/actions")
+
+        # Parent events should not be wrapped
+        assert "claude-opus-4-6" in html  # system init model
+        assert "The repo has 289 files." in html  # parent text
+
+        # Task launch should show subagent details
+        assert "Explore" in html  # subagent_type
+        assert "Summarize repo size" in html  # description
+
+        # Subagent events should be wrapped with badge
+        assert "subagent-event" in html
+        assert "subagent-badge" in html
+        # Badge should contain the full tool_use_id for CSS truncation
+        assert task_id in html
+
+        # Subagent tool calls render inside the wrapper
+        assert "Count files" in html  # Bash description
+        assert "289" in html  # tool result
+
+        # Task result (parent context) — not wrapped
+        assert "Repository has 289 files." in html
+
+        # Result summary
+        assert "result:" in html
+        assert "35976ms" in html
+
+
 class TestSSEServerSideRendering:
     """Tests for server-side HTML rendering in SSE streams.
 

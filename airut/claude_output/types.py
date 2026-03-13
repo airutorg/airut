@@ -90,10 +90,15 @@ class StreamEvent:
     """A single parsed event from Claude's streaming JSON output.
 
     Core fields (``event_type``, ``subtype``, ``session_id``,
-    ``content_blocks``) are parsed into typed attributes.
+    ``content_blocks``, ``parent_tool_use_id``) are parsed into typed
+    attributes.
 
     The ``raw`` field preserves the original JSON line for session file
     persistence and JSON API serialization.
+
+    The ``parent_tool_use_id`` field identifies events emitted by a
+    subagent (Task tool). When non-empty, the event belongs to the
+    subagent spawned by the tool_use block with that ID.
 
     The ``extra`` dict carries event-type-specific fields not captured
     by the core attributes:
@@ -109,6 +114,7 @@ class StreamEvent:
     content_blocks: tuple[ContentBlock, ...]
     raw: str
     extra: dict[str, Any] = dataclass_field(default_factory=dict)
+    parent_tool_use_id: str = ""
 
 
 @dataclass(frozen=True)
