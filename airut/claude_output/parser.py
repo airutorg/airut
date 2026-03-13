@@ -110,7 +110,7 @@ def parse_event_dict(raw_obj: dict[str, Any]) -> StreamEvent | None:
     return _parse_event(raw_obj, json.dumps(raw_obj, separators=(",", ":")))
 
 
-_CORE_KEYS = {"type", "subtype", "session_id", "message"}
+_CORE_KEYS = {"type", "subtype", "session_id", "message", "parent_tool_use_id"}
 
 
 def _parse_event(raw_obj: dict[str, Any], raw_line: str) -> StreamEvent | None:
@@ -135,6 +135,10 @@ def _parse_event(raw_obj: dict[str, Any], raw_line: str) -> StreamEvent | None:
 
     content_blocks = _extract_content_blocks(raw_obj, event_type)
 
+    parent_tool_use_id = raw_obj.get("parent_tool_use_id") or ""
+    if not isinstance(parent_tool_use_id, str):
+        parent_tool_use_id = ""
+
     # For event types that parse "message" into content_blocks, exclude it
     # from extra. For unknown events, preserve all non-core keys including
     # "message" since it isn't structurally parsed.
@@ -156,6 +160,7 @@ def _parse_event(raw_obj: dict[str, Any], raw_line: str) -> StreamEvent | None:
         content_blocks=tuple(content_blocks),
         raw=raw_line,
         extra=extra,
+        parent_tool_use_id=parent_tool_use_id,
     )
 
 

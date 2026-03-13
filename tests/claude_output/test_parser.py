@@ -301,6 +301,55 @@ class TestParseStreamEvents:
         events = parse_stream_events(stdout)
         assert events[0].subtype == ""
 
+    def test_parent_tool_use_id_set(self) -> None:
+        event = {
+            "type": "assistant",
+            "parent_tool_use_id": "toolu_abc123",
+            "message": {"content": [{"type": "text", "text": "Working"}]},
+        }
+        stdout = json.dumps(event)
+        events = parse_stream_events(stdout)
+        assert events[0].parent_tool_use_id == "toolu_abc123"
+
+    def test_parent_tool_use_id_null(self) -> None:
+        event = {
+            "type": "assistant",
+            "parent_tool_use_id": None,
+            "message": {"content": [{"type": "text", "text": "Root"}]},
+        }
+        stdout = json.dumps(event)
+        events = parse_stream_events(stdout)
+        assert events[0].parent_tool_use_id == ""
+
+    def test_parent_tool_use_id_missing(self) -> None:
+        event = {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "No parent"}]},
+        }
+        stdout = json.dumps(event)
+        events = parse_stream_events(stdout)
+        assert events[0].parent_tool_use_id == ""
+
+    def test_parent_tool_use_id_excluded_from_extra(self) -> None:
+        event = {
+            "type": "assistant",
+            "parent_tool_use_id": "toolu_xyz789",
+            "message": {"content": [{"type": "text", "text": "Test"}]},
+        }
+        stdout = json.dumps(event)
+        events = parse_stream_events(stdout)
+        assert "parent_tool_use_id" not in events[0].extra
+
+    def test_parent_tool_use_id_non_string_defaults(self) -> None:
+        event = {
+            "type": "assistant",
+            "parent_tool_use_id": 12345,
+            "message": {"content": [{"type": "text", "text": "Bad type"}]},
+        }
+        stdout = json.dumps(event)
+        events = parse_stream_events(stdout)
+        assert events[0].parent_tool_use_id == ""
+
 
 class TestParseEvent:
     def test_valid_event(self) -> None:

@@ -30,6 +30,16 @@ from airut.dashboard.views.styles import actions_styles
 # Maximum lines shown for edit diffs and tool results before truncation.
 _EDIT_MAX_LINES = 20
 
+# Fixed palette of distinguishable colors for subagent borders/badges.
+_SUBAGENT_COLORS = [
+    "#e06c75",  # red
+    "#61afef",  # blue
+    "#98c379",  # green
+    "#e5c07b",  # yellow
+    "#c678dd",  # purple
+    "#56b6c2",  # cyan
+]
+
 
 def render_actions_page(
     task: TaskState,
@@ -312,8 +322,51 @@ def render_actions_timeline(
     return "".join(sections)
 
 
+def _subagent_color(tool_use_id: str) -> str:
+    """Deterministic color for a subagent based on its tool_use_id.
+
+    Args:
+        tool_use_id: The parent tool_use_id identifying the subagent.
+
+    Returns:
+        CSS color string from the palette.
+    """
+    idx = sum(ord(c) for c in tool_use_id) % len(_SUBAGENT_COLORS)
+    return _SUBAGENT_COLORS[idx]
+
+
+def _render_subagent_badge(
+    parent_tool_use_id: str,
+    subagent_label: str,
+) -> str:
+    """Render inline badge for a subagent event.
+
+    The badge shows ``label:tool_use_id`` and is CSS-truncated from the
+    left so the last characters of the ID remain visible (e.g.,
+    ``…Wn7T``).  The ``.subagent-badge`` class uses ``direction: rtl``
+    with ``text-overflow: ellipsis`` to achieve start-truncation.
+
+    Args:
+        parent_tool_use_id: The tool_use_id of the parent Task call.
+        subagent_label: Label to show (e.g., "Explore" or "subagent").
+
+    Returns:
+        HTML string for the badge.
+    """
+    color = _subagent_color(parent_tool_use_id)
+    escaped_id = html.escape(parent_tool_use_id)
+    escaped_label = html.escape(subagent_label)
+    return (
+        f'<span class="subagent-badge" style="color: {color}">'
+        f"{escaped_label}:{escaped_id}</span>"
+    )
+
+
 def render_events_list(events: list[StreamEvent]) -> str:
     """Render list of events as collapsible sections.
+
+    Pre-scans events for Task tool_use blocks to build a label map
+    so subagent events can display the subagent type in their badge.
 
     Args:
         events: Typed streaming events.
@@ -324,36 +377,63 @@ def render_events_list(events: list[StreamEvent]) -> str:
     if not events:
         return '<div class="no-actions">No events recorded</div>'
 
-    items: list[str] = []
-
+    # Build subagent label map from Task tool_use blocks
+    subagent_labels: dict[str, str] = {}
     for event in events:
-        event_html = render_single_event(event)
-        items.append(event_html)
+        for block in event.content_blocks:
+            if isinstance(block, ToolUseBlock) and block.tool_name == "Task":
+                label = block.tool_input.get("subagent_type", "subagent")
+                subagent_labels[block.tool_id] = label
+
+    items: list[str] = []
+    for event in events:
+        label = subagent_labels.get(event.parent_tool_use_id, "")
+        items.append(render_single_event(event, subagent_label=label))
 
     return "".join(items)
 
 
-def render_single_event(event: StreamEvent) -> str:
+def render_single_event(
+    event: StreamEvent,
+    subagent_label: str = "",
+) -> str:
     """Render a single event in CLI-style streaming format.
 
-    Recognized event types are pretty-printed inline.
+    Recognized event types are pretty-printed inline. Events with a
+    non-empty ``parent_tool_use_id`` are wrapped in a subagent
+    container with a colored left border and badge.
 
     Args:
         event: Typed streaming event.
+        subagent_label: Label for the subagent badge (e.g., "Explore").
+            When empty and the event has a parent_tool_use_id, defaults
+            to "subagent".
 
     Returns:
         HTML string for event.
     """
     if event.event_type == EventType.SYSTEM:
-        return _render_system_event(event)
+        inner_html = _render_system_event(event)
     elif event.event_type == EventType.ASSISTANT:
-        return _render_assistant_event(event)
+        inner_html = _render_assistant_event(event)
     elif event.event_type == EventType.USER:
-        return _render_user_event(event)
+        inner_html = _render_user_event(event)
     elif event.event_type == EventType.RESULT:
-        return _render_result_event(event)
+        inner_html = _render_result_event(event)
     else:
-        return _render_unknown_event(event)
+        inner_html = _render_unknown_event(event)
+
+    if event.parent_tool_use_id:
+        color = _subagent_color(event.parent_tool_use_id)
+        label = subagent_label or "subagent"
+        badge = _render_subagent_badge(event.parent_tool_use_id, label)
+        return (
+            f'<div class="subagent-event" style="border-left-color: {color}">'
+            f"{badge}"
+            f'<div class="subagent-content">{inner_html}</div>'
+            f"</div>"
+        )
+    return inner_html
 
 
 # ── Event type renderers ─────────────────────────────────────────────
@@ -700,7 +780,10 @@ def _render_tool_glob(tool_input: dict[str, Any]) -> str:
 
 
 def _render_tool_task(tool_input: dict[str, Any]) -> str:
-    """Render Task tool input.
+    """Render Task tool input with subagent details.
+
+    Shows the subagent type, description, model, and a truncated
+    prompt inline.
 
     Args:
         tool_input: Task tool input dict.
@@ -709,7 +792,23 @@ def _render_tool_task(tool_input: dict[str, Any]) -> str:
         HTML detail string.
     """
     desc = html.escape(tool_input.get("description", ""))
-    return f'<span class="tool-desc">{desc}</span>'
+    subagent_type = html.escape(tool_input.get("subagent_type", ""))
+    model = html.escape(tool_input.get("model", ""))
+    prompt = tool_input.get("prompt", "")
+
+    parts: list[str] = []
+    if subagent_type:
+        parts.append(f'<span class="tool-desc">{subagent_type}</span>')
+    if desc:
+        parts.append(f'<span class="tool-desc">{desc}</span>')
+    if model:
+        parts.append(f'<span class="tool-desc">({model})</span>')
+    if prompt:
+        # Truncate raw prompt before escaping to avoid cutting HTML entities
+        truncated_prompt = prompt[:200] + "..." if len(prompt) > 200 else prompt
+        escaped_prompt = html.escape(truncated_prompt)
+        parts.append(f'<div class="tool-detail-dim">{escaped_prompt}</div>')
+    return "".join(parts)
 
 
 def _render_tool_todowrite(tool_input: dict[str, Any]) -> str:

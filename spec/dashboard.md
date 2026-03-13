@@ -325,6 +325,29 @@ URL access to `/conversation/{conv_id}` triggers disk loading. The
 `/task/{task_id}` endpoint does not support disk loading (disk-loaded tasks have
 synthetic IDs not known to the caller).
 
+### Actions Viewer (`/conversation/{conv_id}/actions`)
+
+Dark-themed terminal-style page that renders the timeline of Claude streaming
+events (system, assistant text, tool use/result, result summaries) for a
+conversation. Events are grouped per reply, paired with request text and reply
+metadata.
+
+**Subagent event annotation**: Events produced by Claude's subagent (Task tool)
+calls are visually distinguished in the timeline:
+
+- Events with a non-null `parent_tool_use_id` field are rendered with left
+  indentation (`margin-left: 20px`), a colored left border, and a badge showing
+  `{subagent_type}:{short_id}` (where `short_id` is the last 6 characters of the
+  `parent_tool_use_id`).
+- Border and badge colors are assigned deterministically from a fixed palette
+  based on the `parent_tool_use_id`, so events from the same subagent share a
+  consistent color.
+- The label map (`subagent_type` values like "Explore", "CodeReview", etc.) is
+  built by pre-scanning the event group for Task `tool_use` blocks and
+  extracting the `subagent_type` field from their `tool_input`.
+- For SSE-streamed events (arriving after the initial page render), the Task
+  context is not available, so a fallback label of `"subagent"` is used instead.
+
 ### Styling
 
 - Real-time updates via SSE on all pages (no polling or meta-refresh)
