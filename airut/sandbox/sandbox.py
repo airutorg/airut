@@ -6,7 +6,7 @@
 """Top-level sandbox manager.
 
 Manages shared infrastructure (proxy image, CA cert, egress network)
-and creates Task instances for individual executions.
+and creates AgentTask/CommandTask instances for individual executions.
 """
 
 from __future__ import annotations
@@ -17,14 +17,14 @@ from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
 
-from airut.gateway.config import ResourceLimits
 from airut.sandbox._image import (
     _ImageInfo,
     build_overlay_image,
     build_repo_image,
 )
 from airut.sandbox._proxy import ProxyManager
-from airut.sandbox.task import ContainerEnv, Mount, NetworkSandboxConfig, Task
+from airut.sandbox.task import AgentTask, CommandTask, NetworkSandboxConfig
+from airut.sandbox.types import ContainerEnv, Mount, ResourceLimits
 
 
 logger = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ class Sandbox:
     """Top-level sandbox manager.
 
     Manages shared infrastructure (proxy image, CA cert, egress network)
-    and creates Task instances for individual executions.
+    and creates AgentTask/CommandTask instances for individual executions.
 
     Thread Safety: Thread-safe. Multiple threads may call create_task()
     and ensure_image() concurrently. Image builds are serialized.
@@ -129,6 +129,8 @@ class Sandbox:
         self,
         dockerfile: bytes,
         context_files: dict[str, bytes],
+        *,
+        passthrough_entrypoint: bool = False,
     ) -> str:
         """Build or reuse two-layer container image.
 
@@ -139,6 +141,9 @@ class Sandbox:
         Args:
             dockerfile: Raw Dockerfile content.
             context_files: Additional files for build context.
+            passthrough_entrypoint: When True, use the passthrough
+                entrypoint (``exec "$@"``) instead of the agent
+                entrypoint (``exec claude "$@"``).
 
         Returns:
             Image tag for use in create_task().
@@ -160,6 +165,7 @@ class Sandbox:
                 repo_tag,
                 self._overlay_images,
                 self._config.max_image_age_hours,
+                passthrough=passthrough_entrypoint,
             )
 
             return overlay_tag
@@ -175,8 +181,8 @@ class Sandbox:
         network_log_dir: Path | None = None,
         network_sandbox: NetworkSandboxConfig | None = None,
         resource_limits: ResourceLimits | None = None,
-    ) -> Task:
-        """Create a task for sandboxed execution.
+    ) -> AgentTask:
+        """Create a task for sandboxed Claude Code execution.
 
         The sandbox owns:
         - execution_context_dir/events.jsonl -- append-only event log
@@ -191,7 +197,7 @@ class Sandbox:
         Does not start execution -- call task.execute() to run.
 
         Args:
-            execution_context_id: Execution context identifier — an
+            execution_context_id: Execution context identifier -- an
                 opaque string used to scope execution context state,
                 network resources, and container naming.
             image_tag: Container image tag (from ensure_image()).
@@ -204,9 +210,55 @@ class Sandbox:
                 cpus, pids_limit).
 
         Returns:
-            Task instance ready for execution.
+            AgentTask instance ready for execution.
         """
-        return Task(
+        return AgentTask(
+            execution_context_id,
+            image_tag=image_tag,
+            mounts=mounts,
+            env=env,
+            execution_context_dir=execution_context_dir,
+            network_log_dir=network_log_dir,
+            network_sandbox=network_sandbox,
+            resource_limits=resource_limits or ResourceLimits(),
+            container_command=self._container_command,
+            proxy_manager=(
+                self._proxy_manager if network_sandbox is not None else None
+            ),
+        )
+
+    def create_command_task(
+        self,
+        execution_context_id: str,
+        *,
+        image_tag: str,
+        mounts: list[Mount],
+        env: ContainerEnv,
+        execution_context_dir: Path,
+        network_log_dir: Path | None = None,
+        network_sandbox: NetworkSandboxConfig | None = None,
+        resource_limits: ResourceLimits | None = None,
+    ) -> CommandTask:
+        """Create a task for sandboxed command execution.
+
+        Unlike create_task(), this creates a CommandTask for running
+        arbitrary commands (not Claude Code). There is no event log
+        or Claude session directory.
+
+        Args:
+            execution_context_id: Execution context identifier.
+            image_tag: Container image tag (from ensure_image()).
+            mounts: Volume mounts for the container.
+            env: Container environment variables.
+            execution_context_dir: Directory for execution context state.
+            network_log_dir: Directory for network activity log.
+            network_sandbox: Network sandbox configuration.
+            resource_limits: Container resource limits.
+
+        Returns:
+            CommandTask instance ready for execution.
+        """
+        return CommandTask(
             execution_context_id,
             image_tag=image_tag,
             mounts=mounts,

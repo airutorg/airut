@@ -27,12 +27,20 @@ from airut.sandbox.secrets import (
     prepare_secrets,
 )
 from airut.sandbox.task import (
+    AgentTask,
+    CommandTask,
     EventCallback,
     NetworkSandboxConfig,
     SandboxError,
-    Task,
 )
-from airut.sandbox.types import ContainerEnv, ExecutionResult, Mount, Outcome
+from airut.sandbox.types import (
+    CommandResult,
+    ContainerEnv,
+    ExecutionResult,
+    Mount,
+    Outcome,
+    ResourceLimits,
+)
 
 
 __all__ = [
@@ -40,15 +48,18 @@ __all__ = [
     "Sandbox",
     "SandboxConfig",
     # task
-    "Task",
+    "AgentTask",
+    "CommandTask",
     "EventCallback",
     "NetworkSandboxConfig",
     "SandboxError",
     # types
+    "CommandResult",
     "ContainerEnv",
     "ExecutionResult",
     "Mount",
     "Outcome",
+    "ResourceLimits",
     # secrets
     "MaskedSecret",
     "PreparedSecrets",

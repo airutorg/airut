@@ -16,10 +16,11 @@ from airut.claude_output import StreamEvent, parse_stream_events
 from airut.claude_output.types import Usage
 from airut.dashboard.tracker import CompletionReason
 from airut.gateway.channel import ChannelSendError, ParsedMessage
-from airut.gateway.config import RepoConfig, ResourceLimits
+from airut.gateway.config import RepoConfig
 from airut.gateway.service import build_recovery_prompt
 from airut.gateway.service.message_processing import process_message
 from airut.sandbox import ExecutionResult, Outcome
+from airut.sandbox.types import ResourceLimits
 
 from .conftest import make_service, update_global
 

@@ -358,6 +358,66 @@ class TestBuildOverlayImage:
         assert info.tag.startswith("airut:")
         assert isinstance(info.built_at, datetime)
 
+    @patch("airut.sandbox._image.get_entrypoint_content")
+    @patch("airut.sandbox._image.subprocess.run")
+    def test_passthrough_false_by_default(
+        self, mock_run: MagicMock, mock_entrypoint: MagicMock
+    ) -> None:
+        """build_overlay_image defaults to passthrough=False."""
+        mock_run.return_value = MagicMock(returncode=0)
+        mock_entrypoint.return_value = b"#!/bin/bash\nexec claude\n"
+        overlay_images: dict[str, _ImageInfo] = {}
+
+        build_overlay_image("podman", "airut-repo:abc123", overlay_images, 24)
+
+        mock_entrypoint.assert_called_once_with(passthrough=False)
+
+    @patch("airut.sandbox._image.get_entrypoint_content")
+    @patch("airut.sandbox._image.subprocess.run")
+    def test_passthrough_true_passed(
+        self, mock_run: MagicMock, mock_entrypoint: MagicMock
+    ) -> None:
+        """build_overlay_image(passthrough=True) passes to entrypoint."""
+        mock_run.return_value = MagicMock(returncode=0)
+        mock_entrypoint.return_value = b"#!/bin/bash\nexec $@\n"
+        overlay_images: dict[str, _ImageInfo] = {}
+
+        build_overlay_image(
+            "podman",
+            "airut-repo:abc123",
+            overlay_images,
+            24,
+            passthrough=True,
+        )
+
+        mock_entrypoint.assert_called_once_with(passthrough=True)
+
+    @patch("airut.sandbox._image.get_entrypoint_content")
+    @patch("airut.sandbox._image.subprocess.run")
+    def test_different_passthrough_produces_different_tag(
+        self, mock_run: MagicMock, mock_entrypoint: MagicMock
+    ) -> None:
+        """Different passthrough values produce different overlay tags."""
+        mock_run.return_value = MagicMock(returncode=0)
+
+        agent_content = b"#!/bin/bash\nexec claude\n"
+        passthrough_content = b"#!/bin/bash\nexec $@\n"
+
+        overlay1: dict[str, _ImageInfo] = {}
+        overlay2: dict[str, _ImageInfo] = {}
+
+        mock_entrypoint.return_value = agent_content
+        tag1 = build_overlay_image(
+            "podman", "airut-repo:abc", overlay1, 24, passthrough=False
+        )
+
+        mock_entrypoint.return_value = passthrough_content
+        tag2 = build_overlay_image(
+            "podman", "airut-repo:abc", overlay2, 24, passthrough=True
+        )
+
+        assert tag1 != tag2
+
 
 class TestImageInfo:
     """Tests for _ImageInfo dataclass."""

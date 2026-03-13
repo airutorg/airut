@@ -5,7 +5,11 @@
 
 """Tests for lib/sandbox/_entrypoint.py -- container entrypoint generation."""
 
-from airut.sandbox._entrypoint import ENTRYPOINT_SCRIPT, get_entrypoint_content
+from airut.sandbox._entrypoint import (
+    AGENT_ENTRYPOINT_SCRIPT,
+    PASSTHROUGH_ENTRYPOINT_SCRIPT,
+    get_entrypoint_content,
+)
 
 
 class TestGetEntrypointContent:
@@ -22,10 +26,10 @@ class TestGetEntrypointContent:
         decoded = content.decode("utf-8")
         assert isinstance(decoded, str)
 
-    def test_matches_script_constant(self) -> None:
-        """Returned bytes match the ENTRYPOINT_SCRIPT constant."""
+    def test_matches_agent_script_constant(self) -> None:
+        """Default returns bytes matching AGENT_ENTRYPOINT_SCRIPT."""
         content = get_entrypoint_content()
-        assert content == ENTRYPOINT_SCRIPT.encode("utf-8")
+        assert content == AGENT_ENTRYPOINT_SCRIPT.encode("utf-8")
 
     def test_starts_with_shebang(self) -> None:
         """Content starts with bash shebang."""
@@ -44,7 +48,7 @@ class TestGetEntrypointContent:
         assert b"mitmproxy-ca.crt" in content
 
     def test_contains_exec_claude(self) -> None:
-        """Content execs claude with arguments."""
+        """Agent entrypoint execs claude with arguments."""
         content = get_entrypoint_content()
         assert b'exec claude "$@"' in content
 
@@ -58,3 +62,62 @@ class TestGetEntrypointContent:
         c1 = get_entrypoint_content()
         c2 = get_entrypoint_content()
         assert c1 == c2
+
+
+class TestPassthroughEntrypoint:
+    """Tests for passthrough entrypoint generation."""
+
+    def test_passthrough_returns_bytes(self) -> None:
+        """Passthrough mode returns bytes."""
+        content = get_entrypoint_content(passthrough=True)
+        assert isinstance(content, bytes)
+
+    def test_passthrough_matches_constant(self) -> None:
+        """Passthrough returns bytes matching PASSTHROUGH_ENTRYPOINT_SCRIPT."""
+        content = get_entrypoint_content(passthrough=True)
+        assert content == PASSTHROUGH_ENTRYPOINT_SCRIPT.encode("utf-8")
+
+    def test_passthrough_starts_with_shebang(self) -> None:
+        """Passthrough starts with bash shebang."""
+        content = get_entrypoint_content(passthrough=True)
+        assert content.startswith(b"#!/usr/bin/env bash")
+
+    def test_passthrough_contains_is_sandbox(self) -> None:
+        """Passthrough sets IS_SANDBOX environment variable."""
+        content = get_entrypoint_content(passthrough=True)
+        assert b"IS_SANDBOX=1" in content
+
+    def test_passthrough_contains_ca_trust(self) -> None:
+        """Passthrough handles CA certificate trust."""
+        content = get_entrypoint_content(passthrough=True)
+        assert b"update-ca-certificates" in content
+        assert b"mitmproxy-ca.crt" in content
+
+    def test_passthrough_exec_dollar_at(self) -> None:
+        """Passthrough execs $@ (any command), not claude."""
+        content = get_entrypoint_content(passthrough=True)
+        assert b'exec "$@"' in content
+        assert b"exec claude" not in content
+
+    def test_passthrough_contains_set_euo_pipefail(self) -> None:
+        """Passthrough uses strict bash error handling."""
+        content = get_entrypoint_content(passthrough=True)
+        assert b"set -euo pipefail" in content
+
+    def test_passthrough_idempotent(self) -> None:
+        """Multiple passthrough calls return the same content."""
+        c1 = get_entrypoint_content(passthrough=True)
+        c2 = get_entrypoint_content(passthrough=True)
+        assert c1 == c2
+
+    def test_agent_and_passthrough_differ(self) -> None:
+        """Agent and passthrough entrypoints have different content."""
+        agent = get_entrypoint_content(passthrough=False)
+        passthrough = get_entrypoint_content(passthrough=True)
+        assert agent != passthrough
+
+    def test_default_is_agent(self) -> None:
+        """Default (passthrough=False) produces agent entrypoint."""
+        default = get_entrypoint_content()
+        explicit_agent = get_entrypoint_content(passthrough=False)
+        assert default == explicit_agent
