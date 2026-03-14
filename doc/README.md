@@ -38,6 +38,8 @@ Named "Airut" (Finnish: herald/messenger).
   limits
 - [Network sandbox](network-sandbox.md) — Network allowlist enforcement via
   proxy
+- [CI sandbox](ci-sandbox.md) — Sandboxing GitHub Actions and CI pipelines with
+  `airut-sandbox`
 
 ## Channels
 
