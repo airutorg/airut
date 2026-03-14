@@ -686,13 +686,44 @@ When the network sandbox is disabled (`network_sandbox: false` in
 ## CI Integration Patterns
 
 CI checks run inside the sandbox via `.github/workflows/ci.yml`. The workflow
-makes `airut-sandbox` available on the host, then runs `ci.py` inside the
-container through a wrapper script. See `spec/local-ci-runner.md` for `ci.py`
-details.
+checks out the default branch on the host (ensuring `airut-sandbox` and all
+`.airut/` config come from trusted code), then runs `ci.py` inside the container
+through a wrapper script that fetches and checks out the PR commit. See
+`spec/local-ci-runner.md` for `ci.py` details.
+
+### Default-Branch Trust Model
+
+The workflow implements the default-branch trust model described in the Security
+Model section above:
+
+- **Host checkout**: `actions/checkout` with
+  `ref: ${{ github.event.repository.default_branch }}` and `fetch-depth: 0`.
+  This ensures all host-side code (`airut-sandbox`, `.airut/sandbox.yaml`,
+  `.airut/network-allowlist.yaml`, `.airut/container/Dockerfile`) comes from the
+  trusted default branch.
+- **PR code inside sandbox only**: The wrapper script (`scripts/sandbox-ci.sh`)
+  runs inside the container and fetches/checks out the PR commit. The host never
+  executes PR code.
+
+Two controls ensure trusted config:
+
+1. **Branch filter** (`pull_request: branches: [main]`): The workflow only
+   triggers on PRs targeting main.
+2. **`repository.default_branch` checkout ref**: Defense-in-depth against branch
+   filter loosening. Unlike `base.ref` (which the agent controls),
+   `repository.default_branch` always resolves to the repository's configured
+   default branch.
 
 ### Workflow Structure
 
 ```yaml
+- uses: actions/checkout@v4
+  with:
+    ref: ${{ github.event.repository.default_branch }}
+    fetch-depth: 0
+
+# ... setup steps ...
+
 - name: CI checks
   run: >-
     uv run airut-sandbox run --verbose --
@@ -714,9 +745,7 @@ arbitrary commands if interpolated directly into the shell script.
 2. Installs dependencies (`uv sync`)
 3. Runs CI checks (`uv run scripts/ci.py --verbose --timeout 0`)
 
-The script receives the commit SHA as its first argument. It is designed so that
-when the host checkout transitions from the PR branch (current) to the default
-branch (future Stage C), the script requires no changes.
+The script receives the commit SHA as its first argument.
 
 ### Sandbox Configuration
 
@@ -727,6 +756,14 @@ branch (future Stage C), the script requires no changes.
 - `network_sandbox: true` — enforces the shared network allowlist
 - No `masked_secrets` — CI checks require no credentials
 - No `resource_limits` — GitHub Actions enforces its own limits
+
+### Push-to-Main Behavior
+
+On `push` to main (after PR merge), the workflow runs with `github.sha` pointing
+to the merge commit on main. The checkout ref resolves to main itself. The
+wrapper script checks out the same SHA that is already on the host. This is a
+no-op checkout but is harmless — the script runs `ci.py` on the merged code,
+which is the intended behavior for post-merge validation.
 
 ### Design Guidelines
 
