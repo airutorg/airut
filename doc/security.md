@@ -428,11 +428,13 @@ legitimate from malicious use of authorized channels.
 
 ### GitHub Actions Workflow Escape
 
-If the agent's `GH_TOKEN` has permission to push commits that modify
-`.github/workflows/`, the agent can escape the container sandbox entirely by
-committing a workflow file that runs arbitrary code on GitHub Actions runners.
-GitHub Actions runners have outbound internet access and can communicate with
-external hosts — the network sandbox does not apply to GitHub-hosted runners.
+GitHub Actions workflows execute code from PR branches on runners with outbound
+internet access — completely outside the Airut network sandbox. The agent can
+exploit this in two ways: by pushing a malicious workflow file, or by modifying
+code that existing workflows execute (test suites, build scripts, linters). The
+second path requires no special permissions beyond normal git push access,
+making it the harder threat to close. See [ci-sandbox.md](ci-sandbox.md) for the
+recommended mitigation (running CI inside the Airut sandbox).
 
 **Threat model:** This threat vector is relevant when the
 [lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/)
@@ -449,8 +451,10 @@ external hosts — the network sandbox does not apply to GitHub-hosted runners.
    with arbitrary external hosts, completely outside the network sandbox
 
 The workflow escape is the mechanism that provides capability (3): even though
-the container's network sandbox restricts outbound access, a pushed workflow
-file runs on a GitHub-hosted runner where no such restriction applies.
+the container's network sandbox restricts outbound access, code running on a
+GitHub-hosted runner (whether from a pushed workflow file or from existing
+workflows executing agent-modified code) operates completely outside the
+sandbox.
 
 **The escape has two paths**, both of which must be closed:
 
