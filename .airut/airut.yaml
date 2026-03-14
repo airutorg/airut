@@ -42,3 +42,7 @@ container_env:
 
   # GitHub token for git operations inside the container.
   GH_TOKEN: !secret GH_TOKEN
+
+  # Canary values for sandbox verification tests.
+  CANARY_PLAIN: !secret? CANARY_PLAIN
+  CANARY_MASKED: !secret? CANARY_MASKED
