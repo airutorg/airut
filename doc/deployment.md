@@ -37,7 +37,9 @@ source ~/.bashrc  # or restart shell
 uv tool install airut
 ```
 
-This installs the latest release from PyPI to `~/.local/bin/airut`.
+This installs the latest release from PyPI to `~/.local/bin/airut`. The package
+also provides the `airut-sandbox` CLI for running commands in the sandbox from
+CI pipelines (see [ci-sandbox.md](ci-sandbox.md)).
 
 To install from the main branch (latest development version):
 
@@ -87,17 +89,16 @@ organization settings, or resources that your personal account has access to.
    will operate on (write access for pushing branches and creating PRs)
 3. Generate a **personal access token** for this account:
    - **Fine-grained PAT** (recommended): Grant `Contents: Read and write` and
-     `Metadata: Read` for the target repositories. Consider whether to grant
-     `Workflows` permission — omitting it prevents the agent from modifying
-     `.github/workflows/` files, blocking a sandbox escape vector. This is
-     recommended when the
-     [lethal trifecta](security.md#github-actions-workflow-escape) is present
-     (private data + untrusted content + external communication). For public
-     repos with no Actions secrets, granting `Workflows` is lower risk.
-   - **Classic PAT**: Grant `repo` scope. Consider whether to enable the
-     `workflow` scope using the same criteria above. Note that existing classic
-     PATs may have `workflow` enabled by default — audit at GitHub → Settings →
-     Developer settings.
+     `Metadata: Read` for the target repositories. **Do not grant
+     `Workflows: Read and write`** — omitting it prevents the agent from
+     modifying `.github/workflows/` files, blocking a
+     [sandbox escape vector](security.md#github-actions-workflow-escape).
+     Alternatively (or additionally), use a
+     [repository ruleset](ci-sandbox.md#protecting-workflow-files) to block
+     workflow file changes.
+   - **Classic PAT**: Grant `repo` scope. **Do not enable the `workflow`
+     scope.** Existing classic PATs may have `workflow` enabled by default —
+     audit at GitHub → Settings → Developer settings.
 4. Use this token as the `GH_TOKEN` in your server configuration
 
 The server's own git credentials (for fetching mirrors) can use a separate

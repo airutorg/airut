@@ -13,8 +13,8 @@ Code interaction via email and/or Slack.
     [slack-setup.md](slack-setup.md))
 - **Dedicated GitHub account** for the agent with a properly scoped personal
   access token (see [deployment.md](deployment.md#dedicated-github-account)).
-  For guidance on the `workflow` scope, see
-  [security.md](security.md#github-actions-workflow-escape)
+  The PAT should **not** include the `workflow` scope -- see
+  [ci-sandbox.md](ci-sandbox.md#protecting-workflow-files)
 - Claude API credentials
 
 ## Example Project
@@ -336,7 +336,53 @@ On GitHub, configure branch protection for `main`:
    - Require status checks to pass
 4. Save changes
 
-### 8. Test the Setup
+### 8. Set Up CI Sandbox (Recommended)
+
+If the repository uses GitHub Actions for CI, configure
+[`airutorg/sandbox-action`](ci-sandbox.md) to run CI commands inside the Airut
+sandbox. This prevents the agent from escaping containment via CI workflows --
+test suites, build scripts, and linters run inside the same container isolation
+and network sandbox that the Airut gateway uses.
+
+**Quick setup:**
+
+1. Add `.airut/sandbox.yaml` to your repository (optional -- defaults work for
+   CI that needs no credentials):
+
+   ```yaml
+   env:
+     CI: "true"
+   network_sandbox: true
+   ```
+
+2. Create `.github/workflows/ci.yml`:
+
+   ```yaml
+   name: CI
+   on:
+     pull_request:
+       branches: [main]
+
+   jobs:
+     test:
+       runs-on: ubuntu-latest
+       steps:
+         - uses: airutorg/sandbox-action@v0
+           with:
+             command: '<your CI command>'
+             pr_sha: ${{ github.event.pull_request.head.sha }}
+   ```
+
+3. Ensure the agent's PAT lacks the `workflow` scope (or add a repository
+   ruleset blocking `.github/workflows/**` changes). See
+   [ci-sandbox.md](ci-sandbox.md#protecting-workflow-files).
+
+This is the recommended configuration. Without CI sandboxing, auto-triggered
+workflows that execute repository code (which most CI workflows do) allow the
+agent to run unsandboxed code on GitHub Actions runners. See
+[ci-sandbox.md](ci-sandbox.md) for the full guide and security requirements.
+
+### 9. Test the Setup
 
 **Email:** Send a test email:
 

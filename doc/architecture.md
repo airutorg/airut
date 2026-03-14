@@ -92,7 +92,9 @@ each component's lifetime and what resources it can access.
 - **GatewayService** — Top-level orchestrator that manages repo handlers, shared
   thread pool, dashboard, and graceful shutdown
 - **Sandbox** (`airut/sandbox/`) — Manages container execution, proxy
-  infrastructure, execution context state, and image builds
+  infrastructure, execution context state, and image builds. The sandbox library
+  is also used by the standalone `airut-sandbox` CLI for running commands in CI
+  pipelines (see [ci-sandbox.md](ci-sandbox.md))
 - **ThreadPool** — Limits concurrent task execution across repositories
 - **TaskTracker** — Tracks task status for dashboard and monitoring
 - **Dashboard** — Optional web UI for viewing conversations and network logs

@@ -57,6 +57,8 @@ autonomous operation:
   creating a human-in-the-loop checkpoint
 - **Dedicated agent account** — A GitHub account with limited permissions for
   the agent to push branches and create PRs
+- **CI sandbox** — GitHub Actions workflows that run agent-steerable code inside
+  the Airut sandbox (see [ci-sandbox.md](ci-sandbox.md))
 - **`.airut/` configuration** — Container Dockerfile, network allowlist, and
   repo settings
 
@@ -291,13 +293,14 @@ it codifies them as heuristics. This builds institutional knowledge over time.
 
 Agentic operation with Airut requires:
 
-| Component               | Purpose                                     |
-| ----------------------- | ------------------------------------------- |
-| Airut                   | Channel handling, sandboxing, session state |
-| `CLAUDE.md`             | Workflow instructions and codebase docs     |
-| Workflow tools          | Reliable CI/PR operations                   |
-| Branch protection       | Human-in-the-loop checkpoint                |
-| Dedicated agent account | Limited permissions, clear audit trail      |
+| Component               | Purpose                                            |
+| ----------------------- | -------------------------------------------------- |
+| Airut                   | Channel handling, sandboxing, session state        |
+| `CLAUDE.md`             | Workflow instructions and codebase docs            |
+| Workflow tools          | Reliable CI/PR operations                          |
+| Branch protection       | Human-in-the-loop checkpoint                       |
+| Dedicated agent account | Limited permissions, clear audit trail             |
+| CI sandbox              | Agent-steerable CI runs inside sandboxed container |
 
 The Airut repository demonstrates these practices. Adapt them when onboarding
 new repositories.

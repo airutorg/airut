@@ -16,6 +16,7 @@ High-level documentation in `doc/` (see `doc/README.md` for full list):
 - `doc/security.md` — security model (channel auth, isolation, credentials)
 - `doc/execution-sandbox.md` — container isolation and resource limits
 - `doc/network-sandbox.md` — network allowlist and proxy architecture
+- `doc/ci-sandbox.md` — sandboxing GitHub Actions and CI pipelines
 - `doc/deployment.md` — installation and server configuration
 - `doc/email-setup.md` — email channel setup (IMAP/SMTP, DMARC)
 - `doc/slack-setup.md` — Slack channel setup (Socket Mode, authorization rules)

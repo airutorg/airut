@@ -5,6 +5,8 @@ sandboxed container with network restrictions and credential isolation. Designed
 for repositories where PRs may come from untrusted sources, such as a coding
 agent.
 
+For the user-facing setup guide, see [doc/ci-sandbox.md](../doc/ci-sandbox.md).
+
 Standard GitHub Actions runners give workflow steps full outbound network access
 and expose repository secrets as environment variables. A malicious PR that
 modifies test scripts or build steps can exfiltrate secrets. Sandbox Action

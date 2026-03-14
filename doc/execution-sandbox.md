@@ -4,6 +4,11 @@ The execution sandbox isolates Claude Code sessions from the host system and
 from each other. Each conversation runs in a dedicated Podman container with
 controlled mounts, environment variables, and network access.
 
+The same sandbox technology is available as a standalone CLI (`airut-sandbox`)
+for running arbitrary commands in CI pipelines and other environments. See
+[ci-sandbox.md](ci-sandbox.md) for CI usage and
+[spec/sandbox-cli.md](../spec/sandbox-cli.md) for the full CLI specification.
+
 ## Threat Model
 
 Claude Code executes arbitrary code on behalf of the agent. Without isolation:
@@ -178,9 +183,11 @@ verify. This is the default on Ubuntu 22.04+, Fedora 34+, Debian 12+, and RHEL
 
 ## Further Reading
 
+- [ci-sandbox.md](ci-sandbox.md) — Using the sandbox for CI pipelines
 - [network-sandbox.md](network-sandbox.md) — Network allowlist enforcement
 - [security.md](security.md) — Overall security model
 - [spec/sandbox.md](../spec/sandbox.md) — Sandbox library specification
+- [spec/sandbox-cli.md](../spec/sandbox-cli.md) — Standalone CLI specification
 - [spec/image.md](../spec/image.md) — Container image build details
 - [spec/gateway-architecture.md](../spec/gateway-architecture.md) — Full
   execution flow

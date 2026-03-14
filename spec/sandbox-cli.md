@@ -5,6 +5,8 @@ sandbox. Exposes the same container isolation, network allowlisting, and
 credential masking that the gateway uses, as a standalone tool for CI pipelines
 and other environments running agent-steerable code.
 
+For the user-facing setup guide, see [doc/ci-sandbox.md](../doc/ci-sandbox.md).
+
 ## Security Model
 
 ### Principle: Agent Containment
