@@ -123,15 +123,31 @@ After fixes, the script continues to run remaining checks.
 
 ### GitHub Actions Integration
 
-The consolidated workflow (`.github/workflows/ci.yml`) calls `ci.py` directly:
+The consolidated workflow (`.github/workflows/ci.yml`) runs `ci.py` inside the
+Airut sandbox via a wrapper script:
 
 ```yaml
 - name: CI checks
-  run: uv run scripts/ci.py --verbose --timeout 0
+  run: >-
+    uv run airut-sandbox run --verbose --
+    scripts/sandbox-ci.sh "$COMMIT_SHA"
+  env:
+    COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 ```
+
+The wrapper script (`scripts/sandbox-ci.sh`) runs inside the container: it
+fetches and checks out the PR commit, installs dependencies with `uv sync`, and
+runs `ci.py --verbose --timeout 0`. The SHA is passed via an `env:` variable
+rather than inline `${{ }}` interpolation to prevent expression injection.
 
 `--timeout 0` disables `ci.py`'s overall timeout since GitHub Actions provides
 its own `timeout-minutes`. `--verbose` shows full output in CI logs.
 
+Sandbox configuration lives in `.airut/sandbox.yaml`. The CI sandbox uses
+network isolation (shared allowlist with the gateway) and container isolation
+but requires no credentials — all linters run locally, tests mock external
+calls, and `uv-secure` queries PyPI through the proxy.
+
 This makes `ci.py` the single source of truth — local and GitHub CI run
-identical checks. There are no separate workflow files to drift against.
+identical checks. The sandbox adds container and network isolation without
+changing what checks run.

@@ -670,25 +670,60 @@ When the network sandbox is disabled (`network_sandbox: false` in
 `.airut/sandbox.yaml`), no proxy runs and no network log is written. The
 `--network-log` flag is silently ignored (not an error).
 
-## CI Integration Patterns (Future Work)
+## CI Integration Patterns
 
-CI integration patterns (reference GitHub Actions workflows, wrapper scripts,
-runner requirements, workflow design guidelines) are planned for a future stage.
-The core security model and design guidelines are documented in the Security
-Model section above. Key considerations for CI integration:
+CI checks run inside the sandbox via `.github/workflows/ci.yml`. The workflow
+makes `airut-sandbox` available on the host, then runs `ci.py` inside the
+container through a wrapper script. See `spec/local-ci-runner.md` for `ci.py`
+details.
 
-- Workflows must check out the default branch on the host before running
-  `airut-sandbox` (not the merge ref or PR branch)
-- The `airut-sandbox` binary must come from a trusted source (PyPI or default
-  branch)
-- GitHub context values should be passed via `env:` variables, not inline
-  `${{ }}` interpolation, to avoid shell injection
-- The `airut-sandbox` step should be the terminal step of the job (workspace is
-  tainted after execution)
-- Runners need rootless podman with cgroup v2 delegation
+### Workflow Structure
 
-Full workflow examples and guidelines will be added when this stage is
-implemented.
+```yaml
+- name: CI checks
+  run: >-
+    uv run airut-sandbox run --verbose --
+    scripts/sandbox-ci.sh "$COMMIT_SHA"
+  env:
+    COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+```
+
+The SHA is passed via an `env:` variable rather than inline `${{ }}`
+interpolation in the `run:` script. This prevents expression injection — a
+malicious PR title or branch name containing `${{ }}` syntax could execute
+arbitrary commands if interpolated directly into the shell script.
+
+### Wrapper Script
+
+`scripts/sandbox-ci.sh` runs inside the container:
+
+1. Fetches and checks out the PR commit (`git fetch origin <sha>`)
+2. Installs dependencies (`uv sync`)
+3. Runs CI checks (`uv run scripts/ci.py --verbose --timeout 0`)
+
+The script receives the commit SHA as its first argument. It is designed so that
+when the host checkout transitions from the PR branch (current) to the default
+branch (future Stage C), the script requires no changes.
+
+### Sandbox Configuration
+
+`.airut/sandbox.yaml` configures the CI sandbox:
+
+- `env.CI=true` — signals CI environment to tools
+- `env.PYTHONDONTWRITEBYTECODE=1` — avoids `.pyc` clutter
+- `network_sandbox: true` — enforces the shared network allowlist
+- No `masked_secrets` — CI checks require no credentials
+- No `resource_limits` — GitHub Actions enforces its own limits
+
+### Design Guidelines
+
+- **Expression injection prevention** — Always pass GitHub context values via
+  `env:` variables, never inline `${{ }}` in `run:` scripts.
+- **Terminal step** — The `airut-sandbox` step should be the last step of the
+  job. The workspace is tainted after sandboxed execution (the container has
+  read-write access).
+- **Runner requirements** — Runners need a container runtime (podman or docker).
+  GitHub-hosted `ubuntu-latest` runners include podman by default.
 
 ## Not In Scope
 

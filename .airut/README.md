@@ -64,6 +64,39 @@ url_prefixes:
 edit this file and submit a PR. A human must review and merge before the change
 takes effect.
 
+### `sandbox.yaml` — Sandbox CLI Config
+
+Configuration for `airut-sandbox run`, used by CI pipelines and other
+environments that run agent-steerable code inside the sandbox. Not used by the
+Airut gateway service (gateway sandbox is configured in server `airut.yaml`).
+See `spec/sandbox-cli.md`.
+
+```yaml
+env:                              # Static environment variables
+  CI: "true"
+
+pass_env: [TERM]                  # Host env vars passed through (no masking)
+
+masked_secrets:                   # Credentials with proxy-level token replacement
+  GH_TOKEN:
+    value: !env GH_TOKEN
+    scopes: [api.github.com, "*.githubusercontent.com"]
+    headers: [Authorization]
+
+signing_credentials:              # AWS SigV4 re-signing credentials
+  AWS_BEDROCK:
+    type: aws-sigv4
+    access_key_id: !env AWS_ACCESS_KEY_ID
+    secret_access_key: !env AWS_SECRET_ACCESS_KEY
+    scopes: ["*.amazonaws.com"]
+
+network_sandbox: true             # Enforce network allowlist (default: true)
+
+resource_limits:                  # Container resource limits (all optional)
+  timeout: 600
+  memory: "4g"
+```
+
 ### `container/Dockerfile` — Container Image
 
 Repo-defined base image. Controls what tools and dependencies are available in
