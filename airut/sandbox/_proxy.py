@@ -43,16 +43,10 @@ from airut.sandbox.network_log import NETWORK_LOG_FILENAME
 
 logger = logging.getLogger(__name__)
 
-EGRESS_NETWORK = "airut-egress"
+DEFAULT_RESOURCE_PREFIX = "airut"
 PROXY_IMAGE_NAME = "airut-proxy"
 MITMPROXY_CONFDIR = Path.home() / ".airut-mitmproxy"
 CA_CERT_FILENAME = "mitmproxy-ca-cert.pem"
-
-# Prefixes for per-context resources. Orphan cleanup uses prefix-based
-# matching via ``podman ps --filter name=`` / ``podman network ls
-# --filter name=``.
-CONTEXT_NETWORK_PREFIX = "airut-conv-"
-CONTEXT_PROXY_PREFIX = "airut-proxy-"
 
 # Maximum time to wait for the proxy to start accepting connections.
 HEALTH_CHECK_TIMEOUT = 5.0
@@ -110,13 +104,21 @@ class ProxyManager:
         self,
         container_command: str = "podman",
         proxy_dir: Path | None = None,
-        egress_network: str = EGRESS_NETWORK,
+        egress_network: str | None = None,
         *,
         upstream_dns: str,
+        resource_prefix: str = DEFAULT_RESOURCE_PREFIX,
     ) -> None:
         self._cmd = container_command
         self._proxy_dir = proxy_dir or Path(str(files("airut._bundled.proxy")))
-        self._egress_network = egress_network
+        self._resource_prefix = resource_prefix
+        self._context_network_prefix = f"{resource_prefix}-conv-"
+        self._context_proxy_prefix = f"{resource_prefix}-proxy-"
+        self._egress_network = (
+            egress_network
+            if egress_network is not None
+            else f"{resource_prefix}-egress"
+        )
         self._upstream_dns = upstream_dns
         self._lock = threading.Lock()
         self._active_proxies: dict[str, _ContextProxy] = {}
@@ -204,8 +206,8 @@ class ProxyManager:
         # Tear down stale resources from a previous attempt (idempotent).
         self.stop_proxy(context_id)
 
-        network_name = f"{CONTEXT_NETWORK_PREFIX}{context_id}"
-        container_name = f"{CONTEXT_PROXY_PREFIX}{context_id}"
+        network_name = f"{self._context_network_prefix}{context_id}"
+        container_name = f"{self._context_proxy_prefix}{context_id}"
 
         logger.info(
             "Starting proxy for context %s (network=%s, container=%s)",
@@ -720,7 +722,7 @@ class ProxyManager:
                     "ps",
                     "-a",
                     "--filter",
-                    f"name={CONTEXT_PROXY_PREFIX}",
+                    f"name={self._context_proxy_prefix}",
                     "--format",
                     "{{.Names}}",
                 ],
@@ -744,7 +746,7 @@ class ProxyManager:
                     "network",
                     "ls",
                     "--filter",
-                    f"name={CONTEXT_NETWORK_PREFIX}",
+                    f"name={self._context_network_prefix}",
                     "--format",
                     "{{.Name}}",
                 ],

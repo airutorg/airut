@@ -51,12 +51,17 @@ class SandboxConfig:
         proxy_dir: Path to directory containing proxy.dockerfile.
         upstream_dns: Upstream DNS server for the proxy.
         max_image_age_hours: Maximum image age before rebuild.
+        resource_prefix: Prefix for container/network resources.
+            Different prefixes isolate sandbox instances running on the
+            same host (e.g. ``"airut"`` for the gateway, ``"airut-cli"``
+            for the standalone CLI).
     """
 
     container_command: str = "podman"
     proxy_dir: Path = field(default_factory=_default_proxy_dir)
     upstream_dns: str = "1.1.1.1"
     max_image_age_hours: int = 24
+    resource_prefix: str = "airut"
 
 
 class Sandbox:
@@ -90,19 +95,13 @@ class Sandbox:
         self._overlay_images: dict[str, _ImageInfo] = {}
 
         # Proxy manager
-        if egress_network is not None:
-            self._proxy_manager = ProxyManager(
-                container_command=config.container_command,
-                proxy_dir=config.proxy_dir,
-                egress_network=egress_network,
-                upstream_dns=config.upstream_dns,
-            )
-        else:
-            self._proxy_manager = ProxyManager(
-                container_command=config.container_command,
-                proxy_dir=config.proxy_dir,
-                upstream_dns=config.upstream_dns,
-            )
+        self._proxy_manager = ProxyManager(
+            container_command=config.container_command,
+            proxy_dir=config.proxy_dir,
+            egress_network=egress_network,
+            upstream_dns=config.upstream_dns,
+            resource_prefix=config.resource_prefix,
+        )
 
     @property
     def proxy_manager(self) -> ProxyManager:

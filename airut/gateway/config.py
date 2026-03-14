@@ -26,7 +26,6 @@ gateway can be deployed independently.
 """
 
 import logging
-import os
 import secrets as secrets_module
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,6 +38,7 @@ from airut.gateway.channel import ChannelConfig
 from airut.gateway.dotenv_loader import load_dotenv_once
 from airut.logging import SecretFilter
 from airut.sandbox.types import ResourceLimits
+from airut.yaml_env import EnvVar, make_env_loader, raw_resolve
 
 
 if TYPE_CHECKING:
@@ -317,13 +317,6 @@ def generate_session_token_surrogate() -> str:
 # ---------------------------------------------------------------------------
 
 
-class _EnvVar:
-    """Placeholder for an unresolved ``!env VAR_NAME`` tag."""
-
-    def __init__(self, var_name: str) -> None:
-        self.var_name = var_name
-
-
 class _SecretRef:
     """Placeholder for ``!secret`` or ``!secret?`` tag in repo config.
 
@@ -336,12 +329,6 @@ class _SecretRef:
     def __init__(self, name: str, *, optional: bool = False) -> None:
         self.name = name
         self.optional = optional
-
-
-def _env_constructor(loader: yaml.SafeLoader, node: yaml.Node) -> _EnvVar:
-    """Handle ``!env VAR_NAME`` in YAML."""
-    value = loader.construct_scalar(node)
-    return _EnvVar(str(value))
 
 
 def _secret_constructor(loader: yaml.SafeLoader, node: yaml.Node) -> _SecretRef:
@@ -368,16 +355,6 @@ def _reject_env_constructor(
         f"(found !env {value}). Use !secret to reference "
         f"server-provided secrets instead."
     )
-
-
-def _make_loader() -> type[yaml.SafeLoader]:
-    """Create a YAML loader that understands ``!env``."""
-
-    class EnvLoader(yaml.SafeLoader):
-        pass
-
-    EnvLoader.add_constructor("!env", _env_constructor)
-    return EnvLoader
 
 
 def _make_repo_loader() -> type[yaml.SafeLoader]:
@@ -415,22 +392,6 @@ def _coerce_bool(value: object) -> bool:
     raise ConfigError(f"Cannot convert {value!r} to bool")
 
 
-def _raw_resolve(value: object) -> str | None:
-    """Resolve an ``_EnvVar`` to its string value, or stringify literals.
-
-    Returns None if the value is None or the env var is not set.
-    Returns empty string if the env var is set to empty string.
-    """
-    if isinstance(value, _EnvVar):
-        raw = os.environ.get(value.var_name)
-        if raw is None:
-            return None
-        return raw
-    if value is None:
-        return None
-    return str(value)
-
-
 _MISSING = object()
 
 
@@ -461,11 +422,11 @@ def _resolve(
     """Resolve a YAML value, handling ``!env`` tags and type coercion.
 
     This is the single entry point for reading any config value.  It
-    resolves ``_EnvVar`` placeholders, applies a default when the value
+    resolves ``EnvVar`` placeholders, applies a default when the value
     is missing, and coerces to the target type.
 
     Args:
-        value: Raw value from YAML (may be ``_EnvVar``, None, or a
+        value: Raw value from YAML (may be ``EnvVar``, None, or a
             literal already parsed by PyYAML).
         coerce: Target type (``str``, ``int``, ``bool``, ``Path``).
         default: Default when value is absent.  Not allowed together
@@ -478,18 +439,18 @@ def _resolve(
     """
     # For non-EnvVar values that PyYAML already parsed to the right
     # type (e.g. bool, int), skip string round-tripping when possible.
-    if not isinstance(value, _EnvVar) and value is not None:
+    if not isinstance(value, EnvVar) and value is not None:
         if coerce is bool:
             return _coerce_bool(value)
         if isinstance(value, coerce):
             return value
 
-    resolved = _raw_resolve(value)
+    resolved = raw_resolve(value)
 
     # Handle missing / empty
     if resolved is None:
         if required:
-            if isinstance(value, _EnvVar):
+            if isinstance(value, EnvVar):
                 raise ConfigError(
                     f"Required config '{required}': environment variable "
                     f"'{value.var_name}' is not set"
@@ -511,7 +472,7 @@ def _resolve_secrets(raw_secrets: dict) -> dict[str, str]:
     """Resolve a secrets mapping (``!env`` values from server config).
 
     Args:
-        raw_secrets: Raw mapping from YAML (values may be ``_EnvVar``).
+        raw_secrets: Raw mapping from YAML (values may be ``EnvVar``).
 
     Returns:
         Resolved mapping.  Entries whose value resolves to None (unset
@@ -520,7 +481,7 @@ def _resolve_secrets(raw_secrets: dict) -> dict[str, str]:
     """
     secrets: dict[str, str] = {}
     for key, value in raw_secrets.items():
-        resolved = _raw_resolve(value)
+        resolved = raw_resolve(value)
         if resolved is not None:
             secrets[str(key)] = resolved
     return secrets
@@ -530,7 +491,7 @@ def _resolve_string_list(value: object, *, required: str = "") -> list[str]:
     """Resolve a list of strings, handling ``!env`` for each element.
 
     Args:
-        value: Raw value from YAML (should be a list, may contain ``_EnvVar``).
+        value: Raw value from YAML (should be a list, may contain ``EnvVar``).
         required: Human-readable field name.  When set, raises
             ``ConfigError`` if the value is absent or empty.
 
@@ -552,7 +513,7 @@ def _resolve_string_list(value: object, *, required: str = "") -> list[str]:
 
     result: list[str] = []
     for item in value:
-        resolved = _raw_resolve(item)
+        resolved = raw_resolve(item)
         if resolved:
             result.append(resolved)
 
@@ -922,7 +883,7 @@ class ServerConfig:
             raise ConfigError(f"Config file not found: {config_path}")
 
         with open(config_path) as f:
-            raw = yaml.load(f, Loader=_make_loader())
+            raw = yaml.load(f, Loader=make_env_loader())
 
         if not isinstance(raw, dict):
             raise ConfigError(
@@ -1215,7 +1176,7 @@ def _parse_slack_channel_config(
                 )
             authorized.append({key: coerced})
         else:
-            resolved = _raw_resolve(value)
+            resolved = raw_resolve(value)
             if resolved is None:
                 raise ConfigError(
                     f"{prefix}.slack.authorized[{i}].{key} value is required"
@@ -1258,7 +1219,7 @@ def _resolve_masked_secrets(
 
         # Resolve value (supports !env)
         raw_value = config.get("value")
-        value = _raw_resolve(raw_value)
+        value = raw_resolve(raw_value)
 
         # Skip if value is None (env var unset / YAML null)
         if value is None:
@@ -1322,7 +1283,7 @@ def _resolve_signing_credential_field(
     name = str(name)
 
     raw_value = raw.get("value")
-    value = _raw_resolve(raw_value)
+    value = raw_resolve(raw_value)
     if not value:
         if required:
             raise ConfigError(f"{field_path}.value is required")
@@ -1528,7 +1489,7 @@ class RepoConfig:
     ) -> tuple["RepoConfig", ReplacementMap]:
         """Build repo config from parsed YAML dict."""
         # Reject !secret tags outside container_env — they would be
-        # silently stringified by _resolve/_raw_resolve.
+        # silently stringified by _resolve/raw_resolve.
         _reject_stray_secret_refs(raw)
 
         network_raw = raw.get("network", {})
@@ -1772,7 +1733,7 @@ def _resolve_container_env(
             )
         else:
             # Inline value
-            str_value = _raw_resolve(value)
+            str_value = raw_resolve(value)
             if str_value is not None:
                 resolved[str(key)] = str_value
 

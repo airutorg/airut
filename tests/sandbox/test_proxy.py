@@ -15,14 +15,18 @@ import pytest
 
 from airut.sandbox._proxy import (
     CA_CERT_FILENAME,
-    CONTEXT_NETWORK_PREFIX,
-    CONTEXT_PROXY_PREFIX,
-    EGRESS_NETWORK,
+    DEFAULT_RESOURCE_PREFIX,
     PROXY_IMAGE_NAME,
     ProxyError,
     ProxyManager,
     _ContextProxy,
 )
+
+
+# Derived constants matching the default prefix for test assertions.
+EGRESS_NETWORK = f"{DEFAULT_RESOURCE_PREFIX}-egress"
+CONTEXT_NETWORK_PREFIX = f"{DEFAULT_RESOURCE_PREFIX}-conv-"
+CONTEXT_PROXY_PREFIX = f"{DEFAULT_RESOURCE_PREFIX}-proxy-"
 
 
 class TestContextProxy:
