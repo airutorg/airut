@@ -95,3 +95,4 @@ class TestSandboxCanary:
             "canary.txt SHA-256 matches real content — "
             "network sandbox is not working"
         )
+
