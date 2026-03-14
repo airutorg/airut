@@ -35,6 +35,7 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
 - `spec/integration-tests.md` — end-to-end test specification
 - `spec/sandbox.md` — sandbox library for safe containerized Claude Code
   execution
+- `spec/sandbox-action.md` — reusable GitHub Action wrapping airut-sandbox
 - `spec/image.md` — two-layer container image build strategy
 - `spec/network-sandbox.md` — proxy lifecycle, resource scoping, log format,
   crash recovery
@@ -58,6 +59,8 @@ context that cannot be summarized here.
 
 - **Preparing a release** → `workflows/release.md`
   - Release notes, GitHub release creation (version derived from git tag)
+- **Maintaining sandbox-action** → `workflows/sandbox-action.md`
+  - Setup, changes, releases for `airutorg/sandbox-action` GitHub Action
 
 Read the entire workflow before starting. Workflows are living documents -
 update them if outdated.

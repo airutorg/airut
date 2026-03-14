@@ -24,6 +24,8 @@ For high-level documentation, see [doc/](../doc/).
   execution
 - [sandbox-cli.md](sandbox-cli.md) — Standalone CLI for running commands in the
   sandbox (CI integration)
+- [sandbox-action.md](sandbox-action.md) — Reusable GitHub Action wrapping
+  airut-sandbox (`airutorg/sandbox-action`)
 
 ## Container
 

@@ -54,7 +54,7 @@ url_prefixes:
     path: ""
     methods: [GET, HEAD]
 
-  # GitHub — restricted to airut repositories
+  # GitHub — restricted to airutorg repositories
   - host: github.com
     path: /airutorg/airut*
     methods: [GET, HEAD, POST]

@@ -11,16 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: airutorg/sandbox-action@main
         with:
-          ref: ${{ github.event.repository.default_branch }}
-          fetch-depth: 0
-      - uses: astral-sh/setup-uv@v4
-      - run: uv python install 3.13
-      - run: uv sync
-      - name: CI checks
-        run: >-
-          uv run airut-sandbox run --verbose --
-          scripts/sandbox-ci.sh "$COMMIT_SHA"
-        env:
-          COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          command: 'uv sync && uv run scripts/ci.py --verbose --timeout 0'
+          pr_sha: ${{ github.event.pull_request.head.sha || github.sha }}

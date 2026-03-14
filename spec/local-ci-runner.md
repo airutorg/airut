@@ -123,32 +123,19 @@ After fixes, the script continues to run remaining checks.
 
 ### GitHub Actions Integration
 
-The consolidated workflow (`.github/workflows/ci.yml`) checks out the default
-branch on the host, then runs `ci.py` inside the Airut sandbox via a wrapper
-script. The default-branch checkout ensures `airut-sandbox` and all `.airut/`
-config come from trusted code — the agent cannot tamper with sandbox
-configuration. See `spec/sandbox-cli.md` for the full security model.
+The consolidated workflow (`.github/workflows/ci.yml`) uses the
+`airutorg/sandbox-action` GitHub Action to run `ci.py` inside the Airut sandbox.
+The action handles default-branch checkout, `airut-sandbox` installation, and PR
+SHA fetching. See `spec/sandbox-action.md` for the action design and
+`spec/sandbox-cli.md` for the full security model.
 
 ```yaml
-- uses: actions/checkout@v4
-  with:
-    ref: ${{ github.event.repository.default_branch }}
-    fetch-depth: 0
-
-# ... setup steps ...
-
-- name: CI checks
-  run: >-
-    uv run airut-sandbox run --verbose --
-    scripts/sandbox-ci.sh "$COMMIT_SHA"
-  env:
-    COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+steps:
+  - uses: airutorg/sandbox-action@main
+    with:
+      command: 'uv sync && uv run scripts/ci.py --verbose --timeout 0'
+      pr_sha: ${{ github.event.pull_request.head.sha || github.sha }}
 ```
-
-The wrapper script (`scripts/sandbox-ci.sh`) runs inside the container: it
-fetches and checks out the PR commit, installs dependencies with `uv sync`, and
-runs `ci.py --verbose --timeout 0`. The SHA is passed via an `env:` variable
-rather than inline `${{ }}` interpolation to prevent expression injection.
 
 `--timeout 0` disables `ci.py`'s overall timeout since GitHub Actions provides
 its own `timeout-minutes`. `--verbose` shows full output in CI logs.
