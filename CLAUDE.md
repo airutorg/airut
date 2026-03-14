@@ -1,4 +1,5 @@
 # CLAUDE.md - Operating Instructions for Airut
+<!-- git-ops test marker: delete this line -->
 
 ## Project Overview
 
