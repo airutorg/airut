@@ -500,10 +500,10 @@ For example:
      - *Classic PAT*: Grant `repo` scope, ensure `workflow` is unchecked.
        Existing classic PATs may have `workflow` enabled by default — audit at
        GitHub → Settings → Developer settings → Personal access tokens.
-   - **Use a repository ruleset** — Create a ruleset that blocks pushes
-     modifying `.github/workflows/**` for all users except trusted
-     administrators. See
-     [ci-sandbox.md](ci-sandbox.md#protecting-workflow-files) for setup
+   - **Use a push ruleset** (Teams/Enterprise plans only) — Create a push
+     ruleset that blocks pushes modifying workflow files for all users except
+     trusted administrators. This requires a GitHub Teams or Enterprise plan.
+     See [ci-sandbox.md](ci-sandbox.md#protecting-workflow-files) for setup
      instructions. Rulesets and PAT scope restrictions can be combined for
      defense in depth.
    - **Limitation**: This alone is not sufficient — the agent cannot modify

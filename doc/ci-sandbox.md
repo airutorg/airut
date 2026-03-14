@@ -13,9 +13,10 @@ allowlisting, and credential masking that the Airut gateway uses.
 ## The Problem
 
 GitHub Actions workflows triggered by `pull_request` events execute code from
-the PR branch. For same-repository PRs (not forks), GitHub grants full access to
-repository secrets and `GITHUB_TOKEN` write permissions. A compromised agent
-can:
+the PR branch. For same-repository PRs (not forks), GitHub makes all repository
+secrets available. The `GITHUB_TOKEN` has whatever permissions are configured in
+the repository's default token settings (Settings → Actions → General → Workflow
+permissions) -- commonly read-write. A compromised agent can:
 
 1. **Modify workflow files directly** -- push a workflow that runs arbitrary
    code. Requires the `workflow` PAT scope.
@@ -97,27 +98,27 @@ GitHub enforces this at the git push level -- any push that includes changes to
   Existing classic PATs may have `workflow` enabled by default -- audit at
   GitHub → Settings → Developer settings → Personal access tokens.
 
-**Option B: Repository rulesets**
+**Option B: Push rulesets (Teams and Enterprise plans)**
 
-GitHub repository rulesets can restrict changes to specific file paths. Create a
-ruleset that blocks pushes modifying `.github/workflows/**` for all users except
-repository administrators (or a specific bypass list).
+GitHub push rulesets can restrict changes to specific file paths. This option
+requires a **GitHub Teams or Enterprise plan** -- push rulesets with file path
+restrictions are not available on Free or Pro plans, or for public repositories
+on those plans. For repositories without access to push rulesets, Option A (PAT
+scope omission) is the only mechanism.
 
 To configure:
 
-1. Go to Settings → Rules → Rulesets → New ruleset
+1. Go to Settings → Rules → Rulesets → New push ruleset
 2. Set enforcement status to **Active**
-3. Under "Target branches", add `main` and any other protected branches
-4. Under "Bypass list", add only trusted administrators
-5. Under "Rules", enable **Restrict file paths** and add the pattern
-   `.github/workflows/**`
+3. Under "Target branches", target all branches (`**`) or specific branch
+   patterns where the agent pushes
+4. Under "Bypass list", add only trusted administrators or apps that need to
+   modify workflows
+5. Under "Restrict file paths", add the pattern `**/.github/workflows/**/*`
 
-**Important:** Rulesets apply to the target branch. A push to a feature branch
-that modifies `.github/workflows/` is not blocked by the ruleset itself -- the
-restriction takes effect when the PR targets a protected branch. The PAT scope
-restriction (Option A) is more comprehensive because it blocks the push
-regardless of target branch. **Both options can be combined** for defense in
-depth.
+Push rulesets block the push itself (regardless of target branch), which is the
+desired behavior -- the agent cannot push workflow file changes to any branch.
+**Both options can be combined** for defense in depth.
 
 ### 2. Branch Protection
 

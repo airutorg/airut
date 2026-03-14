@@ -92,10 +92,10 @@ organization settings, or resources that your personal account has access to.
      `Metadata: Read` for the target repositories. **Do not grant
      `Workflows: Read and write`** — omitting it prevents the agent from
      modifying `.github/workflows/` files, blocking a
-     [sandbox escape vector](security.md#github-actions-workflow-escape).
-     Alternatively (or additionally), use a
-     [repository ruleset](ci-sandbox.md#protecting-workflow-files) to block
-     workflow file changes.
+     [sandbox escape vector](security.md#github-actions-workflow-escape). On
+     Teams/Enterprise plans, a
+     [push ruleset](ci-sandbox.md#protecting-workflow-files) can additionally
+     block workflow file changes.
    - **Classic PAT**: Grant `repo` scope. **Do not enable the `workflow`
      scope.** Existing classic PATs may have `workflow` enabled by default —
      audit at GitHub → Settings → Developer settings.

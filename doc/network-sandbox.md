@@ -496,5 +496,6 @@ When investigating connectivity problems from inside a container:
   specification
 - [spec/aws-sigv4-resigning.md](../spec/aws-sigv4-resigning.md) — AWS
   SigV4/SigV4A re-signing specification
+- [ci-sandbox.md](ci-sandbox.md) — Using the sandbox for CI pipelines
 - [execution-sandbox.md](execution-sandbox.md) — Container isolation
 - [security.md](security.md) — Overall security model
