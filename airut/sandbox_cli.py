@@ -406,6 +406,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Append network activity log to FILE",
     )
     run_parser.add_argument(
+        "--log",
+        type=Path,
+        default=None,
+        help="Write sandbox log to FILE instead of stderr",
+    )
+    run_parser.add_argument(
         "--verbose",
         action="store_true",
         help="Verbose logging (debug-level output on stderr)",
@@ -460,12 +466,22 @@ def _parse_mount(mount_str: str) -> Mount:
 # -------------------------------------------------------------------
 
 
-def _setup_logging(*, verbose: bool = False, quiet: bool = False) -> None:
-    """Configure logging to stderr.
+def _setup_logging(
+    *,
+    verbose: bool = False,
+    quiet: bool = False,
+    log_file: Path | None = None,
+) -> None:
+    """Configure logging.
+
+    When *log_file* is ``None``, logs are written to stderr.  When
+    given, logs are appended to the specified file instead (parent
+    directories are created automatically).
 
     Args:
         verbose: Enable debug-level output.
         quiet: Suppress all output except errors.
+        log_file: Optional file path for log output.
     """
     if quiet:
         level = logging.ERROR
@@ -474,12 +490,25 @@ def _setup_logging(*, verbose: bool = False, quiet: bool = False) -> None:
     else:
         level = logging.INFO
 
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        stream=sys.stderr,
+    handler: logging.Handler
+    if log_file is not None:
+        log_file = log_file.resolve()
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(str(log_file), mode="a")
+    else:
+        handler = logging.StreamHandler(sys.stderr)
+
+    handler.setLevel(level)
+    handler.setFormatter(
+        logging.Formatter(
+            fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
     )
+
+    root = logging.getLogger()
+    root.setLevel(level)
+    root.addHandler(handler)
 
 
 # -------------------------------------------------------------------
@@ -668,6 +697,12 @@ def _execute(args: argparse.Namespace, config: _SandboxCliConfig) -> int:
     # Build container env
     container_env = _build_container_env(config, prepared)
 
+    # Pass AIRUT_VERBOSE=1 to the container entrypoint when verbose
+    if getattr(args, "verbose", False):
+        container_env = ContainerEnv(
+            variables={**container_env.variables, "AIRUT_VERBOSE": "1"}
+        )
+
     # Parse additional mounts
     mounts: list[Mount] = []
     for mount_str in args.mount:
@@ -838,6 +873,7 @@ def _run(argv: list[str]) -> int:
     _setup_logging(
         verbose=getattr(args, "verbose", False),
         quiet=getattr(args, "quiet", False),
+        log_file=getattr(args, "log", None),
     )
 
     if args.subcommand != "run":

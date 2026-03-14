@@ -133,6 +133,12 @@ class TestParseArgs:
         args = _parse_args(["run", "--quiet", "--", "cmd"])
         assert args.quiet is True
 
+    def test_log_flag(self, tmp_path: Path) -> None:
+        """--log flag is parsed correctly."""
+        log_path = tmp_path / "sandbox.log"
+        args = _parse_args(["run", "--log", str(log_path), "--", "cmd"])
+        assert args.log == log_path
+
     def test_defaults(self) -> None:
         """Default values are None/False/[]."""
         args = _parse_args(["run", "--", "cmd"])
@@ -144,6 +150,7 @@ class TestParseArgs:
         assert args.container_command is None
         assert args.mount == []
         assert args.network_log is None
+        assert args.log is None
         assert args.verbose is False
         assert args.quiet is False
 
@@ -161,36 +168,93 @@ class TestParseArgs:
 class TestSetupLogging:
     """Tests for logging configuration."""
 
+    def _cleanup_root_logger(self) -> None:
+        """Remove handlers added by _setup_logging from root logger."""
+        root = logging.getLogger()
+        for h in root.handlers[:]:
+            root.removeHandler(h)
+            h.close()
+
     def test_default_level(self) -> None:
         """Default level is INFO."""
-        with patch("airut.sandbox_cli.logging.basicConfig") as mock_basic:
-            _setup_logging()
-            mock_basic.assert_called_once()
-            assert mock_basic.call_args.kwargs["level"] == logging.INFO
+        _setup_logging()
+        try:
+            root = logging.getLogger()
+            assert root.level == logging.INFO
+        finally:
+            self._cleanup_root_logger()
 
     def test_verbose_level(self) -> None:
         """Verbose enables DEBUG level."""
-        with patch("airut.sandbox_cli.logging.basicConfig") as mock_basic:
-            _setup_logging(verbose=True)
-            assert mock_basic.call_args.kwargs["level"] == logging.DEBUG
+        _setup_logging(verbose=True)
+        try:
+            root = logging.getLogger()
+            assert root.level == logging.DEBUG
+        finally:
+            self._cleanup_root_logger()
 
     def test_quiet_level(self) -> None:
         """Quiet enables ERROR level."""
-        with patch("airut.sandbox_cli.logging.basicConfig") as mock_basic:
-            _setup_logging(quiet=True)
-            assert mock_basic.call_args.kwargs["level"] == logging.ERROR
+        _setup_logging(quiet=True)
+        try:
+            root = logging.getLogger()
+            assert root.level == logging.ERROR
+        finally:
+            self._cleanup_root_logger()
 
     def test_quiet_overrides_verbose(self) -> None:
         """Quiet takes precedence over verbose."""
-        with patch("airut.sandbox_cli.logging.basicConfig") as mock_basic:
-            _setup_logging(verbose=True, quiet=True)
-            assert mock_basic.call_args.kwargs["level"] == logging.ERROR
+        _setup_logging(verbose=True, quiet=True)
+        try:
+            root = logging.getLogger()
+            assert root.level == logging.ERROR
+        finally:
+            self._cleanup_root_logger()
 
     def test_stream_is_stderr(self) -> None:
-        """Output goes to stderr."""
-        with patch("airut.sandbox_cli.logging.basicConfig") as mock_basic:
-            _setup_logging()
-            assert mock_basic.call_args.kwargs["stream"] is sys.stderr
+        """Default output goes to stderr via StreamHandler."""
+        _setup_logging()
+        try:
+            root = logging.getLogger()
+            handler = root.handlers[-1]
+            assert isinstance(handler, logging.StreamHandler)
+            assert handler.stream is sys.stderr
+        finally:
+            self._cleanup_root_logger()
+
+    def test_log_file(self, tmp_path: Path) -> None:
+        """--log PATH writes to a file via FileHandler."""
+        log_path = tmp_path / "sandbox.log"
+        _setup_logging(log_file=log_path)
+        try:
+            root = logging.getLogger()
+            handler = root.handlers[-1]
+            assert isinstance(handler, logging.FileHandler)
+            assert Path(handler.baseFilename) == log_path.resolve()
+        finally:
+            self._cleanup_root_logger()
+
+    def test_log_file_creates_parents(self, tmp_path: Path) -> None:
+        """--log PATH creates parent directories."""
+        log_path = tmp_path / "deep" / "nested" / "sandbox.log"
+        _setup_logging(log_file=log_path)
+        try:
+            assert log_path.parent.exists()
+        finally:
+            self._cleanup_root_logger()
+
+    def test_log_file_appends(self, tmp_path: Path) -> None:
+        """--log PATH appends to existing file."""
+        log_path = tmp_path / "sandbox.log"
+        log_path.write_text("existing content\n")
+        _setup_logging(log_file=log_path)
+        try:
+            root = logging.getLogger()
+            handler = root.handlers[-1]
+            assert isinstance(handler, logging.FileHandler)
+            assert handler.mode == "a"
+        finally:
+            self._cleanup_root_logger()
 
 
 # -------------------------------------------------------------------
@@ -1905,6 +1969,88 @@ class TestExecute:
         network_log_dir = create_call.kwargs["network_log_dir"]
         assert network_log_dir is not None
 
+    @patch("airut.sandbox_cli.Sandbox")
+    @patch("airut.sandbox_cli.prepare_secrets")
+    @patch("airut.sandbox_cli._install_signal_handlers")
+    def test_verbose_sets_airut_verbose_env(
+        self,
+        mock_signal_handlers: MagicMock,
+        mock_prepare: MagicMock,
+        mock_sandbox_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Verbose flag injects AIRUT_VERBOSE=1 into container env."""
+        from airut.sandbox_cli import _SandboxCliConfig
+
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine")
+
+        mock_prepare.return_value = PreparedSecrets(
+            env_vars={}, replacements=SecretReplacements()
+        )
+
+        mock_sandbox = MagicMock()
+        mock_sandbox_cls.return_value = mock_sandbox
+        mock_sandbox.ensure_image.return_value = "img:latest"
+
+        mock_task = MagicMock()
+        mock_task.execute.return_value = CommandResult(
+            exit_code=0,
+            stdout="",
+            stderr="",
+            duration_ms=50,
+            timed_out=False,
+        )
+        mock_sandbox.create_command_task.return_value = mock_task
+
+        args = self._make_args(dockerfile=dockerfile, verbose=True)
+        _execute(args, _SandboxCliConfig(network_sandbox=False))
+
+        create_call = mock_sandbox.create_command_task.call_args
+        env = create_call.kwargs["env"]
+        assert env.variables["AIRUT_VERBOSE"] == "1"
+
+    @patch("airut.sandbox_cli.Sandbox")
+    @patch("airut.sandbox_cli.prepare_secrets")
+    @patch("airut.sandbox_cli._install_signal_handlers")
+    def test_no_verbose_omits_airut_verbose_env(
+        self,
+        mock_signal_handlers: MagicMock,
+        mock_prepare: MagicMock,
+        mock_sandbox_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Without verbose, AIRUT_VERBOSE is not in container env."""
+        from airut.sandbox_cli import _SandboxCliConfig
+
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine")
+
+        mock_prepare.return_value = PreparedSecrets(
+            env_vars={}, replacements=SecretReplacements()
+        )
+
+        mock_sandbox = MagicMock()
+        mock_sandbox_cls.return_value = mock_sandbox
+        mock_sandbox.ensure_image.return_value = "img:latest"
+
+        mock_task = MagicMock()
+        mock_task.execute.return_value = CommandResult(
+            exit_code=0,
+            stdout="",
+            stderr="",
+            duration_ms=50,
+            timed_out=False,
+        )
+        mock_sandbox.create_command_task.return_value = mock_task
+
+        args = self._make_args(dockerfile=dockerfile)
+        _execute(args, _SandboxCliConfig(network_sandbox=False))
+
+        create_call = mock_sandbox.create_command_task.call_args
+        env = create_call.kwargs["env"]
+        assert "AIRUT_VERBOSE" not in env.variables
+
 
 # -------------------------------------------------------------------
 # _run
@@ -2015,7 +2161,9 @@ class TestRun:
 
         with patch("airut.sandbox_cli._setup_logging") as mock_logging:
             _run(["run", "--verbose", "--", "echo"])
-            mock_logging.assert_called_once_with(verbose=True, quiet=False)
+            mock_logging.assert_called_once_with(
+                verbose=True, quiet=False, log_file=None
+            )
 
     @patch("airut.sandbox_cli._execute")
     @patch("airut.sandbox_cli._load_config")
@@ -2032,7 +2180,30 @@ class TestRun:
 
         with patch("airut.sandbox_cli._setup_logging") as mock_logging:
             _run(["run", "--quiet", "--", "echo"])
-            mock_logging.assert_called_once_with(verbose=False, quiet=True)
+            mock_logging.assert_called_once_with(
+                verbose=False, quiet=True, log_file=None
+            )
+
+    @patch("airut.sandbox_cli._execute")
+    @patch("airut.sandbox_cli._load_config")
+    def test_log_file_passed_to_setup_logging(
+        self,
+        mock_load_config: MagicMock,
+        mock_execute: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """--log path is passed to _setup_logging."""
+        from airut.sandbox_cli import _SandboxCliConfig
+
+        log_path = tmp_path / "sandbox.log"
+        mock_load_config.return_value = _SandboxCliConfig()
+        mock_execute.return_value = 0
+
+        with patch("airut.sandbox_cli._setup_logging") as mock_logging:
+            _run(["run", "--log", str(log_path), "--", "echo"])
+            mock_logging.assert_called_once_with(
+                verbose=False, quiet=False, log_file=log_path
+            )
 
 
 # -------------------------------------------------------------------

@@ -113,3 +113,13 @@ class TestPassthroughEntrypoint:
         """Passthrough content uses strict bash error handling."""
         content = get_entrypoint_content(passthrough=True)
         assert b"set -euo pipefail" in content
+
+    def test_passthrough_uses_airut_verbose(self) -> None:
+        """Passthrough entrypoint checks AIRUT_VERBOSE for CA output."""
+        content = get_entrypoint_content(passthrough=True)
+        assert b"AIRUT_VERBOSE" in content
+
+    def test_passthrough_quiet_by_default(self) -> None:
+        """Passthrough redirects CA output to /dev/null by default."""
+        content = get_entrypoint_content(passthrough=True)
+        assert b">/dev/null 2>&1" in content

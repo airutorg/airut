@@ -295,6 +295,7 @@ Options:
   --container-command CMD  Container runtime (default: podman)
   --mount SRC:DST[:ro]   Additional mount (repeatable)
   --network-log FILE     Append network activity log to FILE
+  --log FILE             Write sandbox log to FILE instead of stderr
   --verbose              Verbose logging (debug-level output on stderr)
   --quiet                Suppress all diagnostic output (errors only)
 ```
@@ -322,6 +323,20 @@ would weaken security and should be avoided.
 appended to the given file (created if it does not exist) and persists after
 exit. When not specified, a temporary log file is created and deleted on exit.
 See Network Activity Log for details.
+
+**`--log` behavior**: When specified, sandbox implementation log messages
+(startup, image build, shutdown, etc.) are written to the given file instead of
+stderr. The file is created if it does not exist and appended to if it already
+exists. Parent directories are created automatically. When combined with
+`--quiet`, only ERROR and above messages are written. This is useful for keeping
+stdout/stderr clean (containing only the sandboxed command's output) while still
+retaining a diagnostic log for debugging.
+
+**Entrypoint output**: The container entrypoint is silent by default -- the
+`update-ca-certificates` step redirects all output to `/dev/null`. When
+`--verbose` is used, the entrypoint outputs CA certificate setup details to
+stderr. This is controlled via the `AIRUT_VERBOSE` environment variable, which
+the CLI injects into the container when `--verbose` is specified.
 
 ## Configuration
 
