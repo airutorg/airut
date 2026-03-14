@@ -296,8 +296,8 @@ Options:
   --mount SRC:DST[:ro]   Additional mount (repeatable)
   --network-log FILE     Append network activity log to FILE
   --log FILE             Write sandbox log to FILE instead of stderr
-  --verbose              Verbose logging (debug-level output on stderr)
-  --quiet                Suppress all diagnostic output (errors only)
+  --verbose              Enable informational logging (INFO level)
+  --debug                Enable debug logging (DEBUG level, implies --verbose)
 ```
 
 Entry point registered in `pyproject.toml`:
@@ -327,16 +327,22 @@ See Network Activity Log for details.
 **`--log` behavior**: When specified, sandbox implementation log messages
 (startup, image build, shutdown, etc.) are written to the given file instead of
 stderr. The file is created if it does not exist and appended to if it already
-exists. Parent directories are created automatically. When combined with
-`--quiet`, only ERROR and above messages are written. This is useful for keeping
-stdout/stderr clean (containing only the sandboxed command's output) while still
-retaining a diagnostic log for debugging.
+exists. Parent directories are created automatically. This is useful for
+capturing diagnostic logs without polluting the sandboxed command's output.
+
+**Logging levels**: By default, only ERROR and above messages are emitted, so
+the terminal shows only the sandboxed command's stdout and stderr. `--verbose`
+enables INFO-level messages (sandbox startup, image build progress, shutdown).
+`--debug` enables DEBUG-level messages (full container commands, internal
+details) and implies `--verbose`. When `--log` is specified, the chosen level
+applies to the log file; stderr receives no log output.
 
 **Entrypoint output**: The container entrypoint is silent by default -- the
 `update-ca-certificates` step redirects all output to `/dev/null`. When
-`--verbose` is used, the entrypoint outputs CA certificate setup details to
-stderr. This is controlled via the `AIRUT_VERBOSE` environment variable, which
-the CLI injects into the container when `--verbose` is specified.
+`--verbose` or `--debug` is used, the entrypoint outputs CA certificate setup
+details to stderr. This is controlled via the `AIRUT_VERBOSE` environment
+variable, which the CLI injects into the container when `--verbose` or `--debug`
+is specified.
 
 ## Configuration
 
@@ -536,7 +542,9 @@ both written to the CLI's stdout and passed to the `on_output` callback. This
 gives real-time streaming for both streams.
 
 The CLI's own log messages (sandbox startup, image build progress) go to stderr
-to avoid polluting the command's stdout.
+(or to the `--log` file when specified) to avoid polluting the command's stdout.
+By default (no `--verbose` or `--debug`), only ERROR messages are emitted, so
+the terminal output consists solely of the sandboxed command's streams.
 
 ## Lifecycle
 

@@ -128,10 +128,10 @@ class TestParseArgs:
         assert args.verbose is True
         assert args.command == ["echo", "hello"]
 
-    def test_quiet_flag(self) -> None:
-        """Quiet flag is parsed correctly."""
-        args = _parse_args(["run", "--quiet", "--", "cmd"])
-        assert args.quiet is True
+    def test_debug_flag(self) -> None:
+        """Debug flag is parsed correctly."""
+        args = _parse_args(["run", "--debug", "--", "cmd"])
+        assert args.debug is True
 
     def test_log_flag(self, tmp_path: Path) -> None:
         """--log flag is parsed correctly."""
@@ -152,7 +152,7 @@ class TestParseArgs:
         assert args.network_log is None
         assert args.log is None
         assert args.verbose is False
-        assert args.quiet is False
+        assert args.debug is False
 
     def test_double_dash_no_command(self) -> None:
         """Double dash with nothing after yields empty command."""
@@ -176,38 +176,38 @@ class TestSetupLogging:
             h.close()
 
     def test_default_level(self) -> None:
-        """Default level is INFO."""
+        """Default level is ERROR (quiet by default)."""
         _setup_logging()
+        try:
+            root = logging.getLogger()
+            assert root.level == logging.ERROR
+        finally:
+            self._cleanup_root_logger()
+
+    def test_verbose_level(self) -> None:
+        """Verbose enables INFO level."""
+        _setup_logging(verbose=True)
         try:
             root = logging.getLogger()
             assert root.level == logging.INFO
         finally:
             self._cleanup_root_logger()
 
-    def test_verbose_level(self) -> None:
-        """Verbose enables DEBUG level."""
-        _setup_logging(verbose=True)
+    def test_debug_level(self) -> None:
+        """Debug enables DEBUG level."""
+        _setup_logging(debug=True)
         try:
             root = logging.getLogger()
             assert root.level == logging.DEBUG
         finally:
             self._cleanup_root_logger()
 
-    def test_quiet_level(self) -> None:
-        """Quiet enables ERROR level."""
-        _setup_logging(quiet=True)
+    def test_debug_overrides_verbose(self) -> None:
+        """Debug takes precedence over verbose."""
+        _setup_logging(verbose=True, debug=True)
         try:
             root = logging.getLogger()
-            assert root.level == logging.ERROR
-        finally:
-            self._cleanup_root_logger()
-
-    def test_quiet_overrides_verbose(self) -> None:
-        """Quiet takes precedence over verbose."""
-        _setup_logging(verbose=True, quiet=True)
-        try:
-            root = logging.getLogger()
-            assert root.level == logging.ERROR
+            assert root.level == logging.DEBUG
         finally:
             self._cleanup_root_logger()
 
@@ -2013,6 +2013,47 @@ class TestExecute:
     @patch("airut.sandbox_cli.Sandbox")
     @patch("airut.sandbox_cli.prepare_secrets")
     @patch("airut.sandbox_cli._install_signal_handlers")
+    def test_debug_sets_airut_verbose_env(
+        self,
+        mock_signal_handlers: MagicMock,
+        mock_prepare: MagicMock,
+        mock_sandbox_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Debug flag also injects AIRUT_VERBOSE=1 into container env."""
+        from airut.sandbox_cli import _SandboxCliConfig
+
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine")
+
+        mock_prepare.return_value = PreparedSecrets(
+            env_vars={}, replacements=SecretReplacements()
+        )
+
+        mock_sandbox = MagicMock()
+        mock_sandbox_cls.return_value = mock_sandbox
+        mock_sandbox.ensure_image.return_value = "img:latest"
+
+        mock_task = MagicMock()
+        mock_task.execute.return_value = CommandResult(
+            exit_code=0,
+            stdout="",
+            stderr="",
+            duration_ms=50,
+            timed_out=False,
+        )
+        mock_sandbox.create_command_task.return_value = mock_task
+
+        args = self._make_args(dockerfile=dockerfile, debug=True)
+        _execute(args, _SandboxCliConfig(network_sandbox=False))
+
+        create_call = mock_sandbox.create_command_task.call_args
+        env = create_call.kwargs["env"]
+        assert env.variables["AIRUT_VERBOSE"] == "1"
+
+    @patch("airut.sandbox_cli.Sandbox")
+    @patch("airut.sandbox_cli.prepare_secrets")
+    @patch("airut.sandbox_cli._install_signal_handlers")
     def test_no_verbose_omits_airut_verbose_env(
         self,
         mock_signal_handlers: MagicMock,
@@ -2162,26 +2203,26 @@ class TestRun:
         with patch("airut.sandbox_cli._setup_logging") as mock_logging:
             _run(["run", "--verbose", "--", "echo"])
             mock_logging.assert_called_once_with(
-                verbose=True, quiet=False, log_file=None
+                verbose=True, debug=False, log_file=None
             )
 
     @patch("airut.sandbox_cli._execute")
     @patch("airut.sandbox_cli._load_config")
-    def test_quiet_passed_to_setup_logging(
+    def test_debug_passed_to_setup_logging(
         self,
         mock_load_config: MagicMock,
         mock_execute: MagicMock,
     ) -> None:
-        """Quiet flag is passed to _setup_logging."""
+        """Debug flag is passed to _setup_logging."""
         from airut.sandbox_cli import _SandboxCliConfig
 
         mock_load_config.return_value = _SandboxCliConfig()
         mock_execute.return_value = 0
 
         with patch("airut.sandbox_cli._setup_logging") as mock_logging:
-            _run(["run", "--quiet", "--", "echo"])
+            _run(["run", "--debug", "--", "echo"])
             mock_logging.assert_called_once_with(
-                verbose=False, quiet=True, log_file=None
+                verbose=False, debug=True, log_file=None
             )
 
     @patch("airut.sandbox_cli._execute")
@@ -2202,7 +2243,7 @@ class TestRun:
         with patch("airut.sandbox_cli._setup_logging") as mock_logging:
             _run(["run", "--log", str(log_path), "--", "echo"])
             mock_logging.assert_called_once_with(
-                verbose=False, quiet=False, log_file=log_path
+                verbose=False, debug=False, log_file=log_path
             )
 
 
@@ -2303,7 +2344,7 @@ class TestRunIntegration:
                 mock_parse.return_value = argparse.Namespace(
                     subcommand="unknown",
                     verbose=False,
-                    quiet=False,
+                    debug=False,
                     command=[],
                 )
                 result = _run(["unknown", "--", "cmd"])

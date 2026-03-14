@@ -414,12 +414,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     run_parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Verbose logging (debug-level output on stderr)",
+        help="Enable informational logging (INFO level)",
     )
     run_parser.add_argument(
-        "--quiet",
+        "--debug",
         action="store_true",
-        help="Suppress all diagnostic output (errors only)",
+        help="Enable debug logging (DEBUG level, implies --verbose)",
     )
 
     args = parser.parse_args(our_args)
@@ -469,26 +469,31 @@ def _parse_mount(mount_str: str) -> Mount:
 def _setup_logging(
     *,
     verbose: bool = False,
-    quiet: bool = False,
+    debug: bool = False,
     log_file: Path | None = None,
 ) -> None:
     """Configure logging.
+
+    The default level is ERROR so that only the sandboxed command's
+    stdout/stderr appear on the terminal.  ``--verbose`` enables INFO
+    messages (startup, image build, shutdown), and ``--debug`` enables
+    DEBUG messages (full command lines, internal details).
 
     When *log_file* is ``None``, logs are written to stderr.  When
     given, logs are appended to the specified file instead (parent
     directories are created automatically).
 
     Args:
-        verbose: Enable debug-level output.
-        quiet: Suppress all output except errors.
+        verbose: Enable INFO-level output.
+        debug: Enable DEBUG-level output (implies verbose).
         log_file: Optional file path for log output.
     """
-    if quiet:
-        level = logging.ERROR
-    elif verbose:
+    if debug:
         level = logging.DEBUG
-    else:
+    elif verbose:
         level = logging.INFO
+    else:
+        level = logging.ERROR
 
     handler: logging.Handler
     if log_file is not None:
@@ -697,8 +702,8 @@ def _execute(args: argparse.Namespace, config: _SandboxCliConfig) -> int:
     # Build container env
     container_env = _build_container_env(config, prepared)
 
-    # Pass AIRUT_VERBOSE=1 to the container entrypoint when verbose
-    if getattr(args, "verbose", False):
+    # Pass AIRUT_VERBOSE=1 to the container entrypoint when verbose/debug
+    if getattr(args, "verbose", False) or getattr(args, "debug", False):
         container_env = ContainerEnv(
             variables={**container_env.variables, "AIRUT_VERBOSE": "1"}
         )
@@ -872,7 +877,7 @@ def _run(argv: list[str]) -> int:
 
     _setup_logging(
         verbose=getattr(args, "verbose", False),
-        quiet=getattr(args, "quiet", False),
+        debug=getattr(args, "debug", False),
         log_file=getattr(args, "log", None),
     )
 
