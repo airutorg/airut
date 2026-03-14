@@ -406,14 +406,20 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Append network activity log to FILE",
     )
     run_parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Verbose logging (debug-level output on stderr)",
+        "--log",
+        type=Path,
+        default=None,
+        help="Write sandbox log to FILE instead of stderr",
     )
     run_parser.add_argument(
-        "--quiet",
+        "--verbose",
         action="store_true",
-        help="Suppress all diagnostic output (errors only)",
+        help="Enable informational logging (INFO level)",
+    )
+    run_parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging (DEBUG level, implies --verbose)",
     )
 
     args = parser.parse_args(our_args)
@@ -460,26 +466,54 @@ def _parse_mount(mount_str: str) -> Mount:
 # -------------------------------------------------------------------
 
 
-def _setup_logging(*, verbose: bool = False, quiet: bool = False) -> None:
-    """Configure logging to stderr.
+def _setup_logging(
+    *,
+    verbose: bool = False,
+    debug: bool = False,
+    log_file: Path | None = None,
+) -> None:
+    """Configure logging.
+
+    The default level is ERROR so that only the sandboxed command's
+    stdout/stderr appear on the terminal.  ``--verbose`` enables INFO
+    messages (startup, image build, shutdown), and ``--debug`` enables
+    DEBUG messages (full command lines, internal details).
+
+    When *log_file* is ``None``, logs are written to stderr.  When
+    given, logs are appended to the specified file instead (parent
+    directories are created automatically).
 
     Args:
-        verbose: Enable debug-level output.
-        quiet: Suppress all output except errors.
+        verbose: Enable INFO-level output.
+        debug: Enable DEBUG-level output (implies verbose).
+        log_file: Optional file path for log output.
     """
-    if quiet:
-        level = logging.ERROR
-    elif verbose:
+    if debug:
         level = logging.DEBUG
-    else:
+    elif verbose:
         level = logging.INFO
+    else:
+        level = logging.ERROR
 
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        stream=sys.stderr,
+    handler: logging.Handler
+    if log_file is not None:
+        log_file = log_file.resolve()
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(str(log_file), mode="a")
+    else:
+        handler = logging.StreamHandler(sys.stderr)
+
+    handler.setLevel(level)
+    handler.setFormatter(
+        logging.Formatter(
+            fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
     )
+
+    root = logging.getLogger()
+    root.setLevel(level)
+    root.addHandler(handler)
 
 
 # -------------------------------------------------------------------
@@ -668,6 +702,12 @@ def _execute(args: argparse.Namespace, config: _SandboxCliConfig) -> int:
     # Build container env
     container_env = _build_container_env(config, prepared)
 
+    # Pass AIRUT_VERBOSE=1 to the container entrypoint when verbose/debug
+    if getattr(args, "verbose", False) or getattr(args, "debug", False):
+        container_env = ContainerEnv(
+            variables={**container_env.variables, "AIRUT_VERBOSE": "1"}
+        )
+
     # Parse additional mounts
     mounts: list[Mount] = []
     for mount_str in args.mount:
@@ -837,7 +877,8 @@ def _run(argv: list[str]) -> int:
 
     _setup_logging(
         verbose=getattr(args, "verbose", False),
-        quiet=getattr(args, "quiet", False),
+        debug=getattr(args, "debug", False),
+        log_file=getattr(args, "log", None),
     )
 
     if args.subcommand != "run":

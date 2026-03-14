@@ -40,6 +40,11 @@ exec claude "$@"
 
 # The passthrough entrypoint script content. Same setup as the agent
 # entrypoint but runs the command directly instead of Claude.
+#
+# When AIRUT_VERBOSE=1 is set in the container environment, the
+# entrypoint logs its setup steps to stderr.  Otherwise it is
+# completely silent -- only the sandboxed command's own stdout and
+# stderr are emitted.
 PASSTHROUGH_ENTRYPOINT_SCRIPT = """\
 #!/usr/bin/env bash
 set -euo pipefail
@@ -49,7 +54,11 @@ export IS_SANDBOX=1
 
 # Trust mounted CA certificates (for network proxy)
 if [ -f /usr/local/share/ca-certificates/mitmproxy-ca.crt ]; then
-    update-ca-certificates 2>/dev/null || true
+    if [ "${AIRUT_VERBOSE:-}" = "1" ]; then
+        update-ca-certificates >&2 || true
+    else
+        update-ca-certificates >/dev/null 2>&1 || true
+    fi
 fi
 
 # Run command with all arguments passed through
