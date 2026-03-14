@@ -58,19 +58,33 @@ url_prefixes:
   - host: github.com
     path: /airutorg/airut*
     methods: [GET, HEAD, POST]
+  - host: github.com
+    path: /airutorg/sandbox-action*
+    methods: [GET, HEAD, POST]
   - host: api.github.com
     path: /repos/airutorg/airut*
+  - host: api.github.com
+    path: /repos/airutorg/sandbox-action*
   - host: api.github.com
     path: /graphql
     methods: [POST]
   - host: uploads.github.com
     path: /repos/airutorg/airut*
     methods: [POST]
+  - host: uploads.github.com
+    path: /repos/airutorg/sandbox-action*
+    methods: [POST]
   - host: raw.githubusercontent.com
     path: /airutorg/airut*
     methods: [GET, HEAD]
+  - host: raw.githubusercontent.com
+    path: /airutorg/sandbox-action*
+    methods: [GET, HEAD]
   - host: objects.githubusercontent.com
     path: /airutorg/airut*
+    methods: [GET, HEAD]
+  - host: objects.githubusercontent.com
+    path: /airutorg/sandbox-action*
     methods: [GET, HEAD]
   - host: results-receiver.actions.githubusercontent.com
     path: /rest/runs*
