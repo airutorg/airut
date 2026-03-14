@@ -113,7 +113,7 @@ Caller (gateway, CLI, automation)
 ### Owned State
 
 The sandbox creates and manages these files. Callers specify where to place them
-via `execution_context_dir` and `network_log_dir` in `create_task()` /
+via `execution_context_dir` and `network_log_path` in `create_task()` /
 `create_command_task()`:
 
 | File                  | Task type   | Purpose                                                     |

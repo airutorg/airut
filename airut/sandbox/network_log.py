@@ -18,7 +18,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-# Network sandbox log file name (created in network_log_dir)
+# Network sandbox log file name
 NETWORK_LOG_FILENAME = "network-sandbox.log"
 
 

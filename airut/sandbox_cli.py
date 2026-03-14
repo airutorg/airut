@@ -35,7 +35,6 @@ import yaml
 
 from airut.allowlist import Allowlist, parse_allowlist_yaml
 from airut.sandbox import (
-    NETWORK_LOG_FILENAME,
     CommandResult,
     ContainerEnv,
     MaskedSecret,
@@ -517,48 +516,41 @@ def _setup_logging(
 
 
 # -------------------------------------------------------------------
-# Network log bridging
+# Network log setup
 # -------------------------------------------------------------------
 
 
 def _setup_network_log(
     user_path: Path | None,
-) -> tuple[Path, Path, Callable[[], None]]:
-    """Set up network log directory for the proxy.
-
-    The proxy manager expects a directory (``network_log_dir``) and
-    creates ``network-sandbox.log`` inside it.  This function bridges
-    the user-facing file path to that interface via symlink.
+) -> tuple[Path, Callable[[], None]]:
+    """Set up the network log file path.
 
     Args:
         user_path: User-specified ``--network-log`` path, or ``None``
             for a tempfile that is deleted on exit.
 
     Returns:
-        Tuple of (network_log_dir, log_file_path, cleanup_fn).
+        Tuple of (network_log_path, cleanup_fn).
     """
     if user_path is not None:
         user_path = user_path.resolve()
         user_path.parent.mkdir(parents=True, exist_ok=True)
         user_path.touch(exist_ok=True)
 
-        tmpdir = Path(tempfile.mkdtemp(prefix="airut-netlog-"))
-        symlink = tmpdir / NETWORK_LOG_FILENAME
-        symlink.symlink_to(user_path)
-
         def cleanup() -> None:
-            symlink.unlink(missing_ok=True)
-            tmpdir.rmdir()
+            pass  # user file persists
 
-        return tmpdir, user_path, cleanup
+        return user_path, cleanup
 
-    # Default: temp dir, deleted on exit
-    tmpdir = Path(tempfile.mkdtemp(prefix="airut-netlog-"))
+    # Default: temp file, deleted on exit
+    fd, tmp = tempfile.mkstemp(prefix="airut-netlog-", suffix=".log")
+    os.close(fd)
+    tmp_path = Path(tmp)
 
     def cleanup_default() -> None:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        tmp_path.unlink(missing_ok=True)
 
-    return tmpdir, tmpdir / NETWORK_LOG_FILENAME, cleanup_default
+    return tmp_path, cleanup_default
 
 
 # -------------------------------------------------------------------
@@ -730,15 +722,15 @@ def _execute(args: argparse.Namespace, config: _SandboxCliConfig) -> int:
         )
 
     # Set up network log
-    network_log_dir: Path | None = None
+    network_log_path: Path | None = None
 
     def _noop_cleanup() -> None:
         pass
 
     network_log_cleanup: Callable[[], None] = _noop_cleanup
     if config.network_sandbox:
-        network_log_dir, network_log_path, network_log_cleanup = (
-            _setup_network_log(args.network_log)
+        network_log_path, network_log_cleanup = _setup_network_log(
+            args.network_log
         )
         logger.info("Network activity log: %s", network_log_path)
 
@@ -775,7 +767,7 @@ def _execute(args: argparse.Namespace, config: _SandboxCliConfig) -> int:
                 mounts=mounts,
                 env=container_env,
                 execution_context_dir=execution_context_dir,
-                network_log_dir=network_log_dir,
+                network_log_path=network_log_path,
                 network_sandbox=network_sandbox_config,
                 resource_limits=resource_limits,
             )

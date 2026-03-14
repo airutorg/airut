@@ -635,27 +635,22 @@ The network proxy records all DNS queries and HTTP(S) requests to a log file
 `spec/network-sandbox.md`). The log provides a complete audit trail: DNS
 resolutions, allowed requests, blocked requests, and upstream errors.
 
-**How it works**: The proxy manager volume-mounts a host file into the proxy
-container at `/network-sandbox.log`. Both the DNS responder and the mitmproxy
-addon append to this file. Internally, the proxy manager expects a directory
-(`network_log_dir`) and creates the file as
-`network_log_dir/network-sandbox.log` (see `spec/network-sandbox.md`). The CLI
-bridges the user-facing file path to this interface: it creates a temporary
-directory, symlinks `network-sandbox.log` inside it to the user's target file
-(or to a tempfile), and passes the temporary directory as `network_log_dir`.
-This keeps the proxy manager interface unchanged while giving the CLI user
-direct control over the output file path.
+**How it works**: The proxy manager accepts a `network_log_path` file path,
+touches it, and volume-mounts it into the proxy container at
+`/network-sandbox.log`. Both the DNS responder and the mitmproxy addon append to
+this file (see `spec/network-sandbox.md`). The CLI passes the user-specified
+path (or a temporary file) directly to the proxy manager.
 
 The CLI always logs the network log file path to stderr at startup (INFO level),
 so users know where to find the audit trail even when using the default
 temporary location.
 
-**Default behavior** (no `--network-log`): The CLI creates a temporary file and
-temporary directory (with the symlink). Both are deleted on exit, including
-after errors or signals. The log's content is still observable during execution:
-blocked requests (`BLOCKED`) and errors (`ERROR`) are written to both the log
-file and the proxy container's stdout (which surfaces on stderr via the
-container runtime), so they are visible in CI output without any special flag.
+**Default behavior** (no `--network-log`): The CLI creates a temporary file that
+is deleted on exit, including after errors or signals. The log's content is
+still observable during execution: blocked requests (`BLOCKED`) and errors
+(`ERROR`) are written to both the log file and the proxy container's stdout
+(which surfaces on stderr via the container runtime), so they are visible in CI
+output without any special flag.
 
 **Explicit file** (`--network-log FILE`): The CLI creates the file if it does
 not exist, and appends to it if it already exists. The file persists after exit.
