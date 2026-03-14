@@ -26,12 +26,9 @@ from airut.gateway.config import (
     SigningCredentialEntry,
     SigningCredentialField,
     _coerce_bool,
-    _EnvVar,
-    _make_loader,
     _make_repo_loader,
     _parse_resource_limits,
     _parse_slack_channel_config,
-    _raw_resolve,
     _resolve,
     _resolve_container_env,
     _resolve_masked_secrets,
@@ -45,37 +42,38 @@ from airut.gateway.config import (
     get_storage_dir,
 )
 from airut.logging import SecretFilter
+from airut.yaml_env import EnvVar, make_env_loader, raw_resolve
 
 
 class TestRawResolve:
-    """Tests for _raw_resolve."""
+    """Tests for raw_resolve."""
 
     def test_literal_string(self) -> None:
         """Literal string values resolve to themselves."""
-        assert _raw_resolve("hello") == "hello"
+        assert raw_resolve("hello") == "hello"
 
     def test_none(self) -> None:
         """None resolves to None."""
-        assert _raw_resolve(None) is None
+        assert raw_resolve(None) is None
 
     def test_int(self) -> None:
         """Non-string values are stringified."""
-        assert _raw_resolve(42) == "42"
+        assert raw_resolve(42) == "42"
 
     def test_envvar_set(self) -> None:
         """EnvVar resolves to env value when set."""
         with patch.dict("os.environ", {"MY_VAR": "val"}):
-            assert _raw_resolve(_EnvVar("MY_VAR")) == "val"
+            assert raw_resolve(EnvVar("MY_VAR")) == "val"
 
     def test_envvar_unset(self) -> None:
         """EnvVar resolves to None when env var is not set."""
         with patch.dict("os.environ", {}, clear=True):
-            assert _raw_resolve(_EnvVar("MISSING")) is None
+            assert raw_resolve(EnvVar("MISSING")) is None
 
     def test_envvar_empty(self) -> None:
         """EnvVar set to empty string resolves to empty string."""
         with patch.dict("os.environ", {"EMPTY": ""}):
-            assert _raw_resolve(_EnvVar("EMPTY")) == ""
+            assert raw_resolve(EnvVar("EMPTY")) == ""
 
 
 class TestCoerceBool:
@@ -112,7 +110,7 @@ class TestResolve:
     def test_str_envvar(self) -> None:
         """String !env resolves from environment."""
         with patch.dict("os.environ", {"V": "val"}):
-            assert _resolve(_EnvVar("V"), str) == "val"
+            assert _resolve(EnvVar("V"), str) == "val"
 
     def test_int_literal(self) -> None:
         """Int literal from YAML passes through."""
@@ -121,7 +119,7 @@ class TestResolve:
     def test_int_envvar(self) -> None:
         """Int !env resolves and coerces."""
         with patch.dict("os.environ", {"P": "993"}):
-            assert _resolve(_EnvVar("P"), int) == 993
+            assert _resolve(EnvVar("P"), int) == 993
 
     def test_bool_literal(self) -> None:
         """Bool literal from YAML passes through."""
@@ -131,9 +129,9 @@ class TestResolve:
     def test_bool_envvar(self) -> None:
         """Bool !env resolves string to bool."""
         with patch.dict("os.environ", {"B": "false"}):
-            assert _resolve(_EnvVar("B"), bool) is False
+            assert _resolve(EnvVar("B"), bool) is False
         with patch.dict("os.environ", {"B": "true"}):
-            assert _resolve(_EnvVar("B"), bool) is True
+            assert _resolve(EnvVar("B"), bool) is True
 
     def test_path_expanduser(self) -> None:
         """Path values get ~ expanded."""
@@ -143,7 +141,7 @@ class TestResolve:
     def test_path_envvar(self) -> None:
         """Path !env resolves and expands."""
         with patch.dict("os.environ", {"D": "~/stuff"}):
-            assert _resolve(_EnvVar("D"), Path) == Path.home() / "stuff"
+            assert _resolve(EnvVar("D"), Path) == Path.home() / "stuff"
 
     def test_default_when_none(self) -> None:
         """Default returned when value is None."""
@@ -152,7 +150,7 @@ class TestResolve:
     def test_default_when_envvar_unset(self) -> None:
         """Default returned when !env var is unset."""
         with patch.dict("os.environ", {}, clear=True):
-            assert _resolve(_EnvVar("X"), str, default="fallback") == "fallback"
+            assert _resolve(EnvVar("X"), str, default="fallback") == "fallback"
 
     def test_required_missing_literal(self) -> None:
         """Required raises ConfigError for missing literal."""
@@ -163,7 +161,7 @@ class TestResolve:
         """Required raises ConfigError with env var name."""
         with patch.dict("os.environ", {}, clear=True):
             with pytest.raises(ConfigError, match="'MY_VAR' is not set"):
-                _resolve(_EnvVar("MY_VAR"), str, required="field")
+                _resolve(EnvVar("MY_VAR"), str, required="field")
 
     def test_optional_returns_none(self) -> None:
         """Optional (no default, no required) returns None."""
@@ -179,19 +177,19 @@ class TestYamlLoader:
     """Tests for YAML !env tag loading."""
 
     def test_env_tag_parsed(self) -> None:
-        """!env tags produce _EnvVar objects."""
+        """!env tags produce EnvVar objects."""
         import yaml
 
-        loader = _make_loader()
+        loader = make_env_loader()
         result = yaml.load("key: !env MY_VAR", Loader=loader)
-        assert isinstance(result["key"], _EnvVar)
+        assert isinstance(result["key"], EnvVar)
         assert result["key"].var_name == "MY_VAR"
 
     def test_plain_values_unchanged(self) -> None:
         """Plain values load normally."""
         import yaml
 
-        loader = _make_loader()
+        loader = make_env_loader()
         result = yaml.load("key: hello", Loader=loader)
         assert result["key"] == "hello"
 
@@ -261,9 +259,7 @@ class TestResolveStringList:
     def test_env_vars_resolved(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """!env vars in list are resolved."""
         monkeypatch.setenv("TEST_EMAIL", "env@test.com")
-        result = _resolve_string_list(
-            [_EnvVar("TEST_EMAIL"), "inline@test.com"]
-        )
+        result = _resolve_string_list([EnvVar("TEST_EMAIL"), "inline@test.com"])
         assert result == ["env@test.com", "inline@test.com"]
 
     def test_empty_values_skipped(
@@ -271,7 +267,7 @@ class TestResolveStringList:
     ) -> None:
         """Empty values (resolved or literal) are skipped."""
         monkeypatch.delenv("UNSET_VAR", raising=False)
-        result = _resolve_string_list([_EnvVar("UNSET_VAR"), "valid@test.com"])
+        result = _resolve_string_list([EnvVar("UNSET_VAR"), "valid@test.com"])
         assert result == ["valid@test.com"]
 
 
@@ -2580,7 +2576,7 @@ class TestResolveSigningCredentials:
 
     def test_env_var_resolution(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """!env vars are resolved in signing credential field values."""
-        from airut.gateway.config import _EnvVar
+        from airut.yaml_env import EnvVar
 
         monkeypatch.setenv("AWS_KEY", "AKIAIOSFODNN7EXAMPLE")
         monkeypatch.setenv("AWS_SECRET", "secretkey")
@@ -2589,11 +2585,11 @@ class TestResolveSigningCredentials:
                 "type": SIGNING_TYPE_AWS_SIGV4,
                 "access_key_id": {
                     "name": "AWS_ACCESS_KEY_ID",
-                    "value": _EnvVar("AWS_KEY"),
+                    "value": EnvVar("AWS_KEY"),
                 },
                 "secret_access_key": {
                     "name": "AWS_SECRET_ACCESS_KEY",
-                    "value": _EnvVar("AWS_SECRET"),
+                    "value": EnvVar("AWS_SECRET"),
                 },
                 "scopes": ["*.amazonaws.com"],
             }
@@ -3017,7 +3013,7 @@ class TestParseSlackChannelConfig:
 
         with patch.dict("os.environ", {"SLACK_BOT_CFG": "xoxb-env-token"}):
             raw = {
-                "bot_token": _EnvVar("SLACK_BOT_CFG"),
+                "bot_token": EnvVar("SLACK_BOT_CFG"),
                 "app_token": "xapp-test-slack-token-11",
                 "authorized": [{"workspace_members": True}],
             }

@@ -39,6 +39,7 @@ dev = [
 
 [project.scripts]
 airut = "airut.cli:cli"
+airut-sandbox = "airut.sandbox_cli:main"
 
 [project.urls]
 Homepage = "https://airut.org"

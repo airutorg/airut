@@ -22,6 +22,8 @@ For high-level documentation, see [doc/](../doc/).
 
 - [sandbox.md](sandbox.md) — Sandbox library for safe containerized Claude Code
   execution
+- [sandbox-cli.md](sandbox-cli.md) — Standalone CLI for running commands in the
+  sandbox (CI integration)
 
 ## Container
 
