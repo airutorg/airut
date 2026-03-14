@@ -184,7 +184,7 @@ class Sandbox:
         mounts: list[Mount],
         env: ContainerEnv,
         execution_context_dir: Path,
-        network_log_dir: Path | None = None,
+        network_log_path: Path | None = None,
         network_sandbox: NetworkSandboxConfig | None = None,
         resource_limits: ResourceLimits | None = None,
     ) -> AgentTask:
@@ -194,8 +194,8 @@ class Sandbox:
         - execution_context_dir/events.jsonl -- append-only event log
         - execution_context_dir/claude/ -- Claude session state directory
           (mounted at /root/.claude in the container)
-        - network_log_dir/network-sandbox.log -- network activity log
-          (if network_log_dir provided)
+        - network_log_path -- network activity log
+          (if network_log_path provided)
 
         The claude/ subdirectory is created automatically and mounted
         by the sandbox. It must not appear in the caller's mounts list.
@@ -210,7 +210,7 @@ class Sandbox:
             mounts: Volume mounts for the container.
             env: Container environment variables.
             execution_context_dir: Directory for execution context state.
-            network_log_dir: Directory for network activity log.
+            network_log_path: File path for network activity log.
             network_sandbox: Network sandbox configuration.
             resource_limits: Container resource limits (timeout, memory,
                 cpus, pids_limit).
@@ -224,7 +224,7 @@ class Sandbox:
             mounts=mounts,
             env=env,
             execution_context_dir=execution_context_dir,
-            network_log_dir=network_log_dir,
+            network_log_path=network_log_path,
             network_sandbox=network_sandbox,
             resource_limits=resource_limits or ResourceLimits(),
             container_command=self._container_command,
@@ -241,7 +241,7 @@ class Sandbox:
         mounts: list[Mount],
         env: ContainerEnv,
         execution_context_dir: Path,
-        network_log_dir: Path | None = None,
+        network_log_path: Path | None = None,
         network_sandbox: NetworkSandboxConfig | None = None,
         resource_limits: ResourceLimits | None = None,
     ) -> CommandTask:
@@ -257,7 +257,7 @@ class Sandbox:
             mounts: Volume mounts for the container.
             env: Container environment variables.
             execution_context_dir: Directory for execution context state.
-            network_log_dir: Directory for network activity log.
+            network_log_path: File path for network activity log.
             network_sandbox: Network sandbox configuration.
             resource_limits: Container resource limits.
 
@@ -270,7 +270,7 @@ class Sandbox:
             mounts=mounts,
             env=env,
             execution_context_dir=execution_context_dir,
-            network_log_dir=network_log_dir,
+            network_log_path=network_log_path,
             network_sandbox=network_sandbox,
             resource_limits=resource_limits or ResourceLimits(),
             container_command=self._container_command,

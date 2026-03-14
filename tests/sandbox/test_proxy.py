@@ -512,11 +512,11 @@ class TestCreateNetworkLog:
     def test_creates_log_file(self, tmp_path: Path) -> None:
         """Creates empty network log file and tracks it."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
+        log_path = tmp_path / "network-sandbox.log"
 
-        log_path = pm._create_network_log("task-1", tmp_path)
+        pm._create_network_log("task-1", log_path)
 
         assert log_path.exists()
-        assert log_path.name == "network-sandbox.log"
         assert pm._network_log_files["task-1"] == log_path
 
 
@@ -957,11 +957,11 @@ class TestStartTaskProxy:
         for path in pm._replacement_tmpfiles.values():
             path.unlink(missing_ok=True)
 
-    def test_with_network_log_dir(self, tmp_path: Path) -> None:
-        """Creates network log when network_log_dir is provided."""
+    def test_with_network_log_path(self, tmp_path: Path) -> None:
+        """Creates network log when network_log_path is provided."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
-        log_dir = tmp_path / "logs"
-        log_dir.mkdir()
+        log_path = tmp_path / "logs" / "network-sandbox.log"
+        log_path.parent.mkdir()
 
         with (
             patch.object(pm, "stop_proxy"),
@@ -978,15 +978,16 @@ class TestStartTaskProxy:
                 "task-1",
                 allowlist_json=b"[]",
                 replacements_json=b"{}",
-                network_log_dir=log_dir,
+                network_log_path=log_path,
             )
 
         # Verify network log was created
         assert "task-1" in pm._network_log_files
+        assert pm._network_log_files["task-1"] == log_path
 
         # Verify _run_proxy_container was called with network_log_path
         call_kwargs = mock_run_proxy.call_args.kwargs
-        assert call_kwargs["network_log_path"] is not None
+        assert call_kwargs["network_log_path"] == log_path
 
         # Cleanup
         for path in pm._allowlist_tmpfiles.values():
@@ -1035,8 +1036,8 @@ class TestStartTaskProxy:
     def test_cleanup_on_failure_with_network_log(self, tmp_path: Path) -> None:
         """Cleans up network log tracking on failure."""
         pm = ProxyManager(upstream_dns="1.1.1.1")
-        log_dir = tmp_path / "logs"
-        log_dir.mkdir()
+        log_path = tmp_path / "logs" / "network-sandbox.log"
+        log_path.parent.mkdir()
 
         with (
             patch.object(pm, "stop_proxy"),
@@ -1059,7 +1060,7 @@ class TestStartTaskProxy:
                     "task-1",
                     allowlist_json=b"[]",
                     replacements_json=b"{}",
-                    network_log_dir=log_dir,
+                    network_log_path=log_path,
                 )
 
         # Network log tracking should be cleaned up

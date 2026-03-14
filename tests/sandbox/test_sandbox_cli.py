@@ -930,68 +930,52 @@ class TestParseMount:
 
 
 class TestSetupNetworkLog:
-    """Tests for network log directory setup."""
+    """Tests for network log file setup."""
 
     def test_with_user_path(self, tmp_path: Path) -> None:
-        """User-specified path creates symlink in temp dir."""
-        from airut.sandbox import NETWORK_LOG_FILENAME
-
+        """User-specified path is resolved and touched."""
         user_path = tmp_path / "logs" / "network.log"
-        log_dir, log_path, cleanup = _setup_network_log(user_path)
+        log_path, cleanup = _setup_network_log(user_path)
 
         try:
             # User path is created
             assert user_path.exists()
             # log_path matches resolved user path
             assert log_path == user_path.resolve()
-            # Temp dir exists
-            assert log_dir.is_dir()
-            # Symlink points to user path
-            symlink = log_dir / NETWORK_LOG_FILENAME
-            assert symlink.is_symlink()
-            assert symlink.resolve() == user_path.resolve()
         finally:
             cleanup()
 
-        # After cleanup, symlink and temp dir are gone
-        assert not (log_dir / NETWORK_LOG_FILENAME).exists()
-        assert not log_dir.exists()
+        # User file persists after cleanup
+        assert user_path.exists()
 
     def test_without_user_path(self) -> None:
-        """No user path creates temp dir, cleaned up on exit."""
-        from airut.sandbox import NETWORK_LOG_FILENAME
-
-        log_dir, log_path, cleanup = _setup_network_log(None)
+        """No user path creates temp file, cleaned up on exit."""
+        log_path, cleanup = _setup_network_log(None)
 
         try:
-            assert log_dir.is_dir()
-            assert "airut-netlog-" in str(log_dir)
-            # log_path points inside log_dir
-            assert log_path == log_dir / NETWORK_LOG_FILENAME
+            assert log_path.exists()
+            assert "airut-netlog-" in str(log_path)
         finally:
             cleanup()
 
-        assert not log_dir.exists()
+        assert not log_path.exists()
 
     def test_cleanup_default_removes_log_file(self) -> None:
-        """Default cleanup removes log file if created."""
-        from airut.sandbox import NETWORK_LOG_FILENAME
-
-        log_dir, log_path, cleanup = _setup_network_log(None)
+        """Default cleanup removes temp log file."""
+        log_path, cleanup = _setup_network_log(None)
 
         try:
-            # Simulate proxy creating a log file
-            log_file = log_dir / NETWORK_LOG_FILENAME
-            log_file.write_text("some log data")
+            # Simulate proxy creating log data
+            log_path.write_text("some log data")
         finally:
             cleanup()
 
-        assert not log_dir.exists()
+        assert not log_path.exists()
 
     def test_with_user_path_parent_created(self, tmp_path: Path) -> None:
         """Parent directories for user path are created."""
         user_path = tmp_path / "deep" / "nested" / "dir" / "net.log"
-        log_dir, log_path, cleanup = _setup_network_log(user_path)
+        log_path, cleanup = _setup_network_log(user_path)
 
         try:
             assert user_path.parent.exists()
@@ -1966,8 +1950,8 @@ class TestExecute:
         _execute(args, _SandboxCliConfig(network_sandbox=True))
 
         create_call = mock_sandbox.create_command_task.call_args
-        network_log_dir = create_call.kwargs["network_log_dir"]
-        assert network_log_dir is not None
+        network_log_path = create_call.kwargs["network_log_path"]
+        assert network_log_path == net_log.resolve()
 
     @patch("airut.sandbox_cli.Sandbox")
     @patch("airut.sandbox_cli.prepare_secrets")
@@ -2390,7 +2374,7 @@ class TestRunIntegration:
 
         with patch(
             "airut.sandbox_cli._setup_network_log",
-            return_value=(tmp_path, tmp_path / "net.log", bad_cleanup),
+            return_value=(tmp_path / "net.log", bad_cleanup),
         ):
             args = argparse.Namespace(
                 command=["echo", "hi"],

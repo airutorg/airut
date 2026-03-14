@@ -32,7 +32,7 @@ from airut.sandbox._run_container import (
     run_container,
 )
 from airut.sandbox.event_log import EventLog
-from airut.sandbox.network_log import NETWORK_LOG_FILENAME, NetworkLog
+from airut.sandbox.network_log import NetworkLog
 from airut.sandbox.secrets import SecretReplacements
 from airut.sandbox.types import (
     CommandResult,
@@ -81,7 +81,7 @@ def _start_proxy(
     execution_context_id: str,
     network_sandbox: NetworkSandboxConfig | None,
     proxy_manager: ProxyManager | None,
-    network_log_dir: Path | None,
+    network_log_path: Path | None,
 ) -> _ContextProxy | None:
     """Start a proxy for the given execution context if sandbox is configured.
 
@@ -89,7 +89,7 @@ def _start_proxy(
         execution_context_id: Execution context identifier.
         network_sandbox: Network sandbox configuration.
         proxy_manager: Proxy manager instance.
-        network_log_dir: Directory for network activity log.
+        network_log_path: File path for network activity log.
 
     Returns:
         Started context proxy, or None if no sandbox configured.
@@ -106,7 +106,7 @@ def _start_proxy(
         execution_context_id,
         allowlist_json=allowlist_json,
         replacements_json=replacements_json,
-        network_log_dir=network_log_dir,
+        network_log_path=network_log_path,
     )
 
 
@@ -138,7 +138,7 @@ class AgentTask:
         mounts: list[Mount],
         env: ContainerEnv,
         execution_context_dir: Path,
-        network_log_dir: Path | None,
+        network_log_path: Path | None,
         network_sandbox: NetworkSandboxConfig | None,
         resource_limits: ResourceLimits,
         container_command: str,
@@ -149,7 +149,7 @@ class AgentTask:
         self._mounts = mounts
         self._env = env
         self._execution_context_dir = execution_context_dir
-        self._network_log_dir = network_log_dir
+        self._network_log_path = network_log_path
         self._network_sandbox = network_sandbox
         self._resource_limits = resource_limits
         self._container_command = container_command
@@ -160,10 +160,8 @@ class AgentTask:
 
         # Network log
         self._network_log: NetworkLog | None = None
-        if network_log_dir is not None:
-            self._network_log = NetworkLog(
-                network_log_dir / NETWORK_LOG_FILENAME
-            )
+        if network_log_path is not None:
+            self._network_log = NetworkLog(network_log_path)
 
         # Claude session state directory
         self._claude_dir = execution_context_dir / "claude"
@@ -231,7 +229,7 @@ class AgentTask:
                 self._execution_context_id,
                 self._network_sandbox,
                 self._proxy_manager,
-                self._network_log_dir,
+                self._network_log_path,
             )
 
             try:
@@ -404,7 +402,7 @@ class CommandTask:
         mounts: list[Mount],
         env: ContainerEnv,
         execution_context_dir: Path,
-        network_log_dir: Path | None,
+        network_log_path: Path | None,
         network_sandbox: NetworkSandboxConfig | None,
         resource_limits: ResourceLimits,
         container_command: str,
@@ -415,7 +413,7 @@ class CommandTask:
         self._mounts = mounts
         self._env = env
         self._execution_context_dir = execution_context_dir
-        self._network_log_dir = network_log_dir
+        self._network_log_path = network_log_path
         self._network_sandbox = network_sandbox
         self._resource_limits = resource_limits
         self._container_command = container_command
@@ -423,10 +421,8 @@ class CommandTask:
 
         # Network log
         self._network_log: NetworkLog | None = None
-        if network_log_dir is not None:
-            self._network_log = NetworkLog(
-                network_log_dir / NETWORK_LOG_FILENAME
-            )
+        if network_log_path is not None:
+            self._network_log = NetworkLog(network_log_path)
 
         # Process tracking for stop()
         self._process_tracker = _ProcessTracker()
@@ -474,7 +470,7 @@ class CommandTask:
                 self._execution_context_id,
                 self._network_sandbox,
                 self._proxy_manager,
-                self._network_log_dir,
+                self._network_log_path,
             )
 
             try:

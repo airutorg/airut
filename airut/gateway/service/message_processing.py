@@ -47,6 +47,7 @@ from airut.gateway.config import ReplacementMap, RepoConfig
 from airut.gateway.conversation import GitCloneError
 from airut.gateway.service.usage_stats import extract_usage_stats
 from airut.sandbox import (
+    NETWORK_LOG_FILENAME,
     ContainerEnv,
     Mount,
     NetworkSandboxConfig,
@@ -467,8 +468,10 @@ def process_message(
             mounts=mounts,
             env=env,
             execution_context_dir=conversation_dir,
-            network_log_dir=(
-                conversation_dir if network_sandbox is not None else None
+            network_log_path=(
+                conversation_dir / NETWORK_LOG_FILENAME
+                if network_sandbox is not None
+                else None
             ),
             network_sandbox=network_sandbox,
             resource_limits=repo_config.resource_limits,
@@ -546,8 +549,10 @@ def process_message(
                 mounts=mounts,
                 env=env,
                 execution_context_dir=conversation_dir,
-                network_log_dir=(
-                    conversation_dir if network_sandbox is not None else None
+                network_log_path=(
+                    conversation_dir / NETWORK_LOG_FILENAME
+                    if network_sandbox is not None
+                    else None
                 ),
                 network_sandbox=network_sandbox,
                 resource_limits=repo_config.resource_limits,

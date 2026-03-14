@@ -38,8 +38,6 @@ from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
 
-from airut.sandbox.network_log import NETWORK_LOG_FILENAME
-
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +182,7 @@ class ProxyManager:
         *,
         allowlist_json: bytes,
         replacements_json: bytes,
-        network_log_dir: Path | None = None,
+        network_log_path: Path | None = None,
     ) -> _ContextProxy:
         """Create internal network and start proxy container for a context.
 
@@ -195,7 +193,7 @@ class ProxyManager:
             context_id: Execution context identifier.
             allowlist_json: JSON-encoded network allowlist.
             replacements_json: JSON-encoded replacement map for secrets.
-            network_log_dir: Optional directory for network activity log.
+            network_log_path: Optional file path for network activity log.
 
         Returns:
             _ContextProxy with connection details.
@@ -222,12 +220,9 @@ class ProxyManager:
             network_name, subnet=subnet, proxy_ip=proxy_ip
         )
 
-        # Create network log file if network_log_dir provided
-        network_log_path: Path | None = None
-        if network_log_dir is not None:
-            network_log_path = self._create_network_log(
-                context_id, network_log_dir
-            )
+        # Touch network log file if path provided
+        if network_log_path is not None:
+            self._create_network_log(context_id, network_log_path)
 
         try:
             # Write allowlist to temp file
@@ -479,25 +474,22 @@ class ProxyManager:
             tmppath.unlink(missing_ok=True)
 
     def _create_network_log(
-        self, context_id: str, network_log_dir: Path
-    ) -> Path:
-        """Create the network log file in the given directory.
+        self, context_id: str, network_log_path: Path
+    ) -> None:
+        """Touch the network log file and track it.
 
         Args:
             context_id: Execution context identifier (for tracking).
-            network_log_dir: Directory to create log file in.
-
-        Returns:
-            Path to the created log file.
+            network_log_path: File path for the network activity log.
         """
-        log_path = network_log_dir / NETWORK_LOG_FILENAME
         # Create empty file (proxy addon will append to it)
-        log_path.touch(exist_ok=True)
-        self._network_log_files[context_id] = log_path
+        network_log_path.touch(exist_ok=True)
+        self._network_log_files[context_id] = network_log_path
         logger.debug(
-            "Created network log for context %s: %s", context_id, log_path
+            "Created network log for context %s: %s",
+            context_id,
+            network_log_path,
         )
-        return log_path
 
     def _cleanup_network_log(self, context_id: str) -> None:
         """Remove tracking for network log file (but keep the file)."""

@@ -366,17 +366,17 @@ class TestSandboxCreateTask:
         assert task._resource_limits == ResourceLimits()
 
     @patch("airut.sandbox.sandbox.ProxyManager")
-    def test_network_log_dir(
+    def test_network_log_path(
         self, mock_pm_class: MagicMock, tmp_path: Path
     ) -> None:
-        """create_task() passes network_log_dir to AgentTask."""
+        """create_task() passes network_log_path to AgentTask."""
         config = SandboxConfig()
         sandbox = Sandbox(config)
 
         context_dir = tmp_path / "context"
         context_dir.mkdir()
-        log_dir = tmp_path / "logs"
-        log_dir.mkdir()
+        log_path = tmp_path / "logs" / "network-sandbox.log"
+        log_path.parent.mkdir()
 
         task = sandbox.create_task(
             "task-123",
@@ -384,10 +384,10 @@ class TestSandboxCreateTask:
             mounts=[],
             env=ContainerEnv(),
             execution_context_dir=context_dir,
-            network_log_dir=log_dir,
+            network_log_path=log_path,
         )
 
-        assert task._network_log_dir == log_dir
+        assert task._network_log_path == log_path
 
 
 class TestSandboxCreateCommandTask:

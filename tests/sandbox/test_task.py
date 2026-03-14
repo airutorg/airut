@@ -28,7 +28,7 @@ def _make_task(
     image_tag: str = "airut:test123",
     mounts: list[Mount] | None = None,
     env: ContainerEnv | None = None,
-    network_log_dir: Path | None = None,
+    network_log_path: Path | None = None,
     network_sandbox: NetworkSandboxConfig | None = None,
     resource_limits: ResourceLimits | None = None,
     container_command: str = "podman",
@@ -44,7 +44,7 @@ def _make_task(
         mounts=mounts or [],
         env=env or ContainerEnv(),
         execution_context_dir=context_dir,
-        network_log_dir=network_log_dir,
+        network_log_path=network_log_path,
         network_sandbox=network_sandbox,
         resource_limits=resource_limits or ResourceLimits(),
         container_command=container_command,
@@ -66,18 +66,18 @@ class TestAgentTaskInit:
         task = _make_task(tmp_path)
         assert isinstance(task.event_log, EventLog)
 
-    def test_network_log_none_when_no_dir(self, tmp_path: Path) -> None:
-        """network_log is None when network_log_dir not provided."""
+    def test_network_log_none_when_no_path(self, tmp_path: Path) -> None:
+        """network_log is None when network_log_path not provided."""
         task = _make_task(tmp_path)
         assert task.network_log is None
 
-    def test_network_log_created_when_dir_provided(
+    def test_network_log_created_when_path_provided(
         self, tmp_path: Path
     ) -> None:
-        """network_log is created when network_log_dir is provided."""
-        log_dir = tmp_path / "logs"
-        log_dir.mkdir()
-        task = _make_task(tmp_path, network_log_dir=log_dir)
+        """network_log is created when network_log_path is provided."""
+        log_path = tmp_path / "logs" / "network-sandbox.log"
+        log_path.parent.mkdir()
+        task = _make_task(tmp_path, network_log_path=log_path)
         assert isinstance(task.network_log, NetworkLog)
 
     def test_execution_context_id_property(self, tmp_path: Path) -> None:
