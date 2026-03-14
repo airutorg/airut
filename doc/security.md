@@ -498,12 +498,12 @@ For example:
    able to push changes to `.github/workflows/`. Two mechanisms are available:
    - **Omit the `workflow` scope from the agent's PAT** — GitHub enforces this
      at the git push level, rejecting any push that includes workflow file
-     changes.
-     - *Fine-grained PAT*: Grant `Contents: Read and write` but do **not** grant
-       `Workflows: Read and write`. `Metadata: Read` is set automatically.
-     - *Classic PAT*: Grant `repo` scope, ensure `workflow` is unchecked.
-       Existing classic PATs may have `workflow` enabled by default — audit at
-       GitHub → Settings → Developer settings → Personal access tokens.
+     changes. Use a **classic PAT** with the `repo` scope and ensure `workflow`
+     is unchecked. Existing classic PATs may have `workflow` enabled by default
+     — audit at GitHub → Settings → Developer settings → Personal access tokens.
+     (Fine-grained PATs cannot be used with a dedicated bot account because they
+     can only access repositories owned by the token's account, not repositories
+     where the account is a collaborator.)
    - **Use a push ruleset** (Teams/Enterprise plans only) — Create a push
      ruleset that blocks pushes modifying workflow files for all users except
      trusted administrators. This requires a GitHub Teams or Enterprise plan.

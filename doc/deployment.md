@@ -87,18 +87,20 @@ organization settings, or resources that your personal account has access to.
 1. Create a new GitHub account for the agent
 2. Grant the account **collaborator access** to only the repositories the agent
    will operate on (write access for pushing branches and creating PRs)
-3. Generate a **personal access token** for this account:
-   - **Fine-grained PAT** (recommended): Grant `Contents: Read and write` and
-     `Metadata: Read` for the target repositories. **Do not grant
-     `Workflows: Read and write`** — omitting it prevents the agent from
-     modifying `.github/workflows/` files, blocking a
-     [sandbox escape vector](security.md#github-actions-workflow-escape). On
+3. Generate a **classic personal access token** for this account:
+   - Grant the **`repo`** scope. **Do not enable the `workflow` scope** —
+     omitting it prevents the agent from modifying `.github/workflows/` files,
+     blocking a
+     [sandbox escape vector](security.md#github-actions-workflow-escape).
+     Existing classic PATs may have `workflow` enabled by default — audit at
+     GitHub → Settings → Developer settings → Personal access tokens. On
      Teams/Enterprise plans, a
      [push ruleset](ci-sandbox.md#protecting-workflow-files) can additionally
      block workflow file changes.
-   - **Classic PAT**: Grant `repo` scope. **Do not enable the `workflow`
-     scope.** Existing classic PATs may have `workflow` enabled by default —
-     audit at GitHub → Settings → Developer settings.
+   - **Why not fine-grained PATs?** Fine-grained PATs can only access
+     repositories owned by the token's account. Since the dedicated bot account
+     is a **collaborator** on target repositories (not the owner), fine-grained
+     PATs cannot be used to grant access to those repositories.
 4. Use this token as the `GH_TOKEN` in your server configuration
 
 The server's own git credentials (for fetching mirrors) can use a separate
