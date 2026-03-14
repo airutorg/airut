@@ -24,9 +24,9 @@ behavior (`mock_podman.py` → `mock_claude.py`). Response strategies: `echo`,
 
 ## CI Integration
 
-Tests run as part of the integration workflow
-(`.github/workflows/integration.yml`). No environment variables needed -
-`conftest.py` configures `CONTAINER_COMMAND` at module load.
+Tests run as part of the CI workflow (`.github/workflows/ci.yml`) via
+`scripts/ci.py`. No environment variables needed - `conftest.py` configures
+`CONTAINER_COMMAND` at module load.
 
 ```bash
 # Run via local CI runner

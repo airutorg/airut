@@ -8,17 +8,14 @@
 import subprocess
 import sys
 import time
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-import yaml
 from scripts.ci import (
     DEFAULT_TIMEOUT_SECONDS,
     FAILURE_OUTPUT_LINES,
     GREEN,
     RESET,
-    STEPS,
     Step,
     _format_overall_timeout_message,
     colorize,
@@ -599,89 +596,3 @@ class TestMain:
                 step_timeout=DEFAULT_STEP_TIMEOUT_SECONDS,
                 timeout=0,
             )
-
-
-class TestDriftDetection:
-    """Tests that verify ci.py steps match workflow files."""
-
-    def test_code_workflow_steps_match(self) -> None:
-        """Verify ci.py covers all steps from code.yml."""
-        workflow_path = (
-            Path(__file__).parent.parent.parent / ".github/workflows/code.yml"
-        )
-        with open(workflow_path) as f:
-            workflow = yaml.safe_load(f)
-
-        # Extract step names from workflow
-        workflow_steps = set()
-        for job in workflow.get("jobs", {}).values():
-            for step in job.get("steps", []):
-                if "name" in step:
-                    workflow_steps.add(step["name"])
-
-        # Steps we expect to skip (setup steps, not validation)
-        setup_steps = set()  # None currently
-
-        # Get ci.py step names for code workflow
-        ci_step_names = {s.name for s in STEPS if s.workflow == "code"}
-
-        # All workflow steps should be in ci.py (minus setup)
-        validation_steps = workflow_steps - setup_steps
-        missing = validation_steps - ci_step_names
-        assert not missing, f"Steps in code.yml not in ci.py: {missing}"
-
-    def test_integration_workflow_steps_match(self) -> None:
-        """Verify ci.py covers all test steps from integration.yml."""
-        workflow_path = (
-            Path(__file__).parent.parent.parent
-            / ".github/workflows/integration.yml"
-        )
-        with open(workflow_path) as f:
-            workflow = yaml.safe_load(f)
-
-        # Extract step names from workflow (only "Run" steps)
-        workflow_steps = set()
-        for job in workflow.get("jobs", {}).values():
-            for step in job.get("steps", []):
-                name = step.get("name", "")
-                if name.startswith("Run "):
-                    workflow_steps.add(name)
-
-        # Get ci.py step names for integration workflow
-        ci_step_names = {s.name for s in STEPS if s.workflow == "integration"}
-
-        # Map workflow step names to ci.py step names
-        expected_ci_names = set()
-        for step_name in workflow_steps:
-            if "integration" in step_name.lower():
-                expected_ci_names.add("Integration tests")
-
-        missing = expected_ci_names - ci_step_names
-        assert not missing, f"Steps in integration.yml not in ci.py: {missing}"
-
-    def test_security_workflow_steps_match(self) -> None:
-        """Verify ci.py covers all steps from security.yml."""
-        workflow_path = (
-            Path(__file__).parent.parent.parent
-            / ".github/workflows/security.yml"
-        )
-        with open(workflow_path) as f:
-            workflow = yaml.safe_load(f)
-
-        # Extract step names from workflow
-        workflow_steps = set()
-        for job in workflow.get("jobs", {}).values():
-            for step in job.get("steps", []):
-                if "name" in step:
-                    workflow_steps.add(step["name"])
-
-        # Steps we expect to skip (setup steps, not validation)
-        setup_steps = set()  # None currently
-
-        # Get ci.py step names for security workflow
-        ci_step_names = {s.name for s in STEPS if s.workflow == "security"}
-
-        # All workflow steps should be in ci.py (minus setup)
-        validation_steps = workflow_steps - setup_steps
-        missing = validation_steps - ci_step_names
-        assert not missing, f"Steps in security.yml not in ci.py: {missing}"

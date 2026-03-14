@@ -1,4 +1,4 @@
-name: Integration Tests
+name: CI
 
 on:
   push:
@@ -7,9 +7,9 @@ on:
     branches: [main]
 
 jobs:
-  integration-tests:
+  ci:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -17,10 +17,5 @@ jobs:
       - uses: astral-sh/setup-uv@v4
       - run: uv python install 3.13
       - run: uv sync
-
-      - name: Run integration tests
-        run: |
-          uv run pytest tests/integration/ -n auto -v -x \
-            -W error::pytest.PytestUnraisableExceptionWarning \
-            -W error::RuntimeWarning \
-            --allow-hosts=127.0.0.1,localhost
+      - name: CI checks
+        run: uv run scripts/ci.py --verbose --timeout 0
