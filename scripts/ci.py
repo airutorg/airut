@@ -4,15 +4,15 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Local CI runner that executes the same checks as GitHub Actions workflows.
+"""CI runner — the single source of truth for all CI checks.
 
-Provides a single command to validate changes before pushing, with minimal
-output on success and focused diagnostics on failure.
+Called directly by .github/workflows/ci.yml. Also used locally to validate
+changes before pushing.
 
 Usage:
     uv run scripts/ci.py           # Run all checks
     uv run scripts/ci.py --fix     # Auto-fix formatting issues first
-    uv run scripts/ci.py --workflow code   # Run specific workflow only
+    uv run scripts/ci.py --workflow code   # Run specific group only
     uv run scripts/ci.py --verbose # Show output even on success
     uv run scripts/ci.py --step-timeout 600  # Use 10-minute timeout per step
     uv run scripts/ci.py --step-timeout 0    # Disable timeout
@@ -58,17 +58,11 @@ class Step:
     fix_command: str | None = None
 
 
-# Steps derived from .github/workflows/*.yml
-# See spec/local-ci-runner.md for mapping details
-#
-# Workflow step name mapping (for drift detection):
-# code.yml: Lint, Format check, Type check, Markdown format check,
-#           Test coverage, Worktree clean check
-# security.yml: License check, Vulnerability scan, Proxy vulnerability scan,
-#               Proxy requirements.txt drift check
-# integration.yml: Integration tests
+# CI steps — the single source of truth for all checks.
+# The "workflow" field groups steps for selective runs (--workflow code, etc.)
+# but all steps run in a single GitHub Actions job via ci.yml.
 STEPS: list[Step] = [
-    # code.yml steps
+    # Code quality steps
     Step(
         name="Lint",
         command="uv run ruff check .",
@@ -101,13 +95,12 @@ STEPS: list[Step] = [
         ),
         workflow="code",
     ),
-    # Worktree clean check
     Step(
         name="Worktree clean check",
         command="git status --porcelain",
         workflow="code",
     ),
-    # security.yml steps
+    # Security steps
     Step(
         name="License check",
         command="uv run python scripts/check_licenses.py",
@@ -135,7 +128,7 @@ STEPS: list[Step] = [
         ),
         workflow="security",
     ),
-    # integration.yml steps
+    # Integration steps
     Step(
         name="Integration tests",
         command=(
@@ -392,7 +385,7 @@ def main() -> int:
         choices=["code", "security", "integration"],
         action="append",
         dest="workflows",
-        help="Run only steps from specified workflow (can be repeated)",
+        help="Run only steps from specified group (can be repeated)",
     )
     parser.add_argument(
         "--fix",

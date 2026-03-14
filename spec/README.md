@@ -48,5 +48,5 @@ For high-level documentation, see [doc/](../doc/).
 - [cli.md](cli.md) — CLI subcommands, service management, self-update
 - [pr-workflow-tool.md](pr-workflow-tool.md) — PR workflow automation (ci.py,
   pr.py)
-- [local-ci-runner.md](local-ci-runner.md) — Local CI runner for pre-push
-  validation
+- [local-ci-runner.md](local-ci-runner.md) — CI runner (single source of truth
+  for all CI checks)

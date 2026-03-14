@@ -46,7 +46,8 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
 - `spec/live-dashboard.md` — real-time dashboard updates via SSE
 - `spec/cli.md` — CLI subcommands, service management, self-update
 - `spec/pr-workflow-tool.md` — PR workflow automation (ci.py, pr.py)
-- `spec/local-ci-runner.md` — local CI runner for pre-push validation
+- `spec/local-ci-runner.md` — CI runner (single source of truth for all CI
+  checks)
 
 ## Operational Workflows
 
@@ -286,7 +287,7 @@ workflows/                  - Step-by-step operational guides
 
 ## Key Scripts
 
-- `scripts/ci.py` — local CI runner (runs all checks)
+- `scripts/ci.py` — CI runner (single source of truth for all CI checks)
 - `scripts/pr.py` — PR workflow (CI status and review comments)
 - `scripts/airut.py` — gateway entry point (`uv run airut`)
 

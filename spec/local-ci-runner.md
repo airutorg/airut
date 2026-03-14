@@ -1,7 +1,8 @@
-# Local CI Runner
+# CI Runner
 
-A Python script that runs the same checks as GitHub Actions CI locally,
-providing fast feedback before pushing changes.
+`scripts/ci.py` is the single source of truth for all CI checks. It is called
+directly by `.github/workflows/ci.yml` and can also be run locally for fast
+feedback before pushing changes.
 
 ## Motivation
 
@@ -12,9 +13,8 @@ PR. CLAUDE.md documents these steps but:
 2. Reproducing the exact CI environment is unnecessary for local validation
 3. Verbose output clutters the context when checks pass
 
-The local CI runner provides a single command that validates changes match CI
-expectations, showing minimal output on success and focused diagnostics on
-failure.
+The CI runner provides a single command that validates changes, showing minimal
+output on success and focused diagnostics on failure.
 
 ## Design
 
@@ -24,7 +24,7 @@ failure.
 # Run all checks
 uv run scripts/ci.py
 
-# Run specific workflow
+# Run specific step group
 uv run scripts/ci.py --workflow code
 
 # Show output even on success (for debugging)
@@ -68,38 +68,42 @@ Summary: 1 of 5 checks failed
 The full command is shown on failure so agents can easily re-run or iterate on
 that specific step.
 
-### Workflow Mapping
+### Step Groups
 
-The script derives steps from workflow files but filters for local relevance:
+Steps are organized into groups for selective runs via `--workflow <group>`. All
+steps run in a single GitHub Actions job; the grouping exists only for local
+convenience.
 
-#### From `code.yml`
+#### `code` group
 
-| Step            | Command                                          | Include |
-| --------------- | ------------------------------------------------ | ------- |
-| Lint            | `uv run ruff check .`                            | Yes     |
-| Format check    | `uv run ruff format --check .`                   | Yes     |
-| Type check      | `uv run ty check .`                              | Yes     |
-| Markdown format | `uv run mdformat --check .`                      | Yes     |
-| Test coverage   | `uv run pytest --cov=airut --cov-fail-under=100` | Yes     |
-| Worktree clean  | `git status --porcelain`                         | Yes     |
+| Step            | Command                                          |
+| --------------- | ------------------------------------------------ |
+| Lint            | `uv run ruff check .`                            |
+| Format check    | `uv run ruff format --check .`                   |
+| Type check      | `uv run ty check .`                              |
+| Markdown format | `uv run python scripts/check_markdown.py`        |
+| Test coverage   | `uv run pytest --cov=airut --cov-fail-under=100` |
+| Worktree clean  | `git status --porcelain`                         |
 
-#### From `security.yml`
+#### `security` group
 
-| Step               | Command                                   | Include |
-| ------------------ | ----------------------------------------- | ------- |
-| License check      | `uv run python scripts/check_licenses.py` | Yes     |
-| Vulnerability scan | `uv run uv-secure uv.lock`                | Yes     |
+| Step                               | Command                                             |
+| ---------------------------------- | --------------------------------------------------- |
+| License check                      | `uv run python scripts/check_licenses.py`           |
+| Vulnerability scan                 | `uv run uv-secure uv.lock`                          |
+| Proxy vulnerability scan           | `uv run uv-secure airut/_bundled/proxy/uv.lock ...` |
+| Proxy requirements.txt drift check | `uv export ... \| diff - ...`                       |
 
 The license check resolves the transitive closure of runtime dependencies (via
 `uv tree --no-dev`) and passes only those packages to `pip-licenses`. This
 ensures the license audit covers exactly what ships in a production install,
 without being affected by dev tooling licenses.
 
-#### From `integration.yml`
+#### `integration` group
 
-| Step              | Command                                                   | Include |
-| ----------------- | --------------------------------------------------------- | ------- |
-| Integration tests | `pytest tests/integration/ -v --allow-hosts=127.0.0.1...` | Yes     |
+| Step              | Command                                                   |
+| ----------------- | --------------------------------------------------------- |
+| Integration tests | `pytest tests/integration/ -v --allow-hosts=127.0.0.1...` |
 
 Integration tests run with a mock container tool (configured automatically by
 test fixtures) and require only localhost network access for the test servers.
@@ -117,15 +121,17 @@ check command:
 
 After fixes, the script continues to run remaining checks.
 
-### Drift Detection
+### GitHub Actions Integration
 
-Steps are hardcoded in `ci.py` rather than parsed from workflow YAML at runtime.
-To ensure they stay in sync, the test suite includes drift detection tests that:
+The consolidated workflow (`.github/workflows/ci.yml`) calls `ci.py` directly:
 
-1. Parse the workflow YAML files to extract step names
-2. Compare against the steps defined in `ci.py`
-3. Fail if there are steps in workflows not accounted for in `ci.py`
+```yaml
+- name: CI checks
+  run: uv run scripts/ci.py --verbose --timeout 0
+```
 
-This provides single-source-of-truth benefits without runtime YAML parsing
-complexity. When workflows change, the test fails with a clear message about
-what needs updating.
+`--timeout 0` disables `ci.py`'s overall timeout since GitHub Actions provides
+its own `timeout-minutes`. `--verbose` shows full output in CI logs.
+
+This makes `ci.py` the single source of truth — local and GitHub CI run
+identical checks. There are no separate workflow files to drift against.
