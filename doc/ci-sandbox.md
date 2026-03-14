@@ -124,11 +124,12 @@ The PR author must not be able to modify `.github/workflows/`. Two options:
 GitHub enforces this at the git push level -- any push that includes changes to
 `.github/workflows/` is rejected.
 
-- **Fine-grained PAT**: Grant `Contents: Read and write` but do **not** grant
-  `Workflows: Read and write`.
 - **Classic PAT**: Grant `repo` scope, ensure `workflow` is **unchecked**.
   Existing classic PATs may have `workflow` enabled by default -- audit at
-  GitHub → Settings → Developer settings → Personal access tokens.
+  GitHub → Settings → Developer settings → Personal access tokens. (Fine-grained
+  PATs cannot be used with a dedicated bot account because they can only access
+  repositories owned by the token's account, not repositories where the account
+  is a collaborator.)
 
 **Option B: Push rulesets (Teams and Enterprise plans)**
 
