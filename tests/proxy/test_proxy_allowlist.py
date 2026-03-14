@@ -13,6 +13,7 @@ here to avoid mitmproxy dependencies.
 
 import fnmatch
 from typing import TypedDict
+from urllib.parse import unquote
 
 
 def _match_pattern(pattern: str, value: str) -> bool:
@@ -77,6 +78,10 @@ class MockNetworkAllowlist:
 
     def _is_allowed(self, host: str, path: str, method: str = "") -> bool:
         """Check if a host+path+method combination is allowed."""
+        # Decode percent-encoded characters before matching to prevent
+        # bypass via encoding differences between proxy and upstream.
+        path = unquote(path)
+
         # Check domain entries (with wildcard support)
         # Domain entries allow all methods unconditionally
         for domain in self.domains:
@@ -287,6 +292,65 @@ class TestNetworkAllowlistIsAllowed:
         al.url_prefixes = []
 
         assert al._is_allowed("any.host.com", "/any/path") is False
+
+    def test_percent_encoded_path_decoded_before_match(self) -> None:
+        """Percent-encoded paths are decoded before allowlist matching.
+
+        Prevents bypass where encoded characters pass fnmatch but the
+        upstream server decodes them differently.
+        """
+        al = MockNetworkAllowlist()
+        al.domains = []
+        al.url_prefixes = [{"host": "api.github.com", "path": "/repos/foo*"}]
+
+        # %2F = '/' — decoded path is /repos/foo/bar, should match
+        assert al._is_allowed("api.github.com", "/repos/foo%2Fbar") is True
+        # Normal path still works
+        assert al._is_allowed("api.github.com", "/repos/foo/bar") is True
+
+    def test_percent_encoded_path_blocked_when_not_matching(self) -> None:
+        """Percent-encoded paths that don't match after decoding are blocked."""
+        al = MockNetworkAllowlist()
+        al.domains = []
+        al.url_prefixes = [{"host": "api.github.com", "path": "/repos/foo*"}]
+
+        # %2E%2E = '..' — decoded path is /repos/../secret, should NOT match
+        assert al._is_allowed("api.github.com", "/repos/%2E%2E/secret") is False
+
+    def test_percent_encoded_hash_in_path(self) -> None:
+        """Percent-encoded # (%23) is decoded before matching.
+
+        Without decoding, %23 could pass fnmatch while the upstream
+        interprets it as a fragment boundary.
+        """
+        al = MockNetworkAllowlist()
+        al.domains = []
+        al.url_prefixes = [{"host": "example.com", "path": "/api/*"}]
+
+        # %23 = '#' — after decoding, path is /api/foo#bar
+        assert al._is_allowed("example.com", "/api/foo%23bar") is True
+
+    def test_double_encoded_path_not_double_decoded(self) -> None:
+        """Double-encoded paths are only decoded once.
+
+        %252F decodes to %2F (not /). This ensures we don't over-decode.
+        """
+        al = MockNetworkAllowlist()
+        al.domains = []
+        al.url_prefixes = [{"host": "example.com", "path": "/a/b"}]
+
+        # %252F decodes to %2F (literal), not to /
+        # So decoded path is /a%2Fb, which should NOT match /a/b
+        assert al._is_allowed("example.com", "/a%252Fb") is False
+
+    def test_percent_encoded_exact_path(self) -> None:
+        """Exact path match works with percent-encoded input."""
+        al = MockNetworkAllowlist()
+        al.domains = []
+        al.url_prefixes = [{"host": "example.com", "path": "/graphql"}]
+
+        # %67 = 'g' — /graphql encoded partially
+        assert al._is_allowed("example.com", "/%67raphql") is True
 
 
 class TestMethodFiltering:
