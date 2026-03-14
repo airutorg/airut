@@ -35,6 +35,7 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TextIO, TypedDict
+from urllib.parse import unquote
 
 from aws_signing import (
     SIGNING_TYPE_AWS_SIGV4,
@@ -270,6 +271,10 @@ class ProxyFilter:
         Returns:
             True if the request is allowed, False otherwise.
         """
+        # Decode percent-encoded characters before matching to prevent
+        # bypass via encoding differences between proxy and upstream.
+        path = unquote(path)
+
         # Check domain entries (with wildcard support)
         # Domain entries allow all methods unconditionally
         for domain in self.domains:
