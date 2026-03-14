@@ -76,6 +76,38 @@ Even if the agent injects malicious code into test suites or build scripts, the
 sandbox prevents exfiltration. The container never sees real credential values
 -- only surrogates that the proxy replaces on matching outbound requests.
 
+## Trust Model
+
+The security of sandboxed CI relies on four invariants. Each is enforced by a
+different control, and all four must hold simultaneously:
+
+1. **Sandbox configuration comes from the default branch** --
+   `.airut/sandbox.yaml`, `.airut/network-allowlist.yaml`, and
+   `.airut/container/Dockerfile` are read from the base branch checkout on the
+   host, not from the PR branch. The agent cannot tamper with the container
+   image, network allowlist, or secret masking rules. The sandbox-action
+   enforces this by checking out `github.event.pull_request.base.ref`.
+
+2. **Workflow files are immutable to the agent** -- the agent must not be able
+   to modify `.github/workflows/`. For `pull_request` events, GitHub executes
+   the workflow YAML from the merge ref (`refs/pull/<number>/merge`), not from
+   the base branch alone -- so PAT scope restriction or a push ruleset is the
+   actual control that prevents the agent from altering the workflow.
+
+3. **The `airut-sandbox` implementation is trusted** -- the agent must not be
+   able to modify the sandbox code that enforces containment. For third-party
+   repos, `airut-sandbox` is installed from PyPI (the agent cannot modify it).
+   For the Airut repo itself, the default-branch checkout ensures the sandbox
+   implementation is trusted.
+
+4. **Only PR code runs inside the sandbox** -- the untrusted code (test suites,
+   build scripts, application code from the PR) executes inside the container.
+   Everything outside the container -- the workflow file, the checkout logic,
+   the `airut-sandbox` invocation -- comes from trusted sources.
+
+The only thing the agent controls is the code that runs inside the sandbox,
+which is the intended behavior: CI tests the PR code in a sandboxed environment.
+
 ## Security Requirements
 
 The sandbox action provides containment, but **the repository must be configured
@@ -320,15 +352,35 @@ for failure). Infrastructure errors exit with 125, timeouts with 124.
 
 ### Non-GitHub CI Systems
 
-`airut-sandbox` is CI-agnostic, but the workflow-level security guarantees
-depend on the CI platform. On non-GitHub platforms, verify:
+`airut-sandbox` is CI-agnostic -- it runs anywhere with a container runtime --
+but the **workflow-level security guarantees** depend on the CI platform
+enforcing equivalent constraints to those described in this guide. The security
+requirements above are written for GitHub Actions; operators deploying on other
+platforms must map them to their CI system's controls:
 
-- **Workflow file protection**: Use branch protection, CODEOWNERS, or path-based
-  protections to prevent the agent from modifying CI config files
-- **Default-branch checkout**: Ensure the host workspace contains only
-  default-branch files before `airut-sandbox` runs
-- **Secrets availability**: Audit which secrets are exposed to agent-triggered
-  pipelines and use masked secrets for all credentials
+- **Workflow file protection**: On GitHub, omitting the `workflow` PAT scope
+  prevents the agent from modifying `.github/workflows/`. On GitLab, Buildkite,
+  Jenkins, and other systems, there may be no equivalent token-level scope
+  restriction. Operators must use branch protection rules, CODEOWNERS, or
+  path-based protections to prevent the agent from modifying CI configuration
+  files (e.g., `.gitlab-ci.yml`, `Jenkinsfile`, `.buildkite/pipeline.yml`). If
+  the platform's API does not respect these protections, consider using an
+  external webhook-triggered pipeline where the agent's token has no write
+  access to the repository containing the pipeline definition.
+
+- **Default-branch checkout**: The `actions/checkout` `ref:` override pattern is
+  GitHub-specific. Other CI systems have different default checkout behaviors --
+  some check out the PR branch directly, others the merge result. Operators must
+  ensure the host workspace contains only default-branch files before
+  `airut-sandbox` runs, using whatever mechanism their CI platform provides.
+  This is critical: if the host workspace contains PR-branch files, the agent
+  can tamper with `.airut/` configuration.
+
+- **Secrets availability**: GitHub makes repository secrets available to
+  same-repo `pull_request` workflows but restricts them for fork PRs. Other
+  platforms may have different policies. Operators should audit which secrets
+  are exposed to agent-triggered pipelines and use masked secrets for all
+  credentials regardless of platform.
 
 ## Security Summary
 
@@ -361,9 +413,21 @@ Before relying on the sandbox for CI security, verify:
 | --------------------------------------------- | ------------------------------------------------------------ |
 | Sandbox escape via container vulnerability    | Same as gateway: `--cap-drop=ALL`, `no-new-privileges`       |
 | Misconfigured workflow checks out PR branch   | Follow this guide; use sandbox-action which handles checkout |
-| Expression injection in workflow `run:`       | Pass values via `env:`, not inline `${{ }}` interpolation    |
+| Expression injection in workflow `run:`       | See below                                                    |
 | Tainted workspace after sandbox               | Make sandbox step terminal; no post-sandbox steps            |
 | Agent modifies `airut-sandbox` implementation | Installed from PyPI/trusted source, not from PR branch       |
+
+**Expression injection:** GitHub Actions evaluates `${{ }}` expressions in
+workflow YAML _before_ the `run:` script executes. Values like
+`github.event.pull_request.title`, `github.head_ref` (branch name), and
+`github.event.pull_request.body` are controlled by the PR author (the agent). If
+a workflow interpolates these directly in a `run:` block, the agent can embed
+shell commands in the PR title or branch name that execute on the runner
+**outside the sandbox** -- the expression is evaluated at the workflow level,
+not inside the container. Mitigation: pass untrusted GitHub context values via
+`env:` variables (which are shell-escaped) rather than inline `${{ }}`
+interpolation in `run:` scripts. The `sandbox-action` itself follows this
+pattern.
 
 ## Fail-Secure Behavior
 
@@ -378,6 +442,7 @@ agent-steerable code runs as a fallback when sandboxing fails.
 - [execution-sandbox.md](execution-sandbox.md) -- Container isolation details
 - [network-sandbox.md](network-sandbox.md) -- Network allowlist and credential
   masking
-- [spec/sandbox-cli.md](../spec/sandbox-cli.md) -- Full CLI specification
+- [spec/sandbox-cli.md](../spec/sandbox-cli.md) -- `airut-sandbox` CLI
+  specification (configuration, lifecycle, resource isolation)
 - [spec/sandbox-action.md](../spec/sandbox-action.md) -- Full action
   specification

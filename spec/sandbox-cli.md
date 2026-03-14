@@ -1,218 +1,24 @@
 # Sandbox CLI
 
-Standalone CLI tool (`airut-sandbox`) for running commands inside the Airut
-sandbox. Exposes the same container isolation, network allowlisting, and
-credential masking that the gateway uses, as a standalone tool for CI pipelines
-and other environments running agent-steerable code.
+Standalone CLI tool (`airut-sandbox`) for running arbitrary commands inside the
+Airut sandbox. Exposes the same container isolation, network allowlisting, and
+credential masking that the gateway uses, as a standalone tool that can be
+invoked from any environment.
 
-For the user-facing setup guide, see [doc/ci-sandbox.md](../doc/ci-sandbox.md).
-
-## Security Model
-
-### Principle: Agent Containment
-
-The agent must be contained within the Airut sandbox at all times. This includes
-not only the agent during Airut task execution, but also any code the agent can
-steer or influence running anywhere outside Airut -- CI pipelines, build
-scripts, test suites, or any other execution environment.
-
-### Default Branch Is Trusted
-
-Airut's security model treats the default branch (typically main) as trusted.
-The agent cannot push directly to the default branch -- repository branch
-protection enforces this. All agent changes go through PRs that are merged by
-humans after review.
-
-This means a human reviews (by approving the PR) any changes the agent proposes
-to sandbox configuration (`.airut/container/Dockerfile`,
-`.airut/network-allowlist.yaml`, `.airut/sandbox.yaml`), workflow files, and
-other trusted infrastructure.
-
-### The CI Escape Vector
-
-GitHub Actions (and other CI systems) are an environment where the agent can run
-code outside the Airut sandbox. The agent pushes a PR branch, and CI workflows
-execute code from that branch -- test suites, build scripts, linters -- on
-runners with outbound internet access and access to CI secrets. This is a
-sandbox escape: the agent's code runs unsandboxed on the runner.
-
-**Note on secrets availability:** For same-repository PRs (branches within the
-same repo, not forks), GitHub Actions makes all repository secrets available and
-grants `GITHUB_TOKEN` write permissions. The agent pushes branches to the same
-repository, so `pull_request` workflows triggered by agent PRs have full access
-to secrets. This is why sandboxing CI execution matters -- the agent's code runs
-with access to credentials that could be exfiltrated via the runner's
-unrestricted network access.
-
-The escape has two paths (documented in `doc/security.md`):
-
-1. **Modify workflow files directly** -- push a workflow that runs arbitrary
-   code. Requires the `workflow` PAT scope.
-2. **Modify code that workflows execute** -- alter test files, build scripts, or
-   application code that existing workflows run. Requires only
-   `Contents: Read and write` (which the agent needs for normal git operations).
-
-### Existing Mitigations (Without `airut-sandbox`)
-
-Without `airut-sandbox`, **both** of the following mitigations are needed to
-close both escape paths:
-
-1. **Omit `workflow` scope from agent PAT** -- prevents the agent from creating
-   or modifying workflow files. GitHub enforces this at the git push level. This
-   closes path 1, but is not sufficient alone -- the agent can still modify code
-   that existing workflows execute (path 2).
-2. **Use `workflow_dispatch` for workflows that run agent-steerable code** --
-   workflows triggered only by manual dispatch (`workflow_dispatch`) cannot be
-   triggered by the agent. A human must review the changes and manually trigger
-   the workflow. This closes path 2, but sacrifices auto-triggered CI.
-
-Neither mitigation is sufficient on its own. Omitting the `workflow` scope
-without `workflow_dispatch` leaves path 2 open: existing auto-triggered
-workflows still execute agent-modified code on runners with full secret access.
-Using `workflow_dispatch` without omitting the `workflow` scope leaves path 1
-open: the agent can push a new workflow with an auto-trigger.
-
-Workflows that run no agent-steerable code (e.g., fixed actions, pinned linter
-configs) are safe to auto-trigger with only mitigation 1.
-
-### What `airut-sandbox` Adds
-
-`airut-sandbox` adds a third option: **auto-triggered workflows that run
-agent-steerable code inside the sandbox**. The workflow invokes
-`airut-sandbox run`, which runs the CI command inside the same container
-isolation, network allowlisting, and credential masking that the Airut gateway
-provides. Even if the agent injects malicious code into test suites or build
-scripts, the sandbox prevents exfiltration.
-
-Credential masking is particularly important in CI: same-repository
-`pull_request` workflows have full access to repository secrets (unlike fork
-PRs). By using masked secrets, the container never sees real credential values
--- only surrogates that the proxy replaces on matching outbound requests. This
-means compromised test code cannot exfiltrate API keys even if it finds a way to
-make network requests outside the allowlist.
-
-| Workflow type                                         | Auto-trigger safe? | Why                                           |
-| ----------------------------------------------------- | ------------------ | --------------------------------------------- |
-| Runs no agent-steerable code                          | Yes                | Agent can't influence execution               |
-| Runs agent-steerable code, **no sandbox**             | No                 | Must use `workflow_dispatch` (manual trigger) |
-| Runs agent-steerable code, **inside `airut-sandbox`** | Yes                | Agent-steered code contained by sandbox       |
-
-The security relies on the default-branch trust model:
-
-- **Sandbox configuration** is loaded from the default branch checkout, not from
-  the PR branch. The agent cannot tamper with the Dockerfile, network allowlist,
-  or secret masking rules. This requires the workflow to explicitly check out
-  the default branch.
-- **Workflow files** cannot be modified by the agent because the PAT lacks the
-  `workflow` scope. GitHub enforces this at the git push level -- any push that
-  includes changes to `.github/workflows/` is rejected. Note: for `pull_request`
-  events, GitHub executes the workflow YAML from the merge ref
-  (`refs/pull/<number>/merge`), not from the base branch alone. The PAT
-  restriction is the actual security control that prevents the agent from
-  altering the workflow.
-- **The `airut-sandbox` implementation** must come from a trusted source, not
-  from the PR branch. The agent must not be able to modify the sandbox code that
-  enforces containment. This has two cases:
-  - **Airut repo itself**: The workflow checks out the default branch before
-    running `airut-sandbox`. Since `airut-sandbox` is part of the repo, the
-    default-branch checkout ensures the sandbox implementation is trusted.
-  - **Third-party repos**: Install `airut-sandbox` from PyPI
-    (`uv tool install airut`) or from the Airut repository's main branch. The
-    sandbox implementation is not part of the consuming repo, so the agent
-    cannot modify it regardless of what it pushes.
-- **Wrapper scripts** that prepare the workspace (e.g., merging the PR commit)
-  run inside the sandbox. They come from the default branch in practice (since
-  that is what is checked out on the host), but the security model does not
-  require them to be trusted -- they execute inside the same container isolation
-  as the PR code itself.
-
-The only thing the agent controls is the code that runs inside the sandbox,
-which is the intended behavior -- CI tests the PR code in a sandboxed
-environment.
-
-### Non-GitHub CI Systems
-
-The security model above describes GitHub-specific controls (PAT scope
-restrictions, `pull_request` event semantics, `actions/checkout` behavior).
-`airut-sandbox` itself is CI-agnostic -- it runs anywhere with a container
-runtime -- but the **workflow-level security guarantees** depend on the CI
-platform enforcing equivalent constraints. Operators deploying on non-GitHub
-platforms must verify:
-
-- **Workflow file protection**: On GitHub, omitting the `workflow` PAT scope
-  prevents the agent from modifying `.github/workflows/`. On GitLab, Buildkite,
-  Jenkins, and other systems, there may be no equivalent token-level scope
-  restriction. Operators must use branch protection rules, CODEOWNERS, or
-  path-based protections to prevent the agent from modifying CI configuration
-  files (e.g., `.gitlab-ci.yml`, `Jenkinsfile`, `.buildkite/pipeline.yml`). If
-  the platform's API does not respect these protections, consider using an
-  external webhook-triggered pipeline where the agent's token has no write
-  access to the repository containing the pipeline definition.
-
-- **Default-branch checkout semantics**: The `actions/checkout` `ref:` override
-  pattern is GitHub-specific. Other CI systems have different default checkout
-  behaviors -- some check out the PR branch directly, others the merge result.
-  Operators must ensure the host workspace contains only default-branch files
-  before `airut-sandbox` runs, using whatever mechanism their CI platform
-  provides.
-
-- **Secrets availability**: GitHub makes repository secrets available to
-  same-repo `pull_request` workflows but restricts them for fork PRs. Other
-  platforms may have different policies. Operators should audit which secrets
-  are exposed to agent-triggered pipelines and use masked secrets for all
-  credentials regardless of platform.
-
-### Fail-Secure Principle
-
-Workflows that use `airut-sandbox` must be designed to **fail secure**: if the
-sandbox cannot run for any reason (not installed, container runtime unavailable,
-config error, infrastructure failure), the workflow step must fail and
-agent-steerable code must not execute unsandboxed. This is the natural behavior
-when `airut-sandbox run` is the workflow step command -- if `airut-sandbox` is
-missing or fails to start, the step exits non-zero and no code runs.
-
-**Never** structure a workflow where agent-steerable code runs as a fallback
-when sandboxing fails. The correct failure mode is a failed CI check, not an
-unsandboxed run.
-
-### Residual Attack Surface
-
-| Risk                                                 | Mitigation                                                                                         |
-| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Agent pushes workflow file with `workflow` PAT scope | Omit `workflow` scope from agent PAT (GitHub enforces at git push level)                           |
-| Workflow checks out PR branch before running sandbox | Workflow design: main-branch checkout first, PR code only inside sandbox                           |
-| Agent modifies `airut-sandbox` implementation        | Install from PyPI/trusted source, or check out from default branch                                 |
-| Sandbox escape via container vulnerability           | Same risk as gateway; mitigated by `--cap-drop=ALL`, `no-new-privileges`                           |
-| Sandbox infrastructure failure                       | Fail-secure: workflow step fails, agent code does not run unsandboxed                              |
-| Expression injection in workflow `run:` scripts      | Pass GitHub context via `env:` variables, not inline `${{ }}` interpolation                        |
-| Tainted workspace after sandbox execution            | Make `airut-sandbox` the terminal job step; post-sandbox steps must not execute workspace binaries |
-
-The primary operational risk is a misconfigured workflow that checks out the PR
-branch (or the default merge ref) on the host before running `airut-sandbox`,
-allowing the PR to tamper with `.airut/` config or sandbox implementation. On
-`pull_request` events, `actions/checkout` without an explicit `ref:` checks out
-the merge commit (`refs/pull/<number>/merge`), which includes PR changes -- this
-is the default behavior and must be overridden. Two controls ensure trusted
-config on the host:
-
-- **Branch filter** (`pull_request: branches: [main]`): The workflow must only
-  trigger on PRs targeting protected branches.
-- **Base branch checkout**: The `sandbox-action` checks out
-  `pull_request.base.ref` (the PR's target branch). Since the workflow only
-  triggers on PRs to protected branches, the base branch is always protected and
-  its `.airut/` config is trusted.
-
-Additionally, the PR author must not be able to modify workflow files. The push
-token must lack the `workflow` scope, or a repository ruleset must block changes
-to `.github/workflows/`. See `spec/sandbox-action.md` for details.
+For the CI-specific setup guide (GitHub Actions, security requirements, workflow
+configuration), see [doc/ci-sandbox.md](../doc/ci-sandbox.md).
 
 ## Motivation
 
-The Airut gateway already has a production-quality sandbox: container isolation
-with `--cap-drop=ALL`, network allowlisting via transparent proxy, credential
-masking with format-preserving surrogates, and resource limits via cgroup v2.
-`airut-sandbox` exposes this as a standalone CLI tool so that CI workflows (and
-any other environment running agent-steerable code) can use the same sandbox.
+The Airut gateway runs Claude Code inside a production-quality sandbox:
+container isolation with `--cap-drop=ALL`, network allowlisting via transparent
+proxy, credential masking with format-preserving surrogates, and resource limits
+via cgroup v2. `airut-sandbox` exposes this as a standalone CLI tool so that
+**any** command can run inside the same sandbox — not just Claude Code sessions.
+
+The primary use case is sandboxing agent-steerable code in CI pipelines, but the
+tool is generic: it sandboxes whatever command it is given, regardless of who or
+what invokes it.
 
 ### Why a CLI Tool, Not a Service
 
@@ -222,8 +28,8 @@ significant advantages:
 
 - **No new infrastructure** -- no webhook server, executor process, systemd
   unit, or separate config file. The sandbox is a tool, not a service.
-- **Works with any CI system** -- GitHub Actions, GitLab CI, Buildkite, local
-  dev. The sandbox does not care who invokes it.
+- **Works anywhere** -- CI systems, local development, scripts, cron jobs. The
+  sandbox does not care who invokes it.
 - **Preserves CI ecosystem** -- status checks, artifact upload, matrix builds,
   caching, marketplace actions all continue to work.
 - **Lower operational cost** -- one tool to install, not a service to deploy and
@@ -246,27 +52,15 @@ significant advantages:
 ### Component Overview
 
 ```
-CI System (GitHub Actions, GitLab CI, etc.)
+airut-sandbox run -- <command>
   |
-  +- Workflow on default branch triggers on PR event
-  +- Checks out default branch (trusted config)
-  +- Fetches PR SHA on host (objects stored in .git/)
-  |
-  v
-airut-sandbox run -- bash -c 'git checkout <sha> && <ci-command>'
-  |
-  +- Load .airut/ config (default branch, trusted)
-  +- Build/reuse container image (Dockerfile from default branch)
+  +- Load .airut/ config from working directory
+  +- Build/reuse container image (Dockerfile from .airut/container/)
   +- Start sandbox (container + network proxy + credential masking)
   +- Run command inside container
-  |    +- git checkout checks out PR ref (local objects, no network)
-  |    +- CI command runs (agent-steered code, sandboxed)
   +- Stream stdout/stderr to the caller
   +- Exit with the command's exit code
 ```
-
-For GitHub Actions, the `airutorg/sandbox-action` composite action handles all
-the above steps (see `spec/sandbox-action.md`).
 
 ### Code Layout
 
@@ -327,16 +121,16 @@ command being sandboxed.
 
 **`--allowlist` behavior**: When specified, this allowlist is used instead of
 the default `.airut/network-allowlist.yaml`. The intended use case is providing
-a **more restrictive** CI-specific allowlist (e.g., CI may only need
-`api.github.com` while the gateway allowlist includes additional hosts for
-development). There is no enforcement that the override is a subset -- this is a
-configuration guideline, not a technical constraint. A more permissive override
-would weaken security and should be avoided.
+a **more restrictive** allowlist (e.g., CI may only need `api.github.com` while
+the gateway allowlist includes additional hosts for development). There is no
+enforcement that the override is a subset -- this is a configuration guideline,
+not a technical constraint. A more permissive override would weaken security and
+should be avoided.
 
 **`--network-log` behavior**: When specified, the network activity log is
 appended to the given file (created if it does not exist) and persists after
 exit. When not specified, a temporary log file is created and deleted on exit.
-See Network Activity Log for details.
+See [Network Activity Log](#network-activity-log) for details.
 
 **`--log` behavior**: When specified, sandbox implementation log messages
 (startup, image build, shutdown, etc.) are written to the given file instead of
@@ -373,17 +167,12 @@ earlier ones:
 4. **CLI flags** -- explicit overrides for Dockerfile path, allowlist path,
    timeout, mounts, and container runtime
 
-The CLI reads `.airut/` from the current working directory. In the CI pattern,
-the CWD is the default-branch checkout, so all configuration comes from the
-trusted default branch -- the agent cannot tamper with it. This is the same
-trust model as the gateway, where network allowlists and container images are
-always read from the default branch.
+The CLI reads `.airut/` from the current working directory.
 
 **All environment variables and secrets passed to the container are defined in
 the config file.** There are no CLI flags for passing environment variables or
 secrets -- this ensures the set of credentials available inside the sandbox is
-controlled by the config file (which lives on the default branch and is reviewed
-by humans), not by workflow arguments that might be modified in a PR.
+controlled by the config file, not by command-line arguments.
 
 ### Sandbox Config (`.airut/sandbox.yaml`)
 
@@ -458,19 +247,13 @@ resource_limits:
 
 **`!env` resolution**: All `!env` tags are resolved from host environment
 variables at CLI startup. If a referenced variable is not set, the CLI exits
-with code 125 and an error message. This is fail-closed -- a CI step that
-expects credentials should not silently run without them.
+with code 125 and an error message. This is fail-closed -- missing credentials
+should not silently result in an uncredentialed run.
 
 **Config file is optional**: If `.airut/sandbox.yaml` does not exist, the CLI
 runs with defaults (no env vars, no secrets, network sandbox enabled, default
 resource limits). This is appropriate for sandboxing commands that need no
 credentials.
-
-**Security note**: The config file lives on the default branch (`.airut/`
-directory). In the CI workflow pattern, the host filesystem contains the
-default-branch checkout, so the agent cannot tamper with the list of env vars,
-secrets, or network sandbox settings. This is the same trust model used for the
-Dockerfile and network allowlist.
 
 ## Credential Handling
 
@@ -497,7 +280,7 @@ surrogates are available inside the container.
 - **Credentials for non-HTTP protocols** that the proxy cannot intercept (e.g.,
   SSH keys, database passwords) -- these are not supported by the masking proxy
   and must be passed as plain values. Consider whether the command actually
-  needs these credentials in CI.
+  needs these credentials.
 
 **When `pass_env` is appropriate for non-secrets:**
 
@@ -509,7 +292,7 @@ surrogates are available inside the container.
 
 By default, the current working directory is mounted read-write at `/workspace`
 inside the container, and the container's working directory is set to
-`/workspace`. This differs from the gateway (which mounts read-only) because CI
+`/workspace`. This differs from the gateway (which mounts read-only) because
 commands typically need write access: test reports, coverage files, formatter
 auto-fixes, lockfile updates, and build artifacts all write to the working
 directory.
@@ -519,10 +302,9 @@ read-only workspace: `--mount .:/workspace:ro`.
 
 ## Exit Code Passthrough
 
-The CLI exits with the sandboxed command's exit code. This is critical for CI
-integration -- a failing test suite must cause the CI step to fail:
+The CLI exits with the sandboxed command's exit code:
 
-| Sandboxed command exit       | `airut-sandbox` exit | CI interpretation                                 |
+| Sandboxed command exit       | `airut-sandbox` exit | Interpretation                                    |
 | ---------------------------- | -------------------- | ------------------------------------------------- |
 | 0                            | 0                    | Success                                           |
 | Non-zero N                   | N                    | Failure                                           |
@@ -587,35 +369,31 @@ subsequent invocations are fast (no rebuild unless content changes).
 
 Each `airut-sandbox run` invocation performs sandbox startup (orphan cleanup,
 proxy image check, CA cert check, egress network creation) and shutdown (network
-removal). This overhead is acceptable for single-step CI jobs but adds up for
+removal). This overhead is acceptable for single-command use but adds up for
 pipelines with multiple sandboxed steps.
 
 Workarounds for multi-step pipelines:
 
-- **Combine steps**: Run all CI checks in a single `airut-sandbox run`
-  invocation (e.g., `airut-sandbox run -- uv run scripts/ci.py` where `ci.py`
-  runs lint, typecheck, and tests sequentially).
+- **Combine steps**: Run all checks in a single `airut-sandbox run` invocation
+  (e.g., `airut-sandbox run -- uv run scripts/ci.py` where `ci.py` runs lint,
+  typecheck, and tests sequentially).
 - **Persistent daemon mode**: Deferred to future work (see "Not In Scope").
 
-### Image Staleness in CI
+### Image Staleness
 
 The sandbox's 24-hour image staleness check (see `spec/image.md`) triggers
-periodic rebuilds to pick up upstream tool updates. In CI, where runners are
-ephemeral and images are built from scratch, the staleness check is not
-applicable -- images are always "fresh" because the in-memory build timestamp
-cache starts empty on each invocation. The first build always runs; subsequent
-builds within the same invocation (if any) reuse the cached image.
-
-For CI runners with persistent podman image caches (self-hosted runners), the
-staleness check applies normally.
+periodic rebuilds to pick up upstream tool updates. On ephemeral CI runners,
+images are built from scratch every time (the in-memory build timestamp cache
+starts empty). For hosts with persistent podman image caches, the staleness
+check applies normally.
 
 ### Crash Recovery
 
 If `airut-sandbox` is killed by SIGKILL (CI timeout, host OOM), the container,
 proxy, and internal network are orphaned. The next `airut-sandbox run`
 invocation cleans these orphans during `Sandbox.startup()` (same mechanism the
-gateway uses). This is the expected recovery path -- orphaned resources do not
-accumulate across CI runs on persistent runners.
+gateway uses). Orphaned resources do not accumulate across runs on persistent
+hosts.
 
 ## Resource Isolation
 
@@ -663,86 +441,34 @@ temporary location.
 is deleted on exit, including after errors or signals. The log's content is
 still observable during execution: blocked requests (`BLOCKED`) and errors
 (`ERROR`) are written to both the log file and the proxy container's stdout
-(which surfaces on stderr via the container runtime), so they are visible in CI
+(which surfaces on stderr via the container runtime), so they are visible in
 output without any special flag.
 
 **Explicit file** (`--network-log FILE`): The CLI creates the file if it does
 not exist, and appends to it if it already exists. The file persists after exit.
-Append semantics allow multiple `airut-sandbox` invocations (e.g., separate CI
-steps) to accumulate into a single log file. Each invocation's entries are
-delimited by the `=== TASK START ... ===` marker that the proxy already writes.
-This is useful for:
+Append semantics allow multiple `airut-sandbox` invocations to accumulate into a
+single log file. Each invocation's entries are delimited by the
+`=== TASK START ... ===` marker that the proxy already writes. This is useful
+for:
 
-- **CI artifact upload** -- save the network log as a build artifact for
-  post-hoc audit (e.g., `actions/upload-artifact` with the log path).
+- **Artifact upload** -- save the network log as a build artifact for post-hoc
+  audit.
 - **Debugging** -- inspect the full audit trail (including allowed requests and
   DNS) when troubleshooting network issues.
 - **Compliance** -- retain a record of all outbound network activity from
-  sandboxed CI runs.
+  sandboxed runs.
 
 When the network sandbox is disabled (`network_sandbox: false` in
 `.airut/sandbox.yaml`), no proxy runs and no network log is written. The
 `--network-log` flag is silently ignored (not an error).
-
-## CI Integration Patterns
-
-CI checks run inside the sandbox via the `airutorg/sandbox-action` GitHub Action
-(see `spec/sandbox-action.md`). The action handles checkout, installation, and
-sandbox invocation in a single `uses:` step. See `spec/local-ci-runner.md` for
-`ci.py` details.
-
-### Workflow Structure
-
-```yaml
-steps:
-  - uses: airutorg/sandbox-action@main
-    with:
-      command: 'uv sync && uv run scripts/ci.py --verbose --timeout 0'
-      pr_sha: ${{ github.event.pull_request.head.sha || github.sha }}
-```
-
-The action checks out the base branch on the host (trusted config), fetches the
-PR SHA on the host (so git credentials are not needed inside the container), and
-runs the command inside `airut-sandbox`. See `spec/sandbox-action.md` for the
-full security model including required external controls.
-
-### Sandbox Configuration
-
-`.airut/sandbox.yaml` configures the CI sandbox:
-
-- `env.CI=true` — signals CI environment to tools
-- `env.PYTHONDONTWRITEBYTECODE=1` — avoids `.pyc` clutter
-- `network_sandbox: true` — enforces the shared network allowlist
-- No `masked_secrets` — CI checks require no credentials
-- No `resource_limits` — GitHub Actions enforces its own limits
-
-### Tainted Workspace
-
-After sandbox execution, the workspace is tainted. The sandbox mounts the
-workspace read-write, so untrusted PR code can modify `.git/` (e.g., install
-hooks) or replace binaries. **The sandbox action must be the final step of the
-job.** No workflow steps should run after it. See `spec/sandbox-action.md` for
-details.
-
-### Design Guidelines
-
-- **Expression injection prevention** — Always pass GitHub context values via
-  `env:` variables, never inline `${{ }}` in `run:` scripts.
-- **Terminal step** — The sandbox step must be the last step of the job.
-- **Runner requirements** — Runners need a container runtime (podman or docker).
-  GitHub-hosted `ubuntu-latest` runners include podman by default.
 
 ## Not In Scope
 
 - **Persistent daemon mode** -- each invocation is standalone. A daemon mode
   (keeping the proxy running across invocations for faster startup) may be added
   later but is not part of this spec.
-- **Dashboard** -- the CLI has no web UI. CI systems provide their own job
-  monitoring.
-- **Webhook handling** -- the CLI is invoked by the CI system, not by webhooks.
-- **Job queuing / concurrency** -- handled by the CI system.
+- **Dashboard** -- the CLI has no web UI.
+- **Job queuing / concurrency** -- if used in CI, handled by the CI system.
 - **Protected file integrity checks** -- the sandbox runs whatever command it is
-  given. File-level protection is handled by the default-branch trust model.
-- **GitHub commit status updates** -- the CI system handles status reporting.
-- **Fork PRs** -- fork PR security is a CI system concern (e.g., GitHub Actions
-  `pull_request_target` vs. `pull_request` trigger selection).
+  given. File-level protection (e.g., ensuring trusted config in CI) is handled
+  by the caller.
