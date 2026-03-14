@@ -1,0 +1,21 @@
+# Sandbox configuration for CI.
+#
+# Used by airut-sandbox to run CI checks inside a container with
+# network isolation and container isolation.
+#
+# No masked_secrets or pass_env — ci.py does not require GitHub access
+# or any other credentials. All linters run locally, tests mock all
+# external calls (pytest-socket blocks real network), and uv-secure
+# queries vulnerability databases over HTTP through the proxy (PyPI
+# hosts are on the allowlist).
+#
+# No resource_limits — GitHub Actions enforces its own job-level
+# resource limits (timeout-minutes in the workflow, runner memory/CPU).
+# Adding container-level limits would duplicate these and risk false
+# failures.
+
+env:
+  CI: "true"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+network_sandbox: true

@@ -64,6 +64,23 @@ url_prefixes:
 edit this file and submit a PR. A human must review and merge before the change
 takes effect.
 
+### `sandbox.yaml` — Sandbox CLI Config
+
+Configuration for `airut-sandbox run`, used by CI to run checks inside the
+sandbox. See `spec/sandbox-cli.md`.
+
+```yaml
+env:                              # Static environment variables
+  CI: "true"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+network_sandbox: true             # Enforce network allowlist (default: true)
+```
+
+The CI sandbox uses the shared `network-allowlist.yaml` and
+`container/Dockerfile`. No credentials are needed — all CI checks run locally
+with mocked external calls.
+
 ### `container/Dockerfile` — Container Image
 
 Repo-defined base image. Controls what tools and dependencies are available in
