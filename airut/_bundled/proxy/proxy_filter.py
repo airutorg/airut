@@ -733,6 +733,37 @@ class ProxyFilter:
 
         return ResignResult(auth_header="", region=region, is_chunked=False)
 
+    def http_connect(self, flow: http.HTTPFlow) -> None:
+        """Block all CONNECT tunnel requests.
+
+        The proxy operates in regular mode with DNS spoofing — clients
+        connect directly to the proxy IP believing it is the upstream
+        server. CONNECT (HTTP tunneling) is never needed in this model
+        and would allow bypassing the allowlist entirely, since the
+        tunnel payload is opaque to the proxy.
+
+        Unconditionally returns 403 regardless of the target host.
+        """
+        host = flow.request.pretty_host
+        self._log_loud(f"BLOCKED CONNECT {host} -> 403 (tunneling not allowed)")
+
+        flow.response = http.Response.make(
+            403,
+            json.dumps(
+                {
+                    "error": "blocked_by_network_allowlist",
+                    "host": host,
+                    "method": "CONNECT",
+                    "message": (
+                        "CONNECT tunneling is not allowed. "
+                        "The network sandbox does not support "
+                        "HTTP proxy tunneling."
+                    ),
+                }
+            ),
+            {"Content-Type": "application/json"},
+        )
+
     def requestheaders(self, flow: http.HTTPFlow) -> None:
         """Handle AWS re-signing before body arrives.
 
