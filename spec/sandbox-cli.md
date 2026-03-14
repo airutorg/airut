@@ -193,20 +193,16 @@ the merge commit (`refs/pull/<number>/merge`), which includes PR changes -- this
 is the default behavior and must be overridden. Two controls ensure trusted
 config on the host:
 
-- **Branch filter** (`pull_request: branches: [main]`): The workflow only
-  triggers on PRs targeting the default branch. A PR targeting a non-protected
-  branch does not trigger CI at all. This is the primary control.
-- **`repository.default_branch` checkout ref**: The reference workflow uses
-  `ref: ${{ github.event.repository.default_branch }}` rather than
-  `pull_request.base.ref`. This is defense-in-depth -- `base.ref` reflects the
-  PR's target branch, which the agent controls. If the branch filter were ever
-  loosened (e.g., `branches: ['**']`), `base.ref` alone would allow the agent to
-  create a PR targeting a non-protected branch with malicious `.airut/` config.
-  `repository.default_branch` always resolves to the repository's configured
-  default branch regardless of what the PR targets.
+- **Branch filter** (`pull_request: branches: [main]`): The workflow must only
+  trigger on PRs targeting protected branches.
+- **Base branch checkout**: The `sandbox-action` checks out
+  `pull_request.base.ref` (the PR's target branch). Since the workflow only
+  triggers on PRs to protected branches, the base branch is always protected and
+  its `.airut/` config is trusted.
 
-The PR SHA is passed as an argument to a wrapper script that runs inside the
-sandbox.
+Additionally, the PR author must not be able to modify workflow files. The push
+token must lack the `workflow` scope, or a repository ruleset must block changes
+to `.github/workflows/`. See `spec/sandbox-action.md` for details.
 
 ## Motivation
 
@@ -252,20 +248,23 @@ CI System (GitHub Actions, GitLab CI, etc.)
   |
   +- Workflow on default branch triggers on PR event
   +- Checks out default branch (trusted config)
+  +- Fetches PR SHA on host (objects stored in .git/)
   |
   v
-airut-sandbox run -- scripts/sandbox-ci.sh <pr-sha>
-  |                         (from default branch, runs inside sandbox)
+airut-sandbox run -- bash -c 'git checkout <sha> && <ci-command>'
   |
   +- Load .airut/ config (default branch, trusted)
   +- Build/reuse container image (Dockerfile from default branch)
   +- Start sandbox (container + network proxy + credential masking)
-  +- Run wrapper script inside container
-  |    +- Wrapper checks out PR ref (agent-steered code)
-  |    +- Wrapper runs CI command (agent-steered code, sandboxed)
+  +- Run command inside container
+  |    +- git checkout checks out PR ref (local objects, no network)
+  |    +- CI command runs (agent-steered code, sandboxed)
   +- Stream stdout/stderr to the caller
   +- Exit with the command's exit code
 ```
+
+For GitHub Actions, the `airutorg/sandbox-action` composite action handles all
+the above steps (see `spec/sandbox-action.md`).
 
 ### Code Layout
 
@@ -685,67 +684,25 @@ When the network sandbox is disabled (`network_sandbox: false` in
 
 ## CI Integration Patterns
 
-CI checks run inside the sandbox via `.github/workflows/ci.yml`. The workflow
-checks out the default branch on the host (ensuring `airut-sandbox` and all
-`.airut/` config come from trusted code), then runs `ci.py` inside the container
-through a wrapper script that fetches and checks out the PR commit. See
-`spec/local-ci-runner.md` for `ci.py` details.
-
-### Default-Branch Trust Model
-
-The workflow implements the default-branch trust model described in the Security
-Model section above:
-
-- **Host checkout**: `actions/checkout` with
-  `ref: ${{ github.event.repository.default_branch }}` and `fetch-depth: 0`.
-  This ensures all host-side code (`airut-sandbox`, `.airut/sandbox.yaml`,
-  `.airut/network-allowlist.yaml`, `.airut/container/Dockerfile`) comes from the
-  trusted default branch.
-- **PR code inside sandbox only**: The wrapper script (`scripts/sandbox-ci.sh`)
-  runs inside the container and fetches/checks out the PR commit. The host never
-  executes PR code.
-
-Two controls ensure trusted config:
-
-1. **Branch filter** (`pull_request: branches: [main]`): The workflow only
-   triggers on PRs targeting main.
-2. **`repository.default_branch` checkout ref**: Defense-in-depth against branch
-   filter loosening. Unlike `base.ref` (which the agent controls),
-   `repository.default_branch` always resolves to the repository's configured
-   default branch.
+CI checks run inside the sandbox via the `airutorg/sandbox-action` GitHub Action
+(see `spec/sandbox-action.md`). The action handles checkout, installation, and
+sandbox invocation in a single `uses:` step. See `spec/local-ci-runner.md` for
+`ci.py` details.
 
 ### Workflow Structure
 
 ```yaml
-- uses: actions/checkout@v4
-  with:
-    ref: ${{ github.event.repository.default_branch }}
-    fetch-depth: 0
-
-# ... setup steps ...
-
-- name: CI checks
-  run: >-
-    uv run airut-sandbox run --verbose --
-    scripts/sandbox-ci.sh "$COMMIT_SHA"
-  env:
-    COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+steps:
+  - uses: airutorg/sandbox-action@main
+    with:
+      command: 'uv sync && uv run scripts/ci.py --verbose --timeout 0'
+      pr_sha: ${{ github.event.pull_request.head.sha || github.sha }}
 ```
 
-The SHA is passed via an `env:` variable rather than inline `${{ }}`
-interpolation in the `run:` script. This prevents expression injection — a
-malicious PR title or branch name containing `${{ }}` syntax could execute
-arbitrary commands if interpolated directly into the shell script.
-
-### Wrapper Script
-
-`scripts/sandbox-ci.sh` runs inside the container:
-
-1. Fetches and checks out the PR commit (`git fetch origin <sha>`)
-2. Installs dependencies (`uv sync`)
-3. Runs CI checks (`uv run scripts/ci.py --verbose --timeout 0`)
-
-The script receives the commit SHA as its first argument.
+The action checks out the base branch on the host (trusted config), fetches the
+PR SHA on the host (so git credentials are not needed inside the container), and
+runs the command inside `airut-sandbox`. See `spec/sandbox-action.md` for the
+full security model including required external controls.
 
 ### Sandbox Configuration
 
@@ -757,21 +714,19 @@ The script receives the commit SHA as its first argument.
 - No `masked_secrets` — CI checks require no credentials
 - No `resource_limits` — GitHub Actions enforces its own limits
 
-### Push-to-Main Behavior
+### Tainted Workspace
 
-On `push` to main (after PR merge), the workflow runs with `github.sha` pointing
-to the merge commit on main. The checkout ref resolves to main itself. The
-wrapper script checks out the same SHA that is already on the host. This is a
-no-op checkout but is harmless — the script runs `ci.py` on the merged code,
-which is the intended behavior for post-merge validation.
+After sandbox execution, the workspace is tainted. The sandbox mounts the
+workspace read-write, so untrusted PR code can modify `.git/` (e.g., install
+hooks) or replace binaries. **The sandbox action must be the final step of the
+job.** No workflow steps should run after it. See `spec/sandbox-action.md` for
+details.
 
 ### Design Guidelines
 
 - **Expression injection prevention** — Always pass GitHub context values via
   `env:` variables, never inline `${{ }}` in `run:` scripts.
-- **Terminal step** — The `airut-sandbox` step should be the last step of the
-  job. The workspace is tainted after sandboxed execution (the container has
-  read-write access).
+- **Terminal step** — The sandbox step must be the last step of the job.
 - **Runner requirements** — Runners need a container runtime (podman or docker).
   GitHub-hosted `ubuntu-latest` runners include podman by default.
 
