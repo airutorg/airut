@@ -2051,6 +2051,142 @@ class TestRequestData:
 # ---------------------------------------------------------------------------
 
 
+class TestWebSocketUpgrade:
+    """Tests for WebSocket upgrade requests subject to allowlist.
+
+    WebSocket connections begin as HTTP upgrade requests. mitmproxy routes
+    these through the same ``request()`` / ``requestheaders()`` hooks, so
+    allowlist enforcement applies identically.  These tests explicitly
+    verify that behaviour.
+    """
+
+    @staticmethod
+    def _ws_headers(host: str = "ws.example.com") -> dict[str, str]:
+        """Return standard WebSocket upgrade request headers."""
+        return {
+            "Connection": "Upgrade",
+            "Upgrade": "websocket",
+            "Sec-WebSocket-Version": "13",
+            "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==",
+            "Host": host,
+        }
+
+    def test_websocket_blocked_by_allowlist(self) -> None:
+        """WebSocket upgrade to non-allowlisted host is blocked with 403."""
+        pf = ProxyFilter()
+        # No domains configured — everything is blocked
+        flow = _flow(
+            method="GET",
+            host="ws.evil.com",
+            path="/",
+            headers=self._ws_headers("ws.evil.com"),
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+        assert flow.response is not None
+        body = json.loads(flow.response._content)
+        assert body["error"] == "blocked_by_network_allowlist"
+
+    def test_websocket_allowed_by_domain(self) -> None:
+        """WebSocket upgrade to allowlisted domain passes through."""
+        pf = ProxyFilter()
+        pf.domains = ["ws.example.com"]
+        flow = _flow(
+            method="GET",
+            host="ws.example.com",
+            path="/stream",
+            headers=self._ws_headers("ws.example.com"),
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "allowed"
+        assert flow.response is None
+
+    def test_websocket_allowed_by_url_prefix(self) -> None:
+        """WebSocket upgrade matching url_prefixes entry is allowed."""
+        pf = ProxyFilter()
+        pf.url_prefixes = [{"host": "api.example.com", "path": "/ws/*"}]
+        flow = _flow(
+            method="GET",
+            host="api.example.com",
+            path="/ws/events",
+            headers=self._ws_headers("api.example.com"),
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "allowed"
+
+    def test_websocket_blocked_wrong_path(self) -> None:
+        """WebSocket upgrade to wrong path on allowlisted host is blocked."""
+        pf = ProxyFilter()
+        pf.url_prefixes = [{"host": "api.example.com", "path": "/ws/*"}]
+        flow = _flow(
+            method="GET",
+            host="api.example.com",
+            path="/admin/ws",
+            headers=self._ws_headers("api.example.com"),
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+
+    def test_websocket_method_restriction(self) -> None:
+        """WebSocket upgrade blocked when GET not in allowed methods."""
+        pf = ProxyFilter()
+        pf.url_prefixes = [
+            {"host": "api.example.com", "path": "/ws", "methods": ["POST"]}
+        ]
+        flow = _flow(
+            method="GET",
+            host="api.example.com",
+            path="/ws",
+            headers=self._ws_headers("api.example.com"),
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+        body = json.loads(flow.response._content)
+        assert "Method" in body["message"]
+
+    def test_websocket_with_wildcard_domain(self) -> None:
+        """WebSocket upgrade allowed via wildcard domain pattern."""
+        pf = ProxyFilter()
+        pf.domains = ["*.example.com"]
+        flow = _flow(
+            method="GET",
+            host="ws.example.com",
+            path="/",
+            headers=self._ws_headers("ws.example.com"),
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "allowed"
+
+    def test_websocket_token_replacement(self) -> None:
+        """Token replacement works on WebSocket upgrade requests."""
+        pf = ProxyFilter()
+        pf.domains = ["ws.example.com"]
+        pf.replacements = {
+            "surr_token": {
+                "value": "real_token",
+                "scopes": ["ws.example.com"],
+                "headers": ["Authorization"],
+            }
+        }
+        headers = self._ws_headers("ws.example.com")
+        headers["Authorization"] = "Bearer surr_token"
+        flow = _flow(
+            method="GET",
+            host="ws.example.com",
+            path="/stream",
+            headers=headers,
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "allowed"
+        assert flow.metadata["masked_count"] == 1
+        assert flow.request.headers["Authorization"] == "Bearer real_token"
+
+
+# ---------------------------------------------------------------------------
+# ProxyFilter.response — AWS region suffix
+# ---------------------------------------------------------------------------
+
+
 class TestResponseAwsRegion:
     """Tests for response() including AWS region in log."""
 
