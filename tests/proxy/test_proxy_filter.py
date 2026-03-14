@@ -2202,3 +2202,56 @@ class TestResponseAwsRegion:
             msg = mock_log.call_args[0][0]
             assert "[region: us-west-2]" in msg
             assert "[masked: 1]" in msg
+
+
+# ---------------------------------------------------------------------------
+# ProxyFilter.http_connect — CONNECT tunnel blocking
+# ---------------------------------------------------------------------------
+
+
+class TestHttpConnect:
+    """Tests for ProxyFilter.http_connect() hook.
+
+    CONNECT requests allow clients to establish tunnels through the proxy,
+    bypassing the allowlist entirely. The proxy operates via DNS spoofing
+    (regular mode), so CONNECT is never needed for legitimate traffic and
+    must be unconditionally blocked.
+    """
+
+    def test_connect_blocked_for_non_allowed_host(self) -> None:
+        """CONNECT to a non-allowed host is blocked with 403."""
+        pf = ProxyFilter()
+        pf.domains = ["api.github.com"]
+        flow = _flow(method="CONNECT", host="evil.com", path="/")
+        pf.http_connect(flow)
+        assert flow.response is not None
+        body = json.loads(flow.response._content)
+        assert body["error"] == "blocked_by_network_allowlist"
+        assert "CONNECT" in body["message"]
+
+    def test_connect_blocked_for_allowed_host(self) -> None:
+        """CONNECT blocked even for allowed hosts."""
+        pf = ProxyFilter()
+        pf.domains = ["api.github.com"]
+        flow = _flow(method="CONNECT", host="api.github.com", path="/")
+        pf.http_connect(flow)
+        assert flow.response is not None
+        body = json.loads(flow.response._content)
+        assert body["error"] == "blocked_by_network_allowlist"
+
+    def test_connect_blocked_with_no_allowlist(self) -> None:
+        """CONNECT is blocked even when no allowlist is configured."""
+        pf = ProxyFilter()
+        flow = _flow(method="CONNECT", host="anything.com", path="/")
+        pf.http_connect(flow)
+        assert flow.response is not None
+
+    def test_connect_logged(self) -> None:
+        """Blocked CONNECT is logged via _log_loud."""
+        pf = ProxyFilter()
+        flow = _flow(method="CONNECT", host="evil.com", path="/")
+        with patch.object(pf, "_log_loud") as mock_log:
+            pf.http_connect(flow)
+            mock_log.assert_called_once()
+            assert "CONNECT" in mock_log.call_args[0][0]
+            assert "evil.com" in mock_log.call_args[0][0]
