@@ -1,7 +1,8 @@
 # Maintaining sandbox-action
 
 The `airutorg/sandbox-action` repository contains a reusable GitHub Action that
-wraps `airut-sandbox` for CI. See `spec/sandbox-action.md` for the full design.
+wraps `airut-sandbox` for CI. See `spec/sandbox-action.md` for design decisions
+and `doc/ci-sandbox.md` for the user-facing setup guide.
 
 ## Repository
 
@@ -101,8 +102,7 @@ To bootstrap the empty `airutorg/sandbox-action` repository:
    cd /storage/sandbox-action
    ```
 
-2. Create the files described in `spec/sandbox-action.md` (Repository Structure
-   section): `action.yml`, `VERSION`, `README.md`, `LICENSE`.
+2. Create the action files: `action.yml`, `VERSION`, `README.md`, `LICENSE`.
 
 3. Set `VERSION` to `main` (the main branch always installs from GitHub HEAD).
 

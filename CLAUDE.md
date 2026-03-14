@@ -36,7 +36,6 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
 - `spec/integration-tests.md` — end-to-end test specification
 - `spec/sandbox.md` — sandbox library for safe containerized Claude Code
   execution
-- `spec/sandbox-cli.md` — standalone CLI for running commands in the sandbox
 - `spec/sandbox-action.md` — reusable GitHub Action wrapping airut-sandbox
 - `spec/image.md` — two-layer container image build strategy
 - `spec/network-sandbox.md` — proxy lifecycle, resource scoping, log format,

@@ -20,21 +20,6 @@ The primary use case is sandboxing agent-steerable code in CI pipelines, but the
 tool is generic: it sandboxes whatever command it is given, regardless of who or
 what invokes it.
 
-### Why a CLI Tool, Not a Service
-
-An earlier design (PR #227) proposed a full CI service with webhook handling,
-executor, job queuing, and dashboard. The standalone CLI approach has
-significant advantages:
-
-- **No new infrastructure** -- no webhook server, executor process, systemd
-  unit, or separate config file. The sandbox is a tool, not a service.
-- **Works anywhere** -- CI systems, local development, scripts, cron jobs. The
-  sandbox does not care who invokes it.
-- **Preserves CI ecosystem** -- status checks, artifact upload, matrix builds,
-  caching, marketplace actions all continue to work.
-- **Lower operational cost** -- one tool to install, not a service to deploy and
-  monitor.
-
 ## Design Goals
 
 1. **Reuse, don't rebuild**: The CLI is a thin layer over the existing sandbox
