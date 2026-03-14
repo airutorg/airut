@@ -190,10 +190,23 @@ branch (or the default merge ref) on the host before running `airut-sandbox`,
 allowing the PR to tamper with `.airut/` config or sandbox implementation. On
 `pull_request` events, `actions/checkout` without an explicit `ref:` checks out
 the merge commit (`refs/pull/<number>/merge`), which includes PR changes -- this
-is the default behavior and must be overridden. The reference workflow uses
-`ref: ${{ github.event.pull_request.base.ref }}` to ensure only trusted
-default-branch config is present. The PR SHA is passed as an argument to a
-wrapper script that runs inside the sandbox.
+is the default behavior and must be overridden. Two controls ensure trusted
+config on the host:
+
+- **Branch filter** (`pull_request: branches: [main]`): The workflow only
+  triggers on PRs targeting the default branch. A PR targeting a non-protected
+  branch does not trigger CI at all. This is the primary control.
+- **`repository.default_branch` checkout ref**: The reference workflow uses
+  `ref: ${{ github.event.repository.default_branch }}` rather than
+  `pull_request.base.ref`. This is defense-in-depth -- `base.ref` reflects the
+  PR's target branch, which the agent controls. If the branch filter were ever
+  loosened (e.g., `branches: ['**']`), `base.ref` alone would allow the agent to
+  create a PR targeting a non-protected branch with malicious `.airut/` config.
+  `repository.default_branch` always resolves to the repository's configured
+  default branch regardless of what the PR targets.
+
+The PR SHA is passed as an argument to a wrapper script that runs inside the
+sandbox.
 
 ## Motivation
 
