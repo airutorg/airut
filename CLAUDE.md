@@ -70,7 +70,6 @@ details.
 Key files:
 
 - `.airut/airut.yaml` — repo config (model, timeout, container environment)
-- `.airut/sandbox.yaml` — sandbox CLI config for CI (env vars, network sandbox)
 - `.airut/network-allowlist.yaml` — domains and URL prefixes the container can
   access
 - `.airut/container/Dockerfile` — repo-defined container base image
