@@ -1552,3 +1552,77 @@ class TestSSEServerSideRendering:
             "tail(0) should return events, confirming offset=0 would "
             "cause duplication"
         )
+
+    def test_multiple_result_events_all_rendered(
+        self, harness: DashboardHarness
+    ) -> None:
+        """Test that multiple result events (from background tasks) all render.
+
+        When background tasks complete after the main result, Claude emits
+        additional result events. All result events and intermediate events
+        (system notifications, assistant responses) must appear in the
+        actions timeline.
+        """
+        harness.add_events(
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "s1",
+                "tools": ["Bash"],
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "Main report completed."}
+                    ]
+                },
+            },
+            result_event(
+                session_id="s1",
+                result="Main comprehensive report",
+                duration_ms=5000,
+                total_cost_usd=0.10,
+                num_turns=10,
+            ),
+            # Background task completes
+            {
+                "type": "system",
+                "subtype": "task_notification",
+                "session_id": "s1",
+            },
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "s1",
+                "tools": ["Bash"],
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "Background task follow-up."}
+                    ]
+                },
+            },
+            result_event(
+                session_id="s1",
+                result="Follow-up result",
+                duration_ms=1000,
+                total_cost_usd=0.12,
+                num_turns=2,
+            ),
+        )
+
+        html = harness.get_html("/conversation/abc12345/actions")
+
+        # Both result events should be rendered
+        assert "Main comprehensive report" in html
+        assert "Follow-up result" in html
+        # Intermediate events should also render
+        assert "Main report completed." in html
+        assert "Background task follow-up." in html
+        assert "task_notification" in html
+        # Should show as a single reply (all events in one group)
+        assert "Reply #1" in html
+        assert "Reply #2" not in html

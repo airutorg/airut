@@ -123,14 +123,31 @@ class TestExtractResultSummary:
             "server_tool_use": {"web_search_requests": 2},
         }
 
-    def test_uses_last_result_event(self) -> None:
+    def test_uses_last_result_for_cumulative_fields(self) -> None:
+        """Last result's cumulative fields (cost, usage) are used."""
         events = _parse(
-            _make_result_event(session_id="first"),
-            _make_result_event(session_id="second"),
+            _make_result_event(total_cost_usd=2.52),
+            _make_result_event(total_cost_usd=3.46),
         )
         summary = extract_result_summary(events)
         assert summary is not None
-        assert summary.session_id == "second"
+        assert summary.total_cost_usd == 3.46
+
+    def test_sums_per_segment_fields(self) -> None:
+        """duration_ms and num_turns are summed across all result events.
+
+        These fields are per-segment (not cumulative) when background
+        tasks complete after the main result.
+        """
+        events = _parse(
+            _make_result_event(duration_ms=902580, num_turns=75),
+            _make_result_event(duration_ms=27122, num_turns=2),
+            _make_result_event(duration_ms=11346, num_turns=2),
+        )
+        summary = extract_result_summary(events)
+        assert summary is not None
+        assert summary.duration_ms == 902580 + 27122 + 11346
+        assert summary.num_turns == 75 + 2 + 2
 
     def test_error_result(self) -> None:
         events = _parse(_make_result_event(is_error=True, result="Error!"))
@@ -213,6 +230,76 @@ class TestExtractResponseText:
         assert (
             extract_response_text(events) == "No output received from Claude."
         )
+
+    def test_multiple_results_concatenated(self) -> None:
+        """Multiple result events are concatenated.
+
+        When background tasks complete after the main result, Claude
+        emits additional result events in the same execution's stdout.
+        All result texts must be included in the response.
+        """
+        events = _parse(
+            _make_system_event(),
+            _make_assistant_text_event("Main report"),
+            _make_result_event(result="Main report"),
+            # Background task completes, triggering re-init and follow-up
+            {"type": "system", "subtype": "task_notification"},
+            _make_system_event(),
+            _make_assistant_text_event("Follow-up 1"),
+            _make_result_event(result="Follow-up 1"),
+        )
+        result = extract_response_text(events)
+        assert "Main report" in result
+        assert "Follow-up 1" in result
+
+    def test_multiple_results_three_results(self) -> None:
+        """Three result events are all included in order."""
+        events = _parse(
+            _make_system_event(),
+            _make_assistant_text_event("Report A"),
+            _make_result_event(result="Report A"),
+            {"type": "system", "subtype": "task_notification"},
+            _make_system_event(),
+            _make_assistant_text_event("Report B"),
+            _make_result_event(result="Report B"),
+            {"type": "system", "subtype": "task_notification"},
+            _make_system_event(),
+            _make_assistant_text_event("Report C"),
+            _make_result_event(result="Report C"),
+        )
+        result = extract_response_text(events)
+        assert "Report A" in result
+        assert "Report B" in result
+        assert "Report C" in result
+        # Verify order: A before B before C
+        assert result.index("Report A") < result.index("Report B")
+        assert result.index("Report B") < result.index("Report C")
+
+    def test_multiple_results_preserves_separator(self) -> None:
+        """Multiple results are joined with double newline."""
+        events = _parse(
+            _make_result_event(result="Part 1"),
+            _make_result_event(result="Part 2"),
+        )
+        assert extract_response_text(events) == "Part 1\n\nPart 2"
+
+    def test_multiple_results_skips_empty(self) -> None:
+        """Empty result texts are skipped during concatenation."""
+        events = _parse(
+            _make_result_event(result="Part 1"),
+            _make_result_event(result=""),
+            _make_result_event(result="Part 3"),
+        )
+        assert extract_response_text(events) == "Part 1\n\nPart 3"
+
+    def test_multiple_results_all_empty_text_falls_through(self) -> None:
+        """When all result texts are empty, falls through to assistant text."""
+        events = _parse(
+            _make_assistant_text_event("The real response"),
+            _make_result_event(result=""),
+            _make_result_event(result=""),
+        )
+        assert extract_response_text(events) == "The real response"
 
 
 class TestExtractErrorSummary:
