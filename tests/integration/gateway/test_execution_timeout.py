@@ -56,6 +56,7 @@ class _MockTimeoutTask:
         *,
         session_id=None,
         model="sonnet",
+        effort=None,
         on_event=None,
     ):
         return ExecutionResult(

@@ -34,6 +34,7 @@ def _parse_events(*raw_events: dict) -> list[StreamEvent]:
 def _make_repo_config(
     *,
     default_model: str = "sonnet",
+    default_effort: str | None = None,
     timeout: int | None = 300,
     network_sandbox_enabled: bool = True,
     container_env: dict[str, str] | None = None,
@@ -41,6 +42,7 @@ def _make_repo_config(
     """Create a RepoConfig for testing."""
     return RepoConfig(
         default_model=default_model,
+        default_effort=default_effort,
         resource_limits=ResourceLimits(timeout=timeout),
         network_sandbox_enabled=network_sandbox_enabled,
         container_env=container_env or {},
@@ -439,6 +441,7 @@ class TestProcessMessage:
         mock_conv_store = MagicMock()
         mock_conv_store.get_session_id_for_resume.return_value = None
         mock_conv_store.get_model.return_value = None
+        mock_conv_store.get_effort.return_value = None
 
         # Configure sandbox mock: ensure_image returns tag,
         # create_task returns a mock Task whose execute returns success
@@ -650,6 +653,64 @@ class TestProcessMessage:
         # task.execute should be called with opus model
         call_kwargs = svc._mock_task.execute.call_args[1]
         assert call_kwargs["model"] == "opus"
+
+    def test_default_effort_passed_to_execute(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+
+        # Override repo config to include default_effort
+        rc = _make_repo_config(default_effort="max")
+        self._mock_repo_config.return_value = (rc, {})
+
+        parsed = _make_parsed_message(body="Do stuff")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+        call_kwargs = svc._mock_task.execute.call_args[1]
+        assert call_kwargs["effort"] == "max"
+
+    def test_effort_none_by_default(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        parsed = _make_parsed_message(body="Do stuff")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+        call_kwargs = svc._mock_task.execute.call_args[1]
+        assert call_kwargs["effort"] is None
+
+    def test_effort_persisted_for_resumed_conversation(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        repo_path = tmp_path / "repo"
+        handler.conversation_manager.exists.return_value = True
+        handler.conversation_manager.resume_existing.return_value = repo_path
+        mock_cs.get_model.return_value = "opus"
+        mock_cs.get_effort.return_value = "high"
+        mock_cs.get_session_id_for_resume.return_value = None
+        mock_cs.load.return_value = MagicMock(replies=[])
+
+        parsed = _make_parsed_message(
+            body="Continue",
+            conversation_id="aabb1122",
+        )
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "conv1", handler, adapter)
+        call_kwargs = svc._mock_task.execute.call_args[1]
+        assert call_kwargs["effort"] == "high"
 
     def test_attachments_saved(self, email_config: Any, tmp_path: Path) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
@@ -1255,6 +1316,7 @@ class TestBuildImageErrors:
         mock_conv_store = MagicMock()
         mock_conv_store.get_session_id_for_resume.return_value = None
         mock_conv_store.get_model.return_value = None
+        mock_conv_store.get_effort.return_value = None
 
         mock_task = MagicMock()
         mock_task.execute.return_value = _make_success_result()
@@ -1403,6 +1465,7 @@ class TestAllowlistParseError:
         mock_conv_store = MagicMock()
         mock_conv_store.get_session_id_for_resume.return_value = None
         mock_conv_store.get_model.return_value = None
+        mock_conv_store.get_effort.return_value = None
 
         mock_task = MagicMock()
         mock_task.execute.return_value = _make_success_result()
@@ -1476,6 +1539,7 @@ class TestConvertReplacementMap:
         mock_conv_store = MagicMock()
         mock_conv_store.get_session_id_for_resume.return_value = None
         mock_conv_store.get_model.return_value = None
+        mock_conv_store.get_effort.return_value = None
 
         mock_task = MagicMock()
         mock_task.execute.return_value = _make_success_result()

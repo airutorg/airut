@@ -191,6 +191,7 @@ class AgentTask:
         *,
         session_id: str | None = None,
         model: str = "sonnet",
+        effort: str | None = None,
         on_event: EventCallback | Callable[[StreamEvent], None] | None = None,
     ) -> ExecutionResult:
         """Execute Claude Code in the sandbox.
@@ -206,6 +207,9 @@ class AgentTask:
             prompt: User prompt to pass to Claude via stdin.
             session_id: Optional session ID for --resume.
             model: Claude model name (e.g., "opus", "sonnet").
+            effort: Optional effort level (e.g., "medium", "high",
+                "max").  Passed as ``--effort`` to the CLI.  ``None``
+                means the flag is omitted.
             on_event: Optional callback for real-time streaming events.
 
         Returns:
@@ -216,8 +220,9 @@ class AgentTask:
             SandboxError: Only for unexpected infrastructure failures.
         """
         logger.info(
-            "Executing Claude Code (model=%s) for context %s",
+            "Executing Claude Code (model=%s, effort=%s) for context %s",
             model,
+            effort,
             self._execution_context_id,
         )
 
@@ -237,6 +242,7 @@ class AgentTask:
                     prompt,
                     session_id=session_id,
                     model=model,
+                    effort=effort,
                     on_event=on_event,
                     task_proxy=task_proxy,
                 )
@@ -284,6 +290,7 @@ class AgentTask:
         *,
         session_id: str | None,
         model: str,
+        effort: str | None,
         on_event: Callable[[StreamEvent], None] | None,
         task_proxy: _ContextProxy | None,
     ) -> ExecutionResult:
@@ -294,6 +301,8 @@ class AgentTask:
             claude_cmd.extend(["--resume", session_id])
             logger.info("Resuming Claude session: %s", session_id)
         claude_cmd.extend(["--model", model])
+        if effort is not None:
+            claude_cmd.extend(["--effort", effort])
         claude_cmd.extend(
             [
                 "-p",

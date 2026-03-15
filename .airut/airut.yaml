@@ -14,6 +14,11 @@
 # subaddressing (e.g. airut+opus@example.com).
 default_model: opus
 
+# Default effort level passed as --effort to Claude Code (optional).
+# Common values: "medium", "high", "max".  Omit to use Claude Code's
+# built-in default.
+# default_effort: max
+
 # Container resource limits (all optional — omitted fields mean no limit).
 # Effective limits are clamped to server-side ceilings if configured.
 # resource_limits:

@@ -1403,6 +1403,10 @@ class RepoConfig:
     Attributes:
         default_model: Default Claude model when not specified via
             email subaddressing.
+        default_effort: Default effort level for Claude Code
+            (e.g. ``"medium"``, ``"high"``, ``"max"``).  Passed
+            as ``--effort`` to the CLI.  ``None`` means the flag is
+            omitted and Claude Code uses its own default.
         resource_limits: Container resource limits (timeout, memory,
             cpus, pids_limit).  All fields optional.
         network_sandbox_enabled: Whether to enable the network sandbox.
@@ -1411,6 +1415,7 @@ class RepoConfig:
     """
 
     default_model: str = "opus"
+    default_effort: str | None = None
     resource_limits: ResourceLimits = field(default_factory=ResourceLimits)
     network_sandbox_enabled: bool = True
     container_env: dict[str, str] = field(default_factory=dict)
@@ -1570,6 +1575,9 @@ class RepoConfig:
         config = cls(
             default_model=_resolve(
                 raw.get("default_model"), str, default="opus"
+            ),
+            default_effort=_resolve(
+                raw.get("default_effort"), str, default=None
             ),
             resource_limits=repo_limits,
             network_sandbox_enabled=effective_sandbox,

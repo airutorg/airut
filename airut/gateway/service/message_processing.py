@@ -360,11 +360,13 @@ def process_message(
 
         if is_new:
             model = parsed.model_hint or repo_config.default_model
+            effort = repo_config.default_effort
             logger.info(
-                "Repo '%s': using model=%s for new conversation %s "
-                "(requested=%s, default=%s)",
+                "Repo '%s': using model=%s, effort=%s for new "
+                "conversation %s (requested=%s, default=%s)",
                 repo_id,
                 model,
+                effort,
                 conv_id,
                 parsed.model_hint,
                 repo_config.default_model,
@@ -373,12 +375,16 @@ def process_message(
             conversation_dir = conv_mgr.get_conversation_dir(conv_id)
             conversation_store = ConversationStore(conversation_dir)
             conversation_store.set_model(conv_id, model)
+            conversation_store.set_effort(conv_id, effort)
             service.tracker.set_task_model(task_id, model)
             service.tracker.set_reply_index(task_id, 0)
         else:
             conversation_dir = conv_mgr.get_conversation_dir(conv_id)
             conversation_store = ConversationStore(conversation_dir)
             model = conversation_store.get_model() or repo_config.default_model
+            effort = (
+                conversation_store.get_effort() or repo_config.default_effort
+            )
             if parsed.model_hint and parsed.model_hint != model:
                 logger.warning(
                     "Repo '%s': ignoring model=%s in resumed "
@@ -487,9 +493,11 @@ def process_message(
         task.event_log.start_new_reply()
 
         logger.info(
-            "Repo '%s': executing Claude Code (model=%s) for conversation %s",
+            "Repo '%s': executing Claude Code (model=%s, effort=%s) "
+            "for conversation %s",
             repo_id,
             model,
+            effort,
             conv_id,
         )
 
@@ -513,6 +521,7 @@ def process_message(
                 prompt,
                 session_id=session_id,
                 model=model,
+                effort=effort,
                 on_event=todo_callback,
             )
         finally:
