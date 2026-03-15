@@ -15,8 +15,8 @@ herald/messenger). Created by [Pyry Haulos](https://github.com/phaulos).
 
 Send a message — email or Slack — with instructions, and get results back in the
 same thread. Starting a new task is as simple as starting a new conversation.
-Airut handles everything behind the scenes: workspace creation, container
-isolation, network sandboxing, session persistence, and cleanup.
+Airut provisions an isolated container, runs Claude Code, and cleans up when
+done.
 
 Self-hosted: your code and conversations never leave your infrastructure.
 
@@ -37,11 +37,10 @@ Airut and reviewing the resulting PRs.
   proxy, and credential masking limit blast radius when agents run with full
   autonomy.
 - **Conversation persistence**: Reply to continue where you left off. Claude
-  Code session context is maintained across messages — iterate, don't
-  re-explain.
-- **Task-to-PR foundation**: Combined with proper repo configuration
-  (`CLAUDE.md`, CI tooling, branch protection), enables end-to-end autonomous
-  workflows where agents push PRs for human review.
+  Code session context is maintained across messages.
+- **Task-to-PR foundation**: Combined with repo configuration (`CLAUDE.md`, CI
+  tooling, branch protection), enables end-to-end autonomous workflows where
+  agents push PRs for human review.
 - **Email and Slack channels**: Authenticate via DMARC (email) or workspace
   membership (Slack), with sender authorization per repo.
 - **Web dashboard**: Monitor running tasks and view network activity logs.
@@ -50,21 +49,18 @@ Airut and reviewing the resulting PRs.
 
 ### Mature Tools You Already Use
 
-Email and Slack are optimized for asynchronous communication — threading,
-search, notifications, and mobile clients all work out of the box. Agent
-interactions integrate naturally into the tools your team already lives in.
+Email and Slack already handle threading, search, notifications, and mobile
+access. Agent interactions show up where your team already works.
 
-This also dramatically lowers the barrier to engage with an agent. Send a
-message from any device, get results when ready. No terminal session to keep
-open, no custom client to install.
+Send a message from any device, get results when ready. No terminal session to
+keep open, no custom client to install.
 
 ### Parallel Agent Management
 
 Running multiple Claude Code agents requires isolation — each needs its own
 workspace, session state, and credentials. Airut provides this automatically:
 each conversation is fully isolated, and a configurable thread pool manages
-concurrent execution. Start as many conversations as you want; Airut handles the
-rest.
+concurrent execution.
 
 ### Code Review as Feedback
 
@@ -90,6 +86,14 @@ Agent: reads comments → fixes → updates PR → replies
 You: approve and merge
 ```
 
+### CI Sandboxing
+
+When an agent pushes a PR, CI workflows run the agent's code on the runner —
+outside the container sandbox. The `airut-sandbox` CLI and
+`airutorg/sandbox-action` GitHub Action solve this by running CI commands inside
+the same container isolation and network allowlisting used by the gateway. See
+[doc/ci-sandbox.md](doc/ci-sandbox.md) for setup and security requirements.
+
 **Example project:** The
 [airut.org website](https://github.com/airutorg/website) is a minimal
 Airut-managed repository that demonstrates the message-to-deploy workflow with
@@ -114,6 +118,8 @@ starting point for onboarding your own projects.
   repositories
 - **[doc/agentic-operation.md](doc/agentic-operation.md)** — Message-to-PR
   workflow patterns
+- **[doc/ci-sandbox.md](doc/ci-sandbox.md)** — Sandboxing CI with
+  `airut-sandbox` and `airutorg/sandbox-action`
 
 ### Channel Setup
 
