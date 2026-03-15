@@ -163,8 +163,10 @@ The proxy addon (`airut/_bundled/proxy/proxy_filter.py`) performs replacement in
    Glob patterns like `"*"` or `"X-*"` do not trigger stripping — they mean
    "scan everywhere for the surrogate", not "every matching header is a
    credential".
-4. Log request with `[masked: N]` suffix indicating replacement count. Stripped
-   headers are logged with `STRIPPED` prefix.
+4. Log each stripped header with a `STRIPPED` line. Append `[dropped: N]` to the
+   response log line (alongside `[masked: N]`) indicating how many headers were
+   stripped. The dashboard renders `[dropped: N]` as a warning tag and
+   `STRIPPED` lines with warning styling.
 
 Headers that were successfully replaced by any credential are never stripped,
 even if a different credential also matches the same header pattern but does not

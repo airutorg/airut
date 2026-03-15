@@ -123,7 +123,8 @@ DNS A evil.com -> 10.199.1.100
 DNS AAAA evil.com -> NOTIMP
 allowed GET https://api.github.com/repos/your-org/your-repo/pulls -> 200 [masked: 1]
 BLOCKED GET https://evil.com/exfiltrate -> 403
-allowed POST https://api.anthropic.com/v1/messages -> 200 [masked: 1]
+STRIPPED header 'authorization' from POST https://api.anthropic.com/v1/files (foreign credential blocked)
+allowed POST https://api.anthropic.com/v1/messages -> 200 [masked: 1] [dropped: 1]
 ERROR GET https://down.example.com/api -> Connection failed: Name or service not known
 ```
 
@@ -135,8 +136,13 @@ NOTIMP (for non-A queries). All A queries resolve to the proxy IP — the DNS
 responder does not perform allowlist checking or upstream DNS resolution.
 
 HTTP log lines use the format
-`{BLOCKED|allowed} {METHOD} {URL} -> {status} [masked: N]` where `[masked: N]`
-is present only when masked secret tokens were replaced.
+`{BLOCKED|allowed} {METHOD} {URL} -> {status} [masked: N] [dropped: N]` where
+`[masked: N]` is present only when masked secret tokens were replaced, and
+`[dropped: N]` is present only when foreign credential headers were stripped.
+
+STRIPPED lines indicate a credential header was removed because it contained a
+non-surrogate value on a scoped host. The format is
+`STRIPPED header '{name}' from {METHOD} {URL} (foreign credential blocked)`.
 
 ERROR lines indicate upstream connection failures — the domain passed the
 allowlist but mitmproxy could not connect (e.g. DNS resolution failure, timeout,

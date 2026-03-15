@@ -474,7 +474,7 @@ class TestReplaceTokens:
     def test_no_replacements(self) -> None:
         pf = ProxyFilter()
         flow = _flow()
-        assert pf._replace_tokens(flow) == 0
+        assert pf._replace_tokens(flow) == (0, 0)
 
     def test_scope_mismatch(self) -> None:
         pf = ProxyFilter()
@@ -489,7 +489,7 @@ class TestReplaceTokens:
             host="example.com",
             headers={"Authorization": "Bearer surr"},
         )
-        assert pf._replace_tokens(flow) == 0
+        assert pf._replace_tokens(flow) == (0, 0)
 
     def test_header_pattern_mismatch(self) -> None:
         pf = ProxyFilter()
@@ -504,7 +504,7 @@ class TestReplaceTokens:
             host="example.com",
             headers={"Authorization": "Bearer surr"},
         )
-        assert pf._replace_tokens(flow) == 0
+        assert pf._replace_tokens(flow) == (0, 0)
 
     def test_successful_replacement(self) -> None:
         pf = ProxyFilter()
@@ -519,8 +519,9 @@ class TestReplaceTokens:
             host="example.com",
             headers={"Authorization": "Bearer surr"},
         )
-        count = pf._replace_tokens(flow)
-        assert count == 1
+        replaced, dropped = pf._replace_tokens(flow)
+        assert replaced == 1
+        assert dropped == 0
         assert flow.request.headers["Authorization"] == "Bearer real"
 
     def test_wildcard_scope(self) -> None:
@@ -536,7 +537,7 @@ class TestReplaceTokens:
             host="api.example.com",
             headers={"Authorization": "Bearer surr"},
         )
-        assert pf._replace_tokens(flow) == 1
+        assert pf._replace_tokens(flow) == (1, 0)
 
     def test_wildcard_header(self) -> None:
         pf = ProxyFilter()
@@ -551,7 +552,7 @@ class TestReplaceTokens:
             host="example.com",
             headers={"X-Custom": "Bearer surr"},
         )
-        assert pf._replace_tokens(flow) == 1
+        assert pf._replace_tokens(flow) == (1, 0)
 
     def test_foreign_credential_stripped(self) -> None:
         """Header with non-surrogate value is stripped when in scope."""
@@ -567,7 +568,9 @@ class TestReplaceTokens:
             host="example.com",
             headers={"Authorization": "Bearer attacker_key"},
         )
-        pf._replace_tokens(flow)
+        replaced, dropped = pf._replace_tokens(flow)
+        assert replaced == 0
+        assert dropped == 1
         assert "Authorization" not in flow.request.headers
 
     def test_foreign_credential_allowed_with_flag(self) -> None:
@@ -624,8 +627,9 @@ class TestReplaceTokens:
             host="example.com",
             headers={"Authorization": "Bearer surr_a"},
         )
-        count = pf._replace_tokens(flow)
-        assert count == 1
+        replaced, dropped = pf._replace_tokens(flow)
+        assert replaced == 1
+        assert dropped == 0
         assert flow.request.headers["Authorization"] == "Bearer real_a"
 
     def test_foreign_credential_strip_logged(self) -> None:
@@ -663,8 +667,9 @@ class TestReplaceTokens:
             host="example.com",
             headers={"Authorization": "Bearer something"},
         )
-        count = pf._replace_tokens(flow)
-        assert count == 0
+        replaced, dropped = pf._replace_tokens(flow)
+        assert replaced == 0
+        assert dropped == 0
         # Header should NOT be stripped (signing creds handled elsewhere)
         assert flow.request.headers["Authorization"] == "Bearer something"
 
@@ -702,8 +707,9 @@ class TestReplaceTokens:
                 "Content-Type": "application/json",
             },
         )
-        count = pf._replace_tokens(flow)
-        assert count == 1
+        replaced, dropped = pf._replace_tokens(flow)
+        assert replaced == 1
+        assert dropped == 0
         assert flow.request.headers["Authorization"] == "Bearer real"
         # Content-Type must NOT be stripped — wildcard means "scan
         # everywhere", not "every header is a credential".
@@ -815,6 +821,26 @@ class TestProxyFilterRequest:
         )
         pf.request(flow)
         assert flow.metadata["masked_count"] == 1
+        assert flow.metadata["dropped_count"] == 0
+
+    def test_allowed_with_foreign_credential_dropped(self) -> None:
+        """Allowed request with foreign credential sets dropped_count."""
+        pf = ProxyFilter()
+        pf.domains = ["example.com"]
+        pf.replacements = {
+            "surr": {
+                "value": "real",
+                "scopes": ["example.com"],
+                "headers": ["Authorization"],
+            }
+        }
+        flow = _flow(
+            host="example.com",
+            headers={"Authorization": "Bearer attacker_key"},
+        )
+        pf.request(flow)
+        assert flow.metadata["masked_count"] == 0
+        assert flow.metadata["dropped_count"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -853,6 +879,29 @@ class TestProxyFilterResponse:
         with patch.object(pf, "_log") as mock_log:
             pf.response(flow)
             assert "[masked: 2]" in mock_log.call_args[0][0]
+
+    def test_dropped_suffix(self) -> None:
+        """Dropped count is included in log."""
+        pf = ProxyFilter()
+        flow = _flow(response_code=200)
+        flow.metadata["allowlist_action"] = "allowed"
+        flow.metadata["dropped_count"] = 1
+        with patch.object(pf, "_log") as mock_log:
+            pf.response(flow)
+            assert "[dropped: 1]" in mock_log.call_args[0][0]
+
+    def test_masked_and_dropped_suffix(self) -> None:
+        """Both masked and dropped counts appear in log."""
+        pf = ProxyFilter()
+        flow = _flow(response_code=200)
+        flow.metadata["allowlist_action"] = "allowed"
+        flow.metadata["masked_count"] = 1
+        flow.metadata["dropped_count"] = 2
+        with patch.object(pf, "_log") as mock_log:
+            pf.response(flow)
+            log_msg = mock_log.call_args[0][0]
+            assert "[masked: 1]" in log_msg
+            assert "[dropped: 2]" in log_msg
 
     def test_no_response(self) -> None:
         """Handles flow with no response (shows ?)."""

@@ -15,6 +15,9 @@ from airut.dashboard.views.styles import network_styles
 # Pattern to extract status code from log lines: "allowed GET ... -> 200"
 _STATUS_CODE_PATTERN = re.compile(r"-> (\d{3})(?:\s|$)")
 
+# Pattern to detect [dropped: N] suffix in log lines
+_DROPPED_PATTERN = re.compile(r"\[dropped: (\d+)\]")
+
 
 def render_network_page(
     task: TaskState,
@@ -119,6 +122,22 @@ def _highlight_error_prefix(escaped_line: str) -> str:
     )
 
 
+def _highlight_stripped(escaped_line: str) -> str:
+    """Wrap 'STRIPPED' in a highlight span."""
+    return escaped_line.replace(
+        "STRIPPED", '<span class="highlight">STRIPPED</span>', 1
+    )
+
+
+def _highlight_dropped(escaped_line: str) -> str:
+    """Wrap [dropped: N] in a warning span."""
+    return re.sub(
+        r"\[dropped: (\d+)\]",
+        r'<span class="dropped-tag">[dropped: \1]</span>',
+        escaped_line,
+    )
+
+
 def render_network_log_line(line: str) -> str:
     """Render a single network log line with appropriate styling.
 
@@ -130,17 +149,22 @@ def render_network_log_line(line: str) -> str:
 
     Line types and their styling:
         - Task start headers (=== TASK START ...): blue
+        - STRIPPED lines (foreign credential blocked): orange warning
         - BLOCKED requests: red with dark red background, BLOCKED in bold
         - ERROR lines (upstream failures): red with dark red background,
           ERROR in bold
         - Allowed requests with error status (4xx/5xx): orange with dark orange
           background, status code in bold
+        - Allowed requests with [dropped: N]: green with warning tag
         - Allowed requests with success status (2xx/3xx): green
     """
     escaped = html.escape(line)
 
     if line.startswith("=== TASK START"):
         return f'<div class="log-line task-start">{escaped}</div>'
+    elif line.startswith("STRIPPED"):
+        highlighted = _highlight_stripped(escaped)
+        return f'<div class="log-line stripped">{highlighted}</div>'
     elif line.startswith("BLOCKED"):
         highlighted = _highlight_blocked(escaped)
         return f'<div class="log-line blocked">{highlighted}</div>'
@@ -148,11 +172,17 @@ def render_network_log_line(line: str) -> str:
         highlighted = _highlight_error_prefix(escaped)
         return f'<div class="log-line conn-error">{highlighted}</div>'
     elif line.startswith("allowed"):
+        has_dropped = _DROPPED_PATTERN.search(line)
         status_code = _extract_status_code(line)
         if status_code is not None and _is_error_status(status_code):
             highlighted = _highlight_status_code(escaped, status_code)
+            if has_dropped:
+                highlighted = _highlight_dropped(highlighted)
             return f'<div class="log-line error">{highlighted}</div>'
         else:
+            if has_dropped:
+                highlighted = _highlight_dropped(escaped)
+                return f'<div class="log-line allowed">{highlighted}</div>'
             return f'<div class="log-line allowed">{escaped}</div>'
     else:
         return f'<div class="log-line">{escaped}</div>'

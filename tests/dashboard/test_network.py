@@ -194,6 +194,54 @@ class TestNetworkLogLineStyling:
         assert '<span class="highlight">ERROR</span>' in html
 
 
+class TestNetworkLogStripped:
+    """Tests for STRIPPED and [dropped: N] log line rendering."""
+
+    def test_stripped_line_styling(self, harness: DashboardHarness) -> None:
+        """Test STRIPPED lines get warning styling."""
+        harness.write_log(
+            "STRIPPED header 'authorization' from"
+            " GET https://example.com (foreign credential blocked)\n"
+        )
+
+        html = harness.get_html("/conversation/abc12345/network")
+        assert 'class="log-line stripped"' in html
+        assert '<span class="highlight">STRIPPED</span>' in html
+
+    def test_dropped_tag_in_allowed_line(
+        self, harness: DashboardHarness
+    ) -> None:
+        """Test [dropped: N] in allowed lines gets warning tag styling."""
+        harness.write_log(
+            "allowed GET https://api.github.com -> 200 [dropped: 1]\n"
+        )
+
+        html = harness.get_html("/conversation/abc12345/network")
+        assert 'class="log-line allowed"' in html
+        assert '<span class="dropped-tag">[dropped: 1]</span>' in html
+
+    def test_dropped_tag_in_error_line(self, harness: DashboardHarness) -> None:
+        """Test [dropped: N] in error response lines also gets styling."""
+        harness.write_log(
+            "allowed GET https://api.github.com -> 401 [dropped: 1]\n"
+        )
+
+        html = harness.get_html("/conversation/abc12345/network")
+        assert 'class="log-line error"' in html
+        assert '<span class="dropped-tag">[dropped: 1]</span>' in html
+
+    def test_stripped_css_present(self, harness: DashboardHarness) -> None:
+        """Test stripped class CSS is present in page."""
+        harness.write_log(
+            "STRIPPED header 'authorization' from"
+            " GET https://example.com (foreign credential blocked)\n"
+        )
+
+        html = harness.get_html("/conversation/abc12345/network")
+        assert ".log-line.stripped" in html
+        assert ".dropped-tag" in html
+
+
 class TestNetworkLogHighlighting:
     """Tests for bold/highlight spans in log lines."""
 
