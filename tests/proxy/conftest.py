@@ -56,6 +56,7 @@ def _install_mitmproxy_mock() -> None:
             self.pretty_host = host
             self.pretty_url = url
             self.path = path
+            self.port = 443
             self.headers = _MockHeaders(headers or {})
             self.stream = stream
             self.content = content

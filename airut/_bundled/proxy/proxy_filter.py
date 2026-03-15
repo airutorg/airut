@@ -275,6 +275,11 @@ class ProxyFilter:
         # bypass via encoding differences between proxy and upstream.
         path = unquote(path)
 
+        # Reject null bytes which can cause path truncation mismatches
+        # between the proxy's fnmatch and C-based upstream servers.
+        if "\x00" in path:
+            return False
+
         # Check domain entries (with wildcard support)
         # Domain entries allow all methods unconditionally
         for domain in self.domains:
@@ -734,25 +739,34 @@ class ProxyFilter:
         return ResignResult(auth_header="", region=region, is_chunked=False)
 
     def http_connect(self, flow: http.HTTPFlow) -> None:
-        """Block all CONNECT tunnel requests.
+        """Block all CONNECT tunnel requests (defense-in-depth).
 
         The proxy operates in regular mode with DNS spoofing — clients
         connect directly to the proxy IP believing it is the upstream
-        server. CONNECT (HTTP tunneling) is never needed in this model
-        and would allow bypassing the allowlist entirely, since the
-        tunnel payload is opaque to the proxy.
+        server.  CONNECT is never needed in this model.
+
+        Note: mitmproxy would MITM a CONNECT tunnel and still apply
+        request hooks to inner requests, so the allowlist would not
+        actually be bypassed.  We block CONNECT anyway because:
+        (1) it is never legitimate in this architecture, (2) it
+        eliminates a class of edge cases, and (3) it simplifies
+        security reasoning.
 
         Unconditionally returns 403 regardless of the target host.
         """
         host = flow.request.pretty_host
-        self._log_loud(f"BLOCKED CONNECT {host} -> 403 (tunneling not allowed)")
+        port = flow.request.port
+        target = f"{host}:{port}" if port else host
+        self._log_loud(
+            f"BLOCKED CONNECT {target} -> 403 (tunneling not allowed)"
+        )
 
         flow.response = http.Response.make(
             403,
             json.dumps(
                 {
                     "error": "blocked_by_network_allowlist",
-                    "host": host,
+                    "host": target,
                     "method": "CONNECT",
                     "message": (
                         "CONNECT tunneling is not allowed. "
