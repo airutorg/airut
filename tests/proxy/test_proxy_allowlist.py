@@ -82,6 +82,11 @@ class MockNetworkAllowlist:
         # bypass via encoding differences between proxy and upstream.
         path = unquote(path)
 
+        # Reject null bytes which can cause path truncation mismatches
+        # between the proxy's fnmatch and C-based upstream servers.
+        if "\x00" in path:
+            return False
+
         # Check domain entries (with wildcard support)
         # Domain entries allow all methods unconditionally
         for domain in self.domains:
@@ -351,6 +356,22 @@ class TestNetworkAllowlistIsAllowed:
 
         # %67 = 'g' — /graphql encoded partially
         assert al._is_allowed("example.com", "/%67raphql") is True
+
+    def test_null_byte_in_path_blocked(self) -> None:
+        """Null bytes (%00) in paths are rejected unconditionally.
+
+        Null bytes can cause path truncation in C-based HTTP servers,
+        leading to mismatches between proxy matching and upstream
+        interpretation.
+        """
+        al = MockNetworkAllowlist()
+        al.domains = []
+        al.url_prefixes = [{"host": "example.com", "path": "/allowed*"}]
+
+        # %00 = null byte — should be blocked even though prefix matches
+        assert al._is_allowed("example.com", "/allowed%00/../secret") is False
+        # Literal null byte also blocked
+        assert al._is_allowed("example.com", "/allowed\x00foo") is False
 
 
 class TestMethodFiltering:

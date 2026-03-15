@@ -582,6 +582,14 @@ class TestProxyFilterRequest:
         body = json.loads(flow.response._content)
         assert "Method" in body["message"]
 
+    def test_null_byte_in_path_blocked(self) -> None:
+        """Paths containing null bytes (%00) are blocked unconditionally."""
+        pf = ProxyFilter()
+        pf.url_prefixes = [{"host": "example.com", "path": "/allowed*"}]
+        flow = _flow(host="example.com", path="/allowed%00/../secret")
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+
     def test_allowed_request(self) -> None:
         """Allowed request passes through."""
         pf = ProxyFilter()
@@ -2055,9 +2063,9 @@ class TestWebSocketUpgrade:
     """Tests for WebSocket upgrade requests subject to allowlist.
 
     WebSocket connections begin as HTTP upgrade requests. mitmproxy routes
-    these through the same ``request()`` / ``requestheaders()`` hooks, so
-    allowlist enforcement applies identically.  These tests explicitly
-    verify that behaviour.
+    these through the same ``request()`` hook, so allowlist enforcement
+    applies identically.  These tests verify that WebSocket upgrade
+    headers do not interfere with normal allowlist processing.
     """
 
     @staticmethod
@@ -2210,12 +2218,12 @@ class TestResponseAwsRegion:
 
 
 class TestHttpConnect:
-    """Tests for ProxyFilter.http_connect() hook.
+    """Tests for ProxyFilter.http_connect() hook (defense-in-depth).
 
-    CONNECT requests allow clients to establish tunnels through the proxy,
-    bypassing the allowlist entirely. The proxy operates via DNS spoofing
-    (regular mode), so CONNECT is never needed for legitimate traffic and
-    must be unconditionally blocked.
+    mitmproxy would MITM a CONNECT tunnel and still apply request hooks,
+    so the allowlist is not actually bypassed.  The proxy blocks CONNECT
+    anyway because it is never needed in the DNS-spoofing architecture
+    and eliminating it simplifies security reasoning.
     """
 
     def test_connect_blocked_for_non_allowed_host(self) -> None:
@@ -2225,6 +2233,7 @@ class TestHttpConnect:
         flow = _flow(method="CONNECT", host="evil.com", path="/")
         pf.http_connect(flow)
         assert flow.response is not None
+        assert flow.response.status_code == 403
         body = json.loads(flow.response._content)
         assert body["error"] == "blocked_by_network_allowlist"
         assert "CONNECT" in body["message"]
@@ -2236,6 +2245,7 @@ class TestHttpConnect:
         flow = _flow(method="CONNECT", host="api.github.com", path="/")
         pf.http_connect(flow)
         assert flow.response is not None
+        assert flow.response.status_code == 403
         body = json.loads(flow.response._content)
         assert body["error"] == "blocked_by_network_allowlist"
 
@@ -2245,6 +2255,15 @@ class TestHttpConnect:
         flow = _flow(method="CONNECT", host="anything.com", path="/")
         pf.http_connect(flow)
         assert flow.response is not None
+        assert flow.response.status_code == 403
+
+    def test_connect_includes_port_in_host(self) -> None:
+        """Blocked CONNECT response includes host:port target."""
+        pf = ProxyFilter()
+        flow = _flow(method="CONNECT", host="evil.com", path="/")
+        pf.http_connect(flow)
+        body = json.loads(flow.response._content)
+        assert ":" in body["host"]
 
     def test_connect_logged(self) -> None:
         """Blocked CONNECT is logged via _log_loud."""

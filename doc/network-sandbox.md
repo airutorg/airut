@@ -98,6 +98,15 @@ redirect, the proxy returns that response to the client. The client then makes a
 *new* request to the redirect target, which is checked against the allowlist
 independently. Redirects to blocked domains result in a 403.
 
+**CONNECT tunneling** (defense-in-depth): The proxy unconditionally blocks all
+CONNECT requests with HTTP 403 via the `http_connect` hook, regardless of target
+host. Note that mitmproxy would MITM a CONNECT tunnel and still apply
+`request()` hooks to inner HTTP requests, so the allowlist is not actually
+bypassed by CONNECT — this was confirmed during penetration testing. The block
+is defense-in-depth: CONNECT is never needed in this DNS-spoofing architecture,
+so blocking it eliminates an unnecessary code path and simplifies security
+reasoning.
+
 ### Limitations
 
 The sandbox handles **HTTP(S) traffic only**. Other protocols (raw TCP, SSH,

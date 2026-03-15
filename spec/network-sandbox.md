@@ -45,10 +45,13 @@ high-level documentation (threat model, security properties, configuration), see
    - **Allowed**: mitmproxy connects upstream and forwards the request
    - **Blocked**: HTTP 403 returned with instructions
 
-**CONNECT tunneling is unconditionally blocked.** Since the proxy operates via
-DNS spoofing (not as an explicit HTTP proxy), CONNECT requests are never needed
-for legitimate traffic. The `http_connect` hook rejects all CONNECT attempts
-with HTTP 403 to prevent allowlist bypass via raw TCP tunneling.
+**CONNECT tunneling is unconditionally blocked (defense-in-depth).** Since the
+proxy operates via DNS spoofing (not as an explicit HTTP proxy), CONNECT
+requests are never needed for legitimate traffic. The `http_connect` hook
+rejects all CONNECT attempts with HTTP 403. Note: mitmproxy would MITM a CONNECT
+tunnel and still apply `request()` hooks to inner requests, so the allowlist is
+not actually bypassed by CONNECT. The block is defense-in-depth — it eliminates
+an unnecessary code path and simplifies security reasoning.
 
 Note: Non-existent domains will appear to resolve from within the container.
 This is by design — the DNS responder intentionally avoids upstream DNS
