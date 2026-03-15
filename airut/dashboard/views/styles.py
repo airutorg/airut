@@ -1135,10 +1135,20 @@ def _network_specific() -> str:
             padding: 2px 8px;
             margin: 0 -8px;
         }
+        .log-line.stripped {
+            color: #e09c5f;
+            background: #3c2f1f;
+            padding: 2px 8px;
+            margin: 0 -8px;
+        }
         .log-line.task-start {
             color: #569cd6;
         }
         .log-line .highlight {
+            font-weight: bold;
+        }
+        .log-line .dropped-tag {
+            color: #e09c5f;
             font-weight: bold;
         }
         .no-logs {

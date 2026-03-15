@@ -358,7 +358,7 @@ class ProxyFilter:
 
         return header_value, False
 
-    def _replace_tokens(self, flow: http.HTTPFlow) -> int:
+    def _replace_tokens(self, flow: http.HTTPFlow) -> tuple[int, int]:
         """Replace surrogate tokens with real values in request headers.
 
         Uses a two-pass approach:
@@ -377,10 +377,10 @@ class ProxyFilter:
             flow: The HTTP flow to modify.
 
         Returns:
-            Number of replacements made.
+            Tuple of (replacements_made, headers_dropped).
         """
         if not self.replacements:
-            return 0
+            return 0, 0
 
         host = flow.request.pretty_host
         count = 0
@@ -438,6 +438,7 @@ class ProxyFilter:
                         strip_candidates.append((header.lower(), config))
 
         # Pass 2: Strip headers with foreign credentials
+        dropped = 0
         if strip_candidates:
             headers_to_remove: set[str] = set()
             for header_lower, config in strip_candidates:
@@ -454,6 +455,7 @@ class ProxyFilter:
                     for h in list(flow.request.headers.keys()):
                         if h.lower() == header_lower:
                             del flow.request.headers[h]
+                    dropped += 1
                     self._log_loud(
                         f"STRIPPED header '{header_lower}' from "
                         f"{flow.request.method} "
@@ -461,7 +463,7 @@ class ProxyFilter:
                         f"(foreign credential blocked)"
                     )
 
-        return count
+        return count, dropped
 
     def _try_resign_aws(self, flow: http.HTTPFlow) -> ResignResult | None:
         """Attempt to re-sign an AWS-signed request.
@@ -993,8 +995,9 @@ class ProxyFilter:
                 flow.metadata["masked_count"] = 1
             return
 
-        replaced = self._replace_tokens(flow)
+        replaced, dropped = self._replace_tokens(flow)
         flow.metadata["masked_count"] = replaced
+        flow.metadata["dropped_count"] = dropped
 
     def request_data(self, flow: http.HTTPFlow, data: bytes) -> bytes:
         """Re-sign streaming chunked body data.
@@ -1031,6 +1034,11 @@ class ProxyFilter:
         # Append masking info if tokens were replaced
         masked = flow.metadata.get("masked_count", 0)
         suffix = f" [masked: {masked}]" if masked else ""
+
+        # Append dropped info if foreign credential headers were stripped
+        dropped = flow.metadata.get("dropped_count", 0)
+        if dropped:
+            suffix += f" [dropped: {dropped}]"
 
         # Append region info for AWS re-signed requests
         region = flow.metadata.get("aws_region")
