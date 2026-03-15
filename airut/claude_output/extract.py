@@ -27,7 +27,12 @@ logger = logging.getLogger(__name__)
 
 
 def extract_result_summary(events: list[StreamEvent]) -> ResultSummary | None:
-    """Extract result metadata from the result event.
+    """Extract result metadata from the result event(s).
+
+    When multiple result events exist (from background tasks completing
+    after the main result), ``duration_ms`` and ``num_turns`` are summed
+    across all results (they are per-segment), while ``total_cost_usd``
+    and ``usage`` come from the last result (they are cumulative).
 
     Args:
         events: Parsed stream events.
@@ -35,47 +40,57 @@ def extract_result_summary(events: list[StreamEvent]) -> ResultSummary | None:
     Returns:
         Result summary, or ``None`` if no result event is present.
     """
-    for event in reversed(events):
-        if event.event_type != EventType.RESULT:
-            continue
+    result_events = [e for e in events if e.event_type == EventType.RESULT]
+    if not result_events:
+        return None
 
-        extra = event.extra
-        usage_dict = extra.get("usage", {})
+    last = result_events[-1]
+    extra = last.extra
+    usage_dict = extra.get("usage", {})
 
-        # Capture any API fields beyond the known token fields
-        usage_extra = {
-            k: v for k, v in usage_dict.items() if k not in _KNOWN_USAGE_KEYS
-        }
+    # Capture any API fields beyond the known token fields
+    usage_extra = {
+        k: v for k, v in usage_dict.items() if k not in _KNOWN_USAGE_KEYS
+    }
 
-        return ResultSummary(
-            session_id=event.session_id,
-            duration_ms=extra.get("duration_ms", 0),
-            total_cost_usd=extra.get("total_cost_usd", 0.0),
-            num_turns=extra.get("num_turns", 0),
-            is_error=extra.get("is_error", False),
-            usage=Usage(
-                input_tokens=usage_dict.get("input_tokens", 0),
-                output_tokens=usage_dict.get("output_tokens", 0),
-                cache_creation_input_tokens=usage_dict.get(
-                    "cache_creation_input_tokens", 0
-                ),
-                cache_read_input_tokens=usage_dict.get(
-                    "cache_read_input_tokens", 0
-                ),
-                extra=usage_extra,
+    # duration_ms and num_turns are per-segment; sum across all results.
+    # total_cost_usd and usage are cumulative; use last result.
+    total_duration_ms = sum(
+        e.extra.get("duration_ms", 0) for e in result_events
+    )
+    total_num_turns = sum(e.extra.get("num_turns", 0) for e in result_events)
+
+    return ResultSummary(
+        session_id=last.session_id,
+        duration_ms=total_duration_ms,
+        total_cost_usd=extra.get("total_cost_usd", 0.0),
+        num_turns=total_num_turns,
+        is_error=extra.get("is_error", False),
+        usage=Usage(
+            input_tokens=usage_dict.get("input_tokens", 0),
+            output_tokens=usage_dict.get("output_tokens", 0),
+            cache_creation_input_tokens=usage_dict.get(
+                "cache_creation_input_tokens", 0
             ),
-            result_text=extra.get("result", ""),
-        )
-
-    return None
+            cache_read_input_tokens=usage_dict.get(
+                "cache_read_input_tokens", 0
+            ),
+            extra=usage_extra,
+        ),
+        result_text=extra.get("result", ""),
+    )
 
 
 def extract_response_text(events: list[StreamEvent]) -> str:
-    """Extract Claude's final response text from the last assistant event.
+    """Extract Claude's response text from events.
 
-    Scans events in reverse to find the most recent assistant message,
-    then joins its text blocks. Falls back to the result event's text
-    field if no assistant text is found.
+    When multiple result events exist (caused by background tasks
+    completing after the main result), concatenates all result texts
+    in order.  For a single result, prefers the last assistant event's
+    text blocks and falls back to the result event.
+
+    This function always receives events from a single container
+    execution, so all result events belong to the same task.
 
     Args:
         events: Parsed stream events.
@@ -83,7 +98,19 @@ def extract_response_text(events: list[StreamEvent]) -> str:
     Returns:
         Response text, or a fallback message if nothing found.
     """
-    # Try last assistant event first
+    # When multiple result events exist, concatenate all their texts.
+    result_events = [e for e in events if e.event_type == EventType.RESULT]
+
+    if len(result_events) > 1:
+        result_texts: list[str] = []
+        for event in result_events:
+            text = _extract_result_text(event)
+            if text:
+                result_texts.append(text)
+        if result_texts:
+            return "\n\n".join(result_texts)
+
+    # Single result (or none): try last assistant event first
     for event in reversed(events):
         if event.event_type != EventType.ASSISTANT:
             continue
@@ -101,20 +128,37 @@ def extract_response_text(events: list[StreamEvent]) -> str:
         if event.event_type != EventType.RESULT:
             continue
 
-        result = event.extra.get("result")
-        if isinstance(result, str) and result:
-            return result
-        if isinstance(result, dict):
-            content_blocks = result.get("content", [])
-            text_parts = [
-                block["text"]
-                for block in content_blocks
-                if isinstance(block, dict) and block.get("type") == "text"
-            ]
-            if text_parts:
-                return "\n\n".join(text_parts)
+        text = _extract_result_text(event)
+        if text:
+            return text
 
     return "No output received from Claude."
+
+
+def _extract_result_text(event: StreamEvent) -> str:
+    """Extract text from a single result event.
+
+    Handles both string and dict (content-block) result formats.
+
+    Args:
+        event: A result-type stream event.
+
+    Returns:
+        Extracted text, or empty string if none found.
+    """
+    result = event.extra.get("result")
+    if isinstance(result, str) and result:
+        return result
+    if isinstance(result, dict):
+        content_blocks = result.get("content", [])
+        text_parts = [
+            block["text"]
+            for block in content_blocks
+            if isinstance(block, dict) and block.get("type") == "text"
+        ]
+        if text_parts:
+            return "\n\n".join(text_parts)
+    return ""
 
 
 def extract_error_summary(
