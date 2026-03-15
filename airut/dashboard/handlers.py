@@ -40,6 +40,8 @@ from airut.dashboard.tracker import (
     TaskState,
     TaskStatus,
     TaskTracker,
+    make_disk_task_id,
+    parse_disk_task_id,
 )
 from airut.dashboard.versioned import VersionClock, VersionedStore
 from airut.dashboard.views import get_favicon_svg
@@ -263,13 +265,10 @@ class RequestHandlers:
         Returns:
             HTML response with task details.
         """
-        task = self.tracker.get_task(task_id)
-        if task is None:
+        result = self._resolve_task_by_id(task_id)
+        if result is None:
             return Response("Task not found", status=404)
-
-        conversation = None
-        if task.conversation_id:
-            conversation = self._load_conversation(task.conversation_id)
+        task, conversation = result
 
         return Response(
             views.render_task_detail(task, conversation),
@@ -402,17 +401,14 @@ class RequestHandlers:
         Returns:
             JSON response with task details.
         """
-        task = self.tracker.get_task(task_id)
-        if task is None:
+        result = self._resolve_task_by_id(task_id)
+        if result is None:
             return Response(
                 json.dumps({"error": "Task not found"}),
                 status=404,
                 content_type="application/json",
             )
-
-        conversation = None
-        if task.conversation_id:
-            conversation = self._load_conversation(task.conversation_id)
+        task, conversation = result
 
         return Response(
             json.dumps(
@@ -1085,6 +1081,39 @@ class RequestHandlers:
         store = ConversationStore(conversation_dir)
         return store.load()
 
+    def _resolve_task_by_id(
+        self, task_id: str
+    ) -> tuple[TaskState, ConversationMetadata | None] | None:
+        """Look up a task by ID from memory, falling back to disk.
+
+        First checks the in-memory tracker.  If the task is not found
+        and the *task_id* uses the ``disk-{conversation_id}`` format
+        (see :func:`parse_disk_task_id`), attempts to load the task
+        from the conversation directory on disk.
+
+        Args:
+            task_id: Task ID to resolve.
+
+        Returns:
+            Tuple of (TaskState, ConversationMetadata or None) if
+            found, None otherwise.
+        """
+        task = self.tracker.get_task(task_id)
+        if task is not None:
+            conversation = (
+                self._load_conversation(task.conversation_id)
+                if task.conversation_id
+                else None
+            )
+            return task, conversation
+
+        # Fall back to disk for synthetic disk-{conversation_id} IDs
+        conversation_id = parse_disk_task_id(task_id)
+        if conversation_id is not None:
+            return self._load_task_from_disk(conversation_id)
+
+        return None
+
     def _load_task_from_disk(
         self, conversation_id: str
     ) -> tuple[TaskState, ConversationMetadata] | None:
@@ -1132,7 +1161,7 @@ class RequestHandlers:
 
         has_errors = any(r.is_error for r in conversation.replies)
         task = TaskState(
-            task_id=f"disk-{conversation_id}",
+            task_id=make_disk_task_id(conversation_id),
             conversation_id=conversation_id,
             display_title=f"[Past conversation {conversation_id}]",
             status=TaskStatus.COMPLETED,

@@ -321,9 +321,10 @@ This enables:
 Past tasks loaded from disk are marked as COMPLETED with a synthetic task_id
 (`disk-{conv_id}`) and placeholder subject (`[Past conversation {id}]`). The
 main dashboard completed tasks column is NOT populated from disk — only direct
-URL access to `/conversation/{conv_id}` triggers disk loading. The
-`/task/{task_id}` endpoint does not support disk loading (disk-loaded tasks have
-synthetic IDs not known to the caller).
+URL access to `/conversation/{conv_id}` or `/task/disk-{conv_id}` triggers disk
+loading. Both the HTML task detail page and the JSON API endpoint support the
+`disk-{conv_id}` task ID format, falling back to disk when the task is not found
+in memory.
 
 ### Actions Viewer (`/conversation/{conv_id}/actions`)
 

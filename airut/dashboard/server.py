@@ -339,6 +339,20 @@ class DashboardServer:
         """
         return self._handlers._load_task_from_disk(conversation_id)
 
+    def _resolve_task_by_id(
+        self, task_id: str
+    ) -> tuple[TaskState, ConversationMetadata | None] | None:
+        """Look up a task by ID from memory, falling back to disk.
+
+        Args:
+            task_id: Task ID to resolve.
+
+        Returns:
+            Tuple of (TaskState, ConversationMetadata or None) if found,
+            None otherwise.
+        """
+        return self._handlers._resolve_task_by_id(task_id)
+
     def _load_task_with_conversation(
         self, conversation_id: str
     ) -> tuple[TaskState, ConversationMetadata | None] | None:

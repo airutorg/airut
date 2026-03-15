@@ -188,6 +188,37 @@ class RepoState:
     initialized_at: float = field(default_factory=time.time)
 
 
+DISK_TASK_ID_PREFIX = "disk-"
+"""Prefix for synthetic task IDs created when loading past tasks from disk."""
+
+
+def make_disk_task_id(conversation_id: str) -> str:
+    """Build a synthetic task ID for a disk-loaded conversation.
+
+    Args:
+        conversation_id: 8-character hex conversation ID.
+
+    Returns:
+        Task ID in the form ``disk-{conversation_id}``.
+    """
+    return f"{DISK_TASK_ID_PREFIX}{conversation_id}"
+
+
+def parse_disk_task_id(task_id: str) -> str | None:
+    """Extract the conversation ID from a disk-loaded task ID.
+
+    Args:
+        task_id: Task ID to parse.
+
+    Returns:
+        The conversation ID if *task_id* has the ``disk-`` prefix,
+        otherwise ``None``.
+    """
+    if task_id.startswith(DISK_TASK_ID_PREFIX):
+        return task_id[len(DISK_TASK_ID_PREFIX) :] or None
+    return None
+
+
 ACTIVE_STATUSES: frozenset[TaskStatus] = frozenset(
     {
         TaskStatus.QUEUED,
