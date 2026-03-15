@@ -97,24 +97,19 @@ url_prefixes:
     methods: [GET, HEAD]
   - host: api.github.com
     path: /repos/org*
-  - host: sentry.io
-    path: ""
-    methods: [POST]
 """
         al = parse_allowlist_yaml(yaml_data)
         assert len(al.domains) == 2
         assert al.domains[0].host == "api.anthropic.com"
         assert al.domains[1].host == "*.github.com"
 
-        assert len(al.url_patterns) == 3
+        assert len(al.url_patterns) == 2
         assert al.url_patterns[0].host == "pypi.org"
         assert al.url_patterns[0].path == ""
         assert al.url_patterns[0].methods == ("GET", "HEAD")
         assert al.url_patterns[1].host == "api.github.com"
         assert al.url_patterns[1].path == "/repos/org*"
         assert al.url_patterns[1].methods == ()
-        assert al.url_patterns[2].host == "sentry.io"
-        assert al.url_patterns[2].methods == ("POST",)
 
     def test_domains_only(self) -> None:
         """Parses allowlist with only domains."""

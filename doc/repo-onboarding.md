@@ -95,9 +95,6 @@ url_prefixes:
   - host: statsig.anthropic.com
     path: ""
     methods: [POST]
-  - host: sentry.io
-    path: ""
-    methods: [POST]
 
   # Python packages — read-only (if using Python)
   - host: pypi.org

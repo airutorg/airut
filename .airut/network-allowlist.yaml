@@ -42,9 +42,6 @@ url_prefixes:
   - host: statsig.anthropic.com
     path: ""
     methods: [POST]
-  - host: sentry.io
-    path: ""
-    methods: [POST]
 
   # Python packages — read-only (uv sync in entrypoint)
   - host: pypi.org
