@@ -750,6 +750,11 @@ class RepoServerConfig:
         network_sandbox_enabled: Server-side override for the network sandbox.
             Effective sandbox state is the logical AND of this value and the
             repo config's ``network.sandbox_enabled``.  Defaults to ``True``.
+        model: Server-side model override.  When set, takes precedence over
+            channel ``model_hint`` and repo ``default_model`` for new
+            conversations.
+        effort: Server-side effort override.  When set, takes precedence over
+            repo ``default_effort`` for new conversations.
     """
 
     repo_id: str
@@ -761,6 +766,8 @@ class RepoServerConfig:
         default_factory=dict
     )
     network_sandbox_enabled: bool = True
+    model: str | None = None
+    effort: str | None = None
 
     def __post_init__(self) -> None:
         """Validate configuration and register secrets.
@@ -1039,6 +1046,8 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
         network_sandbox_enabled=_resolve(
             network.get("sandbox_enabled"), bool, default=True
         ),
+        model=_resolve(raw.get("model"), str, default=None) or None,
+        effort=_resolve(raw.get("effort"), str, default=None) or None,
     )
 
 

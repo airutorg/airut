@@ -964,6 +964,68 @@ class TestFromYaml:
         config = ServerConfig.from_yaml(yaml_path)
         assert config.repos["test"].network_sandbox_enabled is False
 
+    def test_model_default_none(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Model defaults to None when not specified."""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
+        config = ServerConfig.from_yaml(yaml_path)
+        assert config.repos["test"].model is None
+
+    def test_model_parsed(self, master_repo: Path, tmp_path: Path) -> None:
+        """Model is parsed from server config."""
+        yaml_content = (
+            _MINIMAL_YAML.format(repo_url=master_repo) + "    model: sonnet\n"
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        config = ServerConfig.from_yaml(yaml_path)
+        assert config.repos["test"].model == "sonnet"
+
+    def test_effort_default_none(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Effort defaults to None when not specified."""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
+        config = ServerConfig.from_yaml(yaml_path)
+        assert config.repos["test"].effort is None
+
+    def test_effort_parsed(self, master_repo: Path, tmp_path: Path) -> None:
+        """Effort is parsed from server config."""
+        yaml_content = (
+            _MINIMAL_YAML.format(repo_url=master_repo) + "    effort: medium\n"
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        config = ServerConfig.from_yaml(yaml_path)
+        assert config.repos["test"].effort == "medium"
+
+    def test_model_empty_string_normalized_to_none(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Empty string model is normalized to None."""
+        yaml_content = (
+            _MINIMAL_YAML.format(repo_url=master_repo) + '    model: ""\n'
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        config = ServerConfig.from_yaml(yaml_path)
+        assert config.repos["test"].model is None
+
+    def test_effort_empty_string_normalized_to_none(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Empty string effort is normalized to None."""
+        yaml_content = (
+            _MINIMAL_YAML.format(repo_url=master_repo) + '    effort: ""\n'
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        config = ServerConfig.from_yaml(yaml_path)
+        assert config.repos["test"].effort is None
+
     def test_missing_file(self, tmp_path: Path) -> None:
         """Raise ConfigError when file does not exist."""
         with pytest.raises(ConfigError, match="Config file not found"):

@@ -359,8 +359,32 @@ def process_message(
         )
 
         if is_new:
-            model = parsed.model_hint or repo_config.default_model
-            effort = repo_config.default_effort
+            # Server overrides take precedence over channel hints and
+            # repo defaults for new conversations.
+            server_model = repo_handler.config.model
+            server_effort = repo_handler.config.effort
+            model = (
+                server_model or parsed.model_hint or repo_config.default_model
+            )
+            effort = server_effort or repo_config.default_effort
+            if server_model and parsed.model_hint:
+                logger.info(
+                    "Repo '%s': server model=%s overrides "
+                    "channel model_hint=%s for conversation %s",
+                    repo_id,
+                    server_model,
+                    parsed.model_hint,
+                    conv_id,
+                )
+            if server_effort and repo_config.default_effort:
+                logger.info(
+                    "Repo '%s': server effort=%s overrides "
+                    "repo default_effort=%s for conversation %s",
+                    repo_id,
+                    server_effort,
+                    repo_config.default_effort,
+                    conv_id,
+                )
             logger.info(
                 "Repo '%s': using model=%s, effort=%s for new "
                 "conversation %s (model_hint=%s)",

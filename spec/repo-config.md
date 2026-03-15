@@ -151,6 +151,33 @@ secrets:
 Fields moved to repo config: `execution.default_model` (now `default_model`),
 `execution.timeout` (now `resource_limits.timeout`), `container_env`.
 
+### Server-Side Model and Effort Overrides
+
+The server config supports optional `model` and `effort` fields per repo. When
+set, these take precedence over channel-supplied hints and repo config defaults
+for **new conversations**. Resumed conversations use their stored values.
+
+```yaml
+repos:
+  my-repo:
+    model: sonnet          # overrides channel model_hint and repo default_model
+    effort: medium         # overrides repo default_effort
+    git:
+      repo_url: https://github.com/org/repo.git
+    email: ...
+```
+
+Precedence for new conversations:
+
+| Priority | Model                       | Effort                       |
+| -------- | --------------------------- | ---------------------------- |
+| 1        | `repos.<id>.model` (server) | `repos.<id>.effort` (server) |
+| 2        | channel `model_hint`        | repo `default_effort`        |
+| 3        | repo `default_model`        | *(none — Claude default)*    |
+
+Resumed conversations always use the model and effort stored at conversation
+creation time, regardless of current server or repo config.
+
 ### Server-Side Network Sandbox Override
 
 The server config retains an optional `network.sandbox_enabled` field per repo
