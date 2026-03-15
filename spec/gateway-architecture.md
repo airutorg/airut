@@ -304,13 +304,18 @@ addressing):
   ignored
 - **No model specified**: Uses `default_model` from repo config (defaults to
   "opus")
+- **Server override**: When `model` is set in the server config for a repo, it
+  takes precedence over both subaddressing and `default_model` for new
+  conversations
 
 **Supported models**: `opus`, `sonnet`, `haiku` (or any valid Claude Code model
 name)
 
 **Implementation**: Model is passed to Claude Code via `--model` CLI parameter,
 not embedded in settings.json. Effort level is passed via `--effort` when
-`default_effort` is configured in repo config (omitted otherwise).
+configured. Server-side `model` and `effort` overrides (in the server config's
+per-repo section) take precedence over channel hints and repo defaults for new
+conversations. See `spec/repo-config.md` for the full precedence table.
 
 **Acknowledgment**: The auto-reply confirms work has started: "I've started
 working on this and will reply shortly." If a dashboard URL is configured, a

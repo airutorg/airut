@@ -22,7 +22,7 @@ from airut.gateway.service.message_processing import process_message
 from airut.sandbox import ExecutionResult, Outcome
 from airut.sandbox.types import ResourceLimits
 
-from .conftest import make_service, update_global
+from .conftest import make_service, update_global, update_repo
 
 
 def _parse_events(*raw_events: dict) -> list[StreamEvent]:
@@ -711,6 +711,140 @@ class TestProcessMessage:
             process_message(svc, parsed, "conv1", handler, adapter)
         call_kwargs = svc._mock_task.execute.call_args[1]
         assert call_kwargs["effort"] == "high"
+
+    def test_server_model_used_as_sole_source(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        update_repo(handler, model="haiku")
+
+        parsed = _make_parsed_message(body="Do stuff")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+        call_kwargs = svc._mock_task.execute.call_args[1]
+        assert call_kwargs["model"] == "haiku"
+
+    def test_server_effort_used_as_sole_source(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        update_repo(handler, effort="low")
+
+        parsed = _make_parsed_message(body="Do stuff")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+        call_kwargs = svc._mock_task.execute.call_args[1]
+        assert call_kwargs["effort"] == "low"
+
+    def test_no_server_override_falls_through(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        # Server model and effort are None by default
+
+        rc = _make_repo_config(default_model="opus", default_effort="max")
+        self._mock_repo_config.return_value = (rc, {})
+
+        parsed = _make_parsed_message(body="Do stuff", model_hint="sonnet")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+        call_kwargs = svc._mock_task.execute.call_args[1]
+        # Channel hint wins over repo default when no server override
+        assert call_kwargs["model"] == "sonnet"
+        assert call_kwargs["effort"] == "max"
+
+    def test_server_model_overrides_channel_hint(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        update_repo(handler, model="haiku")
+
+        parsed = _make_parsed_message(body="Do stuff", model_hint="opus")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+        call_kwargs = svc._mock_task.execute.call_args[1]
+        assert call_kwargs["model"] == "haiku"
+
+    def test_server_model_overrides_repo_default(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        update_repo(handler, model="haiku")
+
+        rc = _make_repo_config(default_model="opus")
+        self._mock_repo_config.return_value = (rc, {})
+
+        parsed = _make_parsed_message(body="Do stuff")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+        call_kwargs = svc._mock_task.execute.call_args[1]
+        assert call_kwargs["model"] == "haiku"
+
+    def test_server_effort_overrides_repo_default(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        update_repo(handler, effort="low")
+
+        rc = _make_repo_config(default_effort="max")
+        self._mock_repo_config.return_value = (rc, {})
+
+        parsed = _make_parsed_message(body="Do stuff")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+        call_kwargs = svc._mock_task.execute.call_args[1]
+        assert call_kwargs["effort"] == "low"
+
+    def test_server_override_not_used_for_resumed_conversation(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        update_repo(handler, model="haiku", effort="low")
+        repo_path = tmp_path / "repo"
+        handler.conversation_manager.exists.return_value = True
+        handler.conversation_manager.resume_existing.return_value = repo_path
+        mock_cs.get_model.return_value = "opus"
+        mock_cs.get_effort.return_value = "max"
+        mock_cs.get_session_id_for_resume.return_value = None
+        mock_cs.load.return_value = MagicMock(replies=[])
+
+        parsed = _make_parsed_message(
+            body="Continue",
+            conversation_id="aabb1122",
+        )
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "conv1", handler, adapter)
+        call_kwargs = svc._mock_task.execute.call_args[1]
+        assert call_kwargs["model"] == "opus"
+        assert call_kwargs["effort"] == "max"
 
     def test_attachments_saved(self, email_config: Any, tmp_path: Path) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
