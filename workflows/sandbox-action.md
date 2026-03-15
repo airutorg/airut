@@ -57,39 +57,61 @@ cd /storage/sandbox-action && git fetch origin && git checkout main && git pull
 
 6. After the PR is merged, revert the airut CI workflow back to `@main`.
 
+## Branching Model
+
+The repository uses a release branch to separate development from tagged
+releases:
+
+| Ref              | VERSION file | airut-sandbox source | Purpose                          |
+| ---------------- | ------------ | -------------------- | -------------------------------- |
+| `main`           | `main`       | `git+.../airut@main` | Development, airut repo's own CI |
+| `releases/v0`    | `0.15.0`     | PyPI `airut==0.15.0` | Current release branch           |
+| `@v0.15.0` (tag) | `0.15.0`     | PyPI `airut==0.15.0` | Pinned version                   |
+| `@v0` (tag)      | `0.15.0`     | PyPI `airut==0.15.0` | Floating major (latest 0.x)      |
+
+**`main` is never modified during releases.** The `VERSION` file on `main`
+always contains `main`. Only the `releases/v0` branch has a PyPI version in
+`VERSION`.
+
 ## Releasing (After Airut Release)
 
 When a new airut version is published to PyPI (e.g., `v0.16.0`):
 
-1. Update the VERSION file:
+1. Update the release branch:
 
    ```bash
    cd /storage/sandbox-action
-   git checkout main && git pull
+   git fetch origin
+   git checkout releases/v0
+   git reset --hard origin/main
    echo "0.16.0" > VERSION
-   ```
-
-2. Update `action.yml` if the new airut version requires changes to the action
-   (usually not needed).
-
-3. Commit:
-
-   ```bash
    git add VERSION
    git commit -m "Release v0.16.0"
-   git push origin main
+   git push --force-with-lease origin releases/v0
    ```
 
-4. Create the version tag and move the major tag:
+   This resets `releases/v0` to the latest `main` and only changes `VERSION`.
+
+2. Create draft releases via `gh release create`:
 
    ```bash
-   git tag v0.16.0
-   git tag -f v0
-   git push origin v0.16.0
-   git push -f origin v0
+   # Exact version tag
+   gh release create v0.16.0 --draft --title "v0.16.0" \
+     --target releases/v0 --notes "Release notes here..."
+
+   # Floating major tag (delete old release first if it exists)
+   gh release delete v0 --yes 2>/dev/null || true
+   gh release create v0 --draft --title "v0 (latest)" \
+     --target releases/v0 --notes "Latest stable v0.x release..."
    ```
 
-5. Verify consumers using `@v0` pick up the new version on their next CI run.
+   Draft releases create tags when published. The tag ruleset blocks direct
+   `git push` of tags — use `gh release create` instead.
+
+3. Publish both releases from the GitHub UI. The user must approve and publish
+   each draft.
+
+4. Verify consumers using `@v0` pick up the new version on their next CI run.
 
 ## Initialization (First Time Only)
 
