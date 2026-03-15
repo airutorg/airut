@@ -113,7 +113,7 @@ by mitmproxy to the URL host, but `pretty_host` returns the Host header value.
 An attacker could set the Host header to an allowed domain while routing the
 request to a blocked host via the URL. The proxy blocks any request where the
 Host header and URL host disagree (case-insensitive comparison), returning HTTP
-403. This only affects plain HTTP — HTTPS requests in the DNS-spoofing model do
+403\. This only affects plain HTTP — HTTPS requests in the DNS-spoofing model do
 not use absolute-form URIs.
 
 ### Limitations
