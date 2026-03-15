@@ -67,9 +67,24 @@ installed. Action versions mirror airut releases:
 | `@v0.15.0` | `0.15.0`     | PyPI `airut==0.15.0`   | Pinned to exact version          |
 
 The `v0` tag always points to the latest `v0.x.y` release. Consumers using `@v0`
-automatically pick up minor and patch releases. See
-[workflows/sandbox-action.md](../workflows/sandbox-action.md) for the release
-process.
+automatically pick up minor and patch releases.
+
+### Branching Strategy
+
+The `releases/*` branches are protected and serve as the source of truth for
+released versions. There are two development tracks:
+
+- **Action implementation changes** happen on `main` and are cherry-picked to
+  `releases/*` via reviewed PRs when they need to ship.
+- **Airut version bumps** happen via PRs directly against `releases/*` that
+  update the `VERSION` file.
+
+Release tags (`vN.x.y` and `vN`) always point to commits on `releases/vN`. The
+release branch is never force-pushed or reset to `main`, preserving
+compatibility within a major version.
+
+See [workflows/sandbox-action.md](../workflows/sandbox-action.md) for the
+release process.
 
 ## Design Decisions
 
