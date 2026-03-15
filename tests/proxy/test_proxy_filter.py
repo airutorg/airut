@@ -685,6 +685,71 @@ class TestReplaceTokens:
         pf._replace_tokens(flow)
         assert "X-Api-Key" not in flow.request.headers
 
+    def test_wildcard_header_not_stripped(self) -> None:
+        """Glob patterns do not strip non-surrogate headers."""
+        pf = ProxyFilter()
+        pf.replacements = {
+            "surr": {
+                "value": "real",
+                "scopes": ["example.com"],
+                "headers": ["*"],
+            }
+        }
+        flow = _flow(
+            host="example.com",
+            headers={
+                "Authorization": "Bearer surr",
+                "Content-Type": "application/json",
+            },
+        )
+        count = pf._replace_tokens(flow)
+        assert count == 1
+        assert flow.request.headers["Authorization"] == "Bearer real"
+        # Content-Type must NOT be stripped — wildcard means "scan
+        # everywhere", not "every header is a credential".
+        assert flow.request.headers["Content-Type"] == "application/json"
+
+    def test_glob_prefix_header_not_stripped(self) -> None:
+        """Glob prefix patterns (e.g., 'X-*') do not trigger stripping."""
+        pf = ProxyFilter()
+        pf.replacements = {
+            "surr": {
+                "value": "real",
+                "scopes": ["example.com"],
+                "headers": ["X-*"],
+            }
+        }
+        flow = _flow(
+            host="example.com",
+            headers={"X-Request-Id": "abc123"},
+        )
+        pf._replace_tokens(flow)
+        # Should NOT be stripped — glob pattern, not exact match
+        assert flow.request.headers["X-Request-Id"] == "abc123"
+
+    def test_mixed_exact_and_glob_strips_exact_match(self) -> None:
+        """Exact pattern in headers list enables stripping even with globs."""
+        pf = ProxyFilter()
+        pf.replacements = {
+            "surr": {
+                "value": "real",
+                "scopes": ["example.com"],
+                "headers": ["Authorization", "X-*"],
+            }
+        }
+        flow = _flow(
+            host="example.com",
+            headers={
+                "Authorization": "Bearer attacker_key",
+                "X-Request-Id": "abc123",
+            },
+        )
+        pf._replace_tokens(flow)
+        # Authorization matched exact pattern — should be stripped
+        assert "Authorization" not in flow.request.headers
+        # X-Request-Id matched glob only — should NOT be stripped
+        assert flow.request.headers["X-Request-Id"] == "abc123"
+
 
 # ---------------------------------------------------------------------------
 # ProxyFilter.request — allowlist and token replacement

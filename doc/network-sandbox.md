@@ -344,9 +344,11 @@ repos:
 **Foreign credential blocking**: By default, if a request to a scoped host
 contains a credential header that does NOT match the expected surrogate, the
 header is stripped entirely. This prevents an attacker from supplying their own
-API key (e.g., to upload data to their account on an allowlisted service). Set
-`allow_foreign_credentials: true` on a per-secret basis to opt out of this
-protection.
+API key (e.g., to upload data to their account on an allowlisted service).
+Stripping only applies when the header matches an **exact** header pattern
+(e.g., `"Authorization"`); glob patterns like `"*"` or `"X-*"` scan for
+surrogates but do not trigger stripping. Set `allow_foreign_credentials: true`
+on a per-secret basis to opt out of this protection.
 
 ### Limitations
 

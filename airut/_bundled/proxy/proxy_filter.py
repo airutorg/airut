@@ -90,6 +90,14 @@ DEBUG_SIGNING = os.environ.get("DEBUG_SIGNING", "").lower() in (
 )
 
 
+_GLOB_CHARS = frozenset("*?[]")
+
+
+def _is_glob(pattern: str) -> bool:
+    """Return True if *pattern* contains fnmatch wildcard characters."""
+    return bool(_GLOB_CHARS & set(pattern))
+
+
 def _match_pattern(pattern: str, value: str) -> bool:
     """Match value against pattern using fnmatch if wildcards present.
 
@@ -418,8 +426,16 @@ class ProxyFilter:
                     replaced_headers.add(header.lower())
                     count += 1
                 else:
-                    # Surrogate not found — candidate for stripping
-                    strip_candidates.append((header.lower(), config))
+                    # Only consider stripping if an exact (non-glob) header
+                    # pattern matched.  Wildcard patterns like "*" or "X-*"
+                    # mean "scan everywhere for the surrogate", not "every
+                    # matching header is a credential to strip".
+                    has_exact = any(
+                        not _is_glob(p) and _match_header_pattern(p, header)
+                        for p in header_patterns
+                    )
+                    if has_exact:
+                        strip_candidates.append((header.lower(), config))
 
         # Pass 2: Strip headers with foreign credentials
         if strip_candidates:

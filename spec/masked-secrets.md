@@ -155,10 +155,14 @@ The proxy addon (`airut/_bundled/proxy/proxy_filter.py`) performs replacement in
 1. Load replacement map from `/replacements.json` at startup
 2. **Replace pass**: For each request, check if host matches any surrogate's
    scopes. If match, replace surrogate → real value in matching headers.
-3. **Strip pass**: For any matching header where the surrogate was NOT found,
-   and `allow_foreign_credentials` is false (default), the header is **removed
+3. **Strip pass**: For any header where the surrogate was NOT found, the header
+   pattern was an **exact name** (no glob characters), and
+   `allow_foreign_credentials` is false (default), the header is **removed
    entirely**. This prevents attacker-supplied credentials from being used on
    allowlisted hosts (e.g., exfiltrating data via an attacker's own API key).
+   Glob patterns like `"*"` or `"X-*"` do not trigger stripping — they mean
+   "scan everywhere for the surrogate", not "every matching header is a
+   credential".
 4. Log request with `[masked: N]` suffix indicating replacement count. Stripped
    headers are logged with `STRIPPED` prefix.
 
