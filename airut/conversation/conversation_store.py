@@ -69,6 +69,7 @@ class ConversationMetadata:
         conversation_id: Conversation identifier.
         replies: List of reply summaries in chronological order.
         model: Claude model to use for this conversation.
+        effort: Effort level for this conversation (e.g. "max").
         pending_request_text: Prompt text for a reply that is currently
             being executed. Set before execution starts so the dashboard
             can display it; cleared when the reply completes.
@@ -77,6 +78,7 @@ class ConversationMetadata:
     conversation_id: str
     replies: list[ReplySummary] = field(default_factory=list)
     model: str | None = None
+    effort: str | None = None
     pending_request_text: str | None = None
 
     @property
@@ -171,6 +173,7 @@ class ConversationStore:
                 conversation_id=conv_id,
                 replies=replies,
                 model=data.get("model"),
+                effort=data.get("effort"),
                 pending_request_text=data.get("pending_request_text"),
             )
 
@@ -203,6 +206,8 @@ class ConversationStore:
         }
         if metadata.model:
             data["model"] = metadata.model
+        if metadata.effort:
+            data["effort"] = metadata.effort
         if metadata.pending_request_text is not None:
             data["pending_request_text"] = metadata.pending_request_text
 
@@ -362,6 +367,36 @@ class ConversationStore:
         metadata.model = model
         self.save(metadata)
         logger.info("Set model=%s for conversation %s", model, conversation_id)
+
+    def get_effort(self) -> str | None:
+        """Get the effort level configured for this conversation.
+
+        Returns:
+            Effort level string, or None if not set.
+        """
+        metadata = self.load()
+        if metadata is None:
+            return None
+        return metadata.effort
+
+    def set_effort(self, conversation_id: str, effort: str | None) -> None:
+        """Set the effort level for this conversation.
+
+        Creates metadata if it doesn't exist, or updates existing.
+
+        Args:
+            conversation_id: Conversation identifier.
+            effort: Effort level (e.g., "medium", "high", "max"),
+                or None to clear.
+        """
+        metadata = self.load()
+        if metadata is None:
+            metadata = ConversationMetadata(conversation_id=conversation_id)
+        metadata.effort = effort
+        self.save(metadata)
+        logger.info(
+            "Set effort=%s for conversation %s", effort, conversation_id
+        )
 
 
 def _serialize_reply(reply: ReplySummary) -> dict[str, Any]:

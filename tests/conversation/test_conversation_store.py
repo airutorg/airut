@@ -333,6 +333,40 @@ class TestConversationStore:
         store.set_model("abc", "sonnet")
         assert store.get_model() == "sonnet"
 
+    def test_set_effort(self, tmp_path: Path) -> None:
+        store = ConversationStore(tmp_path)
+        store.set_effort("abc12345", "max")
+
+        loaded = store.load()
+        assert loaded is not None
+        assert loaded.effort == "max"
+        assert loaded.conversation_id == "abc12345"
+
+    def test_get_effort(self, tmp_path: Path) -> None:
+        store = ConversationStore(tmp_path)
+        assert store.get_effort() is None
+
+        store.set_effort("abc", "high")
+        assert store.get_effort() == "high"
+
+    def test_set_effort_none_clears(self, tmp_path: Path) -> None:
+        store = ConversationStore(tmp_path)
+        store.set_effort("abc", "max")
+        assert store.get_effort() == "max"
+
+        store.set_effort("abc", None)
+        assert store.get_effort() is None
+
+    def test_add_reply_preserves_effort(self, tmp_path: Path) -> None:
+        store = ConversationStore(tmp_path)
+        store.set_effort("abc", "max")
+
+        store.add_reply("abc", _make_reply())
+
+        loaded = store.load()
+        assert loaded is not None
+        assert loaded.effort == "max"
+
     def test_get_session_id_for_resume(self, tmp_path: Path) -> None:
         store = ConversationStore(tmp_path)
         assert store.get_session_id_for_resume() is None

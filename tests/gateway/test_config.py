@@ -1465,6 +1465,7 @@ class TestRepoConfigDirect:
         """Defaults are sensible."""
         rc = RepoConfig()
         assert rc.default_model == "opus"
+        assert rc.default_effort is None
         assert rc.resource_limits == ResourceLimits()
         assert rc.network_sandbox_enabled is True
         assert rc.container_env == {}
@@ -1474,11 +1475,13 @@ class TestRepoConfigDirect:
         limits = ResourceLimits(timeout=600, memory="4g")
         rc = RepoConfig(
             default_model="sonnet",
+            default_effort="max",
             resource_limits=limits,
             network_sandbox_enabled=False,
             container_env={"KEY": "val"},
         )
         assert rc.default_model == "sonnet"
+        assert rc.default_effort == "max"
         assert rc.resource_limits.timeout == 600
         assert rc.resource_limits.memory == "4g"
         assert rc.network_sandbox_enabled is False
@@ -1499,6 +1502,7 @@ class TestRepoConfigFromRaw:
         raw: dict = {}
         rc, replacement_map = RepoConfig._from_raw(raw, {}, {})
         assert rc.default_model == "opus"
+        assert rc.default_effort is None
         assert rc.resource_limits == ResourceLimits()
         assert rc.network_sandbox_enabled is True
         assert rc.container_env == {}
@@ -1508,6 +1512,7 @@ class TestRepoConfigFromRaw:
         """Full repo config with all fields."""
         raw = {
             "default_model": "sonnet",
+            "default_effort": "max",
             "resource_limits": {
                 "timeout": 6000,
                 "memory": "4g",
@@ -1523,6 +1528,7 @@ class TestRepoConfigFromRaw:
         secrets = {"GH_TOKEN": "ghp_tok"}
         rc, replacement_map = RepoConfig._from_raw(raw, secrets, {})
         assert rc.default_model == "sonnet"
+        assert rc.default_effort == "max"
         assert rc.resource_limits.timeout == 6000
         assert rc.resource_limits.memory == "4g"
         assert rc.resource_limits.cpus == 2

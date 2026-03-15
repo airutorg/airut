@@ -12,6 +12,7 @@ File: `.airut/airut.yaml` (loaded from git mirror, not workspace)
 
 ```yaml
 default_model: opus                    # Default Claude model
+default_effort: max                    # Default effort level (optional)
 
 # Resource limits (all optional — omitted fields mean no limit)
 resource_limits:
@@ -34,6 +35,7 @@ container_env:                         # Environment variables for containers
 | Field                        | Type    | Default  | Description                                       |
 | ---------------------------- | ------- | -------- | ------------------------------------------------- |
 | `default_model`              | string  | `"opus"` | Claude model when not specified via subaddressing |
+| `default_effort`             | string  | *(none)* | Effort level passed as `--effort` to Claude Code  |
 | `resource_limits.timeout`    | int     | *(none)* | Max container execution time in seconds (>= 10)   |
 | `resource_limits.memory`     | string  | *(none)* | Memory limit, e.g. `"2g"`, `"512m"`               |
 | `resource_limits.cpus`       | float   | *(none)* | CPU limit (>= 0.01, supports fractional cores)    |
