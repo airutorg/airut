@@ -49,6 +49,7 @@ def _flow(
     *,
     method: str = "GET",
     host: str = "example.com",
+    url_host: str | None = None,
     path: str = "/",
     url: str | None = None,
     headers: dict[str, str] | None = None,
@@ -63,6 +64,7 @@ def _flow(
         method=method,
         url=url,
         host=host,
+        url_host=url_host,
         path=path,
         headers=headers,
     )
@@ -2274,3 +2276,137 @@ class TestHttpConnect:
             mock_log.assert_called_once()
             assert "CONNECT" in mock_log.call_args[0][0]
             assert "evil.com" in mock_log.call_args[0][0]
+
+
+class TestHostHeaderMismatch:
+    """Tests for Host header vs URL host mismatch blocking (#pentest-4).
+
+    In regular proxy mode, HTTP requests with absolute-form URIs
+    (e.g., GET http://target.com/path) are routed by mitmproxy to the
+    URL host, but pretty_host returns the Host header value.  When these
+    differ, the allowlist can be bypassed for routing purposes.
+
+    The fix blocks any request where pretty_host != host (Host header
+    disagrees with URL host).
+    """
+
+    def test_mismatched_host_blocked_in_request(self) -> None:
+        """Request with Host header differing from URL host is blocked."""
+        pf = ProxyFilter()
+        pf.domains = ["pypi.org"]
+        # Host header says pypi.org (allowed), but URL host is airut.org
+        flow = _flow(
+            host="pypi.org",
+            url_host="airut.org",
+            path="/canary.txt",
+            url="http://airut.org/canary.txt",
+            headers={"Host": "pypi.org"},
+        )
+        pf.request(flow)
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        body = json.loads(flow.response._content)
+        assert body["error"] == "blocked_by_network_allowlist"
+        assert "host mismatch" in body["message"].lower()
+
+    def test_mismatched_host_blocked_in_requestheaders(self) -> None:
+        """Mismatch is also blocked early in requestheaders hook."""
+        pf = ProxyFilter()
+        pf.domains = ["pypi.org"]
+        flow = _flow(
+            host="pypi.org",
+            url_host="evil.com",
+            path="/",
+            url="http://evil.com/",
+            headers={"Host": "pypi.org"},
+        )
+        pf.requestheaders(flow)
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+
+    def test_matching_hosts_allowed(self) -> None:
+        """Request with matching Host header and URL host proceeds."""
+        pf = ProxyFilter()
+        pf.domains = ["pypi.org"]
+        flow = _flow(
+            host="pypi.org",
+            url_host="pypi.org",
+            path="/simple/",
+            headers={"Host": "pypi.org"},
+        )
+        pf.request(flow)
+        assert flow.response is None
+        assert flow.metadata["allowlist_action"] == "allowed"
+
+    def test_default_host_match(self) -> None:
+        """When url_host is not set, host and pretty_host match."""
+        pf = ProxyFilter()
+        pf.domains = ["pypi.org"]
+        flow = _flow(host="pypi.org", path="/simple/")
+        pf.request(flow)
+        assert flow.response is None
+        assert flow.metadata["allowlist_action"] == "allowed"
+
+    def test_mismatch_logged(self) -> None:
+        """Host mismatch is logged via _log_loud."""
+        pf = ProxyFilter()
+        pf.domains = ["pypi.org"]
+        flow = _flow(
+            host="pypi.org",
+            url_host="evil.com",
+            path="/",
+            url="http://evil.com/",
+            headers={"Host": "pypi.org"},
+        )
+        with patch.object(pf, "_log_loud") as mock_log:
+            pf.request(flow)
+            mock_log.assert_called_once()
+            assert "mismatch" in mock_log.call_args[0][0].lower()
+
+    def test_mismatch_with_url_prefix_allowlist(self) -> None:
+        """Mismatch blocked even when Host header matches url_prefixes."""
+        pf = ProxyFilter()
+        pf.url_prefixes = [{"host": "pypi.org", "path": "/*"}]
+        flow = _flow(
+            host="pypi.org",
+            url_host="evil.com",
+            path="/packages/foo",
+            url="http://evil.com/packages/foo",
+            headers={"Host": "pypi.org"},
+        )
+        pf.request(flow)
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+
+    def test_case_insensitive_match_allowed(self) -> None:
+        """Case-differing but equal hosts are not treated as mismatch."""
+        pf = ProxyFilter()
+        # Allowlist both case variants so _is_allowed passes
+        pf.domains = ["pypi.org", "PyPI.org"]
+        flow = _flow(
+            host="PyPI.org",
+            url_host="pypi.org",
+            path="/simple/",
+            headers={"Host": "PyPI.org"},
+        )
+        pf.request(flow)
+        # Should NOT be blocked as mismatch (case-insensitive match)
+        assert flow.response is None
+        assert flow.metadata["allowlist_action"] == "allowed"
+
+    def test_both_hosts_disallowed_mismatch_takes_priority(self) -> None:
+        """When both hosts are disallowed, mismatch error takes priority."""
+        pf = ProxyFilter()
+        pf.domains = ["trusted.com"]
+        flow = _flow(
+            host="evil1.com",
+            url_host="evil2.com",
+            path="/",
+            url="http://evil2.com/",
+            headers={"Host": "evil1.com"},
+        )
+        pf.request(flow)
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        body = json.loads(flow.response._content)
+        assert "host mismatch" in body["message"].lower()

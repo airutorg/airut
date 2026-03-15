@@ -107,6 +107,15 @@ is defense-in-depth: CONNECT is never needed in this DNS-spoofing architecture,
 so blocking it eliminates an unnecessary code path and simplifies security
 reasoning.
 
+**Host header mismatch** (defense-in-depth): In regular proxy mode, HTTP
+requests with absolute-form URIs (e.g., `GET http://target.com/path`) are routed
+by mitmproxy to the URL host, but `pretty_host` returns the Host header value.
+An attacker could set the Host header to an allowed domain while routing the
+request to a blocked host via the URL. The proxy blocks any request where the
+Host header and URL host disagree (case-insensitive comparison), returning HTTP
+403\. This only affects plain HTTP — HTTPS requests in the DNS-spoofing model do
+not use absolute-form URIs.
+
 ### Limitations
 
 The sandbox handles **HTTP(S) traffic only**. Other protocols (raw TCP, SSH,

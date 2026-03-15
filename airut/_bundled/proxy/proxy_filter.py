@@ -778,6 +778,46 @@ class ProxyFilter:
             {"Content-Type": "application/json"},
         )
 
+    def _check_host_mismatch(self, flow: http.HTTPFlow) -> bool:
+        """Block requests where Host header disagrees with URL host.
+
+        In regular proxy mode, absolute-form URIs route to the URL host
+        while ``pretty_host`` returns the Host header value.  An
+        attacker can set Host to an allowed domain while routing the
+        request to an arbitrary URL host, bypassing the allowlist.
+
+        Returns True (and sets flow.response) if a mismatch is detected.
+        """
+        header_host = flow.request.pretty_host
+        url_host = flow.request.host
+
+        if header_host.lower() != url_host.lower():
+            self._log_loud(
+                f"BLOCKED {flow.request.method} {flow.request.pretty_url} "
+                f"-> 403 (host mismatch: "
+                f"header={header_host}, url={url_host})"
+            )
+            flow.response = http.Response.make(
+                403,
+                json.dumps(
+                    {
+                        "error": "blocked_by_network_allowlist",
+                        "host": header_host,
+                        "url_host": url_host,
+                        "method": flow.request.method,
+                        "message": (
+                            "Host mismatch: Host header and URL host "
+                            "disagree. This request has been blocked to "
+                            "prevent allowlist bypass."
+                        ),
+                    }
+                ),
+                {"Content-Type": "application/json"},
+            )
+            return True
+
+        return False
+
     def requestheaders(self, flow: http.HTTPFlow) -> None:
         """Handle AWS re-signing before body arrives.
 
@@ -788,6 +828,11 @@ class ProxyFilter:
         like Bedrock), signing is deferred to ``request()`` where the
         body is available for computing the payload hash.
         """
+        # Block requests where Host header disagrees with URL host
+        # (prevents allowlist bypass via absolute-URI mismatch)
+        if self._check_host_mismatch(flow):
+            return
+
         # Allowlist check happens here for all requests
         host = flow.request.pretty_host
         path = flow.request.path
@@ -815,6 +860,10 @@ class ProxyFilter:
         does not send ``x-amz-content-sha256`` and the payload hash must
         be computed from the actual request body.
         """
+        # Block requests where Host header disagrees with URL host
+        if self._check_host_mismatch(flow):
+            return
+
         host = flow.request.pretty_host
         path = flow.request.path
         method = flow.request.method

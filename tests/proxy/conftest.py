@@ -46,6 +46,7 @@ def _install_mitmproxy_mock() -> None:
             method: str = "GET",
             url: str = "https://example.com/",
             host: str = "example.com",
+            url_host: str | None = None,
             path: str = "/",
             headers: dict | None = None,
             stream: bool = False,
@@ -53,6 +54,7 @@ def _install_mitmproxy_mock() -> None:
         ) -> None:
             self.method = method
             self.url = url
+            self.host = url_host if url_host is not None else host
             self.pretty_host = host
             self.pretty_url = url
             self.path = path
