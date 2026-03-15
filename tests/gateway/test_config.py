@@ -2151,6 +2151,44 @@ class TestResolveMaskedSecrets:
         result = _resolve_masked_secrets(raw, "repos.test")
         assert result["API_KEY"].headers == ("*",)
 
+    def test_allow_foreign_credentials_default_false(self) -> None:
+        """allow_foreign_credentials defaults to False."""
+        raw = {
+            "GH_TOKEN": {
+                "value": "ghp_real",
+                "scopes": ["api.github.com"],
+                "headers": ["Authorization"],
+            }
+        }
+        result = _resolve_masked_secrets(raw, "repos.test")
+        assert result["GH_TOKEN"].allow_foreign_credentials is False
+
+    def test_allow_foreign_credentials_true(self) -> None:
+        """allow_foreign_credentials can be set to True."""
+        raw = {
+            "GH_TOKEN": {
+                "value": "ghp_real",
+                "scopes": ["api.github.com"],
+                "headers": ["Authorization"],
+                "allow_foreign_credentials": True,
+            }
+        }
+        result = _resolve_masked_secrets(raw, "repos.test")
+        assert result["GH_TOKEN"].allow_foreign_credentials is True
+
+    def test_allow_foreign_credentials_explicit_false(self) -> None:
+        """allow_foreign_credentials can be explicitly set to False."""
+        raw = {
+            "GH_TOKEN": {
+                "value": "ghp_real",
+                "scopes": ["api.github.com"],
+                "headers": ["Authorization"],
+                "allow_foreign_credentials": False,
+            }
+        }
+        result = _resolve_masked_secrets(raw, "repos.test")
+        assert result["GH_TOKEN"].allow_foreign_credentials is False
+
 
 # ---------------------------------------------------------------------------
 # Masked secrets in container_env resolution
@@ -2261,6 +2299,45 @@ class TestMaskedSecretResolution:
         assert result["API_KEY"] == "plain_api_key"
         assert len(replacement_map) == 1
 
+    def test_allow_foreign_credentials_threaded_to_replacement(self) -> None:
+        """allow_foreign_credentials is passed through to ReplacementEntry."""
+        raw_env = {"TOKEN": _SecretRef("TOKEN")}
+        masked_secrets = {
+            "TOKEN": MaskedSecret(
+                value="secret_value",
+                scopes=frozenset(["api.example.com"]),
+                headers=("Authorization",),
+                allow_foreign_credentials=True,
+            )
+        }
+        result, replacement_map = _resolve_container_env(
+            raw_env, {}, masked_secrets
+        )
+
+        surrogate = result["TOKEN"]
+        entry = replacement_map[surrogate]
+        assert isinstance(entry, ReplacementEntry)
+        assert entry.allow_foreign_credentials is True
+
+    def test_allow_foreign_credentials_default_in_replacement(self) -> None:
+        """Default allow_foreign_credentials=False passes through."""
+        raw_env = {"TOKEN": _SecretRef("TOKEN")}
+        masked_secrets = {
+            "TOKEN": MaskedSecret(
+                value="secret_value",
+                scopes=frozenset(["api.example.com"]),
+                headers=("Authorization",),
+            )
+        }
+        result, replacement_map = _resolve_container_env(
+            raw_env, {}, masked_secrets
+        )
+
+        surrogate = result["TOKEN"]
+        entry = replacement_map[surrogate]
+        assert isinstance(entry, ReplacementEntry)
+        assert entry.allow_foreign_credentials is False
+
 
 # ---------------------------------------------------------------------------
 # ReplacementEntry
@@ -2311,6 +2388,27 @@ class TestReplacementEntry:
             "scopes": ["api.github.com"],
             "headers": ["Authorization", "X-Api-*"],
         }
+
+    def test_to_dict_omits_allow_foreign_when_false(self) -> None:
+        """to_dict omits allow_foreign_credentials when False (default)."""
+        entry = ReplacementEntry(
+            real_value="secret",
+            scopes=("example.com",),
+            headers=("Authorization",),
+        )
+        d = entry.to_dict()
+        assert "allow_foreign_credentials" not in d
+
+    def test_to_dict_includes_allow_foreign_when_true(self) -> None:
+        """to_dict includes allow_foreign_credentials when True."""
+        entry = ReplacementEntry(
+            real_value="secret",
+            scopes=("example.com",),
+            headers=("Authorization",),
+            allow_foreign_credentials=True,
+        )
+        d = entry.to_dict()
+        assert d["allow_foreign_credentials"] is True
 
 
 # ---------------------------------------------------------------------------

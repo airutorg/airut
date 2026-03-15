@@ -123,11 +123,16 @@ class MaskedSecret:
         scopes: Fnmatch patterns for allowed hosts (e.g., "api.github.com").
         headers: Fnmatch patterns for headers to scan (e.g., "Authorization",
             "*" for all headers).
+        allow_foreign_credentials: If False (default), headers matching the
+            scope+header patterns that do NOT contain the surrogate are
+            stripped entirely. This prevents attacker-supplied credentials
+            from reaching allowlisted hosts.
     """
 
     value: str
     scopes: frozenset[str]
     headers: tuple[str, ...]
+    allow_foreign_credentials: bool = False
 
 
 @dataclass(frozen=True)
@@ -138,19 +143,26 @@ class ReplacementEntry:
         real_value: The actual secret to substitute.
         scopes: Fnmatch patterns for hosts where replacement is allowed.
         headers: Fnmatch patterns for headers to scan.
+        allow_foreign_credentials: If False (default), headers matching
+            scope+header patterns that do NOT contain the surrogate are
+            stripped. Prevents attacker-supplied credentials on scoped hosts.
     """
 
     real_value: str
     scopes: tuple[str, ...]
     headers: tuple[str, ...]
+    allow_foreign_credentials: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict for JSON export."""
-        return {
+        d: dict[str, Any] = {
             "value": self.real_value,
             "scopes": list(self.scopes),
             "headers": list(self.headers),
         }
+        if self.allow_foreign_credentials:
+            d["allow_foreign_credentials"] = True
+        return d
 
 
 @dataclass(frozen=True)
@@ -1247,7 +1259,15 @@ def _resolve_masked_secrets(
 
         headers = tuple(str(h) for h in raw_headers)
 
-        result[name] = MaskedSecret(value=value, scopes=scopes, headers=headers)
+        # Parse allow_foreign_credentials (optional, default False)
+        allow_foreign = bool(config.get("allow_foreign_credentials", False))
+
+        result[name] = MaskedSecret(
+            value=value,
+            scopes=scopes,
+            headers=headers,
+            allow_foreign_credentials=allow_foreign,
+        )
 
     return result
 
@@ -1712,6 +1732,7 @@ def _resolve_container_env(
                         real_value=masked.value,
                         scopes=tuple(sorted(masked.scopes)),
                         headers=masked.headers,
+                        allow_foreign_credentials=masked.allow_foreign_credentials,
                     )
                 else:
                     # Empty string is a valid configured value

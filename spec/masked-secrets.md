@@ -33,12 +33,13 @@ repos:
 
 ### Fields
 
-| Field                           | Type         | Required | Description                          |
-| ------------------------------- | ------------ | -------- | ------------------------------------ |
-| `masked_secrets`                | mapping      | No       | Named masked secrets for this repo   |
-| `masked_secrets.<name>.value`   | string/!env  | Yes      | Secret value (supports `!env` tag)   |
-| `masked_secrets.<name>.scopes`  | list[string] | Yes      | Fnmatch patterns for allowed hosts   |
-| `masked_secrets.<name>.headers` | list[string] | Yes      | Fnmatch patterns for headers to scan |
+| Field                                             | Type         | Required | Description                                              |
+| ------------------------------------------------- | ------------ | -------- | -------------------------------------------------------- |
+| `masked_secrets`                                  | mapping      | No       | Named masked secrets for this repo                       |
+| `masked_secrets.<name>.value`                     | string/!env  | Yes      | Secret value (supports `!env` tag)                       |
+| `masked_secrets.<name>.scopes`                    | list[string] | Yes      | Fnmatch patterns for allowed hosts                       |
+| `masked_secrets.<name>.headers`                   | list[string] | Yes      | Fnmatch patterns for headers to scan                     |
+| `masked_secrets.<name>.allow_foreign_credentials` | bool         | No       | Allow non-surrogate credentials through (default: false) |
 
 Both `scopes` and `headers` use fnmatch pattern matching. Header matching is
 **case-insensitive** per RFC 7230 (e.g., `"Authorization"` matches
@@ -125,6 +126,22 @@ surrogate -> ReplacementEntry(real_value, scopes, headers)
 }
 ```
 
+When `allow_foreign_credentials` is true, it is included in the entry:
+
+```json
+{
+  "ghp_surrogate123...": {
+    "value": "ghp_realtoken...",
+    "scopes": ["api.github.com"],
+    "headers": ["Authorization"],
+    "allow_foreign_credentials": true
+  }
+}
+```
+
+When absent or false, the proxy strips matching headers that do not contain the
+surrogate (default secure behavior).
+
 - Written to temp file at proxy start
 - Mounted read-only at `/replacements.json` in proxy container
 - Deleted at proxy stop
@@ -133,12 +150,25 @@ surrogate -> ReplacementEntry(real_value, scopes, headers)
 ## Proxy Replacement
 
 The proxy addon (`airut/_bundled/proxy/proxy_filter.py`) performs replacement in
-`request()`:
+`request()` using a two-pass approach:
 
 1. Load replacement map from `/replacements.json` at startup
-2. For each request, check if host matches any surrogate's scopes
-3. If match, replace surrogate → real value in headers
-4. Log request with `[masked: N]` suffix indicating replacement count
+2. **Replace pass**: For each request, check if host matches any surrogate's
+   scopes. If match, replace surrogate → real value in matching headers.
+3. **Strip pass**: For any header where the surrogate was NOT found, the header
+   pattern was an **exact name** (no glob characters), and
+   `allow_foreign_credentials` is false (default), the header is **removed
+   entirely**. This prevents attacker-supplied credentials from being used on
+   allowlisted hosts (e.g., exfiltrating data via an attacker's own API key).
+   Glob patterns like `"*"` or `"X-*"` do not trigger stripping — they mean
+   "scan everywhere for the surrogate", not "every matching header is a
+   credential".
+4. Log request with `[masked: N]` suffix indicating replacement count. Stripped
+   headers are logged with `STRIPPED` prefix.
+
+Headers that were successfully replaced by any credential are never stripped,
+even if a different credential also matches the same header pattern but does not
+find its surrogate.
 
 ### Headers Scanned
 

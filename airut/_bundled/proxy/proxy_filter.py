@@ -90,6 +90,14 @@ DEBUG_SIGNING = os.environ.get("DEBUG_SIGNING", "").lower() in (
 )
 
 
+_GLOB_CHARS = frozenset("*?[]")
+
+
+def _is_glob(pattern: str) -> bool:
+    """Return True if *pattern* contains fnmatch wildcard characters."""
+    return bool(_GLOB_CHARS & set(pattern))
+
+
 def _match_pattern(pattern: str, value: str) -> bool:
     """Match value against pattern using fnmatch if wildcards present.
 
@@ -353,9 +361,17 @@ class ProxyFilter:
     def _replace_tokens(self, flow: http.HTTPFlow) -> int:
         """Replace surrogate tokens with real values in request headers.
 
-        Only replaces tokens when the request host matches the secret's
-        scope patterns. Handles both direct tokens and Base64-encoded
-        Basic Auth credentials.
+        Uses a two-pass approach:
+        1. **Replace pass**: For each in-scope credential, attempt to replace
+           the surrogate with the real value in matching headers.
+        2. **Strip pass**: For credentials with ``allow_foreign_credentials``
+           False (default), strip any matching headers that were NOT
+           successfully replaced. This prevents attacker-supplied credentials
+           from reaching allowlisted hosts.
+
+        Headers that were successfully replaced by any credential are never
+        stripped, even if a different credential also matches the same header
+        but does not find its surrogate.
 
         Args:
             flow: The HTTP flow to modify.
@@ -369,7 +385,21 @@ class ProxyFilter:
         host = flow.request.pretty_host
         count = 0
 
+        # Track headers that were successfully replaced (by header name,
+        # case-insensitive) so the strip pass does not remove them.
+        replaced_headers: set[str] = set()
+
+        # Track (header_name_lower, config) pairs where the credential was
+        # in scope but the surrogate was NOT found. These are candidates
+        # for stripping in the second pass.
+        strip_candidates: list[tuple[str, dict[str, Any]]] = []
+
+        # Pass 1: Attempt surrogate replacement
         for surrogate, config in self.replacements.items():
+            # Skip signing credentials (handled by _try_resign_aws)
+            if config.get("type") == "aws-sigv4":
+                continue
+
             scopes = config.get("scopes", [])
             real_value = config.get("value", "")
 
@@ -393,7 +423,43 @@ class ProxyFilter:
                 )
                 if replaced:
                     flow.request.headers[header] = new_value
+                    replaced_headers.add(header.lower())
                     count += 1
+                else:
+                    # Only consider stripping if an exact (non-glob) header
+                    # pattern matched.  Wildcard patterns like "*" or "X-*"
+                    # mean "scan everywhere for the surrogate", not "every
+                    # matching header is a credential to strip".
+                    has_exact = any(
+                        not _is_glob(p) and _match_header_pattern(p, header)
+                        for p in header_patterns
+                    )
+                    if has_exact:
+                        strip_candidates.append((header.lower(), config))
+
+        # Pass 2: Strip headers with foreign credentials
+        if strip_candidates:
+            headers_to_remove: set[str] = set()
+            for header_lower, config in strip_candidates:
+                if header_lower in replaced_headers:
+                    # Another credential successfully replaced this header
+                    continue
+                if config.get("allow_foreign_credentials", False):
+                    continue
+                headers_to_remove.add(header_lower)
+
+            if headers_to_remove:
+                for header_lower in headers_to_remove:
+                    # Remove all header instances matching this name
+                    for h in list(flow.request.headers.keys()):
+                        if h.lower() == header_lower:
+                            del flow.request.headers[h]
+                    self._log_loud(
+                        f"STRIPPED header '{header_lower}' from "
+                        f"{flow.request.method} "
+                        f"{flow.request.pretty_url} "
+                        f"(foreign credential blocked)"
+                    )
 
         return count
 
