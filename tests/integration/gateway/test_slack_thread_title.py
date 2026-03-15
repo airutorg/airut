@@ -68,15 +68,14 @@ events = [
             )
             assert reply is not None
 
-            # Check that setTitle was called
-            title_calls = slack_env.slack_server.get_sent_messages(
-                method="assistant_threads_setTitle"
+            # Wait for setTitle (called after chat_postMessage in send_reply)
+            title_call = slack_env.slack_server.wait_for_sent(
+                method="assistant_threads_setTitle",
+                timeout=10.0,
             )
-            assert len(title_calls) >= 1, (
+            assert title_call is not None, (
                 "assistant_threads_setTitle not called"
             )
-
-            title_call = title_calls[0]
             assert title_call.kwargs.get("channel_id") == "D_TEST_DM"
             assert title_call.kwargs.get("thread_ts") == "1700000000.000050"
 
