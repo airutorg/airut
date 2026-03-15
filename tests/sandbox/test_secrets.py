@@ -336,6 +336,39 @@ class TestPrepareSecrets:
         assert result.env_vars == {}
         assert result.replacements.to_dict() == {}
 
+    def test_allow_foreign_credentials_threaded(self) -> None:
+        """allow_foreign_credentials is threaded to replacement map."""
+        secrets = [
+            MaskedSecret(
+                env_var="TOKEN",
+                real_value="ghp_realtoken12345678901234567890",
+                scopes=("api.github.com",),
+                headers=("Authorization",),
+                allow_foreign_credentials=True,
+            ),
+        ]
+        result = prepare_secrets(secrets, [])
+
+        surrogate = result.env_vars["TOKEN"]
+        replacements_dict = result.replacements.to_dict()
+        assert replacements_dict[surrogate]["allow_foreign_credentials"] is True
+
+    def test_allow_foreign_credentials_default_omitted(self) -> None:
+        """Default allow_foreign_credentials=False is omitted from JSON."""
+        secrets = [
+            MaskedSecret(
+                env_var="TOKEN",
+                real_value="ghp_realtoken12345678901234567890",
+                scopes=("api.github.com",),
+                headers=("Authorization",),
+            ),
+        ]
+        result = prepare_secrets(secrets, [])
+
+        surrogate = result.env_vars["TOKEN"]
+        replacements_dict = result.replacements.to_dict()
+        assert "allow_foreign_credentials" not in replacements_dict[surrogate]
+
 
 class TestSecretReplacements:
     """Tests for SecretReplacements dataclass."""
@@ -358,6 +391,19 @@ class TestSecretReplacements:
         assert d["surrogate"]["value"] == "real"
         assert d["surrogate"]["scopes"] == ["scope1"]
         assert d["surrogate"]["headers"] == ["header1"]
+        assert "allow_foreign_credentials" not in d["surrogate"]
+
+    def test_to_dict_with_allow_foreign_credentials(self) -> None:
+        """Serializes allow_foreign_credentials when True."""
+        entry = _ReplacementEntry(
+            real_value="real",
+            scopes=("scope1",),
+            headers=("header1",),
+            allow_foreign_credentials=True,
+        )
+        r = SecretReplacements(_map={"surrogate": entry})
+        d = r.to_dict()
+        assert d["surrogate"]["allow_foreign_credentials"] is True
 
     def test_to_dict_with_signing_credential_entry(self) -> None:
         """Serializes signing credential entries correctly."""
@@ -390,6 +436,18 @@ class TestMaskedSecret:
         assert secret.real_value == "secret_value"
         assert secret.scopes == ("api.example.com", "*.example.com")
         assert secret.headers == ("Authorization", "X-Custom-Header")
+        assert secret.allow_foreign_credentials is False
+
+    def test_create_with_allow_foreign_credentials(self) -> None:
+        """Creates MaskedSecret with allow_foreign_credentials=True."""
+        secret = MaskedSecret(
+            env_var="MY_TOKEN",
+            real_value="secret_value",
+            scopes=("api.example.com",),
+            headers=("Authorization",),
+            allow_foreign_credentials=True,
+        )
+        assert secret.allow_foreign_credentials is True
 
     def test_frozen(self) -> None:
         """MaskedSecret is immutable."""

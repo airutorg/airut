@@ -553,6 +553,138 @@ class TestReplaceTokens:
         )
         assert pf._replace_tokens(flow) == 1
 
+    def test_foreign_credential_stripped(self) -> None:
+        """Header with non-surrogate value is stripped when in scope."""
+        pf = ProxyFilter()
+        pf.replacements = {
+            "surr": {
+                "value": "real",
+                "scopes": ["example.com"],
+                "headers": ["Authorization"],
+            }
+        }
+        flow = _flow(
+            host="example.com",
+            headers={"Authorization": "Bearer attacker_key"},
+        )
+        pf._replace_tokens(flow)
+        assert "Authorization" not in flow.request.headers
+
+    def test_foreign_credential_allowed_with_flag(self) -> None:
+        """Non-surrogate value passes with allow_foreign_credentials."""
+        pf = ProxyFilter()
+        pf.replacements = {
+            "surr": {
+                "value": "real",
+                "scopes": ["example.com"],
+                "headers": ["Authorization"],
+                "allow_foreign_credentials": True,
+            }
+        }
+        flow = _flow(
+            host="example.com",
+            headers={"Authorization": "Bearer attacker_key"},
+        )
+        pf._replace_tokens(flow)
+        assert flow.request.headers["Authorization"] == "Bearer attacker_key"
+
+    def test_foreign_credential_not_stripped_out_of_scope(self) -> None:
+        """Headers are not stripped when host is out of scope."""
+        pf = ProxyFilter()
+        pf.replacements = {
+            "surr": {
+                "value": "real",
+                "scopes": ["other.com"],
+                "headers": ["Authorization"],
+            }
+        }
+        flow = _flow(
+            host="example.com",
+            headers={"Authorization": "Bearer attacker_key"},
+        )
+        pf._replace_tokens(flow)
+        assert flow.request.headers["Authorization"] == "Bearer attacker_key"
+
+    def test_replaced_header_not_stripped_by_another_credential(self) -> None:
+        """A header replaced by one credential is not stripped by another."""
+        pf = ProxyFilter()
+        pf.replacements = {
+            "surr_a": {
+                "value": "real_a",
+                "scopes": ["example.com"],
+                "headers": ["Authorization"],
+            },
+            "surr_b": {
+                "value": "real_b",
+                "scopes": ["example.com"],
+                "headers": ["Authorization"],
+            },
+        }
+        flow = _flow(
+            host="example.com",
+            headers={"Authorization": "Bearer surr_a"},
+        )
+        count = pf._replace_tokens(flow)
+        assert count == 1
+        assert flow.request.headers["Authorization"] == "Bearer real_a"
+
+    def test_foreign_credential_strip_logged(self) -> None:
+        """Stripping a foreign credential is logged via _log_loud."""
+        pf = ProxyFilter()
+        pf.replacements = {
+            "surr": {
+                "value": "real",
+                "scopes": ["example.com"],
+                "headers": ["Authorization"],
+            }
+        }
+        flow = _flow(
+            host="example.com",
+            headers={"Authorization": "Bearer attacker_key"},
+        )
+        with patch.object(pf, "_log_loud") as mock_log:
+            pf._replace_tokens(flow)
+            mock_log.assert_called_once()
+            assert "STRIPPED" in mock_log.call_args[0][0]
+            assert "foreign credential" in mock_log.call_args[0][0]
+
+    def test_signing_credentials_not_stripped(self) -> None:
+        """AWS signing creds (aws-sigv4) skipped by _replace_tokens."""
+        pf = ProxyFilter()
+        pf.replacements = {
+            "AKIASURROGATE": {
+                "type": "aws-sigv4",
+                "access_key_id": "AKIAREAL",
+                "secret_access_key": "secret",
+                "scopes": ["example.com"],
+            }
+        }
+        flow = _flow(
+            host="example.com",
+            headers={"Authorization": "Bearer something"},
+        )
+        count = pf._replace_tokens(flow)
+        assert count == 0
+        # Header should NOT be stripped (signing creds handled elsewhere)
+        assert flow.request.headers["Authorization"] == "Bearer something"
+
+    def test_foreign_credential_default_strip(self) -> None:
+        """Default behavior (no allow_foreign_credentials key) strips."""
+        pf = ProxyFilter()
+        pf.replacements = {
+            "surr": {
+                "value": "real",
+                "scopes": ["example.com"],
+                "headers": ["X-Api-Key"],
+            }
+        }
+        flow = _flow(
+            host="example.com",
+            headers={"X-Api-Key": "foreign_key_123"},
+        )
+        pf._replace_tokens(flow)
+        assert "X-Api-Key" not in flow.request.headers
+
 
 # ---------------------------------------------------------------------------
 # ProxyFilter.request — allowlist and token replacement

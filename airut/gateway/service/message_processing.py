@@ -779,6 +779,7 @@ def _convert_replacement_map(
                 real_value=entry.real_value,
                 scopes=entry.scopes,
                 headers=entry.headers,
+                allow_foreign_credentials=entry.allow_foreign_credentials,
             )
         elif isinstance(entry, SigningCredentialEntry):
             internal_map[surrogate] = _SigningCredentialEntry(

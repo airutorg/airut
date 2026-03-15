@@ -331,14 +331,22 @@ repos:
 
 ### Security Properties
 
-| Property                | Mechanism                                       |
-| ----------------------- | ----------------------------------------------- |
-| Credential isolation    | Container only sees surrogates, never real keys |
-| Scope enforcement       | Proxy only replaces for matching hosts          |
-| Exfiltration prevention | Surrogate useless at unauthorized endpoints     |
-| Fail-secure             | If proxy fails, no credentials reach network    |
-| Audit trail             | Network log shows `[masked: N]` for requests    |
-| Log safety              | Real values redacted; surrogates visible        |
+| Property                    | Mechanism                                       |
+| --------------------------- | ----------------------------------------------- |
+| Credential isolation        | Container only sees surrogates, never real keys |
+| Scope enforcement           | Proxy only replaces for matching hosts          |
+| Exfiltration prevention     | Surrogate useless at unauthorized endpoints     |
+| Foreign credential blocking | Non-surrogate credential headers are stripped   |
+| Fail-secure                 | If proxy fails, no credentials reach network    |
+| Audit trail                 | Network log shows `[masked: N]` for requests    |
+| Log safety                  | Real values redacted; surrogates visible        |
+
+**Foreign credential blocking**: By default, if a request to a scoped host
+contains a credential header that does NOT match the expected surrogate, the
+header is stripped entirely. This prevents an attacker from supplying their own
+API key (e.g., to upload data to their account on an allowlisted service). Set
+`allow_foreign_credentials: true` on a per-secret basis to opt out of this
+protection.
 
 ### Limitations
 

@@ -1555,6 +1555,51 @@ class TestConvertReplacementMap:
         )
         assert replacements_dict["surrogate-key-id"]["type"] == "aws-sigv4"
 
+    def test_allow_foreign_credentials_converted(
+        self, email_config: Any, tmp_path: Path
+    ) -> None:
+        """allow_foreign_credentials is threaded through conversion."""
+        from airut.gateway.config import ReplacementEntry
+
+        svc, handler, mock_ss, adapter = self._setup_svc(email_config, tmp_path)
+
+        replacement_map = {
+            "surrogate-token-1": ReplacementEntry(
+                real_value="real-secret-value",
+                scopes=("api.github.com",),
+                headers=("Authorization",),
+                allow_foreign_credentials=True,
+            ),
+        }
+
+        rc = _make_repo_config(network_sandbox_enabled=True)
+        parsed = _make_parsed_message(body="Do something")
+
+        with (
+            patch(
+                "airut.gateway.service.message_processing."
+                "RepoConfig.from_mirror",
+                return_value=(rc, replacement_map),
+            ),
+            patch(
+                "airut.gateway.service.message_processing.ConversationStore",
+                return_value=mock_ss,
+            ),
+        ):
+            reason, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
+
+        assert reason == CompletionReason.SUCCESS
+
+        create_task_call = svc.sandbox.create_task.call_args
+        network_sandbox = create_task_call[1]["network_sandbox"]
+        replacements_dict = network_sandbox.replacements.to_dict()
+        assert (
+            replacements_dict["surrogate-token-1"]["allow_foreign_credentials"]
+            is True
+        )
+
 
 class TestBuildRecoveryPrompt:
     """Tests for build_recovery_prompt."""

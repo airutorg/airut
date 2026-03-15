@@ -51,12 +51,16 @@ class MaskedSecret:
         real_value: The actual secret value.
         scopes: Fnmatch patterns for hosts where replacement is allowed.
         headers: Fnmatch patterns for headers to scan.
+        allow_foreign_credentials: If False (default), headers matching
+            scope+header patterns that do NOT contain the surrogate are
+            stripped. Prevents attacker-supplied credentials on scoped hosts.
     """
 
     env_var: str
     real_value: str
     scopes: tuple[str, ...]
     headers: tuple[str, ...]
+    allow_foreign_credentials: bool = False
 
 
 @dataclass(frozen=True)
@@ -94,14 +98,18 @@ class _ReplacementEntry:
     real_value: str
     scopes: tuple[str, ...]
     headers: tuple[str, ...]
+    allow_foreign_credentials: bool = False
 
-    def to_dict(self) -> dict[str, str | list[str]]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dict for JSON export."""
-        return {
+        d: dict[str, Any] = {
             "value": self.real_value,
             "scopes": list(self.scopes),
             "headers": list(self.headers),
         }
+        if self.allow_foreign_credentials:
+            d["allow_foreign_credentials"] = True
+        return d
 
 
 @dataclass(frozen=True)
@@ -266,6 +274,7 @@ def prepare_secrets(
             real_value=secret.real_value,
             scopes=secret.scopes,
             headers=secret.headers,
+            allow_foreign_credentials=secret.allow_foreign_credentials,
         )
 
     # Process signing credentials
