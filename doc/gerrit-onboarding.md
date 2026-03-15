@@ -78,9 +78,6 @@ url_prefixes:
   - host: statsig.anthropic.com
     path: ""
     methods: [POST]
-  - host: sentry.io
-    path: ""
-    methods: [POST]
 
   # Gerrit (git smart HTTP uses GET, HEAD, and POST)
   - host: gerrit.example.com
