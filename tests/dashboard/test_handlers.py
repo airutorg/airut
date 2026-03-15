@@ -1429,6 +1429,77 @@ class TestLoadPastTasks:
         assert "[Past conversation" not in html
 
 
+class TestResolveTaskById:
+    """Tests for the _resolve_task_by_id helper."""
+
+    def test_returns_in_memory_task(self) -> None:
+        """Returns task from tracker when it exists in memory."""
+        tracker = TaskTracker()
+        tracker.add_task("t123", "My Task")
+        tracker.set_conversation_id("t123", "c456")
+
+        server = DashboardServer(tracker)
+        result = server._resolve_task_by_id("t123")
+
+        assert result is not None
+        task, _conv = result
+        assert task.task_id == "t123"
+
+    def test_falls_back_to_disk(self, tmp_path: Path) -> None:
+        """Falls back to disk for disk-{conv_id} IDs."""
+        tracker = TaskTracker()
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        _add_reply(
+            conv_dir,
+            "abc12345",
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
+        )
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        result = server._resolve_task_by_id("disk-abc12345")
+
+        assert result is not None
+        task, conversation = result
+        assert task.task_id == "disk-abc12345"
+        assert task.conversation_id == "abc12345"
+        assert conversation is not None
+
+    def test_returns_none_without_prefix(self) -> None:
+        """Returns None for unknown non-disk task IDs."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+
+        assert server._resolve_task_by_id("unknown") is None
+
+    def test_returns_none_for_nonexistent_conversation(
+        self, tmp_path: Path
+    ) -> None:
+        """Returns None when disk- prefix present but conv not found."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+
+        assert server._resolve_task_by_id("disk-abc12345") is None
+
+    def test_returns_none_for_empty_conv_id(self) -> None:
+        """Returns None when task ID is just 'disk-' with no conv ID."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+
+        assert server._resolve_task_by_id("disk-") is None
+
+
 class TestLoadTaskWithConversation:
     """Tests for the unified _load_task_with_conversation utility."""
 
@@ -2731,6 +2802,95 @@ class TestTaskDetailByIdEndpoint:
         assert "Task: t789" in html
         assert "/conversation/" not in html
 
+    def test_task_detail_disk_loaded(self, tmp_path: Path) -> None:
+        """GET /task/disk-<conv_id> loads completed task from disk."""
+        tracker = TaskTracker()
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        _add_reply(
+            conv_dir,
+            "abc12345",
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
+        )
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/disk-abc12345")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+
+        assert "Task: disk-abc12345" in html
+        assert "COMPLETED" in html
+        assert 'href="/conversation/abc12345"' in html
+
+    def test_task_detail_disk_invalid_prefix(self) -> None:
+        """GET /task/disk-<invalid> returns 404 for bad conversation ID."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/disk-invalid")
+        assert response.status_code == 404
+
+    def test_task_detail_disk_empty_conv_id(self) -> None:
+        """GET /task/disk- (empty conv ID) returns 404."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/disk-")
+        assert response.status_code == 404
+
+    def test_task_detail_memory_takes_priority_over_disk(
+        self, tmp_path: Path
+    ) -> None:
+        """In-memory task with disk- prefix ID takes priority over disk."""
+        tracker = TaskTracker()
+        # Create an in-memory task whose ID matches the disk- pattern
+        tracker.add_task("disk-abc12345", "In-Memory Task")
+
+        # Also set up a conversation on disk
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+        _add_reply(
+            conv_dir,
+            "abc12345",
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
+        )
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/disk-abc12345")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+
+        # Should show the in-memory task's title, not the disk placeholder
+        assert "In-Memory Task" in html
+        assert "[Past conversation" not in html
+
 
 class TestApiTaskByIdEndpoint:
     """Tests for the /api/task/<task_id> endpoint."""
@@ -2806,6 +2966,49 @@ class TestApiTaskByIdEndpoint:
         data = json.loads(response.get_data(as_text=True))
         assert data["conversation"] is not None
         assert data["conversation"]["total_cost_usd"] == 0.02
+
+    def test_api_task_disk_loaded(self, tmp_path: Path) -> None:
+        """GET /api/task/disk-<conv_id> loads completed task from disk."""
+        tracker = TaskTracker()
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        _add_reply(
+            conv_dir,
+            "abc12345",
+            {
+                "type": "result",
+                "subtype": "success",
+                "session_id": "sess_123",
+                "duration_ms": 5000,
+                "total_cost_usd": 0.05,
+                "num_turns": 3,
+                "is_error": False,
+                "usage": {},
+                "result": "",
+            },
+        )
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/task/disk-abc12345")
+        assert response.status_code == 200
+        data = json.loads(response.get_data(as_text=True))
+        assert data["task_id"] == "disk-abc12345"
+        assert data["conversation_id"] == "abc12345"
+        assert data["status"] == "completed"
+        assert data["conversation"] is not None
+        assert data["conversation"]["total_cost_usd"] == 0.05
+
+    def test_api_task_disk_not_found(self) -> None:
+        """GET /api/task/disk-<invalid> returns 404."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/task/disk-nonexist")
+        assert response.status_code == 404
 
 
 class TestConversationOverviewPage:

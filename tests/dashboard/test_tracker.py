@@ -12,12 +12,15 @@ from unittest.mock import patch
 import pytest
 
 from airut.dashboard.tracker import (
+    DISK_TASK_ID_PREFIX,
     CompletionReason,
     TaskState,
     TaskStatus,
     TaskTracker,
     TodoItem,
     TodoStatus,
+    make_disk_task_id,
+    parse_disk_task_id,
 )
 
 
@@ -1053,3 +1056,33 @@ class TestCompletionReason:
         assert CompletionReason.CHANNEL_ERROR.value == "channel_error"
         assert CompletionReason.INTERNAL_ERROR.value == "internal_error"
         assert CompletionReason.REJECTED.value == "rejected"
+
+
+class TestDiskTaskId:
+    """Tests for disk task ID utilities."""
+
+    def test_make_disk_task_id(self) -> None:
+        """make_disk_task_id creates prefixed ID."""
+        assert make_disk_task_id("abc12345") == "disk-abc12345"
+
+    def test_parse_disk_task_id(self) -> None:
+        """parse_disk_task_id extracts conversation ID."""
+        assert parse_disk_task_id("disk-abc12345") == "abc12345"
+
+    def test_parse_disk_task_id_no_prefix(self) -> None:
+        """parse_disk_task_id returns None for non-disk IDs."""
+        assert parse_disk_task_id("t123") is None
+        assert parse_disk_task_id("abc12345") is None
+
+    def test_parse_disk_task_id_empty_suffix(self) -> None:
+        """parse_disk_task_id returns None for bare prefix."""
+        assert parse_disk_task_id("disk-") is None
+
+    def test_roundtrip(self) -> None:
+        """Make and parse are inverse operations."""
+        conv_id = "abc12345"
+        assert parse_disk_task_id(make_disk_task_id(conv_id)) == conv_id
+
+    def test_prefix_constant(self) -> None:
+        """DISK_TASK_ID_PREFIX matches the prefix used by make/parse."""
+        assert make_disk_task_id("x").startswith(DISK_TASK_ID_PREFIX)
