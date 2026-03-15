@@ -363,13 +363,12 @@ def process_message(
             effort = repo_config.default_effort
             logger.info(
                 "Repo '%s': using model=%s, effort=%s for new "
-                "conversation %s (requested=%s, default=%s)",
+                "conversation %s (model_hint=%s)",
                 repo_id,
                 model,
                 effort,
                 conv_id,
                 parsed.model_hint,
-                repo_config.default_model,
             )
 
             conversation_dir = conv_mgr.get_conversation_dir(conv_id)

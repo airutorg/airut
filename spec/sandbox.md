@@ -136,7 +136,7 @@ is managed by `airut/conversation/ConversationStore`, which the protocol layer
 ### AgentTask
 
 ```
-task.execute(prompt, session_id=..., model=..., on_event=...)
+task.execute(prompt, session_id=..., model=..., effort=..., on_event=...)
   |
   +- Start proxy (if network_sandbox configured)
   |    +- Allocate subnet, create internal network

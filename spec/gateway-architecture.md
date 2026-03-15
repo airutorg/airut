@@ -309,7 +309,8 @@ addressing):
 name)
 
 **Implementation**: Model is passed to Claude Code via `--model` CLI parameter,
-not embedded in settings.json.
+not embedded in settings.json. Effort level is passed via `--effort` when
+`default_effort` is configured in repo config (omitted otherwise).
 
 **Acknowledgment**: The auto-reply confirms work has started: "I've started
 working on this and will reply shortly." If a dashboard URL is configured, a
@@ -479,7 +480,7 @@ effect after merging to main without a server restart.
 The service stores conversation metadata in `conversation.json` within each
 conversation directory (`{STORAGE}/conversations/{ID}/conversation.json`),
 outside the container workspace. This file contains the conversation_id, model,
-and an ordered list of reply summaries (each with session_id, timestamp,
+effort, and an ordered list of reply summaries (each with session_id, timestamp,
 duration_ms, total_cost_usd, num_turns, is_error, usage, request_text,
 response_text). It is managed by `ConversationStore` (`airut/conversation/`) and
 written only at state transitions.
