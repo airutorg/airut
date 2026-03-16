@@ -3,6 +3,47 @@
 This guide covers deploying Airut on a fresh Linux VM. The service runs as a
 regular user (not root) using systemd user services and rootless Podman.
 
+<!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
+
+- [Prerequisites](#prerequisites)
+- [Installation Steps](#installation-steps)
+  - [1. Install System Dependencies](#1-install-system-dependencies)
+  - [2. Install uv](#2-install-uv)
+  - [3. Install Airut](#3-install-airut)
+  - [4. Configure Git Credentials](#4-configure-git-credentials)
+    - [Dedicated GitHub Account](#dedicated-github-account)
+  - [5. Enable Linger](#5-enable-linger)
+  - [6. Configure Airut](#6-configure-airut)
+  - [7. Validate Configuration](#7-validate-configuration)
+  - [8. Install Services](#8-install-services)
+  - [9. Verify Installation](#9-verify-installation)
+- [Configuration](#configuration)
+  - [Server Config (`~/.config/airut/airut.yaml`)](#server-config-configairutairutyaml)
+  - [Secrets](#secrets)
+  - [Masked Secrets](#masked-secrets)
+  - [Signing Credentials (AWS)](#signing-credentials-aws)
+- [Channel Setup](#channel-setup)
+  - [Email](#email)
+  - [Slack](#slack)
+- [Service Management](#service-management)
+  - [Commands](#commands)
+  - [Updating](#updating)
+- [Dashboard](#dashboard)
+  - [Exposing Externally](#exposing-externally)
+- [Troubleshooting](#troubleshooting)
+  - [Service Won't Start](#service-wont-start)
+  - [Git Mirror Failures](#git-mirror-failures)
+  - [Container Build Failures](#container-build-failures)
+  - [Network Sandbox Issues](#network-sandbox-issues)
+  - [Linger Not Enabled](#linger-not-enabled)
+- [Emergency Recovery (Break Glass)](#emergency-recovery-break-glass)
+  - [Common Recovery Scenarios](#common-recovery-scenarios)
+  - [Prevention](#prevention)
+- [Storage Cleanup](#storage-cleanup)
+- [Upgrading](#upgrading)
+
+<!-- mdformat-toc end -->
+
 ## Prerequisites
 
 - **Linux** (dedicated VM recommended, Debian 13 tested)

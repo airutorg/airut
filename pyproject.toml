@@ -27,6 +27,7 @@ dev = [
     "mdformat-frontmatter>=2",
     "mdformat-gfm>=0.3",
     "mdformat-ruff>=0.1",
+    "mdformat-toc>=0.3",
     "pip-licenses>=5.0",
     "pytest>=8.0",
     "pytest-cov>=4.1",

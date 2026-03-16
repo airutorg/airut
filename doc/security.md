@@ -1,5 +1,36 @@
 # Security Model
 
+<!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
+
+- [Motivation](#motivation)
+- [Core Principles](#core-principles)
+- [Security Layers](#security-layers)
+- [Channel Authentication](#channel-authentication)
+  - [Email: DMARC Verification](#email-dmarc-verification)
+  - [Slack: Socket Mode + Authorization Rules](#slack-socket-mode--authorization-rules)
+- [Execution Isolation](#execution-isolation)
+- [Network Isolation](#network-isolation)
+- [Credential Management](#credential-management)
+  - [Server Secrets](#server-secrets)
+  - [Container Secrets](#container-secrets)
+  - [Git Authentication](#git-authentication)
+  - [Masked Secrets (Token Replacement)](#masked-secrets-token-replacement)
+  - [Signing Credentials (AWS SigV4 Re-signing)](#signing-credentials-aws-sigv4-re-signing)
+- [Dashboard Security](#dashboard-security)
+- [Attack Surface Analysis](#attack-surface-analysis)
+- [Configuration Security](#configuration-security)
+  - [Repo Config Protection](#repo-config-protection)
+  - [Network Allowlist Protection](#network-allowlist-protection)
+  - [Container Image Build Isolation](#container-image-build-isolation)
+- [Fail-Secure Defaults](#fail-secure-defaults)
+- [Security Limitations](#security-limitations)
+  - [Prompt Injection](#prompt-injection)
+  - [Authorized Channel Exfiltration](#authorized-channel-exfiltration)
+  - [GitHub Actions Workflow Escape](#github-actions-workflow-escape)
+  - [Realistic Security Expectations](#realistic-security-expectations)
+
+<!-- mdformat-toc end -->
+
 ## Motivation
 
 Airut enables headless Claude Code interaction over messaging channels (email

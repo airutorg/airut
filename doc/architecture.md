@@ -6,6 +6,30 @@ to continue the conversation. The architecture separates channel-specific
 protocol handling from the core orchestration, allowing multiple channels to
 operate simultaneously for the same repository.
 
+<!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
+
+- [Concepts](#concepts)
+- [Technical Architecture](#technical-architecture)
+  - [Component Overview](#component-overview)
+  - [How It Maps to the Concepts](#how-it-maps-to-the-concepts)
+  - [Sandbox Concept Mapping](#sandbox-concept-mapping)
+  - [Authentication and Authorization](#authentication-and-authorization)
+  - [Request Flow](#request-flow)
+  - [Email Channel](#email-channel)
+  - [Slack Channel](#slack-channel)
+  - [Storage Structure](#storage-structure)
+  - [Multi-Repository Architecture](#multi-repository-architecture)
+  - [Configuration](#configuration)
+- [Key Design Decisions](#key-design-decisions)
+  - [Channel Interfaces](#channel-interfaces)
+  - [Container Isolation](#container-isolation)
+  - [File-Based State](#file-based-state)
+  - [Multi-Repository Support](#multi-repository-support)
+- [Limitations](#limitations)
+- [Further Reading](#further-reading)
+
+<!-- mdformat-toc end -->
+
 ## Concepts
 
 Airut organizes work around four concepts:

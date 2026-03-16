@@ -6,6 +6,26 @@ interact with Claude Code by sending and receiving emails.
 For Slack setup, see [slack-setup.md](slack-setup.md). Both channels can run
 simultaneously for the same repository.
 
+<!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
+
+- [Prerequisites](#prerequisites)
+- [How It Works](#how-it-works)
+- [Step 1: Choose an Email Provider](#step-1-choose-an-email-provider)
+- [Step 2: Configure Airut](#step-2-configure-airut)
+- [Step 3: Test the Setup](#step-3-test-the-setup)
+- [DMARC Requirements](#dmarc-requirements)
+  - [Verifying DMARC](#verifying-dmarc)
+- [Authorization](#authorization)
+- [IMAP Configuration](#imap-configuration)
+- [Model Selection](#model-selection)
+- [Troubleshooting](#troubleshooting)
+  - [IMAP Connection Issues](#imap-connection-issues)
+  - [DMARC Failures](#dmarc-failures)
+  - [Emails Not Being Processed](#emails-not-being-processed)
+  - [Model Hint Not Working](#model-hint-not-working)
+
+<!-- mdformat-toc end -->
+
 ## Prerequisites
 
 - Airut server deployed (see [deployment.md](deployment.md))

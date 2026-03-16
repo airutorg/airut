@@ -10,6 +10,44 @@ so it works with all tools (Node.js, Go, curl, Python, git).
 > "Network allowlist" is the configuration specifying permitted hosts. "Proxy"
 > (mitmproxy) is the enforcement mechanism.
 
+<!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
+
+- [Threat Model](#threat-model)
+- [Security Model](#security-model)
+  - [Why This Is Secure](#why-this-is-secure)
+  - [Fail-Secure Behavior](#fail-secure-behavior)
+  - [Security Analysis](#security-analysis)
+  - [Limitations](#limitations)
+- [Architecture](#architecture)
+- [Configuration](#configuration)
+  - [Enabling/Disabling the Sandbox](#enablingdisabling-the-sandbox)
+  - [Upstream DNS](#upstream-dns)
+  - [Network Allowlist](#network-allowlist)
+    - [Pattern Matching Rules](#pattern-matching-rules)
+    - [HTTP Method Filtering](#http-method-filtering)
+  - [Agent Self-Service Flow](#agent-self-service-flow)
+- [Masked Secrets (Token Replacement)](#masked-secrets-token-replacement)
+  - [Problem](#problem)
+  - [Solution](#solution)
+  - [Security Properties](#security-properties)
+  - [Foreign credential blocking](#foreign-credential-blocking)
+  - [Limitations](#limitations-1)
+  - [When to Use](#when-to-use)
+- [Signing Credentials (AWS SigV4 Re-signing)](#signing-credentials-aws-sigv4-re-signing)
+  - [Problem](#problem-1)
+  - [Solution](#solution-1)
+  - [What Gets Re-signed](#what-gets-re-signed)
+  - [Security Properties](#security-properties-1)
+  - [Limitations](#limitations-2)
+  - [Transparent Upgrade Path](#transparent-upgrade-path)
+- [Troubleshooting](#troubleshooting)
+  - [Broken allowlist checked into main](#broken-allowlist-checked-into-main)
+  - [Masked secrets stopped working](#masked-secrets-stopped-working)
+  - [Debugging container network issues](#debugging-container-network-issues)
+- [Further Reading](#further-reading)
+
+<!-- mdformat-toc end -->
+
 ## Threat Model
 
 Claude Code containers execute arbitrary code on behalf of the agent. A prompt

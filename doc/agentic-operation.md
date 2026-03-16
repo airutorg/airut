@@ -12,6 +12,31 @@ a minimal Airut-managed project. When onboarding new repositories to Airut,
 these practices should be adapted and applied to achieve similar autonomous
 operation.
 
+<!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
+
+- [Key Principles](#key-principles)
+- [What Airut Provides](#what-airut-provides)
+- [What the Repository Must Provide](#what-the-repository-must-provide)
+- [Security Model and Human Oversight](#security-model-and-human-oversight)
+- [CLAUDE.md Design](#claudemd-design)
+  - [Philosophy](#philosophy)
+  - [Key Sections](#key-sections)
+    - [PR Creation Mandate](#pr-creation-mandate)
+    - [Git and PR Workflow](#git-and-pr-workflow)
+    - [Spec Adherence](#spec-adherence)
+    - [Other Important Sections](#other-important-sections)
+- [Workflow Tooling](#workflow-tooling)
+  - [ci.py — Local CI Runner](#cipy-%E2%80%94-local-ci-runner)
+  - [pr.py — PR Workflow Tool](#prpy-%E2%80%94-pr-workflow-tool)
+- [Workflow Patterns](#workflow-patterns)
+  - [Standard Task Flow](#standard-task-flow)
+  - [Review Feedback Loop](#review-feedback-loop)
+  - [Conflict Resolution](#conflict-resolution)
+- [Autonomous Learning](#autonomous-learning)
+- [Summary](#summary)
+
+<!-- mdformat-toc end -->
+
 ## Key Principles
 
 Successful agentic operation relies on:

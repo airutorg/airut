@@ -10,6 +10,33 @@ The `airut-sandbox` CLI and `airutorg/sandbox-action` GitHub Action close this
 gap by running CI commands inside the same container isolation, network
 allowlisting, and credential masking that the Airut gateway uses.
 
+<!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
+
+- [The Problem](#the-problem)
+- [Solution: Sandbox Action](#solution-sandbox-action)
+- [Trust Model](#trust-model)
+- [Security Requirements](#security-requirements)
+  - [1. Protecting Workflow Files](#1-protecting-workflow-files)
+  - [2. Branch Protection](#2-branch-protection)
+  - [3. Sandbox Configuration Files](#3-sandbox-configuration-files)
+  - [4. Terminal Step](#4-terminal-step)
+- [Configuration](#configuration)
+  - [Sandbox Config (`.airut/sandbox.yaml`)](#sandbox-config-airutsandboxyaml)
+  - [Network Allowlist](#network-allowlist)
+  - [Credential Handling](#credential-handling)
+- [Action Inputs](#action-inputs)
+- [Full Workflow Example](#full-workflow-example)
+- [Using `airut-sandbox` Directly](#using-airut-sandbox-directly)
+  - [CLI Options](#cli-options)
+  - [Non-GitHub CI Systems](#non-github-ci-systems)
+- [Security Summary](#security-summary)
+  - [Checklist](#checklist)
+  - [Residual Risks](#residual-risks)
+- [Fail-Secure Behavior](#fail-secure-behavior)
+- [Further Reading](#further-reading)
+
+<!-- mdformat-toc end -->
+
 ## The Problem
 
 GitHub Actions workflows triggered by `pull_request` events execute code from
