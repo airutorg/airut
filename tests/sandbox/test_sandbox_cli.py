@@ -33,6 +33,7 @@ from airut.sandbox_cli import (
     _install_signal_handlers,
     _load_allowlist,
     _load_config,
+    _make_network_line_callback,
     _map_exit_code,
     _parse_args,
     _parse_env,
@@ -139,6 +140,11 @@ class TestParseArgs:
         args = _parse_args(["run", "--log", str(log_path), "--", "cmd"])
         assert args.log == log_path
 
+    def test_network_log_live_flag(self) -> None:
+        """--network-log-live flag is parsed correctly."""
+        args = _parse_args(["run", "--network-log-live", "--", "cmd"])
+        assert args.network_log_live is True
+
     def test_defaults(self) -> None:
         """Default values are None/False/[]."""
         args = _parse_args(["run", "--", "cmd"])
@@ -151,6 +157,7 @@ class TestParseArgs:
         assert args.mount == []
         assert args.network_log is None
         assert args.log is None
+        assert args.network_log_live is False
         assert args.verbose is False
         assert args.debug is False
 
@@ -1278,6 +1285,7 @@ class TestExecute:
             "container_command": None,
             "mount": [],
             "network_log": None,
+            "network_log_live": False,
         }
         defaults.update(overrides)
         return argparse.Namespace(**defaults)
@@ -2150,6 +2158,120 @@ class TestExecute:
         env = create_call.kwargs["env"]
         assert "AIRUT_VERBOSE" not in env.variables
 
+    @patch("airut.sandbox_cli.Sandbox")
+    @patch("airut.sandbox_cli.prepare_secrets")
+    @patch("airut.sandbox_cli._install_signal_handlers")
+    def test_network_log_live_passes_callback(
+        self,
+        mock_signal_handlers: MagicMock,
+        mock_prepare: MagicMock,
+        mock_sandbox_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """--network-log-live passes on_network_line callback to execute."""
+        from airut.sandbox_cli import _SandboxCliConfig
+
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine")
+
+        mock_prepare.return_value = PreparedSecrets(
+            env_vars={}, replacements=SecretReplacements()
+        )
+
+        mock_sandbox = MagicMock()
+        mock_sandbox_cls.return_value = mock_sandbox
+        mock_sandbox.ensure_image.return_value = "img:latest"
+
+        mock_task = MagicMock()
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
+        )
+        mock_sandbox.create_command_task.return_value = mock_task
+
+        args = self._make_args(dockerfile=dockerfile, network_log_live=True)
+        _execute(args, _SandboxCliConfig(network_sandbox=True))
+
+        execute_call = mock_task.execute.call_args
+        assert execute_call.kwargs["on_network_line"] is not None
+
+    @patch("airut.sandbox_cli.Sandbox")
+    @patch("airut.sandbox_cli.prepare_secrets")
+    @patch("airut.sandbox_cli._install_signal_handlers")
+    def test_no_network_log_live_omits_callback(
+        self,
+        mock_signal_handlers: MagicMock,
+        mock_prepare: MagicMock,
+        mock_sandbox_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Without --network-log-live, on_network_line is None."""
+        from airut.sandbox_cli import _SandboxCliConfig
+
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine")
+
+        mock_prepare.return_value = PreparedSecrets(
+            env_vars={}, replacements=SecretReplacements()
+        )
+
+        mock_sandbox = MagicMock()
+        mock_sandbox_cls.return_value = mock_sandbox
+        mock_sandbox.ensure_image.return_value = "img:latest"
+
+        mock_task = MagicMock()
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
+        )
+        mock_sandbox.create_command_task.return_value = mock_task
+
+        args = self._make_args(dockerfile=dockerfile)
+        _execute(args, _SandboxCliConfig(network_sandbox=False))
+
+        execute_call = mock_task.execute.call_args
+        assert execute_call.kwargs["on_network_line"] is None
+
+
+# -------------------------------------------------------------------
+# _make_network_line_callback
+# -------------------------------------------------------------------
+
+
+class TestMakeNetworkLineCallback:
+    """Tests for the network log line callback factory."""
+
+    def test_writes_prefixed_line_to_stderr(self) -> None:
+        """Callback writes [net] prefixed lines to stderr."""
+        callback = _make_network_line_callback()
+        with patch("airut.sandbox_cli.sys") as mock_sys:
+            mock_sys.stderr = MagicMock()
+            callback("allowed GET https://api.github.com/repos -> 200")
+            mock_sys.stderr.write.assert_called_once_with(
+                "[net] allowed GET https://api.github.com/repos -> 200\n"
+            )
+            mock_sys.stderr.flush.assert_called_once()
+
+    def test_writes_blocked_line(self) -> None:
+        """Callback formats blocked lines correctly."""
+        callback = _make_network_line_callback()
+        with patch("airut.sandbox_cli.sys") as mock_sys:
+            mock_sys.stderr = MagicMock()
+            callback("BLOCKED GET https://evil.com/exfil -> 403")
+            mock_sys.stderr.write.assert_called_once_with(
+                "[net] BLOCKED GET https://evil.com/exfil -> 403\n"
+            )
+
 
 # -------------------------------------------------------------------
 # _run
@@ -2461,6 +2583,7 @@ class TestRunIntegration:
                 container_command=None,
                 mount=[],
                 network_log=tmp_path / "net.log",
+                network_log_live=False,
             )
             result = _execute(args, _SandboxCliConfig(network_sandbox=True))
 

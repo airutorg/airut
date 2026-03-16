@@ -415,6 +415,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Write sandbox log to FILE instead of stderr",
     )
     run_parser.add_argument(
+        "--network-log-live",
+        action="store_true",
+        help="Print network activity to stderr during execution",
+    )
+    run_parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable informational logging (INFO level)",
@@ -555,6 +560,20 @@ def _setup_network_log(
         tmp_path.unlink(missing_ok=True)
 
     return tmp_path, cleanup_default
+
+
+def _make_network_line_callback() -> Callable[[str], None]:
+    """Create a callback that prints network log lines to stderr.
+
+    Returns:
+        Callback suitable for ``on_network_line``.
+    """
+
+    def on_network_line(line: str) -> None:
+        sys.stderr.write(f"[net] {line}\n")
+        sys.stderr.flush()
+
+    return on_network_line
 
 
 # -------------------------------------------------------------------
@@ -781,11 +800,17 @@ async def _execute_async(
             # Install signal handlers
             _install_signal_handlers(task)
 
+            # Build network log callback
+            on_network_line: Callable[[str], None] | None = None
+            if getattr(args, "network_log_live", False):
+                on_network_line = _make_network_line_callback()
+
             logger.info("Executing command: %s", args.command)
             result = await task.execute(
                 args.command,
                 on_output=lambda line: sys.stdout.write(line),
                 on_stderr=lambda line: sys.stderr.write(line),
+                on_network_line=on_network_line,
             )
 
             exit_code = _map_exit_code(result)

@@ -88,6 +88,7 @@ Options:
   --container-command CMD  Container runtime (default: podman)
   --mount SRC:DST[:ro]   Additional mount (repeatable)
   --network-log FILE     Append network activity log to FILE
+  --network-log-live     Print network activity to stderr during execution
   --log FILE             Write sandbox log to FILE instead of stderr
   --verbose              Enable informational logging (INFO level)
   --debug                Enable debug logging (DEBUG level, implies --verbose)
@@ -116,6 +117,14 @@ should be avoided.
 appended to the given file (created if it does not exist) and persists after
 exit. When not specified, a temporary log file is created and deleted on exit.
 See [Network Activity Log](#network-activity-log) for details.
+
+**`--network-log-live` behavior**: When specified, network log lines are printed
+to stderr in real time during execution, prefixed with `[net]`. Each line is
+flushed immediately so output appears without buffering delay. This uses the
+sandbox library's `on_network_line` callback, which tails the proxy's log file
+at 0.5-second polling intervals. Can be combined with `--network-log` to both
+persist the full log and stream it live. When the network sandbox is disabled,
+the flag has no effect (no proxy runs, so there are no network log lines).
 
 **`--log` behavior**: When specified, sandbox implementation log messages
 (startup, image build, shutdown, etc.) are written to the given file instead of
