@@ -906,6 +906,9 @@ def _image_save(args: argparse.Namespace) -> int:
             return EXIT_INFRA_ERROR
 
         tarball_path = directory / tarball_name
+        # Remove existing tarball -- podman save (docker-archive format)
+        # cannot overwrite an existing file.
+        tarball_path.unlink(missing_ok=True)
         logger.info("Saving %s to %s", tag, tarball_path)
         result = subprocess.run(
             [container_command, "save", "-o", str(tarball_path), tag],

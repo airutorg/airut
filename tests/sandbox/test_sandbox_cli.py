@@ -3194,6 +3194,56 @@ class TestImageSave:
     @patch("airut.sandbox_cli.subprocess.run")
     @patch("airut.sandbox_cli.ImageCache")
     @patch("airut.sandbox_cli.default_proxy_dir")
+    def test_removes_existing_tarball_before_save(
+        self,
+        mock_proxy_dir: MagicMock,
+        mock_cache_cls: MagicMock,
+        mock_run: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Deletes pre-existing tarball before podman save (docker-archive)."""
+        # Set up files
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine\n")
+        proxy_dir = tmp_path / "proxy"
+        proxy_dir.mkdir()
+        (proxy_dir / "proxy.dockerfile").write_text("FROM python:3.13\n")
+        mock_proxy_dir.return_value = proxy_dir
+
+        out_dir = tmp_path / "cache"
+        out_dir.mkdir()
+
+        # Pre-existing tarballs (as left by a previous image load)
+        (out_dir / "repo.tar").write_bytes(b"old repo data")
+        (out_dir / "proxy.tar").write_bytes(b"old proxy data")
+
+        mock_cache = MagicMock()
+        mock_cache.ensure.side_effect = [
+            "airut-cli-repo:abc123",
+            "airut-cli-proxy:def456",
+        ]
+        mock_cache_cls.return_value = mock_cache
+
+        mock_run.return_value = MagicMock(returncode=0)
+
+        args = argparse.Namespace(
+            dockerfile=dockerfile,
+            context_dir=tmp_path,
+            directory=out_dir,
+            container_command=None,
+        )
+        result = _image_save(args)
+
+        assert result == 0
+        # Tarballs must not exist before podman save is called,
+        # otherwise podman fails with "docker-archive doesn't
+        # support modifying existing images".
+        assert not (out_dir / "repo.tar").exists()
+        assert not (out_dir / "proxy.tar").exists()
+
+    @patch("airut.sandbox_cli.subprocess.run")
+    @patch("airut.sandbox_cli.ImageCache")
+    @patch("airut.sandbox_cli.default_proxy_dir")
     def test_save_failure_returns_error(
         self,
         mock_proxy_dir: MagicMock,
