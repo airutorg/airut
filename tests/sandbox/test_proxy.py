@@ -13,10 +13,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from airut.sandbox._image_cache import ImageBuildSpec, ImageCache
 from airut.sandbox._proxy import (
     CA_CERT_FILENAME,
     DEFAULT_RESOURCE_PREFIX,
-    PROXY_IMAGE_NAME,
     ProxyError,
     ProxyManager,
     _ContextProxy,
@@ -27,6 +27,39 @@ from airut.sandbox._proxy import (
 EGRESS_NETWORK = f"{DEFAULT_RESOURCE_PREFIX}-egress"
 CONTEXT_NETWORK_PREFIX = f"{DEFAULT_RESOURCE_PREFIX}-conv-"
 CONTEXT_PROXY_PREFIX = f"{DEFAULT_RESOURCE_PREFIX}-proxy-"
+
+
+def _make_pm(
+    *,
+    upstream_dns: str = "1.1.1.1",
+    container_command: str = "podman",
+    proxy_dir: Path | None = None,
+    egress_network: str | None = None,
+    resource_prefix: str = DEFAULT_RESOURCE_PREFIX,
+    image_cache: ImageCache | None = None,
+    proxy_image_tag: str | None = "airut-proxy:test123",
+) -> ProxyManager:
+    """Create ProxyManager with a mock ImageCache (convenience helper).
+
+    Sets ``_proxy_image_tag`` to a default test value so methods that
+    reference the tag (``_ensure_ca_cert``, ``_run_proxy_container``)
+    work without calling ``startup()`` first.
+    """
+    if image_cache is None:
+        image_cache = MagicMock(spec=ImageCache)
+    kwargs: dict = {
+        "container_command": container_command,
+        "upstream_dns": upstream_dns,
+        "resource_prefix": resource_prefix,
+        "image_cache": image_cache,
+    }
+    if proxy_dir is not None:
+        kwargs["proxy_dir"] = proxy_dir
+    if egress_network is not None:
+        kwargs["egress_network"] = egress_network
+    pm = ProxyManager(**kwargs)
+    pm._proxy_image_tag = proxy_image_tag
+    return pm
 
 
 class TestContextProxy:
@@ -72,7 +105,7 @@ class TestProxyManagerInit:
 
     def test_defaults(self) -> None:
         """ProxyManager sets default values."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm(proxy_image_tag=None)
         assert pm._cmd == "podman"
         assert pm._proxy_dir.name == "proxy"
         assert pm._proxy_dir.is_absolute()
@@ -84,10 +117,11 @@ class TestProxyManagerInit:
         assert pm._network_log_files == {}
         assert pm._next_subnet_octet == 1
         assert pm._active_octets == set()
+        assert pm._proxy_image_tag is None
 
     def test_custom_values(self) -> None:
         """ProxyManager accepts custom values."""
-        pm = ProxyManager(
+        pm = _make_pm(
             container_command="docker",
             proxy_dir=Path("/custom/proxy"),
             egress_network="custom-egress",
@@ -103,18 +137,18 @@ class TestProxyManagerStartup:
     """Tests for ProxyManager.startup()."""
 
     def test_calls_setup_methods(self) -> None:
-        """startup() calls cleanup, build, ca cert, and egress network."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        """startup() calls cleanup, ensure proxy image, ca cert, egress."""
+        pm = _make_pm()
         with (
             patch.object(pm, "_cleanup_orphans") as mock_cleanup,
-            patch.object(pm, "_build_image") as mock_build,
+            patch.object(pm, "_ensure_proxy_image") as mock_ensure,
             patch.object(pm, "_ensure_ca_cert") as mock_cert,
             patch.object(pm, "_recreate_egress_network") as mock_egress,
         ):
             pm.startup()
 
         mock_cleanup.assert_called_once()
-        mock_build.assert_called_once()
+        mock_ensure.assert_called_once()
         mock_cert.assert_called_once()
         mock_egress.assert_called_once()
 
@@ -124,7 +158,7 @@ class TestProxyManagerShutdown:
 
     def test_stops_active_proxies_and_removes_egress(self) -> None:
         """shutdown() stops remaining proxies and removes egress network."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         pm._active_proxies["task-1"] = _ContextProxy(
             network_name="net-1",
             proxy_container_name="proxy-1",
@@ -143,7 +177,7 @@ class TestProxyManagerShutdown:
 
     def test_shutdown_handles_stop_failure(self) -> None:
         """shutdown() logs warning but continues if stop_proxy fails."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         pm._active_proxies["task-1"] = _ContextProxy(
             network_name="net-1",
             proxy_container_name="proxy-1",
@@ -162,7 +196,7 @@ class TestProxyManagerShutdown:
 
     def test_shutdown_empty_proxies(self) -> None:
         """shutdown() with no active proxies only removes egress network."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with patch.object(pm, "_remove_network") as mock_rm_net:
             pm.shutdown()
@@ -175,7 +209,7 @@ class TestAllocateSubnet:
 
     def test_first_allocation(self) -> None:
         """First allocation uses octet 1."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         subnet, proxy_ip, octet = pm._allocate_subnet()
         assert subnet == "10.199.1.0/24"
         assert proxy_ip == "10.199.1.100"
@@ -183,7 +217,7 @@ class TestAllocateSubnet:
 
     def test_increments_octet(self) -> None:
         """Subsequent allocations increment the octet."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         pm._allocate_subnet()
         subnet, proxy_ip, octet = pm._allocate_subnet()
         assert subnet == "10.199.2.0/24"
@@ -192,7 +226,7 @@ class TestAllocateSubnet:
 
     def test_wraps_at_254(self) -> None:
         """Octet wraps from 254 back to 1."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         pm._next_subnet_octet = 254
         subnet, proxy_ip, octet = pm._allocate_subnet()
         assert subnet == "10.199.254.0/24"
@@ -207,7 +241,7 @@ class TestAllocateSubnet:
 
     def test_no_duplicate_subnets(self) -> None:
         """All 254 allocations produce unique subnets."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         allocated = []
         for _ in range(254):
             subnet, proxy_ip, octet = pm._allocate_subnet()
@@ -226,7 +260,7 @@ class TestAllocateSubnet:
 
     def test_exhaustion_raises_after_254(self) -> None:
         """255th allocation raises ProxyError when all are held."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         for _ in range(254):
             pm._allocate_subnet()
 
@@ -235,7 +269,7 @@ class TestAllocateSubnet:
 
     def test_release_allows_reuse(self) -> None:
         """Releasing a subnet makes it available for reallocation."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         _, _, first_octet = pm._allocate_subnet()
         pm._release_subnet(first_octet)
 
@@ -247,7 +281,7 @@ class TestAllocateSubnet:
 
     def test_release_after_exhaustion(self) -> None:
         """Releasing one subnet after full exhaustion allows one more."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         octets = []
         for _ in range(254):
             _, _, octet = pm._allocate_subnet()
@@ -266,7 +300,7 @@ class TestAllocateSubnet:
 
     def test_wraparound_skips_held_subnets(self) -> None:
         """Allocator wraps around and skips subnets that are still held."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         # Allocate octets 1..253, then release all except 1 and 2
         held_octets = []
         for _ in range(253):
@@ -289,62 +323,103 @@ class TestAllocateSubnet:
 
     def test_release_is_idempotent(self) -> None:
         """Releasing an already-released octet does not raise."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         _, _, octet = pm._allocate_subnet()
         pm._release_subnet(octet)
         pm._release_subnet(octet)  # no error
 
 
-class TestBuildImage:
-    """Tests for ProxyManager._build_image()."""
+class TestEnsureProxyImage:
+    """Tests for ProxyManager._ensure_proxy_image()."""
 
-    def test_success(self, tmp_path: Path) -> None:
-        """Builds proxy image successfully."""
+    def test_delegates_to_image_cache(self, tmp_path: Path) -> None:
+        """_ensure_proxy_image() builds spec and delegates to ImageCache."""
+        mock_cache = MagicMock(spec=ImageCache)
+        mock_cache.ensure.return_value = "airut-proxy:abc123"
         dockerfile = tmp_path / "proxy.dockerfile"
         dockerfile.write_text("FROM python:3.13\n")
 
-        pm = ProxyManager(
+        pm = _make_pm(proxy_dir=tmp_path, image_cache=mock_cache)
+        pm._ensure_proxy_image()
+
+        mock_cache.ensure.assert_called_once()
+        spec = mock_cache.ensure.call_args[0][0]
+        assert isinstance(spec, ImageBuildSpec)
+        assert spec.kind == "proxy"
+        assert pm._proxy_image_tag == "airut-proxy:abc123"
+
+    def test_sets_proxy_image_tag(self, tmp_path: Path) -> None:
+        """_ensure_proxy_image() stores the tag for later use."""
+        mock_cache = MagicMock(spec=ImageCache)
+        mock_cache.ensure.return_value = "airut-cli-proxy:def456"
+        dockerfile = tmp_path / "proxy.dockerfile"
+        dockerfile.write_text("FROM python:3.13\n")
+
+        pm = _make_pm(
             proxy_dir=tmp_path,
-            upstream_dns="1.1.1.1",
+            image_cache=mock_cache,
+            proxy_image_tag=None,
         )
+        assert pm._proxy_image_tag is None
 
-        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            pm._build_image()
+        pm._ensure_proxy_image()
 
-        mock_run.assert_called_once()
-        cmd = mock_run.call_args[0][0]
-        assert cmd[0] == "podman"
-        assert cmd[1] == "build"
-        assert "-t" in cmd
-        assert PROXY_IMAGE_NAME in cmd
-        assert str(dockerfile) in cmd
+        assert pm._proxy_image_tag == "airut-cli-proxy:def456"
+
+
+class TestBuildProxySpec:
+    """Tests for ProxyManager._build_proxy_spec()."""
+
+    def test_includes_all_proxy_files(self, tmp_path: Path) -> None:
+        """Spec includes Dockerfile and all other files as context."""
+        dockerfile = tmp_path / "proxy.dockerfile"
+        dockerfile.write_text("FROM python:3.13\n")
+        script = tmp_path / "proxy_filter.py"
+        script.write_text("# filter\n")
+        dns = tmp_path / "dns_responder.py"
+        dns.write_text("# dns\n")
+
+        pm = _make_pm(proxy_dir=tmp_path)
+        spec = pm._build_proxy_spec()
+
+        assert spec.kind == "proxy"
+        assert spec.dockerfile == b"FROM python:3.13\n"
+        assert "proxy_filter.py" in spec.context_files
+        assert "dns_responder.py" in spec.context_files
+        # Dockerfile itself should NOT be in context_files
+        assert "proxy.dockerfile" not in spec.context_files
 
     def test_dockerfile_not_found(self, tmp_path: Path) -> None:
         """Raises ProxyError when Dockerfile is missing."""
-        pm = ProxyManager(
-            proxy_dir=tmp_path,
-            upstream_dns="1.1.1.1",
-        )
+        pm = _make_pm(proxy_dir=tmp_path)
         with pytest.raises(ProxyError, match="Proxy Dockerfile not found"):
-            pm._build_image()
+            pm._build_proxy_spec()
 
-    def test_build_failure(self, tmp_path: Path) -> None:
-        """Raises ProxyError when build command fails."""
+    def test_context_files_sorted(self, tmp_path: Path) -> None:
+        """Context files are collected from sorted directory listing."""
         dockerfile = tmp_path / "proxy.dockerfile"
-        dockerfile.write_text("FROM invalid\n")
+        dockerfile.write_text("FROM python:3.13\n")
+        (tmp_path / "b_file.py").write_text("b")
+        (tmp_path / "a_file.py").write_text("a")
 
-        pm = ProxyManager(
-            proxy_dir=tmp_path,
-            upstream_dns="1.1.1.1",
-        )
+        pm = _make_pm(proxy_dir=tmp_path)
+        spec = pm._build_proxy_spec()
 
-        with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
-            mock_run.side_effect = subprocess.CalledProcessError(
-                1, ["podman", "build"], stderr="build failed"
-            )
-            with pytest.raises(ProxyError, match="Proxy image build failed"):
-                pm._build_image()
+        assert list(spec.context_files.keys()) == ["a_file.py", "b_file.py"]
+
+    def test_excludes_subdirectories(self, tmp_path: Path) -> None:
+        """Subdirectories in proxy_dir are not included."""
+        dockerfile = tmp_path / "proxy.dockerfile"
+        dockerfile.write_text("FROM python:3.13\n")
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        (subdir / "nested.py").write_text("nested")
+
+        pm = _make_pm(proxy_dir=tmp_path)
+        spec = pm._build_proxy_spec()
+
+        assert "subdir" not in spec.context_files
+        assert "nested.py" not in spec.context_files
 
 
 class TestEnsureCaCert:
@@ -355,7 +430,7 @@ class TestEnsureCaCert:
         cert = tmp_path / CA_CERT_FILENAME
         cert.write_text("existing-cert")
 
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with patch("airut.sandbox._proxy.MITMPROXY_CONFDIR", tmp_path):
             result = pm._ensure_ca_cert()
@@ -364,7 +439,7 @@ class TestEnsureCaCert:
 
     def test_generates_cert_when_missing(self, tmp_path: Path) -> None:
         """Generates CA cert via mitmdump when missing."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         cert_path = tmp_path / CA_CERT_FILENAME
 
@@ -397,7 +472,7 @@ class TestEnsureCaCert:
 
     def test_raises_when_cert_never_appears(self, tmp_path: Path) -> None:
         """Raises ProxyError when cert is never generated."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         mock_proc = MagicMock()
         mock_proc.terminate.return_value = None
@@ -417,7 +492,7 @@ class TestEnsureCaCert:
 
     def test_kills_process_when_wait_times_out(self, tmp_path: Path) -> None:
         """Falls back to kill() when terminate + wait times out."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         cert_path = tmp_path / CA_CERT_FILENAME
 
@@ -458,7 +533,7 @@ class TestWriteTempFile:
 
     def test_writes_data_and_tracks(self) -> None:
         """Writes data to temp file and tracks for cleanup."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         tracking: dict[str, Path] = {}
 
         path = pm._write_temp_file(
@@ -511,7 +586,7 @@ class TestCreateNetworkLog:
 
     def test_creates_log_file(self, tmp_path: Path) -> None:
         """Creates empty network log file and tracks it."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         log_path = tmp_path / "network-sandbox.log"
 
         pm._create_network_log("task-1", log_path)
@@ -525,7 +600,7 @@ class TestCleanupNetworkLog:
 
     def test_removes_tracking(self, tmp_path: Path) -> None:
         """Removes tracking entry but keeps the file."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         log_path = tmp_path / "network-sandbox.log"
         log_path.touch()
         pm._network_log_files["task-1"] = log_path
@@ -538,7 +613,7 @@ class TestCleanupNetworkLog:
 
     def test_noop_for_untracked_task(self) -> None:
         """Does nothing when context_id not tracked."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         pm._cleanup_network_log("nonexistent")  # Should not raise
 
 
@@ -547,7 +622,7 @@ class TestRunProxyContainer:
 
     def test_success_minimal(self, tmp_path: Path) -> None:
         """Starts proxy container with required args only."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         allowlist_path = tmp_path / "allowlist.json"
         allowlist_path.write_text("[]")
 
@@ -572,7 +647,7 @@ class TestRunProxyContainer:
 
     def test_with_replacement_path(self, tmp_path: Path) -> None:
         """Mounts replacement map when provided."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         allowlist_path = tmp_path / "allowlist.json"
         allowlist_path.write_text("[]")
         replacement_path = tmp_path / "replacements.json"
@@ -594,7 +669,7 @@ class TestRunProxyContainer:
 
     def test_with_network_log_path(self, tmp_path: Path) -> None:
         """Mounts network log file when provided."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         allowlist_path = tmp_path / "allowlist.json"
         allowlist_path.write_text("[]")
         log_path = tmp_path / "network-sandbox.log"
@@ -616,7 +691,7 @@ class TestRunProxyContainer:
 
     def test_failure_raises_proxy_error(self, tmp_path: Path) -> None:
         """Raises ProxyError when container start fails."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         allowlist_path = tmp_path / "allowlist.json"
         allowlist_path.write_text("[]")
 
@@ -640,7 +715,7 @@ class TestWaitForProxyReady:
 
     def test_ready_immediately(self) -> None:
         """Proxy ready on first probe."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
@@ -653,7 +728,7 @@ class TestWaitForProxyReady:
 
     def test_ready_after_retries(self) -> None:
         """Proxy ready after several failed probes."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with (
             patch("airut.sandbox._proxy.subprocess.run") as mock_run,
@@ -671,7 +746,7 @@ class TestWaitForProxyReady:
 
     def test_timeout_raises_proxy_error(self) -> None:
         """Raises ProxyError after timeout."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with (
             patch("airut.sandbox._proxy.subprocess.run") as mock_run,
@@ -691,7 +766,7 @@ class TestRemoveContainer:
 
     def test_success(self) -> None:
         """Removes container successfully."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
@@ -706,7 +781,7 @@ class TestRemoveContainer:
 
     def test_already_gone(self) -> None:
         """Handles already-removed container (idempotent)."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.CalledProcessError(
@@ -720,7 +795,7 @@ class TestCreateInternalNetwork:
 
     def test_success(self) -> None:
         """Creates internal network with correct args."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
@@ -743,7 +818,7 @@ class TestCreateInternalNetwork:
 
     def test_failure_raises_proxy_error(self) -> None:
         """Raises ProxyError when network creation fails."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.CalledProcessError(
@@ -764,7 +839,7 @@ class TestCreateEgressNetwork:
 
     def test_success(self) -> None:
         """Creates egress network with correct args."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
@@ -780,7 +855,7 @@ class TestCreateEgressNetwork:
 
     def test_failure_raises_proxy_error(self) -> None:
         """Raises ProxyError when egress network creation fails."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.CalledProcessError(
@@ -797,7 +872,7 @@ class TestRecreateEgressNetwork:
 
     def test_removes_then_creates(self) -> None:
         """Removes existing egress network, then creates new one."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with (
             patch.object(pm, "_remove_network") as mock_rm,
@@ -814,7 +889,7 @@ class TestRemoveNetwork:
 
     def test_success(self) -> None:
         """Removes network successfully."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0)
@@ -829,7 +904,7 @@ class TestRemoveNetwork:
 
     def test_already_gone(self) -> None:
         """Handles already-removed network (idempotent)."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.CalledProcessError(
@@ -843,7 +918,7 @@ class TestCleanupOrphans:
 
     def test_cleans_containers_and_networks(self) -> None:
         """Removes orphaned containers and networks."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             # First call: list containers (returns two names)
@@ -871,7 +946,7 @@ class TestCleanupOrphans:
 
     def test_handles_empty_output(self) -> None:
         """Handles empty container/network lists."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             empty_result = MagicMock()
@@ -888,7 +963,7 @@ class TestCleanupOrphans:
 
     def test_handles_container_list_failure(self) -> None:
         """Continues to network cleanup when container list fails."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             network_result = MagicMock()
@@ -905,7 +980,7 @@ class TestCleanupOrphans:
 
     def test_handles_network_list_failure(self) -> None:
         """Handles failure in network listing."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with patch("airut.sandbox._proxy.subprocess.run") as mock_run:
             container_result = MagicMock()
@@ -924,7 +999,7 @@ class TestStartTaskProxy:
 
     def test_full_flow(self, tmp_path: Path) -> None:
         """Full start_proxy flow with all steps mocked."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with (
             patch.object(pm, "stop_proxy") as mock_stop,
@@ -959,7 +1034,7 @@ class TestStartTaskProxy:
 
     def test_with_network_log_path(self, tmp_path: Path) -> None:
         """Creates network log when network_log_path is provided."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         log_path = tmp_path / "logs" / "network-sandbox.log"
         log_path.parent.mkdir()
 
@@ -997,7 +1072,7 @@ class TestStartTaskProxy:
 
     def test_cleanup_on_failure(self, tmp_path: Path) -> None:
         """Cleans up on failure during start_proxy."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with (
             patch.object(pm, "stop_proxy"),
@@ -1035,7 +1110,7 @@ class TestStartTaskProxy:
 
     def test_cleanup_on_failure_with_network_log(self, tmp_path: Path) -> None:
         """Cleans up network log tracking on failure."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         log_path = tmp_path / "logs" / "network-sandbox.log"
         log_path.parent.mkdir()
 
@@ -1068,7 +1143,7 @@ class TestStartTaskProxy:
 
     def test_concurrent_proxies_get_unique_subnets(self) -> None:
         """Multiple concurrent start_proxy calls get distinct subnets."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with (
             patch.object(pm, "stop_proxy"),
@@ -1098,7 +1173,7 @@ class TestStartTaskProxy:
 
     def test_stop_then_start_reuses_freed_subnet(self) -> None:
         """Stopping a proxy frees its subnet for reuse by a new proxy."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with (
             patch.object(pm, "_create_internal_network"),
@@ -1144,7 +1219,7 @@ class TestStartTaskProxy:
 
     def test_failure_cleanup_releases_subnet(self) -> None:
         """Failed start_proxy releases its subnet so it won't be leaked."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with (
             patch.object(pm, "stop_proxy"),
@@ -1181,7 +1256,7 @@ class TestStopTaskProxy:
 
     def test_stops_active_proxy(self) -> None:
         """Stops and cleans up an active proxy."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
         pm._active_proxies["task-1"] = _ContextProxy(
             network_name="airut-conv-task-1",
             proxy_container_name="airut-proxy-task-1",
@@ -1214,7 +1289,7 @@ class TestStopTaskProxy:
 
     def test_noop_for_unknown_task(self) -> None:
         """Does nothing for unknown context_id."""
-        pm = ProxyManager(upstream_dns="1.1.1.1")
+        pm = _make_pm()
 
         with patch.object(pm, "_remove_container") as mock_rm:
             pm.stop_proxy("nonexistent")

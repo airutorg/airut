@@ -13,16 +13,12 @@ executions.
 from __future__ import annotations
 
 import logging
-import threading
 from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
 
-from airut.sandbox._image import (
-    _ImageInfo,
-    build_overlay_image,
-    build_repo_image,
-)
+from airut.sandbox._entrypoint import get_entrypoint_content
+from airut.sandbox._image_cache import ImageBuildSpec, ImageCache
 from airut.sandbox._proxy import ProxyManager
 from airut.sandbox.task import (
     AgentTask,
@@ -71,7 +67,8 @@ class Sandbox:
     and creates AgentTask/CommandTask instances for individual executions.
 
     Thread Safety: Thread-safe. Multiple threads may call create_task()
-    and ensure_image() concurrently. Image builds are serialized.
+    and ensure_image() concurrently. Image builds are serialized via
+    ImageCache.
     """
 
     def __init__(
@@ -89,18 +86,21 @@ class Sandbox:
         self._config = config
         self._container_command = config.container_command
 
-        # Image caches
-        self._build_lock = threading.Lock()
-        self._repo_images: dict[str, _ImageInfo] = {}
-        self._overlay_images: dict[str, _ImageInfo] = {}
+        # Unified image cache for all image types
+        self._image_cache = ImageCache(
+            container_command=config.container_command,
+            resource_prefix=config.resource_prefix,
+            max_age_hours=config.max_image_age_hours,
+        )
 
-        # Proxy manager
+        # Proxy manager with injected image cache
         self._proxy_manager = ProxyManager(
             container_command=config.container_command,
             proxy_dir=config.proxy_dir,
             egress_network=egress_network,
             upstream_dns=config.upstream_dns,
             resource_prefix=config.resource_prefix,
+            image_cache=self._image_cache,
         )
 
     @property
@@ -157,24 +157,42 @@ class Sandbox:
         Raises:
             ImageBuildError: If image build fails.
         """
-        with self._build_lock:
-            repo_tag = build_repo_image(
-                self._container_command,
-                dockerfile,
-                context_files,
-                self._repo_images,
-                self._config.max_image_age_hours,
-            )
+        repo_spec = ImageBuildSpec(
+            kind="repo",
+            dockerfile=dockerfile,
+            context_files=context_files,
+        )
 
-            overlay_tag = build_overlay_image(
-                self._container_command,
-                repo_tag,
-                self._overlay_images,
-                self._config.max_image_age_hours,
-                passthrough=passthrough_entrypoint,
-            )
+        # Detect whether repo was rebuilt (for force-cascading to overlay).
+        repo_tag = self._image_cache.tag_for(repo_spec)
+        repo_created_before = self._image_cache.get_image_created(repo_tag)
+        repo_tag = self._image_cache.ensure(repo_spec)
+        repo_rebuilt = (
+            repo_created_before is None
+            or self._image_cache.get_image_created(repo_tag)
+            != repo_created_before
+        )
 
-            return overlay_tag
+        entrypoint = get_entrypoint_content(
+            passthrough=passthrough_entrypoint,
+        )
+        overlay_df = (
+            f"FROM {repo_tag}\n"
+            f"COPY airut-entrypoint.sh /entrypoint.sh\n"
+            f"RUN chmod +x /entrypoint.sh\n"
+            f'ENTRYPOINT ["/entrypoint.sh"]\n'
+        ).encode()
+        overlay_spec = ImageBuildSpec(
+            kind="overlay",
+            dockerfile=overlay_df,
+            context_files={"airut-entrypoint.sh": entrypoint},
+        )
+        overlay_tag = self._image_cache.ensure(
+            overlay_spec,
+            force=repo_rebuilt,
+        )
+
+        return overlay_tag
 
     def create_task(
         self,

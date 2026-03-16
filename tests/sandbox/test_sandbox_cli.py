@@ -111,6 +111,8 @@ class TestParseArgs:
                 "/a:/b:ro",
                 "--network-log",
                 str(netlog),
+                "--max-image-age",
+                "12",
                 "--verbose",
                 "--",
                 "echo",
@@ -126,6 +128,7 @@ class TestParseArgs:
         assert args.container_command == "docker"
         assert args.mount == ["/src:/dst", "/a:/b:ro"]
         assert args.network_log == netlog
+        assert args.max_image_age == 12
         assert args.verbose is True
         assert args.command == ["echo", "hello"]
 
@@ -158,6 +161,7 @@ class TestParseArgs:
         assert args.network_log is None
         assert args.log is None
         assert args.network_log_live is False
+        assert args.max_image_age is None
         assert args.verbose is False
         assert args.debug is False
 
@@ -1283,6 +1287,7 @@ class TestExecute:
             "allowlist": None,
             "timeout": None,
             "container_command": None,
+            "max_image_age": None,
             "mount": [],
             "network_log": None,
             "network_log_live": False,
@@ -1505,7 +1510,9 @@ class TestExecute:
 
         mock_sandbox_cls.assert_called_once_with(
             SandboxConfig(
-                container_command="podman", resource_prefix="airut-cli"
+                container_command="podman",
+                resource_prefix="airut-cli",
+                max_image_age_hours=24,
             )
         )
 
@@ -1554,7 +1561,58 @@ class TestExecute:
 
         mock_sandbox_cls.assert_called_once_with(
             SandboxConfig(
-                container_command="docker", resource_prefix="airut-cli"
+                container_command="docker",
+                resource_prefix="airut-cli",
+                max_image_age_hours=24,
+            )
+        )
+
+    @patch("airut.sandbox_cli.Sandbox")
+    @patch("airut.sandbox_cli.prepare_secrets")
+    @patch("airut.sandbox_cli._install_signal_handlers")
+    def test_max_image_age_zero(
+        self,
+        mock_signal_handlers: MagicMock,
+        mock_prepare: MagicMock,
+        mock_sandbox_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """--max-image-age 0 propagates to SandboxConfig."""
+        from airut.sandbox_cli import _SandboxCliConfig
+
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine")
+
+        mock_prepare.return_value = PreparedSecrets(
+            env_vars={}, replacements=SecretReplacements()
+        )
+
+        mock_sandbox = MagicMock()
+        mock_sandbox_cls.return_value = mock_sandbox
+        mock_sandbox.ensure_image.return_value = "img:latest"
+
+        mock_task = MagicMock()
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
+        )
+        mock_sandbox.create_command_task.return_value = mock_task
+
+        args = self._make_args(dockerfile=dockerfile, max_image_age=0)
+        _execute(args, _SandboxCliConfig(network_sandbox=False))
+
+        from airut.sandbox import SandboxConfig
+
+        mock_sandbox_cls.assert_called_once_with(
+            SandboxConfig(
+                container_command="podman",
+                resource_prefix="airut-cli",
+                max_image_age_hours=0,
             )
         )
 

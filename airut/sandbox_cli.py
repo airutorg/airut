@@ -397,6 +397,15 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Container runtime (default: podman)",
     )
     run_parser.add_argument(
+        "--max-image-age",
+        type=int,
+        default=None,
+        help=(
+            "Max image age in hours before rebuild with --no-cache. "
+            "Default: 24. Set to 0 to force rebuild every time."
+        ),
+    )
+    run_parser.add_argument(
         "--mount",
         action="append",
         default=[],
@@ -764,9 +773,14 @@ async def _execute_async(
 
     # Create sandbox with CLI-specific resource prefix to avoid
     # conflicts with the gateway on shared hosts.
+    max_image_age_raw = getattr(args, "max_image_age", None)
+    max_image_age_hours = (
+        max_image_age_raw if max_image_age_raw is not None else 24
+    )
     sandbox_config = SandboxConfig(
         container_command=container_command,
         resource_prefix="airut-cli",
+        max_image_age_hours=max_image_age_hours,
     )
     sandbox = Sandbox(sandbox_config)
 

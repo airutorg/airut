@@ -5,9 +5,11 @@
 
 """Tests for lib/sandbox/sandbox.py -- top-level Sandbox manager."""
 
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from airut.sandbox._image_cache import ImageCache
 from airut.sandbox.sandbox import Sandbox, SandboxConfig
 from airut.sandbox.task import AgentTask, CommandTask
 from airut.sandbox.types import ContainerEnv, Mount, ResourceLimits
@@ -43,27 +45,49 @@ class TestSandboxInit:
     """Tests for Sandbox initialization."""
 
     @patch("airut.sandbox.sandbox.ProxyManager")
-    def test_init_defaults(self, mock_pm_class: MagicMock) -> None:
-        """Sandbox initializes with default config."""
+    @patch("airut.sandbox.sandbox.ImageCache")
+    def test_init_creates_image_cache(
+        self, mock_cache_class: MagicMock, mock_pm_class: MagicMock
+    ) -> None:
+        """Sandbox creates ImageCache with config values."""
         config = SandboxConfig()
-        sandbox = Sandbox(config)
+        Sandbox(config)
 
-        assert sandbox._container_command == "podman"
-        assert sandbox._repo_images == {}
-        assert sandbox._overlay_images == {}
+        mock_cache_class.assert_called_once_with(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
 
     @patch("airut.sandbox.sandbox.ProxyManager")
-    def test_init_with_egress_network(self, mock_pm_class: MagicMock) -> None:
+    @patch("airut.sandbox.sandbox.ImageCache")
+    def test_init_injects_image_cache_into_proxy_manager(
+        self, mock_cache_class: MagicMock, mock_pm_class: MagicMock
+    ) -> None:
+        """Sandbox injects ImageCache into ProxyManager."""
+        config = SandboxConfig()
+        Sandbox(config)
+
+        pm_call_kwargs = mock_pm_class.call_args.kwargs
+        assert pm_call_kwargs["image_cache"] is mock_cache_class.return_value
+
+    @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
+    def test_init_with_egress_network(
+        self, mock_cache_class: MagicMock, mock_pm_class: MagicMock
+    ) -> None:
         """Sandbox passes egress_network override to ProxyManager."""
         config = SandboxConfig()
         Sandbox(config, egress_network="custom-egress")
 
-        # Verify ProxyManager was created with egress_network
         call_kwargs = mock_pm_class.call_args.kwargs
         assert call_kwargs.get("egress_network") == "custom-egress"
 
     @patch("airut.sandbox.sandbox.ProxyManager")
-    def test_proxy_manager_property(self, mock_pm_class: MagicMock) -> None:
+    @patch("airut.sandbox.sandbox.ImageCache")
+    def test_proxy_manager_property(
+        self, mock_cache_class: MagicMock, mock_pm_class: MagicMock
+    ) -> None:
         """proxy_manager property returns ProxyManager."""
         config = SandboxConfig()
         sandbox = Sandbox(config)
@@ -74,7 +98,10 @@ class TestSandboxStartupShutdown:
     """Tests for Sandbox.startup() and shutdown()."""
 
     @patch("airut.sandbox.sandbox.ProxyManager")
-    def test_startup_delegates_to_proxy(self, mock_pm_class: MagicMock) -> None:
+    @patch("airut.sandbox.sandbox.ImageCache")
+    def test_startup_delegates_to_proxy(
+        self, mock_cache_class: MagicMock, mock_pm_class: MagicMock
+    ) -> None:
         """startup() delegates to ProxyManager.startup()."""
         mock_pm = MagicMock()
         mock_pm_class.return_value = mock_pm
@@ -86,8 +113,9 @@ class TestSandboxStartupShutdown:
         mock_pm.startup.assert_called_once()
 
     @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
     def test_shutdown_delegates_to_proxy(
-        self, mock_pm_class: MagicMock
+        self, mock_cache_class: MagicMock, mock_pm_class: MagicMock
     ) -> None:
         """shutdown() delegates to ProxyManager.shutdown()."""
         mock_pm = MagicMock()
@@ -103,77 +131,115 @@ class TestSandboxStartupShutdown:
 class TestSandboxEnsureImage:
     """Tests for Sandbox.ensure_image()."""
 
-    @patch("airut.sandbox.sandbox.build_overlay_image")
-    @patch("airut.sandbox.sandbox.build_repo_image")
     @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
     def test_builds_both_layers(
         self,
+        mock_cache_class: MagicMock,
         mock_pm_class: MagicMock,
-        mock_build_repo: MagicMock,
-        mock_build_overlay: MagicMock,
     ) -> None:
-        """ensure_image() builds both repo and overlay images."""
-        mock_build_repo.return_value = "airut-repo:abc123"
-        mock_build_overlay.return_value = "airut:def456"
+        """ensure_image() builds repo and overlay via ImageCache."""
+        mock_cache = MagicMock(spec=ImageCache)
+        mock_cache_class.return_value = mock_cache
+        mock_cache.tag_for.return_value = "airut-repo:abc123"
+        mock_cache.get_image_created.side_effect = [None, None]
+        mock_cache.ensure.side_effect = [
+            "airut-repo:abc123",
+            "airut-overlay:def456",
+        ]
 
         config = SandboxConfig()
         sandbox = Sandbox(config)
 
         tag = sandbox.ensure_image(b"FROM ubuntu:24.04\n", {})
 
-        assert tag == "airut:def456"
-        mock_build_repo.assert_called_once_with(
-            "podman",
-            b"FROM ubuntu:24.04\n",
-            {},
-            sandbox._repo_images,
-            24,
-        )
-        mock_build_overlay.assert_called_once_with(
-            "podman",
-            "airut-repo:abc123",
-            sandbox._overlay_images,
-            24,
-            passthrough=False,
-        )
+        assert tag == "airut-overlay:def456"
+        assert mock_cache.ensure.call_count == 2
 
-    @patch("airut.sandbox.sandbox.build_overlay_image")
-    @patch("airut.sandbox.sandbox.build_repo_image")
+        # First call: repo spec
+        repo_call = mock_cache.ensure.call_args_list[0]
+        repo_spec = repo_call[0][0]
+        assert repo_spec.kind == "repo"
+        assert repo_spec.dockerfile == b"FROM ubuntu:24.04\n"
+
+        # Second call: overlay spec
+        overlay_call = mock_cache.ensure.call_args_list[1]
+        overlay_spec = overlay_call[0][0]
+        assert overlay_spec.kind == "overlay"
+        assert b"FROM airut-repo:abc123" in overlay_spec.dockerfile
+        assert "airut-entrypoint.sh" in overlay_spec.context_files
+
     @patch("airut.sandbox.sandbox.ProxyManager")
-    def test_caching_reuses_images(
+    @patch("airut.sandbox.sandbox.ImageCache")
+    def test_force_cascades_when_repo_rebuilt(
         self,
+        mock_cache_class: MagicMock,
         mock_pm_class: MagicMock,
-        mock_build_repo: MagicMock,
-        mock_build_overlay: MagicMock,
     ) -> None:
-        """ensure_image() uses cached images on repeated calls."""
-        mock_build_repo.return_value = "airut-repo:abc123"
-        mock_build_overlay.return_value = "airut:def456"
+        """Overlay is force-rebuilt when repo was rebuilt."""
+        mock_cache = MagicMock(spec=ImageCache)
+        mock_cache_class.return_value = mock_cache
+        mock_cache.tag_for.return_value = "airut-repo:abc123"
+        # Before: None (repo doesn't exist), After: has timestamp
+        mock_cache.get_image_created.side_effect = [
+            None,
+            datetime(2026, 1, 1, tzinfo=UTC),
+        ]
+        mock_cache.ensure.side_effect = [
+            "airut-repo:abc123",
+            "airut-overlay:def456",
+        ]
 
         config = SandboxConfig()
         sandbox = Sandbox(config)
+        sandbox.ensure_image(b"FROM ubuntu:24.04\n", {})
 
-        tag1 = sandbox.ensure_image(b"FROM ubuntu:24.04\n", {})
-        tag2 = sandbox.ensure_image(b"FROM ubuntu:24.04\n", {})
+        # Overlay call should have force=True
+        overlay_call = mock_cache.ensure.call_args_list[1]
+        assert overlay_call[1]["force"] is True
 
-        assert tag1 == tag2
-        # build functions are called with the same cache dicts,
-        # so caching happens inside those functions
-        assert mock_build_repo.call_count == 2
-        assert mock_build_overlay.call_count == 2
-
-    @patch("airut.sandbox.sandbox.build_overlay_image")
-    @patch("airut.sandbox.sandbox.build_repo_image")
     @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
+    def test_no_force_when_repo_reused(
+        self,
+        mock_cache_class: MagicMock,
+        mock_pm_class: MagicMock,
+    ) -> None:
+        """Overlay is not force-rebuilt when repo was reused."""
+        mock_cache = MagicMock(spec=ImageCache)
+        mock_cache_class.return_value = mock_cache
+        mock_cache.tag_for.return_value = "airut-repo:abc123"
+        same_ts = "2026-01-01T00:00:00+00:00"
+        mock_cache.get_image_created.return_value = same_ts
+        mock_cache.ensure.side_effect = [
+            "airut-repo:abc123",
+            "airut-overlay:def456",
+        ]
+
+        config = SandboxConfig()
+        sandbox = Sandbox(config)
+        sandbox.ensure_image(b"FROM ubuntu:24.04\n", {})
+
+        # Overlay call should have force=False
+        overlay_call = mock_cache.ensure.call_args_list[1]
+        assert overlay_call[1]["force"] is False
+
+    @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
     def test_passes_context_files(
         self,
+        mock_cache_class: MagicMock,
         mock_pm_class: MagicMock,
-        mock_build_repo: MagicMock,
-        mock_build_overlay: MagicMock,
     ) -> None:
-        """ensure_image() passes context files to build_repo_image."""
-        mock_build_repo.return_value = "airut-repo:abc123"
-        mock_build_overlay.return_value = "airut:def456"
+        """ensure_image() passes context files to repo spec."""
+        mock_cache = MagicMock(spec=ImageCache)
+        mock_cache_class.return_value = mock_cache
+        mock_cache.tag_for.return_value = "airut-repo:abc123"
+        mock_cache.get_image_created.return_value = None
+        mock_cache.ensure.side_effect = [
+            "airut-repo:abc123",
+            "airut-overlay:def456",
+        ]
 
         config = SandboxConfig()
         sandbox = Sandbox(config)
@@ -181,44 +247,49 @@ class TestSandboxEnsureImage:
         context = {"gitconfig": b"[user]\n\tname = Test\n"}
         sandbox.ensure_image(b"FROM ubuntu:24.04\n", context)
 
-        call_args = mock_build_repo.call_args
-        assert call_args[0][2] == context
+        repo_spec = mock_cache.ensure.call_args_list[0][0][0]
+        assert repo_spec.context_files == context
 
-    @patch("airut.sandbox.sandbox.build_overlay_image")
-    @patch("airut.sandbox.sandbox.build_repo_image")
     @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
     def test_passthrough_entrypoint(
         self,
+        mock_cache_class: MagicMock,
         mock_pm_class: MagicMock,
-        mock_build_repo: MagicMock,
-        mock_build_overlay: MagicMock,
     ) -> None:
-        """ensure_image(passthrough_entrypoint=True) passes passthrough flag."""
-        mock_build_repo.return_value = "airut-repo:abc123"
-        mock_build_overlay.return_value = "airut:def456"
+        """ensure_image(passthrough_entrypoint=True) uses passthrough."""
+        mock_cache = MagicMock(spec=ImageCache)
+        mock_cache_class.return_value = mock_cache
+        mock_cache.tag_for.return_value = "airut-repo:abc123"
+        mock_cache.get_image_created.return_value = None
+        mock_cache.ensure.side_effect = [
+            "airut-repo:abc123",
+            "airut-overlay:def456",
+        ]
 
         config = SandboxConfig()
         sandbox = Sandbox(config)
-
         sandbox.ensure_image(
             b"FROM ubuntu:24.04\n", {}, passthrough_entrypoint=True
         )
 
-        mock_build_overlay.assert_called_once_with(
-            "podman",
-            "airut-repo:abc123",
-            sandbox._overlay_images,
-            24,
-            passthrough=True,
-        )
+        # The overlay spec should contain the passthrough entrypoint
+        overlay_spec = mock_cache.ensure.call_args_list[1][0][0]
+        entrypoint = overlay_spec.context_files["airut-entrypoint.sh"]
+        assert b'exec "$@"' in entrypoint
+        assert b"exec claude" not in entrypoint
 
 
 class TestSandboxCreateTask:
     """Tests for Sandbox.create_task()."""
 
     @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
     def test_returns_agent_task(
-        self, mock_pm_class: MagicMock, tmp_path: Path
+        self,
+        mock_cache_class: MagicMock,
+        mock_pm_class: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """create_task() returns an AgentTask instance."""
         config = SandboxConfig()
@@ -229,7 +300,7 @@ class TestSandboxCreateTask:
 
         task = sandbox.create_task(
             "task-123",
-            image_tag="airut:test",
+            image_tag="airut-overlay:test",
             mounts=[],
             env=ContainerEnv(),
             execution_context_dir=context_dir,
@@ -239,8 +310,12 @@ class TestSandboxCreateTask:
         assert task.execution_context_id == "task-123"
 
     @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
     def test_passes_mounts_and_env(
-        self, mock_pm_class: MagicMock, tmp_path: Path
+        self,
+        mock_cache_class: MagicMock,
+        mock_pm_class: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """create_task() passes mounts and env to AgentTask."""
         config = SandboxConfig()
@@ -259,7 +334,7 @@ class TestSandboxCreateTask:
 
         task = sandbox.create_task(
             "task-123",
-            image_tag="airut:test",
+            image_tag="airut-overlay:test",
             mounts=mounts,
             env=env,
             execution_context_dir=context_dir,
@@ -269,8 +344,12 @@ class TestSandboxCreateTask:
         assert task._env == env
 
     @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
     def test_no_proxy_manager_without_network_sandbox(
-        self, mock_pm_class: MagicMock, tmp_path: Path
+        self,
+        mock_cache_class: MagicMock,
+        mock_pm_class: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """create_task() does not pass proxy_manager when no network_sandbox."""
         config = SandboxConfig()
@@ -281,7 +360,7 @@ class TestSandboxCreateTask:
 
         task = sandbox.create_task(
             "task-123",
-            image_tag="airut:test",
+            image_tag="airut-overlay:test",
             mounts=[],
             env=ContainerEnv(),
             execution_context_dir=context_dir,
@@ -290,8 +369,12 @@ class TestSandboxCreateTask:
         assert task._proxy_manager is None
 
     @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
     def test_passes_proxy_manager_with_network_sandbox(
-        self, mock_pm_class: MagicMock, tmp_path: Path
+        self,
+        mock_cache_class: MagicMock,
+        mock_pm_class: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """create_task() passes proxy_manager when network_sandbox is set."""
         from airut.allowlist import Allowlist
@@ -310,7 +393,7 @@ class TestSandboxCreateTask:
 
         task = sandbox.create_task(
             "task-123",
-            image_tag="airut:test",
+            image_tag="airut-overlay:test",
             mounts=[],
             env=ContainerEnv(),
             execution_context_dir=context_dir,
@@ -320,8 +403,12 @@ class TestSandboxCreateTask:
         assert task._proxy_manager is not None
 
     @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
     def test_custom_resource_limits(
-        self, mock_pm_class: MagicMock, tmp_path: Path
+        self,
+        mock_cache_class: MagicMock,
+        mock_pm_class: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """create_task() passes resource_limits to AgentTask."""
         config = SandboxConfig()
@@ -335,7 +422,7 @@ class TestSandboxCreateTask:
         )
         task = sandbox.create_task(
             "task-123",
-            image_tag="airut:test",
+            image_tag="airut-overlay:test",
             mounts=[],
             env=ContainerEnv(),
             execution_context_dir=context_dir,
@@ -345,8 +432,12 @@ class TestSandboxCreateTask:
         assert task._resource_limits == limits
 
     @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
     def test_default_resource_limits(
-        self, mock_pm_class: MagicMock, tmp_path: Path
+        self,
+        mock_cache_class: MagicMock,
+        mock_pm_class: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """create_task() uses empty ResourceLimits when not specified."""
         config = SandboxConfig()
@@ -357,7 +448,7 @@ class TestSandboxCreateTask:
 
         task = sandbox.create_task(
             "task-123",
-            image_tag="airut:test",
+            image_tag="airut-overlay:test",
             mounts=[],
             env=ContainerEnv(),
             execution_context_dir=context_dir,
@@ -366,8 +457,12 @@ class TestSandboxCreateTask:
         assert task._resource_limits == ResourceLimits()
 
     @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
     def test_network_log_path(
-        self, mock_pm_class: MagicMock, tmp_path: Path
+        self,
+        mock_cache_class: MagicMock,
+        mock_pm_class: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """create_task() passes network_log_path to AgentTask."""
         config = SandboxConfig()
@@ -380,7 +475,7 @@ class TestSandboxCreateTask:
 
         task = sandbox.create_task(
             "task-123",
-            image_tag="airut:test",
+            image_tag="airut-overlay:test",
             mounts=[],
             env=ContainerEnv(),
             execution_context_dir=context_dir,
@@ -394,8 +489,12 @@ class TestSandboxCreateCommandTask:
     """Tests for Sandbox.create_command_task()."""
 
     @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
     def test_returns_command_task(
-        self, mock_pm_class: MagicMock, tmp_path: Path
+        self,
+        mock_cache_class: MagicMock,
+        mock_pm_class: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """create_command_task() returns a CommandTask instance."""
         config = SandboxConfig()
@@ -406,7 +505,7 @@ class TestSandboxCreateCommandTask:
 
         task = sandbox.create_command_task(
             "cmd-123",
-            image_tag="airut:test",
+            image_tag="airut-overlay:test",
             mounts=[],
             env=ContainerEnv(),
             execution_context_dir=context_dir,
@@ -416,8 +515,12 @@ class TestSandboxCreateCommandTask:
         assert task.execution_context_id == "cmd-123"
 
     @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
     def test_passes_mounts_and_env(
-        self, mock_pm_class: MagicMock, tmp_path: Path
+        self,
+        mock_cache_class: MagicMock,
+        mock_pm_class: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """create_command_task() passes mounts and env to CommandTask."""
         config = SandboxConfig()
@@ -436,7 +539,7 @@ class TestSandboxCreateCommandTask:
 
         task = sandbox.create_command_task(
             "cmd-123",
-            image_tag="airut:test",
+            image_tag="airut-overlay:test",
             mounts=mounts,
             env=env,
             execution_context_dir=context_dir,
@@ -446,8 +549,12 @@ class TestSandboxCreateCommandTask:
         assert task._env == env
 
     @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
     def test_no_proxy_manager_without_network_sandbox(
-        self, mock_pm_class: MagicMock, tmp_path: Path
+        self,
+        mock_cache_class: MagicMock,
+        mock_pm_class: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """create_command_task() without network_sandbox has no proxy."""
         config = SandboxConfig()
@@ -458,7 +565,7 @@ class TestSandboxCreateCommandTask:
 
         task = sandbox.create_command_task(
             "cmd-123",
-            image_tag="airut:test",
+            image_tag="airut-overlay:test",
             mounts=[],
             env=ContainerEnv(),
             execution_context_dir=context_dir,
@@ -467,8 +574,12 @@ class TestSandboxCreateCommandTask:
         assert task._proxy_manager is None
 
     @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
     def test_default_resource_limits(
-        self, mock_pm_class: MagicMock, tmp_path: Path
+        self,
+        mock_cache_class: MagicMock,
+        mock_pm_class: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """create_command_task() uses default ResourceLimits."""
         config = SandboxConfig()
@@ -479,7 +590,7 @@ class TestSandboxCreateCommandTask:
 
         task = sandbox.create_command_task(
             "cmd-123",
-            image_tag="airut:test",
+            image_tag="airut-overlay:test",
             mounts=[],
             env=ContainerEnv(),
             execution_context_dir=context_dir,
@@ -488,8 +599,12 @@ class TestSandboxCreateCommandTask:
         assert task._resource_limits == ResourceLimits()
 
     @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
     def test_custom_resource_limits(
-        self, mock_pm_class: MagicMock, tmp_path: Path
+        self,
+        mock_cache_class: MagicMock,
+        mock_pm_class: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """create_command_task() passes resource_limits."""
         config = SandboxConfig()
@@ -501,7 +616,7 @@ class TestSandboxCreateCommandTask:
         limits = ResourceLimits(timeout=120, memory="1g")
         task = sandbox.create_command_task(
             "cmd-123",
-            image_tag="airut:test",
+            image_tag="airut-overlay:test",
             mounts=[],
             env=ContainerEnv(),
             execution_context_dir=context_dir,

@@ -32,7 +32,7 @@ Layer 1: Repo Image (from git mirror)
 
 Layer 2: Server Overlay (generated in code)
   Source: airut/sandbox/_entrypoint.py (generated entrypoint script)
-  Tag:    airut:<sha256-of-repo-tag-plus-entrypoint-content>
+  Tag:    airut-overlay:<sha256-of-repo-tag-plus-entrypoint-content>
   Contains: FROM repo image + COPY entrypoint + ENTRYPOINT directive
   Note:   Agent and passthrough entrypoints have different content,
           so they produce different overlay image hashes/tags.
@@ -51,7 +51,7 @@ Layer 2: Server Overlay (generated in code)
 # On the Airut server (generated in code)
 airut/sandbox/
   _entrypoint.py                  # generated entrypoint script
-  _image.py                       # two-layer image build logic
+  _image_cache.py                 # unified image cache (ImageCache, ImageBuildSpec)
 
 airut/_bundled/proxy/
   proxy.dockerfile                # proxy container image
@@ -76,17 +76,17 @@ configuration files, scripts) in the image.
 1. List all files in .airut/container/ from git mirror (main branch)
 2. Read Dockerfile and any additional context files
 3. Compute repo_hash = sha256(Dockerfile + sorted context files)
-4. Compute overlay_hash = sha256(repo_tag + entrypoint content)
+4. Compute overlay_hash = sha256(overlay Dockerfile + entrypoint filename + entrypoint content)
 
 5. Check repo image: airut-repo:<repo_hash>
-   EXISTS and age < 24 hours → reuse
+   EXISTS and age < max_age_hours → reuse
    OTHERWISE → build from Dockerfile with context files, tag with repo_hash
 
-6. Check overlay image: airut:<overlay_hash>
+6. Check overlay image: airut-overlay:<overlay_hash>
    EXISTS and repo image was reused → reuse
    OTHERWISE → build overlay (FROM repo image + entrypoint), tag
 
-7. Run container from airut:<overlay_hash>
+7. Run container from airut-overlay:<overlay_hash>
 ```
 
 ### Build Details
@@ -114,26 +114,42 @@ configuration files, scripts) in the image.
 
 ### Staleness and Caching
 
-| Condition                                        | Action                                    |
-| ------------------------------------------------ | ----------------------------------------- |
-| Container dir unchanged, image < 24h old         | Reuse (fast path)                         |
-| Container dir unchanged, image >= 24h old        | Rebuild to pick up upstream updates       |
-| Dockerfile or context files changed (diff hash)  | Build new image (new tag)                 |
-| Generated entrypoint changed                     | Rebuild overlay only (repo image reused)  |
-| Different entrypoint variant (agent/passthrough) | Different overlay tag (repo image reused) |
+All image management is handled by `ImageCache`
+(`airut/sandbox/_image_cache.py`) — a unified cache that manages repo, overlay,
+and proxy images through a single interface. Each image is described by an
+`ImageBuildSpec` (frozen dataclass with `kind`, `dockerfile`, and optional
+`context_files`), and tagged as `{resource_prefix}-{kind}:{sha256}`.
 
-Image age is tracked by recording build timestamps in memory. On service
-restart, images without a recorded build time are treated as stale.
+| Condition                                        | Action                                               |
+| ------------------------------------------------ | ---------------------------------------------------- |
+| Image does not exist (first build)               | Build without `--no-cache` (leverage layer caching)  |
+| Image exists, age < `max_age_hours`              | Reuse (fast path)                                    |
+| Image exists, age >= `max_age_hours`             | Rebuild with `--no-cache` (pick up upstream updates) |
+| `max_age_hours=0`                                | Always rebuild with `--no-cache`                     |
+| `force=True` passed to `ensure()`                | Rebuild with `--no-cache` regardless of age          |
+| Dockerfile or context files changed (diff hash)  | New tag → fresh build (no `--no-cache`)              |
+| Generated entrypoint changed                     | Rebuild overlay only (repo image reused)             |
+| Different entrypoint variant (agent/passthrough) | Different overlay tag (repo image reused)            |
+
+Image age is detected persistently via `podman image inspect` (querying the
+image's `Created` timestamp), not tracked in memory. This means image age
+survives service restarts and is shared across gateway and CLI instances.
+
+**Force cascade**: When `ensure_image()` detects that the repo image was rebuilt
+(by comparing its creation timestamp before and after `ensure()`), the overlay
+image is force-rebuilt to incorporate the new base. This ensures upstream
+updates always propagate through both layers.
 
 ### Concurrent Build Safety
 
-The build is protected by a lock. When multiple tasks need a build
-simultaneously:
+`ImageCache` is protected by a `threading.Lock`. When multiple tasks need a
+build simultaneously:
 
 - First task acquires lock, builds
 - Subsequent tasks wait, then find the image already exists and reuse it
 
-Builds produce new tags, so they don't affect running containers.
+Builds produce new tags (content-addressed), so they don't affect running
+containers.
 
 ## Proxy Dependency Management
 
@@ -190,8 +206,10 @@ The command and arguments are passed through from
 
 ### Overlay Image Hashing
 
-The overlay image hash is `sha256(repo_tag + entrypoint_content)`. Because the
-agent and passthrough entrypoint scripts have different content, they produce
+The overlay image hash is computed via `_content_hash()` over the full overlay
+`ImageBuildSpec`: the generated overlay Dockerfile (which includes
+`FROM <repo_tag>`) plus the entrypoint file name and content. Because the agent
+and passthrough entrypoint scripts have different content, they produce
 different overlay image tags even when built from the same repo image. Both
 variants benefit from the same repo image cache.
 

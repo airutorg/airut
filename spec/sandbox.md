@@ -130,7 +130,8 @@ lines to the callback as they appear.
 - Egress network for proxy internet access
 - Proxy container image
 - CA certificate for TLS interception
-- Container image cache (two-layer, content-addressed)
+- Container image cache (`ImageCache` — two-layer, content-addressed, persistent
+  age detection via `podman image inspect`)
 
 **Task-scoped** (per execution context):
 

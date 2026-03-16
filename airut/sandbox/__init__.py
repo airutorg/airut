@@ -16,7 +16,7 @@ Two task types are provided:
 - ``CommandTask`` -- runs arbitrary commands in the sandbox.
 """
 
-from airut.sandbox._image import ImageBuildError
+from airut.sandbox._image_cache import ImageBuildError
 from airut.sandbox._output import extract_error_summary
 from airut.sandbox._proxy import ProxyError
 from airut.sandbox.event_log import EVENTS_FILE_NAME, EventLog

@@ -3,7 +3,7 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Tests for lib/sandbox/_image.py -- two-layer container image building."""
+"""Tests for lib/sandbox/_image_cache.py -- unified image cache."""
 
 import subprocess
 from datetime import UTC, datetime, timedelta
@@ -11,423 +11,515 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from airut.sandbox._image import (
+from airut.sandbox._image_cache import (
     ImageBuildError,
+    ImageBuildSpec,
+    ImageCache,
     _content_hash,
-    _ImageInfo,
-    _is_image_fresh,
-    build_overlay_image,
-    build_repo_image,
+    _format_age,
+    _parse_timestamp,
 )
 
 
 class TestContentHash:
     """Tests for _content_hash function."""
 
-    def test_consistent_bytes(self) -> None:
-        """Returns consistent hex digest for same bytes input."""
-        h1 = _content_hash(b"hello")
-        h2 = _content_hash(b"hello")
+    def test_consistent_hash(self) -> None:
+        """Returns consistent hex digest for same spec."""
+        spec = ImageBuildSpec(kind="repo", dockerfile=b"FROM ubuntu:24.04\n")
+        h1 = _content_hash(spec)
+        h2 = _content_hash(spec)
         assert h1 == h2
 
-    def test_different_input_different_hash(self) -> None:
-        """Returns different hex digest for different input."""
-        h1 = _content_hash(b"hello")
-        h2 = _content_hash(b"world")
-        assert h1 != h2
+    def test_different_dockerfile_different_hash(self) -> None:
+        """Returns different hex digest for different Dockerfile."""
+        s1 = ImageBuildSpec(kind="repo", dockerfile=b"FROM ubuntu:24.04\n")
+        s2 = ImageBuildSpec(kind="repo", dockerfile=b"FROM ubuntu:22.04\n")
+        assert _content_hash(s1) != _content_hash(s2)
 
     def test_returns_64_char_hex(self) -> None:
         """Returns 64-character SHA-256 hex digest."""
-        h = _content_hash(b"test")
+        spec = ImageBuildSpec(kind="repo", dockerfile=b"test")
+        h = _content_hash(spec)
         assert len(h) == 64
 
-    def test_accepts_str(self) -> None:
-        """Accepts string input and produces same hash as equivalent bytes."""
-        h1 = _content_hash("hello")
-        h2 = _content_hash(b"hello")
-        assert h1 == h2
-
-
-class TestIsImageFresh:
-    """Tests for _is_image_fresh function."""
-
-    def test_fresh_image(self) -> None:
-        """Returns True for recently built image."""
-        info = _ImageInfo(tag="test:123", built_at=datetime.now(UTC))
-        assert _is_image_fresh(info, max_age_hours=24) is True
-
-    def test_stale_image(self) -> None:
-        """Returns False for old image past max age."""
-        info = _ImageInfo(
-            tag="test:123",
-            built_at=datetime.now(UTC) - timedelta(hours=25),
+    def test_context_files_affect_hash(self) -> None:
+        """Context files are included in the hash."""
+        s1 = ImageBuildSpec(
+            kind="repo",
+            dockerfile=b"FROM ubuntu:24.04\n",
+            context_files={"a.txt": b"content1"},
         )
-        assert _is_image_fresh(info, max_age_hours=24) is False
-
-    def test_custom_max_age(self) -> None:
-        """Respects custom max_age_hours."""
-        info = _ImageInfo(
-            tag="test:123",
-            built_at=datetime.now(UTC) - timedelta(hours=2),
+        s2 = ImageBuildSpec(
+            kind="repo",
+            dockerfile=b"FROM ubuntu:24.04\n",
+            context_files={"a.txt": b"content2"},
         )
-        assert _is_image_fresh(info, max_age_hours=1) is False
-        assert _is_image_fresh(info, max_age_hours=3) is True
+        assert _content_hash(s1) != _content_hash(s2)
 
-    def test_boundary_slightly_under_age(self) -> None:
-        """Image slightly under max age is considered fresh."""
-        info = _ImageInfo(
-            tag="test:123",
-            built_at=datetime.now(UTC) - timedelta(hours=23, minutes=59),
+    def test_context_file_names_affect_hash(self) -> None:
+        """Context file names are included in the hash."""
+        s1 = ImageBuildSpec(
+            kind="repo",
+            dockerfile=b"FROM ubuntu:24.04\n",
+            context_files={"a.txt": b"content"},
         )
-        assert _is_image_fresh(info, max_age_hours=24) is True
+        s2 = ImageBuildSpec(
+            kind="repo",
+            dockerfile=b"FROM ubuntu:24.04\n",
+            context_files={"b.txt": b"content"},
+        )
+        assert _content_hash(s1) != _content_hash(s2)
+
+    def test_context_files_sorted_order(self) -> None:
+        """Hash is deterministic regardless of context file insertion order."""
+        s1 = ImageBuildSpec(
+            kind="repo",
+            dockerfile=b"FROM ubuntu:24.04\n",
+            context_files={"b.txt": b"2", "a.txt": b"1"},
+        )
+        s2 = ImageBuildSpec(
+            kind="repo",
+            dockerfile=b"FROM ubuntu:24.04\n",
+            context_files={"a.txt": b"1", "b.txt": b"2"},
+        )
+        assert _content_hash(s1) == _content_hash(s2)
 
 
-class TestBuildRepoImage:
-    """Tests for build_repo_image function."""
+class TestImageBuildSpec:
+    """Tests for ImageBuildSpec dataclass."""
 
-    @patch("airut.sandbox._image.subprocess.run")
-    def test_builds_and_returns_tag(self, mock_run: MagicMock) -> None:
-        """Builds repo image and returns tagged image name."""
-        mock_run.return_value = MagicMock(returncode=0)
-        repo_images: dict[str, _ImageInfo] = {}
+    def test_create(self) -> None:
+        """Creates ImageBuildSpec with required fields."""
+        spec = ImageBuildSpec(kind="repo", dockerfile=b"FROM ubuntu\n")
+        assert spec.kind == "repo"
+        assert spec.dockerfile == b"FROM ubuntu\n"
+        assert spec.context_files == {}
 
-        dockerfile = b"FROM ubuntu:24.04\nRUN echo hello\n"
-        tag = build_repo_image("podman", dockerfile, {}, repo_images, 24)
+    def test_create_with_context(self) -> None:
+        """Creates ImageBuildSpec with context files."""
+        spec = ImageBuildSpec(
+            kind="proxy",
+            dockerfile=b"FROM python:3.13\n",
+            context_files={"script.py": b"print('hello')"},
+        )
+        assert spec.context_files == {"script.py": b"print('hello')"}
 
+    def test_frozen(self) -> None:
+        """ImageBuildSpec is immutable."""
+        spec = ImageBuildSpec(kind="repo", dockerfile=b"FROM ubuntu\n")
+        with pytest.raises(AttributeError):
+            spec.kind = "overlay"  # type: ignore[misc]
+
+
+class TestImageCacheTagFor:
+    """Tests for ImageCache.tag_for()."""
+
+    def test_tag_format(self) -> None:
+        """Tag follows {prefix}-{kind}:{hash} format."""
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        spec = ImageBuildSpec(kind="repo", dockerfile=b"FROM ubuntu\n")
+        tag = cache.tag_for(spec)
         assert tag.startswith("airut-repo:")
         assert len(tag.split(":")[1]) == 64
+
+    def test_custom_prefix(self) -> None:
+        """Tag uses the configured resource prefix."""
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut-cli",
+            max_age_hours=24,
+        )
+        spec = ImageBuildSpec(kind="proxy", dockerfile=b"FROM python\n")
+        tag = cache.tag_for(spec)
+        assert tag.startswith("airut-cli-proxy:")
+
+    def test_deterministic(self) -> None:
+        """Same spec always produces the same tag."""
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        spec = ImageBuildSpec(kind="repo", dockerfile=b"FROM ubuntu\n")
+        assert cache.tag_for(spec) == cache.tag_for(spec)
+
+
+class TestImageCacheEnsure:
+    """Tests for ImageCache.ensure()."""
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_first_build_no_cache_false(self, mock_run: MagicMock) -> None:
+        """First build (image does not exist) uses no_cache=False."""
+        # First call: image inspect returns non-zero (not found)
+        # Second call: podman build succeeds
+        mock_run.side_effect = [
+            MagicMock(returncode=1),  # inspect: not found
+            MagicMock(returncode=0),  # build: success
+        ]
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        spec = ImageBuildSpec(kind="repo", dockerfile=b"FROM ubuntu:24.04\n")
+        tag = cache.ensure(spec)
+
+        assert tag.startswith("airut-repo:")
+        # Build command should NOT have --no-cache
+        build_call = mock_run.call_args_list[1]
+        build_cmd = build_call[0][0]
+        assert "--no-cache" not in build_cmd
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_fresh_image_reused(self, mock_run: MagicMock) -> None:
+        """Fresh existing image is reused without rebuild."""
+        now = datetime.now(UTC)
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=now.isoformat(),
+        )
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        spec = ImageBuildSpec(kind="repo", dockerfile=b"FROM ubuntu:24.04\n")
+        tag = cache.ensure(spec)
+
+        assert tag.startswith("airut-repo:")
+        # Only inspect was called, no build
         mock_run.assert_called_once()
         cmd = mock_run.call_args[0][0]
-        assert cmd[0] == "podman"
-        assert cmd[1] == "build"
-        assert "-t" in cmd
-        assert tag in cmd
+        assert cmd[1] == "image"
+        assert cmd[2] == "inspect"
 
-    @patch("airut.sandbox._image.subprocess.run")
-    def test_caches_on_second_call(self, mock_run: MagicMock) -> None:
-        """Reuses cached image on second call with same content."""
-        mock_run.return_value = MagicMock(returncode=0)
-        repo_images: dict[str, _ImageInfo] = {}
-
-        dockerfile = b"FROM ubuntu:24.04\n"
-        tag1 = build_repo_image("podman", dockerfile, {}, repo_images, 24)
-        tag2 = build_repo_image("podman", dockerfile, {}, repo_images, 24)
-
-        assert tag1 == tag2
-        mock_run.assert_called_once()
-
-    @patch("airut.sandbox._image.subprocess.run")
-    def test_rebuilds_when_stale(self, mock_run: MagicMock) -> None:
-        """Rebuilds image when cached version is stale."""
-        mock_run.return_value = MagicMock(returncode=0)
-
-        dockerfile = b"FROM ubuntu:24.04\n"
-        content_hash = _content_hash(dockerfile)
-        repo_images: dict[str, _ImageInfo] = {
-            content_hash: _ImageInfo(
-                tag=f"airut-repo:{content_hash}",
-                built_at=datetime.now(UTC) - timedelta(hours=25),
-            )
-        }
-
-        build_repo_image("podman", dockerfile, {}, repo_images, 24)
-        mock_run.assert_called_once()
-
-    @patch("airut.sandbox._image.subprocess.run")
-    def test_context_files_included_in_hash(self, mock_run: MagicMock) -> None:
-        """Context files affect the content hash."""
-        mock_run.return_value = MagicMock(returncode=0)
-
-        dockerfile = b"FROM ubuntu:24.04\n"
-        context1 = {"file1.txt": b"content1"}
-        context2 = {"file1.txt": b"content2"}
-
-        repo_images1: dict[str, _ImageInfo] = {}
-        repo_images2: dict[str, _ImageInfo] = {}
-
-        tag1 = build_repo_image(
-            "podman", dockerfile, context1, repo_images1, 24
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_stale_image_rebuilt_with_no_cache(
+        self, mock_run: MagicMock
+    ) -> None:
+        """Stale image is rebuilt with --no-cache."""
+        old_time = (datetime.now(UTC) - timedelta(hours=25)).isoformat()
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=old_time),  # inspect: stale
+            MagicMock(returncode=0),  # build: success
+        ]
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
         )
-        tag2 = build_repo_image(
-            "podman", dockerfile, context2, repo_images2, 24
+        spec = ImageBuildSpec(kind="repo", dockerfile=b"FROM ubuntu:24.04\n")
+        cache.ensure(spec)
+
+        # Build should have --no-cache
+        build_call = mock_run.call_args_list[1]
+        build_cmd = build_call[0][0]
+        assert "--no-cache" in build_cmd
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_force_rebuilds_with_no_cache(self, mock_run: MagicMock) -> None:
+        """force=True rebuilds with --no-cache even when fresh."""
+        now = datetime.now(UTC)
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=now.isoformat()),  # inspect: fresh
+            MagicMock(returncode=0),  # build: success
+        ]
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
         )
+        spec = ImageBuildSpec(kind="repo", dockerfile=b"FROM ubuntu:24.04\n")
+        cache.ensure(spec, force=True)
 
-        assert tag1 != tag2
+        build_call = mock_run.call_args_list[1]
+        build_cmd = build_call[0][0]
+        assert "--no-cache" in build_cmd
 
-    @patch("airut.sandbox._image.subprocess.run")
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_max_age_zero_always_rebuilds(self, mock_run: MagicMock) -> None:
+        """max_age_hours=0 rebuilds with --no-cache."""
+        now = datetime.now(UTC)
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=now.isoformat()),  # inspect: exists
+            MagicMock(returncode=0),  # build: success
+        ]
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=0,
+        )
+        spec = ImageBuildSpec(kind="repo", dockerfile=b"FROM ubuntu:24.04\n")
+        cache.ensure(spec)
+
+        build_call = mock_run.call_args_list[1]
+        build_cmd = build_call[0][0]
+        assert "--no-cache" in build_cmd
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_build_failure_raises_error(self, mock_run: MagicMock) -> None:
+        """Raises ImageBuildError when build fails."""
+        mock_run.side_effect = [
+            MagicMock(returncode=1),  # inspect: not found
+            subprocess.CalledProcessError(
+                1, ["podman", "build"], stderr="build error"
+            ),
+        ]
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        spec = ImageBuildSpec(kind="repo", dockerfile=b"FROM ubuntu:24.04\n")
+
+        with pytest.raises(ImageBuildError, match="Image build failed"):
+            cache.ensure(spec)
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_custom_container_command(self, mock_run: MagicMock) -> None:
+        """Uses specified container command."""
+        mock_run.side_effect = [
+            MagicMock(returncode=1),  # inspect: not found
+            MagicMock(returncode=0),  # build: success
+        ]
+        cache = ImageCache(
+            container_command="docker",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        spec = ImageBuildSpec(kind="repo", dockerfile=b"FROM ubuntu:24.04\n")
+        cache.ensure(spec)
+
+        # Both inspect and build use docker
+        inspect_cmd = mock_run.call_args_list[0][0][0]
+        build_cmd = mock_run.call_args_list[1][0][0]
+        assert inspect_cmd[0] == "docker"
+        assert build_cmd[0] == "docker"
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
     def test_context_files_written_to_build_dir(
         self, mock_run: MagicMock
     ) -> None:
         """Context files are written into the build context directory."""
-        mock_run.return_value = MagicMock(returncode=0)
-        repo_images: dict[str, _ImageInfo] = {}
-
-        dockerfile = b"FROM ubuntu:24.04\nCOPY gitconfig /root/.gitconfig\n"
-        context_files = {"gitconfig": b"[user]\n\tname = Test\n"}
-
-        tag = build_repo_image(
-            "podman", dockerfile, context_files, repo_images, 24
+        mock_run.side_effect = [
+            MagicMock(returncode=1),  # inspect: not found
+            MagicMock(returncode=0),  # build: success
+        ]
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
         )
+        spec = ImageBuildSpec(
+            kind="repo",
+            dockerfile=b"FROM ubuntu:24.04\nCOPY gitconfig /root/.gitconfig\n",
+            context_files={"gitconfig": b"[user]\n\tname = Test\n"},
+        )
+        tag = cache.ensure(spec)
 
         assert tag.startswith("airut-repo:")
-        mock_run.assert_called_once()
-        cmd = mock_run.call_args[0][0]
-        assert cmd[0] == "podman"
-        assert cmd[1] == "build"
+        build_cmd = mock_run.call_args_list[1][0][0]
+        assert build_cmd[0] == "podman"
+        assert build_cmd[1] == "build"
 
-    @patch("airut.sandbox._image.subprocess.run")
-    def test_build_failure_raises_error(self, mock_run: MagicMock) -> None:
-        """Raises ImageBuildError when build command fails."""
-        mock_run.side_effect = subprocess.CalledProcessError(
-            1, ["podman", "build"], stderr="build error"
-        )
-        repo_images: dict[str, _ImageInfo] = {}
-
-        with pytest.raises(ImageBuildError, match="Repo image build failed"):
-            build_repo_image(
-                "podman", b"FROM ubuntu:24.04\n", {}, repo_images, 24
-            )
-
-    @patch("airut.sandbox._image.subprocess.run")
-    def test_build_failure_no_stderr(self, mock_run: MagicMock) -> None:
-        """Handles build failure with no stderr output."""
-        mock_run.side_effect = subprocess.CalledProcessError(
-            1, ["podman", "build"], stderr=""
-        )
-        repo_images: dict[str, _ImageInfo] = {}
-
-        with pytest.raises(ImageBuildError, match="Repo image build failed"):
-            build_repo_image(
-                "podman", b"FROM ubuntu:24.04\n", {}, repo_images, 24
-            )
-
-    @patch("airut.sandbox._image.subprocess.run")
-    def test_custom_container_command(self, mock_run: MagicMock) -> None:
-        """Uses specified container command instead of default."""
-        mock_run.return_value = MagicMock(returncode=0)
-        repo_images: dict[str, _ImageInfo] = {}
-
-        build_repo_image("docker", b"FROM ubuntu:24.04\n", {}, repo_images, 24)
-
-        cmd = mock_run.call_args[0][0]
-        assert cmd[0] == "docker"
-
-    @patch("airut.sandbox._image.subprocess.run")
-    def test_stores_in_cache_after_build(self, mock_run: MagicMock) -> None:
-        """Stores built image info in the repo_images cache dict."""
-        mock_run.return_value = MagicMock(returncode=0)
-        repo_images: dict[str, _ImageInfo] = {}
-
-        dockerfile = b"FROM ubuntu:24.04\n"
-        build_repo_image("podman", dockerfile, {}, repo_images, 24)
-
-        assert len(repo_images) == 1
-        info = next(iter(repo_images.values()))
-        assert info.tag.startswith("airut-repo:")
-        assert isinstance(info.built_at, datetime)
-
-
-class TestBuildOverlayImage:
-    """Tests for build_overlay_image function."""
-
-    @patch("airut.sandbox._image.get_entrypoint_content")
-    @patch("airut.sandbox._image.subprocess.run")
-    def test_builds_overlay(
-        self, mock_run: MagicMock, mock_entrypoint: MagicMock
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_rejects_path_traversal_in_context_files(
+        self, mock_run: MagicMock
     ) -> None:
-        """Builds overlay image on top of repo image."""
-        mock_run.return_value = MagicMock(returncode=0)
-        mock_entrypoint.return_value = b"#!/bin/bash\nexec claude\n"
-        overlay_images: dict[str, _ImageInfo] = {}
-
-        tag = build_overlay_image(
-            "podman", "airut-repo:abc123", overlay_images, 24
+        """Context file names with path separators are rejected."""
+        mock_run.side_effect = [
+            MagicMock(returncode=1),  # inspect: not found
+        ]
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        spec = ImageBuildSpec(
+            kind="repo",
+            dockerfile=b"FROM ubuntu:24.04\n",
+            context_files={"../escape.txt": b"malicious"},
         )
 
-        assert tag.startswith("airut:")
-        mock_run.assert_called_once()
+        with pytest.raises(ValueError, match="Invalid context file name"):
+            cache.ensure(spec)
 
-    @patch("airut.sandbox._image.get_entrypoint_content")
-    @patch("airut.sandbox._image.subprocess.run")
-    def test_overlay_caches(
-        self, mock_run: MagicMock, mock_entrypoint: MagicMock
+
+class TestFormatAge:
+    """Tests for _format_age()."""
+
+    def test_hours_and_minutes(self) -> None:
+        """Ages >= 1h show hours and minutes."""
+        assert _format_age(timedelta(hours=25, minutes=30)) == "25h30m"
+
+    def test_minutes_and_seconds(self) -> None:
+        """Ages >= 1m but < 1h show minutes and seconds."""
+        assert _format_age(timedelta(minutes=5, seconds=42)) == "5m42s"
+
+    def test_seconds_only(self) -> None:
+        """Ages < 1m show seconds only."""
+        assert _format_age(timedelta(seconds=7)) == "7s"
+
+    def test_zero(self) -> None:
+        """Zero age shows 0s."""
+        assert _format_age(timedelta()) == "0s"
+
+
+class TestParseTimestamp:
+    """Tests for _parse_timestamp()."""
+
+    def test_go_time_format_with_nanoseconds(self) -> None:
+        """Parses Go time.Time.String() format from podman."""
+        raw = "2026-03-15 16:19:16.937789677 +0000 UTC"
+        dt = _parse_timestamp(raw)
+        assert dt is not None
+        assert dt.year == 2026
+        assert dt.month == 3
+        assert dt.day == 15
+        assert dt.hour == 16
+        assert dt.minute == 19
+        assert dt.second == 16
+        assert dt.microsecond == 937789
+        assert dt.tzinfo is not None
+
+    def test_go_time_format_variable_fraction(self) -> None:
+        """Parses Go format with fewer fractional digits."""
+        raw = "2026-03-14 10:46:10.84137945 +0000 UTC"
+        dt = _parse_timestamp(raw)
+        assert dt is not None
+        assert dt.hour == 10
+        assert dt.minute == 46
+        assert dt.second == 10
+        assert dt.microsecond == 841379
+
+    def test_go_time_format_no_fraction(self) -> None:
+        """Parses Go format without fractional seconds."""
+        raw = "2026-01-01 00:00:00 +0000 UTC"
+        dt = _parse_timestamp(raw)
+        assert dt is not None
+        assert dt.microsecond == 0
+
+    def test_go_time_format_negative_offset(self) -> None:
+        """Parses Go format with negative timezone offset."""
+        raw = "2026-06-15 08:30:00.123456789 -0500 CDT"
+        dt = _parse_timestamp(raw)
+        assert dt is not None
+        assert dt.hour == 8
+        from datetime import timedelta, timezone
+
+        assert dt.tzinfo == timezone(timedelta(hours=-5))
+
+    def test_iso_format(self) -> None:
+        """Parses ISO 8601 format (docker)."""
+        dt = _parse_timestamp("2026-01-15T10:30:00+00:00")
+        assert dt is not None
+        assert dt.year == 2026
+        assert dt.month == 1
+        assert dt.day == 15
+
+    def test_naive_iso_gets_utc(self) -> None:
+        """Naive ISO datetime gets UTC timezone attached."""
+        dt = _parse_timestamp("2026-01-15T10:30:00")
+        assert dt is not None
+        assert dt.tzinfo is not None
+
+    def test_returns_none_for_garbage(self) -> None:
+        """Returns None for unparseable input."""
+        assert _parse_timestamp("not-a-timestamp") is None
+
+
+class TestImageCacheGetImageCreated:
+    """Tests for ImageCache.get_image_created()."""
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_returns_datetime_for_existing_image(
+        self, mock_run: MagicMock
     ) -> None:
-        """Reuses cached overlay on second call with same inputs."""
-        mock_run.return_value = MagicMock(returncode=0)
-        mock_entrypoint.return_value = b"#!/bin/bash\nexec claude\n"
-        overlay_images: dict[str, _ImageInfo] = {}
-
-        tag1 = build_overlay_image(
-            "podman", "airut-repo:abc123", overlay_images, 24
+        """Returns timezone-aware datetime for existing image."""
+        ts = "2026-01-15 10:30:00.123456789 +0000 UTC"
+        mock_run.return_value = MagicMock(returncode=0, stdout=ts)
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
         )
-        tag2 = build_overlay_image(
-            "podman", "airut-repo:abc123", overlay_images, 24
+        result = cache.get_image_created("airut-repo:abc123")
+        assert result is not None
+        assert result.year == 2026
+        assert result.month == 1
+        assert result.day == 15
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_returns_none_for_missing_image(self, mock_run: MagicMock) -> None:
+        """Returns None when image does not exist."""
+        mock_run.return_value = MagicMock(returncode=1)
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
         )
+        assert cache.get_image_created("airut-repo:nonexistent") is None
 
-        assert tag1 == tag2
-        mock_run.assert_called_once()
-
-    @patch("airut.sandbox._image.get_entrypoint_content")
-    @patch("airut.sandbox._image.subprocess.run")
-    def test_overlay_rebuilds_when_stale(
-        self, mock_run: MagicMock, mock_entrypoint: MagicMock
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_returns_none_for_unparseable_timestamp(
+        self, mock_run: MagicMock
     ) -> None:
-        """Rebuilds overlay when cached version is stale."""
-        mock_run.return_value = MagicMock(returncode=0)
-        mock_entrypoint.return_value = b"#!/bin/bash\nexec claude\n"
-
-        repo_tag = "airut-repo:abc123"
-        entrypoint = b"#!/bin/bash\nexec claude\n"
-        overlay_hash = _content_hash(repo_tag.encode() + entrypoint)
-
-        overlay_images: dict[str, _ImageInfo] = {
-            overlay_hash: _ImageInfo(
-                tag=f"airut:{overlay_hash}",
-                built_at=datetime.now(UTC) - timedelta(hours=25),
-            )
-        }
-
-        build_overlay_image("podman", repo_tag, overlay_images, 24)
-        mock_run.assert_called_once()
-
-    @patch("airut.sandbox._image.get_entrypoint_content")
-    @patch("airut.sandbox._image.subprocess.run")
-    def test_overlay_failure_raises_error(
-        self, mock_run: MagicMock, mock_entrypoint: MagicMock
-    ) -> None:
-        """Raises ImageBuildError when overlay build fails."""
-        mock_run.side_effect = subprocess.CalledProcessError(
-            1, ["podman", "build"], stderr="overlay error"
+        """Returns None and logs warning for unparseable timestamp."""
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="not-a-timestamp"
         )
-        mock_entrypoint.return_value = b"#!/bin/bash\n"
-        overlay_images: dict[str, _ImageInfo] = {}
-
-        with pytest.raises(ImageBuildError, match="Overlay image build failed"):
-            build_overlay_image(
-                "podman", "airut-repo:abc123", overlay_images, 24
-            )
-
-    @patch("airut.sandbox._image.get_entrypoint_content")
-    @patch("airut.sandbox._image.subprocess.run")
-    def test_overlay_failure_no_stderr(
-        self, mock_run: MagicMock, mock_entrypoint: MagicMock
-    ) -> None:
-        """Handles overlay build failure with no stderr output."""
-        mock_run.side_effect = subprocess.CalledProcessError(
-            1, ["podman", "build"], stderr=""
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
         )
-        mock_entrypoint.return_value = b"#!/bin/bash\n"
-        overlay_images: dict[str, _ImageInfo] = {}
-
-        with pytest.raises(ImageBuildError, match="Overlay image build failed"):
-            build_overlay_image(
-                "podman", "airut-repo:abc123", overlay_images, 24
-            )
-
-    @patch("airut.sandbox._image.get_entrypoint_content")
-    @patch("airut.sandbox._image.subprocess.run")
-    def test_different_repo_tag_produces_different_overlay(
-        self, mock_run: MagicMock, mock_entrypoint: MagicMock
-    ) -> None:
-        """Different repo tags produce different overlay image tags."""
-        mock_run.return_value = MagicMock(returncode=0)
-        mock_entrypoint.return_value = b"#!/bin/bash\nexec claude\n"
-
-        overlay1: dict[str, _ImageInfo] = {}
-        overlay2: dict[str, _ImageInfo] = {}
-
-        tag1 = build_overlay_image("podman", "airut-repo:aaa", overlay1, 24)
-        tag2 = build_overlay_image("podman", "airut-repo:bbb", overlay2, 24)
-
-        assert tag1 != tag2
-
-    @patch("airut.sandbox._image.get_entrypoint_content")
-    @patch("airut.sandbox._image.subprocess.run")
-    def test_stores_in_cache_after_build(
-        self, mock_run: MagicMock, mock_entrypoint: MagicMock
-    ) -> None:
-        """Stores built overlay info in the overlay_images cache dict."""
-        mock_run.return_value = MagicMock(returncode=0)
-        mock_entrypoint.return_value = b"#!/bin/bash\nexec claude\n"
-        overlay_images: dict[str, _ImageInfo] = {}
-
-        build_overlay_image("podman", "airut-repo:abc123", overlay_images, 24)
-
-        assert len(overlay_images) == 1
-        info = next(iter(overlay_images.values()))
-        assert info.tag.startswith("airut:")
-        assert isinstance(info.built_at, datetime)
+        assert cache.get_image_created("airut-repo:abc123") is None
 
 
-class TestBuildOverlayPassthrough:
-    """Tests for build_overlay_image with passthrough parameter."""
+class TestImageCacheIsStale:
+    """Tests for ImageCache._is_stale()."""
 
-    @patch("airut.sandbox._image.get_entrypoint_content")
-    @patch("airut.sandbox._image.subprocess.run")
-    def test_passthrough_false_by_default(
-        self, mock_run: MagicMock, mock_entrypoint: MagicMock
-    ) -> None:
-        """Passthrough defaults to False, calls get_entrypoint_content()."""
-        mock_run.return_value = MagicMock(returncode=0)
-        mock_entrypoint.return_value = b"#!/bin/bash\nexec claude\n"
-        overlay_images: dict[str, _ImageInfo] = {}
-
-        build_overlay_image("podman", "airut-repo:abc123", overlay_images, 24)
-
-        mock_entrypoint.assert_called_once_with(passthrough=False)
-
-    @patch("airut.sandbox._image.get_entrypoint_content")
-    @patch("airut.sandbox._image.subprocess.run")
-    def test_passthrough_true(
-        self, mock_run: MagicMock, mock_entrypoint: MagicMock
-    ) -> None:
-        """passthrough=True passes through to get_entrypoint_content."""
-        mock_run.return_value = MagicMock(returncode=0)
-        mock_entrypoint.return_value = b'#!/bin/bash\nexec "$@"\n'
-        overlay_images: dict[str, _ImageInfo] = {}
-
-        build_overlay_image(
-            "podman",
-            "airut-repo:abc123",
-            overlay_images,
-            24,
-            passthrough=True,
+    def test_fresh_image(self) -> None:
+        """Recently created image is not stale."""
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
         )
-
-        mock_entrypoint.assert_called_once_with(passthrough=True)
-
-    @patch("airut.sandbox._image.get_entrypoint_content")
-    @patch("airut.sandbox._image.subprocess.run")
-    def test_different_entrypoints_different_tags(
-        self, mock_run: MagicMock, mock_entrypoint: MagicMock
-    ) -> None:
-        """Different entrypoint content produces different overlay tags."""
-        mock_run.return_value = MagicMock(returncode=0)
-
-        overlay1: dict[str, _ImageInfo] = {}
-        overlay2: dict[str, _ImageInfo] = {}
-
-        mock_entrypoint.return_value = b"#!/bin/bash\nexec claude\n"
-        tag1 = build_overlay_image("podman", "airut-repo:abc123", overlay1, 24)
-
-        mock_entrypoint.return_value = b'#!/bin/bash\nexec "$@"\n'
-        tag2 = build_overlay_image(
-            "podman",
-            "airut-repo:abc123",
-            overlay2,
-            24,
-            passthrough=True,
-        )
-
-        assert tag1 != tag2
-
-
-class TestImageInfo:
-    """Tests for _ImageInfo dataclass."""
-
-    def test_create(self) -> None:
-        """Creates _ImageInfo with tag and built_at."""
         now = datetime.now(UTC)
-        info = _ImageInfo(tag="airut:test", built_at=now)
-        assert info.tag == "airut:test"
-        assert info.built_at == now
+        assert cache._is_stale(now) is False
+
+    def test_stale_image(self) -> None:
+        """Old image past max age is stale."""
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        old = datetime.now(UTC) - timedelta(hours=25)
+        assert cache._is_stale(old) is True
+
+    def test_boundary_slightly_under_max_age(self) -> None:
+        """Image slightly under max age is not stale."""
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        almost = datetime.now(UTC) - timedelta(hours=23, minutes=59)
+        assert cache._is_stale(almost) is False
+
+    def test_custom_max_age(self) -> None:
+        """Respects custom max_age_hours."""
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=1,
+        )
+        two_hours_ago = datetime.now(UTC) - timedelta(hours=2)
+        assert cache._is_stale(two_hours_ago) is True
