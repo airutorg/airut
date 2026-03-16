@@ -13,7 +13,11 @@ dependencies = [
 # (cookie attribute injection). Safe override: tornado 6.5.5 is a patch
 # release with no breaking API changes. Remove when mitmproxy releases a
 # version that allows tornado >=6.5.5.
-override-dependencies = ["tornado>=6.5.5"]
+#
+# Override pyopenssl<=25.3.0 to fix GHSA-vp96-hxj8-p424. Safe override:
+# pyOpenSSL 26.0.0 is a compatible release. Remove when mitmproxy allows
+# pyopenssl >=26.0.0.
+override-dependencies = ["tornado>=6.5.5", "pyopenssl>=26.0.0"]
 
 [tool.uv-secure.vulnerability_criteria]
 # Flask <=3.1.2 pinned by mitmproxy 12.2.1 (GHSA-68rp-wp8r-4726: missing
