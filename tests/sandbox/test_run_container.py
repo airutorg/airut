@@ -696,3 +696,37 @@ class TestRunContainer:
 
         call_args = mock_create.call_args[0]
         assert call_args[0] == "docker"
+
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_stream_buffer_limit_raised(
+        self, mock_create: MagicMock
+    ) -> None:
+        """run_container sets a large stream buffer limit for long lines.
+
+        Claude Code can emit single JSON lines exceeding the default 64 KiB
+        asyncio StreamReader limit.  Verify that create_subprocess_exec is
+        called with a limit well above the default.
+        """
+        tracker = _ProcessTracker()
+        mock_process = _make_mock_process()
+        mock_create.return_value = mock_process
+
+        await run_container(
+            container_command="podman",
+            image_tag="airut:test",
+            mounts=[],
+            env=ContainerEnv(),
+            resource_limits=ResourceLimits(),
+            network_args=[],
+            command=["cmd"],
+            stdin_data=None,
+            on_stdout_line=None,
+            on_stderr_line=None,
+            timeout=None,
+            process_tracker=tracker,
+        )
+
+        call_kwargs = mock_create.call_args[1]
+        # Default asyncio limit is 2**16 = 64 KiB -- must be much larger
+        assert "limit" in call_kwargs
+        assert call_kwargs["limit"] > 2**16

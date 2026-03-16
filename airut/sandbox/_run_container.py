@@ -220,11 +220,14 @@ async def run_container(
 
     start_time = time.time()
 
+    # Claude Code can emit single JSON lines well over the default 64 KiB
+    # asyncio StreamReader limit, so raise it to 10 MiB.
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        limit=10 * 1024 * 1024,
     )
 
     # Track process PID for stop()
