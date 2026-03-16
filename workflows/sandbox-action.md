@@ -71,9 +71,9 @@ update the `VERSION` file.
 | Ref              | VERSION file | airut-sandbox source | Purpose                          |
 | ---------------- | ------------ | -------------------- | -------------------------------- |
 | `main`           | `main`       | `git+.../airut@main` | Development, airut repo's own CI |
-| `releases/v0`    | `0.15.0`     | PyPI `airut==0.15.0` | Protected release branch         |
-| `@v0.15.0` (tag) | `0.15.0`     | PyPI `airut==0.15.0` | Pinned version                   |
-| `@v0` (tag)      | `0.15.0`     | PyPI `airut==0.15.0` | Floating major (latest 0.x)      |
+| `releases/v0`    | `0.16.0`     | PyPI `airut==0.16.0` | Protected release branch         |
+| `@v0.16.0` (tag) | `0.16.0`     | PyPI `airut==0.16.0` | Pinned version                   |
+| `@v0` (tag)      | `0.16.0`     | PyPI `airut==0.16.0` | Floating major (latest 0.x)      |
 
 **`main` is never modified during releases.** The `VERSION` file on `main`
 always contains `main`. Only `releases/*` branches have PyPI versions in
@@ -111,32 +111,32 @@ When an action implementation change on `main` needs to ship to consumers:
 
 ## Releasing (After Airut Release)
 
-When a new airut version is published to PyPI (e.g., `v0.16.0`):
+When a new airut version is published to PyPI (e.g., `v0.17.0`):
 
 1. Create a branch off the release branch and update `VERSION`:
 
    ```bash
    cd /storage/sandbox-action
    git fetch origin
-   git checkout -b bump/v0.16.0 origin/releases/v0
-   echo "0.16.0" > VERSION
+   git checkout -b bump/v0.17.0 origin/releases/v0
+   echo "0.17.0" > VERSION
    git add VERSION
-   git commit -m "Bump airut to v0.16.0"
+   git commit -m "Bump airut to v0.17.0"
    git push -u origin HEAD
    ```
 
 2. Create a PR **targeting `releases/v0`**:
 
    ```bash
-   gh pr create --base releases/v0 --title "Bump airut to v0.16.0" \
-     --body "Updates VERSION to 0.16.0 for the new airut release."
+   gh pr create --base releases/v0 --title "Bump airut to v0.17.0" \
+     --body "Updates VERSION to 0.17.0 for the new airut release."
    ```
 
 3. After the PR is merged, create draft releases via `gh release create`:
 
    ```bash
    # Exact version tag
-   gh release create v0.16.0 --draft --title "v0.16.0" \
+   gh release create v0.17.0 --draft --title "v0.17.0" \
      --target releases/v0 --notes "Release notes here..."
 
    # Floating major tag (delete old release first if it exists)
