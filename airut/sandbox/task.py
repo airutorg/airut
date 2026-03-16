@@ -492,6 +492,7 @@ class CommandTask:
 
                 def on_stdout_line(line: str) -> None:
                     sys.stdout.write(line)
+                    sys.stdout.flush()
                     if on_output is not None:
                         on_output(line)
 

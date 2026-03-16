@@ -202,7 +202,7 @@ class TestCommandTaskExecute:
     def test_stdout_written_to_sys_stdout(
         self, mock_sys: MagicMock, mock_popen: MagicMock, tmp_path: Path
     ) -> None:
-        """execute() writes stdout lines to sys.stdout."""
+        """execute() writes stdout lines to sys.stdout and flushes."""
         task = _make_command_task(tmp_path)
 
         mock_process = create_mock_popen(
@@ -214,6 +214,7 @@ class TestCommandTaskExecute:
         task.execute(["cmd"])
 
         mock_sys.stdout.write.assert_called()
+        mock_sys.stdout.flush.assert_called()
 
     @patch("airut.sandbox._run_container.subprocess.Popen")
     def test_unexpected_error_wrapped(
