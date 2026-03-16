@@ -880,6 +880,31 @@ class TestDashboardServer:
         finally:
             server._endpoint_handlers["index"] = original
 
+    def test_dispatch_api_error_returns_json(self) -> None:
+        """Test _dispatch returns JSON error for API endpoints."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+
+        # Patch an API handler to raise exception
+        def raise_error(*args, **kwargs):
+            raise RuntimeError("Test error")
+
+        original = server._endpoint_handlers["api_task_stop"]
+        server._endpoint_handlers["api_task_stop"] = raise_error
+        try:
+            client = Client(server._wsgi_app)
+            response = client.post(
+                "/api/conversation/test123/stop",
+                headers={"X-Requested-With": "XMLHttpRequest"},
+            )
+
+            assert response.status_code == 500
+            assert response.content_type == "application/json"
+            data = response.get_json()
+            assert "error" in data
+        finally:
+            server._endpoint_handlers["api_task_stop"] = original
+
     def test_unknown_route_returns_404(self) -> None:
         """Test that unknown routes return 404 Not Found."""
         tracker = TaskTracker()

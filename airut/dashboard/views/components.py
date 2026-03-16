@@ -360,6 +360,14 @@ def render_stop_script(task: TaskState) -> str:
                 headers: {{'X-Requested-With': 'XMLHttpRequest'}}
             }})
             .then(function(response) {{
+                if (!response.ok) {{
+                    return response.text().then(function(t) {{
+                        try {{ return JSON.parse(t); }}
+                        catch (_e) {{
+                            return {{"error": t || "Server error"}};
+                        }}
+                    }});
+                }}
                 return response.json();
             }})
             .then(function(data) {{

@@ -9,6 +9,7 @@ Provides a WSGI application that serves the dashboard web interface
 for viewing task queue status and history.
 """
 
+import json
 import logging
 import threading
 from collections.abc import Callable, Iterable
@@ -284,7 +285,14 @@ class DashboardServer:
             response = Response("Not Found", status=404)
         except Exception:
             logger.exception("Error handling request %s", request.path)
-            response = Response("Internal Server Error", status=500)
+            if request.path.startswith("/api/"):
+                response = Response(
+                    json.dumps({"error": "Internal server error"}),
+                    status=500,
+                    content_type="application/json",
+                )
+            else:
+                response = Response("Internal Server Error", status=500)
 
         _add_security_headers(response)
         return response
