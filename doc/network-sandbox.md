@@ -547,13 +547,55 @@ config.
 
 ### Debugging container network issues
 
-When investigating connectivity problems from inside a container:
+**Live network logs** are the fastest way to diagnose connectivity problems.
+They stream every DNS query, allowed request, and blocked request to stderr in
+real time as the sandboxed command runs.
 
-1. **Prefer the server-side override** — set `network.sandbox_enabled: false` in
-   server config and restart the server. This avoids modifying the repo.
-2. After debugging, re-enable the sandbox and restart.
-3. Check `conversation_dir/network-sandbox.log` for the audit trail of allowed
-   and blocked requests from previous tasks.
+**Gateway tasks**: Live network logs are enabled automatically at INFO level.
+Check the gateway log output for lines prefixed with `[net]`.
+
+**`airut-sandbox` CLI** (local or CI):
+
+```bash
+# Stream network events to stderr during execution
+airut-sandbox run --verbose --network-log-live -- uv run pytest
+
+# Also save the full log to a file for later inspection
+airut-sandbox run --verbose --network-log-live --network-log /tmp/network.log -- uv run pytest
+```
+
+**GitHub Actions** (via `sandbox_args`):
+
+```yaml
+- uses: airutorg/sandbox-action@v0
+  with:
+    command: 'uv sync && uv run pytest'
+    pr_sha: ${{ github.event.pull_request.head.sha }}
+    sandbox_args: '--verbose --network-log-live'
+```
+
+Live log output looks like:
+
+```
+[net] DNS A pypi.org -> 10.199.1.100
+[net] allowed GET https://pypi.org/simple/requests/ -> 200
+[net] BLOCKED GET https://evil.com/exfiltrate -> 403
+```
+
+| Flag                 | Effect                                             |
+| -------------------- | -------------------------------------------------- |
+| `--network-log-live` | Stream network activity to stderr during execution |
+| `--network-log FILE` | Save network activity log to FILE                  |
+| `--verbose`          | Enable INFO-level sandbox logging                  |
+| `--debug`            | Enable DEBUG-level logging (implies `--verbose`)   |
+
+**Other approaches:**
+
+1. **Server-side override** — set `network.sandbox_enabled: false` in server
+   config and restart the server. This disables the sandbox entirely (use only
+   for emergencies — it removes exfiltration protection).
+2. **Post-task log** — check `conversation_dir/network-sandbox.log` for the
+   audit trail of allowed and blocked requests from previous tasks.
 
 ## Further Reading
 

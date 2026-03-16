@@ -28,6 +28,7 @@ allowlisting, and credential masking that the Airut gateway uses.
 - [Full Workflow Example](#full-workflow-example)
 - [Using `airut-sandbox` Directly](#using-airut-sandbox-directly)
   - [CLI Options](#cli-options)
+  - [Debugging Network Issues](#debugging-network-issues)
   - [Non-GitHub CI Systems](#non-github-ci-systems)
 - [Security Summary](#security-summary)
   - [Checklist](#checklist)
@@ -374,6 +375,7 @@ Options:
   --timeout SECONDS      Container timeout (overrides config)
   --mount SRC:DST[:ro]   Additional mount (repeatable)
   --network-log FILE     Append network activity log to FILE
+  --network-log-live     Print network activity to stderr during execution
   --log FILE             Write sandbox log to FILE instead of stderr
   --verbose              Enable informational logging
   --debug                Enable debug logging (implies --verbose)
@@ -381,6 +383,43 @@ Options:
 
 The CLI exits with the sandboxed command's exit code (0 for success, non-zero
 for failure). Infrastructure errors exit with 125, timeouts with 124.
+
+### Debugging Network Issues
+
+When a sandboxed CI command fails due to blocked network requests, use
+`--network-log-live` to stream every DNS query, allowed request, and blocked
+request to stderr in real time. This is the fastest way to identify which hosts
+or paths need to be added to the network allowlist.
+
+**Direct CLI usage:**
+
+```bash
+airut-sandbox run --verbose --network-log-live -- uv run pytest
+```
+
+**Via `sandbox_args` in the GitHub Action:**
+
+```yaml
+- uses: airutorg/sandbox-action@v0
+  with:
+    command: 'uv sync && uv run pytest'
+    pr_sha: ${{ github.event.pull_request.head.sha }}
+    sandbox_args: '--verbose --network-log-live'
+```
+
+Live log lines are prefixed with `[net]` and appear in the job log:
+
+```
+[net] DNS A pypi.org -> 10.199.1.100
+[net] allowed GET https://pypi.org/simple/requests/ -> 200
+[net] BLOCKED GET https://evil.com/exfiltrate -> 403
+```
+
+To also save the log to a file (e.g., for uploading as a CI artifact), combine
+both flags: `--network-log-live --network-log /tmp/network.log`.
+
+See [network-sandbox.md](network-sandbox.md#debugging-container-network-issues)
+for the full log format and additional troubleshooting guidance.
 
 ### Non-GitHub CI Systems
 
