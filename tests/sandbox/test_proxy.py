@@ -329,6 +329,133 @@ class TestAllocateSubnet:
         pm._release_subnet(octet)  # no error
 
 
+class TestAllocateSubnetAndCreateNetwork:
+    """Tests for ProxyManager._allocate_subnet_and_create_network()."""
+
+    def test_success_first_try(self) -> None:
+        """Creates network on first attempt when no conflict."""
+        pm = _make_pm()
+        with patch.object(pm, "_create_internal_network"):
+            proxy_ip, octet = pm._allocate_subnet_and_create_network("net-1")
+        assert proxy_ip == "10.199.1.100"
+        assert octet == 1
+
+    def test_retries_on_subnet_conflict(self) -> None:
+        """Retries with next octet when subnet is already used externally."""
+        pm = _make_pm()
+        conflict_error = ProxyError(
+            "Failed to create internal network net-1: "
+            "Error: subnet 10.199.1.0/24 is already used on the host"
+        )
+        call_count = 0
+
+        def create_side_effect(
+            name: str, *, subnet: str, proxy_ip: str
+        ) -> None:
+            nonlocal call_count
+            call_count += 1
+            if "10.199.1." in subnet:
+                raise conflict_error
+
+        with (
+            patch.object(
+                pm,
+                "_create_internal_network",
+                side_effect=create_side_effect,
+            ),
+        ):
+            proxy_ip, octet = pm._allocate_subnet_and_create_network("net-1")
+
+        assert octet == 2
+        assert proxy_ip == "10.199.2.100"
+        assert call_count == 2
+        # Octet 1 stays marked as active (externally held).
+        assert 1 in pm._active_octets
+
+    def test_retries_multiple_conflicts(self) -> None:
+        """Skips multiple externally-held subnets."""
+        pm = _make_pm()
+        conflict_octets = {1, 2, 3}
+
+        def create_side_effect(
+            name: str, *, subnet: str, proxy_ip: str
+        ) -> None:
+            for o in conflict_octets:
+                if f"10.199.{o}." in subnet:
+                    raise ProxyError(
+                        f"Failed to create internal network {name}: "
+                        f"Error: subnet {subnet} is already used"
+                    )
+
+        with patch.object(
+            pm, "_create_internal_network", side_effect=create_side_effect
+        ):
+            proxy_ip, octet = pm._allocate_subnet_and_create_network("net-1")
+
+        assert octet == 4
+        assert proxy_ip == "10.199.4.100"
+        # All conflict octets stay marked as active.
+        for o in conflict_octets:
+            assert o in pm._active_octets
+
+    def test_all_subnets_conflicting_raises(self) -> None:
+        """Raises ProxyError when all 254 subnets are externally held."""
+        pm = _make_pm()
+
+        def always_conflict(name: str, *, subnet: str, proxy_ip: str) -> None:
+            raise ProxyError(
+                f"Failed to create internal network {name}: "
+                f"Error: subnet {subnet} is already used"
+            )
+
+        with patch.object(
+            pm, "_create_internal_network", side_effect=always_conflict
+        ):
+            with pytest.raises(
+                ProxyError,
+                match="All 254 subnets are in use or already claimed",
+            ):
+                pm._allocate_subnet_and_create_network("net-1")
+
+    def test_non_conflict_error_propagates(self) -> None:
+        """Non-subnet errors propagate immediately without retry."""
+        pm = _make_pm()
+
+        def permission_error(name: str, *, subnet: str, proxy_ip: str) -> None:
+            raise ProxyError(
+                f"Failed to create internal network {name}: permission denied"
+            )
+
+        with patch.object(
+            pm, "_create_internal_network", side_effect=permission_error
+        ):
+            with pytest.raises(ProxyError, match="permission denied"):
+                pm._allocate_subnet_and_create_network("net-1")
+
+        # Octet should be released on non-conflict error.
+        assert 1 not in pm._active_octets
+
+    def test_non_conflict_error_releases_octet(self) -> None:
+        """Non-conflict error releases the allocated octet."""
+        pm = _make_pm()
+
+        def generic_error(name: str, *, subnet: str, proxy_ip: str) -> None:
+            raise ProxyError("some other failure")
+
+        with patch.object(
+            pm, "_create_internal_network", side_effect=generic_error
+        ):
+            with pytest.raises(ProxyError, match="some other failure"):
+                pm._allocate_subnet_and_create_network("net-1")
+
+        # Octet 1 should be freed; all 254 should be allocatable.
+        octets = []
+        for _ in range(254):
+            _, _, octet = pm._allocate_subnet()
+            octets.append(octet)
+        assert len(set(octets)) == 254
+
+
 class TestEnsureProxyImage:
     """Tests for ProxyManager._ensure_proxy_image()."""
 

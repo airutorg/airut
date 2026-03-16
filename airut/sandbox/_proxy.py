@@ -218,10 +218,11 @@ class ProxyManager:
             container_name,
         )
 
-        # Allocate subnet and create internal network with route to proxy
-        subnet, proxy_ip, subnet_octet = self._allocate_subnet()
-        self._create_internal_network(
-            network_name, subnet=subnet, proxy_ip=proxy_ip
+        # Allocate subnet and create internal network with route to proxy.
+        # Retries on subnet conflicts caused by other processes (e.g. another
+        # airut instance sharing the same host).
+        proxy_ip, subnet_octet = self._allocate_subnet_and_create_network(
+            network_name
         )
 
         # Touch network log file if path provided
@@ -343,6 +344,55 @@ class ProxyManager:
         """
         with self._lock:
             self._active_octets.discard(octet)
+
+    def _allocate_subnet_and_create_network(
+        self, network_name: str
+    ) -> tuple[str, int]:
+        """Allocate a subnet and create the internal network.
+
+        Retries automatically when a subnet is already in use on the host
+        (e.g. held by another airut process). On conflict the octet stays
+        marked as active so it is not re-attempted.
+
+        Args:
+            network_name: Name for the internal network.
+
+        Returns:
+            Tuple of (proxy_ip, octet).
+
+        Raises:
+            ProxyError: If all 254 subnets are exhausted or network
+                creation fails for a non-conflict reason.
+        """
+        for _ in range(254):
+            try:
+                subnet, proxy_ip, octet = self._allocate_subnet()
+            except ProxyError:
+                # All 254 exhausted in-memory.
+                break
+
+            try:
+                self._create_internal_network(
+                    network_name, subnet=subnet, proxy_ip=proxy_ip
+                )
+                return proxy_ip, octet
+            except ProxyError as exc:
+                error_msg = str(exc).lower()
+                if "subnet" in error_msg and "already" in error_msg:
+                    # Subnet held by another process -- keep the octet
+                    # marked as active so _allocate_subnet skips it.
+                    logger.info(
+                        "Subnet %s in use externally, trying next", subnet
+                    )
+                    continue
+                # Non-conflict error: release octet and propagate.
+                self._release_subnet(octet)
+                raise
+
+        raise ProxyError(
+            "All 254 subnets are in use or already claimed on the host; "
+            "cannot allocate a new context network"
+        )
 
     # ------------------------------------------------------------------
     # Image and CA cert
