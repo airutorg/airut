@@ -94,8 +94,9 @@ outside the container sandbox. The `airut-sandbox` CLI and
 the same container isolation and network allowlisting used by the gateway. See
 [doc/ci-sandbox.md](doc/ci-sandbox.md) for setup and security requirements.
 
-**Example project:** The
-[airut.org website](https://github.com/airutorg/website) is a minimal
+### Example project
+
+The [airut.org website](https://github.com/airutorg/website) is a minimal
 Airut-managed repository that demonstrates the message-to-deploy workflow with
 Cloudflare Pages. Its `.airut/` directory and `CLAUDE.md` serve as a good
 starting point for onboarding your own projects.
