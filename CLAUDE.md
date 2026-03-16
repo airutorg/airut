@@ -38,6 +38,8 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
   execution
 - `spec/sandbox-action.md` — reusable GitHub Action wrapping airut-sandbox
 - `spec/image.md` — two-layer container image build strategy
+- `spec/image-cache.md` — unified image cache with content-hash tags and
+  staleness checking
 - `spec/network-sandbox.md` — proxy lifecycle, resource scoping, log format,
   crash recovery
 - `spec/masked-secrets.md` — scope-restricted credentials with proxy-level token
