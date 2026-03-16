@@ -14,7 +14,10 @@ import logging
 import threading
 from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+from wsgiref.types import WSGIEnvironment
+
+from airut._json_types import JsonDict
 
 
 if TYPE_CHECKING:
@@ -251,7 +254,7 @@ class DashboardServer:
 
     def _wsgi_app(
         self,
-        environ: dict[str, Any],
+        environ: WSGIEnvironment,
         start_response: "StartResponse",
     ) -> Iterable[bytes]:
         """WSGI application entry point.
@@ -304,7 +307,7 @@ class DashboardServer:
         include_conversation: bool = False,
         conversation: ConversationMetadata | None = None,
         event_groups: list[list[StreamEvent]] | None = None,
-    ) -> dict[str, Any]:
+    ) -> JsonDict:
         """Convert TaskState to JSON-serializable dict.
 
         Args:

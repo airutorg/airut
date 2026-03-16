@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, cast, overload
 import yaml
 from platformdirs import user_config_path, user_state_path
 
+from airut._json_types import JsonDict
 from airut.gateway.channel import ChannelConfig
 from airut.gateway.dotenv_loader import load_dotenv_once
 from airut.logging import SecretFilter
@@ -153,9 +154,9 @@ class ReplacementEntry:
     headers: tuple[str, ...]
     allow_foreign_credentials: bool = False
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> JsonDict:
         """Serialize to dict for JSON export."""
-        d: dict[str, Any] = {
+        d: JsonDict = {
             "value": self.real_value,
             "scopes": list(self.scopes),
             "headers": list(self.headers),
@@ -222,7 +223,7 @@ class SigningCredentialEntry:
     surrogate_session_token: str | None
     scopes: tuple[str, ...]
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> JsonDict:
         """Serialize to dict for JSON export."""
         return {
             "type": SIGNING_TYPE_AWS_SIGV4,
@@ -1284,7 +1285,7 @@ def _resolve_masked_secrets(
 
 # ---------------------------------------------------------------------------
 def _resolve_signing_credential_field(
-    raw: Any,
+    raw: YamlValue,
     field_path: str,
     *,
     required: bool = True,
@@ -1307,12 +1308,13 @@ def _resolve_signing_credential_field(
     if not isinstance(raw, dict):
         raise ConfigError(f"{field_path} must be a mapping with 'name'/'value'")
 
-    name = raw.get("name")
+    raw_dict = cast(dict[str, YamlValue], raw)
+    name = raw_dict.get("name")
     if not name:
         raise ConfigError(f"{field_path}.name is required")
     name = str(name)
 
-    raw_value = raw.get("value")
+    raw_value = raw_dict.get("value")
     value = raw_resolve(raw_value)
     if not value:
         if required:

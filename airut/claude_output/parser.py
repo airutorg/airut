@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
 
+from airut._json_types import JsonDict
 from airut.claude_output.types import (
     ContentBlock,
     EventType,
@@ -91,7 +91,7 @@ def parse_event(raw_json: str) -> StreamEvent | None:
     return _parse_event(raw_obj, stripped)
 
 
-def parse_event_dict(raw_obj: dict[str, Any]) -> StreamEvent | None:
+def parse_event_dict(raw_obj: JsonDict) -> StreamEvent | None:
     """Parse a pre-loaded dict into a typed event.
 
     Unlike :func:`parse_event`, this avoids a round-trip through
@@ -113,7 +113,7 @@ def parse_event_dict(raw_obj: dict[str, Any]) -> StreamEvent | None:
 _CORE_KEYS = {"type", "subtype", "session_id", "message", "parent_tool_use_id"}
 
 
-def _parse_event(raw_obj: dict[str, Any], raw_line: str) -> StreamEvent | None:
+def _parse_event(raw_obj: JsonDict, raw_line: str) -> StreamEvent | None:
     """Convert a raw dict into a typed StreamEvent."""
     type_str = raw_obj.get("type")
     if not isinstance(type_str, str):
@@ -165,7 +165,7 @@ def _parse_event(raw_obj: dict[str, Any], raw_line: str) -> StreamEvent | None:
 
 
 def _extract_content_blocks(
-    raw_obj: dict[str, Any],
+    raw_obj: JsonDict,
     event_type: EventType,
 ) -> list[ContentBlock]:
     """Extract typed content blocks from an event dict."""

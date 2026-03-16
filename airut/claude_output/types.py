@@ -15,7 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from enum import Enum
-from typing import Any
+
+from airut._json_types import JsonValue
 
 
 class EventType(Enum):
@@ -46,7 +47,7 @@ class ToolUseBlock:
 
     tool_id: str
     tool_name: str
-    tool_input: dict[str, Any]
+    tool_input: dict[str, JsonValue]
 
 
 @dataclass(frozen=True)
@@ -54,7 +55,7 @@ class ToolResultBlock:
     """A tool execution result block from a user message."""
 
     tool_id: str
-    content: str | list[dict[str, Any]]
+    content: str | list[dict[str, JsonValue]]
     is_error: bool
 
 
@@ -82,7 +83,7 @@ class Usage:
     output_tokens: int = 0
     cache_creation_input_tokens: int = 0
     cache_read_input_tokens: int = 0
-    extra: dict[str, Any] = dataclass_field(default_factory=dict)
+    extra: dict[str, JsonValue] = dataclass_field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -113,7 +114,7 @@ class StreamEvent:
     session_id: str
     content_blocks: tuple[ContentBlock, ...]
     raw: str
-    extra: dict[str, Any] = dataclass_field(default_factory=dict)
+    extra: dict[str, JsonValue] = dataclass_field(default_factory=dict)
     parent_tool_use_id: str = ""
 
 

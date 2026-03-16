@@ -32,8 +32,8 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
 
+from airut._json_types import JsonDict
 from airut.gateway.config import (
     ConfigError,
     ServerConfig,
@@ -374,7 +374,7 @@ def _fetch_running_version(
 
 def _fetch_health(
     base_url: str,
-) -> dict[str, Any] | None:
+) -> JsonDict | None:
     """Fetch health status from the running dashboard server.
 
     Args:
@@ -388,7 +388,7 @@ def _fetch_health(
     try:
         req = urllib.request.Request(url, method="GET")
         with urllib.request.urlopen(req, timeout=3) as resp:
-            data: dict[str, Any] = json.loads(resp.read().decode())
+            data: JsonDict = json.loads(resp.read().decode())
             return data
     except (
         urllib.error.URLError,

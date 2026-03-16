@@ -17,8 +17,9 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import cast
 
+from airut._json_types import JsonDict, JsonValue
 from airut.claude_output.types import _KNOWN_USAGE_KEYS, Usage
 
 
@@ -200,7 +201,7 @@ class ConversationStore:
         Args:
             metadata: Conversation metadata to persist.
         """
-        data: dict[str, Any] = {
+        data: JsonDict = {
             "conversation_id": metadata.conversation_id,
             "replies": [_serialize_reply(reply) for reply in metadata.replies],
         }
@@ -399,7 +400,7 @@ class ConversationStore:
         )
 
 
-def _serialize_reply(reply: ReplySummary) -> dict[str, Any]:
+def _serialize_reply(reply: ReplySummary) -> JsonDict:
     """Serialize a ReplySummary to a JSON-compatible dict."""
     return {
         "session_id": reply.session_id,
@@ -422,17 +423,19 @@ def _serialize_reply(reply: ReplySummary) -> dict[str, Any]:
     }
 
 
-def _deserialize_usage(raw_usage: Any) -> Usage:
+def _deserialize_usage(raw_usage: JsonValue) -> Usage:
     """Deserialize a usage dict into a typed Usage."""
     if not isinstance(raw_usage, dict):
         return Usage()
     return Usage(
-        input_tokens=raw_usage.get("input_tokens", 0),
-        output_tokens=raw_usage.get("output_tokens", 0),
-        cache_creation_input_tokens=raw_usage.get(
-            "cache_creation_input_tokens", 0
+        input_tokens=cast(int, raw_usage.get("input_tokens", 0)),
+        output_tokens=cast(int, raw_usage.get("output_tokens", 0)),
+        cache_creation_input_tokens=cast(
+            int, raw_usage.get("cache_creation_input_tokens", 0)
         ),
-        cache_read_input_tokens=raw_usage.get("cache_read_input_tokens", 0),
+        cache_read_input_tokens=cast(
+            int, raw_usage.get("cache_read_input_tokens", 0)
+        ),
         extra={
             k: v for k, v in raw_usage.items() if k not in _KNOWN_USAGE_KEYS
         },

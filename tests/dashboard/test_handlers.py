@@ -8,10 +8,12 @@
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 from werkzeug.test import Client
 
+from airut._json_types import JsonDict
 from airut.claude_output.extract import (
     extract_result_summary,
     extract_session_id,
@@ -418,12 +420,13 @@ class TestConversationDataIntegration:
         result = server._task_to_dict(task, include_conversation=True)
 
         assert "conversation" in result
-        assert result["conversation"]["total_cost_usd"] == 0.05
-        assert result["conversation"]["total_turns"] == 10
-        assert result["conversation"]["reply_count"] == 1
-        assert (
-            result["conversation"]["replies"][0]["usage"]["input_tokens"] == 500
-        )
+        conv = cast(JsonDict, result["conversation"])
+        assert conv["total_cost_usd"] == 0.05
+        assert conv["total_turns"] == 10
+        assert conv["reply_count"] == 1
+        replies = cast(list[JsonDict], conv["replies"])
+        usage = cast(JsonDict, replies[0]["usage"])
+        assert usage["input_tokens"] == 500
 
     def test_task_to_dict_without_conversation_flag(
         self, tmp_path: Path
@@ -805,8 +808,9 @@ class TestConversationDataIntegration:
             task, include_conversation=True, conversation=conversation
         )
 
-        assert result["conversation"]["total_cost_usd"] == 0.05
-        assert result["conversation"]["total_turns"] == 10
+        conv = cast(JsonDict, result["conversation"])
+        assert conv["total_cost_usd"] == 0.05
+        assert conv["total_turns"] == 10
 
 
 class TestTodoProgressDisplay:

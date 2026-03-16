@@ -34,7 +34,7 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TextIO, TypedDict
+from typing import TextIO, TypedDict
 from urllib.parse import unquote
 
 from aws_signing import (
@@ -52,6 +52,11 @@ from aws_signing import (
     resign_request,
 )
 from mitmproxy import ctx, http
+
+
+type _JsonValue = (
+    str | int | float | bool | None | list[_JsonValue] | dict[str, _JsonValue]
+)
 
 
 class UrlPrefixEntry(TypedDict, total=False):
@@ -178,7 +183,7 @@ class ProxyFilter:
     def __init__(self) -> None:
         self.domains: list[str] = []
         self.url_prefixes: list[UrlPrefixEntry] = []
-        self.replacements: dict[str, dict[str, Any]] = {}
+        self.replacements: dict[str, dict[str, _JsonValue]] = {}
         self._log_file: TextIO | None = None
 
     def load(self, options: object) -> None:  # noqa: ARG002
@@ -392,7 +397,7 @@ class ProxyFilter:
         # Track (header_name_lower, config) pairs where the credential was
         # in scope but the surrogate was NOT found. These are candidates
         # for stripping in the second pass.
-        strip_candidates: list[tuple[str, dict[str, Any]]] = []
+        strip_candidates: list[tuple[str, dict[str, _JsonValue]]] = []
 
         # Pass 1: Attempt surrogate replacement
         for surrogate, config in self.replacements.items():

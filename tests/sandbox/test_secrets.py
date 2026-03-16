@@ -5,6 +5,9 @@
 
 """Tests for secret masking and surrogate generation."""
 
+from typing import cast
+
+from airut._json_types import JsonDict
 from airut.sandbox.secrets import (
     _SESSION_TOKEN_SURROGATE_LENGTH,
     _TOKEN_PREFIXES,
@@ -183,7 +186,7 @@ class TestPrepareSecrets:
         # Verify replacement map
         replacements_dict = result.replacements.to_dict()
         assert surrogate in replacements_dict
-        entry = replacements_dict[surrogate]
+        entry = cast(JsonDict, replacements_dict[surrogate])
         assert entry["value"] == "ghp_realtoken12345678901234567890"
         assert entry["scopes"] == ["api.github.com"]
         assert entry["headers"] == ["Authorization"]
@@ -259,7 +262,7 @@ class TestPrepareSecrets:
         # Verify replacement map has signing credential entry
         replacements_dict = result.replacements.to_dict()
         assert surrogate_key in replacements_dict
-        entry = replacements_dict[surrogate_key]
+        entry = cast(JsonDict, replacements_dict[surrogate_key])
         assert entry["type"] == "aws-sigv4"
         assert entry["access_key_id"] == "AKIAIOSFODNN7EXAMPLE"
         assert (
@@ -298,7 +301,7 @@ class TestPrepareSecrets:
 
         # Replacement entry includes session token info
         replacements_dict = result.replacements.to_dict()
-        entry = replacements_dict[surrogate_key]
+        entry = cast(JsonDict, replacements_dict[surrogate_key])
         assert entry["session_token"] == "FwoGZXIvY...long_session_token"
         assert entry["surrogate_session_token"] == session_surrogate
 
@@ -351,7 +354,8 @@ class TestPrepareSecrets:
 
         surrogate = result.env_vars["TOKEN"]
         replacements_dict = result.replacements.to_dict()
-        assert replacements_dict[surrogate]["allow_foreign_credentials"] is True
+        entry = cast(JsonDict, replacements_dict[surrogate])
+        assert entry["allow_foreign_credentials"] is True
 
     def test_allow_foreign_credentials_default_omitted(self) -> None:
         """Default allow_foreign_credentials=False is omitted from JSON."""
@@ -367,7 +371,8 @@ class TestPrepareSecrets:
 
         surrogate = result.env_vars["TOKEN"]
         replacements_dict = result.replacements.to_dict()
-        assert "allow_foreign_credentials" not in replacements_dict[surrogate]
+        entry = cast(JsonDict, replacements_dict[surrogate])
+        assert "allow_foreign_credentials" not in entry
 
 
 class TestSecretReplacements:
@@ -388,10 +393,11 @@ class TestSecretReplacements:
         r = SecretReplacements(_map={"surrogate": entry})
         d = r.to_dict()
         assert "surrogate" in d
-        assert d["surrogate"]["value"] == "real"
-        assert d["surrogate"]["scopes"] == ["scope1"]
-        assert d["surrogate"]["headers"] == ["header1"]
-        assert "allow_foreign_credentials" not in d["surrogate"]
+        entry = cast(JsonDict, d["surrogate"])
+        assert entry["value"] == "real"
+        assert entry["scopes"] == ["scope1"]
+        assert entry["headers"] == ["header1"]
+        assert "allow_foreign_credentials" not in entry
 
     def test_to_dict_with_allow_foreign_credentials(self) -> None:
         """Serializes allow_foreign_credentials when True."""
@@ -403,7 +409,8 @@ class TestSecretReplacements:
         )
         r = SecretReplacements(_map={"surrogate": entry})
         d = r.to_dict()
-        assert d["surrogate"]["allow_foreign_credentials"] is True
+        d_entry = cast(JsonDict, d["surrogate"])
+        assert d_entry["allow_foreign_credentials"] is True
 
     def test_to_dict_with_signing_credential_entry(self) -> None:
         """Serializes signing credential entries correctly."""
@@ -417,8 +424,9 @@ class TestSecretReplacements:
         r = SecretReplacements(_map={"surrogate_key": entry})
         d = r.to_dict()
         assert "surrogate_key" in d
-        assert d["surrogate_key"]["type"] == "aws-sigv4"
-        assert d["surrogate_key"]["access_key_id"] == "AKIA_REAL"
+        d_entry = cast(JsonDict, d["surrogate_key"])
+        assert d_entry["type"] == "aws-sigv4"
+        assert d_entry["access_key_id"] == "AKIA_REAL"
 
 
 class TestMaskedSecret:

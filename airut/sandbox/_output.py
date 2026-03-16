@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import cast
 
+from airut._json_types import JsonValue
 from airut.claude_output.types import (
     _KNOWN_USAGE_KEYS,
     EventType,
@@ -213,7 +214,8 @@ class ExecutionAccumulator:
         extra = event.extra
         result_text = _extract_result_text(extra.get("result"))
 
-        usage_dict = extra.get("usage", {})
+        usage_raw = extra.get("usage", {})
+        usage_dict = usage_raw if isinstance(usage_raw, dict) else {}
         usage_extra = {
             k: v for k, v in usage_dict.items() if k not in _KNOWN_USAGE_KEYS
         }
@@ -221,19 +223,20 @@ class ExecutionAccumulator:
         self._results.append(
             _ResultData(
                 session_id=event.session_id,
-                duration_ms=extra.get("duration_ms", 0),
-                total_cost_usd=extra.get("total_cost_usd", 0.0),
-                num_turns=extra.get("num_turns", 0),
-                is_error=extra.get("is_error", False),
+                duration_ms=cast(int, extra.get("duration_ms", 0)),
+                total_cost_usd=cast(float, extra.get("total_cost_usd", 0.0)),
+                num_turns=cast(int, extra.get("num_turns", 0)),
+                is_error=cast(bool, extra.get("is_error", False)),
                 result_text=result_text,
                 usage=Usage(
-                    input_tokens=usage_dict.get("input_tokens", 0),
-                    output_tokens=usage_dict.get("output_tokens", 0),
-                    cache_creation_input_tokens=usage_dict.get(
-                        "cache_creation_input_tokens", 0
+                    input_tokens=cast(int, usage_dict.get("input_tokens", 0)),
+                    output_tokens=cast(int, usage_dict.get("output_tokens", 0)),
+                    cache_creation_input_tokens=cast(
+                        int,
+                        usage_dict.get("cache_creation_input_tokens", 0),
                     ),
-                    cache_read_input_tokens=usage_dict.get(
-                        "cache_read_input_tokens", 0
+                    cache_read_input_tokens=cast(
+                        int, usage_dict.get("cache_read_input_tokens", 0)
                     ),
                     extra=usage_extra,
                 ),
@@ -295,7 +298,7 @@ class ExecutionAccumulator:
         return None
 
 
-def _extract_result_text(result: Any) -> str:
+def _extract_result_text(result: JsonValue) -> str:
     """Extract text from a result event's ``result`` field.
 
     Handles both string and dict (content-block) formats.

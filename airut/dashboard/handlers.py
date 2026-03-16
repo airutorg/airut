@@ -13,10 +13,11 @@ import logging
 from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 from werkzeug.wrappers import Request, Response
 
+from airut._json_types import JsonDict
 from airut.claude_output.types import StreamEvent
 from airut.conversation import (
     ConversationMetadata,
@@ -220,7 +221,7 @@ class RequestHandlers:
 
         upstream = check_upstream_version(self._git_version_info)
 
-        data: dict[str, Any] = {
+        data: JsonDict = {
             "current": (
                 self._git_version_info.version
                 or self._git_version_info.sha_short
@@ -584,23 +585,27 @@ class RequestHandlers:
         else:
             status = "degraded"
 
-        result: dict[str, Any] = {
-            "status": status,
-            "tasks": counts,
-            "repos": {
-                "live": live_repos,
-                "failed": failed_repos,
-                "total": len(repo_states),
+        result = cast(
+            JsonDict,
+            {
+                "status": status,
+                "tasks": counts,
+                "repos": {
+                    "live": live_repos,
+                    "failed": failed_repos,
+                    "total": len(repo_states),
+                },
             },
-        }
+        )
 
         if boot_state:
-            result["boot"] = {
+            boot_info: JsonDict = {
                 "phase": boot_state.phase.value,
                 "message": boot_state.message,
             }
             if boot_state.error_message:
-                result["boot"]["error"] = boot_state.error_message
+                boot_info["error"] = boot_state.error_message
+            result["boot"] = boot_info
 
         return Response(
             json.dumps(result),
@@ -1223,7 +1228,7 @@ class RequestHandlers:
         include_conversation: bool = False,
         conversation: ConversationMetadata | None = None,
         event_groups: list[list[StreamEvent]] | None = None,
-    ) -> dict[str, Any]:
+    ) -> JsonDict:
         """Convert TaskState to JSON-serializable dict.
 
         Args:
@@ -1235,7 +1240,7 @@ class RequestHandlers:
         Returns:
             Dict representation of task.
         """
-        result: dict[str, Any] = {
+        result: JsonDict = {
             "task_id": task.task_id,
             "conversation_id": task.conversation_id,
             "display_title": task.display_title,
@@ -1265,7 +1270,7 @@ class RequestHandlers:
             if conversation:
                 replies_data = []
                 for i, r in enumerate(conversation.replies):
-                    reply_dict: dict[str, Any] = {
+                    reply_dict: JsonDict = {
                         "session_id": r.session_id,
                         "timestamp": r.timestamp,
                         "duration_ms": r.duration_ms,

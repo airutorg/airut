@@ -7,7 +7,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -43,7 +43,7 @@ from airut.gateway.config import (
     get_storage_dir,
 )
 from airut.logging import SecretFilter
-from airut.yaml_env import EnvVar, make_env_loader, raw_resolve
+from airut.yaml_env import EnvVar, YamlValue, make_env_loader, raw_resolve
 
 
 class TestRawResolve:
@@ -234,7 +234,7 @@ class TestResolveStringList:
 
     def test_normal_list(self) -> None:
         """Normal list of strings is returned as-is."""
-        result = _resolve_string_list(["a@b.com", "c@d.com"])
+        result = _resolve_string_list(cast(YamlValue, ["a@b.com", "c@d.com"]))
         assert result == ["a@b.com", "c@d.com"]
 
     def test_none_without_required(self) -> None:
@@ -260,7 +260,9 @@ class TestResolveStringList:
     def test_env_vars_resolved(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """!env vars in list are resolved."""
         monkeypatch.setenv("TEST_EMAIL", "env@test.com")
-        result = _resolve_string_list([EnvVar("TEST_EMAIL"), "inline@test.com"])
+        result = _resolve_string_list(
+            cast(YamlValue, [EnvVar("TEST_EMAIL"), "inline@test.com"])
+        )
         assert result == ["env@test.com", "inline@test.com"]
 
     def test_empty_values_skipped(
@@ -268,7 +270,9 @@ class TestResolveStringList:
     ) -> None:
         """Empty values (resolved or literal) are skipped."""
         monkeypatch.delenv("UNSET_VAR", raising=False)
-        result = _resolve_string_list([EnvVar("UNSET_VAR"), "valid@test.com"])
+        result = _resolve_string_list(
+            cast(YamlValue, [EnvVar("UNSET_VAR"), "valid@test.com"])
+        )
         assert result == ["valid@test.com"]
 
 

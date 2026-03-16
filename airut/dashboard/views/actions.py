@@ -13,8 +13,9 @@ result summaries) for a conversation.
 import html
 import json
 from collections.abc import Callable
-from typing import Any
+from typing import cast
 
+from airut._json_types import JsonDict, JsonValue
 from airut.claude_output.types import (
     EventType,
     StreamEvent,
@@ -382,7 +383,9 @@ def render_events_list(events: list[StreamEvent]) -> str:
     for event in events:
         for block in event.content_blocks:
             if isinstance(block, ToolUseBlock) and block.tool_name == "Task":
-                label = block.tool_input.get("subagent_type", "subagent")
+                label = cast(
+                    str, block.tool_input.get("subagent_type", "subagent")
+                )
                 subagent_labels[block.tool_id] = label
 
     items: list[str] = []
@@ -454,11 +457,11 @@ def _render_system_event(event: StreamEvent) -> str:
     model = event.extra.get("model")
     if model:
         parts.append(f"model={html.escape(str(model))}")
-    tools = event.extra.get("tools", [])
-    if tools:
-        tools_str = ", ".join(html.escape(str(t)) for t in tools[:20])
-        if len(tools) > 20:
-            tools_str += f"... (+{len(tools) - 20} more)"
+    raw_tools = event.extra.get("tools", [])
+    if isinstance(raw_tools, list) and raw_tools:
+        tools_str = ", ".join(html.escape(str(t)) for t in raw_tools[:20])
+        if len(raw_tools) > 20:
+            tools_str += f"... (+{len(raw_tools) - 20} more)"
         parts.append(f"tools=[{tools_str}]")
     if event.session_id:
         parts.append(f"session={html.escape(event.session_id)}")
@@ -534,13 +537,13 @@ def _render_result_event(event: StreamEvent) -> str:
     meta: list[str] = []
     if event.subtype:
         meta.append(html.escape(event.subtype))
-    duration_ms = event.extra.get("duration_ms")
+    duration_ms = cast(int, event.extra.get("duration_ms"))
     if duration_ms is not None:
         meta.append(f"{duration_ms}ms")
-    total_cost = event.extra.get("total_cost_usd")
+    total_cost = cast(float, event.extra.get("total_cost_usd"))
     if total_cost is not None:
         meta.append(f"${total_cost:.4f}")
-    num_turns = event.extra.get("num_turns")
+    num_turns = cast(int, event.extra.get("num_turns"))
     if num_turns is not None:
         meta.append(f"{num_turns} turns")
 
@@ -614,7 +617,7 @@ def _render_tool_use_block_typed(block: ToolUseBlock) -> str:
     )
 
 
-def _render_tool_bash(tool_input: dict[str, Any]) -> str:
+def _render_tool_bash(tool_input: JsonDict) -> str:
     """Render Bash tool input.
 
     Args:
@@ -623,9 +626,9 @@ def _render_tool_bash(tool_input: dict[str, Any]) -> str:
     Returns:
         HTML detail string.
     """
-    cmd = html.escape(tool_input.get("command", ""))
-    desc = tool_input.get("description", "")
-    timeout = tool_input.get("timeout")
+    cmd = html.escape(cast(str, tool_input.get("command", "")))
+    desc = cast(str, tool_input.get("description", ""))
+    timeout = cast(int | None, tool_input.get("timeout"))
 
     parts: list[str] = []
     if desc:
@@ -636,7 +639,7 @@ def _render_tool_bash(tool_input: dict[str, Any]) -> str:
     return f'{header}<div class="bash-cmd">{cmd}</div>'
 
 
-def _render_tool_read(tool_input: dict[str, Any]) -> str:
+def _render_tool_read(tool_input: JsonDict) -> str:
     """Render Read tool input.
 
     Args:
@@ -645,10 +648,10 @@ def _render_tool_read(tool_input: dict[str, Any]) -> str:
     Returns:
         HTML detail string.
     """
-    path = html.escape(tool_input.get("file_path", ""))
+    path = html.escape(cast(str, tool_input.get("file_path", "")))
     parts = [f'<span class="tool-desc">{path}</span>']
-    offset = tool_input.get("offset")
-    limit = tool_input.get("limit")
+    offset = cast(int | None, tool_input.get("offset"))
+    limit = cast(int | None, tool_input.get("limit"))
     if offset or limit:
         range_parts = []
         if offset:
@@ -660,7 +663,7 @@ def _render_tool_read(tool_input: dict[str, Any]) -> str:
     return "".join(parts)
 
 
-def _render_tool_edit(tool_input: dict[str, Any]) -> str:
+def _render_tool_edit(tool_input: JsonDict) -> str:
     """Render Edit tool input as git-style diff.
 
     Args:
@@ -669,10 +672,10 @@ def _render_tool_edit(tool_input: dict[str, Any]) -> str:
     Returns:
         HTML detail string.
     """
-    path = html.escape(tool_input.get("file_path", ""))
-    old = tool_input.get("old_string", "")
-    new = tool_input.get("new_string", "")
-    replace_all = tool_input.get("replace_all", False)
+    path = html.escape(cast(str, tool_input.get("file_path", "")))
+    old = cast(str, tool_input.get("old_string", ""))
+    new = cast(str, tool_input.get("new_string", ""))
+    replace_all = cast(bool, tool_input.get("replace_all", False))
 
     parts = [f'<span class="tool-desc">{path}</span>']
     if replace_all:
@@ -726,7 +729,7 @@ def _format_diff_lines(
     return "\n".join(result_parts)
 
 
-def _render_tool_write(tool_input: dict[str, Any]) -> str:
+def _render_tool_write(tool_input: JsonDict) -> str:
     """Render Write tool input.
 
     Args:
@@ -735,8 +738,8 @@ def _render_tool_write(tool_input: dict[str, Any]) -> str:
     Returns:
         HTML detail string.
     """
-    path = html.escape(tool_input.get("file_path", ""))
-    content = tool_input.get("content", "")
+    path = html.escape(cast(str, tool_input.get("file_path", "")))
+    content = cast(str, tool_input.get("content", ""))
     lines = content.count("\n") + 1 if content else 0
     chars = len(content)
     return (
@@ -746,7 +749,7 @@ def _render_tool_write(tool_input: dict[str, Any]) -> str:
     )
 
 
-def _render_tool_grep(tool_input: dict[str, Any]) -> str:
+def _render_tool_grep(tool_input: JsonDict) -> str:
     """Render Grep tool input.
 
     Args:
@@ -755,9 +758,9 @@ def _render_tool_grep(tool_input: dict[str, Any]) -> str:
     Returns:
         HTML detail string.
     """
-    pattern = html.escape(tool_input.get("pattern", ""))
-    path = html.escape(tool_input.get("path", ""))
-    glob = tool_input.get("glob", "")
+    pattern = html.escape(cast(str, tool_input.get("pattern", "")))
+    path = html.escape(cast(str, tool_input.get("path", "")))
+    glob = cast(str, tool_input.get("glob", ""))
     parts = [f'<span class="tool-desc">/{pattern}/</span>']
     if path:
         parts.append(f'<span class="tool-desc">{path}</span>')
@@ -766,7 +769,7 @@ def _render_tool_grep(tool_input: dict[str, Any]) -> str:
     return "".join(parts)
 
 
-def _render_tool_glob(tool_input: dict[str, Any]) -> str:
+def _render_tool_glob(tool_input: JsonDict) -> str:
     """Render Glob tool input.
 
     Args:
@@ -775,11 +778,11 @@ def _render_tool_glob(tool_input: dict[str, Any]) -> str:
     Returns:
         HTML detail string.
     """
-    pattern = html.escape(tool_input.get("pattern", ""))
+    pattern = html.escape(cast(str, tool_input.get("pattern", "")))
     return f'<span class="tool-desc">{pattern}</span>'
 
 
-def _render_tool_task(tool_input: dict[str, Any]) -> str:
+def _render_tool_task(tool_input: JsonDict) -> str:
     """Render Task tool input with subagent details.
 
     Shows the subagent type, description, model, and a truncated
@@ -791,10 +794,10 @@ def _render_tool_task(tool_input: dict[str, Any]) -> str:
     Returns:
         HTML detail string.
     """
-    desc = html.escape(tool_input.get("description", ""))
-    subagent_type = html.escape(tool_input.get("subagent_type", ""))
-    model = html.escape(tool_input.get("model", ""))
-    prompt = tool_input.get("prompt", "")
+    desc = html.escape(cast(str, tool_input.get("description", "")))
+    subagent_type = html.escape(cast(str, tool_input.get("subagent_type", "")))
+    model = html.escape(cast(str, tool_input.get("model", "")))
+    prompt = cast(str, tool_input.get("prompt", ""))
 
     parts: list[str] = []
     if subagent_type:
@@ -811,7 +814,7 @@ def _render_tool_task(tool_input: dict[str, Any]) -> str:
     return "".join(parts)
 
 
-def _render_tool_todowrite(tool_input: dict[str, Any]) -> str:
+def _render_tool_todowrite(tool_input: JsonDict) -> str:
     """Render TodoWrite tool input.
 
     Args:
@@ -820,17 +823,21 @@ def _render_tool_todowrite(tool_input: dict[str, Any]) -> str:
     Returns:
         HTML detail string.
     """
-    todos = tool_input.get("todos", [])
+    raw_todos = tool_input.get("todos", [])
+    todos = (
+        cast(list[JsonValue], raw_todos) if isinstance(raw_todos, list) else []
+    )
     items: list[str] = []
     for t in todos:
-        status = t.get("status", "?")
-        content = html.escape(t.get("content", ""))
-        items.append(f"[{status}] {content}")
+        if isinstance(t, dict):
+            status = cast(str, t.get("status", "?"))
+            content = html.escape(cast(str, t.get("content", "")))
+            items.append(f"[{status}] {content}")
     body = "\n".join(items)
     return f'<div class="tool-detail">{body}</div>'
 
 
-def _render_tool_generic(tool_input: dict[str, Any]) -> str:
+def _render_tool_generic(tool_input: JsonDict) -> str:
     """Render unknown tool input as JSON.
 
     Args:
@@ -846,7 +853,7 @@ def _render_tool_generic(tool_input: dict[str, Any]) -> str:
 
 
 # Map of tool names to their specialized renderers.
-_TOOL_RENDERERS: dict[str, Callable[[dict[str, Any]], str]] = {
+_TOOL_RENDERERS: dict[str, Callable[[JsonDict], str]] = {
     "Bash": _render_tool_bash,
     "Read": _render_tool_read,
     "Write": _render_tool_write,
@@ -870,11 +877,11 @@ def _render_tool_result_block_typed(block: ToolResultBlock) -> str:
     result_content = block.content
     # Content can be a list of content blocks or a string
     if isinstance(result_content, list):
-        text_parts = []
+        text_parts: list[str] = []
         for part in result_content:
             is_text = isinstance(part, dict) and part.get("type") == "text"
             if is_text:
-                text_parts.append(part.get("text", ""))
+                text_parts.append(cast(str, part.get("text", "")))
             elif isinstance(part, str):
                 text_parts.append(part)
         result_content = "\n".join(text_parts)
