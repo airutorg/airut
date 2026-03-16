@@ -4,9 +4,11 @@ GitHub Action (`airutorg/sandbox-action`) that wraps `airut-sandbox` for PR
 workflows, handling base-branch checkout, PR SHA fetch, and sandboxed execution
 in a single `uses:` step.
 
-For the user-facing setup guide (security requirements, configuration, workflow
-examples), see [doc/ci-sandbox.md](../doc/ci-sandbox.md). For the maintenance
-workflow, see [workflows/sandbox-action.md](../workflows/sandbox-action.md).
+For usage documentation (inputs, workflow examples, configuration), see the
+[sandbox-action README](https://github.com/airutorg/sandbox-action#readme). For
+the security model and repository setup requirements, see
+[doc/ci-sandbox.md](../doc/ci-sandbox.md). For the maintenance workflow, see
+[workflows/sandbox-action.md](../workflows/sandbox-action.md).
 
 ## Consumer Interface
 
