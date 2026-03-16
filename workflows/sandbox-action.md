@@ -59,28 +59,32 @@ cd /storage/sandbox-action && git fetch origin && git checkout main && git pull
 
 ## Branching Model
 
-The repository uses protected release branches to separate development from
-tagged releases. There are two independent development tracks:
+The repository uses `vN` branches as protected release branches. Consumers using
+`@v0` resolve to the `v0` branch directly (no floating tag). There are two
+independent development tracks:
 
-**(a) Action implementation changes** — developed on `main`, cherry-picked to
-`releases/*` as needed via reviewed PRs.
+**(a) Action implementation changes** -- developed on `main`, cherry-picked to
+`vN` as needed via reviewed PRs.
 
-**(b) Airut version bumps** — happen directly on `releases/*` via PRs that
-update the `VERSION` file.
+**(b) Airut version bumps** -- happen directly on `vN` via PRs that update the
+`VERSION` file.
 
-| Ref              | VERSION file | airut-sandbox source | Purpose                          |
-| ---------------- | ------------ | -------------------- | -------------------------------- |
-| `main`           | `main`       | `git+.../airut@main` | Development, airut repo's own CI |
-| `releases/v0`    | `0.15.0`     | PyPI `airut==0.15.0` | Protected release branch         |
-| `@v0.15.0` (tag) | `0.15.0`     | PyPI `airut==0.15.0` | Pinned version                   |
-| `@v0` (tag)      | `0.15.0`     | PyPI `airut==0.15.0` | Floating major (latest 0.x)      |
+| Ref             | VERSION file | airut-sandbox source | Purpose                             |
+| --------------- | ------------ | -------------------- | ----------------------------------- |
+| `main`          | `main`       | `git+.../airut@main` | Development, airut repo's own CI    |
+| `v0` (branch)   | `0.16.1`     | PyPI `airut==0.16.1` | Stable release; `@v0` resolves here |
+| `v0.16.1` (tag) | `0.16.1`     | PyPI `airut==0.16.1` | Pinned version                      |
 
 **`main` is never modified during releases.** The `VERSION` file on `main`
-always contains `main`. Only `releases/*` branches have PyPI versions in
-`VERSION`.
+always contains `main`. Only `vN` branches have PyPI versions in `VERSION`.
 
-**`releases/*` branches are protected** and only advance through merged PRs.
-They are never force-pushed or reset to `main`.
+**`vN` branches are protected** and only advance through merged PRs. They are
+never force-pushed or reset to `main`.
+
+**Why branches, not floating tags?** GitHub Actions resolves `@v0` to both tags
+and branches (tags take priority). Using a branch means consumers automatically
+get updates when PRs merge -- no tag deletion/recreation needed. This avoids
+race conditions and simplifies the release process.
 
 ## Cherry-Picking Action Changes to a Release Branch
 
@@ -93,93 +97,55 @@ When an action implementation change on `main` needs to ship to consumers:
    ```bash
    cd /storage/sandbox-action
    git fetch origin
-   git checkout -b cherry-pick/description origin/releases/v0
+   git checkout -b cherry-pick/description origin/v0
    git cherry-pick <commit-sha>
    ```
 
    Resolve any conflicts (the release branch may diverge from `main` in
    `VERSION` and potentially other files).
 
-3. Push and create a PR **targeting `releases/v0`**:
+3. Push and create a PR **targeting `v0`**:
 
    ```bash
    git push -u origin HEAD
-   gh pr create --base releases/v0 --fill
+   gh pr create --base v0 --fill
    ```
 
-4. After review and merge, tag a new release (see Releasing below).
+4. After review and merge, consumers using `@v0` pick up the change on their
+   next CI run. If the change warrants a pinned release, tag it (see Releasing).
 
 ## Releasing (After Airut Release)
 
-When a new airut version is published to PyPI (e.g., `v0.16.0`):
+When a new airut version is published to PyPI (e.g., `v0.17.0`):
 
 1. Create a branch off the release branch and update `VERSION`:
 
    ```bash
    cd /storage/sandbox-action
    git fetch origin
-   git checkout -b bump/v0.16.0 origin/releases/v0
-   echo "0.16.0" > VERSION
+   git checkout -b bump/v0.17.0 origin/v0
+   echo "0.17.0" > VERSION
    git add VERSION
-   git commit -m "Bump airut to v0.16.0"
+   git commit -m "Bump airut to v0.17.0"
    git push -u origin HEAD
    ```
 
-2. Create a PR **targeting `releases/v0`**:
+2. Create a PR **targeting `v0`**:
 
    ```bash
-   gh pr create --base releases/v0 --title "Bump airut to v0.16.0" \
-     --body "Updates VERSION to 0.16.0 for the new airut release."
+   gh pr create --base v0 --title "Bump airut to v0.17.0" \
+     --body "Updates VERSION to 0.17.0 for the new airut release."
    ```
 
-3. After the PR is merged, create draft releases via `gh release create`:
+3. After the PR is merged, consumers using `@v0` immediately get the new
+   version. Create a pinned release tag:
 
    ```bash
-   # Exact version tag
-   gh release create v0.16.0 --draft --title "v0.16.0" \
-     --target releases/v0 --notes "Release notes here..."
-
-   # Floating major tag (delete old release first if it exists)
-   gh release delete v0 --yes 2>/dev/null || true
-   gh release create v0 --draft --title "v0 (latest)" \
-     --target releases/v0 --notes "Latest stable v0.x release..."
+   gh release create v0.17.0 --draft --title "v0.17.0" \
+     --target v0 --notes "Bump airut to v0.17.0."
    ```
 
-   Draft releases create tags when published. The tag ruleset blocks direct
-   `git push` of tags — use `gh release create` instead.
-
-4. Publish both releases from the GitHub UI. The user must approve and publish
-   each draft.
-
-5. Verify consumers using `@v0` pick up the new version on their next CI run.
-
-## Initialization (First Time Only)
-
-To bootstrap the empty `airutorg/sandbox-action` repository:
-
-1. Clone it:
-
-   ```bash
-   git clone https://github.com/airutorg/sandbox-action /storage/sandbox-action
-   cd /storage/sandbox-action
-   ```
-
-2. Create the action files: `action.yml`, `VERSION`, `README.md`, `LICENSE`.
-
-3. Set `VERSION` to `main` (the main branch always installs from GitHub HEAD).
-
-4. Commit and push:
-
-   ```bash
-   git add -A
-   git commit -m "Initial sandbox action"
-   git push origin main
-   ```
-
-5. Test by pointing the airut repo's CI workflow to `sandbox-action@main`.
-
-6. After validation, proceed with the first versioned release (see Releasing
-   above).
+4. Publish the draft release from the GitHub UI.
 
 ## Files Overview
 
