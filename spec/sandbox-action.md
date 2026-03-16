@@ -28,6 +28,9 @@ workflow, see [workflows/sandbox-action.md](../workflows/sandbox-action.md).
 | `merge`         | No       | `true`         | Merge PR into base branch before running (like GitHub's default behavior) |
 | `airut_version` | No       | from `VERSION` | Airut version to install. PyPI version or `main` for GitHub HEAD.         |
 | `sandbox_args`  | No       | `--verbose`    | Additional arguments passed to `airut-sandbox run`.                       |
+| `cache`         | No       | `true`         | Enable image caching across CI runs.                                      |
+| `cache-version` | No       | `""`           | Arbitrary string to force cache invalidation.                             |
+| `cache-max-age` | No       | `168`          | Maximum image age (hours) before forced rebuild. Default one week.        |
 
 ### Consumer Prerequisites
 
@@ -85,6 +88,15 @@ version.
 
 See [workflows/sandbox-action.md](../workflows/sandbox-action.md) for the
 release process.
+
+## Image Caching
+
+The action caches repo and proxy container images across CI runs using
+`actions/cache`, saving ~50 s per run on cache hit. Caching is enabled by
+default and can be disabled with `cache: false`.
+
+See [image.md](image.md#ci-image-caching) for the full design, cache key
+structure, step ordering, and security model.
 
 ## Design Decisions
 
