@@ -102,10 +102,13 @@ concurrent I/O. Both `AgentTask.execute()` and `CommandTask.execute()` are
 `async def` methods. Callers at sync boundaries (gateway, CLI) use
 `asyncio.run()` to invoke them.
 
-**Stream reading**: stdout and stderr are read concurrently as binary streams,
-decoded to UTF-8 with `errors="replace"`. Line-by-line callbacks
-(`on_stdout_line`, `on_stderr_line`) fire as data arrives. Mutable accumulators
-capture full output for the result object.
+**Stream reading**: stdout and stderr are read concurrently using fixed-size
+`read()` calls (not `readline()`) so that individual lines are not constrained
+by the asyncio `StreamReader` buffer limit. Bytes are accumulated in a
+`bytearray` and split on newlines; complete lines are decoded to UTF-8 with
+`errors="replace"` and delivered to callbacks (`on_stdout_line`,
+`on_stderr_line`) as they arrive. Any trailing data without a final newline is
+flushed on EOF. Mutable accumulators capture full output for the result object.
 
 **Timeout handling**: `asyncio.wait_for()` wraps the stream-reading coroutine.
 On timeout, the process is killed and partial accumulated output is preserved in

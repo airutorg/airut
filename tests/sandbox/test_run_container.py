@@ -42,31 +42,25 @@ def _make_mock_process(
     mock.stdin.close = MagicMock()
     mock.stdin.wait_closed = AsyncMock()
 
-    # Async iterator for binary stream lines
+    # Mock StreamReader supporting read(n) for chunk-based line reading.
     class _MockStream:
-        def __init__(self, data_lines):
-            self._lines = data_lines
-            self._index = 0
+        def __init__(self, data: bytes):
+            self._data = data
+            self._pos = 0
 
-        def __aiter__(self):
-            return self
+        async def read(self, n: int = -1) -> bytes:
+            if self._pos >= len(self._data):
+                return b""
+            if n < 0:
+                chunk = self._data[self._pos :]
+                self._pos = len(self._data)
+            else:
+                chunk = self._data[self._pos : self._pos + n]
+                self._pos += len(chunk)
+            return chunk
 
-        async def __anext__(self):
-            if self._index >= len(self._lines):
-                raise StopAsyncIteration
-            line = self._lines[self._index]
-            self._index += 1
-            return line
-
-    # stdout as async iterator yielding lines
-    stdout_lines = stdout_data.split(b"\n") if stdout_data else []
-    stdout_lines = [line + b"\n" for line in stdout_lines if line]
-    mock.stdout = _MockStream(stdout_lines)
-
-    # stderr as async iterator
-    stderr_lines = stderr_data.split(b"\n") if stderr_data else []
-    stderr_lines = [line + b"\n" for line in stderr_lines if line]
-    mock.stderr = _MockStream(stderr_lines)
+    mock.stdout = _MockStream(stdout_data)
+    mock.stderr = _MockStream(stderr_data)
 
     # wait
     mock.wait = AsyncMock(return_value=returncode)
@@ -531,7 +525,7 @@ class TestRunContainer:
     ) -> None:
         """run_container calls on_stdout_line for each line."""
         tracker = _ProcessTracker()
-        mock_process = _make_mock_process(stdout_data=b"line1\nline2\nline3")
+        mock_process = _make_mock_process(stdout_data=b"line1\nline2\nline3\n")
         mock_create.return_value = mock_process
 
         lines: list[str] = []
@@ -562,7 +556,7 @@ class TestRunContainer:
     ) -> None:
         """run_container calls on_stderr_line for each stderr line."""
         tracker = _ProcessTracker()
-        mock_process = _make_mock_process(stderr_data=b"err1\nerr2")
+        mock_process = _make_mock_process(stderr_data=b"err1\nerr2\n")
         mock_create.return_value = mock_process
 
         lines: list[str] = []
@@ -698,20 +692,21 @@ class TestRunContainer:
         assert call_args[0] == "docker"
 
     @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
-    async def test_stream_buffer_limit_raised(
-        self, mock_create: MagicMock
-    ) -> None:
-        """run_container sets a large stream buffer limit for long lines.
+    async def test_long_line_no_limit(self, mock_create: MagicMock) -> None:
+        """run_container handles lines longer than the StreamReader default.
 
-        Claude Code can emit single JSON lines exceeding the default 64 KiB
-        asyncio StreamReader limit.  Verify that create_subprocess_exec is
-        called with a limit well above the default.
+        Claude Code can emit single JSON lines well over 64 KiB.  The
+        chunk-based reader must handle arbitrarily long lines without
+        raising LimitOverrunError.
         """
         tracker = _ProcessTracker()
-        mock_process = _make_mock_process()
+        # 200 KiB line — well above asyncio's default 64 KiB limit
+        long_line = b"x" * (200 * 1024) + b"\n"
+        mock_process = _make_mock_process(stdout_data=long_line)
         mock_create.return_value = mock_process
 
-        await run_container(
+        lines: list[str] = []
+        result = await run_container(
             container_command="podman",
             image_tag="airut:test",
             mounts=[],
@@ -720,13 +715,42 @@ class TestRunContainer:
             network_args=[],
             command=["cmd"],
             stdin_data=None,
-            on_stdout_line=None,
+            on_stdout_line=lines.append,
             on_stderr_line=None,
             timeout=None,
             process_tracker=tracker,
         )
 
-        call_kwargs = mock_create.call_args[1]
-        # Default asyncio limit is 2**16 = 64 KiB -- must be much larger
-        assert "limit" in call_kwargs
-        assert call_kwargs["limit"] > 2**16
+        assert len(lines) == 1
+        assert len(lines[0]) == 200 * 1024 + 1  # data + newline
+        assert result.stdout == lines[0]
+
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_unterminated_final_line(
+        self, mock_create: MagicMock
+    ) -> None:
+        """run_container flushes a final line that lacks a trailing newline."""
+        tracker = _ProcessTracker()
+        mock_process = _make_mock_process(stdout_data=b"line1\npartial")
+        mock_create.return_value = mock_process
+
+        lines: list[str] = []
+        result = await run_container(
+            container_command="podman",
+            image_tag="airut:test",
+            mounts=[],
+            env=ContainerEnv(),
+            resource_limits=ResourceLimits(),
+            network_args=[],
+            command=["cmd"],
+            stdin_data=None,
+            on_stdout_line=lines.append,
+            on_stderr_line=None,
+            timeout=None,
+            process_tracker=tracker,
+        )
+
+        assert len(lines) == 2
+        assert lines[0] == "line1\n"
+        assert lines[1] == "partial"
+        assert result.stdout == "line1\npartial"
