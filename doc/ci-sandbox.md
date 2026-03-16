@@ -32,6 +32,10 @@ allowlisting, and credential masking that the Airut gateway uses.
 - [Security Summary](#security-summary)
   - [Checklist](#checklist)
   - [Residual Risks](#residual-risks)
+- [Image Caching](#image-caching)
+  - [Cache Inputs](#cache-inputs)
+  - [Security](#security)
+  - [When to Disable Caching](#when-to-disable-caching)
 - [Fail-Secure Behavior](#fail-secure-behavior)
 - [Further Reading](#further-reading)
 
@@ -434,16 +438,18 @@ Before relying on the sandbox for CI security, verify:
 - [ ] Sandbox action is the **last step** of the job (nothing runs after it)
 - [ ] Credentials passed as masked secrets in `.airut/sandbox.yaml`, not as
   plain environment variables
+- [ ] Image caching enabled (default) or explicitly disabled if not wanted
 
 ### Residual Risks
 
-| Risk                                          | Mitigation                                                   |
-| --------------------------------------------- | ------------------------------------------------------------ |
-| Sandbox escape via container vulnerability    | Same as gateway: `--cap-drop=ALL`, `no-new-privileges`       |
-| Misconfigured workflow checks out PR branch   | Follow this guide; use sandbox-action which handles checkout |
-| Expression injection in workflow `run:`       | See below                                                    |
-| Tainted workspace after sandbox               | Make sandbox step terminal; no post-sandbox steps            |
-| Agent modifies `airut-sandbox` implementation | Installed from PyPI/trusted source, not from PR branch       |
+| Risk                                          | Mitigation                                                    |
+| --------------------------------------------- | ------------------------------------------------------------- |
+| Sandbox escape via container vulnerability    | Same as gateway: `--cap-drop=ALL`, `no-new-privileges`        |
+| Misconfigured workflow checks out PR branch   | Follow this guide; use sandbox-action which handles checkout  |
+| Expression injection in workflow `run:`       | See below                                                     |
+| Tainted workspace after sandbox               | Make sandbox step terminal; no post-sandbox steps             |
+| Agent modifies `airut-sandbox` implementation | Installed from PyPI/trusted source, not from PR branch        |
+| Stale cached image with unpatched base OS     | Weekly invalidation via Claude Code releases; `cache-version` |
 
 **Expression injection:** GitHub Actions evaluates `${{ }}` expressions in
 workflow YAML _before_ the `run:` script executes. Values like
@@ -456,6 +462,60 @@ not inside the container. Mitigation: pass untrusted GitHub context values via
 `env:` variables (which are shell-escaped) rather than inline `${{ }}`
 interpolation in `run:` scripts. The `sandbox-action` itself follows this
 pattern.
+
+## Image Caching
+
+By default, the sandbox action caches built container images across CI runs
+using `actions/cache`. This eliminates redundant image builds on ephemeral
+GitHub Actions runners, saving ~50 s per CI run.
+
+Two images are cached independently:
+
+- **Repo image** (`airut-repo:<hash>`): The container with your tools and
+  dependencies. Cache key includes the Dockerfile content hash and the current
+  Claude Code version.
+- **Proxy image** (`airut-proxy:<hash>`): The network sandbox proxy (mitmproxy,
+  DNS responder). Cache key includes a hash of the installed proxy package
+  files.
+
+### Cache Inputs
+
+| Input           | Default | Description                                                                                 |
+| --------------- | ------- | ------------------------------------------------------------------------------------------- |
+| `cache`         | `true`  | Set to `false` to disable caching and force fresh builds                                    |
+| `cache-version` | `""`    | Manual cache-buster for cases where automatic invalidation is insufficient (see note below) |
+| `cache-max-age` | `168`   | Maximum image age (hours) before forced rebuild. Default one week.                          |
+
+Cache keys automatically invalidate when the Dockerfile, context files, proxy
+code, or Claude Code version changes. The `cache-version` input is for edge
+cases where this is not enough -- for example, when the Dockerfile installs a
+tool via `curl | bash` that fetches the latest version dynamically (e.g., uv, gh
+CLI), and you need to force a rebuild to pick up a newer version.
+
+### Security
+
+Image caching does not weaken the sandbox security model:
+
+- **No secrets in images**: Neither image contains credentials. Secrets are
+  injected at runtime via environment variables and proxy-level bind mounts.
+- **Cache isolation**: GitHub Actions caches are branch-scoped. PR branches can
+  read the base branch cache but cannot write to it. A malicious PR cannot
+  poison the cache that other PRs use.
+- **Pre-sandbox operations**: All cache operations (build, save, load, upload)
+  run before the sandbox executes untrusted code. No commands run after the
+  sandbox, so there is no post-sandbox tampering vector.
+- **Content-addressed keys**: Cache keys include content hashes, so a change to
+  the Dockerfile or proxy files produces a new cache entry rather than
+  overwriting the old one.
+
+For the full cache design, see
+[spec/image.md](../spec/image.md#ci-image-caching).
+
+### When to Disable Caching
+
+- **Debugging image build issues**: Set `cache: false` to force a fresh build.
+- **After urgent security patches**: Bump `cache-version` to invalidate all
+  cached images and pick up updated base images.
 
 ## Fail-Secure Behavior
 
@@ -474,3 +534,5 @@ agent-steerable code runs as a fallback when sandboxing fails.
   specification (configuration, lifecycle, resource isolation)
 - [spec/sandbox-action.md](../spec/sandbox-action.md) -- Full action
   specification
+- [spec/image.md](../spec/image.md#ci-image-caching) -- Image caching design and
+  security model
