@@ -49,6 +49,7 @@ from airut.sandbox import (
     NetworkSandboxConfig,
     Outcome,
 )
+from airut.sandbox.types import ExecutionResult
 
 
 if TYPE_CHECKING:
@@ -56,6 +57,7 @@ if TYPE_CHECKING:
 
     from airut.gateway.service.gateway import GatewayService
     from airut.gateway.service.repo_handler import RepoHandler
+    from airut.git_mirror import GitMirrorCache
     from airut.sandbox.secrets import SecretReplacements
 
 logger = logging.getLogger(__name__)
@@ -166,7 +168,7 @@ def build_recovery_prompt(
 
 def _build_image(
     service: GatewayService,
-    mirror: object,
+    mirror: GitMirrorCache,
 ) -> str:
     """Build or reuse container image from git mirror.
 
@@ -179,7 +181,7 @@ def _build_image(
     """
     # Read all files from .airut/container/ directory
     try:
-        filenames = mirror.list_directory(_REPO_CONTAINER_DIR)  # type: ignore[union-attr]
+        filenames = mirror.list_directory(_REPO_CONTAINER_DIR)
     except Exception as e:
         from airut.sandbox import ImageBuildError
 
@@ -193,7 +195,7 @@ def _build_image(
     for filename in filenames:
         file_path = f"{_REPO_CONTAINER_DIR}/{filename}"
         try:
-            content = mirror.read_file(file_path)  # type: ignore[union-attr]
+            content = mirror.read_file(file_path)
         except Exception as e:
             from airut.sandbox import ImageBuildError
 
@@ -215,7 +217,7 @@ def _build_image(
 
 
 def _build_reply_summary(
-    result: object,
+    result: ExecutionResult,
     *,
     request_text: str,
     response_text: str,
@@ -235,10 +237,6 @@ def _build_reply_summary(
         ReplySummary ready for ConversationStore.
     """
     from datetime import datetime
-
-    from airut.sandbox.types import ExecutionResult
-
-    assert isinstance(result, ExecutionResult)
 
     return ReplySummary(
         session_id=result.session_id,

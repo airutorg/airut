@@ -29,7 +29,7 @@ import logging
 import secrets as secrets_module
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NoReturn, overload
+from typing import TYPE_CHECKING, Any, NoReturn, cast, overload
 
 import yaml
 from platformdirs import user_config_path, user_state_path
@@ -38,7 +38,7 @@ from airut.gateway.channel import ChannelConfig
 from airut.gateway.dotenv_loader import load_dotenv_once
 from airut.logging import SecretFilter
 from airut.sandbox.types import ResourceLimits
-from airut.yaml_env import EnvVar, make_env_loader, raw_resolve
+from airut.yaml_env import EnvVar, YamlValue, make_env_loader, raw_resolve
 
 
 if TYPE_CHECKING:
@@ -392,7 +392,7 @@ def _make_repo_loader() -> type[yaml.SafeLoader]:
 # ---------------------------------------------------------------------------
 
 
-def _coerce_bool(value: object) -> bool:
+def _coerce_bool(value: YamlValue) -> bool:
     """Coerce a value to bool, handling string representations."""
     if isinstance(value, bool):
         return value
@@ -408,12 +408,12 @@ _MISSING = object()
 
 
 @overload
-def _resolve[T](value: object, coerce: type[T], *, default: T) -> T: ...
+def _resolve[T](value: YamlValue, coerce: type[T], *, default: T) -> T: ...
 
 
 @overload
 def _resolve[T](
-    value: object,
+    value: YamlValue,
     coerce: type[T],
     *,
     required: str,
@@ -421,11 +421,11 @@ def _resolve[T](
 
 
 @overload
-def _resolve[T](value: object, coerce: type[T]) -> T | None: ...
+def _resolve[T](value: YamlValue, coerce: type[T]) -> T | None: ...
 
 
 def _resolve(
-    value: object,
+    value: YamlValue,
     coerce: type[Any],
     *,
     default: object = _MISSING,
@@ -499,7 +499,7 @@ def _resolve_secrets(raw_secrets: dict) -> dict[str, str]:
     return secrets
 
 
-def _resolve_string_list(value: object, *, required: str = "") -> list[str]:
+def _resolve_string_list(value: YamlValue, *, required: str = "") -> list[str]:
     """Resolve a list of strings, handling ``!env`` for each element.
 
     Args:
@@ -524,7 +524,7 @@ def _resolve_string_list(value: object, *, required: str = "") -> list[str]:
         )
 
     result: list[str] = []
-    for item in value:
+    for item in cast(list[YamlValue], value):
         resolved = raw_resolve(item)
         if resolved:
             result.append(resolved)
@@ -1185,7 +1185,7 @@ def _parse_slack_channel_config(
                 f"type '{key}' (expected workspace_members, "
                 f"user_group, or user_id)"
             )
-        value = items[0][1]
+        value = cast(YamlValue, items[0][1])
         if key == "workspace_members":
             coerced = _coerce_bool(value)
             if not coerced:
@@ -1610,7 +1610,7 @@ def _reject_stray_secret_refs(raw: dict) -> None:
         _check_secret_ref(value, key)
 
 
-def _check_secret_ref(value: object, path: str) -> None:
+def _check_secret_ref(value: YamlValue | _SecretRef, path: str) -> None:
     """Recursively check for ``_SecretRef`` in a parsed YAML value."""
     if isinstance(value, _SecretRef):
         tag = "!secret?" if value.optional else "!secret"
@@ -1619,10 +1619,12 @@ def _check_secret_ref(value: object, path: str) -> None:
             f"!secret tags are only supported inside container_env"
         )
     if isinstance(value, dict):
-        for k, v in value.items():
+        for k, v in cast(dict[str, YamlValue | _SecretRef], value).items():
             _check_secret_ref(v, f"{path}.{k}")
     if isinstance(value, list):
-        for i, v in enumerate(value):
+        for i, v in enumerate(
+            cast(list[YamlValue | _SecretRef], value),
+        ):
             _check_secret_ref(v, f"{path}[{i}]")
 
 

@@ -862,7 +862,7 @@ def _check_patches(
     service_running: bool = False,
     dotenv: bool = False,
     running_version: dict[str, str] | None = None,
-    upstream_version: object | None = None,
+    upstream_version: UpstreamVersion | None = None,
     cgroup_ok: bool = True,
 ):
     """Build a ``contextmanager`` that patches everything cmd_check needs.

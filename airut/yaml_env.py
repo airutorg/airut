@@ -11,6 +11,7 @@ tags on top; the sandbox CLI uses ``!env`` only.
 """
 
 import os
+from typing import Any
 
 import yaml
 
@@ -20,6 +21,14 @@ class EnvVar:
 
     def __init__(self, var_name: str) -> None:
         self.var_name = var_name
+
+
+#: Type alias for any value produced by YAML parsing with ``!env`` support.
+#: PyYAML SafeLoader produces str, int, float, bool, None, list, dict;
+#: the custom ``!env`` tag produces :class:`EnvVar`.
+YamlValue = (
+    str | int | float | bool | EnvVar | None | list[Any] | dict[str, Any]
+)
 
 
 def env_constructor(loader: yaml.SafeLoader, node: yaml.Node) -> EnvVar:
@@ -38,7 +47,7 @@ def make_env_loader() -> type[yaml.SafeLoader]:
     return _EnvLoader
 
 
-def raw_resolve(value: object) -> str | None:
+def raw_resolve(value: YamlValue) -> str | None:
     """Resolve an ``EnvVar`` to its string value, or stringify literals.
 
     Returns ``None`` if the value is ``None`` or the env var is not set.

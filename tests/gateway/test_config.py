@@ -7,6 +7,7 @@
 
 import logging
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -348,7 +349,7 @@ def test_global_config_invalid_conversation_max_age() -> None:
 
 
 def _make_repo_server_config(
-    master_repo: Path, tmp_path: Path, **overrides: object
+    master_repo: Path, tmp_path: Path, **overrides: Any
 ) -> RepoServerConfig:
     """Create a minimal RepoServerConfig for testing.
 
@@ -375,7 +376,7 @@ def _make_repo_server_config(
         "microsoft_oauth2_client_id",
         "microsoft_oauth2_client_secret",
     }
-    email_defaults: dict[str, object] = {
+    email_defaults: dict[str, Any] = {
         "imap_server": "imap.example.com",
         "imap_port": 993,
         "smtp_server": "smtp.example.com",
@@ -386,7 +387,7 @@ def _make_repo_server_config(
         "authorized_senders": ["authorized@example.com"],
         "trusted_authserv_id": "mx.example.com",
     }
-    repo_defaults: dict[str, object] = {
+    repo_defaults: dict[str, Any] = {
         "repo_id": "test",
         "git_repo_url": str(master_repo),
     }
@@ -397,8 +398,8 @@ def _make_repo_server_config(
         else:
             repo_defaults[key] = value
 
-    email_config = EmailChannelConfig(**email_defaults)  # type: ignore[arg-type]
-    return RepoServerConfig(channels={"email": email_config}, **repo_defaults)  # type: ignore[arg-type]
+    email_config = EmailChannelConfig(**email_defaults)
+    return RepoServerConfig(channels={"email": email_config}, **repo_defaults)
 
 
 def test_repo_server_config_defaults(master_repo: Path, tmp_path: Path) -> None:
@@ -789,9 +790,9 @@ class TestServerConfigValidation:
     """Tests for ServerConfig cross-repo validation."""
 
     def _repo(
-        self, repo_id: str, tmp_path: Path, **overrides: object
+        self, repo_id: str, tmp_path: Path, **overrides: Any
     ) -> RepoServerConfig:
-        email_defaults: dict[str, object] = {
+        email_defaults: dict[str, Any] = {
             "imap_server": "imap.example.com",
             "imap_port": 993,
             "smtp_server": "smtp.example.com",
@@ -809,7 +810,7 @@ class TestServerConfigValidation:
         return RepoServerConfig(
             repo_id=repo_id,
             git_repo_url="https://example.com/repo.git",
-            channels={"email": EmailChannelConfig(**email_defaults)},  # type: ignore[arg-type]
+            channels={"email": EmailChannelConfig(**email_defaults)},
         )
 
     def test_empty_repos_rejected(self, tmp_path: Path) -> None:

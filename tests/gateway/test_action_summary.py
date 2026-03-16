@@ -5,11 +5,13 @@
 
 """Tests for action_summary module."""
 
+from typing import Any
+
 from airut.claude_output.types import ToolUseBlock
 from airut.gateway.action_summary import summarize_action
 
 
-def _block(tool_name: str, **tool_input: object) -> ToolUseBlock:
+def _block(tool_name: str, **tool_input: Any) -> ToolUseBlock:
     """Create a ToolUseBlock for testing."""
     return ToolUseBlock(
         tool_id="t1",

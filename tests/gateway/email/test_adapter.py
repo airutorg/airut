@@ -7,6 +7,7 @@
 
 from email.parser import BytesParser
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -59,11 +60,11 @@ def _make_email(
     return BytesParser().parsebytes(raw.encode())
 
 
-def _make_raw_message(**kwargs: object) -> RawMessage:
+def _make_raw_message(**kwargs: Any) -> RawMessage:
     """Build a RawMessage wrapping an email for authenticate_and_parse tests."""
     sender = str(kwargs.get("sender", "user@example.com"))
     subject = str(kwargs.get("subject", "Hello"))
-    email_msg = _make_email(**kwargs)  # type: ignore[arg-type]
+    email_msg = _make_email(**kwargs)
     return RawMessage(sender=sender, content=email_msg, display_title=subject)
 
 

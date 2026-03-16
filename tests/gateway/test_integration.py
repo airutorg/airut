@@ -14,6 +14,7 @@ import concurrent.futures
 import threading
 import time
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -507,8 +508,8 @@ Follow-up question.
 
         def tracking_submit(
             raw_message: RawMessage,
-            repo_handler: object,
-            adapter: object,
+            repo_handler: Any,
+            adapter: Any,
         ) -> bool:
             received.append(raw_message)
             return False  # Don't actually process
