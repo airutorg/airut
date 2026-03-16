@@ -226,25 +226,20 @@ pre-populated local image store -- no changes to `ImageCache` are needed.
 Two images are cached independently. The overlay image is not cached (it is too
 cheap to rebuild and depends on the repo image tag).
 
-| Image       | Cache key                                              | Invalidates when                           |
-| ----------- | ------------------------------------------------------ | ------------------------------------------ |
-| Repo image  | `airut-repo-<dockerfile-hash>-cc<claude-code-version>` | Dockerfile changes or Claude Code releases |
-| Proxy image | `airut-proxy-<proxy-files-hash>`                       | Airut updates that change proxy code       |
+| Image       | Cache key                        | Invalidates when                     |
+| ----------- | -------------------------------- | ------------------------------------ |
+| Repo image  | `airut-repo-<dockerfile-hash>`   | Dockerfile or context files change   |
+| Proxy image | `airut-proxy-<proxy-files-hash>` | Airut updates that change proxy code |
 
-Independent entries ensure that a Claude Code release only rebuilds the repo
-image (not the proxy), and an airut update that only touches proxy code only
-rebuilds the proxy image (not the repo image).
+Independent entries ensure that an airut update that only touches proxy code
+only rebuilds the proxy image (not the repo image), and vice versa.
 
 ### Cache Key Design
 
-**Repo image key:**
-`airut-repo-<dockerfile-hash>-cc<claude-code-version>[-v<cache-version>]`
+**Repo image key:** `airut-repo-<dockerfile-hash>[-v<cache-version>]`
 
 - `<dockerfile-hash>`: First 16 hex chars of `airut-sandbox image hash` (repo
   component). Matches the content hash used by `ImageCache` internally.
-- `cc<claude-code-version>`: Current Claude Code release version, fetched from
-  the distribution endpoint. This is the most volatile component -- the
-  Dockerfile's `curl | bash` installer fetches whatever version is current.
 - `v<cache-version>`: Optional, appended only when the `cache-version` action
   input is non-empty.
 
@@ -253,12 +248,6 @@ rebuilds the proxy image (not the repo image).
 - `<proxy-files-hash>`: First 16 hex chars of `airut-sandbox image hash` (proxy
   component). Changes only when an airut update modifies proxy code or
   dependencies.
-
-**Claude Code version source:** The action fetches the version from
-`https://storage.googleapis.com/claude-code-dist-.../claude-code-releases/latest`
-(a bare version string). If unreachable, the version is set to `unknown`,
-producing a unique key that forces a cache miss (fail-safe: rebuild from
-scratch).
 
 ### How Loaded Images Interact with `ImageCache.ensure()`
 
@@ -289,19 +278,18 @@ All cache steps run **before** the sandbox. The sandbox action remains the
 3.  Checkout base branch                 (existing)
 4.  Fetch PR objects                     (existing)
 5.  Compute image hashes                 (airut-sandbox image hash)
-6.  Fetch Claude Code version            (curl version endpoint)
-7.  Restore repo image cache             (actions/cache/restore)
-8.  Restore proxy image cache            (actions/cache/restore)
-9.  Load cached images                   (airut-sandbox image load, if hit)
-10. Build and save images                (airut-sandbox image save, if miss)
-11. Upload repo image cache              (actions/cache/save, if miss)
-12. Upload proxy image cache             (actions/cache/save, if miss)
-13. Run sandboxed command                (existing: airut-sandbox run)
+6.  Restore repo image cache             (actions/cache/restore)
+7.  Restore proxy image cache            (actions/cache/restore)
+8.  Load cached images                   (airut-sandbox image load, if hit)
+9.  Build and save images                (airut-sandbox image save, if miss)
+10. Upload repo image cache              (actions/cache/save, if miss)
+11. Upload proxy image cache             (actions/cache/save, if miss)
+12. Run sandboxed command                (existing: airut-sandbox run)
 ```
 
-On cache hit: step 9 loads tarballs, steps 10--12 are skipped, step 13 finds
-images present. On cache miss: step 9 is skipped, step 10 builds and exports,
-steps 11--12 upload, step 13 finds images present.
+On cache hit: step 8 loads tarballs, steps 9--11 are skipped, step 12 finds
+images present. On cache miss: step 8 is skipped, step 9 builds and exports,
+steps 10--11 upload, step 12 finds images present.
 
 ### Security
 
@@ -312,8 +300,8 @@ which has unrestricted network access and handles credential replacement.
 
 Four independent defenses prevent this:
 
-1. **Step ordering (structural guarantee)**: All cache operations (steps 5--12)
-   run **before** the sandbox (step 13). The sandbox is the terminal step -- no
+1. **Step ordering (structural guarantee)**: All cache operations (steps 5--11)
+   run **before** the sandbox (step 12). The sandbox is the terminal step -- no
    workflow steps execute after it. A compromised container cannot tamper with
    tarballs, call cache APIs, or influence upload steps because those steps have
    already completed.
