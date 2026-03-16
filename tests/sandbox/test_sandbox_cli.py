@@ -547,6 +547,48 @@ class TestParseMaskedSecrets:
         assert result[0].scopes == ("*.example.com",)
         assert result[0].headers == ("Authorization", "X-Api-Key")
 
+    def test_allow_foreign_credentials_true(self) -> None:
+        """allow_foreign_credentials: true is parsed and propagated."""
+        result = _parse_masked_secrets(
+            {
+                "CF_TOKEN": {
+                    "value": "cf-secret",
+                    "scopes": ["api.cloudflare.com"],
+                    "headers": ["Authorization"],
+                    "allow_foreign_credentials": True,
+                }
+            }
+        )
+        assert len(result) == 1
+        assert result[0].allow_foreign_credentials is True
+
+    def test_allow_foreign_credentials_false(self) -> None:
+        """allow_foreign_credentials: false is parsed explicitly."""
+        result = _parse_masked_secrets(
+            {
+                "MY_TOKEN": {
+                    "value": "secret",
+                    "scopes": ["api.example.com"],
+                    "headers": ["Authorization"],
+                    "allow_foreign_credentials": False,
+                }
+            }
+        )
+        assert result[0].allow_foreign_credentials is False
+
+    def test_allow_foreign_credentials_absent_defaults_false(self) -> None:
+        """Omitted allow_foreign_credentials defaults to False."""
+        result = _parse_masked_secrets(
+            {
+                "MY_TOKEN": {
+                    "value": "secret",
+                    "scopes": ["api.example.com"],
+                    "headers": ["Authorization"],
+                }
+            }
+        )
+        assert result[0].allow_foreign_credentials is False
+
     def test_scopes_not_list_raises(self) -> None:
         """Non-list scopes raises _ConfigError."""
         from airut.sandbox_cli import _ConfigError
@@ -2460,3 +2502,23 @@ class TestLoadConfigWithEnvTag:
         assert cred.access_key_id_env_var == "AWS_AKI"
         assert cred.secret_access_key_env_var == "AWS_SAK"
         assert cred.session_token_env_var == "AWS_ST"
+
+    def test_allow_foreign_credentials_from_yaml(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """allow_foreign_credentials flows through YAML loading."""
+        monkeypatch.setenv("CF_TOKEN_VAL", "cf-secret-123")
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(
+            "masked_secrets:\n"
+            "  CF_TOKEN:\n"
+            "    value: !env CF_TOKEN_VAL\n"
+            "    scopes:\n"
+            "      - api.cloudflare.com\n"
+            "    headers:\n"
+            "      - Authorization\n"
+            "    allow_foreign_credentials: true\n"
+        )
+        config = _load_config(cfg_file)
+        assert len(config.masked_secrets) == 1
+        assert config.masked_secrets[0].allow_foreign_credentials is True

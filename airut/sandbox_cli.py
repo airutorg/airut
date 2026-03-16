@@ -198,12 +198,15 @@ def _parse_masked_secrets(raw: object) -> list[MaskedSecret]:
         if not isinstance(raw_headers, list) or not raw_headers:
             raise _ConfigError(f"{path}.headers must be a non-empty list")
 
+        allow_foreign = bool(c.get("allow_foreign_credentials", False))
+
         result.append(
             MaskedSecret(
                 env_var=name,
                 real_value=value,
                 scopes=tuple(str(s) for s in raw_scopes),
                 headers=tuple(str(h) for h in raw_headers),
+                allow_foreign_credentials=allow_foreign,
             )
         )
     return result
