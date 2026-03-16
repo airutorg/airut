@@ -40,7 +40,10 @@ def _block_text_contains(msg: SentSlackMessage, needle: str) -> bool:
     text = msg.kwargs.get("text", "")
     if isinstance(text, str) and needle_lower in text.lower():
         return True
-    for block in msg.kwargs.get("blocks", []):
+    blocks = msg.kwargs.get("blocks", [])
+    if not isinstance(blocks, list):
+        return False
+    for block in blocks:
         if not isinstance(block, dict):
             continue
         block_text = block.get("text", "")

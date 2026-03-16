@@ -14,7 +14,7 @@ import pytest
 from airut.claude_output.types import Usage
 from airut.dashboard.tracker import CompletionReason
 from airut.gateway.channel import ChannelSendError, ParsedMessage
-from airut.gateway.config import RepoConfig
+from airut.gateway.config import RepoConfig, RepoServerConfig
 from airut.gateway.service import build_recovery_prompt
 from airut.gateway.service.message_processing import process_message
 from airut.sandbox import ExecutionResult, Outcome
@@ -376,8 +376,8 @@ class TestProcessMessage:
             yield
 
     def _setup_svc(
-        self, email_config: Any, tmp_path: Path
-    ) -> tuple[Any, Any, Any, Any]:
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> tuple[Any, Any, MagicMock, MagicMock]:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_base_url=None)
 
@@ -429,7 +429,7 @@ class TestProcessMessage:
         return svc, handler, mock_conv_store, adapter
 
     def test_new_conversation_success(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         parsed = _make_parsed_message(body="Do something")
@@ -447,7 +447,7 @@ class TestProcessMessage:
         adapter.send_reply.assert_called_once()
 
     def test_empty_body_rejected(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, _, adapter = self._setup_svc(email_config, tmp_path)
         parsed = _make_parsed_message(body="")
@@ -458,7 +458,9 @@ class TestProcessMessage:
         assert reason != CompletionReason.SUCCESS
         adapter.send_error.assert_called_once()
 
-    def test_execution_failure(self, email_config: Any, tmp_path: Path) -> None:
+    def test_execution_failure(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
         svc._mock_task.execute = AsyncMock(
@@ -478,7 +480,9 @@ class TestProcessMessage:
         assert reason == CompletionReason.EXECUTION_FAILED
         assert conv_id == "conv1"
 
-    def test_container_timeout(self, email_config: Any, tmp_path: Path) -> None:
+    def test_container_timeout(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         svc._mock_task.execute = AsyncMock(
             return_value=_make_failure_result(
@@ -499,7 +503,7 @@ class TestProcessMessage:
         assert "after 300 seconds" in error_msg
 
     def test_container_timeout_no_timeout_value(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """Timeout message is clean when no timeout value is configured."""
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
@@ -529,7 +533,9 @@ class TestProcessMessage:
         assert "The task was interrupted." in error_msg
         assert "interrupted ." not in error_msg
 
-    def test_git_clone_error(self, email_config: Any, tmp_path: Path) -> None:
+    def test_git_clone_error(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
         from airut.gateway import GitCloneError
 
         svc, handler, _, adapter = self._setup_svc(email_config, tmp_path)
@@ -543,7 +549,9 @@ class TestProcessMessage:
         assert reason != CompletionReason.SUCCESS
         assert conv_id is None
 
-    def test_unexpected_error(self, email_config: Any, tmp_path: Path) -> None:
+    def test_unexpected_error(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         svc._mock_task.execute = AsyncMock(
             side_effect=RuntimeError("unexpected")
@@ -560,7 +568,7 @@ class TestProcessMessage:
         assert reason == CompletionReason.INTERNAL_ERROR
 
     def test_channel_send_error(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         adapter.send_reply.side_effect = ChannelSendError("SMTP rate limit")
@@ -577,7 +585,7 @@ class TestProcessMessage:
         assert conv_id == "conv1"
 
     def test_resume_existing_conversation(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         repo_path = tmp_path / "repo"
@@ -606,7 +614,7 @@ class TestProcessMessage:
         adapter.send_reply.assert_called_once()
 
     def test_model_hint_used_for_new_conversation(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         parsed = _make_parsed_message(body="Do stuff", model_hint="opus")
@@ -621,7 +629,7 @@ class TestProcessMessage:
         assert call_kwargs["model"] == "opus"
 
     def test_default_effort_passed_to_execute(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
@@ -640,7 +648,7 @@ class TestProcessMessage:
         assert call_kwargs["effort"] == "max"
 
     def test_effort_none_by_default(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         parsed = _make_parsed_message(body="Do stuff")
@@ -654,7 +662,7 @@ class TestProcessMessage:
         assert call_kwargs["effort"] is None
 
     def test_effort_persisted_for_resumed_conversation(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         repo_path = tmp_path / "repo"
@@ -679,7 +687,7 @@ class TestProcessMessage:
         assert call_kwargs["effort"] == "high"
 
     def test_server_model_used_as_sole_source(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         update_repo(handler, model="haiku")
@@ -695,7 +703,7 @@ class TestProcessMessage:
         assert call_kwargs["model"] == "haiku"
 
     def test_server_effort_used_as_sole_source(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         update_repo(handler, effort="low")
@@ -711,7 +719,7 @@ class TestProcessMessage:
         assert call_kwargs["effort"] == "low"
 
     def test_no_server_override_falls_through(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         # Server model and effort are None by default
@@ -732,7 +740,7 @@ class TestProcessMessage:
         assert call_kwargs["effort"] == "max"
 
     def test_server_model_overrides_channel_hint(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         update_repo(handler, model="haiku")
@@ -748,7 +756,7 @@ class TestProcessMessage:
         assert call_kwargs["model"] == "haiku"
 
     def test_server_model_overrides_repo_default(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         update_repo(handler, model="haiku")
@@ -767,7 +775,7 @@ class TestProcessMessage:
         assert call_kwargs["model"] == "haiku"
 
     def test_server_effort_overrides_repo_default(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         update_repo(handler, effort="low")
@@ -786,7 +794,7 @@ class TestProcessMessage:
         assert call_kwargs["effort"] == "low"
 
     def test_server_override_not_used_for_resumed_conversation(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         update_repo(handler, model="haiku", effort="low")
@@ -812,7 +820,9 @@ class TestProcessMessage:
         assert call_kwargs["model"] == "opus"
         assert call_kwargs["effort"] == "max"
 
-    def test_attachments_saved(self, email_config: Any, tmp_path: Path) -> None:
+    def test_attachments_saved(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         # Adapter returns attachment filenames
         adapter.save_attachments.return_value = ["report.pdf"]
@@ -828,7 +838,7 @@ class TestProcessMessage:
         assert "report.pdf" in call_args[0][0]  # positional prompt arg
 
     def test_usage_stats_footer(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         parsed = _make_parsed_message(body="Check")
@@ -844,7 +854,7 @@ class TestProcessMessage:
         assert "Cost:" in str(adapter.send_reply.call_args)
 
     def test_success_calls_add_reply(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """Successful execution records reply via add_reply."""
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
@@ -861,7 +871,7 @@ class TestProcessMessage:
         assert call_args[0][0] == "conv1"  # conversation_id
 
     def test_event_log_start_new_reply_called(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """task.event_log.start_new_reply() is called before execution."""
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
@@ -876,7 +886,7 @@ class TestProcessMessage:
         svc._mock_task.event_log.start_new_reply.assert_called_once()
 
     def test_resumed_conversation_ignores_model_request(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         repo_path = tmp_path / "repo"
@@ -901,7 +911,7 @@ class TestProcessMessage:
         assert call_kwargs["model"] == "sonnet"
 
     def test_task_id_updated_for_new_conversation(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         parsed = _make_parsed_message(body="Do something")
@@ -916,7 +926,7 @@ class TestProcessMessage:
         )
 
     def test_long_subject_truncated_in_log(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """Long messages don't crash processing."""
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
@@ -930,7 +940,7 @@ class TestProcessMessage:
         # Just verify it doesn't crash
 
     def test_no_usage_stats_no_footer(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
@@ -951,7 +961,7 @@ class TestProcessMessage:
         assert usage_footer == ""
 
     def test_cost_shown_with_api_key_only(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """Cost shown when only ANTHROPIC_API_KEY is set."""
         rc = _make_repo_config(
@@ -969,7 +979,7 @@ class TestProcessMessage:
         assert "Cost:" in str(adapter.send_reply.call_args)
 
     def test_cost_hidden_with_oauth_only(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """Cost hidden when only OAuth token is set."""
         rc = _make_repo_config(
@@ -987,7 +997,7 @@ class TestProcessMessage:
         assert "Cost:" not in str(adapter.send_reply.call_args)
 
     def test_cost_shown_with_both_api_key_and_oauth(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """Cost shown when both are set (API key takes priority)."""
         rc = _make_repo_config(
@@ -1008,7 +1018,7 @@ class TestProcessMessage:
         assert "Cost:" in str(adapter.send_reply.call_args)
 
     def test_failure_with_no_error_summary(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
@@ -1027,7 +1037,7 @@ class TestProcessMessage:
         assert "An error occurred" in response_text
 
     def test_failure_with_error_summary(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
@@ -1051,7 +1061,7 @@ class TestProcessMessage:
         assert "Error summary text" in response_text
 
     def test_execution_failure_persists_session(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """Conversation store must be updated even when execution fails."""
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
@@ -1077,7 +1087,7 @@ class TestProcessMessage:
         assert call_args[0][0] == "conv1"  # conversation_id
 
     def test_container_timeout_persists_session(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """Store must be updated on container timeout."""
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
@@ -1102,7 +1112,7 @@ class TestProcessMessage:
         assert call_args[0][0] == "conv1"  # conversation_id
 
     def test_unexpected_error_persists_session(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """Conversation store must be updated on unexpected exceptions."""
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
@@ -1125,7 +1135,7 @@ class TestProcessMessage:
         assert call_args[0][0] == "conv1"  # conversation_id
 
     def test_unexpected_error_persist_failure_handled(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """Persist failure in catch-all handler is logged, not raised."""
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
@@ -1147,7 +1157,7 @@ class TestProcessMessage:
         assert conv_id == "conv1"
 
     def test_prompt_too_long_retries_with_new_session(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """Prompt-too-long error triggers retry with fresh session."""
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
@@ -1204,7 +1214,7 @@ class TestProcessMessage:
         assert "I created the PR." in second_call[0][0]
 
     def test_prompt_too_long_no_retry_without_session_id(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """Prompt-too-long without session_id does not retry (new conv)."""
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
@@ -1231,7 +1241,7 @@ class TestProcessMessage:
         assert svc.sandbox.create_task.call_count == 1
 
     def test_session_corrupted_retries_with_new_session(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """API 4xx error triggers retry with fresh session."""
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
@@ -1282,7 +1292,7 @@ class TestProcessMessage:
         assert "context length limits" in second_call[0][0]
 
     def test_session_corrupted_no_retry_without_session_id(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """API 4xx without session_id does not retry (new conversation)."""
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
@@ -1325,8 +1335,8 @@ class TestBuildImageErrors:
             yield
 
     def _setup_svc(
-        self, email_config: Any, tmp_path: Path
-    ) -> tuple[Any, Any, Any, Any]:
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> tuple[Any, Any, MagicMock, MagicMock]:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_base_url=None)
 
@@ -1375,7 +1385,7 @@ class TestBuildImageErrors:
         return svc, handler, mock_conv_store, adapter
 
     def test_list_directory_error_raises_image_build_error(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """mirror.list_directory failure is caught and sent as error."""
         svc, handler, mock_ss, adapter = self._setup_svc(email_config, tmp_path)
@@ -1400,7 +1410,7 @@ class TestBuildImageErrors:
         assert "ImageBuildError" in error_msg
 
     def test_read_file_error_raises_image_build_error(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """mirror.read_file failure is caught and sent as error."""
         svc, handler, mock_ss, adapter = self._setup_svc(email_config, tmp_path)
@@ -1428,7 +1438,7 @@ class TestBuildImageErrors:
         assert "ImageBuildError" in error_msg
 
     def test_no_dockerfile_raises_image_build_error(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """Missing Dockerfile in directory listing raises ImageBuildError."""
         svc, handler, mock_ss, adapter = self._setup_svc(email_config, tmp_path)
@@ -1474,8 +1484,8 @@ class TestAllowlistParseError:
             yield
 
     def _setup_svc(
-        self, email_config: Any, tmp_path: Path
-    ) -> tuple[Any, Any, Any, Any]:
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> tuple[Any, Any, MagicMock, MagicMock]:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_base_url=None)
 
@@ -1523,7 +1533,7 @@ class TestAllowlistParseError:
         return svc, handler, mock_conv_store, adapter
 
     def test_allowlist_read_error_raises_proxy_error(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """Failure reading/parsing allowlist raises ProxyError."""
         svc, handler, mock_ss, adapter = self._setup_svc(email_config, tmp_path)
@@ -1548,8 +1558,8 @@ class TestConvertReplacementMap:
     """Tests for _convert_replacement_map exercised through process_message."""
 
     def _setup_svc(
-        self, email_config: Any, tmp_path: Path
-    ) -> tuple[Any, Any, Any, Any]:
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> tuple[Any, Any, MagicMock, MagicMock]:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_base_url=None)
 
@@ -1598,7 +1608,7 @@ class TestConvertReplacementMap:
         return svc, handler, mock_conv_store, adapter
 
     def test_replacement_and_signing_entries_converted(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """ReplacementEntry and SigningCredentialEntry are converted."""
         from airut.gateway.config import (
@@ -1664,7 +1674,7 @@ class TestConvertReplacementMap:
         assert replacements_dict["surrogate-key-id"]["type"] == "aws-sigv4"
 
     def test_allow_foreign_credentials_converted(
-        self, email_config: Any, tmp_path: Path
+        self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """allow_foreign_credentials is threaded through conversion."""
         from airut.gateway.config import ReplacementEntry

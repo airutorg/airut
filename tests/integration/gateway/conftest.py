@@ -12,11 +12,12 @@ tests of the email gateway service with minimal mocking.
 import os
 import sys
 from collections.abc import Callable, Generator
+from email.message import EmailMessage, Message
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 
@@ -201,7 +202,7 @@ def create_email() -> Callable[..., MIMEMultipart | MIMEText]:
 @pytest.fixture
 def wait_for_response(
     integration_env: IntegrationEnvironment,
-) -> Callable[..., Any]:
+) -> Callable[..., EmailMessage]:
     """Fixture that provides a helper to wait for email responses.
 
     Returns a function that waits for a response email matching
@@ -216,9 +217,9 @@ def wait_for_response(
     """
 
     def _wait(
-        predicate: Callable[[Any], bool] | None = None,
+        predicate: Callable[[EmailMessage], bool] | None = None,
         timeout: float = 30.0,
-    ) -> Any:
+    ) -> EmailMessage:
         """Wait for a response email.
 
         Args:
@@ -460,7 +461,7 @@ def wait_for_task(
         time.sleep(min(0.1, remaining))
 
 
-def get_message_text(msg: MIMEMultipart | MIMEText | Any) -> str:
+def get_message_text(msg: Message) -> str:
     """Extract text content from an email message.
 
     Handles both simple text messages and multipart messages.

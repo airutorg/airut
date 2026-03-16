@@ -353,13 +353,16 @@ def test_global_config_invalid_conversation_max_age() -> None:
 
 
 def _make_repo_server_config(
-    master_repo: Path, tmp_path: Path, **overrides: Any
+    master_repo: Path,
+    tmp_path: Path,
+    **overrides: Any,
 ) -> RepoServerConfig:
     """Create a minimal RepoServerConfig for testing.
 
-    Email-specific overrides go into the EmailChannelConfig; repo-level
-    overrides (repo_id, git_repo_url, secrets, masked_secrets, etc.) stay
-    on RepoServerConfig.
+    ``**overrides`` uses ``Any`` because the dict is split and unpacked
+    into two different constructors (EmailChannelConfig, RepoServerConfig)
+    whose parameters have incompatible types; no single union satisfies
+    all parameter positions.
     """
     email_fields = {
         "imap_server",
@@ -794,8 +797,12 @@ class TestServerConfigValidation:
     """Tests for ServerConfig cross-repo validation."""
 
     def _repo(
-        self, repo_id: str, tmp_path: Path, **overrides: Any
+        self,
+        repo_id: str,
+        tmp_path: Path,
+        **overrides: Any,
     ) -> RepoServerConfig:
+        # Any: dict is unpacked into EmailChannelConfig constructor
         email_defaults: dict[str, Any] = {
             "imap_server": "imap.example.com",
             "imap_port": 993,

@@ -9,9 +9,20 @@ Centralizes credential constants and Authorization header strings
 used across ``test_aws_signing.py`` and ``test_proxy_filter.py``.
 """
 
-from typing import Any
+from typing import TypedDict
 
 from airut._bundled.proxy.aws_signing import SIGNING_TYPE_AWS_SIGV4
+
+
+class SigningReplacement(TypedDict):
+    """Typed replacement map entry for AWS SigV4 credentials."""
+
+    type: str
+    access_key_id: str
+    secret_access_key: str
+    session_token: str
+    surrogate_session_token: str
+    scopes: list[str]
 
 
 # Real credential pair used in AWS documentation examples
@@ -47,7 +58,7 @@ SIGV4A_BEDROCK_AUTH = (
 )
 
 # Signing credential replacement map entry
-SIGNING_REPLACEMENT: dict[str, Any] = {
+SIGNING_REPLACEMENT: SigningReplacement = {
     "type": SIGNING_TYPE_AWS_SIGV4,
     "access_key_id": REAL_ACCESS_KEY_ID,
     "secret_access_key": REAL_SECRET_ACCESS_KEY,

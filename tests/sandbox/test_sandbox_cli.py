@@ -13,7 +13,7 @@ import signal
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1351,10 +1351,10 @@ class TestExecute:
         self,
         command: list[str] | None = None,
         tmp_path: Path | None = None,
-        **overrides: Any,
+        **overrides: list[str] | Path | str | int | bool | None,
     ) -> argparse.Namespace:
         """Create a minimal args Namespace for testing _execute."""
-        defaults: dict[str, Any] = {
+        defaults: dict[str, list[str] | Path | str | int | bool | None] = {
             "command": command if command is not None else ["echo", "hello"],
             "dockerfile": None,
             "context_dir": None,
@@ -2416,7 +2416,8 @@ class TestExecute:
         mock_stream = MagicMock()
 
         async def _fake_execute(
-            command: list[str], **kwargs: Any
+            command: list[str],
+            **kwargs: Callable[[str], None] | None,
         ) -> CommandResult:
             callback = kwargs[callback_kwarg]
             assert callback is not None

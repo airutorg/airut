@@ -55,8 +55,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+from airut._json_types import JsonDict
 
-def generate_system_event(session_id: str) -> dict[str, Any]:
+
+def generate_system_event(session_id: str) -> JsonDict:
     """Generate system/init event."""
     return {
         "type": "system",
@@ -67,7 +69,7 @@ def generate_system_event(session_id: str) -> dict[str, Any]:
     }
 
 
-def generate_assistant_event(text: str) -> dict[str, Any]:
+def generate_assistant_event(text: str) -> JsonDict:
     """Generate assistant message event."""
     return {
         "type": "assistant",
@@ -77,9 +79,7 @@ def generate_assistant_event(text: str) -> dict[str, Any]:
     }
 
 
-def generate_tool_use_event(
-    tool_name: str, tool_input: dict[str, Any]
-) -> dict[str, Any]:
+def generate_tool_use_event(tool_name: str, tool_input: JsonDict) -> JsonDict:
     """Generate assistant event with tool use."""
     return {
         "type": "assistant",
@@ -101,7 +101,7 @@ def generate_result_event(
     result_text: str,
     is_error: bool = False,
     duration_ms: int = 100,
-) -> dict[str, Any]:
+) -> JsonDict:
     """Generate result event."""
     return {
         "type": "result",
@@ -165,7 +165,9 @@ def main() -> int:
         os.environ.get("MOCK_CLAUDE_SESSION_ID") or f"mock-{int(time.time())}"
     )
 
-    # Prepare execution context
+    # exec() populates the context with arbitrary user-defined objects
+    # (events list, sync functions, etc.), so Any is the only correct
+    # value type for the dict.
     context: dict[str, Any] = {
         "workspace": workspace,
         "inbox": inbox,

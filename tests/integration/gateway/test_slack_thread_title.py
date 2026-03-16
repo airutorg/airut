@@ -81,6 +81,7 @@ events = [
 
             # Title should be derived from the message text
             title = title_call.kwargs.get("title", "")
+            assert isinstance(title, str), "Title should be a string"
             assert len(title) > 0, "Title should not be empty"
 
         finally:

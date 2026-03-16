@@ -69,7 +69,7 @@ events = [
 
             # Should have blocks (markdown block format)
             blocks = reply.kwargs.get("blocks")
-            if blocks:
+            if isinstance(blocks, list):
                 assert len(blocks) >= 1
 
         finally:

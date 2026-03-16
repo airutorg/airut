@@ -29,8 +29,12 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
+
+from slack_bolt import App
+
+from airut._json_types import JsonDict, JsonValue
+from airut.gateway.channel import RawMessage
 
 
 logger = logging.getLogger(__name__)
@@ -48,7 +52,7 @@ class SentSlackMessage:
     method: str
     """API method name (``chat_postMessage``, etc.)."""
 
-    kwargs: dict[str, Any]
+    kwargs: dict[str, JsonValue | bytes]
     """Keyword arguments passed to the API method."""
 
 
@@ -89,7 +93,7 @@ class FakeWebClient:
 
     # -- chat.postMessage -----------------------------------------------
 
-    def chat_postMessage(self, **kwargs: Any) -> MagicMock:  # noqa: N802
+    def chat_postMessage(self, **kwargs: JsonValue | bytes) -> MagicMock:  # noqa: N802
         """Record a chat.postMessage call."""
         self._server._record_sent(
             SentSlackMessage(method="chat_postMessage", kwargs=kwargs)
@@ -100,10 +104,10 @@ class FakeWebClient:
 
     # -- files_upload_v2 ------------------------------------------------
 
-    def files_upload_v2(self, **kwargs: Any) -> MagicMock:
+    def files_upload_v2(self, **kwargs: JsonValue | bytes) -> MagicMock:
         """Record a files_upload_v2 call."""
         file_path = kwargs.get("file")
-        if file_path and Path(file_path).exists():
+        if isinstance(file_path, str) and Path(file_path).exists():
             kwargs["_file_content"] = Path(file_path).read_bytes()
         self._server._record_sent(
             SentSlackMessage(method="files_upload_v2", kwargs=kwargs)
@@ -114,7 +118,9 @@ class FakeWebClient:
 
     # -- assistant_threads_setTitle -------------------------------------
 
-    def assistant_threads_setTitle(self, **kwargs: Any) -> MagicMock:  # noqa: N802
+    def assistant_threads_setTitle(  # noqa: N802
+        self, **kwargs: JsonValue | bytes
+    ) -> MagicMock:
         """Record a setTitle call."""
         self._server._record_sent(
             SentSlackMessage(
@@ -128,9 +134,10 @@ class FakeWebClient:
 
     # -- users.info -----------------------------------------------------
 
-    def users_info(self, **kwargs: Any) -> dict[str, Any]:
+    def users_info(self, **kwargs: JsonValue | bytes) -> JsonDict:
         """Return canned user info from registered users."""
-        user_id = kwargs.get("user", "")
+        raw_user_id = kwargs.get("user", "")
+        user_id = raw_user_id if isinstance(raw_user_id, str) else ""
         user = self._server.get_registered_user(user_id)
         if user is None:
             from slack_sdk.errors import SlackApiError
@@ -161,7 +168,7 @@ class FakeWebClient:
 
     # -- auth.test ------------------------------------------------------
 
-    def auth_test(self, **kwargs: Any) -> dict[str, Any]:
+    def auth_test(self, **kwargs: JsonValue | bytes) -> JsonDict:
         """Return workspace team ID."""
         return {
             "ok": True,
@@ -171,7 +178,7 @@ class FakeWebClient:
 
     # -- chat.update (for plan streamer) --------------------------------
 
-    def chat_update(self, **kwargs: Any) -> MagicMock:  # noqa: N802
+    def chat_update(self, **kwargs: JsonValue | bytes) -> MagicMock:  # noqa: N802
         """Record a chat.update call (used by plan streamer)."""
         self._server._record_sent(
             SentSlackMessage(method="chat_update", kwargs=kwargs)
@@ -194,7 +201,7 @@ class FakeSocketModeHandler:
     listeners without errors.
     """
 
-    def __init__(self, app: Any, app_token: str = "") -> None:
+    def __init__(self, app: App | None, app_token: str = "") -> None:
         self.app = app
         self.app_token = app_token
         self.client = MagicMock()
@@ -256,7 +263,9 @@ class TestSlackServer:
         self._handler: FakeSocketModeHandler | None = None
 
         # Submit callback set by listener.start()
-        self._submit_callback: Callable[[Any], bool] | None = None
+        self._submit_callback: Callable[[RawMessage[JsonDict]], bool] | None = (
+            None
+        )
         self._ready_event = threading.Event()
 
     def start(self) -> None:
@@ -322,7 +331,9 @@ class TestSlackServer:
 
     # -- Message injection ----------------------------------------------
 
-    def set_submit_callback(self, callback: Callable[[Any], bool]) -> None:
+    def set_submit_callback(
+        self, callback: Callable[[RawMessage[JsonDict]], bool]
+    ) -> None:
         """Set submit callback (called by listener.start)."""
         self._submit_callback = callback
         self._ready_event.set()
@@ -345,18 +356,16 @@ class TestSlackServer:
         text: str,
         channel_id: str = "D_TEST_DM",
         thread_ts: str | None = None,
-        files: list[dict[str, str]] | None = None,
+        files: list[JsonDict] | None = None,
     ) -> None:
         """Simulate a Slack user message event.
 
         Builds a ``RawMessage`` and calls the ``submit`` callback.
         """
-        from airut.gateway.channel import RawMessage
-
         if thread_ts is None:
             thread_ts = str(time.time())
 
-        payload: dict[str, Any] = {
+        payload: JsonDict = {
             "user": user_id,
             "text": text,
             "channel": channel_id,
@@ -364,11 +373,13 @@ class TestSlackServer:
         }
 
         if files:
-            payload["files"] = files
+            # list[JsonDict] is list[JsonValue] which is JsonValue; ty
+            # cannot resolve recursive type alias subtyping.
+            payload["files"] = files  # type: ignore[invalid-assignment]
 
         display_title = text[:60].split("\n")[0] if text else ""
 
-        raw: RawMessage[dict[str, Any]] = RawMessage(
+        raw: RawMessage[JsonDict] = RawMessage(
             sender=user_id,
             content=payload,
             display_title=display_title,
@@ -435,14 +446,18 @@ class TestSlackServer:
         texts: list[str] = []
         for m in msgs:
             text = m.kwargs.get("text", "")
-            if text:
+            if isinstance(text, str) and text:
                 texts.append(text)
             blocks = m.kwargs.get("blocks", [])
+            if not isinstance(blocks, list):
+                continue
             for block in blocks:
                 if isinstance(block, dict) and "text" in block:
                     block_text = block["text"]
                     if isinstance(block_text, dict):
-                        texts.append(block_text.get("text", ""))
-                    else:
+                        raw = block_text.get("text", "")
+                        if isinstance(raw, str):
+                            texts.append(raw)
+                    elif isinstance(block_text, str):
                         texts.append(block_text)
         return texts

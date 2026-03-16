@@ -13,7 +13,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from airut.gateway.channel import RawMessage
+from airut.gateway.config import RepoServerConfig
 from airut.gateway.service import GatewayService
+from airut.gateway.service.repo_handler import RepoHandler
 
 
 def make_message(
@@ -42,7 +44,9 @@ def make_message(
     return RawMessage(sender=sender, content=email_msg, display_title=subject)
 
 
-def update_global(svc: Any, **overrides: Any) -> None:
+def update_global(
+    svc: GatewayService, **overrides: bool | int | str | None
+) -> None:
     """Update global config with new values (frozen dataclass)."""
     for key, value in overrides.items():
         object.__setattr__(svc.global_config, key, value)
@@ -69,7 +73,9 @@ _EMAIL_FIELDS = {
 }
 
 
-def update_repo(handler: Any, **overrides: Any) -> None:
+def update_repo(
+    handler: RepoHandler, **overrides: bool | int | str | None
+) -> None:
     """Update repo config with new values (frozen dataclass)."""
     for key, value in overrides.items():
         if key in _EMAIL_FIELDS:
@@ -79,12 +85,21 @@ def update_repo(handler: Any, **overrides: Any) -> None:
 
 
 def make_service(
-    email_config: Any, tmp_path: Path, **config_overrides: Any
+    email_config: RepoServerConfig,
+    tmp_path: Path,
+    **config_overrides: bool | int | str | None,
 ) -> tuple[Any, Any]:
     """Create a GatewayService with all external deps mocked.
 
+    Returns ``Any`` because the returned GatewayService and RepoHandler
+    have internal attributes (tracker, sandbox, adapters,
+    conversation_manager) replaced with MagicMock.  Tests access both
+    the real interface and mock attributes (.return_value, .side_effect,
+    .assert_called_*), which no single static type can express.
+
     Returns:
-        Tuple of (service, handler) where handler is svc.repo_handlers["test"].
+        Tuple of (service, handler) where handler is
+        svc.repo_handlers["test"].
     """
     from dataclasses import fields
 
@@ -100,6 +115,8 @@ def make_service(
     }
 
     # Build GlobalConfig with overrides
+    # Any: dict unpacked into GlobalConfig whose params have
+    # incompatible types (bool, int, str, None).
     global_kwargs: dict[str, Any] = {"dashboard_enabled": False}
     global_kwargs.update(global_overrides)
     global_config = GlobalConfig(**global_kwargs)
@@ -137,6 +154,11 @@ def make_service(
 
 
 @pytest.fixture
-def service_and_handler(email_config: Any, tmp_path: Path) -> tuple[Any, Any]:
-    """Fixture providing a service and handler tuple."""
+def service_and_handler(
+    email_config: RepoServerConfig, tmp_path: Path
+) -> tuple[Any, Any]:
+    """Fixture providing a service and handler tuple.
+
+    Returns ``Any`` — see ``make_service`` docstring.
+    """
     return make_service(email_config, tmp_path)
