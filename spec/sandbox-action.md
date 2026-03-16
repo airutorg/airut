@@ -21,13 +21,14 @@ workflow, see [workflows/sandbox-action.md](../workflows/sandbox-action.md).
 
 ### Inputs
 
-| Input           | Required | Default        | Description                                                               |
-| --------------- | -------- | -------------- | ------------------------------------------------------------------------- |
-| `command`       | Yes      |                | CI command to run inside the sandbox (after PR checkout)                  |
-| `pr_sha`        | Yes      |                | PR commit SHA to check out and test                                       |
-| `merge`         | No       | `true`         | Merge PR into base branch before running (like GitHub's default behavior) |
-| `airut_version` | No       | from `VERSION` | Airut version to install. PyPI version or `main` for GitHub HEAD.         |
-| `sandbox_args`  | No       | `--verbose`    | Additional arguments passed to `airut-sandbox run`.                       |
+| Input              | Required | Default        | Description                                                               |
+| ------------------ | -------- | -------------- | ------------------------------------------------------------------------- |
+| `command`          | Yes      |                | CI command to run inside the sandbox (after PR checkout)                  |
+| `pr_sha`           | Yes      |                | PR commit SHA to check out and test                                       |
+| `merge`            | No       | `true`         | Merge PR into base branch before running (like GitHub's default behavior) |
+| `airut_version`    | No       | from `VERSION` | Airut version to install. PyPI version or `main` for GitHub HEAD.         |
+| `sandbox_args`     | No       | `--verbose`    | Additional arguments passed to `airut-sandbox run`.                       |
+| `network_log_live` | No       | `false`        | Print network activity to the job log during execution.                   |
 
 ### Consumer Prerequisites
 
