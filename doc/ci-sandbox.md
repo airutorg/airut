@@ -356,14 +356,14 @@ Before relying on the sandbox for CI security, verify:
 
 ### Residual Risks
 
-| Risk                                          | Mitigation                                                    |
-| --------------------------------------------- | ------------------------------------------------------------- |
-| Sandbox escape via container vulnerability    | Same as gateway: `--cap-drop=ALL`, `no-new-privileges`        |
-| Misconfigured workflow checks out PR branch   | Follow this guide; use sandbox-action which handles checkout  |
-| Expression injection in workflow `run:`       | See below                                                     |
-| Tainted workspace after sandbox               | Make sandbox step terminal; no post-sandbox steps             |
-| Agent modifies `airut-sandbox` implementation | Installed from PyPI/trusted source, not from PR branch        |
-| Stale cached image with unpatched base OS     | Weekly invalidation via Claude Code releases; `cache-version` |
+| Risk                                          | Mitigation                                                                                          |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Sandbox escape via container vulnerability    | Same as gateway: `--cap-drop=ALL`, `no-new-privileges`                                              |
+| Misconfigured workflow checks out PR branch   | Follow this guide; use sandbox-action which handles checkout                                        |
+| Expression injection in workflow `run:`       | See below                                                                                           |
+| Tainted workspace after sandbox               | Make sandbox step terminal; no post-sandbox steps                                                   |
+| Agent modifies `airut-sandbox` implementation | Installed from PyPI/trusted source, not from PR branch                                              |
+| Stale cached image with unpatched base OS     | `cache-max-age` (default one week) forces periodic rebuild; `cache-version` for manual invalidation |
 
 **Expression injection:** GitHub Actions evaluates `${{ }}` expressions in
 workflow YAML _before_ the `run:` script executes. Values like
