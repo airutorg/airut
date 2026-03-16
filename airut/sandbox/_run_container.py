@@ -8,13 +8,17 @@
 Extracts the container subprocess lifecycle from task-specific logic so
 that both ``AgentTask`` (Claude Code) and ``CommandTask`` (arbitrary
 commands) can share the same execution engine.
+
+Uses ``asyncio.create_subprocess_exec`` for concurrent stdout/stderr
+reading, eliminating the deadlock risk of sequential pipe reads.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import signal
-import subprocess
 import threading
 import time
 from collections.abc import Callable
@@ -32,7 +36,7 @@ class _RawResult:
 
     Attributes:
         stdout: Raw stdout text.
-        stderr: Raw stderr text (empty when ``stderr_passthrough`` is True).
+        stderr: Raw stderr text.
         exit_code: Container process exit code.
         duration_ms: Execution duration in milliseconds.
         timed_out: Whether the command timed out.
@@ -46,61 +50,68 @@ class _RawResult:
 
 
 class _ProcessTracker:
-    """Thread-safe process reference for stop() support.
+    """Thread-safe PID reference for stop() support.
 
-    Holds a reference to the currently running subprocess and provides
+    Holds the raw PID of the currently running subprocess and provides
     a ``stop()`` method that can be called from another thread to
-    gracefully terminate the process.
+    terminate the process via ``os.kill()``.
     """
 
     def __init__(self) -> None:
-        self._process: subprocess.Popen[str] | None = None
+        self._pid: int | None = None
         self._lock = threading.Lock()
 
-    def set(self, process: subprocess.Popen[str]) -> None:
-        """Set the active process reference.
+    def set(self, pid: int) -> None:
+        """Set the active process PID.
 
         Args:
-            process: The running subprocess.
+            pid: The running subprocess PID.
         """
         with self._lock:
-            self._process = process
+            self._pid = pid
 
     def clear(self) -> None:
-        """Clear the process reference after completion."""
+        """Clear the PID reference after completion."""
         with self._lock:
-            self._process = None
+            self._pid = None
 
     def stop(self) -> bool:
         """Stop the tracked process from another thread.
 
-        Sends SIGTERM, waits 5 seconds, then SIGKILL. The lock is
-        released before the blocking wait to avoid holding it during
-        I/O.
+        Sends SIGTERM and returns immediately. A background timer sends
+        SIGKILL after 5 seconds if the process has not exited.
 
         Returns:
-            True if a running process was stopped, False if nothing running.
+            True if a signal was sent, False if nothing running.
         """
         with self._lock:
-            process = self._process
-        if process is None:
+            pid = self._pid
+        if pid is None:
             return False
 
-        logger.info("Stopping tracked process")
+        logger.info("Stopping tracked process (pid=%d)", pid)
         try:
-            process.send_signal(signal.SIGTERM)
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                logger.warning(
-                    "Process did not terminate gracefully, sending SIGKILL"
-                )
-                process.kill()
-                process.wait()
-            return True
-        except Exception as e:
-            logger.error("Failed to stop process: %s", e)
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
             return False
+
+        threading.Timer(5.0, self._force_kill).start()
+        return True
+
+    def _force_kill(self) -> None:
+        """Send SIGKILL if the process is still tracked."""
+        with self._lock:
+            pid = self._pid
+        if pid is None:
+            return  # clear() was called -- process already reaped
+        logger.warning(
+            "Process did not terminate gracefully, sending SIGKILL (pid=%d)",
+            pid,
+        )
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass  # already exited
 
 
 def _redact_env_args(cmd: list[str]) -> list[str]:
@@ -131,7 +142,7 @@ def _redact_env_args(cmd: list[str]) -> list[str]:
     return redacted
 
 
-def run_container(
+async def run_container(
     container_command: str,
     image_tag: str,
     mounts: list[Mount],
@@ -141,14 +152,15 @@ def run_container(
     command: list[str],
     stdin_data: str | None,
     on_stdout_line: Callable[[str], None] | None,
+    on_stderr_line: Callable[[str], None] | None,
     timeout: int | None,
     process_tracker: _ProcessTracker,
-    stderr_passthrough: bool = False,
 ) -> _RawResult:
     """Run a container and return the raw result.
 
     Builds the podman command with security flags, environment variables,
-    mounts, resource limits, and network arguments, then executes it.
+    mounts, resource limits, and network arguments, then executes it
+    with concurrent stdout/stderr reading via asyncio.
 
     Args:
         container_command: Container runtime (e.g. "podman").
@@ -160,16 +172,13 @@ def run_container(
         command: Command to run inside the container.
         stdin_data: Data to write to stdin, or None.
         on_stdout_line: Callback for each stdout line, or None.
+        on_stderr_line: Callback for each stderr line, or None.
         timeout: Timeout in seconds, or None for no timeout.
         process_tracker: Process tracker for stop() support.
-        stderr_passthrough: If True, pass stderr to the parent process
-            instead of capturing it.
 
     Returns:
-        _RawResult with stdout, stderr, exit code, duration, and timeout flag.
-
-    Raises:
-        subprocess.SubprocessError: On unexpected subprocess failures.
+        _RawResult with stdout, stderr, exit code, duration, and
+        timeout flag.
     """
     cmd = [
         container_command,
@@ -210,51 +219,63 @@ def run_container(
     logger.debug("Full command: %s", " ".join(redacted_cmd))
 
     start_time = time.time()
-    timed_out = False
 
-    process = subprocess.Popen(
-        cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=None if stderr_passthrough else subprocess.PIPE,
-        text=True,
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
 
-    # Track process for stop()
-    process_tracker.set(process)
+    # Track process PID for stop()
+    process_tracker.set(process.pid)
 
     try:
-        # Write stdin data and close
+        # Write stdin and close
         if process.stdin:
             if stdin_data is not None:
-                process.stdin.write(stdin_data)
+                process.stdin.write(stdin_data.encode())
+                await process.stdin.drain()
             process.stdin.close()
+            await process.stdin.wait_closed()
 
-        # Read stdout line-by-line
+        # Mutable accumulators that survive cancellation
         stdout_lines: list[str] = []
-        if process.stdout:
-            for line in process.stdout:
-                stdout_lines.append(line)
-                if on_stdout_line is not None:
-                    on_stdout_line(line)
+        stderr_lines: list[str] = []
 
-        # Wait for process to complete with timeout
+        async def read_lines(
+            stream: asyncio.StreamReader,
+            lines: list[str],
+            callback: Callable[[str], None] | None,
+        ) -> None:
+            async for raw_line in stream:
+                line = raw_line.decode("utf-8", errors="replace")
+                lines.append(line)
+                if callback is not None:
+                    callback(line)
+
+        async def _run() -> None:
+            # stdout/stderr are always set because we pass PIPE above
+            assert process.stdout is not None
+            assert process.stderr is not None
+            await asyncio.gather(
+                read_lines(process.stdout, stdout_lines, on_stdout_line),
+                read_lines(process.stderr, stderr_lines, on_stderr_line),
+            )
+            await process.wait()
+
         try:
-            process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
+            await asyncio.wait_for(_run(), timeout=timeout)
+            timed_out = False
+        except TimeoutError:
             logger.error("Container execution timed out, killing process")
             process.kill()
-            process.wait()
+            await process.wait()
             timed_out = True
-
-        # Read stderr if captured
-        stderr_lines: list[str] = []
-        if not stderr_passthrough and process.stderr:
-            stderr_lines = process.stderr.readlines()
 
         stdout = "".join(stdout_lines)
         stderr = "".join(stderr_lines)
-        exit_code = process.returncode
+        exit_code = process.returncode or 0
 
     finally:
         process_tracker.clear()

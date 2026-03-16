@@ -7,9 +7,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import signal
-import subprocess
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from airut.sandbox._run_container import (
     _ProcessTracker,
@@ -17,95 +17,146 @@ from airut.sandbox._run_container import (
     run_container,
 )
 from airut.sandbox.types import ContainerEnv, Mount, ResourceLimits
-from tests.sandbox.conftest import create_mock_popen
+
+
+def _make_mock_process(
+    *,
+    returncode: int = 0,
+    stdout_data: bytes = b"",
+    stderr_data: bytes = b"",
+    pid: int = 12345,
+) -> MagicMock:
+    """Create a mock asyncio.subprocess.Process.
+
+    Returns a mock that behaves like the result of
+    ``asyncio.create_subprocess_exec()``.
+    """
+    mock = MagicMock()
+    mock.pid = pid
+    mock.returncode = returncode
+
+    # stdin
+    mock.stdin = MagicMock()
+    mock.stdin.write = MagicMock()
+    mock.stdin.drain = AsyncMock()
+    mock.stdin.close = MagicMock()
+    mock.stdin.wait_closed = AsyncMock()
+
+    # Async iterator for binary stream lines
+    class _MockStream:
+        def __init__(self, data_lines):
+            self._lines = data_lines
+            self._index = 0
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._index >= len(self._lines):
+                raise StopAsyncIteration
+            line = self._lines[self._index]
+            self._index += 1
+            return line
+
+    # stdout as async iterator yielding lines
+    stdout_lines = stdout_data.split(b"\n") if stdout_data else []
+    stdout_lines = [line + b"\n" for line in stdout_lines if line]
+    mock.stdout = _MockStream(stdout_lines)
+
+    # stderr as async iterator
+    stderr_lines = stderr_data.split(b"\n") if stderr_data else []
+    stderr_lines = [line + b"\n" for line in stderr_lines if line]
+    mock.stderr = _MockStream(stderr_lines)
+
+    # wait
+    mock.wait = AsyncMock(return_value=returncode)
+
+    # kill
+    mock.kill = MagicMock()
+
+    return mock
 
 
 class TestProcessTracker:
-    """Tests for _ProcessTracker thread-safe process reference."""
+    """Tests for _ProcessTracker thread-safe PID-based process reference."""
 
     def test_initial_state(self) -> None:
-        """Tracker starts with no process."""
+        """Tracker starts with no PID."""
         tracker = _ProcessTracker()
-        assert tracker._process is None
+        assert tracker._pid is None
 
     def test_set_and_clear(self) -> None:
-        """set() stores process, clear() removes it."""
+        """set() stores PID, clear() removes it."""
         tracker = _ProcessTracker()
-        mock_process = MagicMock()
-        tracker.set(mock_process)
-        assert tracker._process is mock_process
+        tracker.set(12345)
+        assert tracker._pid == 12345
         tracker.clear()
-        assert tracker._process is None
+        assert tracker._pid is None
 
     def test_stop_no_process(self) -> None:
-        """stop() returns False when no process is tracked."""
+        """stop() returns False when no PID is tracked."""
         tracker = _ProcessTracker()
         assert tracker.stop() is False
 
-    def test_stop_success(self) -> None:
-        """stop() sends SIGTERM and returns True."""
+    @patch("airut.sandbox._run_container.os.kill")
+    @patch("airut.sandbox._run_container.threading.Timer")
+    def test_stop_sends_sigterm(
+        self, mock_timer: MagicMock, mock_kill: MagicMock
+    ) -> None:
+        """stop() sends SIGTERM and starts force-kill timer."""
         tracker = _ProcessTracker()
-        mock_process = MagicMock()
-        mock_process.wait.return_value = None
-        tracker.set(mock_process)
+        tracker.set(12345)
 
         result = tracker.stop()
 
         assert result is True
-        mock_process.send_signal.assert_called_once_with(signal.SIGTERM)
-        mock_process.wait.assert_called_once_with(timeout=5)
+        mock_kill.assert_called_once_with(12345, signal.SIGTERM)
+        mock_timer.assert_called_once()
+        mock_timer.return_value.start.assert_called_once()
 
-    def test_stop_force_kill_on_timeout(self) -> None:
-        """stop() kills process if SIGTERM times out."""
+    @patch("airut.sandbox._run_container.os.kill")
+    def test_stop_process_already_exited(self, mock_kill: MagicMock) -> None:
+        """stop() returns False if process already exited."""
         tracker = _ProcessTracker()
-        mock_process = MagicMock()
-        mock_process.wait.side_effect = [
-            subprocess.TimeoutExpired("cmd", 5),
-            None,
-        ]
-        tracker.set(mock_process)
-
-        result = tracker.stop()
-
-        assert result is True
-        mock_process.send_signal.assert_called_once_with(signal.SIGTERM)
-        mock_process.kill.assert_called_once()
-        assert mock_process.wait.call_count == 2
-
-    def test_stop_handles_exception(self) -> None:
-        """stop() returns False on exception."""
-        tracker = _ProcessTracker()
-        mock_process = MagicMock()
-        mock_process.send_signal.side_effect = OSError("Process error")
-        tracker.set(mock_process)
+        tracker.set(12345)
+        mock_kill.side_effect = ProcessLookupError()
 
         result = tracker.stop()
 
         assert result is False
 
-    def test_stop_does_not_hold_lock_during_wait(self) -> None:
-        """stop() releases lock before blocking wait."""
+    @patch("airut.sandbox._run_container.os.kill")
+    def test_force_kill_when_still_tracked(self, mock_kill: MagicMock) -> None:
+        """_force_kill sends SIGKILL when PID is still tracked."""
         tracker = _ProcessTracker()
-        mock_process = MagicMock()
+        tracker.set(12345)
 
-        # Track whether lock is held during wait
-        lock_held_during_wait = False
+        tracker._force_kill()
 
-        def check_lock_during_wait(**kwargs: object) -> None:
-            nonlocal lock_held_during_wait
-            # Try to acquire the lock; if we can, it's not held
-            acquired = tracker._lock.acquire(blocking=False)
-            if not acquired:
-                lock_held_during_wait = True
-            else:
-                tracker._lock.release()
+        mock_kill.assert_called_once_with(12345, signal.SIGKILL)
 
-        mock_process.wait.side_effect = check_lock_during_wait
-        tracker.set(mock_process)
+    @patch("airut.sandbox._run_container.os.kill")
+    def test_force_kill_skipped_after_clear(self, mock_kill: MagicMock) -> None:
+        """_force_kill is skipped if clear() was called."""
+        tracker = _ProcessTracker()
+        tracker.set(12345)
+        tracker.clear()
 
-        tracker.stop()
+        tracker._force_kill()
 
-        assert not lock_held_during_wait
+        mock_kill.assert_not_called()
+
+    @patch("airut.sandbox._run_container.os.kill")
+    def test_force_kill_handles_already_exited(
+        self, mock_kill: MagicMock
+    ) -> None:
+        """_force_kill tolerates ProcessLookupError."""
+        tracker = _ProcessTracker()
+        tracker.set(12345)
+        mock_kill.side_effect = ProcessLookupError()
+
+        # Should not raise
+        tracker._force_kill()
 
 
 class TestRedactEnvArgs:
@@ -153,16 +204,16 @@ class TestRedactEnvArgs:
 
 
 class TestRunContainer:
-    """Tests for run_container function."""
+    """Tests for async run_container function."""
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_builds_correct_command(self, mock_popen: MagicMock) -> None:
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_builds_correct_command(self, mock_create: MagicMock) -> None:
         """run_container builds podman command with correct flags."""
         tracker = _ProcessTracker()
-        mock_process = create_mock_popen(returncode=0, stdout="", stderr="")
-        mock_popen.return_value = mock_process
+        mock_process = _make_mock_process()
+        mock_create.return_value = mock_process
 
-        run_container(
+        await run_container(
             container_command="podman",
             image_tag="airut:test123",
             mounts=[],
@@ -172,11 +223,12 @@ class TestRunContainer:
             command=["echo", "hello"],
             stdin_data=None,
             on_stdout_line=None,
+            on_stderr_line=None,
             timeout=None,
             process_tracker=tracker,
         )
 
-        call_args = mock_popen.call_args[0][0]
+        call_args = mock_create.call_args[0]
         assert call_args[0] == "podman"
         assert call_args[1] == "run"
         assert "--rm" in call_args
@@ -185,14 +237,14 @@ class TestRunContainer:
         assert "echo" in call_args
         assert "hello" in call_args
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_security_flags(self, mock_popen: MagicMock) -> None:
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_security_flags(self, mock_create: MagicMock) -> None:
         """run_container includes security hardening flags."""
         tracker = _ProcessTracker()
-        mock_process = create_mock_popen(returncode=0, stdout="", stderr="")
-        mock_popen.return_value = mock_process
+        mock_process = _make_mock_process()
+        mock_create.return_value = mock_process
 
-        run_container(
+        await run_container(
             container_command="podman",
             image_tag="airut:test",
             mounts=[],
@@ -202,24 +254,25 @@ class TestRunContainer:
             command=["cmd"],
             stdin_data=None,
             on_stdout_line=None,
+            on_stderr_line=None,
             timeout=None,
             process_tracker=tracker,
         )
 
-        call_args = mock_popen.call_args[0][0]
+        call_args = mock_create.call_args[0]
         assert "--cap-drop=ALL" in call_args
         assert "--security-opt=no-new-privileges:true" in call_args
         assert "--log-driver=none" in call_args
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_env_vars(self, mock_popen: MagicMock) -> None:
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_env_vars(self, mock_create: MagicMock) -> None:
         """run_container passes environment variables."""
         tracker = _ProcessTracker()
-        mock_process = create_mock_popen(returncode=0, stdout="", stderr="")
-        mock_popen.return_value = mock_process
+        mock_process = _make_mock_process()
+        mock_create.return_value = mock_process
 
         env = ContainerEnv(variables={"API_KEY": "secret", "TOKEN": "abc123"})
-        run_container(
+        await run_container(
             container_command="podman",
             image_tag="airut:test",
             mounts=[],
@@ -229,21 +282,22 @@ class TestRunContainer:
             command=["cmd"],
             stdin_data=None,
             on_stdout_line=None,
+            on_stderr_line=None,
             timeout=None,
             process_tracker=tracker,
         )
 
-        call_args = mock_popen.call_args[0][0]
+        call_args = mock_create.call_args[0]
         assert "-e" in call_args
         assert "API_KEY=secret" in call_args
         assert "TOKEN=abc123" in call_args
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_mounts(self, mock_popen: MagicMock) -> None:
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_mounts(self, mock_create: MagicMock) -> None:
         """run_container passes mount configurations."""
         tracker = _ProcessTracker()
-        mock_process = create_mock_popen(returncode=0, stdout="", stderr="")
-        mock_popen.return_value = mock_process
+        mock_process = _make_mock_process()
+        mock_create.return_value = mock_process
 
         from pathlib import Path
 
@@ -259,7 +313,7 @@ class TestRunContainer:
                 read_only=True,
             ),
         ]
-        run_container(
+        await run_container(
             container_command="podman",
             image_tag="airut:test",
             mounts=mounts,
@@ -269,23 +323,24 @@ class TestRunContainer:
             command=["cmd"],
             stdin_data=None,
             on_stdout_line=None,
+            on_stderr_line=None,
             timeout=None,
             process_tracker=tracker,
         )
 
-        call_args = mock_popen.call_args[0][0]
+        call_args = mock_create.call_args[0]
         cmd_str = " ".join(str(a) for a in call_args)
         assert "/host/workspace:/workspace:rw" in cmd_str
         assert "/host/config:/config:ro" in cmd_str
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_resource_limits_memory(self, mock_popen: MagicMock) -> None:
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_resource_limits_memory(self, mock_create: MagicMock) -> None:
         """run_container adds --memory and --memory-swap flags."""
         tracker = _ProcessTracker()
-        mock_process = create_mock_popen(returncode=0, stdout="", stderr="")
-        mock_popen.return_value = mock_process
+        mock_process = _make_mock_process()
+        mock_create.return_value = mock_process
 
-        run_container(
+        await run_container(
             container_command="podman",
             image_tag="airut:test",
             mounts=[],
@@ -295,11 +350,12 @@ class TestRunContainer:
             command=["cmd"],
             stdin_data=None,
             on_stdout_line=None,
+            on_stderr_line=None,
             timeout=None,
             process_tracker=tracker,
         )
 
-        call_args = mock_popen.call_args[0][0]
+        call_args = mock_create.call_args[0]
         assert "--memory" in call_args
         idx = call_args.index("--memory")
         assert call_args[idx + 1] == "2g"
@@ -307,14 +363,14 @@ class TestRunContainer:
         swap_idx = call_args.index("--memory-swap")
         assert call_args[swap_idx + 1] == "2g"
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_resource_limits_cpus(self, mock_popen: MagicMock) -> None:
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_resource_limits_cpus(self, mock_create: MagicMock) -> None:
         """run_container adds --cpus flag."""
         tracker = _ProcessTracker()
-        mock_process = create_mock_popen(returncode=0, stdout="", stderr="")
-        mock_popen.return_value = mock_process
+        mock_process = _make_mock_process()
+        mock_create.return_value = mock_process
 
-        run_container(
+        await run_container(
             container_command="podman",
             image_tag="airut:test",
             mounts=[],
@@ -324,23 +380,24 @@ class TestRunContainer:
             command=["cmd"],
             stdin_data=None,
             on_stdout_line=None,
+            on_stderr_line=None,
             timeout=None,
             process_tracker=tracker,
         )
 
-        call_args = mock_popen.call_args[0][0]
+        call_args = mock_create.call_args[0]
         assert "--cpus" in call_args
         idx = call_args.index("--cpus")
         assert call_args[idx + 1] == "1.5"
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_resource_limits_pids(self, mock_popen: MagicMock) -> None:
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_resource_limits_pids(self, mock_create: MagicMock) -> None:
         """run_container adds --pids-limit flag."""
         tracker = _ProcessTracker()
-        mock_process = create_mock_popen(returncode=0, stdout="", stderr="")
-        mock_popen.return_value = mock_process
+        mock_process = _make_mock_process()
+        mock_create.return_value = mock_process
 
-        run_container(
+        await run_container(
             container_command="podman",
             image_tag="airut:test",
             mounts=[],
@@ -350,25 +407,26 @@ class TestRunContainer:
             command=["cmd"],
             stdin_data=None,
             on_stdout_line=None,
+            on_stderr_line=None,
             timeout=None,
             process_tracker=tracker,
         )
 
-        call_args = mock_popen.call_args[0][0]
+        call_args = mock_create.call_args[0]
         assert "--pids-limit" in call_args
         idx = call_args.index("--pids-limit")
         assert call_args[idx + 1] == "256"
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_no_resource_limit_flags_when_none(
-        self, mock_popen: MagicMock
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_no_resource_limit_flags_when_none(
+        self, mock_create: MagicMock
     ) -> None:
         """run_container omits resource flags when all None."""
         tracker = _ProcessTracker()
-        mock_process = create_mock_popen(returncode=0, stdout="", stderr="")
-        mock_popen.return_value = mock_process
+        mock_process = _make_mock_process()
+        mock_create.return_value = mock_process
 
-        run_container(
+        await run_container(
             container_command="podman",
             image_tag="airut:test",
             mounts=[],
@@ -378,23 +436,24 @@ class TestRunContainer:
             command=["cmd"],
             stdin_data=None,
             on_stdout_line=None,
+            on_stderr_line=None,
             timeout=None,
             process_tracker=tracker,
         )
 
-        call_args = mock_popen.call_args[0][0]
+        call_args = mock_create.call_args[0]
         assert "--memory" not in call_args
         assert "--cpus" not in call_args
         assert "--pids-limit" not in call_args
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_network_args(self, mock_popen: MagicMock) -> None:
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_network_args(self, mock_create: MagicMock) -> None:
         """run_container includes network args in command."""
         tracker = _ProcessTracker()
-        mock_process = create_mock_popen(returncode=0, stdout="", stderr="")
-        mock_popen.return_value = mock_process
+        mock_process = _make_mock_process()
+        mock_create.return_value = mock_process
 
-        run_container(
+        await run_container(
             container_command="podman",
             image_tag="airut:test",
             mounts=[],
@@ -404,23 +463,24 @@ class TestRunContainer:
             command=["cmd"],
             stdin_data=None,
             on_stdout_line=None,
+            on_stderr_line=None,
             timeout=None,
             process_tracker=tracker,
         )
 
-        call_args = mock_popen.call_args[0][0]
+        call_args = mock_create.call_args[0]
         assert "--network" in call_args
         assert "my-net" in call_args
         assert "--dns" in call_args
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_stdin_data(self, mock_popen: MagicMock) -> None:
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_stdin_data(self, mock_create: MagicMock) -> None:
         """run_container writes stdin_data and closes stdin."""
         tracker = _ProcessTracker()
-        mock_process = create_mock_popen(returncode=0, stdout="", stderr="")
-        mock_popen.return_value = mock_process
+        mock_process = _make_mock_process()
+        mock_create.return_value = mock_process
 
-        run_container(
+        await run_container(
             container_command="podman",
             image_tag="airut:test",
             mounts=[],
@@ -430,21 +490,24 @@ class TestRunContainer:
             command=["cmd"],
             stdin_data="hello world",
             on_stdout_line=None,
+            on_stderr_line=None,
             timeout=None,
             process_tracker=tracker,
         )
 
-        mock_process.stdin.write.assert_called_once_with("hello world")
+        mock_process.stdin.write.assert_called_once_with(b"hello world")
         mock_process.stdin.close.assert_called_once()
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_stdin_closed_when_no_data(self, mock_popen: MagicMock) -> None:
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_stdin_closed_when_no_data(
+        self, mock_create: MagicMock
+    ) -> None:
         """run_container closes stdin even without data."""
         tracker = _ProcessTracker()
-        mock_process = create_mock_popen(returncode=0, stdout="", stderr="")
-        mock_popen.return_value = mock_process
+        mock_process = _make_mock_process()
+        mock_create.return_value = mock_process
 
-        run_container(
+        await run_container(
             container_command="podman",
             image_tag="airut:test",
             mounts=[],
@@ -454,6 +517,7 @@ class TestRunContainer:
             command=["cmd"],
             stdin_data=None,
             on_stdout_line=None,
+            on_stderr_line=None,
             timeout=None,
             process_tracker=tracker,
         )
@@ -461,18 +525,18 @@ class TestRunContainer:
         mock_process.stdin.write.assert_not_called()
         mock_process.stdin.close.assert_called_once()
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_on_stdout_line_callback(self, mock_popen: MagicMock) -> None:
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_on_stdout_line_callback(
+        self, mock_create: MagicMock
+    ) -> None:
         """run_container calls on_stdout_line for each line."""
         tracker = _ProcessTracker()
-        mock_process = create_mock_popen(
-            returncode=0, stdout="line1\nline2\nline3\n", stderr=""
-        )
-        mock_popen.return_value = mock_process
+        mock_process = _make_mock_process(stdout_data=b"line1\nline2\nline3")
+        mock_create.return_value = mock_process
 
         lines: list[str] = []
 
-        run_container(
+        await run_container(
             container_command="podman",
             image_tag="airut:test",
             mounts=[],
@@ -482,6 +546,7 @@ class TestRunContainer:
             command=["cmd"],
             stdin_data=None,
             on_stdout_line=lines.append,
+            on_stderr_line=None,
             timeout=None,
             process_tracker=tracker,
         )
@@ -491,14 +556,18 @@ class TestRunContainer:
         assert lines[1] == "line2\n"
         assert lines[2] == "line3\n"
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_timeout(self, mock_popen: MagicMock) -> None:
-        """run_container sets timed_out flag on timeout."""
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_on_stderr_line_callback(
+        self, mock_create: MagicMock
+    ) -> None:
+        """run_container calls on_stderr_line for each stderr line."""
         tracker = _ProcessTracker()
-        mock_process = create_mock_popen(raise_timeout=True)
-        mock_popen.return_value = mock_process
+        mock_process = _make_mock_process(stderr_data=b"err1\nerr2")
+        mock_create.return_value = mock_process
 
-        result = run_container(
+        lines: list[str] = []
+
+        await run_container(
             container_command="podman",
             image_tag="airut:test",
             mounts=[],
@@ -508,53 +577,55 @@ class TestRunContainer:
             command=["cmd"],
             stdin_data=None,
             on_stdout_line=None,
-            timeout=10,
+            on_stderr_line=lines.append,
+            timeout=None,
+            process_tracker=tracker,
+        )
+
+        assert len(lines) == 2
+        assert lines[0] == "err1\n"
+        assert lines[1] == "err2\n"
+
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_timeout(self, mock_create: MagicMock) -> None:
+        """run_container sets timed_out flag on timeout."""
+        tracker = _ProcessTracker()
+        mock_process = _make_mock_process()
+        mock_create.return_value = mock_process
+
+        # Make _run() hang to trigger timeout
+        mock_process.wait = AsyncMock(side_effect=lambda: asyncio.sleep(10))
+
+        result = await run_container(
+            container_command="podman",
+            image_tag="airut:test",
+            mounts=[],
+            env=ContainerEnv(),
+            resource_limits=ResourceLimits(),
+            network_args=[],
+            command=["cmd"],
+            stdin_data=None,
+            on_stdout_line=None,
+            on_stderr_line=None,
+            timeout=0,
             process_tracker=tracker,
         )
 
         assert result.timed_out is True
         mock_process.kill.assert_called_once()
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_stderr_passthrough(self, mock_popen: MagicMock) -> None:
-        """stderr_passthrough=True passes stderr=None to Popen."""
-        tracker = _ProcessTracker()
-        mock_process = create_mock_popen(returncode=0, stdout="", stderr="")
-        # For passthrough, stderr should be None
-        mock_process.stderr = None
-        mock_popen.return_value = mock_process
-
-        result = run_container(
-            container_command="podman",
-            image_tag="airut:test",
-            mounts=[],
-            env=ContainerEnv(),
-            resource_limits=ResourceLimits(),
-            network_args=[],
-            command=["cmd"],
-            stdin_data=None,
-            on_stdout_line=None,
-            timeout=None,
-            process_tracker=tracker,
-            stderr_passthrough=True,
-        )
-
-        # When passthrough=True, stderr=None is passed to Popen
-        popen_kwargs = mock_popen.call_args.kwargs
-        assert popen_kwargs["stderr"] is None
-        # stderr in result should be empty (not captured)
-        assert result.stderr == ""
-
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_result_fields(self, mock_popen: MagicMock) -> None:
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_result_fields(self, mock_create: MagicMock) -> None:
         """run_container returns _RawResult with correct fields."""
         tracker = _ProcessTracker()
-        mock_process = create_mock_popen(
-            returncode=42, stdout="output", stderr="errors"
+        mock_process = _make_mock_process(
+            returncode=42,
+            stdout_data=b"output",
+            stderr_data=b"errors",
         )
-        mock_popen.return_value = mock_process
+        mock_create.return_value = mock_process
 
-        result = run_container(
+        result = await run_container(
             container_command="podman",
             image_tag="airut:test",
             mounts=[],
@@ -564,25 +635,25 @@ class TestRunContainer:
             command=["cmd"],
             stdin_data=None,
             on_stdout_line=None,
+            on_stderr_line=None,
             timeout=None,
             process_tracker=tracker,
         )
 
         assert result.exit_code == 42
-        # create_mock_popen adds newline to each line
         assert "output" in result.stdout
         assert "errors" in result.stderr
         assert result.timed_out is False
         assert result.duration_ms >= 0
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_clears_process_tracker(self, mock_popen: MagicMock) -> None:
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_clears_process_tracker(self, mock_create: MagicMock) -> None:
         """run_container clears process tracker after completion."""
         tracker = _ProcessTracker()
-        mock_process = create_mock_popen(returncode=0, stdout="", stderr="")
-        mock_popen.return_value = mock_process
+        mock_process = _make_mock_process()
+        mock_create.return_value = mock_process
 
-        run_container(
+        await run_container(
             container_command="podman",
             image_tag="airut:test",
             mounts=[],
@@ -592,20 +663,23 @@ class TestRunContainer:
             command=["cmd"],
             stdin_data=None,
             on_stdout_line=None,
+            on_stderr_line=None,
             timeout=None,
             process_tracker=tracker,
         )
 
-        assert tracker._process is None
+        assert tracker._pid is None
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_custom_container_command(self, mock_popen: MagicMock) -> None:
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_custom_container_command(
+        self, mock_create: MagicMock
+    ) -> None:
         """run_container uses specified container command."""
         tracker = _ProcessTracker()
-        mock_process = create_mock_popen(returncode=0, stdout="", stderr="")
-        mock_popen.return_value = mock_process
+        mock_process = _make_mock_process()
+        mock_create.return_value = mock_process
 
-        run_container(
+        await run_container(
             container_command="docker",
             image_tag="airut:test",
             mounts=[],
@@ -615,9 +689,10 @@ class TestRunContainer:
             command=["cmd"],
             stdin_data=None,
             on_stdout_line=None,
+            on_stderr_line=None,
             timeout=None,
             process_tracker=tracker,
         )
 
-        call_args = mock_popen.call_args[0][0]
+        call_args = mock_create.call_args[0]
         assert call_args[0] == "docker"

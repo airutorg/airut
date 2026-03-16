@@ -50,7 +50,7 @@ class _MockTimeoutTask:
     def __init__(self, event_log: EventLog) -> None:
         self.event_log = event_log
 
-    def execute(
+    async def execute(
         self,
         prompt,
         *,
@@ -58,6 +58,8 @@ class _MockTimeoutTask:
         model="sonnet",
         effort=None,
         on_event=None,
+        on_stderr_line=None,
+        on_network_line=None,
     ):
         return ExecutionResult(
             outcome=Outcome.TIMEOUT,

@@ -10,14 +10,15 @@ an execution context. A CommandTask represents an arbitrary command
 execution in the same container environment.
 
 Both task types share proxy lifecycle management and container execution
-via the ``_run_container`` module.
+via the ``_run_container`` module. Task execution is async -- callers
+use ``asyncio.run()`` or ``await`` depending on their concurrency model.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
@@ -110,13 +111,45 @@ def _start_proxy(
     )
 
 
+async def _tail_network_log(
+    network_log: NetworkLog,
+    callback: Callable[[str], None],
+    stop_event: asyncio.Event,
+    poll_interval: float = 0.5,
+) -> None:
+    """Tail a network log file and invoke callback for each new line.
+
+    Polls the network log at ``poll_interval`` until ``stop_event``
+    is set, then performs a final drain.
+
+    Args:
+        network_log: NetworkLog instance to tail.
+        callback: Called for each new log line.
+        stop_event: Set to signal tailing should stop.
+        poll_interval: Seconds between polls.
+    """
+    offset = 0
+    while not stop_event.is_set():
+        lines, offset = network_log.tail(offset)
+        for line in lines:
+            callback(line)
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=poll_interval)
+        except TimeoutError:
+            pass
+    # Final drain after stop
+    lines, _ = network_log.tail(offset)
+    for line in lines:
+        callback(line)
+
+
 class AgentTask:
     """A single sandboxed Claude Code execution.
 
     Lifecycle::
 
         task = sandbox.create_task(...)
-        result = task.execute(prompt, session_id=session_id, model=model)
+        result = await task.execute(prompt, session_id=session_id, model=model)
 
         # Events are appended to events.jsonl during execution
         # Conversation metadata is managed by the caller (gateway)
@@ -185,7 +218,7 @@ class AgentTask:
         """Access network activity log (None if sandbox disabled)."""
         return self._network_log
 
-    def execute(
+    async def execute(
         self,
         prompt: str,
         *,
@@ -193,15 +226,19 @@ class AgentTask:
         model: str = "sonnet",
         effort: str | None = None,
         on_event: EventCallback | Callable[[StreamEvent], None] | None = None,
+        on_stderr_line: Callable[[str], None] | None = None,
+        on_network_line: Callable[[str], None] | None = None,
     ) -> ExecutionResult:
         """Execute Claude Code in the sandbox.
 
         1. Start proxy (if network sandbox configured)
-        2. Build podman command with mounts, env, network args
-        3. Run container with prompt on stdin
-        4. Stream events to event log and invoke callback
-        5. Stop proxy
-        6. Classify result and return
+        2. Optionally start network log tailing
+        3. Build podman command with mounts, env, network args
+        4. Run container with prompt on stdin
+        5. Stream events to event log and invoke callback
+        6. Stop network log tailing
+        7. Stop proxy
+        8. Classify result and return
 
         Args:
             prompt: User prompt to pass to Claude via stdin.
@@ -211,6 +248,9 @@ class AgentTask:
                 "max").  Passed as ``--effort`` to the CLI.  ``None``
                 means the flag is omitted.
             on_event: Optional callback for real-time streaming events.
+            on_stderr_line: Optional callback for each stderr line.
+            on_network_line: Optional callback for network log lines
+                during execution. Silently skipped if no network sandbox.
 
         Returns:
             ExecutionResult -- always returned, never raises for expected
@@ -238,12 +278,14 @@ class AgentTask:
             )
 
             try:
-                result = self._run_container(
+                result = await self._run_container(
                     prompt,
                     session_id=session_id,
                     model=model,
                     effort=effort,
                     on_event=on_event,
+                    on_stderr_line=on_stderr_line,
+                    on_network_line=on_network_line,
                     task_proxy=task_proxy,
                 )
             finally:
@@ -266,7 +308,8 @@ class AgentTask:
     def stop(self) -> bool:
         """Stop execution from another thread.
 
-        Sends SIGTERM, waits 5 seconds, then SIGKILL.
+        Sends SIGTERM and returns immediately. A background timer
+        sends SIGKILL after 5 seconds if the process has not exited.
 
         Returns:
             True if a running process was stopped, False if nothing running.
@@ -284,7 +327,7 @@ class AgentTask:
             )
         return result
 
-    def _run_container(
+    async def _run_container(
         self,
         prompt: str,
         *,
@@ -292,6 +335,8 @@ class AgentTask:
         model: str,
         effort: str | None,
         on_event: Callable[[StreamEvent], None] | None,
+        on_stderr_line: Callable[[str], None] | None,
+        on_network_line: Callable[[str], None] | None,
         task_proxy: _ContextProxy | None,
     ) -> ExecutionResult:
         """Run the container with the given configuration."""
@@ -343,8 +388,21 @@ class AgentTask:
                 if on_event:
                     on_event(event)
 
+        # Start network log tailing if requested
+        tail_task: asyncio.Task[None] | None = None
+        stop_tailing: asyncio.Event | None = None
+        if on_network_line is not None and self._network_log is not None:
+            stop_tailing = asyncio.Event()
+            tail_task = asyncio.create_task(
+                _tail_network_log(
+                    self._network_log,
+                    on_network_line,
+                    stop_tailing,
+                )
+            )
+
         try:
-            raw = run_container(
+            raw = await run_container(
                 container_command=self._container_command,
                 image_tag=self._image_tag,
                 mounts=all_mounts,
@@ -354,12 +412,21 @@ class AgentTask:
                 command=claude_cmd,
                 stdin_data=prompt,
                 on_stdout_line=on_stdout_line,
+                on_stderr_line=on_stderr_line,
                 timeout=self._resource_limits.timeout,
                 process_tracker=self._process_tracker,
             )
         except Exception as e:
             logger.error("Unexpected container execution error: %s", e)
             raise SandboxError(f"Container execution failed: {e}") from e
+        finally:
+            if stop_tailing is not None:
+                stop_tailing.set()
+            if tail_task is not None:
+                try:
+                    await tail_task
+                except BaseException:
+                    logger.warning("Network log tailing failed", exc_info=True)
 
         logger.debug(
             "Full stdout (length=%d):\n%s",
@@ -392,7 +459,7 @@ class CommandTask:
     Lifecycle::
 
         task = sandbox.create_command_task(...)
-        result = task.execute(["ls", "-la"])
+        result = await task.execute(["ls", "-la"])
 
         # From another thread:
         task.stop()
@@ -446,17 +513,22 @@ class CommandTask:
         """Access network activity log (None if sandbox disabled)."""
         return self._network_log
 
-    def execute(
+    async def execute(
         self,
         command: list[str],
         *,
         on_output: Callable[[str], None] | None = None,
+        on_stderr: Callable[[str], None] | None = None,
+        on_network_line: Callable[[str], None] | None = None,
     ) -> CommandResult:
         """Execute a command in the sandbox container.
 
         Args:
             command: Command and arguments to run in the container.
             on_output: Optional callback invoked for each stdout line.
+            on_stderr: Optional callback invoked for each stderr line.
+            on_network_line: Optional callback for network log lines
+                during execution. Silently skipped if no network sandbox.
 
         Returns:
             CommandResult with exit code, stdout, stderr, duration, and
@@ -490,25 +562,48 @@ class CommandTask:
                         task_proxy.network_name, task_proxy.proxy_ip
                     )
 
-                def on_stdout_line(line: str) -> None:
-                    sys.stdout.write(line)
-                    if on_output is not None:
-                        on_output(line)
+                # Start network log tailing if requested
+                tail_task: asyncio.Task[None] | None = None
+                stop_tailing: asyncio.Event | None = None
+                if (
+                    on_network_line is not None
+                    and self._network_log is not None
+                ):
+                    stop_tailing = asyncio.Event()
+                    tail_task = asyncio.create_task(
+                        _tail_network_log(
+                            self._network_log,
+                            on_network_line,
+                            stop_tailing,
+                        )
+                    )
 
-                raw = run_container(
-                    container_command=self._container_command,
-                    image_tag=self._image_tag,
-                    mounts=self._mounts,
-                    env=self._env,
-                    resource_limits=self._resource_limits,
-                    network_args=network_args,
-                    command=command,
-                    stdin_data=None,
-                    on_stdout_line=on_stdout_line,
-                    timeout=self._resource_limits.timeout,
-                    process_tracker=self._process_tracker,
-                    stderr_passthrough=True,
-                )
+                try:
+                    raw = await run_container(
+                        container_command=self._container_command,
+                        image_tag=self._image_tag,
+                        mounts=self._mounts,
+                        env=self._env,
+                        resource_limits=self._resource_limits,
+                        network_args=network_args,
+                        command=command,
+                        stdin_data=None,
+                        on_stdout_line=on_output,
+                        on_stderr_line=on_stderr,
+                        timeout=self._resource_limits.timeout,
+                        process_tracker=self._process_tracker,
+                    )
+                finally:
+                    if stop_tailing is not None:
+                        stop_tailing.set()
+                    if tail_task is not None:
+                        try:
+                            await tail_task
+                        except BaseException:
+                            logger.warning(
+                                "Network log tailing failed",
+                                exc_info=True,
+                            )
             finally:
                 # Always stop proxy, even on failure
                 if task_proxy is not None and self._proxy_manager is not None:

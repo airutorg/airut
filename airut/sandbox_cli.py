@@ -20,6 +20,7 @@ Zero coupling to the gateway: imports only from ``airut.sandbox``,
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import os
 import shutil
@@ -639,8 +640,10 @@ def _build_container_env(
 # -------------------------------------------------------------------
 
 
-def _execute(args: argparse.Namespace, config: _SandboxCliConfig) -> int:
-    """Orchestrate sandbox lifecycle and command execution.
+async def _execute_async(
+    args: argparse.Namespace, config: _SandboxCliConfig
+) -> int:
+    """Async orchestration of sandbox lifecycle and command execution.
 
     Args:
         args: Parsed CLI arguments.
@@ -779,7 +782,11 @@ def _execute(args: argparse.Namespace, config: _SandboxCliConfig) -> int:
             _install_signal_handlers(task)
 
             logger.info("Executing command: %s", args.command)
-            result = task.execute(args.command)
+            result = await task.execute(
+                args.command,
+                on_output=lambda line: sys.stdout.write(line),
+                on_stderr=lambda line: sys.stderr.write(line),
+            )
 
             exit_code = _map_exit_code(result)
 
@@ -802,6 +809,21 @@ def _execute(args: argparse.Namespace, config: _SandboxCliConfig) -> int:
         shutil.rmtree(execution_context_dir, ignore_errors=True)
 
     return exit_code
+
+
+def _execute(args: argparse.Namespace, config: _SandboxCliConfig) -> int:
+    """Orchestrate sandbox lifecycle and command execution.
+
+    Wraps the async implementation with ``asyncio.run()``.
+
+    Args:
+        args: Parsed CLI arguments.
+        config: Parsed sandbox configuration.
+
+    Returns:
+        Exit code for the CLI process.
+    """
+    return asyncio.run(_execute_async(args, config))
 
 
 # -------------------------------------------------------------------

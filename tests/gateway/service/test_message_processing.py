@@ -8,7 +8,7 @@
 import json
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -446,7 +446,7 @@ class TestProcessMessage:
         # Configure sandbox mock: ensure_image returns tag,
         # create_task returns a mock Task whose execute returns success
         mock_task = MagicMock()
-        mock_task.execute.return_value = _make_success_result()
+        mock_task.execute = AsyncMock(return_value=_make_success_result())
         mock_task.event_log = MagicMock()
         svc.sandbox.ensure_image.return_value = "airut:test"
         svc.sandbox.create_task.return_value = mock_task
@@ -491,20 +491,22 @@ class TestProcessMessage:
     def test_execution_failure(self, email_config: Any, tmp_path: Path) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
-        svc._mock_task.execute.return_value = _make_failure_result(
-            events=_parse_events(
-                {
-                    "type": "result",
-                    "subtype": "error",
-                    "session_id": "err-session",
-                    "is_error": True,
-                    "duration_ms": 100,
-                    "total_cost_usd": 0.0,
-                    "num_turns": 0,
-                    "usage": {},
-                },
-            ),
-            stderr="FATAL: OOM\nline2\nline3",
+        svc._mock_task.execute = AsyncMock(
+            return_value=_make_failure_result(
+                events=_parse_events(
+                    {
+                        "type": "result",
+                        "subtype": "error",
+                        "session_id": "err-session",
+                        "is_error": True,
+                        "duration_ms": 100,
+                        "total_cost_usd": 0.0,
+                        "num_turns": 0,
+                        "usage": {},
+                    },
+                ),
+                stderr="FATAL: OOM\nline2\nline3",
+            )
         )
         parsed = _make_parsed_message(body="Do something")
 
@@ -520,8 +522,10 @@ class TestProcessMessage:
 
     def test_container_timeout(self, email_config: Any, tmp_path: Path) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
-        svc._mock_task.execute.return_value = _make_failure_result(
-            outcome=Outcome.TIMEOUT,
+        svc._mock_task.execute = AsyncMock(
+            return_value=_make_failure_result(
+                outcome=Outcome.TIMEOUT,
+            )
         )
         parsed = _make_parsed_message(body="Do something")
 
@@ -541,8 +545,10 @@ class TestProcessMessage:
     ) -> None:
         """Timeout message is clean when no timeout value is configured."""
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
-        svc._mock_task.execute.return_value = _make_failure_result(
-            outcome=Outcome.TIMEOUT,
+        svc._mock_task.execute = AsyncMock(
+            return_value=_make_failure_result(
+                outcome=Outcome.TIMEOUT,
+            )
         )
         parsed = _make_parsed_message(body="Do something")
 
@@ -581,7 +587,9 @@ class TestProcessMessage:
 
     def test_unexpected_error(self, email_config: Any, tmp_path: Path) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
-        svc._mock_task.execute.side_effect = RuntimeError("unexpected")
+        svc._mock_task.execute = AsyncMock(
+            side_effect=RuntimeError("unexpected")
+        )
         parsed = _make_parsed_message(body="Do something")
 
         with patch(
@@ -969,13 +977,17 @@ class TestProcessMessage:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
         # Result with no cost event → no usage stats footer
-        svc._mock_task.execute.return_value = _make_success_result(
-            events=_parse_events(
-                {
-                    "type": "assistant",
-                    "message": {"content": [{"type": "text", "text": "Done"}]},
-                },
-            ),
+        svc._mock_task.execute = AsyncMock(
+            return_value=_make_success_result(
+                events=_parse_events(
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "content": [{"type": "text", "text": "Done"}]
+                        },
+                    },
+                ),
+            )
         )
         parsed = _make_parsed_message(body="Do stuff")
 
@@ -1052,8 +1064,10 @@ class TestProcessMessage:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
         stderr_lines = "\n".join(f"line{i}" for i in range(15))
-        svc._mock_task.execute.return_value = _make_failure_result(
-            stderr=stderr_lines,
+        svc._mock_task.execute = AsyncMock(
+            return_value=_make_failure_result(
+                stderr=stderr_lines,
+            )
         )
         parsed = _make_parsed_message(body="Do stuff")
 
@@ -1073,7 +1087,7 @@ class TestProcessMessage:
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
-        svc._mock_task.execute.return_value = _make_failure_result()
+        svc._mock_task.execute = AsyncMock(return_value=_make_failure_result())
         parsed = _make_parsed_message(body="Do stuff")
 
         with (
@@ -1101,23 +1115,25 @@ class TestProcessMessage:
         """Conversation store must be updated even when execution fails."""
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
-        svc._mock_task.execute.return_value = _make_failure_result(
-            events=_parse_events(
-                {
-                    "type": "result",
-                    "subtype": "error",
-                    "session_id": "err-session-1",
-                    "is_error": True,
-                    "duration_ms": 500,
-                    "total_cost_usd": 0.005,
-                    "num_turns": 1,
-                    "usage": {
-                        "input_tokens": 50,
-                        "output_tokens": 10,
+        svc._mock_task.execute = AsyncMock(
+            return_value=_make_failure_result(
+                events=_parse_events(
+                    {
+                        "type": "result",
+                        "subtype": "error",
+                        "session_id": "err-session-1",
+                        "is_error": True,
+                        "duration_ms": 500,
+                        "total_cost_usd": 0.005,
+                        "num_turns": 1,
+                        "usage": {
+                            "input_tokens": 50,
+                            "output_tokens": 10,
+                        },
                     },
-                },
-            ),
-            stderr="FATAL: OOM",
+                ),
+                stderr="FATAL: OOM",
+            )
         )
         parsed = _make_parsed_message(body="Do something")
 
@@ -1139,8 +1155,10 @@ class TestProcessMessage:
     ) -> None:
         """Store must be updated on container timeout."""
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
-        svc._mock_task.execute.return_value = _make_failure_result(
-            outcome=Outcome.TIMEOUT,
+        svc._mock_task.execute = AsyncMock(
+            return_value=_make_failure_result(
+                outcome=Outcome.TIMEOUT,
+            )
         )
         parsed = _make_parsed_message(body="Do something")
 
@@ -1162,7 +1180,9 @@ class TestProcessMessage:
     ) -> None:
         """Conversation store must be updated on unexpected exceptions."""
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
-        svc._mock_task.execute.side_effect = RuntimeError("unexpected")
+        svc._mock_task.execute = AsyncMock(
+            side_effect=RuntimeError("unexpected")
+        )
         parsed = _make_parsed_message(body="Do something")
 
         with patch(
@@ -1183,7 +1203,9 @@ class TestProcessMessage:
     ) -> None:
         """Persist failure in catch-all handler is logged, not raised."""
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
-        svc._mock_task.execute.side_effect = RuntimeError("unexpected")
+        svc._mock_task.execute = AsyncMock(
+            side_effect=RuntimeError("unexpected")
+        )
         mock_cs.add_reply.side_effect = OSError("disk full")
         parsed = _make_parsed_message(body="Do something")
 
@@ -1240,11 +1262,11 @@ class TestProcessMessage:
         )
 
         mock_task1 = MagicMock()
-        mock_task1.execute.return_value = prompt_too_long_result
+        mock_task1.execute = AsyncMock(return_value=prompt_too_long_result)
         mock_task1.event_log = MagicMock()
 
         mock_task2 = MagicMock()
-        mock_task2.execute.return_value = success_result
+        mock_task2.execute = AsyncMock(return_value=success_result)
         mock_task2.event_log = MagicMock()
 
         svc.sandbox.create_task.side_effect = [mock_task1, mock_task2]
@@ -1282,9 +1304,11 @@ class TestProcessMessage:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         mock_cs.get_session_id_for_resume.return_value = None
 
-        svc._mock_task.execute.return_value = _make_failure_result(
-            outcome=Outcome.PROMPT_TOO_LONG,
-            stdout="Prompt is too long",
+        svc._mock_task.execute = AsyncMock(
+            return_value=_make_failure_result(
+                outcome=Outcome.PROMPT_TOO_LONG,
+                stdout="Prompt is too long",
+            )
         )
 
         parsed = _make_parsed_message(body="Do something")
@@ -1343,11 +1367,11 @@ class TestProcessMessage:
         )
 
         mock_task1 = MagicMock()
-        mock_task1.execute.return_value = corrupted_result
+        mock_task1.execute = AsyncMock(return_value=corrupted_result)
         mock_task1.event_log = MagicMock()
 
         mock_task2 = MagicMock()
-        mock_task2.execute.return_value = success_result
+        mock_task2.execute = AsyncMock(return_value=success_result)
         mock_task2.event_log = MagicMock()
 
         svc.sandbox.create_task.side_effect = [mock_task1, mock_task2]
@@ -1379,9 +1403,11 @@ class TestProcessMessage:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         mock_cs.get_session_id_for_resume.return_value = None
 
-        svc._mock_task.execute.return_value = _make_failure_result(
-            outcome=Outcome.SESSION_CORRUPTED,
-            stderr="API Error: 400\ninvalid_request_error",
+        svc._mock_task.execute = AsyncMock(
+            return_value=_make_failure_result(
+                outcome=Outcome.SESSION_CORRUPTED,
+                stderr="API Error: 400\ninvalid_request_error",
+            )
         )
 
         parsed = _make_parsed_message(body="Do something")
@@ -1453,7 +1479,7 @@ class TestBuildImageErrors:
         mock_conv_store.get_effort.return_value = None
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = _make_success_result()
+        mock_task.execute = AsyncMock(return_value=_make_success_result())
         mock_task.event_log = MagicMock()
         svc.sandbox.ensure_image.return_value = "airut:test"
         svc.sandbox.create_task.return_value = mock_task
@@ -1602,7 +1628,7 @@ class TestAllowlistParseError:
         mock_conv_store.get_effort.return_value = None
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = _make_success_result()
+        mock_task.execute = AsyncMock(return_value=_make_success_result())
         mock_task.event_log = MagicMock()
         svc.sandbox.ensure_image.return_value = "airut:test"
         svc.sandbox.create_task.return_value = mock_task
@@ -1676,7 +1702,7 @@ class TestConvertReplacementMap:
         mock_conv_store.get_effort.return_value = None
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = _make_success_result()
+        mock_task.execute = AsyncMock(return_value=_make_success_result())
         mock_task.event_log = MagicMock()
         svc.sandbox.ensure_image.return_value = "airut:test"
         svc.sandbox.create_task.return_value = mock_task

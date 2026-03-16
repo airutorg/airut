@@ -14,6 +14,7 @@ This module handles:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC
 from typing import TYPE_CHECKING
@@ -540,12 +541,14 @@ def process_message(
         )
 
         try:
-            result = task.execute(
-                prompt,
-                session_id=session_id,
-                model=model,
-                effort=effort,
-                on_event=todo_callback,
+            result = asyncio.run(
+                task.execute(
+                    prompt,
+                    session_id=session_id,
+                    model=model,
+                    effort=effort,
+                    on_event=todo_callback,
+                )
             )
         finally:
             service.unregister_active_task(conv_id)
@@ -598,11 +601,13 @@ def process_message(
 
             service.register_active_task(conv_id, task)
             try:
-                result = task.execute(
-                    recovery_prompt,
-                    session_id=None,
-                    model=model,
-                    on_event=todo_callback,
+                result = asyncio.run(
+                    task.execute(
+                        recovery_prompt,
+                        session_id=None,
+                        model=model,
+                        on_event=todo_callback,
+                    )
                 )
                 # Update prompt so conversation stores the recovery prompt
                 prompt = recovery_prompt
