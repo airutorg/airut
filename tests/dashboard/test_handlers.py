@@ -1818,6 +1818,34 @@ class TestStopEndpoint:
         assert "stopTask()" in html
         assert 'stopTask()">Stop</button>' in html
 
+    def test_stop_script_handles_non_json_error(self) -> None:
+        """Stop button JS must handle non-JSON error responses.
+
+        When _dispatch catches an unhandled exception during early task
+        startup, the response may not be JSON.  The script must check
+        ``response.ok`` before calling ``response.json()`` to avoid a
+        ``SyntaxError`` in the browser.
+        """
+        tracker = TaskTracker()
+        task_id = "abc12345"
+        tracker.add_task(task_id, "Test Task")
+        tracker.set_conversation_id(task_id, task_id)
+        tracker.set_authenticating(task_id)
+        tracker.set_executing(task_id)
+
+        def mock_stop(conv_id: str) -> bool:
+            return True
+
+        server = DashboardServer(tracker, stop_callback=mock_stop)
+        client = Client(server._wsgi_app)
+
+        response = client.get(f"/task/{task_id}")
+        html = response.get_data(as_text=True)
+
+        # The script should guard against non-JSON responses by checking
+        # response.ok before attempting JSON parse.
+        assert "response.ok" in html
+
     def test_task_detail_without_stop_button(self) -> None:
         """Test task detail page excludes stop button for completed."""
         tracker = TaskTracker()
