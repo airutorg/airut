@@ -728,10 +728,7 @@ class TestParallelExecution:
         """Test stop() cancels futures that exceed timeout."""
         from concurrent.futures import ThreadPoolExecutor
 
-        # Create config with very short timeout
-        global_config = GlobalConfig(
-            shutdown_timeout_seconds=1
-        )  # Very short timeout
+        global_config = GlobalConfig(shutdown_timeout_seconds=1)
         config = ServerConfig(
             global_config=global_config,
             repos={"test": email_config},
@@ -740,20 +737,20 @@ class TestParallelExecution:
         service = GatewayService(config)
         service._executor_pool = ThreadPoolExecutor(max_workers=1)
 
-        # Create a slow task
-        def slow_task():
-            time.sleep(10)  # Will exceed timeout
-
-        future = service._executor_pool.submit(slow_task)
+        # Create a mock future that simulates a slow task
+        future = MagicMock()
+        future.cancel = MagicMock()
         service._pending_futures = {future}
 
-        # Stop should timeout and cancel
-        start = time.time()
-        service.stop()
-        elapsed = time.time() - start
+        # Mock concurrent.futures.wait to simulate timeout (future not done)
+        with patch(
+            "airut.gateway.service.gateway.concurrent.futures.wait",
+            return_value=(set(), {future}),
+        ):
+            service.stop()
 
-        # Should have waited about 1 second (the timeout)
-        assert elapsed < 3  # Should not wait for full 10 seconds
+        # Future should have been cancelled since it was in not_done
+        future.cancel.assert_called_once()
 
     def test_process_message_worker_no_lock_for_new_conversation(
         self, email_config: RepoServerConfig, sample_email_message
