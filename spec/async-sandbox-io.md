@@ -5,36 +5,6 @@ Replaces the synchronous, blocking IO model in the sandbox library with
 streaming callbacks, enables parallel network log tailing during execution, and
 provides a foundation for interactive container sessions.
 
-## Table of Contents
-
-<!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=1 -->
-
-- [Async Sandbox IO](#async-sandbox-io)
-  - [Table of Contents](#table-of-contents)
-  - [Motivation](#motivation)
-  - [Design Goals](#design-goals)
-  - [Scope](#scope)
-  - [Container Execution](#container-execution)
-    - [Async Process Model](#async-process-model)
-    - [Stream Reading](#stream-reading)
-    - [Timeout Handling](#timeout-handling)
-    - [Process Lifecycle](#process-lifecycle)
-  - [Task API Changes](#task-api-changes)
-    - [AgentTask](#agenttask)
-    - [CommandTask](#commandtask)
-    - [Behavioral Changes](#behavioral-changes)
-    - [Network Log Tailing](#network-log-tailing)
-    - [Stop Semantics](#stop-semantics)
-  - [Interactive Mode](#interactive-mode)
-    - [Design Direction](#design-direction)
-  - [Caller Migration](#caller-migration)
-    - [Gateway](#gateway)
-    - [Sandbox CLI](#sandbox-cli)
-    - [Tests](#tests)
-  - [Migration Strategy](#migration-strategy)
-
-<!-- mdformat-toc end -->
-
 ## Motivation
 
 The current `run_container()` in `_run_container.py` uses `subprocess.Popen`
