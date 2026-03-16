@@ -22,6 +22,8 @@ For high-level documentation, see [doc/](../doc/).
 
 - [sandbox.md](sandbox.md) — Sandbox library for safe containerized Claude Code
   execution
+- [async-sandbox-io.md](async-sandbox-io.md) — Async IO rewrite for concurrent
+  stdout/stderr, network log tailing, and interactive mode foundation
 - [sandbox-cli.md](sandbox-cli.md) — Standalone CLI for running commands in the
   sandbox (CI integration)
 - [sandbox-action.md](sandbox-action.md) — Reusable GitHub Action wrapping
