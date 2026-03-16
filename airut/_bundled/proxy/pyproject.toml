@@ -9,19 +9,15 @@ dependencies = [
 ]
 
 [tool.uv]
-# Override mitmproxy 12.2.1's tornado<=6.5.2 pin to fix GHSA-78cv-mqj4-43f7
-# (cookie attribute injection). Safe override: tornado 6.5.5 is a patch
-# release with no breaking API changes. Remove when mitmproxy releases a
-# version that allows tornado >=6.5.5.
+# Override mitmproxy 12.2.1's transitive dependency pins to fix known
+# vulnerabilities. Safe overrides: all are compatible patch/minor releases.
+# Remove when mitmproxy releases a version with updated pins.
 #
-# Override pyopenssl<=25.3.0 to fix GHSA-vp96-hxj8-p424. Safe override:
-# pyOpenSSL 26.0.0 is a compatible release. Remove when mitmproxy allows
-# pyopenssl >=26.0.0.
-override-dependencies = ["tornado>=6.5.5", "pyopenssl>=26.0.0"]
-
-[tool.uv-secure.vulnerability_criteria]
-# Flask <=3.1.2 pinned by mitmproxy 12.2.1 (GHSA-68rp-wp8r-4726: missing
-# Vary: Cookie header). Low severity, not exploitable in proxy context since
-# Flask's web interface is not exposed externally. Remove when mitmproxy
-# releases a version that allows Flask >=3.1.3.
-ignore_vulnerabilities = ["GHSA-68rp-wp8r-4726"]
+# - tornado >=6.5.5: fixes GHSA-78cv-mqj4-43f7 (cookie attribute injection)
+# - pyopenssl >=26.0.0: fixes GHSA-vp96-hxj8-p424
+# - flask >=3.1.3: fixes GHSA-68rp-wp8r-4726 (missing Vary: Cookie header)
+override-dependencies = [
+    "tornado>=6.5.5",
+    "pyopenssl>=26.0.0",
+    "flask>=3.1.3",
+]
