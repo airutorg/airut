@@ -13,7 +13,7 @@ import signal
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -58,7 +58,7 @@ from airut.sandbox_cli import (
     _setup_network_log,
     main,
 )
-from airut.yaml_env import EnvVar
+from airut.yaml_env import EnvVar, YamlValue
 
 
 # -------------------------------------------------------------------
@@ -394,13 +394,13 @@ class TestParseEnv:
 
     def test_valid_mapping(self) -> None:
         """Dict values are stringified."""
-        result = _parse_env({"KEY": "val", "NUM": 42})
+        result = _parse_env(cast(YamlValue, {"KEY": "val", "NUM": 42}))
         assert result == {"KEY": "val", "NUM": "42"}
 
     def test_env_var_resolved(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """EnvVar values are resolved from host environment."""
         monkeypatch.setenv("MY_VAR", "hello")
-        result = _parse_env({"KEY": EnvVar("MY_VAR")})
+        result = _parse_env(cast(YamlValue, {"KEY": EnvVar("MY_VAR")}))
         assert result == {"KEY": "hello"}
 
     def test_env_var_missing_raises(
@@ -411,14 +411,14 @@ class TestParseEnv:
 
         monkeypatch.delenv("MISSING_VAR", raising=False)
         with pytest.raises(_ConfigError, match="environment variable"):
-            _parse_env({"KEY": EnvVar("MISSING_VAR")})
+            _parse_env(cast(YamlValue, {"KEY": EnvVar("MISSING_VAR")}))
 
     def test_non_mapping_raises(self) -> None:
         """Non-dict raises _ConfigError."""
         from airut.sandbox_cli import _ConfigError
 
         with pytest.raises(_ConfigError, match="'env' must be a mapping"):
-            _parse_env(["not", "a", "dict"])
+            _parse_env(cast(YamlValue, ["not", "a", "dict"]))
 
 
 # -------------------------------------------------------------------
@@ -435,7 +435,7 @@ class TestParsePassEnv:
 
     def test_valid_list(self) -> None:
         """List items are stringified."""
-        result = _parse_pass_env(["HOME", "PATH"])
+        result = _parse_pass_env(cast(YamlValue, ["HOME", "PATH"]))
         assert result == ["HOME", "PATH"]
 
     def test_non_list_raises(self) -> None:
@@ -443,7 +443,7 @@ class TestParsePassEnv:
         from airut.sandbox_cli import _ConfigError
 
         with pytest.raises(_ConfigError, match="'pass_env' must be a list"):
-            _parse_pass_env({"not": "a list"})
+            _parse_pass_env(cast(YamlValue, {"not": "a list"}))
 
 
 # -------------------------------------------------------------------
@@ -465,14 +465,16 @@ class TestParseMaskedSecrets:
         with pytest.raises(
             _ConfigError, match="'masked_secrets' must be a mapping"
         ):
-            _parse_masked_secrets(["not", "a", "dict"])
+            _parse_masked_secrets(cast(YamlValue, ["not", "a", "dict"]))
 
     def test_entry_not_mapping_raises(self) -> None:
         """Non-dict entry raises _ConfigError."""
         from airut.sandbox_cli import _ConfigError
 
         with pytest.raises(_ConfigError, match="must be a mapping"):
-            _parse_masked_secrets({"MY_TOKEN": "string_not_dict"})
+            _parse_masked_secrets(
+                cast(YamlValue, {"MY_TOKEN": "string_not_dict"})
+            )
 
     def test_missing_scopes_raises(self) -> None:
         """Missing scopes raises _ConfigError."""
@@ -480,12 +482,15 @@ class TestParseMaskedSecrets:
 
         with pytest.raises(_ConfigError, match="scopes must be a non-empty"):
             _parse_masked_secrets(
-                {
-                    "MY_TOKEN": {
-                        "value": "secret",
-                        "headers": ["Authorization"],
-                    }
-                }
+                cast(
+                    YamlValue,
+                    {
+                        "MY_TOKEN": {
+                            "value": "secret",
+                            "headers": ["Authorization"],
+                        }
+                    },
+                )
             )
 
     def test_empty_scopes_raises(self) -> None:
@@ -494,13 +499,16 @@ class TestParseMaskedSecrets:
 
         with pytest.raises(_ConfigError, match="scopes must be a non-empty"):
             _parse_masked_secrets(
-                {
-                    "MY_TOKEN": {
-                        "value": "secret",
-                        "scopes": [],
-                        "headers": ["Authorization"],
-                    }
-                }
+                cast(
+                    YamlValue,
+                    {
+                        "MY_TOKEN": {
+                            "value": "secret",
+                            "scopes": [],
+                            "headers": ["Authorization"],
+                        }
+                    },
+                )
             )
 
     def test_missing_headers_raises(self) -> None:
@@ -509,12 +517,15 @@ class TestParseMaskedSecrets:
 
         with pytest.raises(_ConfigError, match="headers must be a non-empty"):
             _parse_masked_secrets(
-                {
-                    "MY_TOKEN": {
-                        "value": "secret",
-                        "scopes": ["api.example.com"],
-                    }
-                }
+                cast(
+                    YamlValue,
+                    {
+                        "MY_TOKEN": {
+                            "value": "secret",
+                            "scopes": ["api.example.com"],
+                        }
+                    },
+                )
             )
 
     def test_empty_headers_raises(self) -> None:
@@ -523,25 +534,31 @@ class TestParseMaskedSecrets:
 
         with pytest.raises(_ConfigError, match="headers must be a non-empty"):
             _parse_masked_secrets(
-                {
-                    "MY_TOKEN": {
-                        "value": "secret",
-                        "scopes": ["api.example.com"],
-                        "headers": [],
-                    }
-                }
+                cast(
+                    YamlValue,
+                    {
+                        "MY_TOKEN": {
+                            "value": "secret",
+                            "scopes": ["api.example.com"],
+                            "headers": [],
+                        }
+                    },
+                )
             )
 
     def test_valid_secret(self) -> None:
         """Valid masked secret is parsed correctly."""
         result = _parse_masked_secrets(
-            {
-                "MY_TOKEN": {
-                    "value": "secret123",
-                    "scopes": ["api.example.com"],
-                    "headers": ["Authorization"],
-                }
-            }
+            cast(
+                YamlValue,
+                {
+                    "MY_TOKEN": {
+                        "value": "secret123",
+                        "scopes": ["api.example.com"],
+                        "headers": ["Authorization"],
+                    }
+                },
+            )
         )
         assert len(result) == 1
         assert result[0] == MaskedSecret(
@@ -555,13 +572,16 @@ class TestParseMaskedSecrets:
         """EnvVar value is resolved from environment."""
         monkeypatch.setenv("SECRET_VAR", "resolved-secret")
         result = _parse_masked_secrets(
-            {
-                "MY_TOKEN": {
-                    "value": EnvVar("SECRET_VAR"),
-                    "scopes": ["*.example.com"],
-                    "headers": ["Authorization", "X-Api-Key"],
-                }
-            }
+            cast(
+                YamlValue,
+                {
+                    "MY_TOKEN": {
+                        "value": EnvVar("SECRET_VAR"),
+                        "scopes": ["*.example.com"],
+                        "headers": ["Authorization", "X-Api-Key"],
+                    }
+                },
+            )
         )
         assert result[0].real_value == "resolved-secret"
         assert result[0].scopes == ("*.example.com",)
@@ -570,14 +590,17 @@ class TestParseMaskedSecrets:
     def test_allow_foreign_credentials_true(self) -> None:
         """allow_foreign_credentials: true is parsed and propagated."""
         result = _parse_masked_secrets(
-            {
-                "CF_TOKEN": {
-                    "value": "cf-secret",
-                    "scopes": ["api.cloudflare.com"],
-                    "headers": ["Authorization"],
-                    "allow_foreign_credentials": True,
-                }
-            }
+            cast(
+                YamlValue,
+                {
+                    "CF_TOKEN": {
+                        "value": "cf-secret",
+                        "scopes": ["api.cloudflare.com"],
+                        "headers": ["Authorization"],
+                        "allow_foreign_credentials": True,
+                    }
+                },
+            )
         )
         assert len(result) == 1
         assert result[0].allow_foreign_credentials is True
@@ -585,27 +608,33 @@ class TestParseMaskedSecrets:
     def test_allow_foreign_credentials_false(self) -> None:
         """allow_foreign_credentials: false is parsed explicitly."""
         result = _parse_masked_secrets(
-            {
-                "MY_TOKEN": {
-                    "value": "secret",
-                    "scopes": ["api.example.com"],
-                    "headers": ["Authorization"],
-                    "allow_foreign_credentials": False,
-                }
-            }
+            cast(
+                YamlValue,
+                {
+                    "MY_TOKEN": {
+                        "value": "secret",
+                        "scopes": ["api.example.com"],
+                        "headers": ["Authorization"],
+                        "allow_foreign_credentials": False,
+                    }
+                },
+            )
         )
         assert result[0].allow_foreign_credentials is False
 
     def test_allow_foreign_credentials_absent_defaults_false(self) -> None:
         """Omitted allow_foreign_credentials defaults to False."""
         result = _parse_masked_secrets(
-            {
-                "MY_TOKEN": {
-                    "value": "secret",
-                    "scopes": ["api.example.com"],
-                    "headers": ["Authorization"],
-                }
-            }
+            cast(
+                YamlValue,
+                {
+                    "MY_TOKEN": {
+                        "value": "secret",
+                        "scopes": ["api.example.com"],
+                        "headers": ["Authorization"],
+                    }
+                },
+            )
         )
         assert result[0].allow_foreign_credentials is False
 
@@ -615,13 +644,16 @@ class TestParseMaskedSecrets:
 
         with pytest.raises(_ConfigError, match="scopes must be a non-empty"):
             _parse_masked_secrets(
-                {
-                    "MY_TOKEN": {
-                        "value": "secret",
-                        "scopes": "not-a-list",
-                        "headers": ["Authorization"],
-                    }
-                }
+                cast(
+                    YamlValue,
+                    {
+                        "MY_TOKEN": {
+                            "value": "secret",
+                            "scopes": "not-a-list",
+                            "headers": ["Authorization"],
+                        }
+                    },
+                )
             )
 
     def test_headers_not_list_raises(self) -> None:
@@ -630,13 +662,16 @@ class TestParseMaskedSecrets:
 
         with pytest.raises(_ConfigError, match="headers must be a non-empty"):
             _parse_masked_secrets(
-                {
-                    "MY_TOKEN": {
-                        "value": "secret",
-                        "scopes": ["api.example.com"],
-                        "headers": "not-a-list",
-                    }
-                }
+                cast(
+                    YamlValue,
+                    {
+                        "MY_TOKEN": {
+                            "value": "secret",
+                            "scopes": ["api.example.com"],
+                            "headers": "not-a-list",
+                        }
+                    },
+                )
             )
 
 
@@ -660,14 +695,16 @@ class TestParseSigningCredentials:
             _ConfigError,
             match="'signing_credentials' must be a mapping",
         ):
-            _parse_signing_credentials(["not", "a", "dict"])
+            _parse_signing_credentials(cast(YamlValue, ["not", "a", "dict"]))
 
     def test_entry_not_mapping_raises(self) -> None:
         """Non-dict entry raises _ConfigError."""
         from airut.sandbox_cli import _ConfigError
 
         with pytest.raises(_ConfigError, match="must be a mapping"):
-            _parse_signing_credentials({"aws": "string_not_dict"})
+            _parse_signing_credentials(
+                cast(YamlValue, {"aws": "string_not_dict"})
+            )
 
     def test_invalid_type_raises(self) -> None:
         """Wrong type field raises _ConfigError."""
@@ -675,14 +712,17 @@ class TestParseSigningCredentials:
 
         with pytest.raises(_ConfigError, match="type must be 'aws-sigv4'"):
             _parse_signing_credentials(
-                {
-                    "aws": {
-                        "type": "aws-sigv2",
-                        "access_key_id": "AKIATEST",
-                        "secret_access_key": "secret",
-                        "scopes": ["bedrock.us-east-1.amazonaws.com"],
-                    }
-                }
+                cast(
+                    YamlValue,
+                    {
+                        "aws": {
+                            "type": "aws-sigv2",
+                            "access_key_id": "AKIATEST",
+                            "secret_access_key": "secret",
+                            "scopes": ["bedrock.us-east-1.amazonaws.com"],
+                        }
+                    },
+                )
             )
 
     def test_missing_type_raises(self) -> None:
@@ -691,13 +731,16 @@ class TestParseSigningCredentials:
 
         with pytest.raises(_ConfigError, match="type must be 'aws-sigv4'"):
             _parse_signing_credentials(
-                {
-                    "aws": {
-                        "access_key_id": "AKIATEST",
-                        "secret_access_key": "secret",
-                        "scopes": ["bedrock.us-east-1.amazonaws.com"],
-                    }
-                }
+                cast(
+                    YamlValue,
+                    {
+                        "aws": {
+                            "access_key_id": "AKIATEST",
+                            "secret_access_key": "secret",
+                            "scopes": ["bedrock.us-east-1.amazonaws.com"],
+                        }
+                    },
+                )
             )
 
     def test_missing_scopes_raises(self) -> None:
@@ -706,13 +749,16 @@ class TestParseSigningCredentials:
 
         with pytest.raises(_ConfigError, match="scopes must be a non-empty"):
             _parse_signing_credentials(
-                {
-                    "aws": {
-                        "type": "aws-sigv4",
-                        "access_key_id": "AKIATEST",
-                        "secret_access_key": "secret",
-                    }
-                }
+                cast(
+                    YamlValue,
+                    {
+                        "aws": {
+                            "type": "aws-sigv4",
+                            "access_key_id": "AKIATEST",
+                            "secret_access_key": "secret",
+                        }
+                    },
+                )
             )
 
     def test_empty_scopes_raises(self) -> None:
@@ -721,27 +767,33 @@ class TestParseSigningCredentials:
 
         with pytest.raises(_ConfigError, match="scopes must be a non-empty"):
             _parse_signing_credentials(
-                {
-                    "aws": {
-                        "type": "aws-sigv4",
-                        "access_key_id": "AKIATEST",
-                        "secret_access_key": "secret",
-                        "scopes": [],
-                    }
-                }
+                cast(
+                    YamlValue,
+                    {
+                        "aws": {
+                            "type": "aws-sigv4",
+                            "access_key_id": "AKIATEST",
+                            "secret_access_key": "secret",
+                            "scopes": [],
+                        }
+                    },
+                )
             )
 
     def test_valid_credential_plain_strings(self) -> None:
         """Plain string credentials use default env var names."""
         result = _parse_signing_credentials(
-            {
-                "aws": {
-                    "type": "aws-sigv4",
-                    "access_key_id": "AKIATEST123",
-                    "secret_access_key": "secret123",
-                    "scopes": ["bedrock.us-east-1.amazonaws.com"],
-                }
-            }
+            cast(
+                YamlValue,
+                {
+                    "aws": {
+                        "type": "aws-sigv4",
+                        "access_key_id": "AKIATEST123",
+                        "secret_access_key": "secret123",
+                        "scopes": ["bedrock.us-east-1.amazonaws.com"],
+                    }
+                },
+            )
         )
         assert len(result) == 1
         cred = result[0]
@@ -760,14 +812,17 @@ class TestParseSigningCredentials:
         monkeypatch.setenv("MY_ACCESS_KEY", "AKIATEST456")
         monkeypatch.setenv("MY_SECRET_KEY", "secret456")
         result = _parse_signing_credentials(
-            {
-                "aws": {
-                    "type": "aws-sigv4",
-                    "access_key_id": EnvVar("MY_ACCESS_KEY"),
-                    "secret_access_key": EnvVar("MY_SECRET_KEY"),
-                    "scopes": ["*.amazonaws.com"],
-                }
-            }
+            cast(
+                YamlValue,
+                {
+                    "aws": {
+                        "type": "aws-sigv4",
+                        "access_key_id": EnvVar("MY_ACCESS_KEY"),
+                        "secret_access_key": EnvVar("MY_SECRET_KEY"),
+                        "scopes": ["*.amazonaws.com"],
+                    }
+                },
+            )
         )
         cred = result[0]
         assert cred.access_key_id_env_var == "MY_ACCESS_KEY"
@@ -778,15 +833,18 @@ class TestParseSigningCredentials:
     def test_credential_with_session_token_plain(self) -> None:
         """Session token as plain string uses default env var name."""
         result = _parse_signing_credentials(
-            {
-                "aws": {
-                    "type": "aws-sigv4",
-                    "access_key_id": "ASIATEST789",
-                    "secret_access_key": "secret789",
-                    "session_token": "token789",
-                    "scopes": ["s3.amazonaws.com"],
-                }
-            }
+            cast(
+                YamlValue,
+                {
+                    "aws": {
+                        "type": "aws-sigv4",
+                        "access_key_id": "ASIATEST789",
+                        "secret_access_key": "secret789",
+                        "session_token": "token789",
+                        "scopes": ["s3.amazonaws.com"],
+                    }
+                },
+            )
         )
         cred = result[0]
         assert cred.session_token_env_var == "AWS_SESSION_TOKEN"
@@ -798,15 +856,18 @@ class TestParseSigningCredentials:
         """Session token as EnvVar resolves from env."""
         monkeypatch.setenv("MY_SESSION_TOKEN", "session-token-value")
         result = _parse_signing_credentials(
-            {
-                "aws": {
-                    "type": "aws-sigv4",
-                    "access_key_id": "ASIATEST",
-                    "secret_access_key": "secret",
-                    "session_token": EnvVar("MY_SESSION_TOKEN"),
-                    "scopes": ["s3.amazonaws.com"],
-                }
-            }
+            cast(
+                YamlValue,
+                {
+                    "aws": {
+                        "type": "aws-sigv4",
+                        "access_key_id": "ASIATEST",
+                        "secret_access_key": "secret",
+                        "session_token": EnvVar("MY_SESSION_TOKEN"),
+                        "scopes": ["s3.amazonaws.com"],
+                    }
+                },
+            )
         )
         cred = result[0]
         assert cred.session_token_env_var == "MY_SESSION_TOKEN"
@@ -818,14 +879,17 @@ class TestParseSigningCredentials:
 
         with pytest.raises(_ConfigError, match="scopes must be a non-empty"):
             _parse_signing_credentials(
-                {
-                    "aws": {
-                        "type": "aws-sigv4",
-                        "access_key_id": "AKIATEST",
-                        "secret_access_key": "secret",
-                        "scopes": "not-a-list",
-                    }
-                }
+                cast(
+                    YamlValue,
+                    {
+                        "aws": {
+                            "type": "aws-sigv4",
+                            "access_key_id": "AKIATEST",
+                            "secret_access_key": "secret",
+                            "scopes": "not-a-list",
+                        }
+                    },
+                )
             )
 
 
@@ -894,12 +958,15 @@ class TestParseResourceLimits:
     def test_all_fields(self) -> None:
         """All fields are parsed with correct types."""
         result = _parse_resource_limits(
-            {
-                "timeout": 600,
-                "memory": "4g",
-                "cpus": 2.5,
-                "pids_limit": 100,
-            }
+            cast(
+                YamlValue,
+                {
+                    "timeout": 600,
+                    "memory": "4g",
+                    "cpus": 2.5,
+                    "pids_limit": 100,
+                },
+            )
         )
         assert result.timeout == 600
         assert result.memory == "4g"
@@ -908,7 +975,7 @@ class TestParseResourceLimits:
 
     def test_partial_fields(self) -> None:
         """Missing fields remain None."""
-        result = _parse_resource_limits({"timeout": 120})
+        result = _parse_resource_limits(cast(YamlValue, {"timeout": 120}))
         assert result.timeout == 120
         assert result.memory is None
         assert result.cpus is None
@@ -921,17 +988,17 @@ class TestParseResourceLimits:
 
     def test_string_timeout_converted_to_int(self) -> None:
         """String timeout is converted to int."""
-        result = _parse_resource_limits({"timeout": "300"})
+        result = _parse_resource_limits(cast(YamlValue, {"timeout": "300"}))
         assert result.timeout == 300
 
     def test_string_cpus_converted_to_float(self) -> None:
         """String cpus is converted to float."""
-        result = _parse_resource_limits({"cpus": "1.5"})
+        result = _parse_resource_limits(cast(YamlValue, {"cpus": "1.5"}))
         assert result.cpus == 1.5
 
     def test_string_pids_limit_converted_to_int(self) -> None:
         """String pids_limit is converted to int."""
-        result = _parse_resource_limits({"pids_limit": "50"})
+        result = _parse_resource_limits(cast(YamlValue, {"pids_limit": "50"}))
         assert result.pids_limit == 50
 
     def test_invalid_timeout_raises(self) -> None:
@@ -939,7 +1006,7 @@ class TestParseResourceLimits:
         from airut.sandbox_cli import _ConfigError
 
         with pytest.raises(_ConfigError, match="invalid value"):
-            _parse_resource_limits({"timeout": "fast"})
+            _parse_resource_limits(cast(YamlValue, {"timeout": "fast"}))
 
 
 # -------------------------------------------------------------------

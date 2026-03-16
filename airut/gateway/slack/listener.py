@@ -14,15 +14,19 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_bolt.context.assistant.thread_context import (
     AssistantThreadContext,
 )
+from slack_bolt.context.say import Say
+from slack_bolt.context.set_status import SetStatus
+from slack_bolt.context.set_suggested_prompts import SetSuggestedPrompts
 from slack_bolt.middleware.assistant import Assistant
 
+from airut._json_types import JsonDict
 from airut.gateway.channel import (
     ChannelHealth,
     ChannelListener,
@@ -64,7 +68,7 @@ class SlackChannelListener(ChannelListener):
             self._app, config.app_token
         )
         self._status = ChannelStatus(health=ChannelHealth.STARTING)
-        self._submit: Callable[[RawMessage[dict[str, Any]]], bool] | None = None
+        self._submit: Callable[[RawMessage[JsonDict]], bool] | None = None
         self._started = False
 
     def start(self, submit: Callable[[RawMessage[Any]], bool]) -> None:
@@ -183,9 +187,9 @@ class SlackChannelListener(ChannelListener):
 
         @assistant.thread_started
         def handle_thread_started(
-            set_status: Any,
-            say: Any,
-            set_suggested_prompts: Any,
+            set_status: SetStatus,
+            say: Say,
+            set_suggested_prompts: SetSuggestedPrompts,
         ) -> None:
             """Handle new thread creation in Agents & AI Apps mode."""
             set_status("is getting ready...")
@@ -201,8 +205,8 @@ class SlackChannelListener(ChannelListener):
 
         @assistant.user_message
         def handle_user_message(
-            payload: dict[str, Any],
-            set_status: Any,
+            payload: JsonDict,
+            set_status: SetStatus,
         ) -> None:
             """Handle user message in a thread.
 
@@ -210,17 +214,17 @@ class SlackChannelListener(ChannelListener):
             submit callback.  Authentication happens in the worker
             thread, not here.
             """
-            user_id = payload.get("user", "")
-            text = payload.get("text", "")
-            channel = payload.get("channel", "")
-            thread_ts = payload.get("thread_ts", "")
+            user_id = cast(str, payload.get("user", ""))
+            text = cast(str, payload.get("text", ""))
+            channel = cast(str, payload.get("channel", ""))
+            thread_ts = cast(str, payload.get("thread_ts", ""))
 
             # Build display title from first line of message
             display_title = text[:60].split("\n")[0] if text else ""
 
             set_status("is working on this...")
 
-            raw: RawMessage[dict[str, Any]] = RawMessage(
+            raw: RawMessage[JsonDict] = RawMessage(
                 sender=user_id,
                 content=payload,
                 display_title=display_title,

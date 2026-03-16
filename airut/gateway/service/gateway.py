@@ -845,7 +845,7 @@ class GatewayService:
         parsed: ParsedMessage,
         task_id: str,
         repo_handler: RepoHandler,
-        adapter: ChannelAdapter[Any, Any],
+        adapter: ChannelAdapter,
     ) -> None:
         """Execute a message and complete the tracker task.
 

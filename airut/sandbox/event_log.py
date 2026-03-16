@@ -16,8 +16,8 @@ grouped by reply when reading back.
 import json
 import logging
 from pathlib import Path
-from typing import Any
 
+from airut._json_types import JsonDict
 from airut.claude_output import StreamEvent, parse_event_dict
 
 
@@ -156,7 +156,7 @@ def _parse_chunk(chunk: str) -> list[StreamEvent]:
         if not line:
             continue
         try:
-            raw_obj: dict[str, Any] = json.loads(line)
+            raw_obj: JsonDict = json.loads(line)
         except json.JSONDecodeError:
             continue
         if not isinstance(raw_obj, dict):

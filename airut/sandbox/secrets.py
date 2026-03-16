@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import secrets as secrets_module
 from dataclasses import dataclass, field
-from typing import Any
+
+from airut._json_types import JsonDict
 
 
 # Known token prefixes to preserve during surrogate generation.
@@ -100,9 +101,9 @@ class _ReplacementEntry:
     headers: tuple[str, ...]
     allow_foreign_credentials: bool = False
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> JsonDict:
         """Serialize to dict for JSON export."""
-        d: dict[str, Any] = {
+        d: JsonDict = {
             "value": self.real_value,
             "scopes": list(self.scopes),
             "headers": list(self.headers),
@@ -122,7 +123,7 @@ class _SigningCredentialEntry:
     surrogate_session_token: str | None
     scopes: tuple[str, ...]
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> JsonDict:
         """Serialize to dict for JSON export."""
         return {
             "type": "aws-sigv4",
@@ -147,7 +148,7 @@ class SecretReplacements:
         default_factory=dict
     )
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> JsonDict:
         """Serialize to dict for JSON export (internal use)."""
         return {
             surrogate: entry.to_dict() for surrogate, entry in self._map.items()

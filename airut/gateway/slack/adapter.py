@@ -16,11 +16,12 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
+from airut._json_types import JsonDict
 from airut.gateway.channel import (
     AuthenticationError,
     ChannelAdapter,
@@ -150,7 +151,7 @@ class SlackChannelAdapter(ChannelAdapter):
         return self._listener
 
     def authenticate_and_parse(
-        self, raw_message: RawMessage[dict[str, Any]]
+        self, raw_message: RawMessage[JsonDict]
     ) -> SlackParsedMessage:
         """Authenticate sender and parse the Slack message.
 
@@ -164,10 +165,10 @@ class SlackChannelAdapter(ChannelAdapter):
             AuthenticationError: If authorization fails.
         """
         payload = raw_message.content
-        user_id = payload.get("user", "")
-        text = payload.get("text", "")
-        channel_id = payload.get("channel", "")
-        thread_ts = payload.get("thread_ts", "")
+        user_id = cast(str, payload.get("user", ""))
+        text = cast(str, payload.get("text", ""))
+        channel_id = cast(str, payload.get("channel", ""))
+        thread_ts = cast(str, payload.get("thread_ts", ""))
 
         # Authorize via rules
         authorized, reason = self._authorizer.authorize(user_id)
@@ -187,10 +188,12 @@ class SlackChannelAdapter(ChannelAdapter):
 
         # Extract file metadata for deferred download
         slack_file_urls: list[tuple[str, str]] = []
-        for file_info in payload.get("files", []):
-            name = file_info.get("name", "unnamed")
-            url = file_info.get("url_private_download") or file_info.get(
-                "url_private", ""
+        for raw_file in cast(list[JsonDict], payload.get("files", [])):
+            name = cast(str, raw_file.get("name", "unnamed"))
+            url = cast(
+                str,
+                raw_file.get("url_private_download")
+                or raw_file.get("url_private", ""),
             )
             if url:
                 slack_file_urls.append((name, url))

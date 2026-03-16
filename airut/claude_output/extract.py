@@ -12,6 +12,7 @@ result summaries, response text, error summaries, and session IDs.
 from __future__ import annotations
 
 import logging
+from typing import cast
 
 from airut.claude_output.types import (
     _KNOWN_USAGE_KEYS,
@@ -46,7 +47,8 @@ def extract_result_summary(events: list[StreamEvent]) -> ResultSummary | None:
 
     last = result_events[-1]
     extra = last.extra
-    usage_dict = extra.get("usage", {})
+    usage_raw = extra.get("usage", {})
+    usage_dict = usage_raw if isinstance(usage_raw, dict) else {}
 
     # Capture any API fields beyond the known token fields
     usage_extra = {
@@ -56,28 +58,30 @@ def extract_result_summary(events: list[StreamEvent]) -> ResultSummary | None:
     # duration_ms and num_turns are per-segment; sum across all results.
     # total_cost_usd and usage are cumulative; use last result.
     total_duration_ms = sum(
-        e.extra.get("duration_ms", 0) for e in result_events
+        cast(int, e.extra.get("duration_ms", 0)) for e in result_events
     )
-    total_num_turns = sum(e.extra.get("num_turns", 0) for e in result_events)
+    total_num_turns = sum(
+        cast(int, e.extra.get("num_turns", 0)) for e in result_events
+    )
 
     return ResultSummary(
         session_id=last.session_id,
         duration_ms=total_duration_ms,
-        total_cost_usd=extra.get("total_cost_usd", 0.0),
+        total_cost_usd=cast(float, extra.get("total_cost_usd", 0.0)),
         num_turns=total_num_turns,
-        is_error=extra.get("is_error", False),
+        is_error=cast(bool, extra.get("is_error", False)),
         usage=Usage(
-            input_tokens=usage_dict.get("input_tokens", 0),
-            output_tokens=usage_dict.get("output_tokens", 0),
-            cache_creation_input_tokens=usage_dict.get(
-                "cache_creation_input_tokens", 0
+            input_tokens=cast(int, usage_dict.get("input_tokens", 0)),
+            output_tokens=cast(int, usage_dict.get("output_tokens", 0)),
+            cache_creation_input_tokens=cast(
+                int, usage_dict.get("cache_creation_input_tokens", 0)
             ),
-            cache_read_input_tokens=usage_dict.get(
-                "cache_read_input_tokens", 0
+            cache_read_input_tokens=cast(
+                int, usage_dict.get("cache_read_input_tokens", 0)
             ),
             extra=usage_extra,
         ),
-        result_text=extra.get("result", ""),
+        result_text=cast(str, extra.get("result", "")),
     )
 
 
@@ -189,7 +193,7 @@ def extract_error_summary(
 
         elif event.event_type == EventType.RESULT:
             result = event.extra.get("result", "")
-            if result:
+            if isinstance(result, str) and result:
                 result_text = result
 
     if result_text:

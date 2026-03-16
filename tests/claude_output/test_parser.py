@@ -7,6 +7,7 @@
 
 import json
 
+from airut._json_types import JsonDict
 from airut.claude_output.parser import (
     parse_event,
     parse_event_dict,
@@ -398,14 +399,18 @@ class TestParseEventDict:
         assert json.loads(event.raw) == raw
 
     def test_unknown_type_preserved(self) -> None:
-        raw = {"type": "ping", "seq": 42}
+        raw: JsonDict = {"type": "ping", "seq": 42}
         event = parse_event_dict(raw)
         assert event is not None
         assert event.event_type == EventType.UNKNOWN
         assert event.extra == {"seq": 42}
 
     def test_unknown_type_preserves_message_field(self) -> None:
-        raw = {"type": "status", "message": "processing", "progress": 50}
+        raw: JsonDict = {
+            "type": "status",
+            "message": "processing",
+            "progress": 50,
+        }
         event = parse_event_dict(raw)
         assert event is not None
         assert event.event_type == EventType.UNKNOWN

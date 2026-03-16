@@ -8,7 +8,9 @@
 import json
 import threading
 from pathlib import Path
+from typing import cast
 
+from airut._json_types import JsonDict
 from airut.dashboard.sse import (
     SSEConnectionManager,
     _boot_state_to_dict,
@@ -305,9 +307,10 @@ class TestTaskStateToDictWithTodos:
         )
         result = _task_state_to_dict(task)
         assert "todos" in result
-        assert len(result["todos"]) == 2
-        assert result["todos"][0]["content"] == "Step 1"
-        assert result["todos"][1]["activeForm"] == "Doing Step 2"
+        todos = cast(list[JsonDict], result["todos"])
+        assert len(todos) == 2
+        assert todos[0]["content"] == "Step 1"
+        assert todos[1]["activeForm"] == "Doing Step 2"
 
     def test_task_without_todos(self) -> None:
         """Test converting task without todos omits the field."""

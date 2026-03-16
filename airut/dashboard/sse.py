@@ -15,8 +15,8 @@ import logging
 import threading
 import time
 from collections.abc import Generator
-from typing import Any
 
+from airut._json_types import JsonDict
 from airut.claude_output.types import StreamEvent
 from airut.dashboard.tracker import (
     BootState,
@@ -113,7 +113,7 @@ class SSEConnectionManager:
             return self._active
 
 
-def _boot_state_to_dict(boot_state: BootState) -> dict[str, Any]:
+def _boot_state_to_dict(boot_state: BootState) -> JsonDict:
     """Convert BootState to JSON-serializable dict.
 
     Args:
@@ -122,7 +122,7 @@ def _boot_state_to_dict(boot_state: BootState) -> dict[str, Any]:
     Returns:
         Dict representation suitable for SSE state event.
     """
-    result: dict[str, Any] = {
+    result: JsonDict = {
         "phase": boot_state.phase.value,
         "message": boot_state.message,
     }
@@ -137,7 +137,7 @@ def _boot_state_to_dict(boot_state: BootState) -> dict[str, Any]:
     return result
 
 
-def _repo_state_to_dict(repo_state: RepoState) -> dict[str, Any]:
+def _repo_state_to_dict(repo_state: RepoState) -> JsonDict:
     """Convert RepoState to JSON-serializable dict.
 
     Args:
@@ -161,7 +161,7 @@ def _repo_state_to_dict(repo_state: RepoState) -> dict[str, Any]:
     }
 
 
-def _task_state_to_dict(task: TaskState) -> dict[str, Any]:
+def _task_state_to_dict(task: TaskState) -> JsonDict:
     """Convert TaskState to JSON-serializable dict for SSE.
 
     Matches the format used by ``/api/conversations`` for consistency.
@@ -172,7 +172,7 @@ def _task_state_to_dict(task: TaskState) -> dict[str, Any]:
     Returns:
         Dict representation suitable for SSE state event.
     """
-    result: dict[str, Any] = {
+    result: JsonDict = {
         "task_id": task.task_id,
         "conversation_id": task.conversation_id,
         "display_title": task.display_title,
@@ -218,11 +218,11 @@ def build_state_snapshot(
     tasks = tracker.get_all_tasks()
     task_dicts = [_task_state_to_dict(t) for t in tasks]
 
-    boot_dict: dict[str, Any] | None = None
+    boot_dict: JsonDict | None = None
     if boot_store is not None:
         boot_dict = _boot_state_to_dict(boot_store.get().value)
 
-    repo_dicts: list[dict[str, Any]] = []
+    repo_dicts: list[JsonDict] = []
     if repos_store is not None:
         repo_dicts = [_repo_state_to_dict(r) for r in repos_store.get().value]
 

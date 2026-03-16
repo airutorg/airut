@@ -7,10 +7,11 @@
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
+from airut._json_types import JsonDict
 from airut.claude_output.types import Usage
 from airut.conversation.conversation_store import (
     CONVERSATION_FILE_NAME,
@@ -171,8 +172,9 @@ class TestSerialization:
         assert data["total_cost_usd"] == pytest.approx(0.05)
         assert data["num_turns"] == 3
         assert data["is_error"] is False
-        assert data["usage"]["input_tokens"] == 100
-        assert data["usage"]["output_tokens"] == 50
+        usage = cast(JsonDict, data["usage"])
+        assert usage["input_tokens"] == 100
+        assert usage["output_tokens"] == 50
         assert data["request_text"] == "hello"
         assert data["response_text"] == "world"
 
@@ -184,10 +186,11 @@ class TestSerialization:
         )
         reply = _make_reply(usage=usage)
         data = _serialize_reply(reply)
-        assert data["usage"]["server_tool_tokens"] == 10
+        usage = cast(JsonDict, data["usage"])
+        assert usage["server_tool_tokens"] == 10
 
     def test_deserialize_usage_full(self) -> None:
-        raw = {
+        raw: JsonDict = {
             "input_tokens": 200,
             "output_tokens": 100,
             "cache_creation_input_tokens": 50,

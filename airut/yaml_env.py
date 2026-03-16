@@ -11,7 +11,6 @@ tags on top; the sandbox CLI uses ``!env`` only.
 """
 
 import os
-from typing import Any
 
 import yaml
 
@@ -26,8 +25,15 @@ class EnvVar:
 #: Type alias for any value produced by YAML parsing with ``!env`` support.
 #: PyYAML SafeLoader produces str, int, float, bool, None, list, dict;
 #: the custom ``!env`` tag produces :class:`EnvVar`.
-YamlValue = (
-    str | int | float | bool | EnvVar | None | list[Any] | dict[str, Any]
+type YamlValue = (
+    str
+    | int
+    | float
+    | bool
+    | EnvVar
+    | None
+    | list[YamlValue]
+    | dict[str, YamlValue]
 )
 
 

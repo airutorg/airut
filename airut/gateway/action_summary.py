@@ -11,6 +11,8 @@ display in channel progress indicators (e.g. Slack plan block details).
 
 from __future__ import annotations
 
+from typing import cast
+
 from airut.claude_output.types import ToolUseBlock
 
 
@@ -45,8 +47,8 @@ def summarize_action(block: ToolUseBlock) -> str | None:
         return None
 
     if name == "Bash":
-        cmd = inp.get("command", "")
-        desc = inp.get("description", "")
+        cmd = cast(str, inp.get("command", ""))
+        desc = cast(str, inp.get("description", ""))
         if desc:
             return _truncate(desc)
         if cmd:
@@ -54,49 +56,49 @@ def summarize_action(block: ToolUseBlock) -> str | None:
         return "Running command"
 
     if name == "Read":
-        path = inp.get("file_path", "")
+        path = cast(str, inp.get("file_path", ""))
         if path:
             return f"Reading {_truncate(path)}"
         return "Reading file"
 
     if name == "Write":
-        path = inp.get("file_path", "")
+        path = cast(str, inp.get("file_path", ""))
         if path:
             return f"Writing {_truncate(path)}"
         return "Writing file"
 
     if name == "Edit":
-        path = inp.get("file_path", "")
+        path = cast(str, inp.get("file_path", ""))
         if path:
             return f"Editing {_truncate(path)}"
         return "Editing file"
 
     if name == "Grep":
-        pattern = inp.get("pattern", "")
+        pattern = cast(str, inp.get("pattern", ""))
         if pattern:
             return f'Searching for "{_truncate(pattern, 60)}"'
         return "Searching files"
 
     if name == "Glob":
-        pattern = inp.get("pattern", "")
+        pattern = cast(str, inp.get("pattern", ""))
         if pattern:
             return f"Finding files: {_truncate(pattern, 60)}"
         return "Finding files"
 
     if name == "Task":
-        desc = inp.get("description", "")
+        desc = cast(str, inp.get("description", ""))
         if desc:
             return _truncate(desc)
         return "Running sub-task"
 
     if name == "WebFetch":
-        url = inp.get("url", "")
+        url = cast(str, inp.get("url", ""))
         if url:
             return f"Fetching {_truncate(url, 60)}"
         return "Fetching URL"
 
     if name == "WebSearch":
-        query = inp.get("query", "")
+        query = cast(str, inp.get("query", ""))
         if query:
             return f"Searching: {_truncate(query, 60)}"
         return "Web search"
