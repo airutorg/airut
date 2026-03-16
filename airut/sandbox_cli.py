@@ -820,10 +820,19 @@ async def _execute_async(
                 on_network_line = _make_network_line_callback()
 
             logger.info("Executing command: %s", args.command)
+
+            def _write_stdout(line: str) -> None:
+                sys.stdout.write(line)
+                sys.stdout.flush()
+
+            def _write_stderr(line: str) -> None:
+                sys.stderr.write(line)
+                sys.stderr.flush()
+
             result = await task.execute(
                 args.command,
-                on_output=lambda line: sys.stdout.write(line),
-                on_stderr=lambda line: sys.stderr.write(line),
+                on_output=_write_stdout,
+                on_stderr=_write_stderr,
                 on_network_line=on_network_line,
             )
 
