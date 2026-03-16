@@ -20,11 +20,6 @@ from datetime import UTC
 from typing import TYPE_CHECKING
 
 from airut.allowlist import parse_allowlist_yaml
-from airut.claude_output import (
-    extract_error_summary,
-    extract_result_summary,
-    extract_session_id,
-)
 from airut.claude_output.types import StreamEvent, ToolUseBlock
 from airut.conversation import (
     ConversationStore,
@@ -46,7 +41,7 @@ from airut.gateway.channel import (
 )
 from airut.gateway.config import ReplacementMap, RepoConfig
 from airut.gateway.conversation import GitCloneError
-from airut.gateway.service.usage_stats import extract_usage_stats
+from airut.gateway.service.usage_stats import UsageStats
 from airut.sandbox import (
     NETWORK_LOG_FILENAME,
     ContainerEnv,
@@ -228,8 +223,7 @@ def _build_reply_summary(
 ) -> ReplySummary:
     """Build a ReplySummary from an ExecutionResult.
 
-    Extracts session_id, cost, usage, and timing from the result's events
-    and packages them into a ReplySummary for conversation.json.
+    Uses the scalar fields on ExecutionResult directly.
 
     Args:
         result: ExecutionResult from sandbox execution.
@@ -242,39 +236,21 @@ def _build_reply_summary(
     """
     from datetime import datetime
 
-    from airut.claude_output.types import Usage
     from airut.sandbox.types import ExecutionResult
 
     assert isinstance(result, ExecutionResult)
 
-    session_id = extract_session_id(result.events) or ""
-    summary = extract_result_summary(result.events)
-
-    if summary is not None:
-        return ReplySummary(
-            session_id=session_id,
-            timestamp=datetime.now(tz=UTC).isoformat(),
-            duration_ms=summary.duration_ms,
-            total_cost_usd=summary.total_cost_usd,
-            num_turns=summary.num_turns,
-            is_error=is_error or summary.is_error,
-            usage=summary.usage,
-            request_text=request_text,
-            response_text=response_text,
-        )
-    else:
-        # No result event (e.g., timeout, crash) — use fallback values
-        return ReplySummary(
-            session_id=session_id,
-            timestamp=datetime.now(tz=UTC).isoformat(),
-            duration_ms=result.duration_ms,
-            total_cost_usd=0.0,
-            num_turns=0,
-            is_error=is_error,
-            usage=Usage(),
-            request_text=request_text,
-            response_text=response_text,
-        )
+    return ReplySummary(
+        session_id=result.session_id,
+        timestamp=datetime.now(tz=UTC).isoformat(),
+        duration_ms=result.duration_ms,
+        total_cost_usd=result.total_cost_usd,
+        num_turns=result.num_turns,
+        is_error=is_error or result.is_error,
+        usage=result.usage,
+        request_text=request_text,
+        response_text=response_text,
+    )
 
 
 def process_message(
@@ -624,14 +600,16 @@ def process_message(
             # Claude Code uses ANTHROPIC_API_KEY over OAuth when both are
             # set, so only treat as subscription (hide cost) when OAuth is
             # present without an API key.
-            usage_stats = extract_usage_stats(
-                result.events,
-                is_subscription=bool(
-                    repo_config.container_env.get("CLAUDE_CODE_OAUTH_TOKEN")
-                )
-                and not bool(
-                    repo_config.container_env.get("ANTHROPIC_API_KEY")
-                ),
+            is_subscription = bool(
+                repo_config.container_env.get("CLAUDE_CODE_OAUTH_TOKEN")
+            ) and not bool(repo_config.container_env.get("ANTHROPIC_API_KEY"))
+            usage_stats = UsageStats(
+                total_cost_usd=result.total_cost_usd
+                if result.total_cost_usd > 0
+                else None,
+                web_search_requests=result.web_search_count,
+                web_fetch_requests=result.web_fetch_count,
+                is_subscription=is_subscription,
             )
             logger.info(
                 "Repo '%s': execution successful for conversation %s",
@@ -684,10 +662,9 @@ def process_message(
                 "An error occurred while processing your message. "
                 "To retry, send your message again."
             )
-            error_summary = extract_error_summary(result.events)
-            if error_summary:
+            if result.error_summary:
                 response_body += (
-                    f"\n\nClaude output:\n```\n{error_summary}\n```"
+                    f"\n\nClaude output:\n```\n{result.error_summary}\n```"
                 )
             logger.error(
                 "Repo '%s': execution failed for conversation %s: %s",

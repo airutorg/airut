@@ -65,14 +65,14 @@ class _MockTimeoutTask:
             outcome=Outcome.TIMEOUT,
             session_id=session_id or "mock-timeout",
             response_text="",
-            events=[],
             duration_ms=10000,
             total_cost_usd=0.0,
             num_turns=0,
+            is_error=False,
             usage=Usage(),
-            stdout="",
-            stderr="",
-            exit_code=-9,
+            web_search_count=0,
+            web_fetch_count=0,
+            error_summary=None,
         )
 
     def stop(self):

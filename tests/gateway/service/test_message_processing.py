@@ -5,14 +5,12 @@
 
 """Tests for message_processing module."""
 
-import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from airut.claude_output import StreamEvent, parse_stream_events
 from airut.claude_output.types import Usage
 from airut.dashboard.tracker import CompletionReason
 from airut.gateway.channel import ChannelSendError, ParsedMessage
@@ -23,12 +21,6 @@ from airut.sandbox import ExecutionResult, Outcome
 from airut.sandbox.types import ResourceLimits
 
 from .conftest import make_service, update_global, update_repo
-
-
-def _parse_events(*raw_events: dict) -> list[StreamEvent]:
-    """Parse raw event dicts into typed StreamEvents."""
-    stdout = "\n".join(json.dumps(e) for e in raw_events)
-    return parse_stream_events(stdout)
 
 
 def _make_repo_config(
@@ -68,65 +60,43 @@ def _make_parsed_message(
 
 
 def _make_success_result(
-    events: list[StreamEvent] | None = None,
     response_text: str = "Done!",
+    total_cost_usd: float = 0.01,
 ) -> ExecutionResult:
     """Create a successful ExecutionResult for testing."""
-    if events is None:
-        events = _parse_events(
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [{"type": "text", "text": response_text}]
-                },
-            },
-            {
-                "type": "result",
-                "subtype": "success",
-                "session_id": "test-session",
-                "duration_ms": 100,
-                "total_cost_usd": 0.01,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "result": response_text,
-            },
-        )
     return ExecutionResult(
         outcome=Outcome.SUCCESS,
         session_id="test-session",
         response_text=response_text,
-        events=events,
         duration_ms=100,
-        total_cost_usd=0.01,
+        total_cost_usd=total_cost_usd,
         num_turns=1,
+        is_error=False,
         usage=Usage(),
-        stdout="",
-        stderr="",
-        exit_code=0,
+        web_search_count=0,
+        web_fetch_count=0,
+        error_summary=None,
     )
 
 
 def _make_failure_result(
     outcome: Outcome = Outcome.CONTAINER_FAILED,
-    events: list[StreamEvent] | None = None,
-    stdout: str = "",
-    stderr: str = "",
-    exit_code: int = 1,
+    error_summary: str | None = None,
+    session_id: str = "",
 ) -> ExecutionResult:
     """Create a failed ExecutionResult for testing."""
     return ExecutionResult(
         outcome=outcome,
-        session_id="",
+        session_id=session_id,
         response_text="",
-        events=events or [],
         duration_ms=100,
         total_cost_usd=0.0,
         num_turns=0,
+        is_error=True,
         usage=Usage(),
-        stdout=stdout,
-        stderr=stderr,
-        exit_code=exit_code,
+        web_search_count=0,
+        web_fetch_count=0,
+        error_summary=error_summary,
     )
 
 
@@ -493,19 +463,7 @@ class TestProcessMessage:
 
         svc._mock_task.execute = AsyncMock(
             return_value=_make_failure_result(
-                events=_parse_events(
-                    {
-                        "type": "result",
-                        "subtype": "error",
-                        "session_id": "err-session",
-                        "is_error": True,
-                        "duration_ms": 100,
-                        "total_cost_usd": 0.0,
-                        "num_turns": 0,
-                        "usage": {},
-                    },
-                ),
-                stderr="FATAL: OOM\nline2\nline3",
+                error_summary="FATAL: OOM",
             )
         )
         parsed = _make_parsed_message(body="Do something")
@@ -976,18 +934,9 @@ class TestProcessMessage:
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
-        # Result with no cost event → no usage stats footer
+        # Result with no cost → no usage stats footer
         svc._mock_task.execute = AsyncMock(
-            return_value=_make_success_result(
-                events=_parse_events(
-                    {
-                        "type": "assistant",
-                        "message": {
-                            "content": [{"type": "text", "text": "Done"}]
-                        },
-                    },
-                ),
-            )
+            return_value=_make_success_result(total_cost_usd=0.0)
         )
         parsed = _make_parsed_message(body="Do stuff")
 
@@ -1058,17 +1007,12 @@ class TestProcessMessage:
             process_message(svc, parsed, "task1", handler, adapter)
         assert "Cost:" in str(adapter.send_reply.call_args)
 
-    def test_failure_with_stderr(
+    def test_failure_with_no_error_summary(
         self, email_config: Any, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
-        stderr_lines = "\n".join(f"line{i}" for i in range(15))
-        svc._mock_task.execute = AsyncMock(
-            return_value=_make_failure_result(
-                stderr=stderr_lines,
-            )
-        )
+        svc._mock_task.execute = AsyncMock(return_value=_make_failure_result())
         parsed = _make_parsed_message(body="Do stuff")
 
         with patch(
@@ -1087,19 +1031,16 @@ class TestProcessMessage:
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
 
-        svc._mock_task.execute = AsyncMock(return_value=_make_failure_result())
+        svc._mock_task.execute = AsyncMock(
+            return_value=_make_failure_result(
+                error_summary="Error summary text",
+            )
+        )
         parsed = _make_parsed_message(body="Do stuff")
 
-        with (
-            patch(
-                "airut.gateway.service.message_processing.ConversationStore",
-                return_value=mock_cs,
-            ),
-            patch(
-                "airut.gateway.service.message_processing."
-                "extract_error_summary",
-                return_value="Error summary text",
-            ),
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             reason, _ = process_message(svc, parsed, "task1", handler, adapter)
         assert reason == CompletionReason.EXECUTION_FAILED
@@ -1117,22 +1058,7 @@ class TestProcessMessage:
 
         svc._mock_task.execute = AsyncMock(
             return_value=_make_failure_result(
-                events=_parse_events(
-                    {
-                        "type": "result",
-                        "subtype": "error",
-                        "session_id": "err-session-1",
-                        "is_error": True,
-                        "duration_ms": 500,
-                        "total_cost_usd": 0.005,
-                        "num_turns": 1,
-                        "usage": {
-                            "input_tokens": 50,
-                            "output_tokens": 10,
-                        },
-                    },
-                ),
-                stderr="FATAL: OOM",
+                session_id="err-session-1",
             )
         )
         parsed = _make_parsed_message(body="Do something")
@@ -1236,29 +1162,9 @@ class TestProcessMessage:
         # First call: prompt too long; second call: success
         prompt_too_long_result = _make_failure_result(
             outcome=Outcome.PROMPT_TOO_LONG,
-            stdout="Prompt is too long",
         )
         success_result = _make_success_result(
             response_text="Recovered!",
-            events=_parse_events(
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [{"type": "text", "text": "Recovered!"}]
-                    },
-                },
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "new-session",
-                    "duration_ms": 200,
-                    "total_cost_usd": 0.02,
-                    "num_turns": 1,
-                    "is_error": False,
-                    "usage": {},
-                    "result": "Recovered!",
-                },
-            ),
         )
 
         mock_task1 = MagicMock()
@@ -1307,7 +1213,6 @@ class TestProcessMessage:
         svc._mock_task.execute = AsyncMock(
             return_value=_make_failure_result(
                 outcome=Outcome.PROMPT_TOO_LONG,
-                stdout="Prompt is too long",
             )
         )
 
@@ -1341,29 +1246,9 @@ class TestProcessMessage:
         # First call: session corrupted; second call: success
         corrupted_result = _make_failure_result(
             outcome=Outcome.SESSION_CORRUPTED,
-            stderr="API Error: 400\ninvalid_request_error",
         )
         success_result = _make_success_result(
             response_text="Recovered!",
-            events=_parse_events(
-                {
-                    "type": "assistant",
-                    "message": {
-                        "content": [{"type": "text", "text": "Recovered!"}]
-                    },
-                },
-                {
-                    "type": "result",
-                    "subtype": "success",
-                    "session_id": "new-session",
-                    "duration_ms": 200,
-                    "total_cost_usd": 0.02,
-                    "num_turns": 1,
-                    "is_error": False,
-                    "usage": {},
-                    "result": "Recovered!",
-                },
-            ),
         )
 
         mock_task1 = MagicMock()
@@ -1406,7 +1291,6 @@ class TestProcessMessage:
         svc._mock_task.execute = AsyncMock(
             return_value=_make_failure_result(
                 outcome=Outcome.SESSION_CORRUPTED,
-                stderr="API Error: 400\ninvalid_request_error",
             )
         )
 

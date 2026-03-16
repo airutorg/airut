@@ -187,10 +187,31 @@ await task.execute(prompt, session_id=..., model=..., effort=...,
   |
   +- Stop proxy (always, even on failure)
   |
-  +- Classify outcome
-  |
-  +- Return ExecutionResult
+  +- Build ExecutionResult from accumulator (no disk re-read)
 ```
+
+**Stateful accumulator**: An `ExecutionAccumulator` processes events and raw
+lines during streaming. Outcome classification flags are set from raw lines
+(`on_stdout_line`, `on_stderr_line`); metadata is extracted from parsed events
+(`on_event`). After the container exits, `build_result()` produces the final
+`ExecutionResult` — no re-reading from disk or second pass is needed.
+
+`ExecutionResult` contains only scalar metadata. Raw stdout/stderr and the
+events list are not retained — consumers use the pre-extracted fields directly:
+
+| Field              | Type          | Description                             |
+| ------------------ | ------------- | --------------------------------------- |
+| `outcome`          | `Outcome`     | Classified execution result             |
+| `session_id`       | `str`         | Claude session ID (for resume)          |
+| `response_text`    | `str`         | Final assistant response (SUCCESS only) |
+| `duration_ms`      | `int`         | Execution duration in milliseconds      |
+| `total_cost_usd`   | `float`       | Total API cost in USD                   |
+| `num_turns`        | `int`         | Number of agent turns                   |
+| `is_error`         | `bool`        | Whether Claude reported an error        |
+| `usage`            | `Usage`       | Token usage (input/output)              |
+| `web_search_count` | `int`         | Number of WebSearch tool uses           |
+| `web_fetch_count`  | `int`         | Number of WebFetch tool uses            |
+| `error_summary`    | `str \| None` | Error text for non-success outcomes     |
 
 ### CommandTask
 

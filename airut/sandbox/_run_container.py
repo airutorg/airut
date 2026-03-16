@@ -34,16 +34,16 @@ logger = logging.getLogger(__name__)
 class _RawResult:
     """Raw result from a container execution.
 
+    Callers that need stdout/stderr content should use the
+    ``on_stdout_line`` / ``on_stderr_line`` callbacks to accumulate
+    output themselves.
+
     Attributes:
-        stdout: Raw stdout text.
-        stderr: Raw stderr text.
         exit_code: Container process exit code.
         duration_ms: Execution duration in milliseconds.
         timed_out: Whether the command timed out.
     """
 
-    stdout: str
-    stderr: str
     exit_code: int
     duration_ms: int
     timed_out: bool
@@ -162,6 +162,9 @@ async def run_container(
     mounts, resource limits, and network arguments, then executes it
     with concurrent stdout/stderr reading via asyncio.
 
+    Output is delivered exclusively via callbacks.  Callers that need
+    accumulated stdout/stderr should collect lines in their callbacks.
+
     Args:
         container_command: Container runtime (e.g. "podman").
         image_tag: Container image tag.
@@ -177,8 +180,7 @@ async def run_container(
         process_tracker: Process tracker for stop() support.
 
     Returns:
-        _RawResult with stdout, stderr, exit code, duration, and
-        timeout flag.
+        _RawResult with exit code, duration, and timeout flag.
     """
     cmd = [
         container_command,
@@ -239,13 +241,8 @@ async def run_container(
             process.stdin.close()
             await process.stdin.wait_closed()
 
-        # Mutable accumulators that survive cancellation
-        stdout_lines: list[str] = []
-        stderr_lines: list[str] = []
-
         async def read_lines(
             stream: asyncio.StreamReader,
-            lines: list[str],
             callback: Callable[[str], None] | None,
         ) -> None:
             # Use fixed-size read() instead of readline() so that
@@ -258,11 +255,8 @@ async def run_container(
             while True:
                 chunk = await stream.read(65536)
                 if not chunk:
-                    if buf:
-                        line = buf.decode("utf-8", errors="replace")
-                        lines.append(line)
-                        if callback is not None:
-                            callback(line)
+                    if buf and callback is not None:
+                        callback(buf.decode("utf-8", errors="replace"))
                     break
                 buf.extend(chunk)
                 while True:
@@ -271,18 +265,16 @@ async def run_container(
                         break
                     raw_line = bytes(buf[: pos + 1])
                     del buf[: pos + 1]
-                    line = raw_line.decode("utf-8", errors="replace")
-                    lines.append(line)
                     if callback is not None:
-                        callback(line)
+                        callback(raw_line.decode("utf-8", errors="replace"))
 
         async def _run() -> None:
             # stdout/stderr are always set because we pass PIPE above
             assert process.stdout is not None
             assert process.stderr is not None
             await asyncio.gather(
-                read_lines(process.stdout, stdout_lines, on_stdout_line),
-                read_lines(process.stderr, stderr_lines, on_stderr_line),
+                read_lines(process.stdout, on_stdout_line),
+                read_lines(process.stderr, on_stderr_line),
             )
             await process.wait()
 
@@ -295,8 +287,6 @@ async def run_container(
             await process.wait()
             timed_out = True
 
-        stdout = "".join(stdout_lines)
-        stderr = "".join(stderr_lines)
         exit_code = process.returncode or 0
 
     finally:
@@ -312,8 +302,6 @@ async def run_container(
     )
 
     return _RawResult(
-        stdout=stdout,
-        stderr=stderr,
         exit_code=exit_code,
         duration_ms=duration_ms,
         timed_out=timed_out,

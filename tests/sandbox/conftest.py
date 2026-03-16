@@ -46,8 +46,6 @@ def create_mock_run_container(
                 on_stderr(line)
 
         return _RawResult(
-            stdout=stdout,
-            stderr=stderr,
             exit_code=returncode,
             duration_ms=duration_ms,
             timed_out=timed_out,

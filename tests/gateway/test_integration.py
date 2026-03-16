@@ -11,7 +11,6 @@ Tests the full end-to-end flow with all components:
 """
 
 import concurrent.futures
-import json
 import threading
 import time
 from pathlib import Path
@@ -19,7 +18,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from airut.claude_output import StreamEvent, parse_stream_events
 from airut.dashboard.tracker import CompletionReason, TaskStatus
 from airut.gateway import (
     ConversationManager,
@@ -43,7 +41,6 @@ from airut.gateway.email.parsing import (
     extract_conversation_id,
 )
 from airut.gateway.service import GatewayService
-from airut.gateway.service.usage_stats import extract_usage_stats
 
 
 class TestEndToEndFlow:
@@ -1038,14 +1035,14 @@ class TestAcknowledgmentReply:
                 outcome=Outcome.SUCCESS,
                 session_id="test-session",
                 response_text="Done",
-                events=[],
                 duration_ms=100,
                 total_cost_usd=0.01,
                 num_turns=1,
+                is_error=False,
                 usage=Usage(),
-                stdout="",
-                stderr="",
-                exit_code=0,
+                web_search_count=0,
+                web_fetch_count=0,
+                error_summary=None,
             )
 
         # Create mock task
@@ -1122,14 +1119,14 @@ class TestAcknowledgmentReply:
             outcome=Outcome.SUCCESS,
             session_id="test-session",
             response_text="Done",
-            events=[],
             duration_ms=100,
             total_cost_usd=0.01,
             num_turns=1,
+            is_error=False,
             usage=Usage(),
-            stdout="",
-            stderr="",
-            exit_code=0,
+            web_search_count=0,
+            web_fetch_count=0,
+            error_summary=None,
         )
         mock_task.event_log = MagicMock()
         service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock
@@ -1276,14 +1273,14 @@ class TestAcknowledgmentReply:
             outcome=Outcome.SUCCESS,
             session_id="test-session",
             response_text="Done",
-            events=[],
             duration_ms=100,
             total_cost_usd=0.01,
             num_turns=1,
+            is_error=False,
             usage=Usage(),
-            stdout="",
-            stderr="",
-            exit_code=0,
+            web_search_count=0,
+            web_fetch_count=0,
+            error_summary=None,
         )
         mock_task.event_log = MagicMock()
         service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock
@@ -1304,110 +1301,6 @@ class TestAcknowledgmentReply:
 
         # Acknowledgment should NOT be called for follow-up msgs
         adapter.send_acknowledgment.assert_not_called()
-
-
-class TestExtractUsageStats:
-    """Tests for extract_usage_stats function."""
-
-    @staticmethod
-    def _make_assistant_event(*tool_uses: tuple[str, str]) -> dict:
-        """Create an assistant event dict with tool use blocks.
-
-        Args:
-            tool_uses: Pairs of (tool_name, tool_id).
-        """
-        content = [
-            {"type": "tool_use", "name": name, "id": tid}
-            for name, tid in tool_uses
-        ]
-        return {
-            "type": "assistant",
-            "message": {"content": content},
-        }
-
-    @staticmethod
-    def _make_result_event(total_cost_usd: float = 0.0) -> dict:
-        """Create a result event dict with cost."""
-        return {
-            "type": "result",
-            "subtype": "success",
-            "session_id": "sess-test",
-            "duration_ms": 1000,
-            "total_cost_usd": total_cost_usd,
-            "num_turns": 1,
-            "is_error": False,
-            "usage": {
-                "input_tokens": 100,
-                "output_tokens": 50,
-                "cache_creation_input_tokens": 0,
-                "cache_read_input_tokens": 0,
-            },
-            "result": "Done.",
-        }
-
-    @staticmethod
-    def _parse_events(*dicts: dict) -> list[StreamEvent]:
-        """Convert dicts to typed StreamEvent list via parse_stream_events."""
-        stdout = "\n".join(json.dumps(d) for d in dicts)
-        return parse_stream_events(stdout)
-
-    def test_extract_usage_stats_empty_events(self) -> None:
-        """Test extraction with empty event list."""
-        stats = extract_usage_stats([])
-        assert stats.total_cost_usd is None
-        assert stats.web_search_requests == 0
-        assert stats.web_fetch_requests == 0
-
-    def test_extract_usage_stats_with_cost(self) -> None:
-        """Test extraction with total_cost_usd from result event."""
-        events = self._parse_events(self._make_result_event(0.0123))
-        stats = extract_usage_stats(events)
-        assert stats.total_cost_usd == 0.0123
-
-    def test_extract_usage_stats_with_web_search(self) -> None:
-        """Test extraction with web search tool uses from streaming events."""
-        events = self._parse_events(
-            self._make_assistant_event(
-                ("WebSearch", "1"),
-                ("WebSearch", "2"),
-            ),
-        )
-        stats = extract_usage_stats(events)
-        assert stats.web_search_requests == 2
-
-    def test_extract_usage_stats_with_web_fetch(self) -> None:
-        """Test extraction with web fetch tool uses from streaming events."""
-        events = self._parse_events(
-            self._make_assistant_event(("WebFetch", "1")),
-            self._make_assistant_event(
-                ("WebFetch", "2"),
-                ("WebFetch", "3"),
-            ),
-        )
-        stats = extract_usage_stats(events)
-        assert stats.web_fetch_requests == 3
-
-    def test_extract_usage_stats_full_output(self) -> None:
-        """Test extraction with all stats present from streaming events."""
-        events = self._parse_events(
-            self._make_assistant_event(
-                ("WebSearch", "1"),
-                ("WebFetch", "2"),
-            ),
-            self._make_assistant_event(("WebSearch", "3")),
-            self._make_result_event(0.05),
-        )
-        stats = extract_usage_stats(events)
-        assert stats.total_cost_usd == 0.05
-        assert stats.web_search_requests == 2
-        assert stats.web_fetch_requests == 1
-
-    def test_extract_usage_stats_subscription_flag(self) -> None:
-        """Test is_subscription flag is passed through."""
-        events = self._parse_events(self._make_result_event(0.05))
-        stats = extract_usage_stats(events, is_subscription=True)
-        assert stats.is_subscription is True
-        assert stats.total_cost_usd == 0.05
 
 
 class TestTaskIdTracking:

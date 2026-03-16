@@ -10,7 +10,7 @@ Tests the recovery flow in message_processing.py where:
 2. System builds a recovery prompt and retries with a fresh session
 3. Retry succeeds and sends a normal reply
 
-These outcomes are determined by classify_outcome() in sandbox/_output.py:
+These outcomes are detected by ExecutionAccumulator in sandbox/_output.py:
 - "Prompt is too long" in stdout → Outcome.PROMPT_TOO_LONG
 - "API Error: 4" in stdout/stderr → Outcome.SESSION_CORRUPTED
 
