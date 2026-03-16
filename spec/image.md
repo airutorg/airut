@@ -213,6 +213,154 @@ and passthrough entrypoint scripts have different content, they produce
 different overlay image tags even when built from the same repo image. Both
 variants benefit from the same repo image cache.
 
+## CI Image Caching
+
+On ephemeral CI runners (GitHub Actions), the local image store is empty on
+every run. The sandbox action uses `actions/cache` to persist image tarballs
+across runs, restoring them via `airut-sandbox image load` before
+`airut-sandbox run`. The existing build code benefits automatically from the
+pre-populated local image store -- no changes to `ImageCache` are needed.
+
+### Cached Images
+
+Two images are cached independently. The overlay image is not cached (it is too
+cheap to rebuild and depends on the repo image tag).
+
+| Image       | Cache key                                              | Invalidates when                           |
+| ----------- | ------------------------------------------------------ | ------------------------------------------ |
+| Repo image  | `airut-repo-<dockerfile-hash>-cc<claude-code-version>` | Dockerfile changes or Claude Code releases |
+| Proxy image | `airut-proxy-<proxy-files-hash>`                       | Airut updates that change proxy code       |
+
+Independent entries ensure that a Claude Code release only rebuilds the repo
+image (not the proxy), and an airut update that only touches proxy code only
+rebuilds the proxy image (not the repo image).
+
+### Cache Key Design
+
+**Repo image key:**
+`airut-repo-<dockerfile-hash>-cc<claude-code-version>[-v<cache-version>]`
+
+- `<dockerfile-hash>`: First 16 hex chars of `airut-sandbox image hash` (repo
+  component). Matches the content hash used by `ImageCache` internally.
+- `cc<claude-code-version>`: Current Claude Code release version, fetched from
+  the distribution endpoint. This is the most volatile component -- the
+  Dockerfile's `curl | bash` installer fetches whatever version is current.
+- `v<cache-version>`: Optional, appended only when the `cache-version` action
+  input is non-empty.
+
+**Proxy image key:** `airut-proxy-<proxy-files-hash>[-v<cache-version>]`
+
+- `<proxy-files-hash>`: First 16 hex chars of `airut-sandbox image hash` (proxy
+  component). Changes only when an airut update modifies proxy code or
+  dependencies.
+
+**Claude Code version source:** The action fetches the version from
+`https://storage.googleapis.com/claude-code-dist-.../claude-code-releases/latest`
+(a bare version string). If unreachable, the version is set to `unknown`,
+producing a unique key that forces a cache miss (fail-safe: rebuild from
+scratch).
+
+### How Loaded Images Interact with `ImageCache.ensure()`
+
+When `airut-sandbox image load` restores cached images, they appear in the local
+Podman store with their original content-addressed tags. When
+`airut-sandbox run` subsequently calls `ImageCache.ensure()`:
+
+1. `get_image_created(tag)` queries `podman image inspect` and returns the
+   image's **original build timestamp** -- not the load time. The `Created`
+   field is part of the OCI image config JSON, which `podman load` imports
+   verbatim.
+2. If the image is younger than `max_age_hours`, it is reused.
+3. If the image is older than `max_age_hours`, it is rebuilt with `--no-cache`.
+
+The sandbox action passes `cache-max-age` (default: 168 hours / one week) as
+`--max-image-age` to `airut-sandbox run`. This provides a time-based safety net
+for base image freshness, while the content-addressed cache key handles
+correctness.
+
+### Action Step Ordering
+
+All cache steps run **before** the sandbox. The sandbox action remains the
+**terminal step** of the job, with no post-sandbox steps.
+
+```
+1.  Install uv and Python               (existing)
+2.  Install airut-sandbox                (existing)
+3.  Checkout base branch                 (existing)
+4.  Fetch PR objects                     (existing)
+5.  Compute image hashes                 (airut-sandbox image hash)
+6.  Fetch Claude Code version            (curl version endpoint)
+7.  Restore repo image cache             (actions/cache/restore)
+8.  Restore proxy image cache            (actions/cache/restore)
+9.  Load cached images                   (airut-sandbox image load, if hit)
+10. Build and save images                (airut-sandbox image save, if miss)
+11. Upload repo image cache              (actions/cache/save, if miss)
+12. Upload proxy image cache             (actions/cache/save, if miss)
+13. Run sandboxed command                (existing: airut-sandbox run)
+```
+
+On cache hit: step 9 loads tarballs, steps 10--12 are skipped, step 13 finds
+images present. On cache miss: step 9 is skipped, step 10 builds and exports,
+steps 11--12 upload, step 13 finds images present.
+
+### Security
+
+The primary threat is **cache poisoning**: a malicious PR writes a tampered
+image tarball to the cache so that a subsequent run (on main or another PR)
+loads the poisoned image. This is especially concerning for the proxy image,
+which has unrestricted network access and handles credential replacement.
+
+Four independent defenses prevent this:
+
+1. **Step ordering (structural guarantee)**: All cache operations (steps 5--12)
+   run **before** the sandbox (step 13). The sandbox is the terminal step -- no
+   workflow steps execute after it. A compromised container cannot tamper with
+   tarballs, call cache APIs, or influence upload steps because those steps have
+   already completed.
+
+2. **No cache API credentials in the container**: The GitHub Actions cache API
+   (`ACTIONS_CACHE_URL`) is authenticated by a short-lived JWT
+   (`ACTIONS_RUNTIME_TOKEN`). The sandbox container receives only explicitly
+   declared environment variables via `ContainerEnv` -- it does not inherit the
+   runner's environment. Neither token is passed unless a user explicitly adds
+   them to `pass_env` in `.airut/sandbox.yaml` (which would be a
+   misconfiguration).
+
+3. **Branch-scoped cache isolation (platform guarantee)**: GitHub Actions caches
+   are scoped by branch. PR branches can read the base branch's cache but cannot
+   write to it. Cache entries created during a PR run are scoped to that PR's
+   branch and discarded when the branch is deleted.
+
+4. **Cache key immutability (platform guarantee)**: Once saved, a cache entry
+   cannot be overwritten -- subsequent saves with the same key are silently
+   rejected. Deletion requires the GitHub REST API with `GITHUB_TOKEN` having
+   `actions: write` permission (a different credential than the cache runtime
+   token). Note that cache keys are content-addressed based on build *inputs*
+   (Dockerfile hash, proxy file hash), not build *outputs* -- two builds from
+   the same Dockerfile produce the same key even if the resulting image differs.
+
+**No secrets in images**: Neither image contains credentials. Secrets are
+injected at runtime via environment variables (surrogates for masked secrets)
+and proxy-level bind mounts (CA certificates).
+
+**Defense in depth**: For cache poisoning to succeed, an attacker would need to
+simultaneously bypass step ordering, obtain cache API credentials not passed to
+the container, write to a branch scope they don't control, and overwrite an
+immutable cache entry.
+
+### Performance
+
+| Scenario              | Pre-sandbox overhead            | Net CI time change |
+| --------------------- | ------------------------------- | ------------------ |
+| No caching (baseline) | ~73 s build                     | --                 |
+| Cold (first run)      | ~73 s build + ~20 s save/upload | +20 s              |
+| Warm (both cached)    | ~16 s load                      | **-57 s**          |
+| Partial (repo miss)   | ~6 s proxy load + ~45 s build   | **-12 s**          |
+
+The CA certificate is **not cached** -- it is generated from the proxy image in
+~3--5 s and contains the CA private key. The small time saving does not justify
+persisting a private key in GitHub's cache storage.
+
 ## Image Cleanup
 
 Old images accumulate as Dockerfile content changes. Podman's
