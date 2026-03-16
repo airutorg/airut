@@ -305,17 +305,48 @@ steps 11--12 upload, step 13 finds images present.
 
 ### Security
 
-Image caching does not weaken the sandbox security model:
+The primary threat is **cache poisoning**: a malicious PR writes a tampered
+image tarball to the cache so that a subsequent run (on main or another PR)
+loads the poisoned image. This is especially concerning for the proxy image,
+which has unrestricted network access and handles credential replacement.
 
-- **No secrets in images**: Neither image contains credentials. Secrets are
-  injected at runtime via environment variables and proxy-level bind mounts.
-- **Cache isolation**: GitHub Actions caches are branch-scoped. PR branches can
-  read the base branch cache but cannot write to it. A malicious PR cannot
-  poison the cache that other PRs use.
-- **Pre-sandbox operations**: All cache operations run before the sandbox
-  executes untrusted code. No commands run after the sandbox.
-- **Content-addressed keys**: Cache keys include content hashes, so a change to
-  the Dockerfile or proxy files produces a new cache entry.
+Four independent defenses prevent this:
+
+1. **Step ordering (structural guarantee)**: All cache operations (steps 5--12)
+   run **before** the sandbox (step 13). The sandbox is the terminal step -- no
+   workflow steps execute after it. A compromised container cannot tamper with
+   tarballs, call cache APIs, or influence upload steps because those steps have
+   already completed.
+
+2. **No cache API credentials in the container**: The GitHub Actions cache API
+   (`ACTIONS_CACHE_URL`) is authenticated by a short-lived JWT
+   (`ACTIONS_RUNTIME_TOKEN`). The sandbox container receives only explicitly
+   declared environment variables via `ContainerEnv` -- it does not inherit the
+   runner's environment. Neither token is passed unless a user explicitly adds
+   them to `pass_env` in `.airut/sandbox.yaml` (which would be a
+   misconfiguration).
+
+3. **Branch-scoped cache isolation (platform guarantee)**: GitHub Actions caches
+   are scoped by branch. PR branches can read the base branch's cache but cannot
+   write to it. Cache entries created during a PR run are scoped to that PR's
+   branch and discarded when the branch is deleted.
+
+4. **Cache key immutability (platform guarantee)**: Once saved, a cache entry
+   cannot be overwritten -- subsequent saves with the same key are silently
+   rejected. Deletion requires the GitHub REST API with `GITHUB_TOKEN` having
+   `actions: write` permission (a different credential than the cache runtime
+   token). Note that cache keys are content-addressed based on build *inputs*
+   (Dockerfile hash, proxy file hash), not build *outputs* -- two builds from
+   the same Dockerfile produce the same key even if the resulting image differs.
+
+**No secrets in images**: Neither image contains credentials. Secrets are
+injected at runtime via environment variables (surrogates for masked secrets)
+and proxy-level bind mounts (CA certificates).
+
+**Defense in depth**: For cache poisoning to succeed, an attacker would need to
+simultaneously bypass step ordering, obtain cache API credentials not passed to
+the container, write to a branch scope they don't control, and overwrite an
+immutable cache entry.
 
 ### Performance
 

@@ -494,22 +494,26 @@ CLI), and you need to force a rebuild to pick up a newer version.
 
 ### Security
 
-Image caching does not weaken the sandbox security model:
+The primary concern is cache poisoning: a malicious PR tampers with a cached
+image so that subsequent runs load the poisoned image. Four independent defenses
+prevent this:
 
-- **No secrets in images**: Neither image contains credentials. Secrets are
-  injected at runtime via environment variables and proxy-level bind mounts.
-- **Cache isolation**: GitHub Actions caches are branch-scoped. PR branches can
-  read the base branch cache but cannot write to it. A malicious PR cannot
-  poison the cache that other PRs use.
-- **Pre-sandbox operations**: All cache operations (build, save, load, upload)
-  run before the sandbox executes untrusted code. No commands run after the
-  sandbox, so there is no post-sandbox tampering vector.
-- **Content-addressed keys**: Cache keys include content hashes, so a change to
-  the Dockerfile or proxy files produces a new cache entry rather than
-  overwriting the old one.
+1. **Step ordering**: All cache operations run **before** the sandbox executes
+   untrusted code. The sandbox is the terminal step -- no post-sandbox steps
+   exist, so a compromised container cannot tamper with cached tarballs.
+2. **No cache credentials in the container**: The container does not receive
+   `ACTIONS_RUNTIME_TOKEN` or `ACTIONS_CACHE_URL` (it only gets explicitly
+   declared env vars, not the runner's environment).
+3. **Branch-scoped cache**: PR branches can read the base branch cache but
+   cannot write to it (GitHub platform guarantee).
+4. **Immutable cache keys**: Once saved, a cache entry cannot be overwritten
+   (GitHub platform guarantee).
 
-For the full cache design, see
-[spec/image.md](../spec/image.md#ci-image-caching).
+Neither image contains secrets -- credentials are injected at runtime via
+masked-secret surrogates and proxy-level bind mounts.
+
+For the full security analysis with defense-in-depth details, see
+[spec/image.md](../spec/image.md#security-1).
 
 ### When to Disable Caching
 
