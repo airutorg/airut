@@ -29,7 +29,13 @@ from airut.sandbox_cli import (
     EXIT_INFRA_ERROR,
     EXIT_TIMEOUT,
     _build_container_env,
+    _build_image_specs,
+    _build_repo_spec,
+    _dispatch_image,
     _execute,
+    _image_hash,
+    _image_load,
+    _image_save,
     _install_signal_handlers,
     _load_allowlist,
     _load_config,
@@ -44,6 +50,7 @@ from airut.sandbox_cli import (
     _parse_resource_limits,
     _parse_signing_credentials,
     _require_env,
+    _resolve_image_paths,
     _run,
     _setup_logging,
     _setup_network_log,
@@ -2805,3 +2812,611 @@ class TestLoadConfigWithEnvTag:
         config = _load_config(cfg_file)
         assert len(config.masked_secrets) == 1
         assert config.masked_secrets[0].allow_foreign_credentials is True
+
+
+# -------------------------------------------------------------------
+# Image subcommand argument parsing
+# -------------------------------------------------------------------
+
+
+class TestParseArgsImage:
+    """Tests for image subcommand argument parsing."""
+
+    def test_image_hash_basic(self) -> None:
+        """Image hash is parsed correctly."""
+        args = _parse_args(["image", "hash"])
+        assert args.subcommand == "image"
+        assert args.image_command == "hash"
+
+    def test_image_hash_with_dockerfile(self, tmp_path: Path) -> None:
+        """Image hash --dockerfile is parsed."""
+        df = tmp_path / "Dockerfile"
+        df.touch()
+        args = _parse_args(["image", "hash", "--dockerfile", str(df)])
+        assert args.dockerfile == df
+
+    def test_image_hash_with_context_dir(self, tmp_path: Path) -> None:
+        """Image hash --context-dir is parsed."""
+        ctx = tmp_path / "context"
+        ctx.mkdir()
+        args = _parse_args(["image", "hash", "--context-dir", str(ctx)])
+        assert args.context_dir == ctx
+
+    def test_image_hash_verbose(self) -> None:
+        """Image hash --verbose is parsed."""
+        args = _parse_args(["image", "hash", "--verbose"])
+        assert args.verbose is True
+
+    def test_image_hash_debug(self) -> None:
+        """Image hash --debug is parsed."""
+        args = _parse_args(["image", "hash", "--debug"])
+        assert args.debug is True
+
+    def test_image_save_basic(self, tmp_path: Path) -> None:
+        """Image save DIR is parsed correctly."""
+        args = _parse_args(["image", "save", str(tmp_path)])
+        assert args.subcommand == "image"
+        assert args.image_command == "save"
+        assert args.directory == tmp_path
+
+    def test_image_save_with_options(self, tmp_path: Path) -> None:
+        """Image save with all options is parsed."""
+        df = tmp_path / "Dockerfile"
+        df.touch()
+        out = tmp_path / "out"
+        args = _parse_args(
+            [
+                "image",
+                "save",
+                str(out),
+                "--dockerfile",
+                str(df),
+                "--container-command",
+                "docker",
+                "--verbose",
+            ]
+        )
+        assert args.directory == out
+        assert args.dockerfile == df
+        assert args.container_command == "docker"
+        assert args.verbose is True
+
+    def test_image_load_basic(self, tmp_path: Path) -> None:
+        """Image load DIR is parsed correctly."""
+        args = _parse_args(["image", "load", str(tmp_path)])
+        assert args.subcommand == "image"
+        assert args.image_command == "load"
+        assert args.directory == tmp_path
+
+    def test_image_load_with_container_command(self, tmp_path: Path) -> None:
+        """Image load --container-command is parsed."""
+        args = _parse_args(
+            [
+                "image",
+                "load",
+                str(tmp_path),
+                "--container-command",
+                "docker",
+            ]
+        )
+        assert args.container_command == "docker"
+
+    def test_image_no_subcommand(self) -> None:
+        """Image with no subcommand sets image_command to None."""
+        args = _parse_args(["image"])
+        assert args.subcommand == "image"
+        assert args.image_command is None
+
+    def test_double_dash_irrelevant_for_image(self) -> None:
+        """-- separator doesn't affect image subcommands."""
+        args = _parse_args(["image", "hash"])
+        assert args.command == []
+
+
+# -------------------------------------------------------------------
+# _resolve_image_paths
+# -------------------------------------------------------------------
+
+
+class TestResolveImagePaths:
+    """Tests for _resolve_image_paths."""
+
+    def test_defaults(self) -> None:
+        """Uses default paths when args have None."""
+        args = argparse.Namespace(dockerfile=None, context_dir=None)
+        df, ctx = _resolve_image_paths(args)
+        assert df == Path(".airut/container/Dockerfile")
+        assert ctx == Path(".airut/container")
+
+    def test_explicit_dockerfile(self, tmp_path: Path) -> None:
+        """Explicit --dockerfile overrides default."""
+        df_path = tmp_path / "Dockerfile"
+        args = argparse.Namespace(dockerfile=df_path, context_dir=None)
+        df, ctx = _resolve_image_paths(args)
+        assert df == df_path
+        assert ctx == tmp_path  # parent of dockerfile
+
+    def test_explicit_context_dir(self, tmp_path: Path) -> None:
+        """Explicit --context-dir overrides default."""
+        ctx_path = tmp_path / "ctx"
+        args = argparse.Namespace(dockerfile=None, context_dir=ctx_path)
+        df, ctx = _resolve_image_paths(args)
+        assert ctx == ctx_path
+
+
+# -------------------------------------------------------------------
+# _build_repo_spec
+# -------------------------------------------------------------------
+
+
+class TestBuildRepoSpec:
+    """Tests for _build_repo_spec."""
+
+    def test_basic_spec(self, tmp_path: Path) -> None:
+        """Creates spec from Dockerfile and context files."""
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine\n")
+        ctx_file = tmp_path / "setup.sh"
+        ctx_file.write_text("#!/bin/bash\n")
+
+        spec = _build_repo_spec(dockerfile, tmp_path)
+
+        assert spec.kind == "repo"
+        assert spec.dockerfile == b"FROM alpine\n"
+        assert "setup.sh" in spec.context_files
+        assert spec.context_files["setup.sh"] == b"#!/bin/bash\n"
+
+    def test_excludes_dockerfile_from_context(self, tmp_path: Path) -> None:
+        """Dockerfile is not included in context_files."""
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine\n")
+
+        spec = _build_repo_spec(dockerfile, tmp_path)
+        assert "Dockerfile" not in spec.context_files
+
+    def test_missing_dockerfile_raises(self, tmp_path: Path) -> None:
+        """Raises _ConfigError when Dockerfile doesn't exist."""
+        from airut.sandbox_cli import _ConfigError
+
+        with pytest.raises(_ConfigError, match="Dockerfile not found"):
+            _build_repo_spec(tmp_path / "nonexistent", tmp_path)
+
+    def test_nonexistent_context_dir(self, tmp_path: Path) -> None:
+        """Non-directory context_dir produces empty context_files."""
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine\n")
+
+        spec = _build_repo_spec(dockerfile, tmp_path / "missing")
+        assert spec.context_files == {}
+
+
+# -------------------------------------------------------------------
+# _build_image_specs
+# -------------------------------------------------------------------
+
+
+class TestBuildImageSpecs:
+    """Tests for _build_image_specs."""
+
+    @patch("airut.sandbox_cli.default_proxy_dir")
+    def test_returns_repo_and_proxy(
+        self, mock_proxy_dir: MagicMock, tmp_path: Path
+    ) -> None:
+        """Returns both repo and proxy specs."""
+        # Set up repo
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine\n")
+
+        # Set up proxy dir
+        proxy_dir = tmp_path / "proxy"
+        proxy_dir.mkdir()
+        (proxy_dir / "proxy.dockerfile").write_text("FROM python:3.13\n")
+        (proxy_dir / "filter.py").write_text("# filter\n")
+        mock_proxy_dir.return_value = proxy_dir
+
+        args = argparse.Namespace(dockerfile=dockerfile, context_dir=tmp_path)
+        repo_spec, proxy_spec = _build_image_specs(args)
+
+        assert repo_spec.kind == "repo"
+        assert proxy_spec.kind == "proxy"
+
+
+# -------------------------------------------------------------------
+# _image_hash
+# -------------------------------------------------------------------
+
+
+class TestImageHash:
+    """Tests for _image_hash."""
+
+    @patch("airut.sandbox_cli.default_proxy_dir")
+    def test_outputs_hashes(
+        self,
+        mock_proxy_dir: MagicMock,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Prints repo and proxy hashes to stdout."""
+        # Set up files
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine\n")
+        proxy_dir = tmp_path / "proxy"
+        proxy_dir.mkdir()
+        (proxy_dir / "proxy.dockerfile").write_text("FROM python:3.13\n")
+        mock_proxy_dir.return_value = proxy_dir
+
+        args = argparse.Namespace(dockerfile=dockerfile, context_dir=tmp_path)
+        result = _image_hash(args)
+
+        assert result == 0
+        captured = capsys.readouterr()
+        lines = captured.out.strip().split("\n")
+        assert len(lines) == 2
+        assert lines[0].startswith("repo=")
+        assert lines[1].startswith("proxy=")
+        # Hashes are hex digests (64 chars for SHA-256)
+        assert len(lines[0].split("=")[1]) == 64
+        assert len(lines[1].split("=")[1]) == 64
+
+    def test_missing_dockerfile_returns_error(self, tmp_path: Path) -> None:
+        """Returns EXIT_INFRA_ERROR when Dockerfile is missing."""
+        args = argparse.Namespace(
+            dockerfile=tmp_path / "nonexistent", context_dir=tmp_path
+        )
+        result = _image_hash(args)
+        assert result == EXIT_INFRA_ERROR
+
+
+# -------------------------------------------------------------------
+# _image_save
+# -------------------------------------------------------------------
+
+
+class TestImageSave:
+    """Tests for _image_save."""
+
+    @patch("airut.sandbox_cli.subprocess.run")
+    @patch("airut.sandbox_cli.ImageCache")
+    @patch("airut.sandbox_cli.default_proxy_dir")
+    def test_builds_and_saves(
+        self,
+        mock_proxy_dir: MagicMock,
+        mock_cache_cls: MagicMock,
+        mock_run: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Builds images via ImageCache and saves tarballs."""
+        # Set up files
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine\n")
+        proxy_dir = tmp_path / "proxy"
+        proxy_dir.mkdir()
+        (proxy_dir / "proxy.dockerfile").write_text("FROM python:3.13\n")
+        mock_proxy_dir.return_value = proxy_dir
+
+        out_dir = tmp_path / "cache"
+
+        # Mock ImageCache
+        mock_cache = MagicMock()
+        mock_cache.ensure.side_effect = [
+            "airut-cli-repo:abc123",
+            "airut-cli-proxy:def456",
+        ]
+        mock_cache_cls.return_value = mock_cache
+
+        # Mock podman save success
+        mock_run.return_value = MagicMock(returncode=0)
+
+        args = argparse.Namespace(
+            dockerfile=dockerfile,
+            context_dir=tmp_path,
+            directory=out_dir,
+            container_command=None,
+        )
+        result = _image_save(args)
+
+        assert result == 0
+        assert mock_cache.ensure.call_count == 2
+        assert mock_run.call_count == 2
+
+        # Check podman save commands
+        save_calls = mock_run.call_args_list
+        assert str(out_dir / "repo.tar") in str(save_calls[0])
+        assert str(out_dir / "proxy.tar") in str(save_calls[1])
+
+    @patch("airut.sandbox_cli.subprocess.run")
+    @patch("airut.sandbox_cli.ImageCache")
+    @patch("airut.sandbox_cli.default_proxy_dir")
+    def test_save_failure_returns_error(
+        self,
+        mock_proxy_dir: MagicMock,
+        mock_cache_cls: MagicMock,
+        mock_run: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Returns EXIT_INFRA_ERROR when podman save fails."""
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine\n")
+        proxy_dir = tmp_path / "proxy"
+        proxy_dir.mkdir()
+        (proxy_dir / "proxy.dockerfile").write_text("FROM python:3.13\n")
+        mock_proxy_dir.return_value = proxy_dir
+
+        mock_cache = MagicMock()
+        mock_cache.ensure.return_value = "airut-cli-repo:abc123"
+        mock_cache_cls.return_value = mock_cache
+
+        mock_run.return_value = MagicMock(returncode=1, stderr="disk full")
+
+        args = argparse.Namespace(
+            dockerfile=dockerfile,
+            context_dir=tmp_path,
+            directory=tmp_path / "cache",
+            container_command=None,
+        )
+        result = _image_save(args)
+        assert result == EXIT_INFRA_ERROR
+
+    @patch("airut.sandbox_cli.ImageCache")
+    @patch("airut.sandbox_cli.default_proxy_dir")
+    def test_build_failure_returns_error(
+        self,
+        mock_proxy_dir: MagicMock,
+        mock_cache_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Returns EXIT_INFRA_ERROR when image build fails."""
+        from airut.sandbox._image_cache import ImageBuildError
+
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine\n")
+        proxy_dir = tmp_path / "proxy"
+        proxy_dir.mkdir()
+        (proxy_dir / "proxy.dockerfile").write_text("FROM python:3.13\n")
+        mock_proxy_dir.return_value = proxy_dir
+
+        mock_cache = MagicMock()
+        mock_cache.ensure.side_effect = ImageBuildError("build failed")
+        mock_cache_cls.return_value = mock_cache
+
+        args = argparse.Namespace(
+            dockerfile=dockerfile,
+            context_dir=tmp_path,
+            directory=tmp_path / "cache",
+            container_command=None,
+        )
+        result = _image_save(args)
+        assert result == EXIT_INFRA_ERROR
+
+    def test_missing_dockerfile_returns_error(self, tmp_path: Path) -> None:
+        """Returns EXIT_INFRA_ERROR when Dockerfile is missing."""
+        args = argparse.Namespace(
+            dockerfile=tmp_path / "nonexistent",
+            context_dir=tmp_path,
+            directory=tmp_path / "cache",
+            container_command=None,
+        )
+        result = _image_save(args)
+        assert result == EXIT_INFRA_ERROR
+
+    @patch("airut.sandbox_cli.subprocess.run")
+    @patch("airut.sandbox_cli.ImageCache")
+    @patch("airut.sandbox_cli.default_proxy_dir")
+    def test_creates_output_directory(
+        self,
+        mock_proxy_dir: MagicMock,
+        mock_cache_cls: MagicMock,
+        mock_run: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Creates the output directory if it doesn't exist."""
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine\n")
+        proxy_dir = tmp_path / "proxy"
+        proxy_dir.mkdir()
+        (proxy_dir / "proxy.dockerfile").write_text("FROM python:3.13\n")
+        mock_proxy_dir.return_value = proxy_dir
+
+        out_dir = tmp_path / "nested" / "cache"
+
+        mock_cache = MagicMock()
+        mock_cache.ensure.return_value = "airut-cli-repo:abc123"
+        mock_cache_cls.return_value = mock_cache
+        mock_run.return_value = MagicMock(returncode=0)
+
+        args = argparse.Namespace(
+            dockerfile=dockerfile,
+            context_dir=tmp_path,
+            directory=out_dir,
+            container_command=None,
+        )
+        _image_save(args)
+        assert out_dir.exists()
+
+    @patch("airut.sandbox_cli.subprocess.run")
+    @patch("airut.sandbox_cli.ImageCache")
+    @patch("airut.sandbox_cli.default_proxy_dir")
+    def test_uses_custom_container_command(
+        self,
+        mock_proxy_dir: MagicMock,
+        mock_cache_cls: MagicMock,
+        mock_run: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Uses --container-command for ImageCache and podman save."""
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine\n")
+        proxy_dir = tmp_path / "proxy"
+        proxy_dir.mkdir()
+        (proxy_dir / "proxy.dockerfile").write_text("FROM python:3.13\n")
+        mock_proxy_dir.return_value = proxy_dir
+
+        mock_cache = MagicMock()
+        mock_cache.ensure.return_value = "tag:abc"
+        mock_cache_cls.return_value = mock_cache
+        mock_run.return_value = MagicMock(returncode=0)
+
+        args = argparse.Namespace(
+            dockerfile=dockerfile,
+            context_dir=tmp_path,
+            directory=tmp_path / "out",
+            container_command="docker",
+        )
+        _image_save(args)
+
+        # ImageCache created with docker
+        from airut.sandbox_cli import _CLI_RESOURCE_PREFIX, _SAVE_MAX_AGE_HOURS
+
+        mock_cache_cls.assert_called_once_with(
+            container_command="docker",
+            resource_prefix=_CLI_RESOURCE_PREFIX,
+            max_age_hours=_SAVE_MAX_AGE_HOURS,
+        )
+        # podman save uses docker
+        assert mock_run.call_args_list[0][0][0][0] == "docker"
+
+
+# -------------------------------------------------------------------
+# _image_load
+# -------------------------------------------------------------------
+
+
+class TestImageLoad:
+    """Tests for _image_load."""
+
+    @patch("airut.sandbox_cli.subprocess.run")
+    def test_loads_both_tarballs(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """Loads repo.tar and proxy.tar."""
+        (tmp_path / "repo.tar").write_bytes(b"repo-data")
+        (tmp_path / "proxy.tar").write_bytes(b"proxy-data")
+
+        mock_run.return_value = MagicMock(returncode=0)
+
+        args = argparse.Namespace(directory=tmp_path, container_command=None)
+        result = _image_load(args)
+
+        assert result == 0
+        assert mock_run.call_count == 2
+
+    @patch("airut.sandbox_cli.subprocess.run")
+    def test_skips_missing_tarballs(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """Missing tarballs are silently skipped."""
+        # Only proxy.tar exists
+        (tmp_path / "proxy.tar").write_bytes(b"proxy-data")
+        mock_run.return_value = MagicMock(returncode=0)
+
+        args = argparse.Namespace(directory=tmp_path, container_command=None)
+        result = _image_load(args)
+
+        assert result == 0
+        # Only proxy.tar loaded
+        assert mock_run.call_count == 1
+
+    @patch("airut.sandbox_cli.subprocess.run")
+    def test_load_failure_continues(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """Load failure is logged but returns 0."""
+        (tmp_path / "repo.tar").write_bytes(b"corrupted")
+        (tmp_path / "proxy.tar").write_bytes(b"proxy-data")
+
+        mock_run.side_effect = [
+            MagicMock(returncode=1, stderr="corrupted tarball"),
+            MagicMock(returncode=0),
+        ]
+
+        args = argparse.Namespace(directory=tmp_path, container_command=None)
+        result = _image_load(args)
+        assert result == 0
+        assert mock_run.call_count == 2
+
+    @patch("airut.sandbox_cli.subprocess.run")
+    def test_empty_directory(self, mock_run: MagicMock, tmp_path: Path) -> None:
+        """No tarballs means no loads, still returns 0."""
+        args = argparse.Namespace(directory=tmp_path, container_command=None)
+        result = _image_load(args)
+        assert result == 0
+        mock_run.assert_not_called()
+
+    @patch("airut.sandbox_cli.subprocess.run")
+    def test_uses_custom_container_command(
+        self, mock_run: MagicMock, tmp_path: Path
+    ) -> None:
+        """Uses --container-command for podman load."""
+        (tmp_path / "repo.tar").write_bytes(b"data")
+        mock_run.return_value = MagicMock(returncode=0)
+
+        args = argparse.Namespace(
+            directory=tmp_path, container_command="docker"
+        )
+        _image_load(args)
+
+        assert mock_run.call_args[0][0][0] == "docker"
+
+
+# -------------------------------------------------------------------
+# _dispatch_image
+# -------------------------------------------------------------------
+
+
+class TestDispatchImage:
+    """Tests for _dispatch_image."""
+
+    def test_no_image_command(self) -> None:
+        """Returns EXIT_INFRA_ERROR when image_command is None."""
+        args = argparse.Namespace(image_command=None)
+        assert _dispatch_image(args) == EXIT_INFRA_ERROR
+
+    @patch("airut.sandbox_cli._image_hash", return_value=0)
+    def test_dispatches_hash(self, mock_hash: MagicMock) -> None:
+        """Dispatches to _image_hash."""
+        args = argparse.Namespace(image_command="hash")
+        result = _dispatch_image(args)
+        assert result == 0
+        mock_hash.assert_called_once_with(args)
+
+    @patch("airut.sandbox_cli._image_save", return_value=0)
+    def test_dispatches_save(self, mock_save: MagicMock) -> None:
+        """Dispatches to _image_save."""
+        args = argparse.Namespace(image_command="save")
+        result = _dispatch_image(args)
+        assert result == 0
+        mock_save.assert_called_once_with(args)
+
+    @patch("airut.sandbox_cli._image_load", return_value=0)
+    def test_dispatches_load(self, mock_load: MagicMock) -> None:
+        """Dispatches to _image_load."""
+        args = argparse.Namespace(image_command="load")
+        result = _dispatch_image(args)
+        assert result == 0
+        mock_load.assert_called_once_with(args)
+
+    def test_unknown_image_command(self) -> None:
+        """Returns EXIT_INFRA_ERROR for unknown image command."""
+        args = argparse.Namespace(image_command="unknown")
+        assert _dispatch_image(args) == EXIT_INFRA_ERROR
+
+
+# -------------------------------------------------------------------
+# _run with image subcommands
+# -------------------------------------------------------------------
+
+
+class TestRunImageIntegration:
+    """Tests for _run dispatching to image subcommands."""
+
+    @patch("airut.sandbox_cli._dispatch_image", return_value=0)
+    def test_run_dispatches_image(self, mock_dispatch: MagicMock) -> None:
+        """_run dispatches 'image' to _dispatch_image."""
+        result = _run(["image", "hash"])
+        assert result == 0
+        mock_dispatch.assert_called_once()
+
+    def test_no_subcommand_mentions_image(self) -> None:
+        """Error message for no subcommand mentions 'image'."""
+        result = _run([])
+        assert result == EXIT_INFRA_ERROR

@@ -206,7 +206,7 @@ The command and arguments are passed through from
 
 ### Overlay Image Hashing
 
-The overlay image hash is computed via `_content_hash()` over the full overlay
+The overlay image hash is computed via `content_hash()` over the full overlay
 `ImageBuildSpec`: the generated overlay Dockerfile (which includes
 `FROM <repo_tag>`) plus the entrypoint file name and content. Because the agent
 and passthrough entrypoint scripts have different content, they produce

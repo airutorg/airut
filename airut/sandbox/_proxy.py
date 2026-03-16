@@ -64,6 +64,35 @@ _EGRESS_METRIC = 5
 _INTERNAL_ROUTE_METRIC = 10
 
 
+def build_proxy_spec(proxy_dir: Path) -> ImageBuildSpec:
+    """Construct ImageBuildSpec for the proxy image.
+
+    Args:
+        proxy_dir: Directory containing ``proxy.dockerfile`` and
+            supporting files.
+
+    Returns:
+        ImageBuildSpec for the proxy image.
+
+    Raises:
+        ProxyError: If proxy Dockerfile is missing.
+    """
+    dockerfile_path = proxy_dir / "proxy.dockerfile"
+    if not dockerfile_path.exists():
+        raise ProxyError(f"Proxy Dockerfile not found: {dockerfile_path}")
+
+    dockerfile = dockerfile_path.read_bytes()
+    context_files: dict[str, bytes] = {}
+    for child in sorted(proxy_dir.iterdir()):
+        if child.is_file() and child.name != "proxy.dockerfile":
+            context_files[child.name] = child.read_bytes()
+    return ImageBuildSpec(
+        kind="proxy",
+        dockerfile=dockerfile,
+        context_files=context_files,
+    )
+
+
 @dataclass(frozen=True)
 class _ContextProxy:
     """Running proxy for a single execution context.
@@ -414,21 +443,7 @@ class ProxyManager:
         Raises:
             ProxyError: If proxy Dockerfile is missing.
         """
-        proxy_dir = self._proxy_dir
-        dockerfile_path = proxy_dir / "proxy.dockerfile"
-        if not dockerfile_path.exists():
-            raise ProxyError(f"Proxy Dockerfile not found: {dockerfile_path}")
-
-        dockerfile = dockerfile_path.read_bytes()
-        context_files: dict[str, bytes] = {}
-        for child in sorted(proxy_dir.iterdir()):
-            if child.is_file() and child.name != "proxy.dockerfile":
-                context_files[child.name] = child.read_bytes()
-        return ImageBuildSpec(
-            kind="proxy",
-            dockerfile=dockerfile,
-            context_files=context_files,
-        )
+        return build_proxy_spec(self._proxy_dir)
 
     def _ensure_ca_cert(self) -> Path:
         """Ensure mitmproxy CA certificate exists.

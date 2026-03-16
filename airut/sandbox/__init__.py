@@ -16,11 +16,15 @@ Two task types are provided:
 - ``CommandTask`` -- runs arbitrary commands in the sandbox.
 """
 
-from airut.sandbox._image_cache import ImageBuildError
-from airut.sandbox._proxy import ProxyError
+from airut.sandbox._image_cache import (
+    ImageBuildError,
+    ImageBuildSpec,
+    content_hash,
+)
+from airut.sandbox._proxy import ProxyError, build_proxy_spec
 from airut.sandbox.event_log import EVENTS_FILE_NAME, EventLog
 from airut.sandbox.network_log import NETWORK_LOG_FILENAME, NetworkLog
-from airut.sandbox.sandbox import Sandbox, SandboxConfig
+from airut.sandbox.sandbox import Sandbox, SandboxConfig, default_proxy_dir
 from airut.sandbox.secrets import (
     MaskedSecret,
     PreparedSecrets,
@@ -51,6 +55,7 @@ __all__ = [
     # sandbox
     "Sandbox",
     "SandboxConfig",
+    "default_proxy_dir",
     # task
     "AgentTask",
     "CommandTask",
@@ -78,6 +83,10 @@ __all__ = [
     # network_log
     "NETWORK_LOG_FILENAME",
     "NetworkLog",
+    # image
+    "ImageBuildSpec",
+    "content_hash",
+    "build_proxy_spec",
     # errors
     "ImageBuildError",
     "ProxyError",

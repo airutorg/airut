@@ -15,32 +15,32 @@ from airut.sandbox._image_cache import (
     ImageBuildError,
     ImageBuildSpec,
     ImageCache,
-    _content_hash,
     _format_age,
     _parse_timestamp,
+    content_hash,
 )
 
 
 class TestContentHash:
-    """Tests for _content_hash function."""
+    """Tests for content_hash function."""
 
     def test_consistent_hash(self) -> None:
         """Returns consistent hex digest for same spec."""
         spec = ImageBuildSpec(kind="repo", dockerfile=b"FROM ubuntu:24.04\n")
-        h1 = _content_hash(spec)
-        h2 = _content_hash(spec)
+        h1 = content_hash(spec)
+        h2 = content_hash(spec)
         assert h1 == h2
 
     def test_different_dockerfile_different_hash(self) -> None:
         """Returns different hex digest for different Dockerfile."""
         s1 = ImageBuildSpec(kind="repo", dockerfile=b"FROM ubuntu:24.04\n")
         s2 = ImageBuildSpec(kind="repo", dockerfile=b"FROM ubuntu:22.04\n")
-        assert _content_hash(s1) != _content_hash(s2)
+        assert content_hash(s1) != content_hash(s2)
 
     def test_returns_64_char_hex(self) -> None:
         """Returns 64-character SHA-256 hex digest."""
         spec = ImageBuildSpec(kind="repo", dockerfile=b"test")
-        h = _content_hash(spec)
+        h = content_hash(spec)
         assert len(h) == 64
 
     def test_context_files_affect_hash(self) -> None:
@@ -55,7 +55,7 @@ class TestContentHash:
             dockerfile=b"FROM ubuntu:24.04\n",
             context_files={"a.txt": b"content2"},
         )
-        assert _content_hash(s1) != _content_hash(s2)
+        assert content_hash(s1) != content_hash(s2)
 
     def test_context_file_names_affect_hash(self) -> None:
         """Context file names are included in the hash."""
@@ -69,7 +69,7 @@ class TestContentHash:
             dockerfile=b"FROM ubuntu:24.04\n",
             context_files={"b.txt": b"content"},
         )
-        assert _content_hash(s1) != _content_hash(s2)
+        assert content_hash(s1) != content_hash(s2)
 
     def test_context_files_sorted_order(self) -> None:
         """Hash is deterministic regardless of context file insertion order."""
@@ -83,7 +83,7 @@ class TestContentHash:
             dockerfile=b"FROM ubuntu:24.04\n",
             context_files={"a.txt": b"1", "b.txt": b"2"},
         )
-        assert _content_hash(s1) == _content_hash(s2)
+        assert content_hash(s1) == content_hash(s2)
 
 
 class TestImageBuildSpec:
