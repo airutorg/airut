@@ -12,6 +12,9 @@ but works anywhere with a container runtime.
 Usage::
 
     airut-sandbox run [OPTIONS] -- COMMAND [ARGS...]
+    airut-sandbox image hash [OPTIONS]
+    airut-sandbox image save DIR [OPTIONS]
+    airut-sandbox image load DIR [OPTIONS]
 
 Zero coupling to the gateway: imports only from ``airut.sandbox``,
 ``airut.allowlist``, and ``airut.yaml_env``.
@@ -25,6 +28,7 @@ import logging
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 from collections.abc import Callable
@@ -38,16 +42,22 @@ from airut.allowlist import Allowlist, parse_allowlist_yaml
 from airut.sandbox import (
     CommandResult,
     ContainerEnv,
+    ImageBuildSpec,
     MaskedSecret,
     Mount,
     NetworkSandboxConfig,
     PreparedSecrets,
+    ProxyError,
     ResourceLimits,
     Sandbox,
     SandboxConfig,
     SigningCredential,
+    build_proxy_spec,
+    content_hash,
+    default_proxy_dir,
     prepare_secrets,
 )
+from airut.sandbox._image_cache import ImageCache
 from airut.sandbox.task import CommandTask
 from airut.yaml_env import EnvVar, make_env_loader, raw_resolve
 
@@ -59,6 +69,14 @@ EXIT_INFRA_ERROR = 125
 
 #: Exit code for timeout (matches ``timeout(1)``).
 EXIT_TIMEOUT = 124
+
+#: Resource prefix for CLI sandbox (distinct from gateway's ``"airut"``).
+_CLI_RESOURCE_PREFIX = "airut-cli"
+
+#: Max image age (hours) for ``image save``.  Set very high so loaded
+#: images are never considered stale -- save only needs to ensure images
+#: exist and export them; staleness is handled by ``run``.
+_SAVE_MAX_AGE_HOURS = 999_999
 
 
 class _ConfigError(Exception):
@@ -439,6 +457,87 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Enable debug logging (DEBUG level, implies --verbose)",
     )
 
+    # ---------------------------------------------------------------
+    # image subcommand group
+    # ---------------------------------------------------------------
+    image_parser = subparsers.add_parser(
+        "image", help="Image management commands"
+    )
+    image_subs = image_parser.add_subparsers(dest="image_command")
+
+    # Shared options for image subcommands that need Dockerfile paths
+    def _add_dockerfile_args(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--dockerfile",
+            type=Path,
+            default=None,
+            help=("Path to Dockerfile (default: .airut/container/Dockerfile)"),
+        )
+        p.add_argument(
+            "--context-dir",
+            type=Path,
+            default=None,
+            help="Build context directory (default: .airut/container/)",
+        )
+
+    def _add_logging_args(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--verbose",
+            action="store_true",
+            help="Enable informational logging (INFO level)",
+        )
+        p.add_argument(
+            "--debug",
+            action="store_true",
+            help="Enable debug logging (DEBUG level, implies --verbose)",
+        )
+        p.add_argument(
+            "--log",
+            type=Path,
+            default=None,
+            help="Write sandbox log to FILE instead of stderr",
+        )
+
+    # image hash
+    hash_parser = image_subs.add_parser(
+        "hash", help="Compute content hashes for image specs"
+    )
+    _add_dockerfile_args(hash_parser)
+    _add_logging_args(hash_parser)
+
+    # image save
+    save_parser = image_subs.add_parser(
+        "save", help="Build (if needed) and export images to tarballs"
+    )
+    save_parser.add_argument(
+        "directory",
+        type=Path,
+        help="Output directory for tarballs",
+    )
+    _add_dockerfile_args(save_parser)
+    save_parser.add_argument(
+        "--container-command",
+        default=None,
+        help="Container runtime (default: podman)",
+    )
+    _add_logging_args(save_parser)
+
+    # image load
+    load_parser = image_subs.add_parser(
+        "load", help="Import images from tarballs"
+    )
+    load_parser.add_argument(
+        "directory",
+        type=Path,
+        help="Directory containing tarballs",
+    )
+    load_parser.add_argument(
+        "--container-command",
+        default=None,
+        help="Container runtime (default: podman)",
+    )
+    _add_logging_args(load_parser)
+
     args = parser.parse_args(our_args)
     args.command = command
     return args
@@ -664,6 +763,200 @@ def _build_container_env(
 
 
 # -------------------------------------------------------------------
+# Image spec helpers
+# -------------------------------------------------------------------
+
+
+def _resolve_image_paths(
+    args: argparse.Namespace,
+) -> tuple[Path, Path]:
+    """Resolve Dockerfile and context directory from CLI args.
+
+    Args:
+        args: Parsed CLI arguments (with ``dockerfile`` and
+            ``context_dir`` attributes).
+
+    Returns:
+        Tuple of (dockerfile_path, context_dir).
+    """
+    dockerfile_path = getattr(args, "dockerfile", None) or Path(
+        ".airut/container/Dockerfile"
+    )
+    context_dir = getattr(args, "context_dir", None) or dockerfile_path.parent
+    return dockerfile_path, context_dir
+
+
+def _build_repo_spec(
+    dockerfile_path: Path, context_dir: Path
+) -> ImageBuildSpec:
+    """Construct ImageBuildSpec for the repo image.
+
+    Args:
+        dockerfile_path: Path to Dockerfile.
+        context_dir: Build context directory.
+
+    Returns:
+        ImageBuildSpec for the repo image.
+
+    Raises:
+        _ConfigError: If Dockerfile does not exist.
+    """
+    if not dockerfile_path.exists():
+        raise _ConfigError(f"Dockerfile not found: {dockerfile_path}")
+
+    dockerfile = dockerfile_path.read_bytes()
+    context_files: dict[str, bytes] = {}
+    if context_dir.is_dir():
+        for child in sorted(context_dir.iterdir()):
+            if child.is_file() and child.name != "Dockerfile":
+                context_files[child.name] = child.read_bytes()
+    return ImageBuildSpec(
+        kind="repo",
+        dockerfile=dockerfile,
+        context_files=context_files,
+    )
+
+
+def _build_image_specs(
+    args: argparse.Namespace,
+) -> tuple[ImageBuildSpec, ImageBuildSpec]:
+    """Build repo and proxy ImageBuildSpecs from CLI args.
+
+    Args:
+        args: Parsed CLI arguments.
+
+    Returns:
+        Tuple of (repo_spec, proxy_spec).
+
+    Raises:
+        _ConfigError: If Dockerfile does not exist.
+    """
+    dockerfile_path, context_dir = _resolve_image_paths(args)
+    repo_spec = _build_repo_spec(dockerfile_path, context_dir)
+    proxy_spec = build_proxy_spec(default_proxy_dir())
+    return repo_spec, proxy_spec
+
+
+# -------------------------------------------------------------------
+# Image subcommands
+# -------------------------------------------------------------------
+
+
+def _image_hash(args: argparse.Namespace) -> int:
+    """Compute and print content hashes for image specs.
+
+    Output (one ``key=value`` pair per line)::
+
+        repo=<hex-digest>
+        proxy=<hex-digest>
+
+    Args:
+        args: Parsed CLI arguments.
+
+    Returns:
+        Exit code (0 on success, EXIT_INFRA_ERROR on failure).
+    """
+    try:
+        repo_spec, proxy_spec = _build_image_specs(args)
+    except (_ConfigError, ProxyError) as e:
+        logger.error("Failed to build image specs: %s", e)
+        return EXIT_INFRA_ERROR
+
+    sys.stdout.write(f"repo={content_hash(repo_spec)}\n")
+    sys.stdout.write(f"proxy={content_hash(proxy_spec)}\n")
+    return 0
+
+
+def _image_save(args: argparse.Namespace) -> int:
+    """Build (if needed) and export repo and proxy images to tarballs.
+
+    Creates ``DIR/repo.tar`` and ``DIR/proxy.tar``.
+
+    Args:
+        args: Parsed CLI arguments.
+
+    Returns:
+        Exit code (0 on success, EXIT_INFRA_ERROR on failure).
+    """
+    try:
+        repo_spec, proxy_spec = _build_image_specs(args)
+    except (_ConfigError, ProxyError) as e:
+        logger.error("Failed to build image specs: %s", e)
+        return EXIT_INFRA_ERROR
+
+    container_command = getattr(args, "container_command", None) or "podman"
+    directory: Path = args.directory
+    directory.mkdir(parents=True, exist_ok=True)
+
+    cache = ImageCache(
+        container_command=container_command,
+        resource_prefix=_CLI_RESOURCE_PREFIX,
+        max_age_hours=_SAVE_MAX_AGE_HOURS,
+    )
+
+    for spec, tarball_name in [
+        (repo_spec, "repo.tar"),
+        (proxy_spec, "proxy.tar"),
+    ]:
+        try:
+            tag = cache.ensure(spec)
+        except Exception as e:
+            logger.error("Failed to build %s image: %s", spec.kind, e)
+            return EXIT_INFRA_ERROR
+
+        tarball_path = directory / tarball_name
+        logger.info("Saving %s to %s", tag, tarball_path)
+        result = subprocess.run(
+            [container_command, "save", "-o", str(tarball_path), tag],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            logger.error("Failed to save %s: %s", tag, result.stderr.strip())
+            return EXIT_INFRA_ERROR
+
+    return 0
+
+
+def _image_load(args: argparse.Namespace) -> int:
+    """Import images from tarballs into the local container store.
+
+    Loads ``DIR/repo.tar`` and ``DIR/proxy.tar``. Missing tarballs are
+    silently skipped. Load failures are logged but do not cause a
+    non-zero exit -- ``airut-sandbox run`` will rebuild from scratch.
+
+    Args:
+        args: Parsed CLI arguments.
+
+    Returns:
+        Exit code (always 0).
+    """
+    container_command = getattr(args, "container_command", None) or "podman"
+    directory: Path = args.directory
+
+    for tarball_name in ["repo.tar", "proxy.tar"]:
+        tarball_path = directory / tarball_name
+        if not tarball_path.exists():
+            logger.info("Skipping %s (not found)", tarball_path)
+            continue
+
+        logger.info("Loading %s", tarball_path)
+        result = subprocess.run(
+            [container_command, "load", "-i", str(tarball_path)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            logger.warning(
+                "Failed to load %s: %s",
+                tarball_path,
+                result.stderr.strip(),
+            )
+
+    return 0
+
+
+# -------------------------------------------------------------------
 # Execution orchestration
 # -------------------------------------------------------------------
 
@@ -684,9 +977,8 @@ async def _execute_async(
         logger.error("No command specified after --")
         return EXIT_INFRA_ERROR
 
-    # Resolve paths
-    dockerfile_path = args.dockerfile or Path(".airut/container/Dockerfile")
-    context_dir = args.context_dir or dockerfile_path.parent
+    # Resolve paths and build repo spec
+    dockerfile_path, context_dir = _resolve_image_paths(args)
     allowlist_path = args.allowlist or Path(".airut/network-allowlist.yaml")
 
     # Apply CLI timeout override
@@ -699,19 +991,12 @@ async def _execute_async(
             pids_limit=resource_limits.pids_limit,
         )
 
-    # Load Dockerfile
-    if not dockerfile_path.exists():
-        logger.error("Dockerfile not found: %s", dockerfile_path)
+    # Build repo image spec
+    try:
+        repo_spec = _build_repo_spec(dockerfile_path, context_dir)
+    except _ConfigError as e:
+        logger.error("%s", e)
         return EXIT_INFRA_ERROR
-
-    dockerfile = dockerfile_path.read_bytes()
-
-    # Load context files
-    context_files: dict[str, bytes] = {}
-    if context_dir.is_dir():
-        for child in sorted(context_dir.iterdir()):
-            if child.is_file() and child.name != "Dockerfile":
-                context_files[child.name] = child.read_bytes()
 
     # Load allowlist
     try:
@@ -779,7 +1064,7 @@ async def _execute_async(
     )
     sandbox_config = SandboxConfig(
         container_command=container_command,
-        resource_prefix="airut-cli",
+        resource_prefix=_CLI_RESOURCE_PREFIX,
         max_image_age_hours=max_image_age_hours,
     )
     sandbox = Sandbox(sandbox_config)
@@ -794,8 +1079,8 @@ async def _execute_async(
         try:
             logger.info("Building container image")
             image_tag = sandbox.ensure_image(
-                dockerfile,
-                context_files,
+                repo_spec.dockerfile,
+                repo_spec.context_files,
                 passthrough_entrypoint=True,
             )
 
@@ -946,21 +1231,51 @@ def _run(argv: list[str]) -> int:
         log_file=getattr(args, "log", None),
     )
 
-    if args.subcommand != "run":
-        if args.subcommand is None:
-            logger.error("No subcommand specified (use 'run')")
-        else:
-            logger.error("Unknown subcommand: %s", args.subcommand)
-        return EXIT_INFRA_ERROR
+    if args.subcommand == "image":
+        return _dispatch_image(args)
 
-    config_path = getattr(args, "config", None) or Path(".airut/sandbox.yaml")
-    try:
-        config = _load_config(config_path)
-    except _ConfigError as e:
-        logger.error("Configuration error: %s", e)
-        return EXIT_INFRA_ERROR
+    if args.subcommand == "run":
+        config_path = getattr(args, "config", None) or Path(
+            ".airut/sandbox.yaml"
+        )
+        try:
+            config = _load_config(config_path)
+        except _ConfigError as e:
+            logger.error("Configuration error: %s", e)
+            return EXIT_INFRA_ERROR
+        return _execute(args, config)
 
-    return _execute(args, config)
+    if args.subcommand is None:
+        logger.error("No subcommand specified (use 'run' or 'image')")
+    else:
+        logger.error("Unknown subcommand: %s", args.subcommand)
+    return EXIT_INFRA_ERROR
+
+
+def _dispatch_image(args: argparse.Namespace) -> int:
+    """Dispatch to the appropriate ``image`` subcommand.
+
+    Args:
+        args: Parsed CLI arguments.
+
+    Returns:
+        Exit code.
+    """
+    image_command = getattr(args, "image_command", None)
+    if image_command == "hash":
+        return _image_hash(args)
+    if image_command == "save":
+        return _image_save(args)
+    if image_command == "load":
+        return _image_load(args)
+
+    if image_command is None:
+        logger.error(
+            "No image command specified (use 'hash', 'save', or 'load')"
+        )
+    else:
+        logger.error("Unknown image command: %s", image_command)
+    return EXIT_INFRA_ERROR
 
 
 def main() -> None:

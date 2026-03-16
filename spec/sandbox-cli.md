@@ -76,6 +76,8 @@ The CLI (`airut/sandbox_cli.py`) imports from `airut.sandbox`,
 
 ## CLI Interface
 
+### `airut-sandbox run`
+
 ```
 airut-sandbox run [OPTIONS] -- COMMAND [ARGS...]
 
@@ -94,6 +96,78 @@ Options:
   --verbose              Enable informational logging (INFO level)
   --debug                Enable debug logging (DEBUG level, implies --verbose)
 ```
+
+### `airut-sandbox image`
+
+Image management subcommands for CI caching. These encapsulate all image tarball
+operations so CI systems never interact with `podman` directly for caching. See
+[image.md](image.md) for the image build architecture.
+
+#### `airut-sandbox image hash`
+
+Compute content hashes for repo and proxy image specs without building.
+
+```
+airut-sandbox image hash [OPTIONS]
+
+Options:
+  --dockerfile PATH      Path to Dockerfile (default: .airut/container/Dockerfile)
+  --context-dir PATH     Build context directory (default: .airut/container/)
+  --verbose              Enable informational logging
+  --debug                Enable debug logging
+  --log FILE             Write log to FILE instead of stderr
+```
+
+Output (one `key=value` pair per line, written to stdout):
+
+```
+repo=<sha256-hex-digest>
+proxy=<sha256-hex-digest>
+```
+
+The hashes match those used by `ImageCache.tag_for()` internally. The repo hash
+is computed from the Dockerfile and context files; the proxy hash from the
+bundled proxy package files. The overlay hash is not output because the overlay
+image is too cheap to cache.
+
+#### `airut-sandbox image save`
+
+Build (if needed) and export repo and proxy images to tarballs.
+
+```
+airut-sandbox image save DIR [OPTIONS]
+
+Options:
+  --dockerfile PATH        Path to Dockerfile (default: .airut/container/Dockerfile)
+  --context-dir PATH       Build context directory (default: .airut/container/)
+  --container-command CMD  Container runtime (default: podman)
+  --verbose                Enable informational logging
+  --debug                  Enable debug logging
+  --log FILE               Write log to FILE instead of stderr
+```
+
+Creates `DIR/repo.tar` and `DIR/proxy.tar`. If an image does not exist in the
+local store, it is built first via `ImageCache.ensure()`, then exported via
+`podman save`. Tag preservation ensures `podman load` restores images with their
+original content-addressed tags.
+
+#### `airut-sandbox image load`
+
+Import images from tarballs into the local container store.
+
+```
+airut-sandbox image load DIR [OPTIONS]
+
+Options:
+  --container-command CMD  Container runtime (default: podman)
+  --verbose                Enable informational logging
+  --debug                  Enable debug logging
+  --log FILE               Write log to FILE instead of stderr
+```
+
+Loads `DIR/repo.tar` and `DIR/proxy.tar` via `podman load`. Missing tarballs are
+silently skipped. Load failures are logged but do not cause a non-zero exit --
+`airut-sandbox run` will rebuild the missing image from scratch.
 
 Entry point registered in `pyproject.toml`:
 

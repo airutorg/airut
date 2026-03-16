@@ -53,7 +53,7 @@ class ImageBuildSpec:
     context_files: dict[str, bytes] = field(default_factory=dict)
 
 
-def _content_hash(spec: ImageBuildSpec) -> str:
+def content_hash(spec: ImageBuildSpec) -> str:
     """SHA-256 of dockerfile + sorted context file names and contents."""
     h = hashlib.sha256()
     h.update(spec.dockerfile)
@@ -195,8 +195,8 @@ class ImageCache:
         Useful for pre-build inspection (e.g., checking whether a
         rebuild was triggered).
         """
-        content_hash = _content_hash(spec)
-        return f"{self._resource_prefix}-{spec.kind}:{content_hash}"
+        chash = content_hash(spec)
+        return f"{self._resource_prefix}-{spec.kind}:{chash}"
 
     def get_image_created(self, tag: str) -> datetime | None:
         """Query podman for image creation timestamp.

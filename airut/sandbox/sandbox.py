@@ -33,7 +33,7 @@ from airut.sandbox.types import ResourceLimits
 logger = logging.getLogger(__name__)
 
 
-def _default_proxy_dir() -> Path:
+def default_proxy_dir() -> Path:
     """Resolve the proxy directory from embedded package data."""
     return Path(str(files("airut._bundled.proxy")))
 
@@ -54,7 +54,7 @@ class SandboxConfig:
     """
 
     container_command: str = "podman"
-    proxy_dir: Path = field(default_factory=_default_proxy_dir)
+    proxy_dir: Path = field(default_factory=default_proxy_dir)
     upstream_dns: str = "1.1.1.1"
     max_image_age_hours: int = 24
     resource_prefix: str = "airut"
