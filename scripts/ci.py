@@ -32,10 +32,10 @@ from dataclasses import dataclass
 # Can be overridden with --step-timeout flag
 DEFAULT_STEP_TIMEOUT_SECONDS = 300
 
-# Default overall timeout for the entire CI run (90 seconds).
-# Based on measured execution time of ~56s with 50% buffer.
+# Default overall timeout for the entire CI run (120 seconds).
+# Based on measured local execution of ~25s; CI runners are 2-3x slower.
 # Can be overridden with --timeout flag.
-DEFAULT_TIMEOUT_SECONDS = 90
+DEFAULT_TIMEOUT_SECONDS = 120
 
 
 logger = logging.getLogger(__name__)
