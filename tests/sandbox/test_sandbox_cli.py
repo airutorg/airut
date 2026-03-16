@@ -2300,17 +2300,27 @@ class TestExecute:
         execute_call = mock_task.execute.call_args
         assert execute_call.kwargs["on_network_line"] is None
 
+    @pytest.mark.parametrize(
+        ("callback_kwarg", "stream_name", "line"),
+        [
+            ("on_output", "stdout", "hello\n"),
+            ("on_stderr", "stderr", "warning\n"),
+        ],
+    )
     @patch("airut.sandbox_cli.Sandbox")
     @patch("airut.sandbox_cli.prepare_secrets")
     @patch("airut.sandbox_cli._install_signal_handlers")
-    def test_on_output_flushes_stdout(
+    def test_output_callbacks_flush(
         self,
         mock_signal_handlers: MagicMock,
         mock_prepare: MagicMock,
         mock_sandbox_cls: MagicMock,
         tmp_path: Path,
+        callback_kwarg: str,
+        stream_name: str,
+        line: str,
     ) -> None:
-        """on_output callback flushes sys.stdout after each write."""
+        """on_output/on_stderr callbacks write and flush during execution."""
         from airut.sandbox_cli import _SandboxCliConfig
 
         dockerfile = tmp_path / "Dockerfile"
@@ -2325,86 +2335,38 @@ class TestExecute:
         mock_sandbox.ensure_image.return_value = "img:latest"
 
         mock_task = MagicMock()
-        mock_task.execute = AsyncMock(
-            return_value=CommandResult(
+        mock_sandbox.create_command_task.return_value = mock_task
+
+        # Have execute invoke the callback during execution, testing
+        # the real data flow rather than extracting the callback after.
+        mock_stream = MagicMock()
+
+        async def _fake_execute(
+            command: object, **kwargs: object
+        ) -> CommandResult:
+            callback = kwargs[callback_kwarg]
+            assert callback is not None
+            callback(line)
+            return CommandResult(
                 exit_code=0,
                 stdout="",
                 stderr="",
                 duration_ms=50,
                 timed_out=False,
             )
-        )
-        mock_sandbox.create_command_task.return_value = mock_task
+
+        mock_task.execute = _fake_execute
 
         args = self._make_args(dockerfile=dockerfile)
         with patch("airut.sandbox_cli.sys") as mock_sys:
-            mock_sys.stdout = MagicMock()
-            mock_sys.stderr = MagicMock()
+            setattr(mock_sys, stream_name, mock_stream)
+            # Keep the other stream as a MagicMock so it doesn't error
+            other = "stderr" if stream_name == "stdout" else "stdout"
+            setattr(mock_sys, other, MagicMock())
             _execute(args, _SandboxCliConfig(network_sandbox=False))
 
-        # Extract the on_output callback and invoke it
-        execute_call = mock_task.execute.call_args
-        on_output = execute_call.kwargs["on_output"]
-        assert on_output is not None
-
-        with patch("airut.sandbox_cli.sys") as mock_sys:
-            mock_sys.stdout = MagicMock()
-            on_output("hello\n")
-            mock_sys.stdout.write.assert_called_once_with("hello\n")
-            mock_sys.stdout.flush.assert_called_once()
-
-    @patch("airut.sandbox_cli.Sandbox")
-    @patch("airut.sandbox_cli.prepare_secrets")
-    @patch("airut.sandbox_cli._install_signal_handlers")
-    def test_on_stderr_flushes_stderr(
-        self,
-        mock_signal_handlers: MagicMock,
-        mock_prepare: MagicMock,
-        mock_sandbox_cls: MagicMock,
-        tmp_path: Path,
-    ) -> None:
-        """on_stderr callback flushes sys.stderr after each write."""
-        from airut.sandbox_cli import _SandboxCliConfig
-
-        dockerfile = tmp_path / "Dockerfile"
-        dockerfile.write_text("FROM alpine")
-
-        mock_prepare.return_value = PreparedSecrets(
-            env_vars={}, replacements=SecretReplacements()
-        )
-
-        mock_sandbox = MagicMock()
-        mock_sandbox_cls.return_value = mock_sandbox
-        mock_sandbox.ensure_image.return_value = "img:latest"
-
-        mock_task = MagicMock()
-        mock_task.execute = AsyncMock(
-            return_value=CommandResult(
-                exit_code=0,
-                stdout="",
-                stderr="",
-                duration_ms=50,
-                timed_out=False,
-            )
-        )
-        mock_sandbox.create_command_task.return_value = mock_task
-
-        args = self._make_args(dockerfile=dockerfile)
-        with patch("airut.sandbox_cli.sys") as mock_sys:
-            mock_sys.stdout = MagicMock()
-            mock_sys.stderr = MagicMock()
-            _execute(args, _SandboxCliConfig(network_sandbox=False))
-
-        # Extract the on_stderr callback and invoke it
-        execute_call = mock_task.execute.call_args
-        on_stderr = execute_call.kwargs["on_stderr"]
-        assert on_stderr is not None
-
-        with patch("airut.sandbox_cli.sys") as mock_sys:
-            mock_sys.stderr = MagicMock()
-            on_stderr("warning\n")
-            mock_sys.stderr.write.assert_called_once_with("warning\n")
-            mock_sys.stderr.flush.assert_called_once()
+        mock_stream.write.assert_called_once_with(line)
+        mock_stream.flush.assert_called_once()
 
 
 # -------------------------------------------------------------------
