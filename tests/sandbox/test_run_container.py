@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import signal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -586,9 +585,6 @@ class TestRunContainer:
         tracker = _ProcessTracker()
         mock_process = _make_mock_process()
         mock_create.return_value = mock_process
-
-        # Make _run() hang to trigger timeout
-        mock_process.wait = AsyncMock(side_effect=lambda: asyncio.sleep(10))
 
         result = await run_container(
             container_command="podman",

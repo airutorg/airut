@@ -106,6 +106,12 @@ python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "--disable-socket --allow-unix-socket --ignore=tests/integration"
 asyncio_mode = "auto"
+filterwarnings = [
+    "error",
+    # ResourceWarning from unclosed sockets in __del__ triggers
+    # PytestUnraisableExceptionWarning in integration tests (aiosmtpd cleanup).
+    "default::ResourceWarning",
+]
 
 [tool.pip-licenses]
 # Allowed licenses for runtime dependencies (using partial matching).
