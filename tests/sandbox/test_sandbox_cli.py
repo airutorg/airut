@@ -12,7 +12,7 @@ import logging
 import signal
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -1356,12 +1356,14 @@ class TestExecute:
         mock_sandbox.ensure_image.return_value = "test-image:latest"
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = CommandResult(
-            exit_code=0,
-            stdout="hello\n",
-            stderr="",
-            duration_ms=50,
-            timed_out=False,
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="hello\n",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
         )
         mock_sandbox.create_command_task.return_value = mock_task
 
@@ -1372,7 +1374,7 @@ class TestExecute:
         mock_sandbox.startup.assert_called_once()
         mock_sandbox.ensure_image.assert_called_once()
         mock_sandbox.create_command_task.assert_called_once()
-        mock_task.execute.assert_called_once_with(["echo", "hello"])
+        mock_task.execute.assert_called_once()
         mock_sandbox.shutdown.assert_called_once()
 
     @patch("airut.sandbox_cli.Sandbox")
@@ -1429,12 +1431,14 @@ class TestExecute:
         mock_sandbox.ensure_image.return_value = "img:latest"
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = CommandResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            duration_ms=50,
-            timed_out=False,
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
         )
         mock_sandbox.create_command_task.return_value = mock_task
 
@@ -1475,12 +1479,14 @@ class TestExecute:
         mock_sandbox.ensure_image.return_value = "img:latest"
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = CommandResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            duration_ms=50,
-            timed_out=False,
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
         )
         mock_sandbox.create_command_task.return_value = mock_task
 
@@ -1520,12 +1526,14 @@ class TestExecute:
         mock_sandbox.ensure_image.return_value = "img:latest"
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = CommandResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            duration_ms=50,
-            timed_out=False,
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
         )
         mock_sandbox.create_command_task.return_value = mock_task
 
@@ -1570,12 +1578,14 @@ class TestExecute:
         mock_sandbox.ensure_image.return_value = "img:latest"
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = CommandResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            duration_ms=50,
-            timed_out=False,
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
         )
         mock_sandbox.create_command_task.return_value = mock_task
 
@@ -1613,12 +1623,14 @@ class TestExecute:
         mock_sandbox.ensure_image.return_value = "img:latest"
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = CommandResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            duration_ms=50,
-            timed_out=False,
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
         )
         mock_sandbox.create_command_task.return_value = mock_task
 
@@ -1658,12 +1670,14 @@ class TestExecute:
         mock_sandbox.ensure_image.return_value = "img:latest"
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = CommandResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            duration_ms=50,
-            timed_out=False,
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
         )
         mock_sandbox.create_command_task.return_value = mock_task
 
@@ -1704,12 +1718,14 @@ class TestExecute:
         mock_sandbox.ensure_image.return_value = "img:latest"
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = CommandResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            duration_ms=50,
-            timed_out=False,
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
         )
         mock_sandbox.create_command_task.return_value = mock_task
 
@@ -1745,12 +1761,14 @@ class TestExecute:
         mock_sandbox.ensure_image.return_value = "img:latest"
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = CommandResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            duration_ms=50,
-            timed_out=False,
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
         )
         mock_sandbox.create_command_task.return_value = mock_task
 
@@ -1791,12 +1809,14 @@ class TestExecute:
         mock_sandbox.ensure_image.return_value = "img:latest"
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = CommandResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            duration_ms=50,
-            timed_out=False,
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
         )
         mock_sandbox.create_command_task.return_value = mock_task
 
@@ -1833,12 +1853,14 @@ class TestExecute:
         mock_sandbox.ensure_image.return_value = "img:latest"
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = CommandResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            duration_ms=50,
-            timed_out=False,
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
         )
         mock_sandbox.create_command_task.return_value = mock_task
 
@@ -1936,12 +1958,14 @@ class TestExecute:
         mock_sandbox.ensure_image.return_value = "img:latest"
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = CommandResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            duration_ms=50,
-            timed_out=False,
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
         )
         mock_sandbox.create_command_task.return_value = mock_task
         mock_sandbox.shutdown.side_effect = RuntimeError("shutdown failed")
@@ -1979,12 +2003,14 @@ class TestExecute:
         mock_sandbox.ensure_image.return_value = "img:latest"
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = CommandResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            duration_ms=50,
-            timed_out=False,
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
         )
         mock_sandbox.create_command_task.return_value = mock_task
 
@@ -2020,12 +2046,14 @@ class TestExecute:
         mock_sandbox.ensure_image.return_value = "img:latest"
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = CommandResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            duration_ms=50,
-            timed_out=False,
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
         )
         mock_sandbox.create_command_task.return_value = mock_task
 
@@ -2061,12 +2089,14 @@ class TestExecute:
         mock_sandbox.ensure_image.return_value = "img:latest"
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = CommandResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            duration_ms=50,
-            timed_out=False,
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
         )
         mock_sandbox.create_command_task.return_value = mock_task
 
@@ -2102,12 +2132,14 @@ class TestExecute:
         mock_sandbox.ensure_image.return_value = "img:latest"
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = CommandResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            duration_ms=50,
-            timed_out=False,
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
         )
         mock_sandbox.create_command_task.return_value = mock_task
 
@@ -2401,12 +2433,14 @@ class TestRunIntegration:
         mock_sandbox.ensure_image.return_value = "img:latest"
 
         mock_task = MagicMock()
-        mock_task.execute.return_value = CommandResult(
-            exit_code=0,
-            stdout="",
-            stderr="",
-            duration_ms=50,
-            timed_out=False,
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
         )
         mock_sandbox.create_command_task.return_value = mock_task
 

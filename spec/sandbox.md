@@ -19,8 +19,8 @@ it runs safely.
 3. **Typed interface**: No `Any` in the public API. Proper types for allowlists,
    secrets, environment variables, events, and errors.
 4. **Explicit lifecycle**: `AgentTask` and `CommandTask` have explicit
-   lifecycles -- no context managers. `execute()` runs the container; `stop()`
-   interrupts from another thread.
+   lifecycles -- no context managers. `execute()` is `async` and runs the
+   container; `stop()` interrupts from another thread via PID-based signaling.
 5. **Outcome classification**: The sandbox classifies results into a single
    `Outcome` enum (success and error kinds) so callers can match on outcome
    rather than parsing stdout/stderr strings.
@@ -95,6 +95,31 @@ Caller (gateway, CLI, automation)
        +- network_log               # Read network activity
 ```
 
+### Async Process Model
+
+Container execution uses `asyncio.create_subprocess_exec` for non-blocking,
+concurrent I/O. Both `AgentTask.execute()` and `CommandTask.execute()` are
+`async def` methods. Callers at sync boundaries (gateway, CLI) use
+`asyncio.run()` to invoke them.
+
+**Stream reading**: stdout and stderr are read concurrently as binary streams,
+decoded to UTF-8 with `errors="replace"`. Line-by-line callbacks
+(`on_stdout_line`, `on_stderr_line`) fire as data arrives. Mutable accumulators
+capture full output for the result object.
+
+**Timeout handling**: `asyncio.wait_for()` wraps the stream-reading coroutine.
+On timeout, the process is killed and partial accumulated output is preserved in
+the result.
+
+**Process lifecycle (`_ProcessTracker`)**: Stores the raw PID (not a subprocess
+handle) for cross-thread safety. `stop()` sends `SIGTERM` via `os.kill()`, then
+schedules a `threading.Timer` for `SIGKILL` after 5 seconds. This is
+non-blocking -- the caller does not wait for process exit.
+
+**Network log tailing**: When `on_network_line` is provided, an async task polls
+the network log file concurrently alongside container execution, delivering new
+lines to the callback as they appear.
+
 ### Lifecycle Layers
 
 **Sandbox-scoped** (shared across all tasks):
@@ -136,19 +161,25 @@ is managed by `airut/conversation/ConversationStore`, which the protocol layer
 ### AgentTask
 
 ```
-task.execute(prompt, session_id=..., model=..., effort=..., on_event=...)
+await task.execute(prompt, session_id=..., model=..., effort=...,
+                   on_event=..., on_stderr_line=..., on_network_line=...)
   |
   +- Start proxy (if network_sandbox configured)
   |    +- Allocate subnet, create internal network
   |    +- Start dual-homed proxy container
   |    +- Health check (poll ports 80/443)
   |
-  +- Run Claude Code container
+  +- Start network log tail task (if on_network_line provided)
+  |
+  +- Run Claude Code container (async subprocess)
   |    +- --cap-drop=ALL, --security-opt=no-new-privileges:true
   |    +- Apply resource limits (--memory, --cpus, --pids-limit)
-  |    +- Prompt on stdin, stream-json on stdout
-  |    +- Parse each line as StreamEvent, invoke on_event callback
-  |    +- Wait with timeout (if configured)
+  |    +- Prompt on stdin, read stdout/stderr concurrently as async streams
+  |    +- Parse each stdout line as StreamEvent, invoke on_event callback
+  |    +- Invoke on_stderr_line callback for each stderr line
+  |    +- Wait with asyncio.wait_for() timeout (if configured)
+  |
+  +- Stop network log tail task
   |
   +- Stop proxy (always, even on failure)
   |
@@ -160,21 +191,32 @@ task.execute(prompt, session_id=..., model=..., effort=..., on_event=...)
 ### CommandTask
 
 ```
-task.execute(["make", "test"])
+await task.execute(["make", "test"], on_output=..., on_stderr=...,
+                   on_network_line=...)
   |
   +- Start proxy (if network_sandbox configured)
   |
-  +- Run container with command
+  +- Start network log tail task (if on_network_line provided)
+  |
+  +- Run container with command (async subprocess)
   |    +- --cap-drop=ALL, --security-opt=no-new-privileges:true
   |    +- Apply resource limits (--memory, --cpus, --pids-limit)
-  |    +- Stream stdout to sys.stdout and on_output callback
-  |    +- Pass stderr through to parent process
-  |    +- Wait with timeout (if configured)
+  |    +- Read stdout/stderr concurrently as async streams
+  |    +- Invoke on_output callback for each stdout line
+  |    +- Invoke on_stderr callback for each stderr line
+  |    +- Wait with asyncio.wait_for() timeout (if configured)
+  |
+  +- Stop network log tail task
   |
   +- Stop proxy (always, even on failure)
   |
   +- Return CommandResult
 ```
+
+**Note**: `CommandTask` does not implicitly write to `sys.stdout` or
+`sys.stderr`. All output delivery is through explicit callbacks. Callers that
+want terminal output must provide callbacks (e.g.,
+`on_output=lambda line: sys.stdout.write(line)`).
 
 ## Resource Limits
 
@@ -183,12 +225,12 @@ Container resource limits are configured via `ResourceLimits`
 and `CommandTask` accept resource limits. All limits are optional -- when a
 field is `None`, the corresponding flag is not passed and no limit is enforced.
 
-| ResourceLimits field | Podman flags                 | Effect                     |
-| -------------------- | ---------------------------- | -------------------------- |
-| `timeout`            | `process.wait(timeout=N)`    | SIGKILL after N seconds    |
-| `memory`             | `--memory=X --memory-swap=X` | Hard memory limit, no swap |
-| `cpus`               | `--cpus=N`                   | CPU core limit (float)     |
-| `pids_limit`         | `--pids-limit=N`             | Fork bomb protection       |
+| ResourceLimits field | Podman flags                  | Effect                     |
+| -------------------- | ----------------------------- | -------------------------- |
+| `timeout`            | `asyncio.wait_for(timeout=N)` | SIGKILL after N seconds    |
+| `memory`             | `--memory=X --memory-swap=X`  | Hard memory limit, no swap |
+| `cpus`               | `--cpus=N`                    | CPU core limit (float)     |
+| `pids_limit`         | `--pids-limit=N`              | Fork bomb protection       |
 
 Setting `--memory-swap` equal to `--memory` disables swap for the container,
 preventing slow OOM thrashing.

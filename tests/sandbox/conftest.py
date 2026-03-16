@@ -6,60 +6,54 @@
 """Shared pytest fixtures for sandbox tests."""
 
 import json
-import subprocess
 
 import pytest
 
 from airut.claude_output import StreamEvent, parse_stream_events
+from airut.sandbox._run_container import _RawResult
 
 
-def create_mock_popen(
+def create_mock_run_container(
     returncode: int = 0,
     stdout: str = "",
     stderr: str = "",
-    raise_timeout: bool = False,
+    timed_out: bool = False,
+    duration_ms: int = 100,
 ):
-    """Create a mock Popen object for AgentTask tests.
+    """Create an async mock of ``run_container`` for task tests.
 
-    Returns a MagicMock that behaves like subprocess.Popen:
-    - stdout is an iterator yielding lines with newlines
-    - stderr.readlines() returns a list of lines
-    - stdin has a write() and close() method
-    - wait() can raise TimeoutExpired if raise_timeout is True
+    Returns an async function that simulates run_container by invoking
+    callbacks line-by-line and returning a ``_RawResult``.
+
+    Args:
+        returncode: Simulated exit code.
+        stdout: Simulated stdout content.
+        stderr: Simulated stderr content.
+        timed_out: Whether to simulate a timeout.
+        duration_ms: Simulated duration in milliseconds.
     """
-    from unittest.mock import MagicMock
 
-    mock = MagicMock()
-    mock.returncode = returncode
+    async def fake_run_container(**kwargs):
+        on_stdout = kwargs.get("on_stdout_line")
+        on_stderr = kwargs.get("on_stderr_line")
 
-    # stdout should be an iterator that yields lines WITH newlines
-    if stdout:
-        lines = stdout.split("\n")
-        mock.stdout = iter(line + "\n" for line in lines if line.strip())
-    else:
-        mock.stdout = iter([])
+        if on_stdout and stdout:
+            for line in stdout.splitlines(keepends=True):
+                on_stdout(line)
 
-    mock.stderr = MagicMock()
-    if stderr:
-        stderr_lines = stderr.split("\n")
-        mock.stderr.readlines.return_value = [
-            line + "\n" for line in stderr_lines if line.strip()
-        ]
-    else:
-        mock.stderr.readlines.return_value = []
+        if on_stderr and stderr:
+            for line in stderr.splitlines(keepends=True):
+                on_stderr(line)
 
-    mock.stdin = MagicMock()
+        return _RawResult(
+            stdout=stdout,
+            stderr=stderr,
+            exit_code=returncode,
+            duration_ms=duration_ms,
+            timed_out=timed_out,
+        )
 
-    if raise_timeout:
-        mock.wait.side_effect = [
-            subprocess.TimeoutExpired(cmd=["podman"], timeout=1),
-            None,
-        ]
-    else:
-        mock.wait.return_value = None
-
-    mock.kill.return_value = None
-    return mock
+    return fake_run_container
 
 
 def parse_events(*raw_events: dict) -> list[StreamEvent]:

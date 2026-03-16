@@ -5,8 +5,7 @@
 
 """Tests for lib/sandbox/task.py -- per-execution AgentTask class."""
 
-import signal
-import subprocess
+import asyncio
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -17,9 +16,14 @@ from airut.claude_output.types import EventType
 from airut.sandbox._proxy import ProxyManager
 from airut.sandbox.event_log import EventLog
 from airut.sandbox.network_log import NetworkLog
-from airut.sandbox.task import AgentTask, NetworkSandboxConfig, SandboxError
+from airut.sandbox.task import (
+    AgentTask,
+    NetworkSandboxConfig,
+    SandboxError,
+    _tail_network_log,
+)
 from airut.sandbox.types import ContainerEnv, Mount, Outcome, ResourceLimits
-from tests.sandbox.conftest import create_mock_popen
+from tests.sandbox.conftest import create_mock_run_container
 
 
 def _make_task(
@@ -89,22 +93,21 @@ class TestAgentTaskInit:
 class TestAgentTaskExecute:
     """Tests for AgentTask.execute() method."""
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_success(
+    async def test_execute_success(
         self,
-        mock_popen: MagicMock,
         tmp_path: Path,
         sample_streaming_output: str,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """execute() returns ExecutionResult with parsed output."""
         task = _make_task(tmp_path)
 
-        mock_process = create_mock_popen(
-            returncode=0, stdout=sample_streaming_output, stderr=""
+        mock_rc = create_mock_run_container(
+            returncode=0, stdout=sample_streaming_output
         )
-        mock_popen.return_value = mock_process
+        monkeypatch.setattr("airut.sandbox.task.run_container", mock_rc)
 
-        result = task.execute("Test prompt")
+        result = await task.execute("Test prompt")
 
         assert result.outcome == Outcome.SUCCESS
         assert len(result.events) == 3
@@ -114,255 +117,192 @@ class TestAgentTaskExecute:
         assert result.exit_code == 0
         assert result.session_id == "test-session-123"
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_timeout(
-        self, mock_popen: MagicMock, tmp_path: Path
+    async def test_execute_timeout(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """execute() returns TIMEOUT outcome when container times out."""
         task = _make_task(tmp_path, resource_limits=ResourceLimits(timeout=10))
 
-        mock_process = create_mock_popen(raise_timeout=True)
-        mock_popen.return_value = mock_process
+        mock_rc = create_mock_run_container(timed_out=True)
+        monkeypatch.setattr("airut.sandbox.task.run_container", mock_rc)
 
-        result = task.execute("Test prompt")
+        result = await task.execute("Test prompt")
 
         assert result.outcome == Outcome.TIMEOUT
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_nonzero_exit(
-        self, mock_popen: MagicMock, tmp_path: Path
+    async def test_execute_nonzero_exit(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """execute() returns CONTAINER_FAILED on non-zero exit code."""
         task = _make_task(tmp_path)
 
-        mock_process = create_mock_popen(
-            returncode=1, stdout="", stderr="Error occurred"
+        mock_rc = create_mock_run_container(
+            returncode=1, stderr="Error occurred"
         )
-        mock_popen.return_value = mock_process
+        monkeypatch.setattr("airut.sandbox.task.run_container", mock_rc)
 
-        result = task.execute("Test prompt")
+        result = await task.execute("Test prompt")
 
         assert result.outcome == Outcome.CONTAINER_FAILED
         assert result.exit_code == 1
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_without_session_id(
-        self, mock_popen: MagicMock, tmp_path: Path
+    async def test_execute_without_session_id(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """execute() without session_id does not include --resume."""
         task = _make_task(tmp_path)
 
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
-        )
-        mock_popen.return_value = mock_process
+        calls: list[dict] = []
 
-        task.execute("Test prompt")
+        async def capture_rc(**kwargs):
+            calls.append(kwargs)
+            return await create_mock_run_container(
+                stdout='{"type": "result", "result": "test"}\n'
+            )(**kwargs)
 
-        call_args = mock_popen.call_args[0][0]
-        assert "--resume" not in call_args
+        monkeypatch.setattr("airut.sandbox.task.run_container", capture_rc)
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_with_session_id(
-        self, mock_popen: MagicMock, tmp_path: Path
+        await task.execute("Test prompt")
+
+        cmd = calls[0]["command"]
+        assert "--resume" not in cmd
+
+    async def test_execute_with_session_id(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """execute() with session_id includes --resume flag."""
         task = _make_task(tmp_path)
 
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
-        )
-        mock_popen.return_value = mock_process
+        calls: list[dict] = []
 
-        task.execute(
+        async def capture_rc(**kwargs):
+            calls.append(kwargs)
+            return await create_mock_run_container(
+                stdout='{"type": "result", "result": "test"}\n'
+            )(**kwargs)
+
+        monkeypatch.setattr("airut.sandbox.task.run_container", capture_rc)
+
+        await task.execute(
             "Test prompt",
             session_id="c7886694-f2cb-4861-ad3c-fbe0964eb4df",
         )
 
-        call_args = mock_popen.call_args[0][0]
-        assert "--resume" in call_args
-        resume_index = call_args.index("--resume")
-        assert (
-            call_args[resume_index + 1]
-            == "c7886694-f2cb-4861-ad3c-fbe0964eb4df"
-        )
+        cmd = calls[0]["command"]
+        assert "--resume" in cmd
+        resume_index = cmd.index("--resume")
+        assert cmd[resume_index + 1] == "c7886694-f2cb-4861-ad3c-fbe0964eb4df"
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_model_parameter(
-        self, mock_popen: MagicMock, tmp_path: Path
+    async def test_execute_model_parameter(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """execute() passes model via --model CLI parameter."""
         task = _make_task(tmp_path)
 
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
-        )
-        mock_popen.return_value = mock_process
+        calls: list[dict] = []
 
-        task.execute("Test prompt", model="opus")
+        async def capture_rc(**kwargs):
+            calls.append(kwargs)
+            return await create_mock_run_container(
+                stdout='{"type": "result", "result": "test"}\n'
+            )(**kwargs)
 
-        call_args = mock_popen.call_args[0][0]
-        assert "--model" in call_args
-        model_index = call_args.index("--model")
-        assert call_args[model_index + 1] == "opus"
+        monkeypatch.setattr("airut.sandbox.task.run_container", capture_rc)
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_default_model(
-        self, mock_popen: MagicMock, tmp_path: Path
+        await task.execute("Test prompt", model="opus")
+
+        cmd = calls[0]["command"]
+        assert "--model" in cmd
+        model_index = cmd.index("--model")
+        assert cmd[model_index + 1] == "opus"
+
+    async def test_execute_default_model(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """execute() uses sonnet as default model."""
         task = _make_task(tmp_path)
 
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
-        )
-        mock_popen.return_value = mock_process
+        calls: list[dict] = []
 
-        task.execute("Test prompt")
+        async def capture_rc(**kwargs):
+            calls.append(kwargs)
+            return await create_mock_run_container(
+                stdout='{"type": "result", "result": "test"}\n'
+            )(**kwargs)
 
-        call_args = mock_popen.call_args[0][0]
-        assert "--model" in call_args
-        model_index = call_args.index("--model")
-        assert call_args[model_index + 1] == "sonnet"
+        monkeypatch.setattr("airut.sandbox.task.run_container", capture_rc)
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_effort_parameter(
-        self, mock_popen: MagicMock, tmp_path: Path
+        await task.execute("Test prompt")
+
+        cmd = calls[0]["command"]
+        assert "--model" in cmd
+        model_index = cmd.index("--model")
+        assert cmd[model_index + 1] == "sonnet"
+
+    async def test_execute_effort_parameter(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """execute() passes effort via --effort CLI parameter."""
         task = _make_task(tmp_path)
 
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
-        )
-        mock_popen.return_value = mock_process
+        calls: list[dict] = []
 
-        task.execute("Test prompt", effort="max")
+        async def capture_rc(**kwargs):
+            calls.append(kwargs)
+            return await create_mock_run_container(
+                stdout='{"type": "result", "result": "test"}\n'
+            )(**kwargs)
 
-        call_args = mock_popen.call_args[0][0]
-        assert "--effort" in call_args
-        effort_index = call_args.index("--effort")
-        assert call_args[effort_index + 1] == "max"
+        monkeypatch.setattr("airut.sandbox.task.run_container", capture_rc)
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_effort_omitted_by_default(
-        self, mock_popen: MagicMock, tmp_path: Path
+        await task.execute("Test prompt", effort="max")
+
+        cmd = calls[0]["command"]
+        assert "--effort" in cmd
+        effort_index = cmd.index("--effort")
+        assert cmd[effort_index + 1] == "max"
+
+    async def test_execute_effort_omitted_by_default(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """execute() omits --effort when not specified."""
         task = _make_task(tmp_path)
 
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
-        )
-        mock_popen.return_value = mock_process
+        calls: list[dict] = []
 
-        task.execute("Test prompt")
+        async def capture_rc(**kwargs):
+            calls.append(kwargs)
+            return await create_mock_run_container(
+                stdout='{"type": "result", "result": "test"}\n'
+            )(**kwargs)
 
-        call_args = mock_popen.call_args[0][0]
-        assert "--effort" not in call_args
+        monkeypatch.setattr("airut.sandbox.task.run_container", capture_rc)
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_container_env(
-        self, mock_popen: MagicMock, tmp_path: Path
-    ) -> None:
-        """execute() passes container environment variables."""
-        env = ContainerEnv(
-            variables={
-                "ANTHROPIC_API_KEY": "sk-test-key-12345",
-                "GH_TOKEN": "ghp_testtoken",
-            }
-        )
-        task = _make_task(tmp_path, env=env)
+        await task.execute("Test prompt")
 
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
-        )
-        mock_popen.return_value = mock_process
+        cmd = calls[0]["command"]
+        assert "--effort" not in cmd
 
-        task.execute("Test prompt")
-
-        call_args = mock_popen.call_args[0][0]
-        assert "-e" in call_args
-        assert "ANTHROPIC_API_KEY=sk-test-key-12345" in call_args
-        assert "GH_TOKEN=ghp_testtoken" in call_args
-
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_empty_container_env(
-        self, mock_popen: MagicMock, tmp_path: Path
-    ) -> None:
-        """execute() with empty env does not add env var flags."""
-        task = _make_task(tmp_path, env=ContainerEnv())
-
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
-        )
-        mock_popen.return_value = mock_process
-
-        task.execute("Test prompt")
-
-        call_args = mock_popen.call_args[0][0]
-        # Find all -e flags and their values
-        env_pairs = [
-            call_args[i + 1]
-            for i in range(len(call_args) - 1)
-            if call_args[i] == "-e"
-        ]
-        env_names = [p.split("=")[0] for p in env_pairs]
-        for name in ["ANTHROPIC_API_KEY", "GH_TOKEN"]:
-            assert name not in env_names
-
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_mounts(
-        self, mock_popen: MagicMock, tmp_path: Path
-    ) -> None:
-        """execute() passes mount configurations to container."""
-        mounts = [
-            Mount(
-                host_path=tmp_path / "workspace",
-                container_path="/workspace",
-                read_only=False,
-            ),
-            Mount(
-                host_path=tmp_path / "config",
-                container_path="/config",
-                read_only=True,
-            ),
-        ]
-        task = _make_task(tmp_path, mounts=mounts)
-
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
-        )
-        mock_popen.return_value = mock_process
-
-        task.execute("Test prompt")
-
-        call_args = mock_popen.call_args[0][0]
-        command_str = " ".join(call_args)
-        assert f"{tmp_path / 'workspace'}:/workspace:rw" in command_str
-        assert f"{tmp_path / 'config'}:/config:ro" in command_str
-
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_with_callback(
-        self, mock_popen: MagicMock, tmp_path: Path
+    async def test_execute_with_callback(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """execute() invokes callback for each parsed event."""
         task = _make_task(tmp_path)
@@ -372,28 +312,29 @@ class TestAgentTaskExecute:
             '{"type": "assistant", "message": {"content": '
             '[{"type": "text", "text": "test"}]}}\n'
             '{"type": "result", "subtype": "success", "session_id": "s1", '
-            '"result": "done"}'
+            '"result": "done"}\n'
         )
-        mock_process = create_mock_popen(
-            returncode=0, stdout=streaming_output, stderr=""
+        mock_rc = create_mock_run_container(
+            returncode=0, stdout=streaming_output
         )
-        mock_popen.return_value = mock_process
+        monkeypatch.setattr("airut.sandbox.task.run_container", mock_rc)
 
         events_received: list[StreamEvent] = []
 
         def callback(event: StreamEvent) -> None:
             events_received.append(event)
 
-        task.execute("Test prompt", on_event=callback)
+        await task.execute("Test prompt", on_event=callback)
 
         assert len(events_received) == 3
         assert events_received[0].event_type == EventType.SYSTEM
         assert events_received[1].event_type == EventType.ASSISTANT
         assert events_received[2].event_type == EventType.RESULT
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_callback_non_json_lines_skipped(
-        self, mock_popen: MagicMock, tmp_path: Path
+    async def test_execute_callback_non_json_lines_skipped(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Callback is not invoked for non-JSON lines."""
         task = _make_task(tmp_path)
@@ -402,267 +343,159 @@ class TestAgentTaskExecute:
             "Non-JSON line\n"
             '{"type": "system", "session_id": "s1"}\n'
             "Another non-JSON\n"
-            '{"type": "result", "session_id": "s1", "result": "done"}'
+            '{"type": "result", "session_id": "s1", "result": "done"}\n'
         )
-        mock_process = create_mock_popen(
-            returncode=0, stdout=streaming_output, stderr=""
+        mock_rc = create_mock_run_container(
+            returncode=0, stdout=streaming_output
         )
-        mock_popen.return_value = mock_process
+        monkeypatch.setattr("airut.sandbox.task.run_container", mock_rc)
 
         events_received: list[StreamEvent] = []
 
         def callback(event: StreamEvent) -> None:
             events_received.append(event)
 
-        task.execute("Test prompt", on_event=callback)
+        await task.execute("Test prompt", on_event=callback)
 
         # Only 2 valid JSON events should be received
         assert len(events_received) == 2
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_uses_image_tag(
-        self, mock_popen: MagicMock, tmp_path: Path
+    async def test_execute_sends_prompt_on_stdin(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """execute() uses the configured image_tag in the command."""
-        task = _make_task(tmp_path, image_tag="airut:custom123")
-
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
-        )
-        mock_popen.return_value = mock_process
-
-        task.execute("Test prompt")
-
-        call_args = mock_popen.call_args[0][0]
-        assert "airut:custom123" in call_args
-
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_custom_container_command(
-        self, mock_popen: MagicMock, tmp_path: Path
-    ) -> None:
-        """execute() uses custom container command."""
-        task = _make_task(tmp_path, container_command="docker")
-
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
-        )
-        mock_popen.return_value = mock_process
-
-        task.execute("Test prompt")
-
-        call_args = mock_popen.call_args[0][0]
-        assert call_args[0] == "docker"
-        assert call_args[1] == "run"
-
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_container_security_options(
-        self, mock_popen: MagicMock, tmp_path: Path
-    ) -> None:
-        """execute() includes --cap-drop=ALL and --security-opt flags."""
+        """execute() writes prompt to stdin_data."""
         task = _make_task(tmp_path)
 
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
-        )
-        mock_popen.return_value = mock_process
+        calls: list[dict] = []
 
-        task.execute("Test prompt")
+        async def capture_rc(**kwargs):
+            calls.append(kwargs)
+            return await create_mock_run_container(
+                stdout='{"type": "result", "result": "test"}\n'
+            )(**kwargs)
 
-        call_args = mock_popen.call_args[0][0]
-        assert "--cap-drop=ALL" in call_args
-        assert "--security-opt=no-new-privileges:true" in call_args
+        monkeypatch.setattr("airut.sandbox.task.run_container", capture_rc)
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_unexpected_error(
-        self, mock_popen: MagicMock, tmp_path: Path
-    ) -> None:
-        """execute() raises SandboxError on unexpected exception."""
-        task = _make_task(tmp_path)
+        await task.execute("My test prompt")
 
-        mock_popen.side_effect = RuntimeError("Unexpected error")
+        assert calls[0]["stdin_data"] == "My test prompt"
 
-        with pytest.raises(SandboxError, match="execution failed"):
-            task.execute("Test prompt")
-
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_mounts_claude_dir(
-        self, mock_popen: MagicMock, tmp_path: Path
+    async def test_execute_mounts_claude_dir(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """execute() mounts claude/ directory at /root/.claude."""
         task = _make_task(tmp_path)
 
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
-        )
-        mock_popen.return_value = mock_process
+        calls: list[dict] = []
 
-        task.execute("Test prompt")
+        async def capture_rc(**kwargs):
+            calls.append(kwargs)
+            return await create_mock_run_container(
+                stdout='{"type": "result", "result": "test"}\n'
+            )(**kwargs)
 
-        call_args = mock_popen.call_args[0][0]
-        command_str = " ".join(str(a) for a in call_args)
-        assert "/root/.claude:rw" in command_str
+        monkeypatch.setattr("airut.sandbox.task.run_container", capture_rc)
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_sends_prompt_on_stdin(
-        self, mock_popen: MagicMock, tmp_path: Path
+        await task.execute("Test prompt")
+
+        mounts = calls[0]["mounts"]
+        claude_mount = [
+            m for m in mounts if m.container_path == "/root/.claude"
+        ]
+        assert len(claude_mount) == 1
+        assert not claude_mount[0].read_only
+
+    async def test_execute_unexpected_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """execute() writes prompt to stdin and closes it."""
+        """execute() raises SandboxError on unexpected exception."""
         task = _make_task(tmp_path)
 
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
-        )
-        mock_popen.return_value = mock_process
+        async def failing_rc(**kwargs):
+            raise RuntimeError("Unexpected error")
 
-        task.execute("My test prompt")
+        monkeypatch.setattr("airut.sandbox.task.run_container", failing_rc)
 
-        mock_process.stdin.write.assert_called_once_with("My test prompt")
-        mock_process.stdin.close.assert_called_once()
+        with pytest.raises(SandboxError, match="execution failed"):
+            await task.execute("Test prompt")
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_resume_flag_before_prompt(
-        self, mock_popen: MagicMock, tmp_path: Path
+    async def test_execute_on_stderr_line_callback(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """execute() places --resume before -p flag in command."""
+        """execute() passes on_stderr_line through to run_container."""
         task = _make_task(tmp_path)
 
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
-        )
-        mock_popen.return_value = mock_process
+        calls: list[dict] = []
 
-        task.execute("Test prompt", session_id="test-session-id")
+        async def capture_rc(**kwargs):
+            calls.append(kwargs)
+            # Invoke the stderr callback
+            cb = kwargs.get("on_stderr_line")
+            if cb:
+                cb("stderr line\n")
+            return await create_mock_run_container(
+                stdout='{"type": "result", "result": "test"}\n'
+            )(**kwargs)
 
-        call_args = mock_popen.call_args[0][0]
-        resume_index = call_args.index("--resume")
-        prompt_index = call_args.index("-p")
-        assert resume_index < prompt_index
+        monkeypatch.setattr("airut.sandbox.task.run_container", capture_rc)
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_clears_process_after_completion(
-        self, mock_popen: MagicMock, tmp_path: Path
+        stderr_lines: list[str] = []
+        await task.execute("Test prompt", on_stderr_line=stderr_lines.append)
+
+        assert "stderr line\n" in stderr_lines
+
+    async def test_execute_on_network_line_callback(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """execute() clears process tracker after completion."""
-        task = _make_task(tmp_path)
+        """execute() tails network log when on_network_line is provided."""
+        log_path = tmp_path / "network-sandbox.log"
+        log_path.write_text("ALLOW example.com\nBLOCK evil.com\n")
 
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
+        task = _make_task(tmp_path, network_log_path=log_path)
+
+        mock_rc = create_mock_run_container(
+            stdout='{"type": "result", "result": "test"}\n'
         )
-        mock_popen.return_value = mock_process
+        monkeypatch.setattr("airut.sandbox.task.run_container", mock_rc)
 
-        task.execute("Test prompt")
+        network_lines: list[str] = []
+        await task.execute("Test prompt", on_network_line=network_lines.append)
 
-        assert task._process_tracker._process is None
+        assert "ALLOW example.com" in network_lines
+        assert "BLOCK evil.com" in network_lines
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_resource_limits_memory(
-        self, mock_popen: MagicMock, tmp_path: Path
+    async def test_execute_on_network_line_no_crash_without_sandbox(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """execute() adds --memory and --memory-swap flags."""
-        task = _make_task(tmp_path, resource_limits=ResourceLimits(memory="2g"))
+        """Passing on_network_line when network_log is None does not crash."""
+        task = _make_task(tmp_path)  # no network_log_path
 
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
+        mock_rc = create_mock_run_container(
+            stdout='{"type": "result", "result": "test"}\n'
         )
-        mock_popen.return_value = mock_process
+        monkeypatch.setattr("airut.sandbox.task.run_container", mock_rc)
 
-        task.execute("Test prompt")
+        # Should not raise
+        await task.execute("Test prompt", on_network_line=lambda line: None)
 
-        call_args = mock_popen.call_args[0][0]
-        assert "--memory" in call_args
-        memory_index = call_args.index("--memory")
-        assert call_args[memory_index + 1] == "2g"
-        assert "--memory-swap" in call_args
-        swap_index = call_args.index("--memory-swap")
-        assert call_args[swap_index + 1] == "2g"
-
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_resource_limits_cpus(
-        self, mock_popen: MagicMock, tmp_path: Path
+    async def test_execute_resource_limits_passed(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """execute() adds --cpus flag (supports fractional values)."""
-        task = _make_task(tmp_path, resource_limits=ResourceLimits(cpus=1.5))
-
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
-        )
-        mock_popen.return_value = mock_process
-
-        task.execute("Test prompt")
-
-        call_args = mock_popen.call_args[0][0]
-        assert "--cpus" in call_args
-        cpus_index = call_args.index("--cpus")
-        assert call_args[cpus_index + 1] == "1.5"
-
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_resource_limits_pids(
-        self, mock_popen: MagicMock, tmp_path: Path
-    ) -> None:
-        """execute() adds --pids-limit flag."""
-        task = _make_task(
-            tmp_path, resource_limits=ResourceLimits(pids_limit=256)
-        )
-
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
-        )
-        mock_popen.return_value = mock_process
-
-        task.execute("Test prompt")
-
-        call_args = mock_popen.call_args[0][0]
-        assert "--pids-limit" in call_args
-        pids_index = call_args.index("--pids-limit")
-        assert call_args[pids_index + 1] == "256"
-
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_no_resource_limit_flags_when_none(
-        self, mock_popen: MagicMock, tmp_path: Path
-    ) -> None:
-        """execute() omits resource limit flags when all limits are None."""
-        task = _make_task(tmp_path, resource_limits=ResourceLimits())
-
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
-        )
-        mock_popen.return_value = mock_process
-
-        task.execute("Test prompt")
-
-        call_args = mock_popen.call_args[0][0]
-        assert "--memory" not in call_args
-        assert "--memory-swap" not in call_args
-        assert "--cpus" not in call_args
-        assert "--pids-limit" not in call_args
-
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_all_resource_limits(
-        self, mock_popen: MagicMock, tmp_path: Path
-    ) -> None:
-        """execute() adds all resource limit flags when all are set."""
+        """execute() passes resource limits to run_container."""
         task = _make_task(
             tmp_path,
             resource_limits=ResourceLimits(
@@ -670,20 +503,77 @@ class TestAgentTaskExecute:
             ),
         )
 
-        mock_process = create_mock_popen(
-            returncode=0,
-            stdout='{"type": "result", "result": "test"}',
-            stderr="",
+        calls: list[dict] = []
+
+        async def capture_rc(**kwargs):
+            calls.append(kwargs)
+            return await create_mock_run_container(
+                stdout='{"type": "result", "result": "test"}\n'
+            )(**kwargs)
+
+        monkeypatch.setattr("airut.sandbox.task.run_container", capture_rc)
+
+        await task.execute("Test prompt")
+
+        assert calls[0]["resource_limits"].memory == "4g"
+        assert calls[0]["resource_limits"].cpus == 2.5
+        assert calls[0]["resource_limits"].pids_limit == 512
+
+
+class TestTailNetworkLog:
+    """Tests for _tail_network_log helper."""
+
+    async def test_polls_and_delivers_lines(self, tmp_path: Path) -> None:
+        """Loop body runs, poll times out, then stop delivers lines."""
+        log_path = tmp_path / "network-sandbox.log"
+        log_path.write_text("LINE1\n")
+        net_log = NetworkLog(log_path)
+
+        received: list[str] = []
+        stop = asyncio.Event()
+
+        async def set_stop_after_poll():
+            # Wait long enough for at least one poll timeout
+            await asyncio.sleep(0.05)
+            stop.set()
+
+        asyncio.create_task(set_stop_after_poll())
+        await _tail_network_log(
+            net_log, received.append, stop, poll_interval=0.01
         )
-        mock_popen.return_value = mock_process
 
-        task.execute("Test prompt")
+        assert "LINE1" in received
 
-        call_args = mock_popen.call_args[0][0]
-        assert "--memory" in call_args
-        assert "--memory-swap" in call_args
-        assert "--cpus" in call_args
-        assert "--pids-limit" in call_args
+
+class TestAgentTaskTailFailure:
+    """Tests for tail task exception handling in AgentTask."""
+
+    async def test_tail_task_exception_logged(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Tail task exception is caught and logged, not propagated."""
+        log_path = tmp_path / "network-sandbox.log"
+        log_path.write_text("")
+        task = _make_task(tmp_path, network_log_path=log_path)
+
+        mock_rc = create_mock_run_container(
+            stdout='{"type": "result", "result": "test"}\n'
+        )
+        monkeypatch.setattr("airut.sandbox.task.run_container", mock_rc)
+
+        # Patch _tail_network_log to raise
+        async def bad_tail(*args, **kwargs):
+            raise RuntimeError("tail exploded")
+
+        monkeypatch.setattr("airut.sandbox.task._tail_network_log", bad_tail)
+
+        # Should not raise despite tail failure
+        result = await task.execute(
+            "Test prompt", on_network_line=lambda _line: None
+        )
+        assert result.outcome == Outcome.SUCCESS
 
 
 class TestAgentTaskStop:
@@ -695,53 +585,26 @@ class TestAgentTaskStop:
         result = task.stop()
         assert result is False
 
-    def test_stop_success(self, tmp_path: Path) -> None:
-        """stop() terminates a running process successfully."""
+    @patch("airut.sandbox._run_container.os.kill")
+    @patch("airut.sandbox._run_container.threading.Timer")
+    def test_stop_success(
+        self,
+        mock_timer: MagicMock,
+        mock_kill: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """stop() sends SIGTERM via os.kill."""
         task = _make_task(tmp_path)
-
-        mock_process = MagicMock()
-        mock_process.send_signal = MagicMock()
-        mock_process.wait = MagicMock(return_value=None)
-
-        task._process_tracker._process = mock_process
+        task._process_tracker.set(12345)
 
         result = task.stop()
 
         assert result is True
-        mock_process.send_signal.assert_called_once_with(signal.SIGTERM)
-        mock_process.wait.assert_called_once_with(timeout=5)
+        mock_kill.assert_called_once_with(12345, 15)  # SIGTERM
 
-    def test_stop_force_kill(self, tmp_path: Path) -> None:
-        """stop() force kills if graceful termination fails."""
+    def test_stop_no_pid(self, tmp_path: Path) -> None:
+        """stop() returns False when no PID is tracked."""
         task = _make_task(tmp_path)
-
-        mock_process = MagicMock()
-        mock_process.send_signal = MagicMock()
-        mock_process.wait = MagicMock(
-            side_effect=[
-                subprocess.TimeoutExpired("cmd", 5),
-                None,
-            ]
-        )
-        mock_process.kill = MagicMock()
-
-        task._process_tracker._process = mock_process
-
-        result = task.stop()
-
-        assert result is True
-        mock_process.send_signal.assert_called_once_with(signal.SIGTERM)
-        assert mock_process.wait.call_count == 2
-        mock_process.kill.assert_called_once()
-
-    def test_stop_handles_errors(self, tmp_path: Path) -> None:
-        """stop() handles exceptions gracefully."""
-        task = _make_task(tmp_path)
-
-        mock_process = MagicMock()
-        mock_process.send_signal.side_effect = OSError("Process error")
-
-        task._process_tracker._process = mock_process
 
         result = task.stop()
 
@@ -751,9 +614,10 @@ class TestAgentTaskStop:
 class TestAgentTaskWithProxy:
     """Tests for AgentTask execution with network sandbox."""
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_execute_starts_and_stops_proxy(
-        self, mock_popen: MagicMock, tmp_path: Path
+    async def test_execute_starts_and_stops_proxy(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """execute() starts proxy before and stops after container run."""
         from airut.allowlist import Allowlist
@@ -774,7 +638,6 @@ class TestAgentTaskWithProxy:
         replacements = SecretReplacements()
         sandbox_config = NetworkSandboxConfig(allowlist, replacements)
 
-        # Need to mock get_network_args since it checks for CA cert
         with patch(
             "airut.sandbox.task.get_network_args",
             return_value=["--network", "test-net", "--dns", "10.199.1.100"],
@@ -785,21 +648,20 @@ class TestAgentTaskWithProxy:
                 proxy_manager=mock_proxy_manager,
             )
 
-            mock_process = create_mock_popen(
-                returncode=0,
-                stdout='{"type": "result", "result": "test"}',
-                stderr="",
+            mock_rc = create_mock_run_container(
+                stdout='{"type": "result", "result": "test"}\n'
             )
-            mock_popen.return_value = mock_process
+            monkeypatch.setattr("airut.sandbox.task.run_container", mock_rc)
 
-            task.execute("Test prompt")
+            await task.execute("Test prompt")
 
         mock_proxy_manager.start_proxy.assert_called_once()
         mock_proxy_manager.stop_proxy.assert_called_once_with("test-task-id")
 
-    @patch("airut.sandbox._run_container.subprocess.Popen")
-    def test_proxy_stopped_on_execution_failure(
-        self, mock_popen: MagicMock, tmp_path: Path
+    async def test_proxy_stopped_on_execution_failure(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Proxy is stopped even when container execution fails."""
         from airut.allowlist import Allowlist
@@ -830,23 +692,25 @@ class TestAgentTaskWithProxy:
                 proxy_manager=mock_proxy_manager,
             )
 
-            mock_popen.side_effect = RuntimeError("Container exploded")
+            async def failing_rc(**kwargs):
+                raise RuntimeError("Container exploded")
+
+            monkeypatch.setattr("airut.sandbox.task.run_container", failing_rc)
 
             with pytest.raises(SandboxError):
-                task.execute("Test prompt")
+                await task.execute("Test prompt")
 
         mock_proxy_manager.stop_proxy.assert_called_once_with("test-task-id")
 
-    def test_non_sandbox_error_in_execute_outer_scope(
+    async def test_non_sandbox_error_in_execute_outer_scope(
         self, tmp_path: Path
     ) -> None:
-        """Non-SandboxError during proxy setup is wrapped as SandboxError."""
+        """Non-SandboxError during proxy setup is wrapped."""
         from airut.allowlist import Allowlist
         from airut.sandbox.secrets import SecretReplacements
         from airut.sandbox.task import NetworkSandboxConfig
 
         mock_proxy_manager = MagicMock()
-        # Proxy startup fails with a non-SandboxError
         mock_proxy_manager.start_proxy.side_effect = RuntimeError(
             "DNS resolution failed"
         )
@@ -862,4 +726,4 @@ class TestAgentTaskWithProxy:
         )
 
         with pytest.raises(SandboxError, match="Execution failed"):
-            task.execute("Test prompt")
+            await task.execute("Test prompt")
