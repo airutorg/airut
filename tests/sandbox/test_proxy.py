@@ -369,8 +369,8 @@ class TestAllocateSubnetAndCreateNetwork:
         assert octet == 2
         assert proxy_ip == "10.199.2.100"
         assert call_count == 2
-        # Octet 1 stays marked as active (externally held).
-        assert 1 in pm._active_octets
+        # Octet 1 is released so future calls can retry it.
+        assert 1 not in pm._active_octets
 
     def test_retries_multiple_conflicts(self) -> None:
         """Skips multiple externally-held subnets."""
@@ -394,9 +394,9 @@ class TestAllocateSubnetAndCreateNetwork:
 
         assert octet == 4
         assert proxy_ip == "10.199.4.100"
-        # All conflict octets stay marked as active.
+        # All conflict octets are released for future retries.
         for o in conflict_octets:
-            assert o in pm._active_octets
+            assert o not in pm._active_octets
 
     def test_all_subnets_conflicting_raises(self) -> None:
         """Raises ProxyError when all 254 subnets are externally held."""
@@ -454,6 +454,46 @@ class TestAllocateSubnetAndCreateNetwork:
             _, _, octet = pm._allocate_subnet()
             octets.append(octet)
         assert len(set(octets)) == 254
+
+    def test_conflict_then_non_conflict_error_propagates(self) -> None:
+        """Conflict retry followed by a different error propagates."""
+        pm = _make_pm()
+
+        def mixed_errors(name: str, *, subnet: str, proxy_ip: str) -> None:
+            if "10.199.1." in subnet:
+                raise ProxyError(f"subnet {subnet} is already used")
+            raise ProxyError("permission denied")
+
+        with patch.object(
+            pm, "_create_internal_network", side_effect=mixed_errors
+        ):
+            with pytest.raises(ProxyError, match="permission denied"):
+                pm._allocate_subnet_and_create_network("net-1")
+
+        # Both octets should be released.
+        assert 1 not in pm._active_octets
+        assert 2 not in pm._active_octets
+
+    def test_wraparound_with_conflicts(self) -> None:
+        """Retry wraps around octet space when conflicts span boundary."""
+        pm = _make_pm()
+        pm._next_subnet_octet = 253
+        conflict_octets = {253, 254, 1}
+
+        def create_side_effect(
+            name: str, *, subnet: str, proxy_ip: str
+        ) -> None:
+            for o in conflict_octets:
+                if f"10.199.{o}." in subnet:
+                    raise ProxyError(f"subnet {subnet} is already used")
+
+        with patch.object(
+            pm, "_create_internal_network", side_effect=create_side_effect
+        ):
+            proxy_ip, octet = pm._allocate_subnet_and_create_network("net-1")
+
+        assert octet == 2
+        assert proxy_ip == "10.199.2.100"
 
 
 class TestEnsureProxyImage:

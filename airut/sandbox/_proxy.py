@@ -351,8 +351,10 @@ class ProxyManager:
         """Allocate a subnet and create the internal network.
 
         Retries automatically when a subnet is already in use on the host
-        (e.g. held by another airut process). On conflict the octet stays
-        marked as active so it is not re-attempted.
+        (e.g. held by another airut process). On conflict the octet is
+        released so future calls can retry it (the external holder may
+        have finished). Within a single call the allocator's advancing
+        counter ensures the same octet is not retried.
 
         Args:
             network_name: Name for the internal network.
@@ -379,8 +381,11 @@ class ProxyManager:
             except ProxyError as exc:
                 error_msg = str(exc).lower()
                 if "subnet" in error_msg and "already" in error_msg:
-                    # Subnet held by another process -- keep the octet
-                    # marked as active so _allocate_subnet skips it.
+                    # Subnet held by another process -- release so
+                    # future calls can retry (holder may have finished).
+                    # The advancing counter prevents re-trying within
+                    # this loop.
+                    self._release_subnet(octet)
                     logger.info(
                         "Subnet %s in use externally, trying next", subnet
                     )
