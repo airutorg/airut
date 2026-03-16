@@ -213,6 +213,17 @@ and passthrough entrypoint scripts have different content, they produce
 different overlay image tags even when built from the same repo image. Both
 variants benefit from the same repo image cache.
 
+## CI Image Caching
+
+On ephemeral CI runners (GitHub Actions), the in-memory cache and local image
+store are empty on every run. The sandbox action uses `actions/cache` to persist
+image tarballs across runs, restoring them via `podman load` before
+`airut-sandbox run`. The existing build code benefits automatically from the
+pre-populated local image store -- no changes to `build_repo_image()` or
+`build_overlay_image()` are needed.
+
+See [image-cache.md](image-cache.md) for the full CI caching design.
+
 ## Image Cleanup
 
 Old images accumulate as Dockerfile content changes. Podman's

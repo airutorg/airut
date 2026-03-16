@@ -30,6 +30,7 @@ For high-level documentation, see [doc/](../doc/).
 ## Container
 
 - [image.md](image.md) — Two-layer container image build strategy
+- [image-cache.md](image-cache.md) — CI image caching with `actions/cache`
 
 ## Network
 
