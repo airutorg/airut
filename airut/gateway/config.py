@@ -1177,14 +1177,15 @@ def _parse_slack_channel_config(
                 f"{prefix}.slack.authorized[{i}] must be a single-key "
                 f"mapping (workspace_members, user_group, or user_id)"
             )
-        key = next(iter(rule))
+        items = list(rule.items())
+        key = str(items[0][0])
         if key not in ("workspace_members", "user_group", "user_id"):
             raise ConfigError(
                 f"{prefix}.slack.authorized[{i}]: unknown rule "
                 f"type '{key}' (expected workspace_members, "
                 f"user_group, or user_id)"
             )
-        value = rule[key]
+        value = items[0][1]
         if key == "workspace_members":
             coerced = _coerce_bool(value)
             if not coerced:

@@ -26,7 +26,7 @@ from airut.conversation.conversation_store import (
 
 def _make_reply(**overrides: object) -> ReplySummary:
     """Create a ReplySummary with sensible defaults."""
-    defaults = {
+    defaults: dict[str, object] = {
         "session_id": "session-1",
         "timestamp": "2026-01-15T12:00:00+00:00",
         "duration_ms": 5000,

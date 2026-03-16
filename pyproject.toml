@@ -22,21 +22,21 @@ dependencies = [
 [dependency-groups]
 dev = [
     "aiosmtpd>=1.4.6",
-    "cryptography>=46.0.4",
-    "mdformat>=0.7",
+    "cryptography>=46.0.5",
+    "mdformat>=1.0",
     "mdformat-frontmatter>=2",
-    "mdformat-gfm>=0.3",
+    "mdformat-gfm>=1.0",
     "mdformat-ruff>=0.1",
-    "mdformat-toc>=0.3",
+    "mdformat-toc>=0.5",
     "pip-licenses>=5.0",
-    "pytest>=8.0",
-    "pytest-asyncio>=0.24",
-    "pytest-cov>=4.1",
+    "pytest>=9.0",
+    "pytest-asyncio>=1.0",
+    "pytest-cov>=7.0",
     "pytest-socket>=0.7.0",
     "pytest-xdist>=3.8.0",
-    "ruff>=0.14",
-    "ty>=0.0.8",
-    "uv-secure>=0.6",
+    "ruff>=0.15",
+    "ty>=0.0.17",
+    "uv-secure>=0.16",
 ]
 
 [project.scripts]

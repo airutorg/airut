@@ -305,7 +305,9 @@ class MinimalIMAPHandler:
             if not self.selected_mailbox:
                 return [f"{tag} NO No mailbox selected"]
             removed = self.inbox.expunge()
-            responses = [f"* {uid} EXPUNGE" for uid in removed]
+            responses: list[str | bytes] = [
+                f"* {uid} EXPUNGE" for uid in removed
+            ]
             responses.append(f"{tag} OK EXPUNGE completed")
             return responses
 

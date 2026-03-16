@@ -193,7 +193,7 @@ class DashboardServer:
         )
 
         # Map endpoints to handler methods
-        self._endpoint_handlers = {
+        self._endpoint_handlers: dict[str, Callable[..., Response]] = {
             "index": self._handlers.handle_index,
             "favicon": self._handlers.handle_favicon,
             "version": self._handlers.handle_version,

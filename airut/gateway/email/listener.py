@@ -422,7 +422,7 @@ class EmailListener:
             sock = self.connection.socket()
 
             # Include interrupt pipe in select to allow waking up
-            watch_fds = [sock]
+            watch_fds: list[socket.socket | int] = [sock]
             if self._interrupt_read is not None:
                 watch_fds.append(self._interrupt_read)
 
