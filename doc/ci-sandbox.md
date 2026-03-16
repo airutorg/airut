@@ -6,9 +6,17 @@ build scripts, and linters all run agent-steerable code -- on runners with
 outbound internet access and access to repository secrets. This is a sandbox
 escape: the agent's code runs unsandboxed outside Airut's container.
 
-The `airut-sandbox` CLI and `airutorg/sandbox-action` GitHub Action close this
-gap by running CI commands inside the same container isolation, network
-allowlisting, and credential masking that the Airut gateway uses.
+The `airut-sandbox` CLI and
+[`airutorg/sandbox-action`](https://github.com/airutorg/sandbox-action) GitHub
+Action close this gap by running CI commands inside the same container
+isolation, network allowlisting, and credential masking that the Airut gateway
+uses.
+
+> **For usage documentation** (action inputs, workflow examples, image caching,
+> debugging), see the
+> [sandbox-action README](https://github.com/airutorg/sandbox-action#readme).
+> This document focuses on the security model, threat analysis, and repository
+> configuration requirements.
 
 <!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
 
@@ -21,21 +29,14 @@ allowlisting, and credential masking that the Airut gateway uses.
   - [3. Sandbox Configuration Files](#3-sandbox-configuration-files)
   - [4. Terminal Step](#4-terminal-step)
 - [Configuration](#configuration)
-  - [Sandbox Config (`.airut/sandbox.yaml`)](#sandbox-config-airutsandboxyaml)
-  - [Network Allowlist](#network-allowlist)
   - [Credential Handling](#credential-handling)
-- [Action Inputs](#action-inputs)
-- [Full Workflow Example](#full-workflow-example)
 - [Using `airut-sandbox` Directly](#using-airut-sandbox-directly)
   - [CLI Options](#cli-options)
   - [Non-GitHub CI Systems](#non-github-ci-systems)
 - [Security Summary](#security-summary)
   - [Checklist](#checklist)
   - [Residual Risks](#residual-risks)
-- [Image Caching](#image-caching)
-  - [Cache Inputs](#cache-inputs)
-  - [Security](#security)
-  - [When to Disable Caching](#when-to-disable-caching)
+- [Image Caching Security](#image-caching-security)
 - [Fail-Secure Behavior](#fail-secure-behavior)
 - [Further Reading](#further-reading)
 
@@ -69,10 +70,10 @@ threat analysis.
 
 ## Solution: Sandbox Action
 
-`airutorg/sandbox-action` runs CI commands inside the Airut sandbox. The
-workflow triggers automatically on PRs, but the agent-steerable code runs inside
-a container with network restrictions and credential masking -- not directly on
-the runner.
+[`airutorg/sandbox-action`](https://github.com/airutorg/sandbox-action) runs CI
+commands inside the Airut sandbox. The workflow triggers automatically on PRs,
+but the agent-steerable code runs inside a container with network restrictions
+and credential masking -- not directly on the runner.
 
 ```yaml
 # .github/workflows/ci.yml
@@ -106,6 +107,9 @@ jobs:
 Even if the agent injects malicious code into test suites or build scripts, the
 sandbox prevents exfiltration. The container never sees real credential values
 -- only surrogates that the proxy replaces on matching outbound requests.
+
+For full action inputs, workflow examples, and image caching configuration, see
+the [sandbox-action README](https://github.com/airutorg/sandbox-action#readme).
 
 ## Trust Model
 
@@ -233,65 +237,14 @@ in a separate job that does not share the tainted workspace.
 
 ## Configuration
 
-### Sandbox Config (`.airut/sandbox.yaml`)
-
-This file controls what the container receives. It lives on the default branch
-and is reviewed by humans before taking effect.
-
-```yaml
-# .airut/sandbox.yaml
-
-# Environment variables (non-sensitive only)
-env:
-  CI: "true"
-  PYTHONDONTWRITEBYTECODE: "1"
-
-# Network sandbox (enabled by default)
-network_sandbox: true
-
-# Masked secrets — container gets surrogates, proxy swaps for real values
-# only on matching hosts. Prevents credential exfiltration.
-masked_secrets:
-  GH_TOKEN:
-    value: !env GH_TOKEN
-    scopes: ["api.github.com", "*.githubusercontent.com"]
-    headers: ["Authorization"]
-
-# Resource limits
-resource_limits:
-  memory: "4g"
-  cpus: 2
-  timeout: 600
-```
-
-Pass secrets from GitHub Actions via `env:` on the action step:
-
-```yaml
-- uses: airutorg/sandbox-action@v0
-  with:
-    command: 'uv sync && uv run pytest'
-    pr_sha: ${{ github.event.pull_request.head.sha }}
-  env:
-    GH_TOKEN: ${{ secrets.GH_TOKEN }}
-    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-```
-
-The `!env` tags in `sandbox.yaml` resolve from the runner's environment
-variables (set by the workflow `env:` block). If a referenced variable is
-missing, `airut-sandbox` exits with code 125 (fail-closed).
-
-### Network Allowlist
+The sandbox reads `.airut/sandbox.yaml` and `.airut/network-allowlist.yaml` from
+the base branch checkout. For the full configuration format and examples, see
+the
+[sandbox-action README](https://github.com/airutorg/sandbox-action#configuration).
 
 If `network_sandbox: true` (the default), the container's outbound HTTP(S)
-traffic is restricted to `.airut/network-allowlist.yaml`. The same allowlist
-format is used by the gateway.
-
-The allowlist does **not** need to include the repository's own GitHub URL --
-the action fetches the PR SHA on the host before entering the sandbox, so git
-operations inside the container work from local `.git` objects.
-
-See [network-sandbox.md](network-sandbox.md) for the allowlist format and
-examples.
+traffic is restricted to `.airut/network-allowlist.yaml`. See
+[network-sandbox.md](network-sandbox.md) for the allowlist format and examples.
 
 ### Credential Handling
 
@@ -306,44 +259,6 @@ Credentials should use the most restrictive mechanism available:
 **Masked secrets should be the default for all credentials.** Even if the
 network sandbox prevents most exfiltration, masked secrets ensure that a
 container escape or sandbox misconfiguration cannot expose real credentials.
-
-## Action Inputs
-
-| Input           | Required | Default        | Description                                                               |
-| --------------- | -------- | -------------- | ------------------------------------------------------------------------- |
-| `command`       | Yes      |                | CI command to run inside the sandbox (after PR checkout)                  |
-| `pr_sha`        | Yes      |                | PR commit SHA to check out and test                                       |
-| `merge`         | No       | `true`         | Merge PR into base branch before running (like GitHub's default behavior) |
-| `airut_version` | No       | from `VERSION` | Airut version to install (`0.15.0` for PyPI, `main` for GitHub HEAD)      |
-| `sandbox_args`  | No       | `--verbose`    | Additional arguments passed to `airut-sandbox run`                        |
-
-When `merge` is `true` (default), the container starts on the base branch and
-runs `git merge --no-edit <sha>` to create a temporary merge commit. This
-matches GitHub Actions' default `pull_request` checkout behavior.
-
-## Full Workflow Example
-
-```yaml
-name: CI
-on:
-  pull_request:
-    branches: [main]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: airutorg/sandbox-action@v0
-        with:
-          command: |
-            uv sync
-            uv run scripts/ci.py --verbose --timeout 0
-          pr_sha: ${{ github.event.pull_request.head.sha || github.sha }}
-          sandbox_args: '--verbose'
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-```
 
 ## Using `airut-sandbox` Directly
 
@@ -438,7 +353,6 @@ Before relying on the sandbox for CI security, verify:
 - [ ] Sandbox action is the **last step** of the job (nothing runs after it)
 - [ ] Credentials passed as masked secrets in `.airut/sandbox.yaml`, not as
   plain environment variables
-- [ ] Image caching enabled (default) or explicitly disabled if not wanted
 
 ### Residual Risks
 
@@ -463,40 +377,16 @@ not inside the container. Mitigation: pass untrusted GitHub context values via
 interpolation in `run:` scripts. The `sandbox-action` itself follows this
 pattern.
 
-## Image Caching
+## Image Caching Security
 
-By default, the sandbox action caches built container images across CI runs
-using `actions/cache`. This eliminates redundant image builds on ephemeral
-GitHub Actions runners, saving ~50 s per CI run.
+The sandbox action caches built container images across CI runs using
+`actions/cache`. For usage details (inputs, cache invalidation, disabling), see
+the
+[sandbox-action README](https://github.com/airutorg/sandbox-action#image-caching).
 
-Two images are cached independently:
-
-- **Repo image** (`airut-repo:<hash>`): The container with your tools and
-  dependencies. Cache key includes the Dockerfile content hash and the current
-  Claude Code version.
-- **Proxy image** (`airut-proxy:<hash>`): The network sandbox proxy (mitmproxy,
-  DNS responder). Cache key includes a hash of the installed proxy package
-  files.
-
-### Cache Inputs
-
-| Input           | Default | Description                                                                                 |
-| --------------- | ------- | ------------------------------------------------------------------------------------------- |
-| `cache`         | `true`  | Set to `false` to disable caching and force fresh builds                                    |
-| `cache-version` | `""`    | Manual cache-buster for cases where automatic invalidation is insufficient (see note below) |
-| `cache-max-age` | `168`   | Maximum image age (hours) before forced rebuild. Default one week.                          |
-
-Cache keys automatically invalidate when the Dockerfile, context files, proxy
-code, or Claude Code version changes. The `cache-version` input is for edge
-cases where this is not enough -- for example, when the Dockerfile installs a
-tool via `curl | bash` that fetches the latest version dynamically (e.g., uv, gh
-CLI), and you need to force a rebuild to pick up a newer version.
-
-### Security
-
-The primary concern is cache poisoning: a malicious PR tampers with a cached
-image so that subsequent runs load the poisoned image. Four independent defenses
-prevent this:
+The primary security concern is cache poisoning: a malicious PR tampers with a
+cached image so that subsequent runs load the poisoned image. Four independent
+defenses prevent this:
 
 1. **Step ordering**: All cache operations run **before** the sandbox executes
    untrusted code. The sandbox is the terminal step -- no post-sandbox steps
@@ -515,12 +405,6 @@ masked-secret surrogates and proxy-level bind mounts.
 For the full security analysis with defense-in-depth details, see
 [spec/image.md](../spec/image.md#security-1).
 
-### When to Disable Caching
-
-- **Debugging image build issues**: Set `cache: false` to force a fresh build.
-- **After urgent security patches**: Bump `cache-version` to invalidate all
-  cached images and pick up updated base images.
-
 ## Fail-Secure Behavior
 
 If `airut-sandbox` cannot run for any reason (not installed, container runtime
@@ -530,6 +414,8 @@ agent-steerable code runs as a fallback when sandboxing fails.
 
 ## Further Reading
 
+- [`airutorg/sandbox-action`](https://github.com/airutorg/sandbox-action) --
+  Action usage documentation (inputs, examples, debugging, image caching)
 - [security.md](security.md) -- Full security model and threat analysis
 - [execution-sandbox.md](execution-sandbox.md) -- Container isolation details
 - [network-sandbox.md](network-sandbox.md) -- Network allowlist and credential
