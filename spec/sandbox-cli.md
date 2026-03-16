@@ -55,7 +55,7 @@ airut (Python package)
 │   ├── sandbox.py        #   Sandbox facade (startup, shutdown, image, tasks)
 │   ├── task.py           #   AgentTask + CommandTask
 │   ├── _run_container.py #   Container execution (podman run, process lifecycle)
-│   ├── _image.py         #   Two-layer image build
+│   ├── _image_cache.py   #   Unified image cache (ImageCache, ImageBuildSpec)
 │   ├── _proxy.py         #   Proxy lifecycle
 │   ├── _network.py       #   Network args
 │   ├── _entrypoint.py    #   Entrypoint generation (Claude vs passthrough)
@@ -87,6 +87,7 @@ Options:
   --timeout SECONDS      Container timeout (overrides config)
   --container-command CMD  Container runtime (default: podman)
   --mount SRC:DST[:ro]   Additional mount (repeatable)
+  --max-image-age HOURS  Max image age before rebuild (default: 24, 0 = always)
   --network-log FILE     Append network activity log to FILE
   --network-log-live     Print network activity to stderr during execution
   --log FILE             Write sandbox log to FILE instead of stderr
@@ -375,11 +376,12 @@ Workarounds for multi-step pipelines:
 
 ### Image Staleness
 
-The sandbox's 24-hour image staleness check (see `spec/image.md`) triggers
-periodic rebuilds to pick up upstream tool updates. On ephemeral CI runners,
-images are built from scratch every time (the in-memory build timestamp cache
-starts empty). For hosts with persistent podman image caches, the staleness
-check applies normally.
+The sandbox's image staleness check (see `spec/image.md`) triggers periodic
+rebuilds to pick up upstream tool updates. The default `max_age_hours` is 24;
+use `--max-image-age 0` to force a fresh build every time. Image age is detected
+persistently via `podman image inspect`, so it works correctly on both ephemeral
+CI runners (images always built from scratch) and persistent hosts (images
+reused until stale).
 
 ### Crash Recovery
 
@@ -408,11 +410,13 @@ startup. The gateway's orphan cleanup removes only `airut-conv-*` and
 
 The following resources are safely shared between gateway and CLI:
 
-- **Proxy image** (`airut-proxy`) -- same binary, read-only after build
 - **mitmproxy CA certificate** (`~/.airut-mitmproxy/`) -- same CA, shared trust
   store
-- **Container images** (`airut-repo:*`, `airut:*`) -- content-addressed, no
-  conflicts from concurrent reads
+
+Note: container images are **not** shared between gateway and CLI. The CLI uses
+`resource_prefix="airut-cli"`, producing tags like `airut-cli-repo:*`,
+`airut-cli-overlay:*`, and `airut-cli-proxy:*`. The gateway uses `airut-repo:*`,
+`airut-overlay:*`, and `airut-proxy:*`. Both instances build independently.
 
 ## Network Activity Log
 

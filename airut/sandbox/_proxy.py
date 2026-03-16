@@ -38,11 +38,12 @@ from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
 
+from airut.sandbox._image_cache import ImageBuildSpec, ImageCache
+
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_RESOURCE_PREFIX = "airut"
-PROXY_IMAGE_NAME = "airut-proxy"
 MITMPROXY_CONFDIR = Path.home() / ".airut-mitmproxy"
 CA_CERT_FILENAME = "mitmproxy-ca-cert.pem"
 
@@ -106,9 +107,12 @@ class ProxyManager:
         *,
         upstream_dns: str,
         resource_prefix: str = DEFAULT_RESOURCE_PREFIX,
+        image_cache: ImageCache,
     ) -> None:
         self._cmd = container_command
         self._proxy_dir = proxy_dir or Path(str(files("airut._bundled.proxy")))
+        self._image_cache = image_cache
+        self._proxy_image_tag: str | None = None
         self._resource_prefix = resource_prefix
         self._context_network_prefix = f"{resource_prefix}-conv-"
         self._context_proxy_prefix = f"{resource_prefix}-proxy-"
@@ -145,7 +149,7 @@ class ProxyManager:
         """
         logger.info("ProxyManager starting up")
         self._cleanup_orphans()
-        self._build_image()
+        self._ensure_proxy_image()
         self._ensure_ca_cert()
         self._recreate_egress_network()
         logger.info("ProxyManager startup complete")
@@ -344,37 +348,32 @@ class ProxyManager:
     # Image and CA cert
     # ------------------------------------------------------------------
 
-    def _build_image(self) -> None:
-        """Build the proxy container image.
+    def _ensure_proxy_image(self) -> None:
+        """Build or reuse proxy image via ImageCache."""
+        spec = self._build_proxy_spec()
+        self._proxy_image_tag = self._image_cache.ensure(spec)
+
+    def _build_proxy_spec(self) -> ImageBuildSpec:
+        """Construct ImageBuildSpec for the proxy image.
 
         Raises:
-            ProxyError: If build fails.
+            ProxyError: If proxy Dockerfile is missing.
         """
-        dockerfile = self._proxy_dir / "proxy.dockerfile"
-        if not dockerfile.exists():
-            raise ProxyError(f"Proxy Dockerfile not found: {dockerfile}")
+        proxy_dir = self._proxy_dir
+        dockerfile_path = proxy_dir / "proxy.dockerfile"
+        if not dockerfile_path.exists():
+            raise ProxyError(f"Proxy Dockerfile not found: {dockerfile_path}")
 
-        logger.info("Building proxy image: %s", PROXY_IMAGE_NAME)
-        try:
-            subprocess.run(
-                [
-                    self._cmd,
-                    "build",
-                    "-t",
-                    PROXY_IMAGE_NAME,
-                    "-f",
-                    str(dockerfile),
-                    str(self._proxy_dir),
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except subprocess.CalledProcessError as e:
-            raise ProxyError(
-                f"Proxy image build failed: {e.stderr.strip()}"
-            ) from e
-        logger.info("Proxy image built")
+        dockerfile = dockerfile_path.read_bytes()
+        context_files: dict[str, bytes] = {}
+        for child in sorted(proxy_dir.iterdir()):
+            if child.is_file() and child.name != "proxy.dockerfile":
+                context_files[child.name] = child.read_bytes()
+        return ImageBuildSpec(
+            kind="proxy",
+            dockerfile=dockerfile,
+            context_files=context_files,
+        )
 
     def _ensure_ca_cert(self) -> Path:
         """Ensure mitmproxy CA certificate exists.
@@ -393,6 +392,7 @@ class ProxyManager:
         logger.info("Generating mitmproxy CA certificate")
         MITMPROXY_CONFDIR.mkdir(parents=True, exist_ok=True)
 
+        assert self._proxy_image_tag is not None
         container_confdir = "/tmp/mitmproxy-confdir"
         proc = subprocess.Popen(
             [
@@ -403,7 +403,7 @@ class ProxyManager:
                 "bash",
                 "-v",
                 f"{MITMPROXY_CONFDIR}:{container_confdir}:rw",
-                PROXY_IMAGE_NAME,
+                self._proxy_image_tag,
                 "-c",
                 f"mitmdump --set confdir={container_confdir} "
                 "--listen-port 0 & sleep 3; kill $!",
@@ -546,7 +546,8 @@ class ProxyManager:
         if network_log_path is not None:
             cmd.extend(["-v", f"{network_log_path}:/network-sandbox.log:rw"])
 
-        cmd.append(PROXY_IMAGE_NAME)
+        assert self._proxy_image_tag is not None
+        cmd.append(self._proxy_image_tag)
 
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True)

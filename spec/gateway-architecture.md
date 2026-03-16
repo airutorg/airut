@@ -676,11 +676,11 @@ thread pool.
 
 ### Concurrency Safety
 
-| Component           | Strategy                                                                |
-| ------------------- | ----------------------------------------------------------------------- |
-| IMAP operations     | Main thread only (IMAP not thread-safe)                                 |
-| Container execution | Per-conversation locks prevent parallel processing of same conversation |
-| Image builds        | Serialized via `_build_lock`; cached by content hash with staleness     |
+| Component           | Strategy                                                                 |
+| ------------------- | ------------------------------------------------------------------------ |
+| IMAP operations     | Main thread only (IMAP not thread-safe)                                  |
+| Container execution | Per-conversation locks prevent parallel processing of same conversation  |
+| Image builds        | Serialized via `ImageCache._lock`; cached by content hash with staleness |
 
 ### Per-Conversation Serialization
 
