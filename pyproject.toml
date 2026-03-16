@@ -71,10 +71,14 @@ select = [
     "N",      # pep8-naming
     "UP",     # pyupgrade
     "D",      # pydocstyle
+    "ANN401", # disallow typing.Any in annotations
 ]
 ignore = [
     "D1",     # Allow missing docstrings (enforce via review)
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN401"]
 
 
 [tool.ruff.lint.pydocstyle]
