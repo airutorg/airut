@@ -2300,6 +2300,112 @@ class TestExecute:
         execute_call = mock_task.execute.call_args
         assert execute_call.kwargs["on_network_line"] is None
 
+    @patch("airut.sandbox_cli.Sandbox")
+    @patch("airut.sandbox_cli.prepare_secrets")
+    @patch("airut.sandbox_cli._install_signal_handlers")
+    def test_on_output_flushes_stdout(
+        self,
+        mock_signal_handlers: MagicMock,
+        mock_prepare: MagicMock,
+        mock_sandbox_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """on_output callback flushes sys.stdout after each write."""
+        from airut.sandbox_cli import _SandboxCliConfig
+
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine")
+
+        mock_prepare.return_value = PreparedSecrets(
+            env_vars={}, replacements=SecretReplacements()
+        )
+
+        mock_sandbox = MagicMock()
+        mock_sandbox_cls.return_value = mock_sandbox
+        mock_sandbox.ensure_image.return_value = "img:latest"
+
+        mock_task = MagicMock()
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
+        )
+        mock_sandbox.create_command_task.return_value = mock_task
+
+        args = self._make_args(dockerfile=dockerfile)
+        with patch("airut.sandbox_cli.sys") as mock_sys:
+            mock_sys.stdout = MagicMock()
+            mock_sys.stderr = MagicMock()
+            _execute(args, _SandboxCliConfig(network_sandbox=False))
+
+        # Extract the on_output callback and invoke it
+        execute_call = mock_task.execute.call_args
+        on_output = execute_call.kwargs["on_output"]
+        assert on_output is not None
+
+        with patch("airut.sandbox_cli.sys") as mock_sys:
+            mock_sys.stdout = MagicMock()
+            on_output("hello\n")
+            mock_sys.stdout.write.assert_called_once_with("hello\n")
+            mock_sys.stdout.flush.assert_called_once()
+
+    @patch("airut.sandbox_cli.Sandbox")
+    @patch("airut.sandbox_cli.prepare_secrets")
+    @patch("airut.sandbox_cli._install_signal_handlers")
+    def test_on_stderr_flushes_stderr(
+        self,
+        mock_signal_handlers: MagicMock,
+        mock_prepare: MagicMock,
+        mock_sandbox_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """on_stderr callback flushes sys.stderr after each write."""
+        from airut.sandbox_cli import _SandboxCliConfig
+
+        dockerfile = tmp_path / "Dockerfile"
+        dockerfile.write_text("FROM alpine")
+
+        mock_prepare.return_value = PreparedSecrets(
+            env_vars={}, replacements=SecretReplacements()
+        )
+
+        mock_sandbox = MagicMock()
+        mock_sandbox_cls.return_value = mock_sandbox
+        mock_sandbox.ensure_image.return_value = "img:latest"
+
+        mock_task = MagicMock()
+        mock_task.execute = AsyncMock(
+            return_value=CommandResult(
+                exit_code=0,
+                stdout="",
+                stderr="",
+                duration_ms=50,
+                timed_out=False,
+            )
+        )
+        mock_sandbox.create_command_task.return_value = mock_task
+
+        args = self._make_args(dockerfile=dockerfile)
+        with patch("airut.sandbox_cli.sys") as mock_sys:
+            mock_sys.stdout = MagicMock()
+            mock_sys.stderr = MagicMock()
+            _execute(args, _SandboxCliConfig(network_sandbox=False))
+
+        # Extract the on_stderr callback and invoke it
+        execute_call = mock_task.execute.call_args
+        on_stderr = execute_call.kwargs["on_stderr"]
+        assert on_stderr is not None
+
+        with patch("airut.sandbox_cli.sys") as mock_sys:
+            mock_sys.stderr = MagicMock()
+            on_stderr("warning\n")
+            mock_sys.stderr.write.assert_called_once_with("warning\n")
+            mock_sys.stderr.flush.assert_called_once()
+
 
 # -------------------------------------------------------------------
 # _make_network_line_callback
