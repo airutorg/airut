@@ -220,14 +220,11 @@ async def run_container(
 
     start_time = time.time()
 
-    # Claude Code can emit single JSON lines well over the default 64 KiB
-    # asyncio StreamReader limit, so raise it to 10 MiB.
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        limit=10 * 1024 * 1024,
     )
 
     # Track process PID for stop()
@@ -251,11 +248,33 @@ async def run_container(
             lines: list[str],
             callback: Callable[[str], None] | None,
         ) -> None:
-            async for raw_line in stream:
-                line = raw_line.decode("utf-8", errors="replace")
-                lines.append(line)
-                if callback is not None:
-                    callback(line)
+            # Use fixed-size read() instead of readline() so that
+            # individual lines are not constrained by the asyncio
+            # StreamReader buffer limit.  Complete lines (including the
+            # trailing newline) are delivered as they arrive; any
+            # remaining data after EOF is flushed as a final
+            # unterminated line.
+            buf = bytearray()
+            while True:
+                chunk = await stream.read(65536)
+                if not chunk:
+                    if buf:
+                        line = buf.decode("utf-8", errors="replace")
+                        lines.append(line)
+                        if callback is not None:
+                            callback(line)
+                    break
+                buf.extend(chunk)
+                while True:
+                    pos = buf.find(b"\n")
+                    if pos == -1:
+                        break
+                    raw_line = bytes(buf[: pos + 1])
+                    del buf[: pos + 1]
+                    line = raw_line.decode("utf-8", errors="replace")
+                    lines.append(line)
+                    if callback is not None:
+                        callback(line)
 
         async def _run() -> None:
             # stdout/stderr are always set because we pass PIPE above
