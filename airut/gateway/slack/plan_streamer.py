@@ -155,7 +155,7 @@ class SlackPlanStreamer:
             self._post_or_update(self._last_text)
 
 
-def _build_blocks(text: str) -> list[dict[str, object]]:
+def _build_blocks(text: str) -> list[dict[str, str | dict[str, str]]]:
     """Build Slack blocks for plan text, respecting size limits.
 
     A single ``section`` block supports up to 3000 characters.  If
@@ -176,7 +176,7 @@ def _build_blocks(text: str) -> list[dict[str, object]]:
             }
         ]
 
-    blocks: list[dict[str, object]] = []
+    blocks: list[dict[str, str | dict[str, str]]] = []
     current = ""
 
     for line in text.split("\n"):

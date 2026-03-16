@@ -7,6 +7,7 @@
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -24,9 +25,9 @@ from airut.conversation.conversation_store import (
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
-def _make_reply(**overrides: object) -> ReplySummary:
+def _make_reply(**overrides: Any) -> ReplySummary:
     """Create a ReplySummary with sensible defaults."""
-    defaults: dict[str, object] = {
+    defaults: dict[str, Any] = {
         "session_id": "session-1",
         "timestamp": "2026-01-15T12:00:00+00:00",
         "duration_ms": 5000,
@@ -36,7 +37,7 @@ def _make_reply(**overrides: object) -> ReplySummary:
         "usage": Usage(input_tokens=100, output_tokens=50),
     }
     defaults.update(overrides)
-    return ReplySummary(**defaults)  # type: ignore[arg-type]
+    return ReplySummary(**defaults)
 
 
 # ── ReplySummary dataclass tests ─────────────────────────────────────

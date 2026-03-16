@@ -21,6 +21,7 @@ import signal
 import threading
 import time
 import traceback
+import types
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, replace
@@ -187,7 +188,7 @@ class GatewayService:
         self._conv_repo_map: dict[str, str] = {}
 
         # Active tasks for stop functionality
-        self._active_tasks: dict[str, object] = {}
+        self._active_tasks: dict[str, AgentTask] = {}
         self._active_tasks_lock = threading.Lock()
 
         # Dashboard components — versioned state
@@ -573,7 +574,7 @@ class GatewayService:
         with self._active_tasks_lock:
             task = self._active_tasks.get(conversation_id)
         if task is not None:
-            return task.stop()  # type: ignore[union-attr]
+            return task.stop()
         logger.warning(
             "No active task found for conversation %s", conversation_id
         )
@@ -1041,7 +1042,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.exception("Failed to initialize service: %s", e)
         return 2
 
-    def shutdown_handler(signum: int, frame: object) -> None:
+    def shutdown_handler(signum: int, frame: types.FrameType | None) -> None:
         """Handle shutdown signals."""
         logger.info("Received signal %d, initiating shutdown...", signum)
         service.stop()

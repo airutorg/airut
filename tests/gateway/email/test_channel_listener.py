@@ -7,6 +7,7 @@
 
 from email.message import Message
 from email.parser import BytesParser
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,9 +18,9 @@ from airut.gateway.email.channel_listener import EmailChannelListener
 from airut.gateway.email.listener import IMAPConnectionError, IMAPIdleError
 
 
-def _make_config(**overrides: object) -> EmailChannelConfig:
+def _make_config(**overrides: Any) -> EmailChannelConfig:
     """Build an EmailChannelConfig with test defaults."""
-    defaults: dict[str, object] = {
+    defaults: dict[str, Any] = {
         "imap_server": "imap.example.com",
         "imap_port": 993,
         "smtp_server": "smtp.example.com",
@@ -31,7 +32,7 @@ def _make_config(**overrides: object) -> EmailChannelConfig:
         "trusted_authserv_id": "mx.example.com",
     }
     defaults.update(overrides)
-    return EmailChannelConfig(**defaults)  # type: ignore[arg-type]
+    return EmailChannelConfig(**defaults)
 
 
 def _make_message(subject: str = "Test") -> Message:
@@ -59,14 +60,14 @@ def _make_polling_listener() -> tuple[EmailChannelListener, MagicMock]:
 
 
 def _make_idle_listener(
-    **overrides: object,
+    **overrides: Any,
 ) -> tuple[EmailChannelListener, MagicMock]:
     """Create a listener configured for IDLE mode.
 
     Returns:
         Tuple of (listener, mock_email_listener).
     """
-    config_kwargs: dict[str, object] = {
+    config_kwargs: dict[str, Any] = {
         "use_imap_idle": True,
         "idle_reconnect_interval_seconds": 99999,
     }

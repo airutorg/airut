@@ -31,6 +31,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import types
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,7 +60,7 @@ from airut.sandbox import (
 )
 from airut.sandbox._image_cache import ImageCache
 from airut.sandbox.task import CommandTask
-from airut.yaml_env import EnvVar, make_env_loader, raw_resolve
+from airut.yaml_env import EnvVar, YamlValue, make_env_loader, raw_resolve
 
 
 logger = logging.getLogger(__name__)
@@ -100,7 +101,7 @@ class _SandboxCliConfig:
     resource_limits: ResourceLimits = field(default_factory=ResourceLimits)
 
 
-def _require_env(value: object, path: str) -> str:
+def _require_env(value: YamlValue, path: str) -> str:
     """Resolve an ``!env`` value, failing closed on missing vars.
 
     Args:
@@ -151,7 +152,7 @@ def _load_config(config_path: Path) -> _SandboxCliConfig:
     if not isinstance(raw, dict):
         raise _ConfigError(f"Config file must be a YAML mapping: {config_path}")
 
-    cfg = cast(dict[str, object], raw)
+    cfg = cast(dict[str, YamlValue], raw)
     return _SandboxCliConfig(
         env=_parse_env(cfg.get("env")),
         pass_env=_parse_pass_env(cfg.get("pass_env")),
@@ -164,7 +165,7 @@ def _load_config(config_path: Path) -> _SandboxCliConfig:
     )
 
 
-def _parse_env(raw: object) -> dict[str, str]:
+def _parse_env(raw: YamlValue) -> dict[str, str]:
     """Parse the ``env:`` section (static key-value pairs).
 
     Values may use ``!env`` tags, which are resolved here.
@@ -173,7 +174,7 @@ def _parse_env(raw: object) -> dict[str, str]:
         return {}
     if not isinstance(raw, dict):
         raise _ConfigError("'env' must be a mapping")
-    d = cast(dict[str, object], raw)
+    d = cast(dict[str, YamlValue], raw)
     result: dict[str, str] = {}
     for k, v in d.items():
         key = str(k)
@@ -181,7 +182,7 @@ def _parse_env(raw: object) -> dict[str, str]:
     return result
 
 
-def _parse_pass_env(raw: object) -> list[str]:
+def _parse_pass_env(raw: YamlValue) -> list[str]:
     """Parse the ``pass_env:`` section (list of env var names)."""
     if raw is None:
         return []
@@ -190,14 +191,14 @@ def _parse_pass_env(raw: object) -> list[str]:
     return [str(item) for item in raw]
 
 
-def _parse_masked_secrets(raw: object) -> list[MaskedSecret]:
+def _parse_masked_secrets(raw: YamlValue) -> list[MaskedSecret]:
     """Parse the ``masked_secrets:`` section."""
     if raw is None:
         return []
     if not isinstance(raw, dict):
         raise _ConfigError("'masked_secrets' must be a mapping")
 
-    d = cast(dict[str, object], raw)
+    d = cast(dict[str, YamlValue], raw)
     result: list[MaskedSecret] = []
     for name, config in d.items():
         name = str(name)
@@ -206,7 +207,7 @@ def _parse_masked_secrets(raw: object) -> list[MaskedSecret]:
         if not isinstance(config, dict):
             raise _ConfigError(f"{path} must be a mapping")
 
-        c = cast(dict[str, object], config)
+        c = cast(dict[str, YamlValue], config)
         value = _require_env(c.get("value"), f"{path}.value")
 
         raw_scopes = c.get("scopes")
@@ -231,14 +232,14 @@ def _parse_masked_secrets(raw: object) -> list[MaskedSecret]:
     return result
 
 
-def _parse_signing_credentials(raw: object) -> list[SigningCredential]:
+def _parse_signing_credentials(raw: YamlValue) -> list[SigningCredential]:
     """Parse the ``signing_credentials:`` section."""
     if raw is None:
         return []
     if not isinstance(raw, dict):
         raise _ConfigError("'signing_credentials' must be a mapping")
 
-    d = cast(dict[str, object], raw)
+    d = cast(dict[str, YamlValue], raw)
     result: list[SigningCredential] = []
     for name, config in d.items():
         name = str(name)
@@ -247,7 +248,7 @@ def _parse_signing_credentials(raw: object) -> list[SigningCredential]:
         if not isinstance(config, dict):
             raise _ConfigError(f"{path} must be a mapping")
 
-        c = cast(dict[str, object], config)
+        c = cast(dict[str, YamlValue], config)
         cred_type = c.get("type")
         if cred_type != "aws-sigv4":
             raise _ConfigError(
@@ -307,7 +308,7 @@ def _parse_signing_credentials(raw: object) -> list[SigningCredential]:
     return result
 
 
-def _parse_network_sandbox(raw: object) -> bool:
+def _parse_network_sandbox(raw: YamlValue) -> bool:
     """Parse the ``network_sandbox:`` field (default True)."""
     if raw is None:
         return True
@@ -321,14 +322,14 @@ def _parse_network_sandbox(raw: object) -> bool:
     raise _ConfigError(f"'network_sandbox' must be a boolean, got {raw!r}")
 
 
-def _parse_resource_limits(raw: object) -> ResourceLimits:
+def _parse_resource_limits(raw: YamlValue) -> ResourceLimits:
     """Parse the ``resource_limits:`` section."""
     if raw is None:
         return ResourceLimits()
     if not isinstance(raw, dict):
         raise _ConfigError("'resource_limits' must be a mapping")
 
-    d = cast(dict[str, object], raw)
+    d = cast(dict[str, YamlValue], raw)
     raw_timeout = d.get("timeout")
     raw_memory = d.get("memory")
     raw_cpus = d.get("cpus")
@@ -1164,16 +1165,14 @@ def _execute(args: argparse.Namespace, config: _SandboxCliConfig) -> int:
 # -------------------------------------------------------------------
 
 
-def _install_signal_handlers(task: object) -> None:
+def _install_signal_handlers(task: CommandTask) -> None:
     """Forward SIGTERM and SIGINT to the container.
 
     Args:
         task: CommandTask instance with a ``stop()`` method.
     """
-    if not isinstance(task, CommandTask):
-        return
 
-    def handler(signum: int, frame: object) -> None:
+    def handler(signum: int, frame: types.FrameType | None) -> None:
         logger.info("Received signal %d, stopping task", signum)
         task.stop()
 

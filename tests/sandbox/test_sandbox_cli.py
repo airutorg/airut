@@ -11,8 +11,9 @@ import argparse
 import logging
 import signal
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1179,12 +1180,17 @@ class TestInstallSignalHandlers:
 
     def test_handler_calls_stop(self) -> None:
         """Installed handler calls task.stop() on signal."""
+        import types
+
         from airut.sandbox.task import CommandTask
 
         mock_task = MagicMock(spec=CommandTask)
-        handlers: dict[int, object] = {}
+        handlers: dict[int, Callable[[int, types.FrameType | None], None]] = {}
 
-        def capture_handler(signum: int, handler: object) -> None:
+        def capture_handler(
+            signum: int,
+            handler: Callable[[int, types.FrameType | None], None],
+        ) -> None:
             handlers[signum] = handler
 
         with patch(
@@ -1194,15 +1200,8 @@ class TestInstallSignalHandlers:
 
         # Call the SIGTERM handler
         handler = handlers[signal.SIGTERM]
-        handler(signal.SIGTERM, None)  # type: ignore[operator]
+        handler(signal.SIGTERM, None)
         mock_task.stop.assert_called_once()
-
-    def test_skips_non_command_task(self) -> None:
-        """Non-CommandTask instances are silently skipped."""
-        mock_task = MagicMock()  # Not spec'd as CommandTask
-        with patch("airut.sandbox_cli.signal.signal") as mock_signal:
-            _install_signal_handlers(mock_task)
-            mock_signal.assert_not_called()
 
 
 # -------------------------------------------------------------------
@@ -1285,10 +1284,10 @@ class TestExecute:
         self,
         command: list[str] | None = None,
         tmp_path: Path | None = None,
-        **overrides: object,
+        **overrides: Any,
     ) -> argparse.Namespace:
         """Create a minimal args Namespace for testing _execute."""
-        defaults: dict[str, object] = {
+        defaults: dict[str, Any] = {
             "command": command if command is not None else ["echo", "hello"],
             "dockerfile": None,
             "context_dir": None,
@@ -2350,9 +2349,9 @@ class TestExecute:
         mock_stream = MagicMock()
 
         async def _fake_execute(
-            command: object, **kwargs: object
+            command: list[str], **kwargs: Any
         ) -> CommandResult:
-            callback = cast(Any, kwargs[callback_kwarg])
+            callback = kwargs[callback_kwarg]
             assert callback is not None
             callback(line)
             return CommandResult(
