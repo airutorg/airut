@@ -3,21 +3,12 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Usage statistics extraction from Claude output.
+"""Usage statistics for Claude output.
 
-This module handles:
-- UsageStats dataclass for tracking costs and tool usage
-- Usage statistics extraction from typed Claude streaming events
+Provides the UsageStats dataclass for tracking costs and tool usage.
 """
 
-import logging
 from dataclasses import dataclass
-
-from airut.claude_output import extract_result_summary
-from airut.claude_output.types import EventType, StreamEvent, ToolUseBlock
-
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -67,39 +58,3 @@ class UsageStats:
 
         # Use middle dot separator to avoid markdown table interpretation
         return " · ".join(parts)
-
-
-def extract_usage_stats(
-    events: list[StreamEvent],
-    *,
-    is_subscription: bool = False,
-) -> UsageStats:
-    """Extract usage statistics from typed streaming events.
-
-    Args:
-        events: Typed streaming events from Claude execution.
-        is_subscription: Whether the user is on a subscription plan.
-
-    Returns:
-        UsageStats with extracted statistics.
-    """
-    stats = UsageStats(is_subscription=is_subscription)
-
-    if not events:
-        return stats
-
-    summary = extract_result_summary(events)
-    if summary is not None:
-        stats.total_cost_usd = summary.total_cost_usd
-
-    for event in events:
-        if event.event_type != EventType.ASSISTANT:
-            continue
-        for block in event.content_blocks:
-            if isinstance(block, ToolUseBlock):
-                if block.tool_name == "WebSearch":
-                    stats.web_search_requests += 1
-                elif block.tool_name == "WebFetch":
-                    stats.web_fetch_requests += 1
-
-    return stats

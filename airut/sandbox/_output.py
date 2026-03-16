@@ -5,135 +5,319 @@
 
 """Output parsing integration for the sandbox.
 
-Bridges between the sandbox execution and the claude_output library
-for streaming JSON event parsing and result classification.
+Provides ``ExecutionAccumulator``, a stateful parser that processes
+streaming events and raw output lines during execution.  After the
+container exits, ``build_result()`` returns a fully populated
+``ExecutionResult`` — no re-reading from disk or second pass needed.
 """
 
 from __future__ import annotations
 
-from airut.claude_output import (
-    extract_error_summary as _extract_error_summary,
+import logging
+from dataclasses import dataclass
+from typing import Any
+
+from airut.claude_output.types import (
+    _KNOWN_USAGE_KEYS,
+    EventType,
+    StreamEvent,
+    TextBlock,
+    ToolUseBlock,
+    Usage,
 )
-from airut.claude_output import (
-    extract_response_text,
-    extract_result_summary,
-    extract_session_id,
-    parse_stream_events,
-)
-from airut.claude_output.types import Usage
 from airut.sandbox.types import ExecutionResult, Outcome
 
 
-def classify_outcome(
-    stdout: str,
-    stderr: str,
-    exit_code: int,
-    timed_out: bool,
-) -> Outcome:
-    """Classify the execution outcome from raw container output.
+logger = logging.getLogger(__name__)
 
-    Args:
-        stdout: Raw stdout from the container.
-        stderr: Raw stderr from the container.
-        exit_code: Container process exit code.
-        timed_out: Whether the container was killed by timeout.
+_ERROR_SUMMARY_MAX_LINES = 10
 
-    Returns:
-        Appropriate Outcome variant.
+
+@dataclass
+class _ResultData:
+    """Data extracted from a single result event."""
+
+    session_id: str
+    duration_ms: int
+    total_cost_usd: float
+    num_turns: int
+    is_error: bool
+    result_text: str
+    usage: Usage
+
+
+class ExecutionAccumulator:
+    """Processes streaming events to build ExecutionResult.
+
+    Incrementally accumulates metadata from streaming events and
+    raw output lines, so that no raw stdout/stderr or event lists
+    need to be retained after execution.
+
+    Three entry points, each processing a different signal source:
+
+    - ``on_event()``:  parsed StreamEvent (metadata extraction)
+    - ``on_stdout_line()``:  raw stdout line (outcome pattern detection)
+    - ``on_stderr_line()``:  raw stderr line (outcome pattern detection)
+
+    After the container exits, call ``build_result()`` with the exit
+    info to get the final ``ExecutionResult``.
     """
-    if timed_out:
-        return Outcome.TIMEOUT
 
-    if exit_code == 0:
-        return Outcome.SUCCESS
+    def __init__(self) -> None:
+        # Session ID from system/init event (fallback when no result)
+        self._init_session_id: str = ""
 
-    # Check for prompt-too-long error
-    if "Prompt is too long" in stdout:
-        return Outcome.PROMPT_TOO_LONG
+        # Result events (may be multiple — background tasks completing
+        # after the main result)
+        self._results: list[_ResultData] = []
 
-    # Check for session corruption (API 4xx errors)
-    combined = f"{stdout}\n{stderr}"
-    if "API Error: 4" in combined:
-        return Outcome.SESSION_CORRUPTED
+        # Last assistant text parts (for response_text in single-result
+        # case), all assistant text blocks (for error_summary fallback)
+        self._last_assistant_texts: list[str] = []
+        self._all_assistant_texts: list[str] = []
 
-    return Outcome.CONTAINER_FAILED
+        # Web tool counts
+        self._web_search_count: int = 0
+        self._web_fetch_count: int = 0
 
+        # Outcome flags (set during streaming, used by build_result)
+        self._saw_prompt_too_long: bool = False
+        self._saw_api_error_4: bool = False
 
-def build_execution_result(
-    stdout: str,
-    stderr: str,
-    exit_code: int,
-    timed_out: bool,
-    duration_ms: int,
-) -> ExecutionResult:
-    """Build an ExecutionResult from raw container output.
+    # ── Streaming entry points ──────────────────────────────────────
 
-    Parses streaming events, extracts metadata from the result event,
-    and classifies the outcome.
+    def on_event(self, event: StreamEvent) -> None:
+        """Process a parsed streaming event.
 
-    Args:
-        stdout: Raw stdout from the container.
-        stderr: Raw stderr from the container.
-        exit_code: Container process exit code.
-        timed_out: Whether the container was killed by timeout.
-        duration_ms: Execution duration in milliseconds.
+        Call this for each ``StreamEvent`` produced by ``parse_event()``.
+        """
+        if event.event_type == EventType.SYSTEM:
+            if event.subtype == "init" and event.session_id:
+                self._init_session_id = event.session_id
 
-    Returns:
-        Complete ExecutionResult.
-    """
-    outcome = classify_outcome(stdout, stderr, exit_code, timed_out)
+        elif event.event_type == EventType.ASSISTANT:
+            self._process_assistant(event)
 
-    # Parse events from stdout
-    events = parse_stream_events(stdout) if stdout.strip() else []
+        elif event.event_type == EventType.RESULT:
+            self._process_result(event)
 
-    # Extract metadata from events
-    summary = extract_result_summary(events)
-    session_id = ""
-    response_text = ""
-    total_cost_usd = 0.0
-    num_turns = 0
-    usage = Usage()
+    def on_stdout_line(self, line: str) -> None:
+        """Check raw stdout line for outcome patterns.
 
-    if summary is not None:
-        session_id = summary.session_id
-        total_cost_usd = summary.total_cost_usd
-        num_turns = summary.num_turns
-        usage = summary.usage
-        duration_ms = summary.duration_ms or duration_ms
+        Does NOT accumulate the line — only sets detection flags.
+        """
+        if "Prompt is too long" in line:
+            self._saw_prompt_too_long = True
+        if "API Error: 4" in line:
+            self._saw_api_error_4 = True
 
-    if not session_id:
-        session_id = extract_session_id(events) or ""
+    def on_stderr_line(self, line: str) -> None:
+        """Check raw stderr line for outcome patterns.
 
-    if outcome == Outcome.SUCCESS:
-        response_text = extract_response_text(events)
+        Does NOT accumulate the line — only sets detection flags.
+        """
+        if "API Error: 4" in line:
+            self._saw_api_error_4 = True
 
-    return ExecutionResult(
-        outcome=outcome,
-        session_id=session_id,
-        response_text=response_text,
-        events=events,
-        duration_ms=duration_ms,
-        total_cost_usd=total_cost_usd,
-        num_turns=num_turns,
-        usage=usage,
-        stdout=stdout,
-        stderr=stderr,
-        exit_code=exit_code,
-    )
+    # ── Result building ─────────────────────────────────────────────
 
+    def build_result(
+        self,
+        *,
+        exit_code: int,
+        timed_out: bool,
+        duration_ms: int,
+    ) -> ExecutionResult:
+        """Build final ExecutionResult from accumulated state.
 
-def extract_error_summary(stdout: str, max_lines: int = 10) -> str | None:
-    """Extract a human-readable error summary from streaming JSON.
+        Args:
+            exit_code: Container process exit code.
+            timed_out: Whether the container was killed by timeout.
+            duration_ms: Wall-clock execution duration in milliseconds.
 
-    Args:
-        stdout: Raw stdout containing streaming JSON.
-        max_lines: Maximum number of lines to include in the summary.
+        Returns:
+            Fully populated ExecutionResult.
+        """
+        outcome = self._classify_outcome(exit_code, timed_out)
 
-    Returns:
-        Formatted error summary string, or None if no useful info.
-    """
-    if not stdout or not stdout.strip():
+        # Merge result event data
+        session_id = ""
+        total_cost_usd = 0.0
+        num_turns = 0
+        is_error = False
+        usage = Usage()
+
+        if self._results:
+            last = self._results[-1]
+            session_id = last.session_id
+            total_cost_usd = last.total_cost_usd
+            is_error = last.is_error
+            usage = last.usage
+
+            # duration_ms and num_turns are per-segment; sum across all
+            # results.  total_cost_usd and usage are cumulative (last).
+            result_duration = sum(r.duration_ms for r in self._results)
+            num_turns = sum(r.num_turns for r in self._results)
+            duration_ms = result_duration or duration_ms
+
+        if not session_id:
+            session_id = self._init_session_id
+
+        response_text = (
+            self._build_response_text() if outcome == Outcome.SUCCESS else ""
+        )
+
+        error_summary = (
+            self._build_error_summary() if outcome != Outcome.SUCCESS else None
+        )
+
+        return ExecutionResult(
+            outcome=outcome,
+            session_id=session_id,
+            response_text=response_text,
+            duration_ms=duration_ms,
+            total_cost_usd=total_cost_usd,
+            num_turns=num_turns,
+            is_error=is_error,
+            usage=usage,
+            web_search_count=self._web_search_count,
+            web_fetch_count=self._web_fetch_count,
+            error_summary=error_summary,
+        )
+
+    # ── Internal helpers ────────────────────────────────────────────
+
+    def _process_assistant(self, event: StreamEvent) -> None:
+        """Extract text blocks and web tool counts from assistant event."""
+        text_parts = [
+            block.text
+            for block in event.content_blocks
+            if isinstance(block, TextBlock)
+        ]
+        if text_parts:
+            self._last_assistant_texts = text_parts
+        for text in text_parts:
+            stripped = text.strip()
+            if stripped:
+                self._all_assistant_texts.append(stripped)
+
+        for block in event.content_blocks:
+            if isinstance(block, ToolUseBlock):
+                if block.tool_name == "WebSearch":
+                    self._web_search_count += 1
+                elif block.tool_name == "WebFetch":
+                    self._web_fetch_count += 1
+
+    def _process_result(self, event: StreamEvent) -> None:
+        """Extract metadata from a result event."""
+        extra = event.extra
+        result_text = _extract_result_text(extra.get("result"))
+
+        usage_dict = extra.get("usage", {})
+        usage_extra = {
+            k: v for k, v in usage_dict.items() if k not in _KNOWN_USAGE_KEYS
+        }
+
+        self._results.append(
+            _ResultData(
+                session_id=event.session_id,
+                duration_ms=extra.get("duration_ms", 0),
+                total_cost_usd=extra.get("total_cost_usd", 0.0),
+                num_turns=extra.get("num_turns", 0),
+                is_error=extra.get("is_error", False),
+                result_text=result_text,
+                usage=Usage(
+                    input_tokens=usage_dict.get("input_tokens", 0),
+                    output_tokens=usage_dict.get("output_tokens", 0),
+                    cache_creation_input_tokens=usage_dict.get(
+                        "cache_creation_input_tokens", 0
+                    ),
+                    cache_read_input_tokens=usage_dict.get(
+                        "cache_read_input_tokens", 0
+                    ),
+                    extra=usage_extra,
+                ),
+            )
+        )
+
+    def _classify_outcome(self, exit_code: int, timed_out: bool) -> Outcome:
+        """Classify the execution outcome from flags and exit info."""
+        if timed_out:
+            return Outcome.TIMEOUT
+        if exit_code == 0:
+            return Outcome.SUCCESS
+        if self._saw_prompt_too_long:
+            return Outcome.PROMPT_TOO_LONG
+        if self._saw_api_error_4:
+            return Outcome.SESSION_CORRUPTED
+        return Outcome.CONTAINER_FAILED
+
+    def _build_response_text(self) -> str:
+        """Build response text from accumulated data.
+
+        When multiple result events exist (background tasks completing
+        after the main result), concatenates all result texts.  For a
+        single result, prefers the last assistant event's text blocks
+        and falls back to the result event.
+        """
+        if len(self._results) > 1:
+            texts = [r.result_text for r in self._results if r.result_text]
+            if texts:
+                return "\n\n".join(texts)
+
+        # Single result (or none): try last assistant text first
+        if self._last_assistant_texts:
+            return "\n\n".join(self._last_assistant_texts)
+
+        # Fall back to result event text
+        if self._results and self._results[-1].result_text:
+            return self._results[-1].result_text
+
+        return "No output received from Claude."
+
+    def _build_error_summary(self) -> str | None:
+        """Build error summary from accumulated data.
+
+        Prefers the last result event's text.  Falls back to
+        concatenated text blocks from assistant messages.  Truncates
+        to ``_ERROR_SUMMARY_MAX_LINES`` (keeping the last lines).
+        """
+        # Prefer result event text
+        for r in reversed(self._results):
+            if r.result_text:
+                return _truncate_lines(r.result_text, _ERROR_SUMMARY_MAX_LINES)
+
+        # Fall back to assistant text
+        if self._all_assistant_texts:
+            combined = "\n".join(self._all_assistant_texts)
+            return _truncate_lines(combined, _ERROR_SUMMARY_MAX_LINES)
+
         return None
 
-    events = parse_stream_events(stdout)
-    return _extract_error_summary(events, max_lines=max_lines)
+
+def _extract_result_text(result: Any) -> str:
+    """Extract text from a result event's ``result`` field.
+
+    Handles both string and dict (content-block) formats.
+    """
+    if isinstance(result, str) and result:
+        return result
+    if isinstance(result, dict) and "content" in result:
+        content = result["content"]
+        if isinstance(content, list):
+            text_parts = [
+                block["text"]
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            ]
+            if text_parts:
+                return "\n\n".join(text_parts)
+    return ""
+
+
+def _truncate_lines(text: str, max_lines: int) -> str:
+    """Keep only the last *max_lines* lines of *text*."""
+    lines = text.strip().split("\n")
+    if len(lines) > max_lines:
+        lines = lines[-max_lines:]
+    return "\n".join(lines)

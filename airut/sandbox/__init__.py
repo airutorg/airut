@@ -17,7 +17,6 @@ Two task types are provided:
 """
 
 from airut.sandbox._image_cache import ImageBuildError
-from airut.sandbox._output import extract_error_summary
 from airut.sandbox._proxy import ProxyError
 from airut.sandbox.event_log import EVENTS_FILE_NAME, EventLog
 from airut.sandbox.network_log import NETWORK_LOG_FILENAME, NetworkLog
@@ -82,6 +81,4 @@ __all__ = [
     # errors
     "ImageBuildError",
     "ProxyError",
-    # output
-    "extract_error_summary",
 ]

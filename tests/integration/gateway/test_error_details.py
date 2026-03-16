@@ -132,9 +132,9 @@ class TestErrorSummaryInResponse:
     ) -> None:
         """Error email body includes extract_error_summary output.
 
-        When execution fails, message_processing.py:610-614 calls
-        extract_error_summary(result.events) and appends the result
-        to the error email body under "Claude output:".
+        When execution fails, message_processing.py uses
+        result.error_summary and appends the result to the error
+        email body under "Claude output:".
 
         Mock code emits an assistant event with diagnostic text,
         then a result event with is_error=True. The error summary

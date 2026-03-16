@@ -110,12 +110,8 @@ class TestAgentTaskExecute:
         result = await task.execute("Test prompt")
 
         assert result.outcome == Outcome.SUCCESS
-        assert len(result.events) == 3
-        assert result.events[0].event_type == EventType.SYSTEM
-        assert result.events[1].event_type == EventType.ASSISTANT
-        assert result.events[2].event_type == EventType.RESULT
-        assert result.exit_code == 0
         assert result.session_id == "test-session-123"
+        assert result.response_text == "I've completed the task."
 
     async def test_execute_timeout(
         self,
@@ -148,7 +144,6 @@ class TestAgentTaskExecute:
         result = await task.execute("Test prompt")
 
         assert result.outcome == Outcome.CONTAINER_FAILED
-        assert result.exit_code == 1
 
     async def test_execute_without_session_id(
         self,

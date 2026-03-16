@@ -26,10 +26,7 @@ from airut.gateway.service.message_processing import (
     process_message,
 )
 from airut.gateway.service.repo_handler import RepoHandler
-from airut.gateway.service.usage_stats import (
-    UsageStats,
-    extract_usage_stats,
-)
+from airut.gateway.service.usage_stats import UsageStats
 
 
 __all__ = [
@@ -44,5 +41,4 @@ __all__ = [
     "process_message",
     # usage_stats
     "UsageStats",
-    "extract_usage_stats",
 ]

@@ -192,7 +192,7 @@ class TestCommandTaskExecute:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """execute() does not implicitly write to sys.stdout."""
+        """execute() does not write to sys.stdout when no on_output given."""
         task = _make_command_task(tmp_path)
 
         calls: list[dict] = []
@@ -207,8 +207,9 @@ class TestCommandTaskExecute:
 
         await task.execute(["cmd"])
 
-        # on_stdout_line should be None when no on_output provided
-        assert calls[0]["on_stdout_line"] is None
+        # on_stdout_line is always set (for accumulation), but calling
+        # it should not write to sys.stdout when no on_output was given
+        assert calls[0]["on_stdout_line"] is not None
 
     async def test_stdin_not_sent(
         self,

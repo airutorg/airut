@@ -16,7 +16,6 @@ from airut.claude_output import (
 from airut.gateway.service import (
     UsageStats,
     capture_version_info,
-    extract_usage_stats,
 )
 from airut.version import GitVersionInfo
 
@@ -285,82 +284,3 @@ class TestExtractResponseText:
             }
         )
         assert extract_response_text(events) == "Done"
-
-
-class TestExtractUsageStats:
-    def test_empty_events(self) -> None:
-        stats = extract_usage_stats([])
-        assert stats.total_cost_usd is None
-
-    def test_extracts_cost(self) -> None:
-        events = _parse(
-            {
-                "type": "result",
-                "subtype": "success",
-                "session_id": "s1",
-                "total_cost_usd": 0.05,
-                "num_turns": 1,
-                "is_error": False,
-                "usage": {},
-                "result": "done",
-            }
-        )
-        stats = extract_usage_stats(events)
-        assert stats.total_cost_usd == 0.05
-
-    def test_counts_web_search_and_fetch(self) -> None:
-        events = _parse(
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "id": "t1",
-                            "name": "WebSearch",
-                            "input": {},
-                        },
-                        {
-                            "type": "tool_use",
-                            "id": "t2",
-                            "name": "WebFetch",
-                            "input": {},
-                        },
-                        {
-                            "type": "tool_use",
-                            "id": "t3",
-                            "name": "WebSearch",
-                            "input": {},
-                        },
-                        {
-                            "type": "tool_use",
-                            "id": "t4",
-                            "name": "Bash",
-                            "input": {},
-                        },
-                    ]
-                },
-            }
-        )
-        stats = extract_usage_stats(events)
-        assert stats.web_search_requests == 2
-        assert stats.web_fetch_requests == 1
-
-    def test_subscription_flag_from_container_env(self) -> None:
-        stats = extract_usage_stats([], is_subscription=True)
-        assert stats.is_subscription is True
-
-    def test_no_subscription_without_oauth(self) -> None:
-        stats = extract_usage_stats([])
-        assert stats.is_subscription is False
-
-    def test_skips_non_assistant_events(self) -> None:
-        events = _parse(
-            {
-                "type": "system",
-                "subtype": "init",
-                "session_id": "s1",
-            }
-        )
-        stats = extract_usage_stats(events)
-        assert stats.web_search_requests == 0

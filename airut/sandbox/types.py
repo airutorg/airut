@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
-from airut.claude_output import StreamEvent
 from airut.claude_output.types import Usage
 
 
@@ -74,27 +73,27 @@ class ExecutionResult:
         outcome: Classification of the execution result.
         session_id: Claude session ID (from result or init event).
         response_text: Extracted response text from Claude output.
-        events: Parsed streaming events from Claude.
         duration_ms: Execution duration in milliseconds.
         total_cost_usd: Total cost in USD.
         num_turns: Number of agentic turns.
+        is_error: Whether Claude reported an error in the result event.
         usage: Token usage breakdown.
-        stdout: Raw stdout from the container.
-        stderr: Raw stderr from the container.
-        exit_code: Container process exit code.
+        web_search_count: Number of WebSearch tool uses.
+        web_fetch_count: Number of WebFetch tool uses.
+        error_summary: Human-readable error summary, or None.
     """
 
     outcome: Outcome
     session_id: str
     response_text: str
-    events: list[StreamEvent]
     duration_ms: int
     total_cost_usd: float
     num_turns: int
+    is_error: bool
     usage: Usage
-    stdout: str
-    stderr: str
-    exit_code: int
+    web_search_count: int
+    web_fetch_count: int
+    error_summary: str | None
 
 
 # ---------------------------------------------------------------------------

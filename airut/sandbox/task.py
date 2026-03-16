@@ -26,7 +26,7 @@ from typing import Protocol
 from airut.allowlist import Allowlist, serialize_allowlist_json
 from airut.claude_output import StreamEvent, parse_event
 from airut.sandbox._network import get_network_args
-from airut.sandbox._output import build_execution_result
+from airut.sandbox._output import ExecutionAccumulator
 from airut.sandbox._proxy import ProxyManager, _ContextProxy
 from airut.sandbox._run_container import (
     _ProcessTracker,
@@ -235,10 +235,10 @@ class AgentTask:
         2. Optionally start network log tailing
         3. Build podman command with mounts, env, network args
         4. Run container with prompt on stdin
-        5. Stream events to event log and invoke callback
+        5. Stream events to accumulator, event log, and callback
         6. Stop network log tailing
         7. Stop proxy
-        8. Classify result and return
+        8. Build result from accumulator (no disk re-read)
 
         Args:
             prompt: User prompt to pass to Claude via stdin.
@@ -381,12 +381,21 @@ class AgentTask:
                 task_proxy.network_name, task_proxy.proxy_ip
             )
 
-        def on_stdout_line(line: str) -> None:
+        accumulator = ExecutionAccumulator()
+
+        def on_stdout_cb(line: str) -> None:
+            accumulator.on_stdout_line(line)
             event = parse_event(line)
             if event is not None:
                 self._event_log.append_event(event)
+                accumulator.on_event(event)
                 if on_event:
                     on_event(event)
+
+        def on_stderr_cb(line: str) -> None:
+            accumulator.on_stderr_line(line)
+            if on_stderr_line:
+                on_stderr_line(line)
 
         # Start network log tailing if requested
         tail_task: asyncio.Task[None] | None = None
@@ -411,8 +420,8 @@ class AgentTask:
                 network_args=network_args,
                 command=claude_cmd,
                 stdin_data=prompt,
-                on_stdout_line=on_stdout_line,
-                on_stderr_line=on_stderr_line,
+                on_stdout_line=on_stdout_cb,
+                on_stderr_line=on_stderr_cb,
                 timeout=self._resource_limits.timeout,
                 process_tracker=self._process_tracker,
             )
@@ -428,21 +437,7 @@ class AgentTask:
                 except BaseException:
                     logger.warning("Network log tailing failed", exc_info=True)
 
-        logger.debug(
-            "Full stdout (length=%d):\n%s",
-            len(raw.stdout),
-            raw.stdout,
-        )
-        if raw.stderr:
-            logger.debug(
-                "Full stderr (length=%d):\n%s",
-                len(raw.stderr),
-                raw.stderr,
-            )
-
-        return build_execution_result(
-            stdout=raw.stdout,
-            stderr=raw.stderr,
+        return accumulator.build_result(
             exit_code=raw.exit_code,
             timed_out=raw.timed_out,
             duration_ms=raw.duration_ms,
@@ -578,6 +573,20 @@ class CommandTask:
                         )
                     )
 
+                # Accumulate stdout/stderr via callbacks
+                stdout_lines: list[str] = []
+                stderr_lines: list[str] = []
+
+                def _on_stdout(line: str) -> None:
+                    stdout_lines.append(line)
+                    if on_output is not None:
+                        on_output(line)
+
+                def _on_stderr(line: str) -> None:
+                    stderr_lines.append(line)
+                    if on_stderr is not None:
+                        on_stderr(line)
+
                 try:
                     raw = await run_container(
                         container_command=self._container_command,
@@ -588,8 +597,8 @@ class CommandTask:
                         network_args=network_args,
                         command=command,
                         stdin_data=None,
-                        on_stdout_line=on_output,
-                        on_stderr_line=on_stderr,
+                        on_stdout_line=_on_stdout,
+                        on_stderr_line=_on_stderr,
                         timeout=self._resource_limits.timeout,
                         process_tracker=self._process_tracker,
                     )
@@ -611,8 +620,8 @@ class CommandTask:
 
             return CommandResult(
                 exit_code=raw.exit_code,
-                stdout=raw.stdout,
-                stderr=raw.stderr,
+                stdout="".join(stdout_lines),
+                stderr="".join(stderr_lines),
                 duration_ms=raw.duration_ms,
                 timed_out=raw.timed_out,
             )

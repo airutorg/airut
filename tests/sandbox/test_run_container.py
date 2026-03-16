@@ -612,11 +612,7 @@ class TestRunContainer:
     async def test_result_fields(self, mock_create: MagicMock) -> None:
         """run_container returns _RawResult with correct fields."""
         tracker = _ProcessTracker()
-        mock_process = _make_mock_process(
-            returncode=42,
-            stdout_data=b"output",
-            stderr_data=b"errors",
-        )
+        mock_process = _make_mock_process(returncode=42)
         mock_create.return_value = mock_process
 
         result = await run_container(
@@ -635,8 +631,6 @@ class TestRunContainer:
         )
 
         assert result.exit_code == 42
-        assert "output" in result.stdout
-        assert "errors" in result.stderr
         assert result.timed_out is False
         assert result.duration_ms >= 0
 
@@ -706,7 +700,7 @@ class TestRunContainer:
         mock_create.return_value = mock_process
 
         lines: list[str] = []
-        result = await run_container(
+        await run_container(
             container_command="podman",
             image_tag="airut:test",
             mounts=[],
@@ -723,7 +717,6 @@ class TestRunContainer:
 
         assert len(lines) == 1
         assert len(lines[0]) == 200 * 1024 + 1  # data + newline
-        assert result.stdout == lines[0]
 
     @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
     async def test_unterminated_final_line(
@@ -735,7 +728,7 @@ class TestRunContainer:
         mock_create.return_value = mock_process
 
         lines: list[str] = []
-        result = await run_container(
+        await run_container(
             container_command="podman",
             image_tag="airut:test",
             mounts=[],
@@ -753,4 +746,33 @@ class TestRunContainer:
         assert len(lines) == 2
         assert lines[0] == "line1\n"
         assert lines[1] == "partial"
-        assert result.stdout == "line1\npartial"
+
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_no_callback_no_output(self, mock_create: MagicMock) -> None:
+        """Output is silently discarded when no callback is provided."""
+        tracker = _ProcessTracker()
+        mock_process = _make_mock_process(
+            stdout_data=b"output\n",
+            stderr_data=b"errors\n",
+        )
+        mock_create.return_value = mock_process
+
+        result = await run_container(
+            container_command="podman",
+            image_tag="airut:test",
+            mounts=[],
+            env=ContainerEnv(),
+            resource_limits=ResourceLimits(),
+            network_args=[],
+            command=["cmd"],
+            stdin_data=None,
+            on_stdout_line=None,
+            on_stderr_line=None,
+            timeout=None,
+            process_tracker=tracker,
+        )
+
+        # _RawResult has no stdout/stderr fields
+        assert not hasattr(result, "stdout")
+        assert not hasattr(result, "stderr")
+        assert result.exit_code == 0
