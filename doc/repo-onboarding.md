@@ -3,6 +3,30 @@
 This guide explains how to onboard a new repository to Airut, enabling Claude
 Code interaction via email and/or Slack.
 
+<!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
+
+- [Prerequisites](#prerequisites)
+- [Example Project](#example-project)
+- [Onboarding Steps](#onboarding-steps)
+  - [1. Create `.airut/` Directory](#1-create-airut-directory)
+  - [2. Configure Repo Settings](#2-configure-repo-settings)
+  - [3. Configure Network Allowlist](#3-configure-network-allowlist)
+  - [4. Create Container Dockerfile](#4-create-container-dockerfile)
+  - [5. Write CLAUDE.md](#5-write-claudemd)
+  - [6. Configure Server](#6-configure-server)
+  - [7. Set Up Branch Protection](#7-set-up-branch-protection)
+  - [8. Set Up CI Sandbox (Recommended)](#8-set-up-ci-sandbox-recommended)
+  - [9. Test the Setup](#9-test-the-setup)
+- [Alternative: Gerrit-Based Repositories](#alternative-gerrit-based-repositories)
+- [Configuration Reference](#configuration-reference)
+- [Troubleshooting](#troubleshooting)
+  - [Container Build Failures](#container-build-failures)
+  - [Network Requests Blocked](#network-requests-blocked)
+  - [Git Authentication Failures](#git-authentication-failures)
+  - [Session Not Resuming](#session-not-resuming)
+
+<!-- mdformat-toc end -->
+
 ## Prerequisites
 
 - Airut server deployed (see [deployment.md](deployment.md))

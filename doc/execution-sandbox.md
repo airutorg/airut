@@ -9,6 +9,25 @@ for running arbitrary commands in CI pipelines and other environments. See
 [ci-sandbox.md](ci-sandbox.md) for CI usage and
 [spec/sandbox-cli.md](../spec/sandbox-cli.md) for the full CLI specification.
 
+<!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
+
+- [Threat Model](#threat-model)
+- [Isolation Properties](#isolation-properties)
+  - [Filesystem Isolation](#filesystem-isolation)
+  - [Workspace Isolation](#workspace-isolation)
+  - [Credential Isolation](#credential-isolation)
+  - [Session Metadata](#session-metadata)
+- [Network Isolation](#network-isolation)
+- [Container Runtime](#container-runtime)
+- [Resource Limits](#resource-limits)
+  - [Two-Layer Configuration](#two-layer-configuration)
+  - [cgroup v2 Requirement](#cgroup-v2-requirement)
+  - [Other Limits](#other-limits)
+- [Fail-Secure Behavior](#fail-secure-behavior)
+- [Further Reading](#further-reading)
+
+<!-- mdformat-toc end -->
+
 ## Threat Model
 
 Claude Code executes arbitrary code on behalf of the agent. Without isolation:

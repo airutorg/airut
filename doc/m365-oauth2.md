@@ -10,6 +10,21 @@ Airut uses the **OAuth2 Client Credentials flow** with the XOAUTH2 SASL
 mechanism. This authenticates as a service principal (application identity)
 rather than a user, which is the correct approach for headless/daemon services.
 
+<!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
+
+- [Prerequisites](#prerequisites)
+- [Step 1: Register the Application in Entra ID (Azure AD)](#step-1-register-the-application-in-entra-id-azure-ad)
+- [Step 2: Create a Client Secret](#step-2-create-a-client-secret)
+- [Step 3: Add API Permissions](#step-3-add-api-permissions)
+- [Step 4: Register the Service Principal in Exchange Online](#step-4-register-the-service-principal-in-exchange-online)
+- [Step 5: Grant Mailbox Permissions](#step-5-grant-mailbox-permissions)
+- [Step 6: Enable SMTP AUTH](#step-6-enable-smtp-auth)
+- [Step 7: Configure Airut](#step-7-configure-airut)
+- [Step 8: Verify](#step-8-verify)
+- [Troubleshooting OAuth2](#troubleshooting-oauth2)
+
+<!-- mdformat-toc end -->
+
 ## Prerequisites
 
 - **Global Admin** (or Application Administrator + Exchange Administrator)

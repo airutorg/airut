@@ -8,6 +8,18 @@ This guide walks through the Gerrit-specific pieces.
 Follow the [main onboarding guide](repo-onboarding.md) for the general steps,
 then apply the Gerrit-specific overrides below.
 
+<!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
+
+- [Server-Side: Git Credentials](#server-side-git-credentials)
+- [Repo Settings (`.airut/airut.yaml`)](#repo-settings-airutairutyaml)
+- [Network Allowlist](#network-allowlist)
+- [Container Setup](#container-setup)
+- [Server Configuration](#server-configuration)
+- [CLAUDE.md Adjustments](#claudemd-adjustments)
+- [Branch Protection](#branch-protection)
+
+<!-- mdformat-toc end -->
+
 ## Server-Side: Git Credentials
 
 Airut fetches from configured repositories to maintain git mirrors. For Gerrit,

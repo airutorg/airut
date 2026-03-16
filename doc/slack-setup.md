@@ -7,6 +7,32 @@ platform.
 For email setup, see [email-setup.md](email-setup.md). Both channels can run
 simultaneously for the same repository.
 
+<!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
+
+- [Prerequisites](#prerequisites)
+- [How It Works](#how-it-works)
+- [Step 1: Create the Slack App](#step-1-create-the-slack-app)
+- [Step 2: Generate Tokens](#step-2-generate-tokens)
+  - [App-Level Token (`xapp-...`)](#app-level-token-xapp-)
+  - [Bot Token (`xoxb-...`)](#bot-token-xoxb-)
+  - [App Icon (Optional)](#app-icon-optional)
+- [Step 3: Configure Airut](#step-3-configure-airut)
+- [Step 4: Test the Setup](#step-4-test-the-setup)
+- [Authorization Rules](#authorization-rules)
+  - [`workspace_members`](#workspace_members)
+  - [`user_group`](#user_group)
+  - [`user_id`](#user_id)
+  - [Combining Rules](#combining-rules)
+- [Required Scopes](#required-scopes)
+- [Troubleshooting](#troubleshooting)
+  - [Socket Mode Connection Failures](#socket-mode-connection-failures)
+  - [Authentication Failures](#authentication-failures)
+  - [User Group Rule Not Working](#user-group-rule-not-working)
+  - [Rate Limit Errors](#rate-limit-errors)
+  - [Messages Not Appearing](#messages-not-appearing)
+
+<!-- mdformat-toc end -->
+
 ## Prerequisites
 
 - Airut server deployed (see [deployment.md](deployment.md))
