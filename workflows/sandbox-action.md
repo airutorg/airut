@@ -68,8 +68,8 @@ independent development tracks:
 | Ref             | VERSION file | airut-sandbox source | Purpose                             |
 | --------------- | ------------ | -------------------- | ----------------------------------- |
 | `main`          | `main`       | `git+.../airut@main` | Development, airut repo's own CI    |
-| `v0` (branch)   | `0.16.1`     | PyPI `airut==0.16.1` | Stable release; `@v0` resolves here |
-| `v0.16.1` (tag) | `0.16.1`     | PyPI `airut==0.16.1` | Pinned version                      |
+| `v0` (branch)   | `0.17.0`     | PyPI `airut==0.17.0` | Stable release; `@v0` resolves here |
+| `v0.17.0` (tag) | `0.17.0`     | PyPI `airut==0.17.0` | Pinned version                      |
 
 **`main` is never modified during releases.** The `VERSION` file on `main`
 always contains `main`. Only `vN` branches have PyPI versions in `VERSION`.
