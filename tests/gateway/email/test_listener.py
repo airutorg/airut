@@ -1199,6 +1199,20 @@ def test_disconnect_no_warning_when_interrupted_with_error(
     assert listener.connection is None
 
 
+def test_disconnect_closes_socket_even_when_socket_raises(email_config):
+    """Test disconnect handles socket() raising during cleanup."""
+    listener = EmailListener(email_config.channels["email"])
+
+    mock_conn = MagicMock()
+    mock_conn.socket.side_effect = OSError("socket already closed")
+    listener.connection = mock_conn
+    listener._interrupted = True
+
+    listener.disconnect()
+
+    assert listener.connection is None
+
+
 def test_connect_oauth2_token_error_retries(microsoft_oauth2_email_config):
     """Test OAuth2 token errors are retried in connect()."""
     from airut.gateway.email.microsoft_oauth2 import MicrosoftOAuth2TokenError
