@@ -266,31 +266,23 @@ full specification.
 ### Signing Credentials (AWS SigV4 Re-signing)
 
 AWS credentials present a unique challenge: the secret key never appears in HTTP
-headers. Instead, it is used to compute HMAC (SigV4) or ECDSA (SigV4A)
-signatures over the request. Simple string replacement cannot work — the proxy
-must **re-sign** outbound requests with the real credentials.
+headers — it is used to compute HMAC (SigV4) or ECDSA (SigV4A) signatures over
+the request. Simple string replacement cannot work.
 
-`signing_credentials` in the server config handle this transparently:
+`signing_credentials` solve this by injecting **surrogate** AWS credentials
+(format-preserving: same AKIA/ASIA prefix, same lengths) into the container. The
+AWS SDK signs requests normally using the surrogates, and the proxy **re-signs**
+with the real credentials for scoped hosts. This works with any S3-compatible
+API (AWS, Cloudflare R2, MinIO, etc.).
 
-1. Container receives **surrogate** AWS credentials (format-preserving: same
-   AKIA/ASIA prefix, same lengths)
-2. AWS SDK in the container signs requests normally using the surrogates
-3. Proxy intercepts requests to scoped hosts, verifies the surrogate signature,
-   and re-signs with the real credentials
-4. Re-signing covers Authorization headers, presigned URLs, and chunked transfer
-   encoding (S3 `aws-chunked`)
-
-**Repo config is transparent** — it uses `!secret AWS_ACCESS_KEY_ID` just like
-any other secret. The server admin decides whether to use plain secrets or
-signing credentials; the repo config is unchanged either way.
-
-This works with any S3-compatible API (AWS, Cloudflare R2, MinIO, etc.), not
-just `*.amazonaws.com`.
+As with masked secrets, the repo config is transparent — it uses
+`!secret AWS_ACCESS_KEY_ID` just like any other secret. The server admin decides
+whether to use plain secrets or signing credentials.
 
 See
 [network-sandbox.md](network-sandbox.md#signing-credentials-aws-sigv4-re-signing)
-for an overview and
-[spec/aws-sigv4-resigning.md](../spec/aws-sigv4-resigning.md) for the full
+for the full details and
+[spec/aws-sigv4-resigning.md](../spec/aws-sigv4-resigning.md) for the
 specification.
 
 ## Dashboard Security
@@ -527,20 +519,11 @@ For example:
    paths. See [ci-sandbox.md](ci-sandbox.md) for the full setup guide.
 2. **Prevent the agent from modifying workflow files** — The agent must not be
    able to push changes to `.github/workflows/`. Two mechanisms are available:
-   - **Omit the `workflow` scope from the agent's PAT** — GitHub enforces this
-     at the git push level, rejecting any push that includes workflow file
-     changes. Use a **classic PAT** with the `repo` scope and ensure `workflow`
-     is unchecked. Existing classic PATs may have `workflow` enabled by default
-     — audit at GitHub → Settings → Developer settings → Personal access tokens.
-     (Fine-grained PATs cannot be used with a dedicated bot account because they
-     can only access repositories owned by the token's account, not repositories
-     where the account is a collaborator.)
-   - **Use a push ruleset** (Teams/Enterprise plans only) — Create a push
-     ruleset that blocks pushes modifying workflow files for all users except
-     trusted administrators. This requires a GitHub Teams or Enterprise plan.
-     See [ci-sandbox.md](ci-sandbox.md#protecting-workflow-files) for setup
-     instructions. Rulesets and PAT scope restrictions can be combined for
-     defense in depth.
+   omitting the `workflow` scope from the agent's classic PAT (GitHub enforces
+   at push time), or using a push ruleset to block workflow file changes
+   (Teams/Enterprise plans). Both can be combined for defense in depth. See
+   [ci-sandbox.md](ci-sandbox.md#1-protecting-workflow-files) for setup
+   instructions.
    - **Limitation**: This alone is not sufficient — the agent cannot modify
      workflow files, but can still modify code that workflows execute (path 2).
      Mitigation 1 (sandboxed CI) or mitigation 3 (manual triggers) is needed to

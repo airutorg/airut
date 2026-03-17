@@ -38,7 +38,7 @@ Code interaction via email and/or Slack.
 - **Dedicated GitHub account** for the agent with a properly scoped personal
   access token (see [deployment.md](deployment.md#dedicated-github-account)).
   The PAT should **not** include the `workflow` scope -- see
-  [ci-sandbox.md](ci-sandbox.md#protecting-workflow-files)
+  [ci-sandbox.md](ci-sandbox.md#1-protecting-workflow-files)
 - Claude API credentials
 
 ## Example Project
@@ -396,7 +396,7 @@ and network sandbox that the Airut gateway uses.
 
 3. Ensure the agent's PAT lacks the `workflow` scope (or add a repository
    ruleset blocking `.github/workflows/**` changes). See
-   [ci-sandbox.md](ci-sandbox.md#protecting-workflow-files).
+   [ci-sandbox.md](ci-sandbox.md#1-protecting-workflow-files).
 
 This is the recommended configuration. Without CI sandboxing, auto-triggered
 workflows that execute repository code (which most CI workflows do) allow the
