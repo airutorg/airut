@@ -9,7 +9,6 @@ import json
 import subprocess
 import urllib.error
 from importlib.metadata import PackageNotFoundError
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 from airut.version import (
@@ -444,9 +443,9 @@ class TestUpstreamVersion:
 # ── _check_pypi ────────────────────────────────────────────────────
 
 
-def _make_vi(**kwargs: Any) -> GitVersionInfo:
+def _make_vi(**kwargs: str) -> GitVersionInfo:
     """Create a GitVersionInfo with defaults."""
-    defaults: dict[str, Any] = {
+    defaults: dict[str, str] = {
         "version": "v0.8.0",
         "sha_short": "abc1234",
         "sha_full": "a" * 40,

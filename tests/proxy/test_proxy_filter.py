@@ -13,7 +13,6 @@ reimplemented copies.
 
 import json
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 from mitmproxy.http import (  # type: ignore[attr-defined]
@@ -56,7 +55,7 @@ def _flow(
     response_code: int | None = None,
     response_content: bytes = b"",
     error_msg: str | None = None,
-) -> Any:
+) -> MockHTTPFlow:
     """Build a MockHTTPFlow for testing."""
     if url is None:
         url = f"https://{host}{path}"
@@ -1070,7 +1069,7 @@ def _aws_flow(
     auth: str = SIGV4_AUTH,
     content_sha256: str = "UNSIGNED-PAYLOAD",
     extra_headers: dict[str, str] | None = None,
-) -> Any:
+) -> MockHTTPFlow:
     """Build a flow with AWS-style headers."""
     headers: dict[str, str] = {
         "Host": host,
@@ -1089,7 +1088,11 @@ def _pf_with_signing() -> ProxyFilter:
     """Build a ProxyFilter with signing credential replacements."""
     pf = ProxyFilter()
     pf.domains = ["*.amazonaws.com", "*.r2.cloudflarestorage.com"]
-    pf.replacements = {SURROGATE_ACCESS_KEY_ID: SIGNING_REPLACEMENT}
+    # SigningReplacement values (str | list[str]) are valid
+    # _JsonValue subtypes; ty cannot prove TypedDict compat.
+    pf.replacements = {  # type: ignore[invalid-assignment]
+        SURROGATE_ACCESS_KEY_ID: SIGNING_REPLACEMENT,
+    }
     return pf
 
 
@@ -1507,7 +1510,7 @@ class TestResignPresigned:
         host: str = "mybucket.s3.amazonaws.com",
         key_id: str = SURROGATE_ACCESS_KEY_ID,
         with_session_token: bool = False,
-    ) -> Any:
+    ) -> MockHTTPFlow:
         """Build a flow with presigned URL query parameters."""
         query_parts = [
             "X-Amz-Algorithm=AWS4-HMAC-SHA256",
@@ -1685,7 +1688,7 @@ class TestRequestHeaders:
 def _bedrock_flow_no_content_sha(
     *,
     body: bytes = b'{"prompt": "hello"}',
-) -> Any:
+) -> MockHTTPFlow:
     """Build a Bedrock flow WITHOUT x-amz-content-sha256 header.
 
     Non-S3 SDKs (botocore SigV4Auth) don't send this header.

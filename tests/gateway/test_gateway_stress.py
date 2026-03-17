@@ -34,6 +34,7 @@ from airut.dashboard.tracker import (
 )
 from airut.dashboard.versioned import VersionClock
 from airut.gateway.channel import AuthenticationError, ParsedMessage, RawMessage
+from airut.gateway.config import RepoServerConfig
 
 from .service.conftest import make_message, make_service, update_global
 
@@ -44,9 +45,9 @@ from .service.conftest import make_message, make_service, update_global
 
 
 def _make_gateway_real_tracker(
-    email_config: Any,
+    email_config: RepoServerConfig,
     tmp_path: Path,
-    **global_kwargs: Any,
+    **global_kwargs: bool | str | int | None,
 ) -> tuple[Any, Any]:
     """Create a GatewayService with a *real* TaskTracker.
 

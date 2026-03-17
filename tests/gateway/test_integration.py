@@ -14,7 +14,6 @@ import concurrent.futures
 import threading
 import time
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -30,6 +29,7 @@ from airut.gateway import (
     SenderAuthorizer,
     SMTPSendError,
 )
+from airut.gateway.channel import ChannelAdapter
 from airut.gateway.config import (
     EmailChannelConfig,
     GlobalConfig,
@@ -42,6 +42,7 @@ from airut.gateway.email.parsing import (
     extract_conversation_id,
 )
 from airut.gateway.service import GatewayService
+from airut.gateway.service.repo_handler import RepoHandler
 
 
 class TestEndToEndFlow:
@@ -508,8 +509,8 @@ Follow-up question.
 
         def tracking_submit(
             raw_message: RawMessage,
-            repo_handler: Any,
-            adapter: Any,
+            repo_handler: RepoHandler,
+            adapter: ChannelAdapter,
         ) -> bool:
             received.append(raw_message)
             return False  # Don't actually process

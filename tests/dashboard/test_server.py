@@ -6,10 +6,11 @@
 """Tests for dashboard server module (WSGI application and routing)."""
 
 import json
-from typing import Any
+from typing import NoReturn
 from unittest.mock import MagicMock, patch
 
 from werkzeug.test import Client
+from werkzeug.wrappers import Request
 
 from airut.dashboard.formatters import VersionInfo
 from airut.dashboard.server import DashboardServer
@@ -867,7 +868,7 @@ class TestDashboardServer:
         server = DashboardServer(tracker)
 
         # Patch handler in endpoint dict to raise exception
-        def raise_error(*args: Any, **kwargs: Any) -> Any:
+        def raise_error(*args: Request, **kwargs: str) -> NoReturn:
             raise RuntimeError("Test error")
 
         original = server._endpoint_handlers["index"]
@@ -887,7 +888,7 @@ class TestDashboardServer:
         server = DashboardServer(tracker)
 
         # Patch an API handler to raise exception
-        def raise_error(*args: Any, **kwargs: Any) -> Any:
+        def raise_error(*args: Request, **kwargs: str) -> NoReturn:
             raise RuntimeError("Test error")
 
         original = server._endpoint_handlers["api_task_stop"]
@@ -1712,7 +1713,7 @@ class TestSecurityHeaders:
         tracker = TaskTracker()
         server = DashboardServer(tracker)
 
-        def raise_error(*args: Any, **kwargs: Any) -> Any:
+        def raise_error(*args: Request, **kwargs: str) -> NoReturn:
             raise RuntimeError("boom")
 
         original = server._endpoint_handlers["index"]

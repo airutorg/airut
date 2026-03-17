@@ -6,13 +6,14 @@
 """Shared fixtures and helpers for dashboard tests."""
 
 import json
+from collections.abc import Callable
 from datetime import UTC
 from pathlib import Path
-from typing import Any
 
 import pytest
 from werkzeug.test import Client
 
+from airut._json_types import JsonDict, JsonValue
 from airut.claude_output import StreamEvent, parse_stream_events
 from airut.claude_output.extract import (
     extract_result_summary,
@@ -24,7 +25,7 @@ from airut.dashboard.tracker import TaskTracker
 from airut.sandbox import EventLog
 
 
-def parse_events(*raw_events: dict[str, Any]) -> list[StreamEvent]:
+def parse_events(*raw_events: JsonDict) -> list[StreamEvent]:
     """Parse raw event dicts into typed StreamEvent objects."""
     return parse_stream_events("\n".join(json.dumps(e) for e in raw_events))
 
@@ -32,12 +33,12 @@ def parse_events(*raw_events: dict[str, Any]) -> list[StreamEvent]:
 # ── Minimal event builders ───────────────────────────────────────────
 
 
-def result_event(**overrides: Any) -> dict[str, Any]:
+def result_event(**overrides: JsonValue) -> JsonDict:
     """Build a minimal result event dict, with sane defaults.
 
     Any key can be overridden via keyword arguments.
     """
-    base: dict[str, Any] = {
+    base: JsonDict = {
         "type": "result",
         "subtype": "success",
         "session_id": "sess_123",
@@ -79,7 +80,7 @@ class DashboardHarness:
         tmp_path: Path,
         *,
         add_task: bool = True,
-        stop_callback: Any = None,
+        stop_callback: Callable[[str], bool] | None = None,
     ) -> None:
         self.tmp_path = tmp_path
         self.tracker = TaskTracker()
@@ -114,7 +115,7 @@ class DashboardHarness:
 
     def add_events(
         self,
-        *raw_events: dict[str, Any],
+        *raw_events: JsonDict,
         request_text: str | None = None,
     ) -> None:
         """Parse raw event dicts, write to event log, and add reply."""
