@@ -109,9 +109,6 @@ addopts = "--disable-socket --allow-unix-socket --ignore=tests/integration"
 asyncio_mode = "auto"
 filterwarnings = [
     "error",
-    # ResourceWarning from unclosed sockets in __del__ triggers
-    # PytestUnraisableExceptionWarning in integration tests (aiosmtpd cleanup).
-    "default::ResourceWarning",
 ]
 
 [tool.pip-licenses]

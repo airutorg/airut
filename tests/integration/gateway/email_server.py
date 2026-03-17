@@ -482,9 +482,9 @@ class MinimalIMAPServer:
             logger.debug("IMAP client error/cancelled for %s: %s", addr, e)
         finally:
             try:
-                transport = writer.transport
-                if transport and not transport.is_closing():
-                    transport.close()
+                if not writer.is_closing():
+                    writer.close()
+                    await writer.wait_closed()
             except Exception:
                 pass
             logger.debug("IMAP client disconnected from %s", addr)

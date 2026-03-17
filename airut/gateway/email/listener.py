@@ -265,7 +265,8 @@ class EmailListener:
         """Disconnect from IMAP server.
 
         If the connection was interrupted (socket shutdown), this skips
-        the graceful logout since the socket is no longer usable.
+        the graceful logout since the socket is no longer usable, but
+        still closes the underlying socket to avoid ResourceWarnings.
         """
         if self.connection:
             try:
@@ -281,6 +282,16 @@ class EmailListener:
                 if not self._interrupted:
                     logger.warning("Error during IMAP disconnect: %s", e)
             finally:
+                # Ensure the underlying socket is closed to prevent
+                # ResourceWarning about unclosed ssl.SSLSocket.
+                # logout() normally handles this, but when interrupted
+                # or when logout() raises, the socket may remain open.
+                try:
+                    sock = self.connection.socket()
+                    if sock:
+                        sock.close()
+                except Exception:
+                    pass
                 self.connection = None
 
     def interrupt(self) -> None:
