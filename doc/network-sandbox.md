@@ -27,19 +27,7 @@ so it works with all tools (Node.js, Go, curl, Python, git).
     - [HTTP Method Filtering](#http-method-filtering)
   - [Agent Self-Service Flow](#agent-self-service-flow)
 - [Masked Secrets (Token Replacement)](#masked-secrets-token-replacement)
-  - [Problem](#problem)
-  - [Solution](#solution)
-  - [Security Properties](#security-properties)
-  - [Foreign credential blocking](#foreign-credential-blocking)
-  - [Limitations](#limitations-1)
-  - [When to Use](#when-to-use)
 - [Signing Credentials (AWS SigV4 Re-signing)](#signing-credentials-aws-sigv4-re-signing)
-  - [Problem](#problem-1)
-  - [Solution](#solution-1)
-  - [What Gets Re-signed](#what-gets-re-signed)
-  - [Security Properties](#security-properties-1)
-  - [Limitations](#limitations-2)
-  - [Transparent Upgrade Path](#transparent-upgrade-path)
 - [Troubleshooting](#troubleshooting)
   - [Broken allowlist checked into main](#broken-allowlist-checked-into-main)
   - [Masked secrets stopped working](#masked-secrets-stopped-working)
@@ -325,23 +313,12 @@ The network allowlist controls *where* the agent can connect. Masked secrets
 control *what credentials* are usable at each destination. Together they provide
 layered protection against credential exfiltration.
 
-### Problem
-
-Even with a network allowlist, a compromised container could exfiltrate
-credentials to allowed hosts:
-
-- Send `GH_TOKEN` to a GitHub issue on a repo the attacker controls
-- Embed credentials in request parameters to an allowed API
-- Use an allowed webhook endpoint to leak secrets
-
-Plain secrets in `container_env` are fully exposed to the container — if the
-agent is tricked via prompt injection, it can read and exfiltrate them.
-
-### Solution
-
-Masked secrets inject **surrogate tokens** into containers instead of real
-credentials. The proxy swaps surrogates for real values only when the request
-host matches configured scopes.
+Even with a network allowlist, a compromised container could exfiltrate plain
+secrets to allowed hosts (e.g., embed a token in a GitHub issue on an
+attacker-controlled repo). Masked secrets close this gap: the container receives
+a **surrogate token** instead of the real credential, and the proxy swaps
+surrogates for real values only when the request host matches configured scopes.
+Requests to other hosts carry only the useless surrogate.
 
 ```yaml
 # In ~/.config/airut/airut.yaml (server config)
@@ -357,84 +334,25 @@ repos:
           - "Authorization"
 ```
 
-**How it works:**
+Use `masked_secrets` for credentials sent via `Authorization`, `X-Api-Key`, or
+similar headers that should only be usable with specific hosts. Use plain
+`secrets` for credentials passed in request bodies or that need to work with
+arbitrary hosts. Both require the network sandbox to be enabled — when disabled,
+surrogates are still injected but never swapped, so API calls will fail.
 
-1. Server generates a format-preserving surrogate (same length, charset, known
-   prefix like `ghp_`) using `secrets.choice()`
-2. Container receives the surrogate in its environment — never the real value
-3. Proxy intercepts outbound requests to scoped hosts
-4. For matching requests, proxy swaps surrogate → real value in specified
-   headers
-5. Requests to other hosts see only the useless surrogate
-
-### Security Properties
-
-| Property                    | Mechanism                                       |
-| --------------------------- | ----------------------------------------------- |
-| Credential isolation        | Container only sees surrogates, never real keys |
-| Scope enforcement           | Proxy only replaces for matching hosts          |
-| Exfiltration prevention     | Surrogate useless at unauthorized endpoints     |
-| Foreign credential blocking | Non-surrogate credential headers are stripped   |
-| Fail-secure                 | If proxy fails, no credentials reach network    |
-| Audit trail                 | Network log shows `[masked: N]` for requests    |
-| Log safety                  | Real values redacted; surrogates visible        |
-
-### Foreign credential blocking
-
-By default, if a request to a scoped host contains a credential header that does
-NOT match the expected surrogate, the header is stripped entirely. This prevents
-an attacker from supplying their own API key (e.g., to upload data to their
-account on an allowlisted service). Stripping only applies when the header
-matches an **exact** header pattern (e.g., `"Authorization"`); glob patterns
-like `"*"` or `"X-*"` scan for surrogates but do not trigger stripping. Set
-`allow_foreign_credentials: true` on a per-secret basis to opt out of this
-protection.
-
-### Limitations
-
-1. **Header-only replacement**: Tokens in request body or query parameters are
-   not replaced. Use plain `secrets` if body tokens are required.
-2. **Requires sandbox**: When the sandbox is disabled, surrogates are still
-   injected but never swapped — API calls using masked secrets will fail.
-
-### When to Use
-
-Use `masked_secrets` for credentials that are used via `Authorization`,
-`X-Api-Key`, or `X-Auth-Token` headers and should only be usable with specific
-hosts. Use plain `secrets` for credentials passed in request bodies or that need
-to work with arbitrary hosts.
-
-See [spec/masked-secrets.md](../spec/masked-secrets.md) for the full
-specification (surrogate format, replacement map, proxy addon details).
+See [security.md](security.md#credential-management) for how masked secrets fit
+into the overall credential model and
+[spec/masked-secrets.md](../spec/masked-secrets.md) for the full specification
+(surrogate format, foreign credential blocking, replacement map).
 
 ## Signing Credentials (AWS SigV4 Re-signing)
 
-Masked secrets handle credentials that appear verbatim in headers (bearer
-tokens, API keys). AWS credentials are different — the secret key is used to
-compute HMAC or ECDSA signatures over the request and never appears on the wire.
-Signing credentials extend the proxy to **re-sign** requests instead of
-performing string replacement.
-
-### Problem
-
-If you pass AWS credentials as plain secrets, the container has the real access
-key ID, secret access key, and session token. A compromised container could
-exfiltrate these to any allowed host, and the attacker gains full access to
-whatever AWS resources the credentials allow.
-
-Masked secrets don't solve this either — AWS SDKs don't send the secret key in
-headers, so there's nothing to replace.
-
-### Solution
-
-`signing_credentials` in the server config inject **surrogate** AWS credentials
-into the container. The AWS SDK signs requests normally using the surrogates.
-The proxy then:
-
-1. Intercepts requests to scoped hosts (e.g., `*.amazonaws.com`)
-2. Verifies the request was signed with the surrogate credentials
-3. Re-signs the request with the real credentials
-4. Forwards the correctly-signed request upstream
+AWS credentials are different from bearer tokens — the secret key is used to
+compute HMAC/ECDSA signatures and never appears in headers. Masked secrets can't
+handle this since there's no literal token to replace. Signing credentials
+extend the proxy to **re-sign** requests: the container receives surrogate AWS
+credentials, the AWS SDK signs normally, and the proxy re-signs with real
+credentials for scoped hosts.
 
 ```yaml
 # In ~/.config/airut/airut.yaml (server config)
@@ -444,7 +362,7 @@ repos:
       AWS_PROD:
         type: aws-sigv4
         access_key_id:
-          name: AWS_ACCESS_KEY_ID        # secret name for repo config
+          name: AWS_ACCESS_KEY_ID
           value: !env AWS_ACCESS_KEY_ID
         secret_access_key:
           name: AWS_SECRET_ACCESS_KEY
@@ -456,55 +374,18 @@ repos:
           - "*.amazonaws.com"
 ```
 
-The repo config uses standard `!secret` references — it doesn't know signing
-credentials are involved:
+The repo config uses standard `!secret` references — it doesn't need to know
+whether signing credentials are involved. The server admin can switch between
+plain secrets and signing credentials without any repo config changes.
 
-```yaml
-# In .airut/airut.yaml (repo config)
-container_env:
-  AWS_ACCESS_KEY_ID: !secret AWS_ACCESS_KEY_ID
-  AWS_SECRET_ACCESS_KEY: !secret AWS_SECRET_ACCESS_KEY
-  AWS_SESSION_TOKEN: !secret? AWS_SESSION_TOKEN
-```
+Re-signing covers Authorization headers, presigned URLs, chunked uploads (S3
+`aws-chunked`), and SigV4A (multi-region). Works with any S3-compatible API
+(AWS, Cloudflare R2, MinIO).
 
-### What Gets Re-signed
-
-| Authentication method | Where credentials appear        | Re-signed |
-| --------------------- | ------------------------------- | --------- |
-| Authorization header  | `AWS4-HMAC-SHA256 Credential=…` | Yes       |
-| Presigned URL         | `X-Amz-Credential=…` in query   | Yes       |
-| Chunked upload        | Per-chunk signatures in body    | Yes       |
-| SigV4A (multi-region) | `AWS4-ECDSA-P256-SHA256` header | Yes       |
-
-### Security Properties
-
-| Property                | Mechanism                                                          |
-| ----------------------- | ------------------------------------------------------------------ |
-| Secret key isolation    | Container never sees real secret key                               |
-| Scope enforcement       | Proxy only re-signs for matching hosts                             |
-| Exfiltration resistance | Surrogate credentials are useless outside the proxy                |
-| Contained blast radius  | Attacker can act within scope but only through proxy               |
-| Fail-secure             | If proxy fails, surrogates are not valid AWS credentials           |
-| Audit trail             | Network log shows `[masked: 1] [region: …]` for re-signed requests |
-| S3-compatible           | Works with AWS, Cloudflare R2, MinIO, any SigV4 service            |
-
-### Limitations
-
-1. **SigV4/SigV4A only**: Only AWS-style HMAC-SHA256 and ECDSA-P256 signing is
-   supported. Other signing protocols (e.g., GCP, Azure) are not covered.
-2. **Requires sandbox**: Like masked secrets, signing credentials depend on the
-   proxy. When the sandbox is disabled, the container has surrogate credentials
-   that fail to authenticate.
-
-### Transparent Upgrade Path
-
-The server admin can switch between plain secrets and signing credentials
-without any repo config changes — the repo config uses `!secret` references
-either way.
-
-See [spec/aws-sigv4-resigning.md](../spec/aws-sigv4-resigning.md) for the full
-specification (surrogate generation, re-signing algorithm, chunked transfer
-encoding, data flow).
+See [security.md](security.md#credential-management) for how signing credentials
+fit into the overall credential model and
+[spec/aws-sigv4-resigning.md](../spec/aws-sigv4-resigning.md) for the full
+specification (surrogate generation, re-signing algorithm, chunked transfer).
 
 ## Troubleshooting
 

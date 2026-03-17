@@ -202,6 +202,28 @@ See [network-sandbox.md](network-sandbox.md) for full details.
 
 ## Credential Management
 
+Airut provides three mechanisms for passing credentials to containers. **The
+choice is driven by what the service supports**, not a security ranking — use
+the most protective mechanism the service allows:
+
+| Mechanism               | Use when                                       | Container sees     | Real credential lives in     |
+| ----------------------- | ---------------------------------------------- | ------------------ | ---------------------------- |
+| **Plain secrets**       | Credential in request body, or arbitrary hosts | Real value         | Container env                |
+| **Masked secrets**      | Bearer tokens / API keys in HTTP headers       | Surrogate token    | Proxy only (scoped to hosts) |
+| **Signing credentials** | AWS SigV4/SigV4A services                      | Surrogate AWS keys | Proxy only (scoped to hosts) |
+
+Both masked secrets and signing credentials prevent credential exfiltration —
+the container never sees real values. Signing credentials go further: the real
+secret key never leaves the server config and proxy, since the key is used for
+HMAC/ECDSA computation rather than sent in headers. But this is inherent to the
+SigV4 model, not a configurable choice — you use signing credentials when the
+service uses AWS-style request signing, and masked secrets when the service uses
+bearer tokens.
+
+**Repo config is the same regardless** — it uses `!secret NAME` references. The
+server admin decides which mechanism to use; the repo config is unchanged either
+way.
+
 ### Server Secrets
 
 Server credentials are configured in `~/.config/airut/airut.yaml` using `!env`
@@ -461,114 +483,21 @@ legitimate from malicious use of authorized channels.
 
 GitHub Actions workflows execute code from PR branches on runners with outbound
 internet access — completely outside the Airut network sandbox. The agent can
-exploit this in two ways: by pushing a malicious workflow file, or by modifying
-code that existing workflows execute (test suites, build scripts, linters). The
-second path requires no special permissions beyond normal git push access,
-making it the harder threat to close. See [ci-sandbox.md](ci-sandbox.md) for the
-recommended mitigation (running CI inside the Airut sandbox).
+exploit this via two paths: pushing a malicious workflow file, or modifying code
+that existing workflows execute (test suites, build scripts, linters). The
+second path requires only normal git push access, making it the harder threat.
 
-**Threat model:** This threat vector is relevant when the
-[lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/)
-(coined by Simon Willison) is present — all three conditions simultaneously:
+This threat is relevant when the
+[lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/) is
+present: access to private data + exposure to untrusted content + ability to
+externally communicate. The workflow escape provides the communication channel —
+code on a GitHub-hosted runner operates completely outside the network sandbox.
 
-1. **Access to private data** — The repository contains private code, secrets
-   accessible to Actions, or other sensitive material
-2. **Exposure to untrusted content** — The agent processes content controlled by
-   a potential attacker (repository files with user input, fetched web pages,
-   email attachments, Slack file uploads)
-3. **Ability to externally communicate** — The agent can exfiltrate data through
-   some channel. In this case, GitHub Actions runners have outbound internet
-   access — a workflow escape gives the attacker a runner that can communicate
-   with arbitrary external hosts, completely outside the network sandbox
-
-The workflow escape is the mechanism that provides capability (3): even though
-the container's network sandbox restricts outbound access, code running on a
-GitHub-hosted runner (whether from a pushed workflow file or from existing
-workflows executing agent-modified code) operates completely outside the
-sandbox.
-
-**The escape has two paths**, both of which must be closed:
-
-- **Modify workflow files directly** — Push a new or altered workflow that runs
-  attacker-controlled code. Requires the `GH_TOKEN` to have the `workflow` scope
-  (classic PAT) or `Workflows: Read and write` permission (fine-grained PAT).
-- **Modify code that workflows execute** — Most CI workflows run repository code
-  (e.g., `uv run pytest`, `npm test`, build scripts). The agent can alter that
-  code to perform arbitrary actions when the workflow executes it, without
-  touching the workflow file at all. This only requires
-  `Contents: Read and write` (which the agent needs for normal git operations)
-  plus a workflow trigger the agent can activate (`on: pull_request` or
-  `on: push`).
-
-If the lethal trifecta is not present, the escape is not a meaningful threat.
-For example:
-
-- **Public repositories with no Actions secrets** — There is no private data to
-  exfiltrate (condition 1 absent). Workflow escape gives the attacker a runner
-  with outbound access but nothing sensitive to steal. (Note: if the repo's
-  Actions configuration grants access to organization secrets, this does not
-  apply.)
-- **Network sandbox blocks untrusted content** — If the agent only processes
-  trusted prompts and the network allowlist prevents fetching adversarial
-  content, prompt injection cannot be triggered in the first place (condition 2
-  absent).
-
-**Mitigations:**
-
-1. **Run CI inside the Airut sandbox (recommended)** — Use the
-   [`airutorg/sandbox-action`](ci-sandbox.md) GitHub Action to run CI commands
-   inside the same container isolation, network allowlisting, and credential
-   masking that the Airut gateway uses. The workflow auto-triggers on PRs, but
-   agent-steerable code runs inside a sandboxed container — not directly on the
-   runner. Even if the agent injects malicious code into test suites or build
-   scripts, the sandbox prevents exfiltration. This closes path 2 while
-   preserving auto-triggered CI. **This is the recommended approach** and must
-   be combined with mitigation 2 (protecting workflow files) to close both
-   paths. See [ci-sandbox.md](ci-sandbox.md) for the full setup guide.
-2. **Prevent the agent from modifying workflow files** — The agent must not be
-   able to push changes to `.github/workflows/`. Two mechanisms are available:
-   - **Omit the `workflow` scope from the agent's PAT** — GitHub enforces this
-     at the git push level, rejecting any push that includes workflow file
-     changes. Use a **classic PAT** with the `repo` scope and ensure `workflow`
-     is unchecked. Existing classic PATs may have `workflow` enabled by default
-     — audit at GitHub → Settings → Developer settings → Personal access tokens.
-     (Fine-grained PATs cannot be used with a dedicated bot account because they
-     can only access repositories owned by the token's account, not repositories
-     where the account is a collaborator.)
-   - **Use a push ruleset** (Teams/Enterprise plans only) — Create a push
-     ruleset that blocks pushes modifying workflow files for all users except
-     trusted administrators. This requires a GitHub Teams or Enterprise plan.
-     See [ci-sandbox.md](ci-sandbox.md#protecting-workflow-files) for setup
-     instructions. Rulesets and PAT scope restrictions can be combined for
-     defense in depth.
-   - **Limitation**: This alone is not sufficient — the agent cannot modify
-     workflow files, but can still modify code that workflows execute (path 2).
-     Mitigation 1 (sandboxed CI) or mitigation 3 (manual triggers) is needed to
-     close path 2.
-3. **Use `workflow_dispatch` instead of `pull_request` triggers (fallback)** —
-   Workflows that use `on: workflow_dispatch` can only be triggered manually
-   from the GitHub UI or API by an authorized user. Even if the agent pushes
-   malicious code, the workflow will not run until a human explicitly triggers
-   it. This closes path 2 but **sacrifices auto-triggered CI**. Combined with
-   mitigation 2, this closes both paths. Use this approach when sandboxed CI
-   (mitigation 1) is not feasible — for example, workflows that require
-   capabilities the sandbox cannot provide (GPU access, specific hardware,
-   non-containerizable tools).
-
-**When is this relevant?** Evaluate whether the lethal trifecta is present:
-
-- If your repository is **public with no Actions secrets**: Low risk. No private
-  data to steal (condition 1 absent).
-- If your repository is **private or has Actions secrets**: Apply mitigations 1
-  and 2 (sandboxed CI + workflow file protection). Use mitigation 3 as a
-  fallback for workflows that cannot run in the sandbox.
-- If the agent processes **untrusted content** (user-submitted issues, external
-  web pages, email attachments from untrusted senders): Apply mitigations 1 and
-  2\.
-- If the agent only processes **trusted prompts from authorized senders** and
-  the network sandbox prevents fetching adversarial content: Lower risk
-  (condition 2 absent), but mitigation 2 is still recommended as defense in
-  depth.
+**Recommended mitigation:** Run CI inside the Airut sandbox using
+[`airutorg/sandbox-action`](ci-sandbox.md), combined with preventing the agent
+from modifying workflow files (omit `workflow` PAT scope, or use a push
+ruleset). See [ci-sandbox.md](ci-sandbox.md) for the full threat analysis, trust
+model, security requirements, and configuration guide.
 
 ### Realistic Security Expectations
 

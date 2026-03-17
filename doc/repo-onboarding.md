@@ -246,100 +246,30 @@ can be used as inspiration.
 ### 6. Configure Server
 
 Add the repository to your Airut server config (`~/.config/airut/airut.yaml`).
-Configure at least one channel (email, Slack, or both).
+You need a `git.repo_url`, at least one channel block (`email:` and/or
+`slack:`), and credential configuration (`secrets`, `masked_secrets`, or
+`signing_credentials`).
 
-**Email channel** (see [email-setup.md](email-setup.md) for full guide):
+- **Email channel** — see [email-setup.md](email-setup.md) for the full guide
+  and server config examples. Each repository requires a dedicated email account
+  (Airut deletes messages after processing).
+- **Slack channel** — see [slack-setup.md](slack-setup.md) for the full guide
+  and server config examples. Each repository gets its own Slack app.
+- **Both channels** can coexist — include both `email:` and `slack:` blocks
+  under the same repo.
 
-> **Note:** The email account must be dedicated to this repository. Airut treats
-> the inbox as a work queue and permanently deletes messages after processing.
+For credentials, prefer `masked_secrets` over plain `secrets` — the container
+receives a surrogate token and the proxy inserts the real value only for scoped
+hosts. For AWS credentials, use `signing_credentials`. See
+[security.md](security.md#credential-management) for the credential model and
+[deployment.md](deployment.md#configuration) for the full server config
+reference.
 
-```yaml
-repos:
-  your-repo:
-    email:
-      imap_server: mail.example.com
-      imap_port: 993
-      smtp_server: mail.example.com
-      smtp_port: 587
-      username: your-repo-bot
-      password: !env YOUR_REPO_EMAIL_PASSWORD
-      from: "Your Repo Bot <your-repo-bot@example.com>"
-      authorized_senders:
-        - you@example.com
-        - *@your-company.com
-      trusted_authserv_id: mail.example.com
-      imap:
-        use_idle: true
+For the complete config schema with all options, see the
+[documented example config](https://github.com/airutorg/airut/blob/main/config/airut.example.yaml).
 
-    git:
-      repo_url: https://github.com/your-org/your-repo.git
-
-    # Plain secrets (injected directly into container)
-    secrets:
-      ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
-
-    # Masked secrets (surrogate injected, real value only at proxy for scoped hosts)
-    # Prevents credential exfiltration even if container is compromised
-    masked_secrets:
-      GH_TOKEN:
-        value: !env GH_TOKEN_YOUR_REPO
-        scopes:
-          - "api.github.com"
-          - "*.githubusercontent.com"
-        headers:
-          - "Authorization"
-```
-
-**Slack channel** (see [slack-setup.md](slack-setup.md) for full guide):
-
-```yaml
-repos:
-  your-repo:
-    slack:
-      bot_token: !env SLACK_BOT_TOKEN
-      app_token: !env SLACK_APP_TOKEN
-      authorized:
-        - workspace_members: true
-
-    git:
-      repo_url: https://github.com/your-org/your-repo.git
-
-    secrets:
-      ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
-
-    masked_secrets:
-      GH_TOKEN:
-        value: !env GH_TOKEN_YOUR_REPO
-        scopes:
-          - "api.github.com"
-          - "*.githubusercontent.com"
-        headers:
-          - "Authorization"
-```
-
-Both channels can coexist — include both `email:` and `slack:` blocks under the
-same repo. See [slack-setup.md](slack-setup.md) for the full Slack setup guide.
-
-For credentials that should only be usable with specific services, prefer
-`masked_secrets` over `secrets`. Headers use fnmatch patterns (`*` for all). For
-AWS credentials, use `signing_credentials` — the proxy re-signs requests instead
-of replacing header tokens. See
-[network-sandbox.md](network-sandbox.md#masked-secrets-token-replacement) for
-masked secrets and
-[network-sandbox.md](network-sandbox.md#signing-credentials-aws-sigv4-re-signing)
-for signing credentials.
-
-Add secrets to `~/.config/airut/.env`:
-
-```bash
-YOUR_REPO_EMAIL_PASSWORD=password
-SLACK_BOT_TOKEN=xoxb-...
-SLACK_APP_TOKEN=xapp-...
-ANTHROPIC_API_KEY=sk-ant-...
-GH_TOKEN_YOUR_REPO=ghp_...
-```
-
-Restart the service:
+Add any `!env`-referenced secrets to `~/.config/airut/.env` and restart the
+service:
 
 ```bash
 systemctl --user restart airut

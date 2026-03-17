@@ -149,65 +149,23 @@ autonomous behavior. These can be adapted for other repositories.
 
 #### PR Creation Mandate
 
-This is the core instruction that enables message-to-PR workflows:
-
-```markdown
-## CRITICAL: Always Create PRs
-
-**After completing work that modifies files, create a PR immediately.** Only
-skip if: (1) you need user input to finish the task, or (2) user explicitly asks
-not to create a PR.
-
-**The task is NOT complete until the PR is created and GitHub CI passes.** This
-is the final step of every task, not an optional follow-up. After local CI
-passes:
-
-\`\`\`bash
-git push -u origin HEAD && gh pr create --fill
-uv run scripts/pr.py ci --wait -v  # Wait for GitHub CI to pass
-\`\`\`
-
-**When task is complete, include the PR URL in your response to the user.** Use
-`gh pr view --web` to get the URL, or extract it from the `gh pr create` output.
-```
+The most important instruction: the agent must create a PR after every task that
+modifies files, and must not consider the task complete until GitHub CI passes.
+This transforms every message into a reviewable artifact. Without this, the
+agent may stop after making changes without pushing them.
 
 #### Git and PR Workflow
 
-Clear, step-by-step workflow instructions:
-
-```markdown
-## Git and PR Workflow
-
-**Before starting work:** Create a feature branch from latest main:
-
-\`\`\`bash
-git fetch origin && git checkout -b feature/descriptive-name origin/main
-\`\`\`
-
-**Standard workflow:**
-
-1. Make changes, run `uv run scripts/ci.py --fix` (local CI), commit
-2. Push and create PR: `git push -u origin HEAD && gh pr create --fill`
-3. **Wait for GitHub CI:** `uv run scripts/pr.py ci --wait -v`
-4. Address review: `uv run scripts/pr.py review -v`, fix issues, push
-5. Merge (repo uses fast-forward only): `gh pr merge --squash --delete-branch`
-6. Return to main: `git checkout main && git pull`
-
-**IMPORTANT: Do not stop after step 2.** The task is complete only when the PR
-is created AND GitHub CI passes (step 3).
-```
+Step-by-step commands for the standard development cycle: branch from main, make
+changes, run local CI, commit, push, create PR, wait for GitHub CI, and address
+review feedback. Explicit commands reduce ambiguity — the agent follows the
+recipe rather than improvising git workflows.
 
 #### Spec Adherence
 
-Prevents the agent from making unauthorized architectural decisions:
-
-```markdown
-## CRITICAL: Specs and User Intent Take Priority
-
-**When you encounter issues that require deviating from spec or user-supplied
-design, stop and ask for guidance.** Do not prioritize "making tests pass" or
-"getting CI green" over adhering to the spec or the user's intent.
-```
+Instructs the agent to stop and ask for guidance when implementation requires
+deviating from specs or user intent, rather than silently making architectural
+decisions to "make tests pass."
 
 #### Other Important Sections
 
@@ -216,6 +174,10 @@ design, stop and ask for guidance.** Do not prioritize "making tests pass" or
 - **CI requirements** — Mandatory checks, no workarounds
 - **Autonomous learning** — Self-updating heuristics section for institutional
   knowledge
+
+The Airut repository's
+[CLAUDE.md](https://github.com/airutorg/airut/blob/main/CLAUDE.md) serves as the
+reference implementation for all of these sections.
 
 ## Workflow Tooling
 
@@ -302,17 +264,11 @@ When PR has conflicts:
 
 ## Autonomous Learning
 
-The `CLAUDE.md` includes a self-updating section:
-
-```markdown
-## AUTONOMOUS LEARNING (READ/WRITE)
-
-**PERMISSIONS:** You are explicitly AUTHORIZED to edit the "Active Heuristics"
-section without seeking user approval.
-```
-
-When the agent discovers patterns (e.g., common test failures, codebase quirks),
-it codifies them as heuristics. This builds institutional knowledge over time.
+The `CLAUDE.md` includes a designated section where the agent is explicitly
+authorized to write heuristics without user approval. When the agent discovers
+patterns (e.g., common test failures, codebase quirks), it codifies them as
+rules. This builds institutional knowledge over time — the agent learns from its
+own mistakes and encodes that learning for future sessions.
 
 ## Summary
 

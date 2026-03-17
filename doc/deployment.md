@@ -23,8 +23,6 @@ regular user (not root) using systemd user services and rootless Podman.
   - [Masked Secrets](#masked-secrets)
   - [Signing Credentials (AWS)](#signing-credentials-aws)
 - [Channel Setup](#channel-setup)
-  - [Email](#email)
-  - [Slack](#slack)
 - [Service Management](#service-management)
   - [Commands](#commands)
   - [Updating](#updating)
@@ -185,61 +183,12 @@ Create an initial configuration using the `init` command:
 airut init
 ```
 
-This creates a stub config at `~/.config/airut/airut.yaml`. For all available
+This creates a stub config at `~/.config/airut/airut.yaml`. Edit it with your
+repository URL, channel settings, and secrets. For the full schema with all
 options, see the
-[documented example](https://github.com/airutorg/airut/blob/main/config/airut.example.yaml).
-
-Edit `~/.config/airut/airut.yaml` with your settings. Secrets can be specified
-inline or loaded from environment variables. The inline approach keeps
-everything in one file:
-
-```yaml
-repos:
-  my-project:
-    secrets:
-      ANTHROPIC_API_KEY: sk-ant-...  # Inline secret
-      GH_TOKEN: ghp_...
-    email:
-      password: your-email-password  # Inline secret
-    slack:
-      bot_token: xoxb-...
-      app_token: xapp-...
-```
-
-Alternatively, use `!env` tags to load secrets from environment variables:
-
-```yaml
-repos:
-  my-project:
-    secrets:
-      ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
-      GH_TOKEN: !env GH_TOKEN
-    email:
-      password: !env EMAIL_PASSWORD  # From environment
-    slack:
-      bot_token: !env SLACK_BOT_TOKEN
-      app_token: !env SLACK_APP_TOKEN
-```
-
-Environment variables can be set in `~/.config/airut/.env` (next to
-`airut.yaml`), which is automatically loaded by the service:
-
-```bash
-cat > ~/.config/airut/.env << 'EOF'
-ANTHROPIC_API_KEY=sk-ant-...
-GH_TOKEN=ghp_your-github-token
-EMAIL_PASSWORD=your-email-password   # If using email channel
-SLACK_BOT_TOKEN=xoxb-...            # If using Slack channel
-SLACK_APP_TOKEN=xapp-...
-EOF
-chmod 600 ~/.config/airut/.env
-```
-
-When running `airut` interactively, a `.env` file in the current working
-directory is also loaded (after the XDG file). Variables already set by the XDG
-`.env` are not overwritten.
-
-See [Configuration](#configuration) for full details.
+[documented example config](https://github.com/airutorg/airut/blob/main/config/airut.example.yaml).
+The [Configuration](#configuration) section below covers secrets, masked
+secrets, and signing credentials in detail.
 
 **Important:** The target repository must also be configured for Airut. See
 [repo-onboarding.md](repo-onboarding.md) for setting up the `.airut/` directory,
@@ -427,57 +376,16 @@ Each repository needs at least one channel configured. Both can run
 simultaneously for the same repo — include both `email:` and `slack:` blocks to
 enable dual-channel operation.
 
-### Email
+- **Email** — IMAP/SMTP with DMARC-based sender verification. Each repository
+  requires a dedicated email account (Airut deletes messages after processing).
+  See [email-setup.md](email-setup.md) for the complete setup guide including
+  server config examples. For Microsoft 365 with OAuth2, see
+  [m365-oauth2.md](m365-oauth2.md).
 
-Email uses IMAP/SMTP with DMARC-based sender verification. Each repository
-requires a dedicated email account (Airut deletes messages after processing).
-
-See [email-setup.md](email-setup.md) for the complete setup guide covering
-provider selection, DMARC configuration, authorization, and troubleshooting.
-
-**Quick reference** — add the `email:` block to your server config:
-
-```yaml
-repos:
-  my-project:
-    email:
-      imap_server: mail.example.com
-      smtp_server: mail.example.com
-      username: airut
-      password: !env EMAIL_PASSWORD
-      from: "Airut <airut@example.com>"
-      authorized_senders:
-        - you@example.com
-      trusted_authserv_id: mail.example.com
-
-    git:
-      repo_url: https://github.com/your-org/repo.git
-```
-
-For Microsoft 365 with OAuth2, see [m365-oauth2.md](m365-oauth2.md).
-
-### Slack
-
-Slack uses Socket Mode (outbound WebSocket) — no inbound endpoints, public DNS,
-or TLS certificates needed. Each repository gets its own Slack app.
-
-See [slack-setup.md](slack-setup.md) for the complete setup guide covering app
-creation, token generation, authorization rules, and troubleshooting.
-
-**Quick reference** — add the `slack:` block to your server config:
-
-```yaml
-repos:
-  my-project:
-    slack:
-      bot_token: !env SLACK_BOT_TOKEN
-      app_token: !env SLACK_APP_TOKEN
-      authorized:
-        - workspace_members: true
-
-    git:
-      repo_url: https://github.com/your-org/repo.git
-```
+- **Slack** — Socket Mode (outbound WebSocket) — no inbound endpoints, public
+  DNS, or TLS certificates needed. Each repository gets its own Slack app. See
+  [slack-setup.md](slack-setup.md) for the complete setup guide including server
+  config examples.
 
 ## Service Management
 

@@ -43,21 +43,22 @@ Named "Airut" (Finnish: herald/messenger).
 
 ## Channels
 
-- [Email setup](email-setup.md) — Email provider selection, DMARC verification,
-  and sender authorization
-- [Slack setup](slack-setup.md) — Slack app creation, tokens, and authorization
-  rules
 - [M365 OAuth2](m365-oauth2.md) — Microsoft 365 OAuth2 configuration for
   IMAP/SMTP
 
 ## Operations
 
-- [Deployment](deployment.md) — Installation, configuration, and service
-  management
-- [Repo onboarding](repo-onboarding.md) — Onboarding new repositories
 - [Gerrit onboarding](gerrit-onboarding.md) — Gerrit-specific onboarding
 - [Agentic operation](agentic-operation.md) — Message-to-PR workflow patterns
   and best practices
+
+## Reference
+
+- [Configuration schema](../spec/repo-config.md) — Full `.airut/airut.yaml`
+  schema, YAML tags, and resource limit resolution
+- [CLI reference](../spec/cli.md) — CLI subcommands, options, and exit codes
+- [Example server config](https://github.com/airutorg/airut/blob/main/config/airut.example.yaml)
+  — Documented example with all options
 
 ## Implementation Specifications
 

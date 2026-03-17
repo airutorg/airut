@@ -445,14 +445,11 @@ requires no inbound endpoints, making it firewall-friendly.
 
 ### Container Isolation
 
-Each task runs in a rootless Podman container with:
-
-- Mounted workspace (git checkout)
-- Separate Claude session state directory
-- Network sandbox via mitmproxy (see [network-sandbox.md](network-sandbox.md))
-- Environment-only credentials (no host mounts)
-
-See [execution-sandbox.md](execution-sandbox.md) for details.
+Each task runs in a rootless Podman container with mounted workspace, session
+state, and inbox/outbox — but no host credentials or SSH keys. All network
+traffic routes through a proxy enforcing a host allowlist. See
+[execution-sandbox.md](execution-sandbox.md) for container details and
+[network-sandbox.md](network-sandbox.md) for network isolation.
 
 ### File-Based State
 

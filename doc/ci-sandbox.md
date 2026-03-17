@@ -12,11 +12,11 @@ Action close this gap by running CI commands inside the same container
 isolation, network allowlisting, and credential masking that the Airut gateway
 uses.
 
-> **For usage documentation** (action inputs, workflow examples, image caching,
-> debugging), see the
+> **This document is a security analysis and configuration guide** — it covers
+> the threat model, trust invariants, and repository settings required for
+> sandboxed CI to be effective. For usage documentation (action inputs, workflow
+> examples, image caching, debugging), see the
 > [sandbox-action README](https://github.com/airutorg/sandbox-action#readme).
-> This document focuses on the security model, threat analysis, and repository
-> configuration requirements.
 
 <!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
 
