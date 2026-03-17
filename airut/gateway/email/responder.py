@@ -59,7 +59,7 @@ def generate_message_id(conv_id: str, email_from: str) -> str:
     Airut instances or the same instance when processing reply headers
     (In-Reply-To / References).
 
-    A 4-character random nonce ensures uniqueness when multiple emails
+    An 8-character random nonce ensures uniqueness when multiple emails
     are sent for the same conversation within the same second (e.g.,
     acknowledgment followed by an immediate rejection).
 
@@ -73,7 +73,7 @@ def generate_message_id(conv_id: str, email_from: str) -> str:
     """
     domain = _extract_domain(email_from)
     timestamp = int(time.time())
-    nonce = secrets.token_hex(2)
+    nonce = secrets.token_hex(4)
     return f"<airut.{conv_id}.{timestamp}.{nonce}@{domain}>"
 
 

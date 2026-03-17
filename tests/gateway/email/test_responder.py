@@ -542,7 +542,7 @@ def test_generate_message_id_unique_nonce() -> None:
     ids = {
         generate_message_id("abc12345", "bot@example.com") for _ in range(20)
     }
-    # With 4-hex-char nonce (65536 values), 20 calls within the
+    # With 8-hex-char nonce (~4 billion values), 20 calls within the
     # same second should produce distinct IDs.
     assert len(ids) == 20
 
