@@ -77,9 +77,6 @@ ignore = [
     "D1",     # Allow missing docstrings (enforce via review)
 ]
 
-[tool.ruff.lint.per-file-ignores]
-"tests/**" = ["ANN401"]
-
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

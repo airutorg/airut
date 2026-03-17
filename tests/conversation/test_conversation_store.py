@@ -27,13 +27,9 @@ from airut.conversation.conversation_store import (
 
 
 def _make_reply(
-    **overrides: Any,
+    **overrides: Any,  # noqa: ANN401 - unpacked into mixed-type constructor
 ) -> ReplySummary:
-    """Create a ReplySummary with sensible defaults.
-
-    ``Any`` because the dict is unpacked into ReplySummary whose
-    parameters have incompatible types (str, int, float, bool, Usage).
-    """
+    """Create a ReplySummary with sensible defaults."""
     defaults: dict[str, Any] = {
         "session_id": "session-1",
         "timestamp": "2026-01-15T12:00:00+00:00",

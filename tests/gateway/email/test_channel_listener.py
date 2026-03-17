@@ -19,14 +19,9 @@ from airut.gateway.email.listener import IMAPConnectionError, IMAPIdleError
 
 
 def _make_config(
-    **overrides: Any,
+    **overrides: Any,  # noqa: ANN401 - unpacked into mixed-type constructor
 ) -> EmailChannelConfig:
-    """Build an EmailChannelConfig with test defaults.
-
-    ``**overrides`` uses ``Any`` because the dict is unpacked into
-    EmailChannelConfig whose parameters have incompatible types
-    (str, int, bool, list[str]).
-    """
+    """Build an EmailChannelConfig with test defaults."""
     defaults: dict[str, Any] = {
         "imap_server": "imap.example.com",
         "imap_port": 993,
@@ -67,11 +62,9 @@ def _make_polling_listener() -> tuple[EmailChannelListener, MagicMock]:
 
 
 def _make_idle_listener(
-    **overrides: Any,
+    **overrides: Any,  # noqa: ANN401 - unpacked into mixed-type constructor
 ) -> tuple[EmailChannelListener, MagicMock]:
     """Create a listener configured for IDLE mode.
-
-    ``**overrides`` uses ``Any`` — see ``_make_config``.
 
     Returns:
         Tuple of (listener, mock_email_listener).
