@@ -53,16 +53,6 @@ cd /storage/sandbox-action && git fetch origin && git checkout main && git pull
    gh pr create --fill
    ```
 
-6. Test the change by temporarily pointing the airut repo's CI workflow to the
-   PR branch:
-
-   ```yaml
-   # In airut's .github/workflows/ci.yml (temporary, for testing)
-   - uses: airutorg/sandbox-action@feature/description
-   ```
-
-7. After the PR is merged, revert the airut CI workflow back to `@main`.
-
 ## Branching Model
 
 The repository uses `vN` branches as protected release branches. Consumers using
