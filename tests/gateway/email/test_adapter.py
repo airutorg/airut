@@ -174,7 +174,7 @@ class TestAuthenticateAndParse:
         result = adapter.authenticate_and_parse(msg)
         assert result is not None
         assert result.conversation_id is None
-        assert "Subject: Fix the login bug" in result.channel_context
+        assert "\n\nSubject: Fix the login bug" in result.channel_context
         assert result.subject == "Fix the login bug"
 
     def test_subject_excluded_for_resumed_conversation(

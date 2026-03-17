@@ -225,7 +225,7 @@ class EmailChannelAdapter(ChannelAdapter):
         # Include subject in channel context for new conversations
         # so Claude can see the email subject line as context.
         if not conv_id and subject:
-            channel_context += f"\nSubject: {subject}"
+            channel_context += f"\n\nSubject: {subject}"
 
         # Expose subject on ParsedMessage for protocol-agnostic checks
         # (e.g. allowing empty body when subject carries the request).
