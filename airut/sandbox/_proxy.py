@@ -124,8 +124,20 @@ class ProxyManager:
     ``stop_proxy()``.
 
     Thread Safety:
-        ``_active_proxies`` is protected by ``_lock``. Multiple threads
-        may call ``start_proxy`` / ``stop_proxy`` concurrently.
+        ``_active_proxies`` and the subnet allocator (``_active_octets``,
+        ``_next_subnet_octet``) are protected by ``_lock``.  Multiple
+        threads may call ``start_proxy`` / ``stop_proxy`` concurrently.
+
+        The temp-file tracking dicts (``_allowlist_tmpfiles``,
+        ``_replacement_tmpfiles``, ``_network_log_files``) are **not**
+        locked.  This is safe because each ``context_id`` key is owned
+        by exactly one thread at a time (the thread running
+        ``start_proxy`` / ``stop_proxy`` for that context), and CPython's
+        GIL makes individual ``dict.__setitem__`` / ``dict.pop`` atomic.
+
+        Note: this assumption breaks under free-threaded Python (PEP 703,
+        ``python3.13t``).  If free-threaded builds become a target, these
+        dicts must be protected by ``_lock`` or a per-key lock.
     """
 
     def __init__(
