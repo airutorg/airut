@@ -95,6 +95,13 @@ class ParsedMessage:
     """Channel-specific context instructions prepended to the prompt.
     E.g., 'User is interacting via email interface...'"""
 
+    subject: str = ""
+    """Message subject from the originating channel (e.g. email subject).
+
+    Set only for new conversations where the subject carries user intent
+    and is included in channel_context.  Empty for resumed conversations
+    and for channels that have no concept of a subject (e.g. Slack)."""
+
 
 @dataclass
 class RawMessage[ContentT]:

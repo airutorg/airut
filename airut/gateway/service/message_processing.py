@@ -282,14 +282,18 @@ def process_message(
     )
 
     if not parsed.body.strip():
-        logger.warning("Repo '%s': empty message body", repo_id)
-        adapter.send_error(
-            parsed,
-            None,
-            "Your message appears to be empty. "
-            "Please send a new message with instructions.",
-        )
-        return CompletionReason.EXECUTION_FAILED, None
+        # For new conversations with a subject line the subject is part
+        # of channel_context and may carry the full request, so an empty
+        # body is acceptable.  Otherwise we reject early.
+        if not parsed.subject:
+            logger.warning("Repo '%s': empty message body", repo_id)
+            adapter.send_error(
+                parsed,
+                None,
+                "Your message appears to be empty. "
+                "Please send a new message with instructions.",
+            )
+            return CompletionReason.EXECUTION_FAILED, None
 
     conversation_store: ConversationStore | None = None
     plan_streamer: PlanStreamer | None = None

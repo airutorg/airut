@@ -478,7 +478,7 @@ sys.exit(1)
         create_email,
     ) -> None:
         """Test that an empty body message is tracked and completed."""
-        msg = create_email(subject="Empty body test", body="   ")
+        msg = create_email(subject="", body="   ")
         integration_env.email_server.inject_message(msg)
 
         service = integration_env.create_service()

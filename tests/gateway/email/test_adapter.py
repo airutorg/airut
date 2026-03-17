@@ -162,6 +162,66 @@ class TestAuthenticateAndParse:
         assert result is not None
         assert "email interface" in result.channel_context
 
+    def test_subject_included_for_new_conversation(
+        self,
+    ) -> None:
+        """Subject appears in channel_context and subject field."""
+        adapter, auth, authz, _ = _make_adapter()
+        auth.authenticate.return_value = "user@example.com"
+        authz.is_authorized.return_value = True
+        msg = _make_raw_message(subject="Fix the login bug")
+
+        result = adapter.authenticate_and_parse(msg)
+        assert result is not None
+        assert result.conversation_id is None
+        assert "Subject: Fix the login bug" in result.channel_context
+        assert result.subject == "Fix the login bug"
+
+    def test_subject_excluded_for_resumed_conversation(
+        self,
+    ) -> None:
+        """Subject excluded when conversation ID is present."""
+        adapter, auth, authz, _ = _make_adapter()
+        auth.authenticate.return_value = "user@example.com"
+        authz.is_authorized.return_value = True
+        msg = _make_raw_message(subject="Re: [ID:aabb1122] Fix the login bug")
+
+        result = adapter.authenticate_and_parse(msg)
+        assert result is not None
+        assert result.conversation_id == "aabb1122"
+        assert "Subject:" not in result.channel_context
+        assert result.subject == ""
+
+    def test_empty_subject_not_added(self) -> None:
+        """Empty subject produces no Subject line or field."""
+        adapter, auth, authz, _ = _make_adapter()
+        auth.authenticate.return_value = "user@example.com"
+        authz.is_authorized.return_value = True
+        msg = _make_raw_message(subject="")
+
+        result = adapter.authenticate_and_parse(msg)
+        assert result is not None
+        assert "Subject:" not in result.channel_context
+        assert result.subject == ""
+
+    def test_subject_excluded_when_conv_id_from_headers(
+        self,
+    ) -> None:
+        """Subject excluded when conv_id from threading headers."""
+        adapter, auth, authz, _ = _make_adapter()
+        auth.authenticate.return_value = "user@example.com"
+        authz.is_authorized.return_value = True
+        msg = _make_raw_message(
+            subject="Follow-up question",
+            references=("<airut.aabb1122.12345.nonce@example.com>"),
+        )
+
+        result = adapter.authenticate_and_parse(msg)
+        assert result is not None
+        assert result.conversation_id == "aabb1122"
+        assert "Subject:" not in result.channel_context
+        assert result.subject == ""
+
     def test_display_title_set_from_email(self) -> None:
         """Parsed message includes decoded email subject for task tracker."""
         adapter, auth, authz, _ = _make_adapter()

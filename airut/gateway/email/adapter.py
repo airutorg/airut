@@ -222,6 +222,15 @@ class EmailChannelAdapter(ChannelAdapter):
             "your response text and the user will reply via email."
         )
 
+        # Include subject in channel context for new conversations
+        # so Claude can see the email subject line as context.
+        if not conv_id and subject:
+            channel_context += f"\nSubject: {subject}"
+
+        # Expose subject on ParsedMessage for protocol-agnostic checks
+        # (e.g. allowing empty body when subject carries the request).
+        msg_subject = subject if not conv_id and subject else ""
+
         return EmailParsedMessage(
             sender=sender,
             body=clean_body,
@@ -229,6 +238,7 @@ class EmailChannelAdapter(ChannelAdapter):
             model_hint=model_hint,
             display_title=subject or "(no subject)",
             channel_context=channel_context,
+            subject=msg_subject,
             original_message_id=email_msg.get("Message-ID"),
             original_references=references,
             decoded_subject=subject,

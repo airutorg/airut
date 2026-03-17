@@ -48,6 +48,7 @@ def _make_parsed_message(
     conversation_id: str | None = None,
     model_hint: str | None = None,
     channel_context: str = "Email context",
+    subject: str = "",
 ) -> ParsedMessage:
     """Build a ParsedMessage for testing."""
     return ParsedMessage(
@@ -56,6 +57,7 @@ def _make_parsed_message(
         conversation_id=conversation_id,
         model_hint=model_hint,
         channel_context=channel_context,
+        subject=subject,
     )
 
 
@@ -446,9 +448,23 @@ class TestProcessMessage:
         assert conv_id == "conv1"
         adapter.send_reply.assert_called_once()
 
-    def test_empty_body_rejected(
+    def test_empty_body_rejected_for_resumed_conversation(
         self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
+        """Empty body rejected when resuming a conversation."""
+        svc, handler, _, adapter = self._setup_svc(email_config, tmp_path)
+        parsed = _make_parsed_message(body="", conversation_id="aabb1122")
+
+        reason, conv_id = process_message(
+            svc, parsed, "task1", handler, adapter
+        )
+        assert reason != CompletionReason.SUCCESS
+        adapter.send_error.assert_called_once()
+
+    def test_empty_body_rejected_without_subject(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """Empty body rejected when no subject."""
         svc, handler, _, adapter = self._setup_svc(email_config, tmp_path)
         parsed = _make_parsed_message(body="")
 
@@ -457,6 +473,25 @@ class TestProcessMessage:
         )
         assert reason != CompletionReason.SUCCESS
         adapter.send_error.assert_called_once()
+
+    def test_empty_body_allowed_with_subject(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """Empty body allowed when subject is present."""
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        parsed = _make_parsed_message(body="", subject="Fix the bug")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            reason, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
+
+        assert reason == CompletionReason.SUCCESS
+        assert conv_id == "conv1"
+        adapter.send_reply.assert_called_once()
 
     def test_execution_failure(
         self, email_config: RepoServerConfig, tmp_path: Path

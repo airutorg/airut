@@ -218,7 +218,7 @@ class TestEmptyBodyResponse:
         - No conversation directory is created
         """
         msg = create_email(
-            subject="Empty body test",
+            subject="",
             body="   ",  # Whitespace-only body
         )
         integration_env.email_server.inject_message(msg)
@@ -288,7 +288,7 @@ class TestEmptyBodyResponse:
                         assert (
                             t.completion_reason
                             != CompletionReason.EXECUTION_FAILED
-                            or t.display_title != "Empty body test"
+                            or t.display_title != "(no subject)"
                         ), "Empty body should not create conversation dir"
 
         finally:
