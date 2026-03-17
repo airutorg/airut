@@ -399,12 +399,14 @@ The CLI forwards signals to the container process:
 The sandboxed command's stdout and stderr are streamed to the CLI's stdout and
 stderr in real time. No buffering, no reformatting.
 
-For `CommandTask`, the `_run_container()` function uses `stderr=None`
-(pass-through to the parent process's stderr) instead of
-`stderr=subprocess.PIPE` (which `AgentTask` uses to capture stderr for
-`ExecutionResult`). Stdout is captured line-by-line via `subprocess.PIPE` and
-both written to the CLI's stdout and passed to the `on_output` callback. This
-gives real-time streaming for both streams.
+The shared `run_container()` function uses `asyncio.create_subprocess_exec` with
+`stdout=PIPE` and `stderr=PIPE` for both `AgentTask` and `CommandTask`. Stdout
+and stderr are read concurrently via `asyncio.gather` using fixed-size chunk
+reads (not `readline()`), which avoids the asyncio `StreamReader` buffer limit
+that would truncate very long lines. Complete lines are delivered to callbacks
+as they arrive. For `CommandTask`, the CLI registers callbacks that write each
+line to `sys.stdout` / `sys.stderr` in real time, giving the same streaming
+behavior as a direct pass-through.
 
 The CLI's own log messages (sandbox startup, image build progress) go to stderr
 (or to the `--log` file when specified) to avoid polluting the command's stdout.

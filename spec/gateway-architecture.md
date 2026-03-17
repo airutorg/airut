@@ -26,7 +26,11 @@ protocol handling (email IMAP/SMTP, Slack Socket Mode, etc.) via types in
 
 - **`ParsedMessage`** — Protocol-agnostic dataclass produced by the channel
   adapter after authentication and parsing. Contains sender, body,
-  conversation_id, model_hint, attachments, display_title, and channel_context.
+  conversation_id, model_hint, attachments, display_title, channel_context, and
+  subject. The `subject` field carries the email subject line (or equivalent)
+  for new conversations; it is included in `channel_context` so Claude sees it
+  in the prompt. When a new-conversation email has a subject but an empty body,
+  the subject alone drives the task — the empty body is allowed.
 - **`AuthenticationError`** — Exception raised by `authenticate_and_parse()`
   when authentication or authorization fails. Carries `sender` (raw sender
   identity for dashboard visibility) and `reason` (human-readable rejection

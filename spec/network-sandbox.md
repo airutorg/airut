@@ -82,9 +82,13 @@ The proxy is managed by `ProxyManager` in `airut/sandbox/_proxy.py`:
 
 **Conversation lifecycle** (per-conversation resources):
 
-- `start_task_proxy()`: allocate subnet, create internal network with route,
-  start dual-homed proxy container, health check
-- `stop_task_proxy()`: remove container and network
+- `start_proxy()`: allocate subnet, create internal network with route, start
+  dual-homed proxy container, health check. Subnet allocation retries
+  automatically when the chosen /24 subnet conflicts with one already held on
+  the host (e.g. by another airut instance sharing the same machine).
+  Conflicting octets are released so future calls can retry them once the
+  external holder finishes.
+- `stop_proxy()`: remove container and network
 
 ## Resource Scoping
 
