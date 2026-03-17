@@ -123,6 +123,14 @@ different control, and all four must hold simultaneously:
    image, network allowlist, or secret masking rules. The sandbox-action
    enforces this by checking out `github.event.pull_request.base.ref`.
 
+   > **`workflow_dispatch` note:** For `workflow_dispatch` triggers there is no
+   > PR context, so the action falls back to `github.ref_name` — the dispatched
+   > branch. Sandbox configuration (Dockerfile, network allowlist, masked
+   > secrets) comes from that branch, not the default branch. This is safe
+   > because a human triggers the dispatch after reviewing the PR, but the
+   > dispatcher should verify the branch's `.airut/` configuration before
+   > triggering. For automated CI on PRs, use `pull_request` triggers.
+
 2. **Workflow files are immutable to the agent** -- the agent must not be able
    to modify `.github/workflows/`. For `pull_request` events, GitHub executes
    the workflow YAML from the merge ref (`refs/pull/<number>/merge`), not from

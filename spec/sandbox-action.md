@@ -137,6 +137,14 @@ repositories with multiple protected branches (e.g., `main` and `release/*`).
 For `push` events (no PR context), the fallback `github.ref_name` resolves to
 the branch being pushed to.
 
+**`workflow_dispatch` note:** When triggered via `workflow_dispatch`, there is
+no PR context, so the action checks out `github.ref_name` — the dispatched
+branch. This means `.airut/` configuration (Dockerfile, network allowlist,
+sandbox.yaml) comes from the dispatched branch, not the default branch. This is
+safe because a human triggers the dispatch after reviewing the PR, but the
+dispatcher should verify the branch's `.airut/` configuration before triggering.
+See [doc/ci-sandbox.md](../doc/ci-sandbox.md#trust-model) for details.
+
 ### Merge Mode
 
 When `merge` is `true` (default), the container starts on the base branch and
