@@ -136,7 +136,7 @@ organization settings, or resources that your personal account has access to.
      Existing classic PATs may have `workflow` enabled by default — audit at
      GitHub → Settings → Developer settings → Personal access tokens. On
      Teams/Enterprise plans, a
-     [push ruleset](ci-sandbox.md#protecting-workflow-files) can additionally
+     [push ruleset](ci-sandbox.md#1-protecting-workflow-files) can additionally
      block workflow file changes.
    - **Why not fine-grained PATs?** Fine-grained PATs can only access
      repositories owned by the token's account. Since the dedicated bot account
@@ -378,13 +378,10 @@ repos:
           - "*.githubusercontent.com"
 ```
 
-Real credentials never enter the container — the proxy inserts them into
-upstream requests only for scoped hosts. A compromised container can still act
-within scope (make authenticated API calls), but cannot extract credentials for
-use outside the container. See
-[network-sandbox.md](network-sandbox.md#masked-secrets-token-replacement) for an
-overview and [spec/masked-secrets.md](../spec/masked-secrets.md) for the full
-specification.
+Real credentials never enter the container. See
+[network-sandbox.md](network-sandbox.md#masked-secrets-token-replacement) for
+the security model and [spec/masked-secrets.md](../spec/masked-secrets.md) for
+the full specification.
 
 ### Signing Credentials (AWS)
 

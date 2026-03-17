@@ -58,7 +58,7 @@ permissions) -- commonly read-write. A compromised agent can:
 
 Path 1 can be closed by omitting the `workflow` scope from the agent's PAT (or
 using a repository ruleset -- see
-[Protecting Workflow Files](#protecting-workflow-files)). But path 2 is the
+[Protecting Workflow Files](#1-protecting-workflow-files)). But path 2 is the
 harder problem: the agent can modify any repository code, and most CI workflows
 execute repository code (`uv run pytest`, `npm test`, build scripts).
 
@@ -403,7 +403,7 @@ Neither image contains secrets -- credentials are injected at runtime via
 masked-secret surrogates and proxy-level bind mounts.
 
 For the full security analysis with defense-in-depth details, see
-[spec/image.md](../spec/image.md#security-1).
+[spec/image.md](../spec/image.md#security).
 
 ## Fail-Secure Behavior
 

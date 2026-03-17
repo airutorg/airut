@@ -37,6 +37,7 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
 - `spec/sandbox.md` — sandbox library for safe containerized Claude Code
   execution
 - `spec/sandbox-action.md` — reusable GitHub Action wrapping airut-sandbox
+- `spec/sandbox-cli.md` — standalone sandbox CLI for CI and other environments
 - `spec/image.md` — two-layer container image build strategy
 - `spec/network-sandbox.md` — proxy lifecycle, resource scoping, log format,
   crash recovery

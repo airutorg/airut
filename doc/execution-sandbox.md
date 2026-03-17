@@ -190,7 +190,6 @@ verify. This is the default on Ubuntu 22.04+, Fedora 34+, Debian 12+, and RHEL
 
 ### Other Limits
 
-- **Conversation limit**: 100 active conversations (oldest garbage-collected)
 - **Conversation expiry**: 7 days without activity (configurable)
 
 ## Fail-Secure Behavior
