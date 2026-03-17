@@ -65,11 +65,13 @@ independent development tracks:
 **(b) Airut version bumps** -- happen directly on `vN` via PRs that update the
 `VERSION` file.
 
-| Ref             | VERSION file | airut-sandbox source | Purpose                             |
-| --------------- | ------------ | -------------------- | ----------------------------------- |
-| `main`          | `main`       | `git+.../airut@main` | Development, airut repo's own CI    |
-| `v0` (branch)   | `0.17.0`     | PyPI `airut==0.17.0` | Stable release; `@v0` resolves here |
-| `v0.17.0` (tag) | `0.17.0`     | PyPI `airut==0.17.0` | Pinned version                      |
+| Ref            | VERSION file | airut-sandbox source | Purpose                             |
+| -------------- | ------------ | -------------------- | ----------------------------------- |
+| `main`         | `main`       | `git+.../airut@main` | Development, airut repo's own CI    |
+| `v0` (branch)  | `X.Y.Z`      | PyPI `airut==X.Y.Z`  | Stable release; `@v0` resolves here |
+| `vX.Y.Z` (tag) | `X.Y.Z`      | PyPI `airut==X.Y.Z`  | Pinned version                      |
+
+_(e.g., `X.Y.Z` = `0.17.0`)_
 
 **`main` is never modified during releases.** The `VERSION` file on `main`
 always contains `main`. Only `vN` branches have PyPI versions in `VERSION`.
