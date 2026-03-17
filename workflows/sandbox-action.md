@@ -33,7 +33,13 @@ cd /storage/sandbox-action && git fetch origin && git checkout main && git pull
 
 2. Edit files (`action.yml`, `VERSION`, `README.md`, etc.).
 
-3. Commit and push:
+3. Run CI checks locally:
+
+   ```bash
+   uv run scripts/ci.py --fix
+   ```
+
+4. Commit and push:
 
    ```bash
    git add -A
@@ -41,13 +47,13 @@ cd /storage/sandbox-action && git fetch origin && git checkout main && git pull
    git push -u origin HEAD
    ```
 
-4. Create a PR:
+5. Create a PR:
 
    ```bash
    gh pr create --fill
    ```
 
-5. Test the change by temporarily pointing the airut repo's CI workflow to the
+6. Test the change by temporarily pointing the airut repo's CI workflow to the
    PR branch:
 
    ```yaml
@@ -55,7 +61,7 @@ cd /storage/sandbox-action && git fetch origin && git checkout main && git pull
    - uses: airutorg/sandbox-action@feature/description
    ```
 
-6. After the PR is merged, revert the airut CI workflow back to `@main`.
+7. After the PR is merged, revert the airut CI workflow back to `@main`.
 
 ## Branching Model
 
