@@ -62,8 +62,6 @@ repos:
         scopes:
           - "api.github.com"
           - "*.githubusercontent.com"
-        headers:                                   # Optional, default: ["Authorization"]
-          - "Authorization"
         allow_foreign_credentials: false            # Optional, default: false
         # Optional: restrict token permissions (subset of app's granted permissions)
         permissions:
@@ -76,20 +74,25 @@ repos:
 
 ### Fields
 
-| Field                       | Type          | Required | Description                                                    |
-| --------------------------- | ------------- | -------- | -------------------------------------------------------------- |
-| `app_id`                    | string / !env | Yes      | GitHub App Client ID (`Iv23li...`) or numeric App ID for GHES  |
-| `private_key`               | string / !env | Yes      | PEM-encoded RSA private key                                    |
-| `installation_id`           | string / !env | Yes      | Installation ID for the target org/user                        |
-| `scopes`                    | list[string]  | Yes      | Fnmatch host patterns where token replacement is allowed       |
-| `headers`                   | list[string]  | No       | Fnmatch header patterns to scan (default: `["Authorization"]`) |
-| `allow_foreign_credentials` | bool          | No       | Allow non-surrogate credentials through (default: false)       |
-| `permissions`               | dict          | No       | Restrict token permissions (subset of app's grants)            |
-| `repositories`              | list[string]  | No       | Restrict token to specific repository names                    |
+| Field                       | Type          | Required | Description                                                   |
+| --------------------------- | ------------- | -------- | ------------------------------------------------------------- |
+| `app_id`                    | string / !env | Yes      | GitHub App Client ID (`Iv23li...`) or numeric App ID for GHES |
+| `private_key`               | string / !env | Yes      | PEM-encoded RSA private key                                   |
+| `installation_id`           | string / !env | Yes      | Installation ID for the target org/user                       |
+| `scopes`                    | list[string]  | Yes      | Fnmatch host patterns where token replacement is allowed      |
+| `base_url`                  | string / !env | No       | GitHub API base URL (default: `https://api.github.com`)       |
+| `allow_foreign_credentials` | bool          | No       | Allow non-surrogate credentials through (default: false)      |
+| `permissions`               | dict          | No       | Restrict token permissions (subset of app's grants)           |
+| `repositories`              | list[string]  | No       | Restrict token to specific repository names                   |
 
 The `app_id` field maps to the JWT `iss` claim. On GitHub.com (and GHES 3.19+),
 this should be the **Client ID** (string starting with `Iv`). On older GHES
 versions, use the numeric App ID.
+
+The `private_key` is the PEM-encoded RSA private key downloaded from the GitHub
+App settings page. Both PKCS#1 (`BEGIN RSA PRIVATE KEY`) and PKCS#8
+(`BEGIN PRIVATE KEY`) formats are supported —
+`cryptography.load_pem_private_key()` handles both.
 
 ### GHES Support
 
@@ -147,7 +150,6 @@ new entry type discriminated by `"type": "github-app"`:
     "installation_id": "12345678",
     "base_url": "https://api.github.com",
     "scopes": ["api.github.com", "*.githubusercontent.com"],
-    "headers": ["Authorization"],
     "allow_foreign_credentials": false,
     "permissions": {"contents": "write", "pull_requests": "write"},
     "repositories": ["my-repo"]
@@ -168,16 +170,19 @@ class _CachedToken:
     expires_at: float  # Unix timestamp
 ```
 
-Cache is a dict mapping surrogate → `_CachedToken`. Token is considered expired
-when current time is within `_REFRESH_MARGIN` (5 minutes) of `expires_at`.
+Cache is an instance variable on the `ProxyFilter` class (initialized in
+`load()`), mapping surrogate → `_CachedToken`. Token is considered expired when
+current time is within `_REFRESH_MARGIN` (5 minutes) of `expires_at`.
 
 ### Request Flow
 
 When a request arrives at an allowlisted host:
 
-1. **Detect**: In `_replace_tokens()` (or a new `_try_github_app()` handler),
-   check if the request contains a surrogate matching a `"type": "github-app"`
-   entry.
+1. **Detect**: In a new `_try_github_app()` handler, check if the request's
+   `Authorization` header contains a surrogate matching a `"type": "github-app"`
+   entry. The header is always `Authorization` — this is not configurable
+   (GitHub tokens are always Bearer tokens in the Authorization header; if
+   GitHub changes this, Airut updates accordingly).
 
 2. **Scope check**: Verify request host matches the entry's `scopes` patterns.
 
@@ -186,16 +191,21 @@ When a request arrives at an allowlisted host:
    - If cached token exists and is not within refresh margin → use it.
    - If cached token is missing or near expiry → refresh (step 4).
 
-4. **Token refresh** (synchronous): a. Generate a JWT: sign `{iss, iat, exp}`
-   with the private key using RS256. b. Call
-   `POST {base_url}/app/installations/{installation_id}/access_tokens` with
-   `Authorization: Bearer <JWT>` and optional `permissions` / `repositories`
-   body. c. Parse response: extract `token` and `expires_at`. d. Update the
-   cache.
+4. **Token refresh** (synchronous): mitmproxy hooks are synchronous (blocking
+   the event loop), so concurrent requests naturally serialize. This is
+   acceptable — security and robustness take priority over latency, and agent
+   tasks are asynchronous by nature. Steps:
+
+   a. Generate a JWT: sign `{iss, iat, exp}` with the private key using RS256.
+   b. Call `POST {base_url}/app/installations/{installation_id}/access_tokens`
+   with `Authorization: Bearer <JWT>` and optional `permissions` /
+   `repositories` body. c. Parse response: extract `token` and `expires_at`. d.
+   Update the cache.
 
 5. **Replace**: Substitute the surrogate with the real installation token in the
-   matching header(s). Apply the same two-pass logic as masked secrets (replace
-   pass, then strip pass for foreign credentials).
+   `Authorization` header. Apply the same foreign-credential stripping logic as
+   masked secrets (strip non-surrogate Authorization headers on scoped hosts
+   when `allow_foreign_credentials` is false).
 
 6. **Log**: Log the replacement with `[github-app: refreshed]` or
    `[github-app: cached]` in the network log.
@@ -241,6 +251,11 @@ If the token refresh HTTP call fails:
 
 The container sees a clean HTTP error and can retry. The surrogate is never sent
 to the upstream server.
+
+If the app is suspended or uninstalled mid-session, token refresh will
+persistently fail. The proxy should not cache error state — each request retries
+independently (the overhead of one failed HTTP call per request is acceptable,
+and the app could be reinstated).
 
 ### JWT Generation Without PyJWT
 
@@ -329,6 +344,13 @@ def fetch_installation_token(
     with urllib.request.urlopen(req, timeout=30) as resp:
         result = json.loads(resp.read())
         return result["token"], result["expires_at"]
+
+
+# The caller converts expires_at from ISO 8601 to Unix timestamp:
+#   from datetime import datetime, timezone
+#   expires_at = datetime.fromisoformat(
+#       expires_at_iso.replace("Z", "+00:00")
+#   ).timestamp()
 ```
 
 ## Implementation Plan
@@ -341,14 +363,14 @@ def fetch_installation_token(
 
 ### Modified Files
 
-| File                                          | Change                                                                                            |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `airut/gateway/config.py`                     | New `GitHubAppCredential`, `GitHubAppEntry` dataclasses; extend `_resolve_container_env()`        |
-| `airut/sandbox/secrets.py`                    | New `GitHubAppCredential` input type, `_GitHubAppEntry` internal type; extend `prepare_secrets()` |
-| `airut/_bundled/proxy/proxy_filter.py`        | New `_try_github_app()` handler; integrate into `request()` hook                                  |
-| `airut/_bundled/proxy/proxy.dockerfile`       | `COPY github_app.py`                                                                              |
-| `airut/gateway/service/message_processing.py` | Extend `_convert_replacement_map()` for `GitHubAppEntry`                                          |
-| `spec/repo-config.md`                         | Document new credential type in server config schema                                              |
+| File                                          | Change                                                                                                                                     |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `airut/gateway/config.py`                     | New `GitHubAppCredential`, `GitHubAppEntry` dataclasses; add `GitHubAppEntry` to `ReplacementMap` union; extend `_resolve_container_env()` |
+| `airut/sandbox/secrets.py`                    | New `GitHubAppCredential` input type, `_GitHubAppEntry` internal type; extend `prepare_secrets()`                                          |
+| `airut/_bundled/proxy/proxy_filter.py`        | New `_try_github_app()` handler; integrate into `request()` hook                                                                           |
+| `airut/_bundled/proxy/proxy.dockerfile`       | `COPY github_app.py`                                                                                                                       |
+| `airut/gateway/service/message_processing.py` | Extend `_convert_replacement_map()` for `GitHubAppEntry`                                                                                   |
+| `spec/repo-config.md`                         | Document new credential type in server config schema                                                                                       |
 
 ### Dataclasses
 
@@ -363,7 +385,6 @@ class GitHubAppCredential:
     private_key: str
     installation_id: str
     scopes: frozenset[str]
-    headers: tuple[str, ...]
     allow_foreign_credentials: bool = False
     base_url: str = "https://api.github.com"
     permissions: dict[str, str] | None = None
@@ -379,7 +400,6 @@ class GitHubAppEntry:
     installation_id: str
     base_url: str
     scopes: tuple[str, ...]
-    headers: tuple[str, ...]
     allow_foreign_credentials: bool = False
     permissions: dict[str, str] | None = None
     repositories: tuple[str, ...] | None = None
@@ -397,7 +417,6 @@ class GitHubAppCredential:
     private_key: str
     installation_id: str
     scopes: tuple[str, ...]
-    headers: tuple[str, ...]
     allow_foreign_credentials: bool = False
     base_url: str = "https://api.github.com"
     permissions: dict[str, str] | None = None
@@ -410,7 +429,9 @@ GitHub App credentials don't have a real token at config time. The surrogate is
 generated from a fixed template:
 
 ```python
-_GITHUB_APP_SURROGATE_TEMPLATE = "ghs_" + "x" * 36  # 40 chars total
+# Template must include mixed case + digits so generate_surrogate()
+# detects the correct charset (real ghs_ tokens are alphanumeric).
+_GITHUB_APP_SURROGATE_TEMPLATE = "ghs_" + "aA0" * 12  # 40 chars total
 surrogate = generate_surrogate(_GITHUB_APP_SURROGATE_TEMPLATE)
 ```
 
@@ -419,27 +440,45 @@ looks like a real GitHub installation token.
 
 ## Security Properties
 
-1. **Private key isolation**: The RSA private key exists only in the proxy
-   container's replacement map. The container never sees it.
+01. **Private key isolation**: The RSA private key exists only in the proxy
+    container's replacement map. The container never sees it.
 
-2. **Short-lived tokens**: Installation tokens expire in 1 hour. Even if leaked
-   via response echo, the blast radius is time-bounded.
+02. **Short-lived tokens**: Installation tokens expire in 1 hour. Even if leaked
+    via response echo, the blast radius is time-bounded.
 
-3. **Surrogate stability**: The container sees a single, unchanging surrogate
-   for the entire session. Token rotation is invisible.
+03. **Surrogate stability**: The container sees a single, unchanging surrogate
+    for the entire session. Token rotation is invisible.
 
-4. **No PAT on the wire**: Eliminates long-lived PATs entirely for GitHub API
-   access. The only tokens on the wire are 1-hour installation tokens.
+04. **No PAT on the wire**: Eliminates long-lived PATs entirely for GitHub API
+    access. The only tokens on the wire are 1-hour installation tokens.
 
-5. **Foreign credential blocking**: The `allow_foreign_credentials: false`
-   default strips non-surrogate Authorization headers on scoped hosts, same as
-   masked secrets.
+05. **Foreign credential blocking**: The `allow_foreign_credentials: false`
+    default strips non-surrogate Authorization headers on scoped hosts, same as
+    masked secrets.
 
-6. **Permission scoping**: Installation tokens can be restricted to specific
-   permissions and repositories, following least-privilege.
+06. **Permission scoping**: Installation tokens can be restricted to specific
+    permissions and repositories, following least-privilege.
 
-7. **No new dependencies**: JWT generation uses `cryptography` (already in proxy
-   for SigV4A). Token fetch uses `urllib.request` (stdlib).
+07. **No new dependencies**: JWT generation uses `cryptography` (already in
+    proxy for SigV4A). Token fetch uses `urllib.request` (stdlib).
+
+08. **No token escalation**: Even if a leaked installation token is captured via
+    response echo, it cannot be used to generate additional tokens. The
+    `POST /app/installations/{id}/access_tokens` endpoint requires JWT
+    authentication (signed with the private key), not installation token auth.
+
+09. **Private key log redaction**: The private key must be registered with
+    `SecretFilter.register_secret()` in `RepoServerConfig.__post_init__()`, same
+    as other credential values.
+
+10. **JWT is memory-only**: JWTs generated by the proxy for token exchange exist
+    only in memory for the brief duration of the HTTP call. They are never
+    written to disk.
+
+11. **Private key file lifecycle**: The replacement map JSON
+    (`/replacements.json`) is created with restrictive permissions (0600),
+    mounted read-only into the proxy container, and deleted after proxy stop.
+    This is the same trust boundary as existing masked secret values.
 
 ## Comparison With Masked Secrets
 
@@ -454,26 +493,32 @@ looks like a real GitHub installation token.
 | Response echo risk       | High (PAT valid forever) | Low (token expires in 1 hour)     |
 | GitHub rate limits       | 5,000/hr (PAT)           | 5,000–12,500/hr (scales with org) |
 
-## Open Questions
+## Design Decisions
 
-1. **Should the proxy pre-fetch the first token at startup?** Currently, the
-   first request triggers a synchronous token fetch, adding ~200-500ms latency.
-   Pre-fetching at load time would eliminate this cold-start penalty. Downside:
-   the proxy makes a network call during initialization, which could fail and
-   block startup.
+1. **Lazy token loading**: The first request triggers a synchronous token fetch,
+   adding ~200-500ms latency on the first GitHub API call. This is acceptable:
+   agent tasks are asynchronous and the delay is negligible compared to overall
+   task time. Pre-fetching at startup would add complexity and a failure mode
+   during initialization.
 
-2. **Concurrent refresh handling**: If multiple requests arrive simultaneously
-   and the token is expired, should the proxy serialize refresh calls (only one
-   in-flight at a time) or allow concurrent refreshes? mitmproxy hooks are
-   synchronous (blocking the event loop), so concurrent requests naturally
-   serialize. But if we move to async, we'd need a lock.
+2. **Synchronous serialization**: mitmproxy hooks are synchronous, so concurrent
+   requests naturally serialize through token refresh. This is fine — security
+   and robustness take priority over latency in Airut's model.
 
-3. **Should `headers` default to `["Authorization"]`?** GitHub tokens are always
-   used in the Authorization header. A default would reduce config boilerplate.
-   The masked secrets spec requires explicit `headers` — should GitHub App
-   credentials follow the same pattern for consistency, or optimize for the
-   common case?
+3. **Hardcoded `Authorization` header**: Unlike masked secrets (which have
+   configurable `headers`), GitHub App credentials always scan only the
+   `Authorization` header. GitHub tokens are always Bearer tokens in this
+   header. This simplifies config and follows the "Airut handles everything"
+   contract — if GitHub changes the header convention, Airut updates
+   accordingly.
 
-4. **Token revocation on session end**: Should the proxy revoke the installation
-   token (`DELETE /installation/token`) when the conversation ends? This
-   minimizes the window of a leaked token but adds complexity to proxy teardown.
+## Future Enhancements
+
+- **Token revocation on session end**: The proxy could revoke the installation
+  token (`DELETE /installation/token`) during teardown to minimize the window of
+  a leaked token. Not implemented initially — the risk is low in practice since
+  the execution container never receives the JWT (only the surrogate), and
+  tokens are removed from memory when the proxy exits. The only theoretical
+  vector is a reflection attack where a GitHub API response echoes the
+  installation token back to the container, which could then forward it to
+  another allowlisted destination. The 1-hour expiry already bounds this risk.
