@@ -25,7 +25,7 @@ from airut.gateway.email.microsoft_oauth2 import (
     MicrosoftOAuth2TokenError,
     MicrosoftOAuth2TokenProvider,
 )
-from airut.markdown import markdown_to_html
+from airut.markdown import markdown_to_email_html
 
 
 logger = logging.getLogger(__name__)
@@ -174,7 +174,7 @@ class EmailResponder:
                 alt_part = MIMEMultipart("alternative")
                 alt_part.attach(MIMEText(body, "plain"))
                 html_content = (
-                    html_body if html_body else markdown_to_html(body)
+                    html_body if html_body else markdown_to_email_html(body)
                 )
                 alt_part.attach(MIMEText(html_content, "html"))
                 msg.attach(alt_part)
@@ -182,7 +182,7 @@ class EmailResponder:
                 # Without attachments, attach directly to message
                 msg.attach(MIMEText(body, "plain"))
                 html_content = (
-                    html_body if html_body else markdown_to_html(body)
+                    html_body if html_body else markdown_to_email_html(body)
                 )
                 msg.attach(MIMEText(html_content, "html"))
 

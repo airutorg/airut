@@ -274,9 +274,11 @@ def test_send_reply_markdown_to_html_conversion(email_config):
         assert sent_message.is_multipart()
         parts = sent_message.get_payload()
 
-        # HTML part should have converted markdown
+        # HTML part should have converted markdown in a full HTML document
         # h1 is rendered as bold underline to keep font size constant
         html_content = parts[1].get_payload()
+        assert '<html lang="en">' in html_content
+        assert "text-align: justify" in html_content
         assert "<strong><u>Header</u></strong>" in html_content
         assert "<strong>bold</strong>" in html_content
 

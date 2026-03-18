@@ -15,6 +15,7 @@ from airut.markdown import (
     _render_list,
     _render_table,
     _split_table_cells,
+    markdown_to_email_html,
     markdown_to_html,
 )
 
@@ -772,3 +773,44 @@ class TestHelperFunctions:
         lines = ["1. First", "2. Second"]
         result = _render_list(lines, "ol")
         assert result == "<ol><li>First</li><li>Second</li></ol>"
+
+
+class TestMarkdownToEmailHtml:
+    """Tests for markdown_to_email_html full-document wrapper."""
+
+    def test_empty_string(self):
+        """Test empty input returns empty string."""
+        assert markdown_to_email_html("") == ""
+
+    def test_wraps_in_html_document(self):
+        """Test output is a full HTML document with lang attribute."""
+        result = markdown_to_email_html("Hello world")
+        assert result.startswith("<!DOCTYPE html>")
+        assert '<html lang="en">' in result
+        assert "</html>" in result
+        assert "<body>" in result
+        assert "</body>" in result
+
+    def test_has_justify_css(self):
+        """Test output includes text justification and hyphenation CSS."""
+        result = markdown_to_email_html("Hello world")
+        assert "text-align: justify" in result
+        assert "hyphens: auto" in result
+        assert "text-justify: inter-word" in result
+
+    def test_code_resets_justify(self):
+        """Test code/table elements reset to left-align."""
+        result = markdown_to_email_html("Hello world")
+        assert "pre, code, table" in result
+        assert "text-align: left" in result
+
+    def test_contains_converted_content(self):
+        """Test markdown content is converted inside the document."""
+        result = markdown_to_email_html("This is **bold** text.")
+        assert "<strong>bold</strong>" in result
+        assert "<body>" in result
+
+    def test_charset_meta(self):
+        """Test output includes charset meta tag."""
+        result = markdown_to_email_html("Hello")
+        assert '<meta charset="UTF-8">' in result

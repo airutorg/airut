@@ -30,6 +30,7 @@ def _light_base() -> str:
             padding: 0;
             background: #f5f5f5;
             color: #333;
+            hyphens: auto;
         }
         .page {
             padding: 20px;
@@ -864,6 +865,7 @@ def _dark_base() -> str:
             color: #d4d4d4;
             font-size: 13px;
             line-height: 1.5;
+            hyphens: auto;
         }
         a { color: #569cd6; text-decoration: none; }
         a:hover { text-decoration: underline; }

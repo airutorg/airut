@@ -26,6 +26,51 @@ import html
 import re
 
 
+# HTML document wrapper for email with text justification and hyphenation.
+# Applied to body text; code/table elements reset to left-align.
+_EMAIL_HTML_WRAPPER = (
+    "<!DOCTYPE html>\n"
+    '<html lang="en">\n'
+    "<head>\n"
+    '<meta charset="UTF-8">\n'
+    "<style>\n"
+    "body {\n"
+    "    text-align: justify;\n"
+    "    hyphens: auto;\n"
+    "    text-justify: inter-word;\n"
+    "}\n"
+    "pre, code, table {\n"
+    "    text-align: left;\n"
+    "    hyphens: none;\n"
+    "}\n"
+    "</style>\n"
+    "</head>\n"
+    "<body>\n"
+    "%s\n"
+    "</body>\n"
+    "</html>"
+)
+
+
+def markdown_to_email_html(text: str) -> str:
+    """Convert markdown to a complete HTML email document.
+
+    Wraps the converted HTML in a full ``<!DOCTYPE html>`` document with
+    ``<html lang="en">`` and CSS for justified text with automatic
+    hyphenation. Code blocks and tables are left-aligned.
+
+    Args:
+        text: Markdown-formatted text.
+
+    Returns:
+        Complete HTML document string, or empty string if *text* is empty.
+    """
+    if not text:
+        return ""
+    content = markdown_to_html(text)
+    return _EMAIL_HTML_WRAPPER % content
+
+
 def markdown_to_html(text: str) -> str:
     """Convert markdown text to HTML for email.
 
