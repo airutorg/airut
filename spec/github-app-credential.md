@@ -34,11 +34,11 @@ A GitHub App authenticates in two steps:
 
 2. **Installation token exchange** (network):
    `POST /app/installations/{installation_id}/access_tokens` with
-   `Authorization: Bearer <JWT>`. Returns a `ghs_`-prefixed token valid for
-   **1 hour**. Optional request body can restrict `permissions` and
-   `repositories`.
+   `Authorization: Bearer <JWT>`. Returns a `ghs_`-prefixed token valid for **1
+   hour**. Optional request body can restrict `permissions` and `repositories`.
 
 Key properties:
+
 - **Overlap**: Generating a new installation token does NOT invalidate the old
   one. Both remain valid until their own expiry.
 - **No refresh mechanism**: There is no refresh token. To get a new token,
@@ -76,16 +76,16 @@ repos:
 
 ### Fields
 
-| Field                       | Type           | Required | Description                                                     |
-| --------------------------- | -------------- | -------- | --------------------------------------------------------------- |
-| `app_id`                    | string / !env  | Yes      | GitHub App Client ID (`Iv23li...`) or numeric App ID for GHES   |
-| `private_key`               | string / !env  | Yes      | PEM-encoded RSA private key                                     |
-| `installation_id`           | string / !env  | Yes      | Installation ID for the target org/user                         |
-| `scopes`                    | list[string]   | Yes      | Fnmatch host patterns where token replacement is allowed        |
-| `headers`                   | list[string]   | No       | Fnmatch header patterns to scan (default: `["Authorization"]`)  |
-| `allow_foreign_credentials` | bool           | No       | Allow non-surrogate credentials through (default: false)        |
-| `permissions`               | dict           | No       | Restrict token permissions (subset of app's grants)             |
-| `repositories`              | list[string]   | No       | Restrict token to specific repository names                     |
+| Field                       | Type          | Required | Description                                                    |
+| --------------------------- | ------------- | -------- | -------------------------------------------------------------- |
+| `app_id`                    | string / !env | Yes      | GitHub App Client ID (`Iv23li...`) or numeric App ID for GHES  |
+| `private_key`               | string / !env | Yes      | PEM-encoded RSA private key                                    |
+| `installation_id`           | string / !env | Yes      | Installation ID for the target org/user                        |
+| `scopes`                    | list[string]  | Yes      | Fnmatch host patterns where token replacement is allowed       |
+| `headers`                   | list[string]  | No       | Fnmatch header patterns to scan (default: `["Authorization"]`) |
+| `allow_foreign_credentials` | bool          | No       | Allow non-surrogate credentials through (default: false)       |
+| `permissions`               | dict          | No       | Restrict token permissions (subset of app's grants)            |
+| `repositories`              | list[string]  | No       | Restrict token to specific repository names                    |
 
 The `app_id` field maps to the JWT `iss` claim. On GitHub.com (and GHES 3.19+),
 this should be the **Client ID** (string starting with `Iv`). On older GHES
@@ -165,7 +165,7 @@ The proxy maintains an in-memory cache per GitHub App credential:
 @dataclass
 class _CachedToken:
     token: str
-    expires_at: float   # Unix timestamp
+    expires_at: float  # Unix timestamp
 ```
 
 Cache is a dict mapping surrogate → `_CachedToken`. Token is considered expired
@@ -182,16 +182,16 @@ When a request arrives at an allowlisted host:
 2. **Scope check**: Verify request host matches the entry's `scopes` patterns.
 
 3. **Token check**: Look up the surrogate in the token cache.
+
    - If cached token exists and is not within refresh margin → use it.
    - If cached token is missing or near expiry → refresh (step 4).
 
-4. **Token refresh** (synchronous):
-   a. Generate a JWT: sign `{iss, iat, exp}` with the private key using RS256.
-   b. Call `POST {base_url}/app/installations/{installation_id}/access_tokens`
-      with `Authorization: Bearer <JWT>` and optional `permissions` /
-      `repositories` body.
-   c. Parse response: extract `token` and `expires_at`.
-   d. Update the cache.
+4. **Token refresh** (synchronous): a. Generate a JWT: sign `{iss, iat, exp}`
+   with the private key using RS256. b. Call
+   `POST {base_url}/app/installations/{installation_id}/access_tokens` with
+   `Authorization: Bearer <JWT>` and optional `permissions` / `repositories`
+   body. c. Parse response: extract `token` and `expires_at`. d. Update the
+   cache.
 
 5. **Replace**: Substitute the surrogate with the real installation token in the
    matching header(s). Apply the same two-pass logic as masked secrets (replace
@@ -235,12 +235,12 @@ If the token refresh HTTP call fails:
   }
   ```
 - **GitHub API error** (4xx/5xx): Return HTTP 502 with the upstream error
-  detail. Common errors: 401 (bad JWT/key), 404 (wrong installation ID),
-  403 (insufficient permissions).
+  detail. Common errors: 401 (bad JWT/key), 404 (wrong installation ID), 403
+  (insufficient permissions).
 - **Log**: Always log refresh failures via `_log_loud()`.
 
-The container sees a clean HTTP error and can retry. The surrogate is never
-sent to the upstream server.
+The container sees a clean HTTP error and can retry. The surrogate is never sent
+to the upstream server.
 
 ### JWT Generation Without PyJWT
 
@@ -254,20 +254,28 @@ import time
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
+
 def _base64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
 
 def generate_jwt(app_id: str, private_key_pem: str) -> str:
     header = _base64url(json.dumps({"alg": "RS256", "typ": "JWT"}).encode())
     now = int(time.time())
-    payload = _base64url(json.dumps({
-        "iss": app_id,
-        "iat": now - 60,
-        "exp": now + 540,       # 9 minutes (with 60s clock-drift margin)
-    }).encode())
+    payload = _base64url(
+        json.dumps(
+            {
+                "iss": app_id,
+                "iat": now - 60,
+                "exp": now + 540,  # 9 minutes (with 60s clock-drift margin)
+            }
+        ).encode()
+    )
 
     signing_input = f"{header}.{payload}".encode()
-    key = serialization.load_pem_private_key(private_key_pem.encode(), password=None)
+    key = serialization.load_pem_private_key(
+        private_key_pem.encode(), password=None
+    )
     signature = key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
 
     return f"{header}.{payload}.{_base64url(signature)}"
@@ -284,6 +292,7 @@ the proxy itself.
 ```python
 import json
 import urllib.request
+
 
 def fetch_installation_token(
     base_url: str,
@@ -326,20 +335,20 @@ def fetch_installation_token(
 
 ### New Files
 
-| File                                          | Description                          |
-| --------------------------------------------- | ------------------------------------ |
-| `airut/_bundled/proxy/github_app.py`          | JWT generation, token fetch & cache  |
+| File                                 | Description                         |
+| ------------------------------------ | ----------------------------------- |
+| `airut/_bundled/proxy/github_app.py` | JWT generation, token fetch & cache |
 
 ### Modified Files
 
-| File                                              | Change                                                    |
-| ------------------------------------------------- | --------------------------------------------------------- |
-| `airut/gateway/config.py`                         | New `GitHubAppCredential`, `GitHubAppEntry` dataclasses; extend `_resolve_container_env()` |
-| `airut/sandbox/secrets.py`                        | New `GitHubAppCredential` input type, `_GitHubAppEntry` internal type; extend `prepare_secrets()` |
-| `airut/_bundled/proxy/proxy_filter.py`            | New `_try_github_app()` handler; integrate into `request()` hook |
-| `airut/_bundled/proxy/proxy.dockerfile`           | `COPY github_app.py` |
-| `airut/gateway/service/message_processing.py`     | Extend `_convert_replacement_map()` for `GitHubAppEntry` |
-| `spec/repo-config.md`                             | Document new credential type in server config schema      |
+| File                                          | Change                                                                                            |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `airut/gateway/config.py`                     | New `GitHubAppCredential`, `GitHubAppEntry` dataclasses; extend `_resolve_container_env()`        |
+| `airut/sandbox/secrets.py`                    | New `GitHubAppCredential` input type, `_GitHubAppEntry` internal type; extend `prepare_secrets()` |
+| `airut/_bundled/proxy/proxy_filter.py`        | New `_try_github_app()` handler; integrate into `request()` hook                                  |
+| `airut/_bundled/proxy/proxy.dockerfile`       | `COPY github_app.py`                                                                              |
+| `airut/gateway/service/message_processing.py` | Extend `_convert_replacement_map()` for `GitHubAppEntry`                                          |
+| `spec/repo-config.md`                         | Document new credential type in server config schema                                              |
 
 ### Dataclasses
 
@@ -349,6 +358,7 @@ def fetch_installation_token(
 @dataclass(frozen=True)
 class GitHubAppCredential:
     """GitHub App credential for proxy-managed token rotation."""
+
     app_id: str
     private_key: str
     installation_id: str
@@ -359,9 +369,11 @@ class GitHubAppCredential:
     permissions: dict[str, str] | None = None
     repositories: tuple[str, ...] | None = None
 
+
 @dataclass(frozen=True)
 class GitHubAppEntry:
     """Entry in the replacement map for GitHub App credentials."""
+
     app_id: str
     private_key: str
     installation_id: str
@@ -379,6 +391,7 @@ class GitHubAppEntry:
 @dataclass(frozen=True)
 class GitHubAppCredential:
     """GitHub App credential for proxy-managed token rotation."""
+
     env_var: str
     app_id: str
     private_key: str
@@ -430,16 +443,16 @@ looks like a real GitHub installation token.
 
 ## Comparison With Masked Secrets
 
-| Aspect                    | Masked Secret (PAT)         | GitHub App Credential              |
-| ------------------------- | --------------------------- | ---------------------------------- |
-| Token lifetime            | Months/years (or never)     | 1 hour                             |
-| Token rotation            | None (static value)         | Automatic (proxy-managed)          |
-| Private key in container  | N/A                         | Never                              |
-| Real token in container   | Never (surrogate)           | Never (surrogate)                  |
-| Proxy complexity          | Stateless string replace    | Stateful (cache + HTTP refresh)    |
-| Network call from proxy   | None                        | 1 call per hour to GitHub API      |
-| Response echo risk        | High (PAT valid forever)    | Low (token expires in 1 hour)      |
-| GitHub rate limits        | 5,000/hr (PAT)              | 5,000–12,500/hr (scales with org)  |
+| Aspect                   | Masked Secret (PAT)      | GitHub App Credential             |
+| ------------------------ | ------------------------ | --------------------------------- |
+| Token lifetime           | Months/years (or never)  | 1 hour                            |
+| Token rotation           | None (static value)      | Automatic (proxy-managed)         |
+| Private key in container | N/A                      | Never                             |
+| Real token in container  | Never (surrogate)        | Never (surrogate)                 |
+| Proxy complexity         | Stateless string replace | Stateful (cache + HTTP refresh)   |
+| Network call from proxy  | None                     | 1 call per hour to GitHub API     |
+| Response echo risk       | High (PAT valid forever) | Low (token expires in 1 hour)     |
+| GitHub rate limits       | 5,000/hr (PAT)           | 5,000–12,500/hr (scales with org) |
 
 ## Open Questions
 
