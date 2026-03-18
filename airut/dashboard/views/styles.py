@@ -24,12 +24,12 @@ def _light_base() -> str:
     return """\
         * { box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-                         "Helvetica Neue", Arial, sans-serif;
+            font-family: Georgia, "Times New Roman", Times, serif;
+            font-weight: 500;
             margin: 0;
             padding: 0;
             background: #f5f5f5;
-            color: #333;
+            color: #000;
         }
         .page {
             padding: 20px;
@@ -449,7 +449,7 @@ def _task_detail_specific() -> str:
             margin: 0 0 16px 0;
             font-size: 16px;
             font-weight: 600;
-            color: #444;
+            color: #000;
         }
         .status {
             display: inline-block;
@@ -479,7 +479,7 @@ def _task_detail_specific() -> str:
         .summary-value {
             font-size: 24px;
             font-weight: 600;
-            color: #333;
+            color: #000;
             font-family: "SF Mono", Consolas, monospace;
         }
         .summary-label {
@@ -513,7 +513,7 @@ def _task_detail_specific() -> str:
         }
         .reply-number {
             font-weight: 600;
-            color: #333;
+            color: #000;
         }
         .reply-timestamp {
             font-size: 12px;
@@ -538,7 +538,7 @@ def _task_detail_specific() -> str:
         }
         .reply-stat-value {
             font-family: "SF Mono", Consolas, monospace;
-            color: #333;
+            color: #000;
         }
         .usage-grid {
             display: grid;
@@ -716,7 +716,7 @@ def _task_detail_specific() -> str:
             word-break: break-word;
             max-height: 300px;
             overflow-y: auto;
-            color: #333;
+            color: #000;
         }
         .text-content.request {
             border-left: 3px solid #5bc0de;
@@ -861,7 +861,7 @@ def _dark_base() -> str:
             margin: 0;
             padding: 0;
             background: #1e1e1e;
-            color: #d4d4d4;
+            color: #fff;
             font-size: 13px;
             line-height: 1.5;
         }
@@ -882,7 +882,7 @@ def _dark_base() -> str:
             margin: 0;
             font-size: 14px;
             font-weight: 600;
-            color: #e0e0e0;
+            color: #fff;
         }
         .subtitle {
             color: #888;
