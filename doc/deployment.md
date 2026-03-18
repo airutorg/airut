@@ -678,7 +678,11 @@ systemctl --user restart airut
 
 ## Storage Cleanup
 
-Sessions are garbage-collected automatically, but you can clean up manually:
+Sessions and container images are garbage-collected automatically every 24 hours
+(first pass runs 60 seconds after startup). Image pruning is controlled by
+`execution.image_prune` (default `true`).
+
+You can also clean up manually:
 
 ```bash
 # View storage usage

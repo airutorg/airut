@@ -574,6 +574,7 @@ class GlobalConfig:
         max_concurrent_executions: Max parallel Claude containers (global).
         shutdown_timeout_seconds: Graceful shutdown timeout.
         conversation_max_age_days: Max age before conversations are GC'd.
+        image_prune: Prune dangling container images during GC.
         dashboard_enabled: Enable dashboard server.
         dashboard_host: Dashboard bind address.
         dashboard_port: Dashboard server port.
@@ -588,6 +589,7 @@ class GlobalConfig:
     max_concurrent_executions: int = 3
     shutdown_timeout_seconds: int = 60
     conversation_max_age_days: int = 7
+    image_prune: bool = True
     dashboard_enabled: bool = True
     dashboard_host: str = "127.0.0.1"
     dashboard_port: int = 5200
@@ -929,6 +931,9 @@ class ServerConfig:
             ),
             conversation_max_age_days=_resolve(
                 execution.get("conversation_max_age_days"), int, default=7
+            ),
+            image_prune=_resolve(
+                execution.get("image_prune"), bool, default=True
             ),
             dashboard_enabled=_resolve(
                 dashboard.get("enabled"), bool, default=True

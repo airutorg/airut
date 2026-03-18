@@ -913,74 +913,121 @@ class GatewayService:
             pending.adapter,
         )
 
-    def _garbage_collector_thread(self) -> None:
-        """Background thread for conversation garbage collection.
+    # Initial delay before first GC pass (seconds).  Short enough to
+    # ensure GC runs even if the server restarts frequently, long enough
+    # for boot to complete.
+    GC_INITIAL_DELAY: int = 60
+    GC_INTERVAL: int = 24 * 60 * 60  # 24 hours
 
-        Runs every 24 hours, removing old conversations from all repos.
+    def _garbage_collector_thread(self) -> None:
+        """Background housekeeping thread.
+
+        Runs after a short initial delay, then every 24 hours.
+        Prunes old conversations and (optionally) dangling container
+        images.
+
+        The initial delay ensures GC runs even when the server restarts
+        frequently (previously, the full 24h wait before the first pass
+        meant frequent restarts would skip GC entirely).
         """
-        gc_interval = 24 * 60 * 60  # 24 hours
         max_age_days = self.global_config.conversation_max_age_days
+        image_prune = self.global_config.image_prune
 
         logger.info(
-            "Garbage collector started (interval: 24h, max_age: %d days)",
+            "Garbage collector started "
+            "(initial_delay: %ds, interval: %ds, max_age: %d days, "
+            "image_prune: %s)",
+            self.GC_INITIAL_DELAY,
+            self.GC_INTERVAL,
             max_age_days,
+            image_prune,
         )
 
+        # Wait for boot to finish before first pass.
+        if self._shutdown_event.wait(timeout=self.GC_INITIAL_DELAY):
+            return  # Shutdown signaled during initial delay
+
         while self._running:
-            if self._shutdown_event.wait(timeout=gc_interval):
+            try:
+                self._gc_conversations(max_age_days)
+            except Exception as e:
+                logger.exception(
+                    "Error in conversation garbage collection: %s", e
+                )
+
+            if image_prune:
+                try:
+                    self._gc_images()
+                except Exception as e:
+                    logger.exception("Error in image pruning: %s", e)
+
+            if self._shutdown_event.wait(timeout=self.GC_INTERVAL):
                 break  # Shutdown signaled
 
-            try:
-                logger.info("Running conversation garbage collection...")
-                total_removed = 0
+    def _gc_conversations(self, max_age_days: int) -> None:
+        """Remove conversations older than *max_age_days*."""
+        logger.info("Running conversation garbage collection...")
+        total_removed = 0
 
-                for repo_id, handler in self.repo_handlers.items():
-                    conv_mgr = handler.conversation_manager
-                    conversations = conv_mgr.list_all()
+        for repo_id, handler in self.repo_handlers.items():
+            conv_mgr = handler.conversation_manager
+            conversations = conv_mgr.list_all()
 
-                    for conv_id in conversations:
-                        conv_path = conv_mgr.get_workspace_path(conv_id)
+            for conv_id in conversations:
+                conv_path = conv_mgr.get_workspace_path(conv_id)
 
-                        if conv_path.exists():
-                            mtime = conv_path.stat().st_mtime
-                            age_days = (time.time() - mtime) / (24 * 60 * 60)
+                if conv_path.exists():
+                    mtime = conv_path.stat().st_mtime
+                    age_days = (time.time() - mtime) / (24 * 60 * 60)
 
-                            if age_days > max_age_days:
-                                logger.info(
-                                    "Repo '%s': removing conversation %s "
-                                    "(age: %.1f days)",
-                                    repo_id,
-                                    conv_id,
-                                    age_days,
-                                )
-                                conv_mgr.delete(conv_id)
-                                total_removed += 1
+                    if age_days > max_age_days:
+                        logger.info(
+                            "Repo '%s': removing conversation %s "
+                            "(age: %.1f days)",
+                            repo_id,
+                            conv_id,
+                            age_days,
+                        )
+                        conv_mgr.delete(conv_id)
+                        total_removed += 1
 
-                    # Notify adapters so they can prune stale state
-                    # (e.g. Slack thread-to-conversation mappings).
-                    remaining = set(conv_mgr.list_all())
-                    for adapter in handler.adapters.values():
-                        try:
-                            adapter.cleanup_conversations(remaining)
-                        except Exception as e:
-                            logger.warning(
-                                "Adapter cleanup failed for repo '%s': %s",
-                                repo_id,
-                                e,
-                            )
-
-                if total_removed > 0:
-                    logger.info(
-                        "Garbage collection complete. Removed %d conversations",
-                        total_removed,
-                    )
-                else:
-                    logger.debug(
-                        "Garbage collection complete. No conversations removed"
+            # Notify adapters so they can prune stale state
+            # (e.g. Slack thread-to-conversation mappings).
+            remaining = set(conv_mgr.list_all())
+            for adapter in handler.adapters.values():
+                try:
+                    adapter.cleanup_conversations(remaining)
+                except Exception as e:
+                    logger.warning(
+                        "Adapter cleanup failed for repo '%s': %s",
+                        repo_id,
+                        e,
                     )
 
-            except Exception as e:
-                logger.exception("Error in garbage collector: %s", e)
+        if total_removed > 0:
+            logger.info(
+                "Garbage collection complete. Removed %d conversations",
+                total_removed,
+            )
+        else:
+            logger.debug(
+                "Garbage collection complete. No conversations removed"
+            )
+
+    def _gc_images(self) -> None:
+        """Prune dangling and old container images.
+
+        Delegates to ``Sandbox.prune_images()`` which runs
+        ``podman image prune -f`` and removes stale airut-prefixed
+        images.  Does not hold the image build lock, so concurrent
+        task startups are not blocked.
+        """
+        logger.info("Running container image pruning...")
+        removed = self.sandbox.prune_images()
+        if removed > 0:
+            logger.info("Image pruning complete. Removed %d images", removed)
+        else:
+            logger.debug("Image pruning complete. No images removed")
 
 
 def main(argv: list[str] | None = None) -> int:

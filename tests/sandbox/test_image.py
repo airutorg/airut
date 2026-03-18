@@ -481,6 +481,187 @@ class TestImageCacheGetImageCreated:
         assert cache.get_image_created("airut-repo:abc123") is None
 
 
+class TestImageCachePruneImages:
+    """Tests for ImageCache.prune_images()."""
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_prune_dangling_and_old_images(self, mock_run: MagicMock) -> None:
+        """Prunes dangling images and removes old prefixed images."""
+        old_time = (datetime.now(UTC) - timedelta(hours=25)).isoformat()
+        mock_run.side_effect = [
+            # 1. image prune -f
+            MagicMock(returncode=0, stdout=""),
+            # 2. images --filter reference=airut-*
+            MagicMock(
+                returncode=0,
+                stdout="airut-repo:abc123\nairut-proxy:def456\n",
+            ),
+            # 3. inspect airut-repo:abc123 (stale)
+            MagicMock(returncode=0, stdout=old_time),
+            # 4. rmi airut-repo:abc123
+            MagicMock(returncode=0),
+            # 5. inspect airut-proxy:def456 (fresh)
+            MagicMock(returncode=0, stdout=datetime.now(UTC).isoformat()),
+        ]
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        removed = cache.prune_images()
+
+        assert removed == 1
+        # Verify prune call
+        prune_cmd = mock_run.call_args_list[0][0][0]
+        assert prune_cmd == ["podman", "image", "prune", "-f"]
+        # Verify rmi called for stale image only
+        rmi_cmd = mock_run.call_args_list[3][0][0]
+        assert rmi_cmd == ["podman", "rmi", "airut-repo:abc123"]
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_prune_handles_prune_failure(self, mock_run: MagicMock) -> None:
+        """Continues with old-image removal even if prune -f fails."""
+        mock_run.side_effect = [
+            # 1. image prune -f fails
+            MagicMock(returncode=1, stderr="permission denied"),
+            # 2. images --filter (empty)
+            MagicMock(returncode=0, stdout=""),
+        ]
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        removed = cache.prune_images()
+        assert removed == 0
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_prune_handles_image_list_failure(
+        self, mock_run: MagicMock
+    ) -> None:
+        """Returns 0 when image listing fails."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=""),  # prune ok
+            MagicMock(returncode=1, stderr="error"),  # list fails
+        ]
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        assert cache.prune_images() == 0
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_prune_handles_rmi_failure(self, mock_run: MagicMock) -> None:
+        """Counts only successfully removed images."""
+        old_time = (datetime.now(UTC) - timedelta(hours=25)).isoformat()
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=""),  # prune
+            MagicMock(returncode=0, stdout="airut-repo:abc\n"),  # list
+            MagicMock(returncode=0, stdout=old_time),  # inspect
+            MagicMock(returncode=1, stderr="in use"),  # rmi fails
+        ]
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        assert cache.prune_images() == 0
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_prune_skips_none_tag(self, mock_run: MagicMock) -> None:
+        """Skips <none>:<none> entries from image listing."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=""),  # prune
+            MagicMock(returncode=0, stdout="<none>:<none>\n"),  # list
+        ]
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        assert cache.prune_images() == 0
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_prune_no_old_images(self, mock_run: MagicMock) -> None:
+        """Returns 0 when no images are stale."""
+        fresh_time = datetime.now(UTC).isoformat()
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=""),  # prune
+            MagicMock(returncode=0, stdout="airut-repo:abc\n"),  # list
+            MagicMock(returncode=0, stdout=fresh_time),  # inspect
+        ]
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        assert cache.prune_images() == 0
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_prune_uses_correct_prefix_filter(
+        self, mock_run: MagicMock
+    ) -> None:
+        """Uses correct resource prefix in filter."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=""),
+            MagicMock(returncode=0, stdout=""),
+        ]
+        cache = ImageCache(
+            container_command="docker",
+            resource_prefix="airut-cli",
+            max_age_hours=24,
+        )
+        cache.prune_images()
+
+        list_cmd = mock_run.call_args_list[1][0][0]
+        assert "--filter" in list_cmd
+        idx = list_cmd.index("--filter")
+        assert list_cmd[idx + 1] == "reference=airut-cli-*"
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_prune_logs_dangling_output(self, mock_run: MagicMock) -> None:
+        """Logs non-empty dangling prune output."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="Deleted: sha256:abc123\n"),
+            MagicMock(returncode=0, stdout=""),
+        ]
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        cache.prune_images()
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_prune_skips_unparseable_timestamp(
+        self, mock_run: MagicMock
+    ) -> None:
+        """Skips images whose timestamp cannot be parsed."""
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=""),  # prune
+            MagicMock(returncode=0, stdout="airut-repo:abc\n"),  # list
+            MagicMock(returncode=0, stdout="not-a-timestamp"),  # inspect
+        ]
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=24,
+        )
+        assert cache.prune_images() == 0
+
+    @patch("airut.sandbox._image_cache.subprocess.run")
+    def test_prune_skips_when_max_age_zero(self, mock_run: MagicMock) -> None:
+        """Returns 0 immediately when max_age_hours=0 (always-rebuild mode)."""
+        cache = ImageCache(
+            container_command="podman",
+            resource_prefix="airut",
+            max_age_hours=0,
+        )
+        assert cache.prune_images() == 0
+        mock_run.assert_not_called()
+
+
 class TestImageCacheIsStale:
     """Tests for ImageCache._is_stale()."""
 

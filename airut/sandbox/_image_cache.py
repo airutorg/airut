@@ -189,6 +189,96 @@ class ImageCache:
 
         return tag
 
+    def prune_images(self) -> int:
+        """Remove dangling images and old airut-prefixed images.
+
+        Runs ``<cmd> image prune -f`` to remove dangling (untagged)
+        images, then lists images matching the resource prefix and
+        removes any that exceed ``max_age_hours``.
+
+        This method does NOT hold the build lock while running prune
+        commands, so concurrent image builds are not blocked.
+
+        There is a benign TOCTOU race: ``prune_images`` may check an
+        image's age and then ``rmi`` it just after a concurrent
+        ``ensure()`` rebuilt the same tag.  The next ``ensure()`` call
+        will find the image missing and rebuild it.  The worst outcome
+        is one extra rebuild, never data loss or task failure.
+
+        In normal operation most prefixed images are kept fresh by
+        ``ensure()`` rebuilds during task startup.  This method mainly
+        catches images whose content hash changed (e.g., Dockerfile
+        edits) and are no longer actively requested.
+
+        Returns:
+            Number of old prefixed images removed.
+        """
+        if self._max_age_hours == 0:
+            # max_age_hours=0 means "always rebuild" -- pruning all images
+            # every GC cycle would cause needless churn.
+            return 0
+
+        # 1. Remove dangling (untagged) images.
+        result = subprocess.run(
+            [self._cmd, "image", "prune", "-f"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            logger.warning("image prune -f failed: %s", result.stderr.strip())
+        else:
+            stdout = result.stdout.strip()
+            if stdout:
+                logger.info("Dangling image prune output: %s", stdout)
+
+        # 2. Remove old airut-prefixed images beyond max_age_hours.
+        # Uses the same staleness threshold as ensure() -- in practice most
+        # images are kept fresh by ensure() rebuilds during task startup, so
+        # this mainly catches images whose content hash changed.
+        result = subprocess.run(
+            [
+                self._cmd,
+                "images",
+                "--format",
+                "{{.Repository}}:{{.Tag}}",
+                "--filter",
+                f"reference={self._resource_prefix}-*",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            logger.warning("image list failed: %s", result.stderr.strip())
+            return 0
+
+        removed = 0
+        for line in result.stdout.strip().splitlines():
+            tag = line.strip()
+            if not tag or tag == "<none>:<none>":
+                continue
+            created = self.get_image_created(tag)
+            if created is None:
+                continue
+            if self._is_stale(created):
+                age = datetime.now(UTC) - created
+                logger.info(
+                    "Pruning old image %s (age: %s)", tag, _format_age(age)
+                )
+                rm_result = subprocess.run(
+                    [self._cmd, "rmi", tag],
+                    capture_output=True,
+                    text=True,
+                )
+                if rm_result.returncode == 0:
+                    removed += 1
+                else:
+                    logger.warning(
+                        "Failed to remove %s: %s",
+                        tag,
+                        rm_result.stderr.strip(),
+                    )
+        return removed
+
     def tag_for(self, spec: ImageBuildSpec) -> str:
         """Compute the tag for a spec without building.
 

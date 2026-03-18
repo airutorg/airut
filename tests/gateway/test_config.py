@@ -288,6 +288,7 @@ def test_global_config_defaults() -> None:
     assert config.max_concurrent_executions == 3
     assert config.shutdown_timeout_seconds == 60
     assert config.conversation_max_age_days == 7
+    assert config.image_prune is True
     assert config.dashboard_enabled is True
     assert config.dashboard_host == "127.0.0.1"
     assert config.dashboard_port == 5200
@@ -304,6 +305,7 @@ def test_global_config_with_custom_values() -> None:
         max_concurrent_executions=5,
         shutdown_timeout_seconds=120,
         conversation_max_age_days=30,
+        image_prune=False,
         dashboard_enabled=False,
         dashboard_host="0.0.0.0",
         dashboard_port=8080,
@@ -316,6 +318,7 @@ def test_global_config_with_custom_values() -> None:
     assert config.max_concurrent_executions == 5
     assert config.shutdown_timeout_seconds == 120
     assert config.conversation_max_age_days == 30
+    assert config.image_prune is False
     assert config.dashboard_enabled is False
     assert config.dashboard_host == "0.0.0.0"
     assert config.dashboard_port == 8080
@@ -756,6 +759,7 @@ execution:
   max_concurrent: 5
   shutdown_timeout: 90
   conversation_max_age_days: 30
+  image_prune: false
 dashboard:
   enabled: false
   host: 0.0.0.0
@@ -866,6 +870,7 @@ class TestFromYaml:
         assert config.global_config.max_concurrent_executions == 3
         assert config.global_config.shutdown_timeout_seconds == 60
         assert config.global_config.conversation_max_age_days == 7
+        assert config.global_config.image_prune is True
         assert config.global_config.dashboard_enabled is True
         assert config.global_config.dashboard_host == "127.0.0.1"
         assert config.global_config.dashboard_port == 5200
@@ -901,6 +906,7 @@ class TestFromYaml:
         assert config.global_config.max_concurrent_executions == 5
         assert config.global_config.shutdown_timeout_seconds == 90
         assert config.global_config.conversation_max_age_days == 30
+        assert config.global_config.image_prune is False
         assert config.global_config.dashboard_enabled is False
         assert config.global_config.dashboard_host == "0.0.0.0"
         assert config.global_config.dashboard_port == 8080

@@ -131,6 +131,18 @@ class Sandbox:
         self._proxy_manager.shutdown()
         logger.info("Sandbox shutdown complete")
 
+    def prune_images(self) -> int:
+        """Prune dangling and stale container images.
+
+        Delegates to :meth:`ImageCache.prune_images`.  Does not hold the
+        image build lock, so concurrent ``ensure_image()`` calls are not
+        blocked.
+
+        Returns:
+            Number of old prefixed images removed.
+        """
+        return self._image_cache.prune_images()
+
     def ensure_image(
         self,
         dockerfile: bytes,
