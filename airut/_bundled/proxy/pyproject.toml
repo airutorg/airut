@@ -16,8 +16,10 @@ dependencies = [
 # - tornado >=6.5.5: fixes GHSA-78cv-mqj4-43f7 (cookie attribute injection)
 # - pyopenssl >=26.0.0: fixes GHSA-vp96-hxj8-p424
 # - flask >=3.1.3: fixes GHSA-68rp-wp8r-4726 (missing Vary: Cookie header)
+# - pyasn1 >=0.6.3: fixes GHSA-jr27-m4p2-rc6r
 override-dependencies = [
     "tornado>=6.5.5",
     "pyopenssl>=26.0.0",
     "flask>=3.1.3",
+    "pyasn1>=0.6.3",
 ]
