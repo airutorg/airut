@@ -252,6 +252,16 @@ class ProxyManager:
         network_name = f"{self._context_network_prefix}{context_id}"
         container_name = f"{self._context_proxy_prefix}{context_id}"
 
+        # Force-remove stale container and network by name.  If a
+        # previous execution failed mid-way (e.g. ENOSPC) and
+        # stop_proxy() couldn't remove the network (e.g. because a
+        # workload container was still connected), the resources are
+        # orphaned.  stop_proxy() above only cleans resources tracked
+        # in _active_proxies, which will be empty on retry.  This
+        # ensures we always start from a clean slate.
+        self._remove_container(container_name)
+        self._remove_network(network_name)
+
         logger.info(
             "Starting proxy for context %s (network=%s, container=%s)",
             context_id,

@@ -290,6 +290,27 @@ async def run_container(
         exit_code = process.returncode or 0
 
     finally:
+        # Ensure the subprocess is terminated on any error path.
+        # If stdin write fails (e.g., ENOSPC) or another exception
+        # occurs before process.wait(), the container process may
+        # still be running.  Kill it so it doesn't block network
+        # cleanup (the container stays connected to the sandbox
+        # network until it exits).
+        if process.returncode is None:
+            logger.warning(
+                "Process still running after error, killing (pid=%d)",
+                process.pid,
+            )
+            try:
+                process.kill()
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except ProcessLookupError:
+                pass  # Exited between returncode check and kill
+            except TimeoutError:
+                logger.error(
+                    "Process %d did not exit after SIGKILL",
+                    process.pid,
+                )
         process_tracker.clear()
 
     elapsed = time.time() - start_time

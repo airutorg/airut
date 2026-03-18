@@ -10,12 +10,20 @@ from __future__ import annotations
 import signal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from airut.sandbox._run_container import (
     _ProcessTracker,
     _redact_env_args,
     run_container,
 )
 from airut.sandbox.types import ContainerEnv, Mount, ResourceLimits
+
+
+def _set_returncode(mock: MagicMock, code: int) -> int:
+    """Simulate process exit by setting returncode on mock."""
+    mock.returncode = code
+    return code
 
 
 def _make_mock_process(
@@ -742,6 +750,145 @@ class TestRunContainer:
         assert len(lines) == 2
         assert lines[0] == "line1\n"
         assert lines[1] == "partial"
+
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_kills_process_on_stdin_error(
+        self, mock_create: MagicMock
+    ) -> None:
+        """run_container kills the subprocess when stdin write raises.
+
+        When writing to stdin fails (e.g. ENOSPC), the container process
+        may still be running.  If left alive, it stays connected to the
+        sandbox network and blocks network cleanup.
+        """
+        tracker = _ProcessTracker()
+        mock_process = _make_mock_process()
+        # Simulate the process still running (returncode is None until wait)
+        mock_process.returncode = None
+        mock_process.stdin.write.side_effect = OSError(
+            28, "No space left on device"
+        )
+        mock_process.wait = AsyncMock(
+            side_effect=lambda: _set_returncode(mock_process, -9)
+        )
+        mock_create.return_value = mock_process
+
+        with pytest.raises(OSError, match="No space left on device"):
+            await run_container(
+                container_command="podman",
+                image_tag="airut:test",
+                mounts=[],
+                env=ContainerEnv(),
+                resource_limits=ResourceLimits(),
+                network_args=[],
+                command=["cmd"],
+                stdin_data="hello",
+                on_stdout_line=None,
+                on_stderr_line=None,
+                timeout=None,
+                process_tracker=tracker,
+            )
+
+        mock_process.kill.assert_called_once()
+        assert tracker._pid is None
+
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_no_kill_on_normal_exit(self, mock_create: MagicMock) -> None:
+        """run_container does not kill the process on normal completion."""
+        tracker = _ProcessTracker()
+        mock_process = _make_mock_process(returncode=0)
+        mock_create.return_value = mock_process
+
+        await run_container(
+            container_command="podman",
+            image_tag="airut:test",
+            mounts=[],
+            env=ContainerEnv(),
+            resource_limits=ResourceLimits(),
+            network_args=[],
+            command=["cmd"],
+            stdin_data=None,
+            on_stdout_line=None,
+            on_stderr_line=None,
+            timeout=None,
+            process_tracker=tracker,
+        )
+
+        mock_process.kill.assert_not_called()
+
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_kill_tolerates_already_exited(
+        self, mock_create: MagicMock
+    ) -> None:
+        """Cleanup kill tolerates ProcessLookupError (race).
+
+        The process may exit between the ``returncode is None`` check
+        and the ``process.kill()`` call.  The original exception must
+        propagate, not be replaced by ProcessLookupError.
+        """
+        tracker = _ProcessTracker()
+        mock_process = _make_mock_process()
+        mock_process.returncode = None
+        mock_process.stdin.write.side_effect = OSError(
+            28, "No space left on device"
+        )
+        mock_process.kill.side_effect = ProcessLookupError()
+        mock_create.return_value = mock_process
+
+        with pytest.raises(OSError, match="No space left on device"):
+            await run_container(
+                container_command="podman",
+                image_tag="airut:test",
+                mounts=[],
+                env=ContainerEnv(),
+                resource_limits=ResourceLimits(),
+                network_args=[],
+                command=["cmd"],
+                stdin_data="hello",
+                on_stdout_line=None,
+                on_stderr_line=None,
+                timeout=None,
+                process_tracker=tracker,
+            )
+
+        assert tracker._pid is None
+
+    @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
+    async def test_kill_wait_timeout_does_not_hang(
+        self, mock_create: MagicMock
+    ) -> None:
+        """Cleanup does not hang if process ignores SIGKILL (D-state).
+
+        If the process is stuck in uninterruptible I/O, the wait will
+        time out after 5 seconds instead of blocking forever.
+        """
+        tracker = _ProcessTracker()
+        mock_process = _make_mock_process()
+        mock_process.returncode = None
+        mock_process.stdin.write.side_effect = OSError(
+            28, "No space left on device"
+        )
+        mock_process.wait = AsyncMock(side_effect=TimeoutError)
+        mock_create.return_value = mock_process
+
+        with pytest.raises(OSError, match="No space left on device"):
+            await run_container(
+                container_command="podman",
+                image_tag="airut:test",
+                mounts=[],
+                env=ContainerEnv(),
+                resource_limits=ResourceLimits(),
+                network_args=[],
+                command=["cmd"],
+                stdin_data="hello",
+                on_stdout_line=None,
+                on_stderr_line=None,
+                timeout=None,
+                process_tracker=tracker,
+            )
+
+        mock_process.kill.assert_called_once()
+        assert tracker._pid is None
 
     @patch("airut.sandbox._run_container.asyncio.create_subprocess_exec")
     async def test_no_callback_no_output(self, mock_create: MagicMock) -> None:
