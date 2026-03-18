@@ -1251,13 +1251,6 @@ class TestGarbageCollectorThread:
         svc._shutdown_event.wait = MagicMock(side_effect=[False, True])
         svc._garbage_collector_thread()
 
-    def test_exits_when_not_running(self, email_config, tmp_path: Path) -> None:
-        svc, _ = make_service(email_config, tmp_path)
-
-        # Signal shutdown immediately
-        svc._shutdown_event.wait = MagicMock(return_value=True)
-        svc._garbage_collector_thread()
-
     def test_nonexistent_path(self, email_config, tmp_path: Path) -> None:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, conversation_max_age_days=7)
@@ -1338,6 +1331,96 @@ class TestGarbageCollectorThread:
         svc._shutdown_event.wait = MagicMock(side_effect=[False, True])
         # Should not raise despite cleanup failure
         svc._garbage_collector_thread()
+
+    def test_calls_image_prune_when_enabled(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, image_prune=True, conversation_max_age_days=7)
+
+        handler.conversation_manager.list_all.return_value = []
+        svc.sandbox.prune_images.return_value = 2
+
+        svc._shutdown_event.wait = MagicMock(side_effect=[False, True])
+        svc._garbage_collector_thread()
+
+        svc.sandbox.prune_images.assert_called_once()
+
+    def test_skips_image_prune_when_disabled(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, image_prune=False, conversation_max_age_days=7)
+
+        handler.conversation_manager.list_all.return_value = []
+
+        svc._shutdown_event.wait = MagicMock(side_effect=[False, True])
+        svc._garbage_collector_thread()
+
+        svc.sandbox.prune_images.assert_not_called()
+
+    def test_image_prune_error_does_not_abort_gc(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, image_prune=True, conversation_max_age_days=7)
+
+        handler.conversation_manager.list_all.return_value = []
+        svc.sandbox.prune_images.side_effect = OSError("prune failed")
+
+        svc._shutdown_event.wait = MagicMock(side_effect=[False, True])
+        # Should not crash
+        svc._garbage_collector_thread()
+
+    def test_image_prune_zero_removed(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, image_prune=True, conversation_max_age_days=7)
+
+        handler.conversation_manager.list_all.return_value = []
+        svc.sandbox.prune_images.return_value = 0
+
+        svc._shutdown_event.wait = MagicMock(side_effect=[False, True])
+        svc._garbage_collector_thread()
+
+        svc.sandbox.prune_images.assert_called_once()
+
+    def test_initial_delay_before_first_pass(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, conversation_max_age_days=7)
+
+        handler.conversation_manager.list_all.return_value = []
+
+        waits: list[float] = []
+
+        def record_wait(timeout: float | None = None) -> bool:
+            assert timeout is not None
+            waits.append(timeout)
+            # First call (initial delay): continue
+            # Second call (interval): shutdown
+            return len(waits) > 1
+
+        svc._shutdown_event.wait = MagicMock(side_effect=record_wait)
+        svc._garbage_collector_thread()
+
+        assert len(waits) == 2
+        assert waits[0] == svc.GC_INITIAL_DELAY
+        assert waits[1] == svc.GC_INTERVAL
+
+    def test_exits_during_initial_delay(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        svc, handler = make_service(email_config, tmp_path)
+
+        # Shutdown during initial delay
+        svc._shutdown_event.wait = MagicMock(return_value=True)
+        svc._garbage_collector_thread()
+
+        # Should exit without running any GC
+        handler.conversation_manager.list_all.assert_not_called()
 
 
 class TestMain:

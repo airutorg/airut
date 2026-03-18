@@ -22,6 +22,10 @@ execution:
   # Conversations with no activity for this many days are garbage-collected.
   conversation_max_age_days: 7
 
+  # Prune dangling and old container images during periodic garbage
+  # collection.  Runs after conversation cleanup every 24 hours.
+  image_prune: true
+
 dashboard:
   # Enable the web dashboard for monitoring tasks and viewing actions.
   enabled: true

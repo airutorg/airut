@@ -351,5 +351,15 @@ persisting a private key in GitHub's cache storage.
 
 ## Image Cleanup
 
-Old images accumulate as Dockerfile content changes. Podman's
-`podman image prune` can be run periodically to reclaim space.
+The gateway's housekeeping thread automatically prunes container images every 24
+hours (controlled by `execution.image_prune`, default `true`). Each cycle:
+
+1. Removes dangling (untagged) images via `<container_command> image prune -f`.
+2. Lists images matching the `{resource_prefix}-*` naming pattern and removes
+   any older than the internal staleness threshold (24 h, same as the rebuild
+   threshold in `ensure()`).
+
+Pruning runs in the background without holding the image build lock, so
+concurrent task startups are not blocked.
+
+Manual cleanup is also possible: `podman image prune -a`.

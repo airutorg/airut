@@ -125,7 +125,7 @@ All fields are optional. Omitted fields mean no ceiling for that dimension.
     `user_id`. See [slack-channel.md](slack-channel.md#authorization-rules)
 - `git.repo_url` — Repository to clone
 - `execution.*` — `max_concurrent`, `shutdown_timeout`,
-  `conversation_max_age_days`
+  `conversation_max_age_days`, `image_prune`
 - `dashboard.*` — Web UI configuration
 - `container_command` — Container runtime (podman/docker)
 - `resource_limits.*` — Server-wide resource limit ceilings (timeout, memory,

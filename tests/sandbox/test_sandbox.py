@@ -128,6 +128,27 @@ class TestSandboxStartupShutdown:
         mock_pm.shutdown.assert_called_once()
 
 
+class TestSandboxPruneImages:
+    """Tests for Sandbox.prune_images()."""
+
+    @patch("airut.sandbox.sandbox.ProxyManager")
+    @patch("airut.sandbox.sandbox.ImageCache")
+    def test_delegates_to_image_cache(
+        self, mock_cache_class: MagicMock, mock_pm_class: MagicMock
+    ) -> None:
+        """prune_images() delegates to ImageCache.prune_images()."""
+        mock_cache = MagicMock(spec=ImageCache)
+        mock_cache_class.return_value = mock_cache
+        mock_cache.prune_images.return_value = 3
+
+        config = SandboxConfig()
+        sandbox = Sandbox(config)
+        result = sandbox.prune_images()
+
+        assert result == 3
+        mock_cache.prune_images.assert_called_once()
+
+
 class TestSandboxEnsureImage:
     """Tests for Sandbox.ensure_image()."""
 
