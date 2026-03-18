@@ -1170,6 +1170,8 @@ class TestStartTaskProxy:
 
         with (
             patch.object(pm, "stop_proxy") as mock_stop,
+            patch.object(pm, "_remove_container"),
+            patch.object(pm, "_remove_network"),
             patch.object(
                 pm,
                 "_allocate_subnet",
@@ -1207,6 +1209,8 @@ class TestStartTaskProxy:
 
         with (
             patch.object(pm, "stop_proxy"),
+            patch.object(pm, "_remove_container"),
+            patch.object(pm, "_remove_network"),
             patch.object(
                 pm,
                 "_allocate_subnet",
@@ -1264,13 +1268,15 @@ class TestStartTaskProxy:
                     replacements_json=b"{}",
                 )
 
-        # Verify cleanup was called
-        mock_rm_container.assert_called_once_with(
-            f"{CONTEXT_PROXY_PREFIX}task-1"
-        )
-        mock_rm_network.assert_called_once_with(
-            f"{CONTEXT_NETWORK_PREFIX}task-1"
-        )
+        # Verify cleanup was called: container/network removed both
+        # for stale cleanup (before creation) and error cleanup (after
+        # _run_proxy_container fails).
+        container_name = f"{CONTEXT_PROXY_PREFIX}task-1"
+        network_name = f"{CONTEXT_NETWORK_PREFIX}task-1"
+        assert mock_rm_container.call_count == 2
+        mock_rm_container.assert_any_call(container_name)
+        assert mock_rm_network.call_count == 2
+        mock_rm_network.assert_any_call(network_name)
         # Temp files should have been cleaned up
         assert "task-1" not in pm._allowlist_tmpfiles
         assert "task-1" not in pm._replacement_tmpfiles
@@ -1314,6 +1320,8 @@ class TestStartTaskProxy:
 
         with (
             patch.object(pm, "stop_proxy"),
+            patch.object(pm, "_remove_container"),
+            patch.object(pm, "_remove_network"),
             patch.object(pm, "_create_internal_network"),
             patch.object(pm, "_run_proxy_container"),
             patch.object(pm, "_wait_for_proxy_ready"),
@@ -1382,6 +1390,140 @@ class TestStartTaskProxy:
         for path in list(pm._allowlist_tmpfiles.values()):
             path.unlink(missing_ok=True)
         for path in list(pm._replacement_tmpfiles.values()):
+            path.unlink(missing_ok=True)
+
+    def test_force_cleans_stale_network_by_name(self) -> None:
+        """start_proxy force-removes network by name before creating it.
+
+        When a previous execution fails (e.g. ENOSPC) and stop_proxy
+        can't remove the network (e.g. workload container still
+        connected), the network is orphaned.  On retry, stop_proxy()
+        finds nothing in _active_proxies, so the stale network blocks
+        creation.  start_proxy must force-remove the network by name.
+        """
+        pm = _make_pm()
+
+        with (
+            patch.object(pm, "stop_proxy") as mock_stop,
+            patch.object(pm, "_remove_container") as mock_rm_container,
+            patch.object(pm, "_remove_network") as mock_rm_network,
+            patch.object(
+                pm,
+                "_allocate_subnet",
+                return_value=("10.199.1.0/24", "10.199.1.100", 1),
+            ),
+            patch.object(pm, "_create_internal_network"),
+            patch.object(pm, "_run_proxy_container"),
+            patch.object(pm, "_wait_for_proxy_ready"),
+        ):
+            pm.start_proxy(
+                "task-1",
+                allowlist_json=b"[]",
+                replacements_json=b"{}",
+            )
+
+        # stop_proxy(context_id) called for tracked proxy cleanup
+        mock_stop.assert_called_once_with("task-1")
+
+        # Force-remove by name called BEFORE network creation
+        mock_rm_container.assert_called_once_with(
+            f"{CONTEXT_PROXY_PREFIX}task-1"
+        )
+        mock_rm_network.assert_called_once_with(
+            f"{CONTEXT_NETWORK_PREFIX}task-1"
+        )
+
+        # Cleanup temp files
+        for path in pm._allowlist_tmpfiles.values():
+            path.unlink(missing_ok=True)
+        for path in pm._replacement_tmpfiles.values():
+            path.unlink(missing_ok=True)
+
+    def test_retry_succeeds_after_stale_network(self) -> None:
+        """Simulates the full failure-then-retry scenario.
+
+        1. First start_proxy succeeds, network created
+        2. Container execution fails, stop_proxy called
+        3. stop_proxy pops from _active_proxies, removes container,
+           but _remove_network silently fails (workload still connected)
+        4. Network is now orphaned (not in _active_proxies, not removed)
+        5. Second start_proxy: stop_proxy finds nothing in _active_proxies
+        6. Force-remove by name removes the stale network
+        7. Network creation succeeds
+        """
+        pm = _make_pm()
+
+        network_name = f"{CONTEXT_NETWORK_PREFIX}task-1"
+        create_network_calls: list[str] = []
+
+        def track_create_network(
+            name: str, *, subnet: str, proxy_ip: str
+        ) -> None:
+            create_network_calls.append(name)
+
+        # Track which _remove_network calls succeed vs fail.
+        # The network sticks around until the force-remove in
+        # the second start_proxy call.
+        stale_network_exists = False
+        remove_network_log: list[tuple[str, bool]] = []
+
+        def selective_remove_network(name: str) -> None:
+            nonlocal stale_network_exists
+            if name == network_name and stale_network_exists:
+                # First removal attempt during stop_proxy fails
+                # (container still connected).  Second attempt
+                # during force-remove in start_proxy succeeds.
+                stale_network_exists = False
+                remove_network_log.append((name, True))
+                return
+            remove_network_log.append((name, True))
+
+        with (
+            patch.object(
+                pm,
+                "_create_internal_network",
+                side_effect=track_create_network,
+            ),
+            patch.object(pm, "_run_proxy_container"),
+            patch.object(pm, "_wait_for_proxy_ready"),
+            patch.object(pm, "_remove_container"),
+            patch.object(
+                pm,
+                "_remove_network",
+                side_effect=selective_remove_network,
+            ),
+        ):
+            # Step 1: First start succeeds
+            pm.start_proxy(
+                "task-1",
+                allowlist_json=b"[]",
+                replacements_json=b"{}",
+            )
+            assert "task-1" in pm._active_proxies
+
+            # Step 2-3: stop_proxy runs but _remove_network is a
+            # silent no-op for the stale network (simulating docker
+            # failing because a workload container is still connected)
+            stale_network_exists = True
+            pm.stop_proxy("task-1")
+            assert "task-1" not in pm._active_proxies
+
+            # Step 5-7: Retry — force-remove by name cleans the
+            # stale network, then _create_internal_network succeeds
+            proxy2 = pm.start_proxy(
+                "task-1",
+                allowlist_json=b"[]",
+                replacements_json=b"{}",
+            )
+
+        assert proxy2.network_name == network_name
+        assert "task-1" in pm._active_proxies
+        assert len(create_network_calls) == 2
+
+        # Cleanup
+        for path in pm._allowlist_tmpfiles.values():
+            path.unlink(missing_ok=True)
+        for path in pm._replacement_tmpfiles.values():
             path.unlink(missing_ok=True)
 
     def test_failure_cleanup_releases_subnet(self) -> None:
