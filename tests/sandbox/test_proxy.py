@@ -1559,6 +1559,61 @@ class TestStartTaskProxy:
 
         assert len(set(octets)) == 254
 
+    def test_ensures_proxy_image_before_running_container(
+        self, tmp_path: Path
+    ) -> None:
+        """start_proxy rebuilds proxy image if it was pruned after startup.
+
+        Regression test: the proxy image was only built at gateway startup
+        and cached in _proxy_image_tag.  If the GC thread pruned the image,
+        start_proxy would fail with a 'short-name did not resolve' error
+        because the image no longer existed locally.  start_proxy must call
+        _ensure_proxy_image() so the image is rebuilt when missing.
+        """
+        mock_cache = MagicMock(spec=ImageCache)
+        mock_cache.ensure.return_value = "airut-proxy:abc123"
+        dockerfile = tmp_path / "proxy.dockerfile"
+        dockerfile.write_text("FROM python:3.13\n")
+
+        pm = _make_pm(
+            proxy_dir=tmp_path,
+            image_cache=mock_cache,
+            proxy_image_tag=None,
+        )
+        # Simulate: image was built at startup, then pruned by GC.
+        # _proxy_image_tag is still set (from startup) but image is gone.
+        pm._proxy_image_tag = "airut-proxy:old-stale-tag"
+
+        with (
+            patch.object(pm, "stop_proxy"),
+            patch.object(pm, "_remove_container"),
+            patch.object(pm, "_remove_network"),
+            patch.object(
+                pm,
+                "_allocate_subnet",
+                return_value=("10.199.1.0/24", "10.199.1.100", 1),
+            ),
+            patch.object(pm, "_create_internal_network"),
+            patch.object(pm, "_run_proxy_container"),
+            patch.object(pm, "_wait_for_proxy_ready"),
+        ):
+            pm.start_proxy(
+                "task-1",
+                allowlist_json=b"[]",
+                replacements_json=b"{}",
+            )
+
+        # _ensure_proxy_image must have been called (via ImageCache.ensure)
+        mock_cache.ensure.assert_called_once()
+        # The tag should be updated from the ensure call
+        assert pm._proxy_image_tag == "airut-proxy:abc123"
+
+        # Cleanup
+        for path in pm._allowlist_tmpfiles.values():
+            path.unlink(missing_ok=True)
+        for path in pm._replacement_tmpfiles.values():
+            path.unlink(missing_ok=True)
+
 
 class TestStopTaskProxy:
     """Tests for ProxyManager.stop_proxy()."""

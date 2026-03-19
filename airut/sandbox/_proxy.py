@@ -246,6 +246,9 @@ class ProxyManager:
         Raises:
             ProxyError: If network/container creation or health check fails.
         """
+        # Ensure proxy image exists (rebuilds if pruned by GC or missing).
+        self._ensure_proxy_image()
+
         # Tear down stale resources from a previous attempt (idempotent).
         self.stop_proxy(context_id)
 
