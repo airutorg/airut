@@ -5,12 +5,49 @@
 
 """Shared pytest fixtures used across multiple test packages."""
 
+from __future__ import annotations
+
+import asyncio
 import json
 import subprocess
+import warnings
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _close_leaked_event_loops() -> Iterator[None]:
+    """Close event loops leaked by pytest-asyncio internals.
+
+    pytest-asyncio's ``_temporary_event_loop_policy`` calls
+    ``asyncio.get_event_loop()`` which on Python 3.13+ auto-creates
+    an event loop that is never closed.  When GC collects the leaked
+    loop during a random later test, its ``__del__`` emits a
+    ``ResourceWarning`` (unclosed event loop + self-pipe sockets) that
+    pytest's ``unraisableexception`` plugin converts to a test failure.
+
+    Closing the stale loop explicitly after each test prevents the
+    warning entirely — a closed loop's ``__del__`` is silent regardless
+    of when GC runs.
+
+    Note: we intentionally do NOT call ``gc.collect()`` here.  Forcing a
+    full GC sweep after every test adds ~45 s to the unit-test suite
+    (3 400 tests × ~13 ms/collection under xdist with real object
+    graphs).  Since the loop is already closed, deterministic GC timing
+    is unnecessary.
+    """
+    yield
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = None
+    if loop is not None and not loop.is_closed():
+        loop.close()
 
 
 @pytest.fixture

@@ -109,10 +109,6 @@ addopts = "--disable-socket --allow-unix-socket --ignore=tests/integration"
 asyncio_mode = "auto"
 filterwarnings = [
     "error",
-    # pytest-socket GuardedSocket and pytest-asyncio event-loop objects are
-    # garbage-collected without close() under xdist (plugin bugs, not ours).
-    "default:.*GuardedSocket:pytest.PytestUnraisableExceptionWarning",
-    "default:.*BaseEventLoop:pytest.PytestUnraisableExceptionWarning",
 ]
 
 [tool.pip-licenses]
