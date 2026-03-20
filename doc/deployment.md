@@ -146,9 +146,11 @@ dedicated machine user account (e.g., `your-org-airut-bot`) with a classic PAT.
 2. Grant the account **collaborator access** to only the repositories the agent
    will operate on (write access for pushing branches and creating PRs)
 3. Generate a **classic personal access token** for this account:
-   - Grant the **`repo`** scope. **Do not enable the `workflow` scope** —
-     omitting it prevents the agent from modifying `.github/workflows/` files,
-     blocking a
+   - Grant the **`repo`** scope. For organization-owned repositories, also grant
+     **`read:org`** — without it, `gh pr edit` and other GraphQL-based
+     operations fail because the GitHub API requires organization read access to
+     resolve org context. **Do not enable the `workflow` scope** — omitting it
+     prevents the agent from modifying `.github/workflows/` files, blocking a
      [sandbox escape vector](security.md#github-actions-workflow-escape).
      Existing classic PATs may have `workflow` enabled by default — audit at
      GitHub → Settings → Developer settings → Personal access tokens. On
