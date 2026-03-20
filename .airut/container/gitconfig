@@ -5,5 +5,5 @@
 	helper =
 	helper = !/usr/bin/gh auth git-credential
 [user]
-	name = Airut
-	email = airut@airut.org
+	name = airut-app[bot]
+	email = 269787008+airut-app[bot]@users.noreply.github.com
