@@ -1490,17 +1490,21 @@ class TestDashboardServerStartStop:
             assert server._thread.name == "DashboardServer"
 
     def test_stop_calls_shutdown(self) -> None:
-        """Test that stop() calls server.shutdown()."""
+        """Test that stop() calls server.shutdown() and server_close()."""
         tracker = TaskTracker()
         server = DashboardServer(tracker, host="127.0.0.1", port=5200)
 
-        # Set up mocked server
+        # Set up mocked server and thread
         mock_wsgi_server = MagicMock()
         server._server = mock_wsgi_server
+        mock_thread = MagicMock()
+        server._thread = mock_thread
 
         server.stop()
 
         mock_wsgi_server.shutdown.assert_called_once()
+        mock_wsgi_server.server_close.assert_called_once()
+        mock_thread.join.assert_called_once_with(timeout=5)
 
     def test_stop_without_server(self) -> None:
         """Test that stop() handles case where server wasn't started."""

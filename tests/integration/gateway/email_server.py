@@ -646,6 +646,10 @@ class TestEmailServer:
                     self._loop.run_until_complete(
                         asyncio.gather(*pending, return_exceptions=True)
                     )
+                # Close the loop here (in its owning thread) to avoid
+                # a race where stop() calls loop.close() while this
+                # thread is still draining tasks.
+                self._loop.close()
 
         self._thread = threading.Thread(target=run_imap, daemon=True)
         self._thread.start()
@@ -690,11 +694,6 @@ class TestEmailServer:
 
         if self._thread:
             self._thread.join(timeout=5.0)
-
-        # Close the event loop after the thread has exited to prevent
-        # "unclosed event loop" ResourceWarnings during garbage collection.
-        if loop and not loop.is_closed():
-            loop.close()
 
         logger.info("Test email server stopped")
 
