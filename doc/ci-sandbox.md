@@ -56,11 +56,11 @@ permissions) -- commonly read-write. A compromised agent can:
    application code that existing workflows run. Requires only
    `Contents: Read and write` (which the agent needs for normal git operations).
 
-Path 1 can be closed by omitting the `workflow` scope from the agent's PAT (or
-using a repository ruleset -- see
-[Protecting Workflow Files](#1-protecting-workflow-files)). But path 2 is the
-harder problem: the agent can modify any repository code, and most CI workflows
-execute repository code (`uv run pytest`, `npm test`, build scripts).
+Path 1 can be closed by using a GitHub App without `Workflows` permission,
+omitting the `workflow` scope from a classic PAT, or using a repository ruleset
+(see [Protecting Workflow Files](#1-protecting-workflow-files)). But path 2 is
+the harder problem: the agent can modify any repository code, and most CI
+workflows execute repository code (`uv run pytest`, `npm test`, build scripts).
 
 Without sandboxing, the only way to close both paths is to use
 `workflow_dispatch` triggers (manual-only), which sacrifices auto-triggered CI.
@@ -134,8 +134,9 @@ different control, and all four must hold simultaneously:
 2. **Workflow files are immutable to the agent** -- the agent must not be able
    to modify `.github/workflows/`. For `pull_request` events, GitHub executes
    the workflow YAML from the merge ref (`refs/pull/<number>/merge`), not from
-   the base branch alone -- so PAT scope restriction or a push ruleset is the
-   actual control that prevents the agent from altering the workflow.
+   the base branch alone -- so a GitHub App without `Workflows` permission, PAT
+   scope restriction, or a push ruleset is the actual control that prevents the
+   agent from altering the workflow.
 
 3. **The `airut-sandbox` implementation is trusted** -- the agent must not be
    able to modify the sandbox code that enforces containment. For third-party
@@ -160,12 +161,22 @@ can undermine the protection.
 
 ### 1. Protecting Workflow Files
 
-The PR author must not be able to modify `.github/workflows/`. Two options:
+The PR author must not be able to modify `.github/workflows/`. Three options:
 
-**Option A: Omit the `workflow` scope from the agent's PAT**
+**Option A: GitHub App without `Workflows` permission (recommended)**
 
-GitHub enforces this at the git push level -- any push that includes changes to
-`.github/workflows/` is rejected.
+GitHub Apps treat `Contents` and `Workflows` as separate permissions. A GitHub
+App with `Contents: Read and write` but **without** `Workflows` will be rejected
+by GitHub when pushing changes that include modifications to
+`.github/workflows/` files. This is the cleanest approach -- the separation is
+explicit and enforced by GitHub at push time. See
+[github-app-setup.md](github-app-setup.md) for setup.
+
+**Option B: Omit the `workflow` scope from a classic PAT**
+
+If using a classic PAT instead of a GitHub App, GitHub enforces this at the git
+push level -- any push that includes changes to `.github/workflows/` is
+rejected.
 
 - **Classic PAT**: Grant `repo` scope, ensure `workflow` is **unchecked**.
   Existing classic PATs may have `workflow` enabled by default -- audit at
@@ -174,7 +185,7 @@ GitHub enforces this at the git push level -- any push that includes changes to
   repositories owned by the token's account, not repositories where the account
   is a collaborator.)
 
-**Option B: Push rulesets (Teams and Enterprise plans)**
+**Option C: Push rulesets (Teams and Enterprise plans)**
 
 GitHub push rulesets can restrict changes to specific file paths. This option
 requires a **GitHub Teams or Enterprise plan** -- push rulesets with file path
@@ -194,7 +205,7 @@ To configure:
 
 Push rulesets block the push itself (regardless of target branch), which is the
 desired behavior -- the agent cannot push workflow file changes to any branch.
-**Both options can be combined** for defense in depth.
+**All options can be combined** for defense in depth.
 
 ### 2. Branch Protection
 
@@ -351,8 +362,9 @@ The following table shows which workflow types are safe to auto-trigger:
 
 Before relying on the sandbox for CI security, verify:
 
-- [ ] Agent PAT lacks `workflow` scope **or** repository ruleset blocks
-  `.github/workflows/**` changes (or both)
+- [ ] Agent cannot modify workflow files: GitHub App without `Workflows`
+  permission, classic PAT without `workflow` scope, and/or repository ruleset
+  blocking `.github/workflows/**` changes
 - [ ] Workflow triggers only on PRs to protected branches
   (`pull_request: branches: [main]`)
 - [ ] Base branch (`main`) has branch protection enabled (require PR, require

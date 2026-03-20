@@ -16,6 +16,7 @@
   - [Git Authentication](#git-authentication)
   - [Masked Secrets (Token Replacement)](#masked-secrets-token-replacement)
   - [Signing Credentials (AWS SigV4 Re-signing)](#signing-credentials-aws-sigv4-re-signing)
+  - [GitHub App Credentials (Token Rotation)](#github-app-credentials-token-rotation)
 - [Dashboard Security](#dashboard-security)
 - [Attack Surface Analysis](#attack-surface-analysis)
 - [Configuration Security](#configuration-security)
@@ -103,7 +104,7 @@ The following diagram shows the security controls at each layer:
 │                     Credential Layer                             │
 │  ┌───────────────────┐  ┌──────────────────────────────────┐     │
 │  │ Environment-only  │  │ Surrogate Credentials            │     │
-│  │ secrets           │  │ (Masked Secrets + Signing Creds) │     │
+│  │ secrets           │  │ (Masked/Signing/GitHub App)      │     │
 │  └───────────────────┘  └──────────────────────────────────┘     │
 ├──────────────────────────────────────────────────────────────────┤
 │                     Dashboard Layer                              │
@@ -245,6 +246,8 @@ Containers use `gh auth git-credential` helper with `GH_TOKEN`:
 - No SSH keys mounted from host
 - Token scoped to repository operations
 - Credential helper configured in container image
+- Git sends credentials as Basic Auth (`x-access-token:<token>`); the proxy
+  decodes and replaces the surrogate transparently
 
 ### Masked Secrets (Token Replacement)
 
@@ -285,6 +288,38 @@ for the full details and
 [spec/aws-sigv4-resigning.md](../spec/aws-sigv4-resigning.md) for the
 specification.
 
+### GitHub App Credentials (Token Rotation)
+
+Masked secrets protect credentials from exfiltration, but GitHub API responses
+can echo the authentication token back in the response body (the "response echo"
+problem). Since the proxy only scrubs outbound requests (not inbound responses),
+a compromised container could extract a leaked PAT from a response. A classic
+PAT is long-lived, so this provides persistent access beyond the sandbox
+session.
+
+`github_app_credentials` solve this by eliminating long-lived tokens entirely.
+The container receives a stable `ghs_`-prefixed surrogate in `GH_TOKEN`. The
+proxy holds the GitHub App private key and generates short-lived **installation
+access tokens** (1-hour expiry) on demand. Token rotation is invisible to the
+container -- the surrogate never changes.
+
+**Security properties:**
+
+- **Private key isolation**: The RSA private key only exists in the proxy
+  container, never in the client container
+- **Short-lived tokens**: Even if leaked via response echo, installation tokens
+  expire in 1 hour
+- **No token escalation**: A leaked installation token cannot generate
+  additional tokens (that requires JWT authentication with the private key)
+- **No repository creation**: GitHub Apps cannot create repositories unless
+  explicitly granted `Administration: write`
+- **Scope enforcement**: Same as masked secrets -- proxy only replaces for
+  matching hosts, foreign credentials are stripped
+
+See [github-app-setup.md](github-app-setup.md) for the setup guide and
+[network-sandbox.md](network-sandbox.md#github-app-credentials-proxy-managed-token-rotation)
+for the proxy implementation details.
+
 ## Dashboard Security
 
 The dashboard binds to localhost (`127.0.0.1:5200`) by default:
@@ -320,7 +355,7 @@ This is acceptable for a single-user system behind authentication.
 | Resource exhaustion   | Timeout, conversation limit, garbage collection                               |
 | Log leakage           | Automatic secret redaction (passwords and tokens)                             |
 | Dashboard access      | Localhost binding, reverse proxy auth                                         |
-| Workflow escape       | Sandbox CI with `airut-sandbox`, omit `workflow` scope, protect branches      |
+| Workflow escape       | Sandbox CI, omit `workflow` scope / GitHub App without `Workflows` permission |
 
 ## Configuration Security
 
@@ -433,12 +468,14 @@ legitimate from malicious use of authorized channels.
 
 **Mitigations:**
 
-1. **Use masked secrets and signing credentials** — Real credentials configured
-   as `masked_secrets` or `signing_credentials` never enter the container. The
-   proxy inserts them into upstream requests only for scoped hosts. A
-   compromised container can still act within the boundaries of what the
-   credentials and scopes allow (e.g., make API calls to scoped hosts), but
-   cannot extract the real credentials. The ability to act is bound to the
+1. **Use surrogate credentials** — Real credentials configured as
+   `github_app_credentials`, `masked_secrets`, or `signing_credentials` never
+   enter the container. The proxy inserts them into upstream requests only for
+   scoped hosts. A compromised container can still act within the boundaries of
+   what the credentials and scopes allow (e.g., make API calls to scoped hosts),
+   but cannot extract the real credentials. For GitHub access specifically,
+   `github_app_credentials` are preferred — even if a token is leaked via
+   response echo, it expires in 1 hour. The ability to act is bound to the
    container's lifetime and the proxy's enforcement — once the container stops,
    or if the attacker tries to use the credentials from outside, they are
    useless. This is the strongest mitigation for credential exfiltration.
@@ -483,7 +520,8 @@ sandbox.
 
 - **Modify workflow files directly** — Push a new or altered workflow that runs
   attacker-controlled code. Requires the `GH_TOKEN` to have the `workflow` scope
-  (classic PAT) or `Workflows: Read and write` permission (fine-grained PAT).
+  (classic PAT), `Workflows: Read and write` permission (fine-grained PAT), or
+  the `Workflows` permission (GitHub App).
 - **Modify code that workflows execute** — Most CI workflows run repository code
   (e.g., `uv run pytest`, `npm test`, build scripts). The agent can alter that
   code to perform arbitrary actions when the workflow executes it, without
@@ -518,10 +556,11 @@ For example:
    be combined with mitigation 2 (protecting workflow files) to close both
    paths. See [ci-sandbox.md](ci-sandbox.md) for the full setup guide.
 2. **Prevent the agent from modifying workflow files** — The agent must not be
-   able to push changes to `.github/workflows/`. Two mechanisms are available:
-   omitting the `workflow` scope from the agent's classic PAT (GitHub enforces
-   at push time), or using a push ruleset to block workflow file changes
-   (Teams/Enterprise plans). Both can be combined for defense in depth. See
+   able to push changes to `.github/workflows/`. Three mechanisms are available:
+   using a GitHub App without `Workflows` permission (recommended — GitHub
+   enforces at push time), omitting the `workflow` scope from a classic PAT, or
+   using a push ruleset to block workflow file changes (Teams/Enterprise plans).
+   These can be combined for defense in depth. See
    [ci-sandbox.md](ci-sandbox.md#1-protecting-workflow-files) for setup
    instructions.
    - **Limitation**: This alone is not sufficient — the agent cannot modify

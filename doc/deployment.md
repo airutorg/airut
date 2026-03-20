@@ -11,7 +11,8 @@ regular user (not root) using systemd user services and rootless Podman.
   - [2. Install uv](#2-install-uv)
   - [3. Install Airut](#3-install-airut)
   - [4. Configure Git Credentials](#4-configure-git-credentials)
-    - [Dedicated GitHub Account](#dedicated-github-account)
+    - [GitHub App (Recommended)](#github-app-recommended)
+    - [Alternative: Dedicated Machine User with Classic PAT](#alternative-dedicated-machine-user-with-classic-pat)
   - [5. Enable Linger](#5-enable-linger)
   - [6. Configure Airut](#6-configure-airut)
   - [7. Validate Configuration](#7-validate-configuration)
@@ -22,6 +23,7 @@ regular user (not root) using systemd user services and rootless Podman.
   - [Secrets](#secrets)
   - [Masked Secrets](#masked-secrets)
   - [Signing Credentials (AWS)](#signing-credentials-aws)
+  - [GitHub App Credentials](#github-app-credentials)
 - [Channel Setup](#channel-setup)
   - [Email](#email)
   - [Slack](#slack)
@@ -116,12 +118,27 @@ git ls-remote https://github.com/your-org/your-repo.git
 For private repositories, ensure the authenticated account has read access to
 all repos configured in `~/.config/airut/airut.yaml`.
 
-#### Dedicated GitHub Account
+#### GitHub App (Recommended)
 
-Create a dedicated machine user account (e.g., `your-org-airut-bot`) for the
-agent rather than using a personal account. This limits blast radius: if the
-token is compromised, the attacker cannot access other repositories,
-organization settings, or resources that your personal account has access to.
+A GitHub App provides the agent with a dedicated bot identity, short-lived
+tokens, and fine-grained permissions -- without consuming an organization seat.
+This is the recommended approach for new deployments.
+
+See [github-app-setup.md](github-app-setup.md) for the full step-by-step guide
+covering app creation, permissions, private key generation, installation, and
+Airut configuration.
+
+**Key advantages over a classic PAT:**
+
+- Short-lived tokens (1 hour, auto-rotated by proxy) instead of long-lived PATs
+- Cannot create repositories (eliminates a data exfiltration vector)
+- Granular permissions (e.g., `Contents` without `Workflows`)
+- No dedicated user account needed (no seat consumed)
+
+#### Alternative: Dedicated Machine User with Classic PAT
+
+If you cannot create a GitHub App (e.g., insufficient org permissions), create a
+dedicated machine user account (e.g., `your-org-airut-bot`) with a classic PAT.
 
 **Setup:**
 
@@ -142,7 +159,15 @@ organization settings, or resources that your personal account has access to.
      repositories owned by the token's account. Since the dedicated bot account
      is a **collaborator** on target repositories (not the owner), fine-grained
      PATs cannot be used to grant access to those repositories.
-4. Use this token as the `GH_TOKEN` in your server configuration
+4. Use this token as the `GH_TOKEN` in your server configuration (as a
+   [masked secret](network-sandbox.md#masked-secrets-token-replacement) to
+   prevent exfiltration)
+
+**Limitation:** Classic PATs cannot prevent repository creation. Even with the
+network allowlist restricting which hosts the agent can push to, the agent could
+create public repositories via the GraphQL endpoint and leak limited information
+through repository names or descriptions. GitHub Apps eliminate this risk
+entirely.
 
 The server's own git credentials (for fetching mirrors) can use a separate
 account or the same bot account with read access.
@@ -374,6 +399,7 @@ repos:
       GH_TOKEN:
         value: !env GH_TOKEN
         scopes:
+          - "github.com"
           - "api.github.com"
           - "*.githubusercontent.com"
 ```
@@ -417,6 +443,36 @@ to know about signing credentials. See
 for an overview and
 [spec/aws-sigv4-resigning.md](../spec/aws-sigv4-resigning.md) for the full
 specification.
+
+### GitHub App Credentials
+
+For GitHub API access, `github_app_credentials` is the recommended alternative
+to `masked_secrets`. The proxy manages the full token lifecycle — generating
+short-lived installation tokens from a GitHub App private key, rotating them
+automatically, and replacing the container's surrogate token transparently.
+
+```yaml
+repos:
+  my-project:
+    secrets:
+      ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY  # Plain (body tokens)
+
+    github_app_credentials:
+      GH_TOKEN:
+        app_id: !env GH_APP_ID
+        private_key: !env GH_APP_PRIVATE_KEY
+        installation_id: !env GH_APP_INSTALLATION_ID
+        scopes:
+          - "github.com"
+          - "api.github.com"
+          - "*.githubusercontent.com"
+```
+
+Real credentials never enter the container — installation tokens are short-lived
+(1 hour) and auto-rotated. See [github-app-setup.md](github-app-setup.md) for
+the full setup guide and
+[network-sandbox.md](network-sandbox.md#github-app-credentials-proxy-managed-token-rotation)
+for the security model.
 
 ## Channel Setup
 

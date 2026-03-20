@@ -18,6 +18,7 @@ High-level documentation in `doc/` (see `doc/README.md` for full list):
 - `doc/network-sandbox.md` — network allowlist and proxy architecture
 - `doc/ci-sandbox.md` — sandboxing GitHub Actions and CI pipelines
 - `doc/deployment.md` — installation and server configuration
+- `doc/github-app-setup.md` — GitHub App setup for agent identity
 - `doc/email-setup.md` — email channel setup (IMAP/SMTP, DMARC)
 - `doc/slack-setup.md` — Slack channel setup (Socket Mode, authorization rules)
 - `doc/m365-oauth2.md` — Microsoft 365 OAuth2 setup for email (IMAP/SMTP)
@@ -45,6 +46,8 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
   replacement
 - `spec/aws-sigv4-resigning.md` — AWS SigV4/SigV4A credential masking via proxy
   re-signing
+- `spec/github-app-credential.md` — GitHub App credential support with
+  proxy-managed token rotation
 - `spec/dashboard.md` — web dashboard for task monitoring
 - `spec/live-dashboard.md` — real-time dashboard updates via SSE
 - `spec/cli.md` — CLI subcommands, service management, self-update

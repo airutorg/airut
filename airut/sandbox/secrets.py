@@ -136,6 +136,69 @@ class _SigningCredentialEntry:
 
 
 @dataclass(frozen=True)
+class GitHubAppCredential:
+    """GitHub App credential for proxy-managed token rotation.
+
+    The sandbox generates a ``ghs_``-prefixed surrogate and includes the
+    App credential metadata in the replacement map so the proxy can
+    manage token lifecycle transparently.
+
+    Attributes:
+        env_var: Environment variable name for the container.
+        app_id: GitHub App Client ID or numeric App ID.
+        private_key: PEM-encoded RSA private key.
+        installation_id: Installation ID for the target org/user.
+        scopes: Fnmatch patterns for allowed hosts.
+        allow_foreign_credentials: Whether to allow non-surrogate credentials.
+        base_url: GitHub API base URL.
+        permissions: Optional token permission restrictions.
+        repositories: Optional token repository restrictions.
+    """
+
+    env_var: str
+    app_id: str
+    private_key: str
+    installation_id: str
+    scopes: tuple[str, ...]
+    allow_foreign_credentials: bool = False
+    base_url: str = "https://api.github.com"
+    permissions: dict[str, str] | None = None
+    repositories: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
+class _GitHubAppEntry:
+    """Internal entry for GitHub App credential replacement."""
+
+    app_id: str
+    private_key: str
+    installation_id: str
+    base_url: str
+    scopes: tuple[str, ...]
+    allow_foreign_credentials: bool = False
+    permissions: dict[str, str] | None = None
+    repositories: tuple[str, ...] | None = None
+
+    def to_dict(self) -> JsonDict:
+        """Serialize to dict for JSON export."""
+        d: JsonDict = {
+            "type": "github-app",
+            "app_id": self.app_id,
+            "private_key": self.private_key,
+            "installation_id": self.installation_id,
+            "base_url": self.base_url,
+            "scopes": list(self.scopes),
+        }
+        if self.allow_foreign_credentials:
+            d["allow_foreign_credentials"] = True
+        if self.permissions is not None:
+            d["permissions"] = dict(self.permissions)
+        if self.repositories is not None:
+            d["repositories"] = list(self.repositories)
+        return d
+
+
+@dataclass(frozen=True)
 class SecretReplacements:
     """Opaque container for proxy replacement configuration.
 
@@ -144,9 +207,10 @@ class SecretReplacements:
     internally to configure the proxy.
     """
 
-    _map: dict[str, _ReplacementEntry | _SigningCredentialEntry] = field(
-        default_factory=dict
-    )
+    _map: dict[
+        str,
+        _ReplacementEntry | _SigningCredentialEntry | _GitHubAppEntry,
+    ] = field(default_factory=dict)
 
     def to_dict(self) -> JsonDict:
         """Serialize to dict for JSON export (internal use)."""
@@ -241,26 +305,37 @@ def generate_session_token_surrogate() -> str:
     )
 
 
+# Template for GitHub App surrogates: ghs_ prefix + 36 mixed-case
+# alphanumeric chars = 40 chars total (matches real ghs_ token format).
+_GITHUB_APP_SURROGATE_TEMPLATE = "ghs_" + "aA0" * 12
+
+
 def prepare_secrets(
     masked_secrets: list[MaskedSecret],
     signing_credentials: list[SigningCredential],
+    github_app_credentials: list[GitHubAppCredential] | None = None,
 ) -> PreparedSecrets:
     """Generate surrogates for secrets and signing credentials.
 
     For each masked secret, generates a surrogate that preserves the
     original token's format (length, charset, known prefix). For signing
     credentials, generates surrogates for access_key_id and session_token.
+    For GitHub App credentials, generates ``ghs_``-prefixed surrogates.
 
     Args:
         masked_secrets: List of secrets to mask with surrogates.
         signing_credentials: List of AWS signing credentials.
+        github_app_credentials: List of GitHub App credentials.
 
     Returns:
         PreparedSecrets containing env_vars (surrogates) and
         replacements (opaque config for the proxy).
     """
     env_vars: dict[str, str] = {}
-    replacement_map: dict[str, _ReplacementEntry | _SigningCredentialEntry] = {}
+    replacement_map: dict[
+        str,
+        _ReplacementEntry | _SigningCredentialEntry | _GitHubAppEntry,
+    ] = {}
 
     # Process masked secrets
     for secret in masked_secrets:
@@ -295,6 +370,21 @@ def prepare_secrets(
             session_token=cred.session_token,
             surrogate_session_token=surrogate_session_token,
             scopes=cred.scopes,
+        )
+
+    # Process GitHub App credentials
+    for gh_cred in github_app_credentials or []:
+        surrogate = generate_surrogate(_GITHUB_APP_SURROGATE_TEMPLATE)
+        env_vars[gh_cred.env_var] = surrogate
+        replacement_map[surrogate] = _GitHubAppEntry(
+            app_id=gh_cred.app_id,
+            private_key=gh_cred.private_key,
+            installation_id=gh_cred.installation_id,
+            base_url=gh_cred.base_url,
+            scopes=gh_cred.scopes,
+            allow_foreign_credentials=gh_cred.allow_foreign_credentials,
+            permissions=gh_cred.permissions,
+            repositories=gh_cred.repositories,
         )
 
     return PreparedSecrets(

@@ -13,9 +13,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from airut.gateway.config import (
+    CREDENTIAL_TYPE_GITHUB_APP,
     SIGNING_TYPE_AWS_SIGV4,
     ConfigError,
     EmailChannelConfig,
+    GitHubAppCredential,
+    GitHubAppEntry,
     GlobalConfig,
     MaskedSecret,
     ReplacementEntry,
@@ -32,10 +35,12 @@ from airut.gateway.config import (
     _parse_slack_channel_config,
     _resolve,
     _resolve_container_env,
+    _resolve_github_app_credentials,
     _resolve_masked_secrets,
     _resolve_signing_credentials,
     _resolve_string_list,
     _SecretRef,
+    generate_github_app_surrogate,
     generate_session_token_surrogate,
     generate_surrogate,
     get_config_path,
@@ -3308,3 +3313,475 @@ repos:
     assert "slack" in repo.channels
     assert isinstance(repo.channels["email"], EmailChannelConfig)
     assert isinstance(repo.channels["slack"], SlackChannelConfig)
+
+
+# ---------------------------------------------------------------------------
+# GitHub App Credentials
+# ---------------------------------------------------------------------------
+
+
+class TestGitHubAppCredential:
+    """Tests for GitHubAppCredential dataclass."""
+
+    def test_create_minimal(self) -> None:
+        """Creates GitHubAppCredential with required fields only."""
+        cred = GitHubAppCredential(
+            app_id="Iv23liXyz",
+            private_key=(
+                "-----BEGIN RSA PRIVATE KEY-----"
+                "\ntest\n"
+                "-----END RSA PRIVATE KEY-----"
+            ),
+            installation_id="12345",
+            scopes=frozenset(["api.github.com"]),
+        )
+        assert cred.app_id == "Iv23liXyz"
+        assert cred.installation_id == "12345"
+        assert cred.base_url == "https://api.github.com"
+        assert cred.allow_foreign_credentials is False
+        assert cred.permissions is None
+        assert cred.repositories is None
+
+    def test_create_with_optional_fields(self) -> None:
+        """Creates GitHubAppCredential with all fields."""
+        cred = GitHubAppCredential(
+            app_id="Iv23liXyz",
+            private_key="key",
+            installation_id="12345",
+            scopes=frozenset(["api.github.com", "*.githubusercontent.com"]),
+            allow_foreign_credentials=True,
+            base_url="https://github.example.com/api/v3",
+            permissions={"contents": "write"},
+            repositories=("my-repo",),
+        )
+        assert cred.allow_foreign_credentials is True
+        assert cred.base_url == "https://github.example.com/api/v3"
+        assert cred.permissions == {"contents": "write"}
+        assert cred.repositories == ("my-repo",)
+
+    def test_frozen(self) -> None:
+        """GitHubAppCredential is immutable."""
+        cred = GitHubAppCredential(
+            app_id="app",
+            private_key="key",
+            installation_id="123",
+            scopes=frozenset(["api.github.com"]),
+        )
+        with pytest.raises(AttributeError):
+            cred.app_id = "other"  # type: ignore[misc]
+
+
+class TestGitHubAppEntry:
+    """Tests for GitHubAppEntry dataclass."""
+
+    def test_to_dict_minimal(self) -> None:
+        """Serializes with required fields."""
+        entry = GitHubAppEntry(
+            app_id="Iv23liXyz",
+            private_key="key",
+            installation_id="12345",
+            base_url="https://api.github.com",
+            scopes=("api.github.com",),
+        )
+        d = entry.to_dict()
+        assert d["type"] == CREDENTIAL_TYPE_GITHUB_APP
+        assert d["app_id"] == "Iv23liXyz"
+        assert d["private_key"] == "key"
+        assert d["installation_id"] == "12345"
+        assert d["base_url"] == "https://api.github.com"
+        assert d["scopes"] == ["api.github.com"]
+        assert "allow_foreign_credentials" not in d
+        assert "permissions" not in d
+        assert "repositories" not in d
+
+    def test_to_dict_with_optional_fields(self) -> None:
+        """Serializes with optional permissions and repositories."""
+        entry = GitHubAppEntry(
+            app_id="Iv23liXyz",
+            private_key="key",
+            installation_id="12345",
+            base_url="https://api.github.com",
+            scopes=("api.github.com",),
+            allow_foreign_credentials=True,
+            permissions={"contents": "write"},
+            repositories=("my-repo", "other-repo"),
+        )
+        d = entry.to_dict()
+        assert d["allow_foreign_credentials"] is True
+        assert d["permissions"] == {"contents": "write"}
+        assert d["repositories"] == ["my-repo", "other-repo"]
+
+    def test_frozen(self) -> None:
+        """GitHubAppEntry is immutable."""
+        entry = GitHubAppEntry(
+            app_id="app",
+            private_key="key",
+            installation_id="123",
+            base_url="https://api.github.com",
+            scopes=("api.github.com",),
+        )
+        with pytest.raises(AttributeError):
+            entry.app_id = "other"  # type: ignore[misc]
+
+
+class TestGenerateGitHubAppSurrogate:
+    """Tests for generate_github_app_surrogate function."""
+
+    def test_prefix(self) -> None:
+        """Surrogate starts with ghs_ prefix."""
+        surrogate = generate_github_app_surrogate()
+        assert surrogate.startswith("ghs_")
+
+    def test_length(self) -> None:
+        """Surrogate is 40 characters total (4 prefix + 36 random)."""
+        surrogate = generate_github_app_surrogate()
+        assert len(surrogate) == 40
+
+    def test_alphanumeric_suffix(self) -> None:
+        """Suffix is alphanumeric."""
+        surrogate = generate_github_app_surrogate()
+        suffix = surrogate[4:]
+        assert suffix.isalnum()
+
+    def test_different_each_time(self) -> None:
+        """Each call produces a different surrogate."""
+        s1 = generate_github_app_surrogate()
+        s2 = generate_github_app_surrogate()
+        assert s1 != s2
+
+
+class TestResolveGitHubAppCredentials:
+    """Tests for _resolve_github_app_credentials function."""
+
+    def test_valid_config(self) -> None:
+        """Parses a valid GitHub App credential config."""
+        raw = {
+            "GH_TOKEN": {
+                "app_id": "Iv23liXyz",
+                "private_key": (
+                    "-----BEGIN RSA PRIVATE KEY-----"
+                    "\ntest\n"
+                    "-----END RSA PRIVATE KEY-----"
+                ),
+                "installation_id": "12345",
+                "scopes": [
+                    "api.github.com",
+                    "*.githubusercontent.com",
+                ],
+            }
+        }
+        result = _resolve_github_app_credentials(raw, "repos.test")
+
+        assert "GH_TOKEN" in result
+        cred = result["GH_TOKEN"]
+        assert cred.app_id == "Iv23liXyz"
+        assert cred.installation_id == "12345"
+        assert "api.github.com" in cred.scopes
+        assert cred.base_url == "https://api.github.com"
+
+    def test_with_all_optional_fields(self) -> None:
+        """Parses config with all optional fields."""
+        raw = {
+            "GH_TOKEN": {
+                "app_id": "Iv23liXyz",
+                "private_key": "key",
+                "installation_id": "12345",
+                "scopes": ["api.github.com"],
+                "allow_foreign_credentials": True,
+                "base_url": "https://github.example.com/api/v3",
+                "permissions": {"contents": "write", "pull_requests": "write"},
+                "repositories": ["my-repo"],
+            }
+        }
+        result = _resolve_github_app_credentials(raw, "repos.test")
+
+        cred = result["GH_TOKEN"]
+        assert cred.allow_foreign_credentials is True
+        assert cred.base_url == "https://github.example.com/api/v3"
+        assert cred.permissions == {
+            "contents": "write",
+            "pull_requests": "write",
+        }
+        assert cred.repositories == ("my-repo",)
+
+    def test_missing_app_id_raises(self) -> None:
+        """Raises ConfigError when app_id is missing."""
+        raw = {
+            "GH_TOKEN": {
+                "private_key": "key",
+                "installation_id": "12345",
+                "scopes": ["api.github.com"],
+            }
+        }
+        with pytest.raises(ConfigError, match="app_id is required"):
+            _resolve_github_app_credentials(raw, "repos.test")
+
+    def test_missing_private_key_raises(self) -> None:
+        """Raises ConfigError when private_key is missing."""
+        raw = {
+            "GH_TOKEN": {
+                "app_id": "Iv23li",
+                "installation_id": "12345",
+                "scopes": ["api.github.com"],
+            }
+        }
+        with pytest.raises(ConfigError, match="private_key is required"):
+            _resolve_github_app_credentials(raw, "repos.test")
+
+    def test_missing_installation_id_raises(self) -> None:
+        """Raises ConfigError when installation_id is missing."""
+        raw = {
+            "GH_TOKEN": {
+                "app_id": "Iv23li",
+                "private_key": "key",
+                "scopes": ["api.github.com"],
+            }
+        }
+        with pytest.raises(ConfigError, match="installation_id is required"):
+            _resolve_github_app_credentials(raw, "repos.test")
+
+    def test_missing_scopes_raises(self) -> None:
+        """Raises ConfigError when scopes is missing."""
+        raw = {
+            "GH_TOKEN": {
+                "app_id": "Iv23li",
+                "private_key": "key",
+                "installation_id": "12345",
+            }
+        }
+        with pytest.raises(ConfigError, match="scopes is required"):
+            _resolve_github_app_credentials(raw, "repos.test")
+
+    def test_empty_scopes_raises(self) -> None:
+        """Raises ConfigError when scopes is empty."""
+        raw = {
+            "GH_TOKEN": {
+                "app_id": "Iv23li",
+                "private_key": "key",
+                "installation_id": "12345",
+                "scopes": [],
+            }
+        }
+        with pytest.raises(ConfigError, match="scopes cannot be empty"):
+            _resolve_github_app_credentials(raw, "repos.test")
+
+    def test_scopes_not_list_raises(self) -> None:
+        """Raises ConfigError when scopes is not a list."""
+        raw = {
+            "GH_TOKEN": {
+                "app_id": "Iv23li",
+                "private_key": "key",
+                "installation_id": "12345",
+                "scopes": "api.github.com",
+            }
+        }
+        with pytest.raises(ConfigError, match="scopes must be a list"):
+            _resolve_github_app_credentials(raw, "repos.test")
+
+    def test_non_mapping_raises(self) -> None:
+        """Raises ConfigError when entry is not a mapping."""
+        raw = {"GH_TOKEN": "not-a-mapping"}
+        with pytest.raises(ConfigError, match="must be a mapping"):
+            _resolve_github_app_credentials(raw, "repos.test")
+
+    def test_non_numeric_installation_id_raises(self) -> None:
+        """Raises ConfigError when installation_id is not numeric."""
+        raw = {
+            "GH_TOKEN": {
+                "app_id": "Iv23li",
+                "private_key": "key",
+                "installation_id": "abc",
+                "scopes": ["api.github.com"],
+            }
+        }
+        with pytest.raises(
+            ConfigError, match="installation_id must be numeric"
+        ):
+            _resolve_github_app_credentials(raw, "repos.test")
+
+    def test_http_base_url_raises(self) -> None:
+        """Raises ConfigError when base_url uses HTTP instead of HTTPS."""
+        raw = {
+            "GH_TOKEN": {
+                "app_id": "Iv23li",
+                "private_key": "key",
+                "installation_id": "12345",
+                "scopes": ["api.github.com"],
+                "base_url": "http://github.example.com/api/v3",
+            }
+        }
+        with pytest.raises(ConfigError, match="base_url must use HTTPS"):
+            _resolve_github_app_credentials(raw, "repos.test")
+
+    def test_invalid_permissions_type_raises(self) -> None:
+        """Raises ConfigError when permissions is not a mapping."""
+        raw = {
+            "GH_TOKEN": {
+                "app_id": "Iv23li",
+                "private_key": "key",
+                "installation_id": "12345",
+                "scopes": ["api.github.com"],
+                "permissions": "not-a-mapping",
+            }
+        }
+        with pytest.raises(ConfigError, match="permissions must be a mapping"):
+            _resolve_github_app_credentials(raw, "repos.test")
+
+    def test_invalid_repositories_type_raises(self) -> None:
+        """Raises ConfigError when repositories is not a list."""
+        raw = {
+            "GH_TOKEN": {
+                "app_id": "Iv23li",
+                "private_key": "key",
+                "installation_id": "12345",
+                "scopes": ["api.github.com"],
+                "repositories": "not-a-list",
+            }
+        }
+        with pytest.raises(ConfigError, match="repositories must be a list"):
+            _resolve_github_app_credentials(raw, "repos.test")
+
+
+class TestResolveContainerEnvGitHubApp:
+    """Tests for GitHub App credential resolution in _resolve_container_env."""
+
+    def _make_github_app_cred(
+        self,
+        *,
+        app_id: str = "Iv23liXyz",
+        private_key: str = "test-key",
+        installation_id: str = "12345",
+    ) -> GitHubAppCredential:
+        return GitHubAppCredential(
+            app_id=app_id,
+            private_key=private_key,
+            installation_id=installation_id,
+            scopes=frozenset(["api.github.com"]),
+        )
+
+    def test_github_app_generates_ghs_surrogate(self) -> None:
+        """GitHub App credential generates a ghs_ prefixed surrogate."""
+        raw_env = {"GH_TOKEN": _SecretRef("GH_TOKEN")}
+        gh_creds = {"GH_TOKEN": self._make_github_app_cred()}
+
+        result, replacement_map = _resolve_container_env(
+            raw_env, {}, {}, github_app_credentials=gh_creds
+        )
+
+        surrogate = result["GH_TOKEN"]
+        assert surrogate.startswith("ghs_")
+        assert len(surrogate) == 40
+
+    def test_github_app_adds_entry_to_replacement_map(self) -> None:
+        """GitHub App credential adds GitHubAppEntry to replacement map."""
+        raw_env = {"GH_TOKEN": _SecretRef("GH_TOKEN")}
+        gh_creds = {"GH_TOKEN": self._make_github_app_cred()}
+
+        result, replacement_map = _resolve_container_env(
+            raw_env, {}, {}, github_app_credentials=gh_creds
+        )
+
+        surrogate = result["GH_TOKEN"]
+        assert surrogate in replacement_map
+        entry = replacement_map[surrogate]
+        assert isinstance(entry, GitHubAppEntry)
+        assert entry.app_id == "Iv23liXyz"
+        assert entry.private_key == "test-key"
+        assert entry.installation_id == "12345"
+        assert entry.base_url == "https://api.github.com"
+
+    def test_github_app_priority_over_masked_secrets(self) -> None:
+        """GitHub App credential takes priority over masked secret."""
+        raw_env = {"GH_TOKEN": _SecretRef("GH_TOKEN")}
+        gh_creds = {"GH_TOKEN": self._make_github_app_cred()}
+        masked = {
+            "GH_TOKEN": MaskedSecret(
+                value="ghp_realtoken",
+                scopes=frozenset(["api.github.com"]),
+                headers=("Authorization",),
+            )
+        }
+
+        result, replacement_map = _resolve_container_env(
+            raw_env, {}, masked, github_app_credentials=gh_creds
+        )
+
+        surrogate = result["GH_TOKEN"]
+        assert surrogate.startswith("ghs_")
+        assert isinstance(replacement_map[surrogate], GitHubAppEntry)
+
+    def test_github_app_with_permissions_and_repos(self) -> None:
+        """GitHub App entry includes permissions and repositories."""
+        cred = GitHubAppCredential(
+            app_id="Iv23li",
+            private_key="key",
+            installation_id="123",
+            scopes=frozenset(["api.github.com"]),
+            permissions={"contents": "write"},
+            repositories=("my-repo",),
+        )
+        raw_env = {"GH_TOKEN": _SecretRef("GH_TOKEN")}
+
+        result, replacement_map = _resolve_container_env(
+            raw_env, {}, {}, github_app_credentials={"GH_TOKEN": cred}
+        )
+
+        surrogate = result["GH_TOKEN"]
+        entry = replacement_map[surrogate]
+        assert isinstance(entry, GitHubAppEntry)
+        assert entry.permissions == {"contents": "write"}
+        assert entry.repositories == ("my-repo",)
+
+    def test_signing_credential_priority_over_github_app(self) -> None:
+        """Signing credential takes priority over GitHub App credential."""
+        raw_env = {"AWS_ACCESS_KEY_ID": _SecretRef("AWS_ACCESS_KEY_ID")}
+        gh_creds = {
+            "AWS_ACCESS_KEY_ID": self._make_github_app_cred(app_id="conflict")
+        }
+        signing_creds = {
+            "AWS_PROD": SigningCredential(
+                access_key_id=SigningCredentialField(
+                    name="AWS_ACCESS_KEY_ID", value="AKIAIOSFODNN7EXAMPLE"
+                ),
+                secret_access_key=SigningCredentialField(
+                    name="AWS_SECRET_ACCESS_KEY", value="secret"
+                ),
+                session_token=None,
+                scopes=frozenset(["s3.amazonaws.com"]),
+            )
+        }
+
+        result, replacement_map = _resolve_container_env(
+            raw_env,
+            {},
+            {},
+            signing_credentials=signing_creds,
+            github_app_credentials=gh_creds,
+        )
+
+        surrogate = result["AWS_ACCESS_KEY_ID"]
+        # Should be signing credential, not GitHub App
+        assert surrogate.startswith("AKIA")
+
+
+class TestRepoServerConfigGitHubApp:
+    """Tests for GitHub App credentials in RepoServerConfig."""
+
+    def test_registers_private_key_for_redaction(self) -> None:
+        """Private key is registered with SecretFilter."""
+        SecretFilter.clear_secrets()
+        config = RepoServerConfig(
+            repo_id="test",
+            git_repo_url="https://github.com/test/repo.git",
+            channels={"email": MagicMock(channel_info="test")},
+            github_app_credentials={
+                "GH_TOKEN": GitHubAppCredential(
+                    app_id="Iv23li",
+                    private_key="super-secret-key",
+                    installation_id="123",
+                    scopes=frozenset(["api.github.com"]),
+                )
+            },
+        )
+        assert config is not None
+        assert "super-secret-key" in SecretFilter._secrets

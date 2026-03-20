@@ -275,7 +275,7 @@ pass_env:
 masked_secrets:
   GH_TOKEN:
     value: !env GH_TOKEN
-    scopes: ["api.github.com", "*.githubusercontent.com"]
+    scopes: ["github.com", "api.github.com", "*.githubusercontent.com"]
     headers: ["Authorization"]
 
   ANTHROPIC_API_KEY:

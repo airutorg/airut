@@ -11,10 +11,12 @@ from airut._json_types import JsonDict
 from airut.sandbox.secrets import (
     _SESSION_TOKEN_SURROGATE_LENGTH,
     _TOKEN_PREFIXES,
+    GitHubAppCredential,
     MaskedSecret,
     PreparedSecrets,
     SecretReplacements,
     SigningCredential,
+    _GitHubAppEntry,
     _ReplacementEntry,
     _SigningCredentialEntry,
     generate_session_token_surrogate,
@@ -525,4 +527,183 @@ class TestPreparedSecrets:
             replacements=SecretReplacements(),
         )
         assert result.env_vars == {"KEY": "surrogate"}
+        assert result.replacements.to_dict() == {}
+
+
+class TestGitHubAppCredential:
+    """Tests for GitHubAppCredential dataclass."""
+
+    def test_create_minimal(self) -> None:
+        """Creates GitHubAppCredential with required fields."""
+        cred = GitHubAppCredential(
+            env_var="GH_TOKEN",
+            app_id="Iv23liXyz",
+            private_key="key-data",
+            installation_id="12345",
+            scopes=("api.github.com",),
+        )
+        assert cred.env_var == "GH_TOKEN"
+        assert cred.app_id == "Iv23liXyz"
+        assert cred.base_url == "https://api.github.com"
+        assert cred.allow_foreign_credentials is False
+        assert cred.permissions is None
+        assert cred.repositories is None
+
+    def test_create_with_all_fields(self) -> None:
+        """Creates GitHubAppCredential with optional fields."""
+        cred = GitHubAppCredential(
+            env_var="GH_TOKEN",
+            app_id="Iv23liXyz",
+            private_key="key",
+            installation_id="12345",
+            scopes=("api.github.com",),
+            allow_foreign_credentials=True,
+            base_url="https://ghes.example.com/api/v3",
+            permissions={"contents": "write"},
+            repositories=("my-repo",),
+        )
+        assert cred.allow_foreign_credentials is True
+        assert cred.base_url == "https://ghes.example.com/api/v3"
+        assert cred.permissions == {"contents": "write"}
+        assert cred.repositories == ("my-repo",)
+
+    def test_frozen(self) -> None:
+        """GitHubAppCredential is immutable."""
+        cred = GitHubAppCredential(
+            env_var="GH_TOKEN",
+            app_id="app",
+            private_key="key",
+            installation_id="123",
+            scopes=("api.github.com",),
+        )
+        with __import__("pytest").raises(AttributeError):
+            cred.app_id = "other"  # type: ignore[misc]
+
+
+class TestGitHubAppEntry:
+    """Tests for _GitHubAppEntry dataclass."""
+
+    def test_to_dict_minimal(self) -> None:
+        """Serializes minimal entry correctly."""
+        entry = _GitHubAppEntry(
+            app_id="Iv23li",
+            private_key="key",
+            installation_id="12345",
+            base_url="https://api.github.com",
+            scopes=("api.github.com",),
+        )
+        d = entry.to_dict()
+        assert d["type"] == "github-app"
+        assert d["app_id"] == "Iv23li"
+        assert d["private_key"] == "key"
+        assert d["installation_id"] == "12345"
+        assert d["base_url"] == "https://api.github.com"
+        assert d["scopes"] == ["api.github.com"]
+        assert "permissions" not in d
+        assert "repositories" not in d
+
+    def test_to_dict_with_optional_fields(self) -> None:
+        """Serializes optional permissions and repositories."""
+        entry = _GitHubAppEntry(
+            app_id="Iv23li",
+            private_key="key",
+            installation_id="12345",
+            base_url="https://api.github.com",
+            scopes=("api.github.com",),
+            allow_foreign_credentials=True,
+            permissions={"contents": "write"},
+            repositories=("my-repo",),
+        )
+        d = entry.to_dict()
+        assert d["allow_foreign_credentials"] is True
+        assert d["permissions"] == {"contents": "write"}
+        assert d["repositories"] == ["my-repo"]
+
+
+class TestPrepareSecretsGitHubApp:
+    """Tests for GitHub App credential handling in prepare_secrets."""
+
+    def test_github_app_generates_ghs_surrogate(self) -> None:
+        """Generates ghs_ prefixed surrogate for GitHub App credential."""
+        gh_creds = [
+            GitHubAppCredential(
+                env_var="GH_TOKEN",
+                app_id="Iv23liXyz",
+                private_key="key",
+                installation_id="12345",
+                scopes=("api.github.com",),
+            ),
+        ]
+        result = prepare_secrets([], [], gh_creds)
+
+        assert "GH_TOKEN" in result.env_vars
+        surrogate = result.env_vars["GH_TOKEN"]
+        assert surrogate.startswith("ghs_")
+        assert len(surrogate) == 40
+
+    def test_github_app_replacement_map(self) -> None:
+        """Replacement map includes github-app entry."""
+        gh_creds = [
+            GitHubAppCredential(
+                env_var="GH_TOKEN",
+                app_id="Iv23liXyz",
+                private_key="key-data",
+                installation_id="12345",
+                scopes=("api.github.com",),
+            ),
+        ]
+        result = prepare_secrets([], [], gh_creds)
+
+        surrogate = result.env_vars["GH_TOKEN"]
+        replacements_dict = result.replacements.to_dict()
+        assert surrogate in replacements_dict
+        entry = cast(JsonDict, replacements_dict[surrogate])
+        assert entry["type"] == "github-app"
+        assert entry["app_id"] == "Iv23liXyz"
+        assert entry["private_key"] == "key-data"
+        assert entry["installation_id"] == "12345"
+
+    def test_mixed_all_credential_types(self) -> None:
+        """Handles masked secrets, signing creds, and GitHub App creds."""
+        secrets = [
+            MaskedSecret(
+                env_var="API_KEY",
+                real_value="sk-ant-realvalueA123456789",
+                scopes=("api.anthropic.com",),
+                headers=("x-api-key",),
+            ),
+        ]
+        signing = [
+            SigningCredential(
+                access_key_id_env_var="AWS_ACCESS_KEY_ID",
+                access_key_id="AKIAIOSFODNN7EXAMPLE",
+                secret_access_key_env_var="AWS_SECRET_ACCESS_KEY",
+                secret_access_key="secret",
+                session_token_env_var=None,
+                session_token=None,
+                scopes=("s3.amazonaws.com",),
+            ),
+        ]
+        gh_creds = [
+            GitHubAppCredential(
+                env_var="GH_TOKEN",
+                app_id="Iv23li",
+                private_key="key",
+                installation_id="123",
+                scopes=("api.github.com",),
+            ),
+        ]
+
+        result = prepare_secrets(secrets, signing, gh_creds)
+
+        assert len(result.env_vars) == 4  # API_KEY + 2 AWS + GH_TOKEN
+        assert result.env_vars["GH_TOKEN"].startswith("ghs_")
+        assert result.env_vars["API_KEY"].startswith("sk-ant-")
+        assert result.env_vars["AWS_ACCESS_KEY_ID"].startswith("AKIA")
+        assert len(result.replacements.to_dict()) == 3
+
+    def test_backwards_compatible_without_github_app(self) -> None:
+        """prepare_secrets works without github_app_credentials arg."""
+        result = prepare_secrets([], [])
+        assert result.env_vars == {}
         assert result.replacements.to_dict() == {}

@@ -116,6 +116,11 @@ handles:
 - Authorization configuration (email: sender allowlist; Slack: rules)
 - Git repo URL and storage directory
 - Secrets pool (values that `!secret` tags reference)
+- GitHub App credentials (`github_app_credentials`) — proxy-managed token
+  rotation with short-lived installation tokens
+- Masked secrets (`masked_secrets`) — surrogate token replacement for scoped
+  hosts
+- Signing credentials (`signing_credentials`) — AWS SigV4 re-signing
 
 A repo can have email, Slack, or both channels active simultaneously. See
 `doc/email-setup.md` and `doc/slack-setup.md` for channel-specific guides.

@@ -23,6 +23,7 @@ repos:
       GH_TOKEN:
         value: !env GH_TOKEN
         scopes:
+          - "github.com"
           - "api.github.com"
           - "*.githubusercontent.com"
       ANTHROPIC_API_KEY:
@@ -58,7 +59,7 @@ masked_secrets:
   # Match specific header
   GH_TOKEN:
     value: !env GH_TOKEN
-    scopes: ["api.github.com"]
+    scopes: ["github.com", "api.github.com"]
     headers: ["Authorization"]
 
   # Match pattern (e.g., all X-* headers)
@@ -120,7 +121,7 @@ surrogate -> ReplacementEntry(real_value, scopes, headers)
 {
   "ghp_surrogate123...": {
     "value": "ghp_realtoken...",
-    "scopes": ["api.github.com", "*.githubusercontent.com"],
+    "scopes": ["github.com", "api.github.com", "*.githubusercontent.com"],
     "headers": ["Authorization"]
   }
 }
@@ -132,7 +133,7 @@ When `allow_foreign_credentials` is true, it is included in the entry:
 {
   "ghp_surrogate123...": {
     "value": "ghp_realtoken...",
-    "scopes": ["api.github.com"],
+    "scopes": ["github.com", "api.github.com"],
     "headers": ["Authorization"],
     "allow_foreign_credentials": true
   }

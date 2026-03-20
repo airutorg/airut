@@ -51,6 +51,13 @@ from aws_signing import (
     resign_presigned_url,
     resign_request,
 )
+from github_app import (
+    CREDENTIAL_TYPE_GITHUB_APP,
+    CachedToken,
+    fetch_installation_token,
+    generate_jwt,
+    is_token_valid,
+)
 from mitmproxy import ctx, http
 
 
@@ -185,6 +192,7 @@ class ProxyFilter:
         self.url_prefixes: list[UrlPrefixEntry] = []
         self.replacements: dict[str, dict[str, _JsonValue]] = {}
         self._log_file: TextIO | None = None
+        self._github_app_cache: dict[str, CachedToken] = {}
 
     def load(self, options: object) -> None:  # noqa: ARG002
         """Load configuration on startup."""
@@ -402,7 +410,11 @@ class ProxyFilter:
         # Pass 1: Attempt surrogate replacement
         for surrogate, config in self.replacements.items():
             # Skip signing credentials (handled by _try_resign_aws)
-            if config.get("type") == "aws-sigv4":
+            if config.get("type") == SIGNING_TYPE_AWS_SIGV4:
+                continue
+
+            # Skip GitHub App credentials (handled by _try_github_app)
+            if config.get("type") == CREDENTIAL_TYPE_GITHUB_APP:
                 continue
 
             scopes = config.get("scopes", [])
@@ -491,6 +503,147 @@ class ProxyFilter:
 
         # Check for presigned URL
         return self._resign_presigned(flow, host)
+
+    def _try_github_app(self, flow: http.HTTPFlow) -> bool:
+        """Attempt GitHub App token replacement.
+
+        Checks Authorization header for a surrogate matching a
+        ``"type": "github-app"`` entry in the replacement map. If found,
+        generates/refreshes a real installation access token and replaces
+        the surrogate.
+
+        Also handles foreign credential stripping when
+        ``allow_foreign_credentials`` is False.
+
+        Args:
+            flow: The HTTP flow to modify.
+
+        Returns:
+            True if a GitHub App replacement was performed, False otherwise.
+        """
+        host = flow.request.pretty_host
+        auth_value = flow.request.headers.get("Authorization", "")
+
+        if not auth_value:
+            return False
+
+        # Check each GitHub App entry for a surrogate match.
+        # The surrogate may appear directly (Bearer token) or inside
+        # Base64-encoded Basic Auth (git credential helpers send
+        # "Basic base64(x-access-token:<surrogate>)").
+        basic_creds = _decode_basic_auth(auth_value)
+
+        for surrogate, config in self.replacements.items():
+            if config.get("type") != CREDENTIAL_TYPE_GITHUB_APP:
+                continue
+
+            # Check for surrogate in Bearer or raw header
+            is_direct = surrogate in auth_value
+            # Check for surrogate in Basic Auth password
+            is_basic = basic_creds is not None and surrogate in basic_creds[1]
+
+            if not is_direct and not is_basic:
+                continue
+
+            # Verify host matches scopes
+            scopes = config.get("scopes", [])
+            if not any(_match_pattern(scope, host) for scope in scopes):
+                continue
+
+            # Found a matching GitHub App credential — get a real token
+            cached = self._github_app_cache.get(surrogate)
+
+            if is_token_valid(cached):
+                real_token = cached.token  # type: ignore[union-attr]
+                cache_status = "cached"
+            else:
+                # Refresh the token
+                try:
+                    jwt = generate_jwt(
+                        str(config["app_id"]),
+                        str(config["private_key"]),
+                    )
+                    permissions = config.get("permissions")
+                    repositories = config.get("repositories")
+                    real_token, expires_at = fetch_installation_token(
+                        str(config["base_url"]),
+                        str(config["installation_id"]),
+                        jwt,
+                        permissions=dict(permissions)  # type: ignore[arg-type]
+                        if permissions
+                        else None,
+                        repositories=list(repositories)  # type: ignore[arg-type]
+                        if repositories
+                        else None,
+                    )
+                    self._github_app_cache[surrogate] = CachedToken(
+                        token=real_token,
+                        expires_at=expires_at,
+                    )
+                    cache_status = "refreshed"
+                except Exception as e:
+                    self._log_loud(
+                        f"GitHub App token refresh failed for "
+                        f"{flow.request.method} "
+                        f"{flow.request.pretty_url}: {e}"
+                    )
+                    flow.response = http.Response.make(
+                        502,
+                        json.dumps(
+                            {
+                                "error": "github_app_token_refresh_failed",
+                                "message": (
+                                    "Failed to refresh GitHub App "
+                                    "installation token"
+                                ),
+                            }
+                        ),
+                        {"Content-Type": "application/json"},
+                    )
+                    return True
+
+            # Replace the surrogate with the real token
+            if is_basic:
+                # Re-encode Basic Auth with real token in password
+                username, password = basic_creds  # type: ignore[misc]
+                password = password.replace(surrogate, real_token)
+                flow.request.headers["Authorization"] = _encode_basic_auth(
+                    username, password
+                )
+            else:
+                flow.request.headers["Authorization"] = auth_value.replace(
+                    surrogate, real_token
+                )
+            self._log(
+                f"ALLOWED {flow.request.method} "
+                f"{flow.request.pretty_url} "
+                f"[github-app: {cache_status}]"
+            )
+            return True
+
+        # Handle foreign credential stripping for GitHub App scopes
+        for surrogate, config in self.replacements.items():
+            if config.get("type") != CREDENTIAL_TYPE_GITHUB_APP:
+                continue
+
+            scopes = config.get("scopes", [])
+            if not any(_match_pattern(scope, host) for scope in scopes):
+                continue
+
+            if config.get("allow_foreign_credentials", False):
+                continue
+
+            # Host is in scope but no surrogate matched — strip the header
+            if "Authorization" in flow.request.headers:
+                del flow.request.headers["Authorization"]
+                self._log_loud(
+                    f"STRIPPED header 'authorization' from "
+                    f"{flow.request.method} "
+                    f"{flow.request.pretty_url} "
+                    f"(foreign credential blocked)"
+                )
+
+        return False
 
     def _prepare_signing_context(
         self,
@@ -998,6 +1151,11 @@ class ProxyFilter:
             if result is not None:
                 flow.metadata["aws_resigned"] = True
                 flow.metadata["masked_count"] = 1
+            return
+
+        # Try GitHub App token replacement before general token masking
+        if self._try_github_app(flow):
+            flow.metadata["masked_count"] = 1
             return
 
         replaced, dropped = self._replace_tokens(flow)

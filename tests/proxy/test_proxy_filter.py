@@ -2659,3 +2659,415 @@ class TestHostHeaderMismatch:
         assert flow.response.status_code == 403
         body = json.loads(flow.response._content)
         assert "host mismatch" in body["message"].lower()
+
+
+# ---------------------------------------------------------------------------
+# GitHub App token replacement
+# ---------------------------------------------------------------------------
+
+
+def _github_app_replacement(
+    surrogate: str = "ghs_SurrogateTokenValue1234567890abcde",
+    *,
+    app_id: str = "Iv23liTestApp",
+    private_key: str = "test-private-key",
+    installation_id: str = "12345",
+    base_url: str = "https://api.github.com",
+    scopes: list[str] | None = None,
+    allow_foreign_credentials: bool = False,
+    permissions: dict[str, str] | None = None,
+    repositories: list[str] | None = None,
+) -> dict:
+    """Build a GitHub App replacement map entry."""
+    entry: dict = {
+        "type": "github-app",
+        "app_id": app_id,
+        "private_key": private_key,
+        "installation_id": installation_id,
+        "base_url": base_url,
+        "scopes": scopes or ["api.github.com"],
+        "allow_foreign_credentials": allow_foreign_credentials,
+    }
+    if permissions is not None:
+        entry["permissions"] = permissions
+    if repositories is not None:
+        entry["repositories"] = repositories
+    return entry
+
+
+class TestGitHubAppTokenReplacement:
+    """Tests for GitHub App token replacement in proxy filter."""
+
+    _SURROGATE = "ghs_SurrogateTokenValue1234567890abcde"
+
+    def test_replaces_surrogate_with_real_token(self) -> None:
+        """Surrogate in Authorization header is replaced with real token."""
+        pf = ProxyFilter()
+        pf.domains = ["api.github.com"]
+        pf.replacements = {
+            self._SURROGATE: _github_app_replacement(self._SURROGATE),
+        }
+
+        flow = _flow(
+            host="api.github.com",
+            path="/repos/org/repo",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+        )
+
+        with (
+            patch(
+                "airut._bundled.proxy.proxy_filter.generate_jwt",
+                return_value="fake-jwt",
+            ),
+            patch(
+                "airut._bundled.proxy.proxy_filter.fetch_installation_token",
+                return_value=("ghs_real_token_value", 9999999999.0),
+            ),
+        ):
+            pf.requestheaders(flow)
+            pf.request(flow)
+
+        assert (
+            flow.request.headers["Authorization"]
+            == "Bearer ghs_real_token_value"
+        )
+        assert flow.metadata["masked_count"] == 1
+
+    def test_uses_cached_token(self) -> None:
+        """Cached token is used without calling fetch_installation_token."""
+        import time as time_mod
+
+        from airut._bundled.proxy.github_app import CachedToken
+
+        pf = ProxyFilter()
+        pf.domains = ["api.github.com"]
+        pf.replacements = {
+            self._SURROGATE: _github_app_replacement(self._SURROGATE),
+        }
+        pf._github_app_cache[self._SURROGATE] = CachedToken(
+            token="ghs_cached_token",
+            expires_at=time_mod.time() + 3600,
+        )
+
+        flow = _flow(
+            host="api.github.com",
+            path="/repos/org/repo",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+        )
+
+        with patch(
+            "airut._bundled.proxy.proxy_filter.fetch_installation_token"
+        ) as mock_fetch:
+            pf.requestheaders(flow)
+            pf.request(flow)
+
+        mock_fetch.assert_not_called()
+        assert (
+            flow.request.headers["Authorization"] == "Bearer ghs_cached_token"
+        )
+
+    def test_refreshes_expired_token(self) -> None:
+        """Expired cached token triggers a refresh."""
+        import time as time_mod
+
+        from airut._bundled.proxy.github_app import CachedToken
+
+        pf = ProxyFilter()
+        pf.domains = ["api.github.com"]
+        pf.replacements = {
+            self._SURROGATE: _github_app_replacement(self._SURROGATE),
+        }
+        pf._github_app_cache[self._SURROGATE] = CachedToken(
+            token="ghs_expired",
+            expires_at=time_mod.time() - 100,
+        )
+
+        flow = _flow(
+            host="api.github.com",
+            path="/repos/org/repo",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+        )
+
+        with (
+            patch(
+                "airut._bundled.proxy.proxy_filter.generate_jwt",
+                return_value="fresh-jwt",
+            ),
+            patch(
+                "airut._bundled.proxy.proxy_filter.fetch_installation_token",
+                return_value=("ghs_fresh_token", time_mod.time() + 3600),
+            ),
+        ):
+            pf.requestheaders(flow)
+            pf.request(flow)
+
+        assert flow.request.headers["Authorization"] == "Bearer ghs_fresh_token"
+        assert pf._github_app_cache[self._SURROGATE].token == "ghs_fresh_token"
+
+    def test_returns_502_on_refresh_failure(self) -> None:
+        """Returns 502 when token refresh fails."""
+        pf = ProxyFilter()
+        pf.domains = ["api.github.com"]
+        pf.replacements = {
+            self._SURROGATE: _github_app_replacement(self._SURROGATE),
+        }
+
+        flow = _flow(
+            host="api.github.com",
+            path="/repos/org/repo",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+        )
+
+        with patch(
+            "airut._bundled.proxy.proxy_filter.generate_jwt",
+            side_effect=Exception("key error"),
+        ):
+            pf.requestheaders(flow)
+            pf.request(flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 502
+        body = json.loads(flow.response._content)
+        assert body["error"] == "github_app_token_refresh_failed"
+
+    def test_scope_mismatch_skips_replacement(self) -> None:
+        """No replacement when host doesn't match scopes."""
+        pf = ProxyFilter()
+        pf.domains = ["other-api.example.com"]
+        pf.replacements = {
+            self._SURROGATE: _github_app_replacement(
+                self._SURROGATE,
+                scopes=["api.github.com"],
+            ),
+        }
+
+        flow = _flow(
+            host="other-api.example.com",
+            path="/",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        # Surrogate should still be in the header (not replaced)
+        assert self._SURROGATE in flow.request.headers["Authorization"]
+
+    def test_strips_foreign_credentials(self) -> None:
+        """Strips Authorization header with non-surrogate on scoped host."""
+        pf = ProxyFilter()
+        pf.domains = ["api.github.com"]
+        pf.replacements = {
+            self._SURROGATE: _github_app_replacement(
+                self._SURROGATE,
+                allow_foreign_credentials=False,
+            ),
+        }
+
+        flow = _flow(
+            host="api.github.com",
+            path="/repos/org/repo",
+            headers={"Authorization": "Bearer foreign-token"},
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert "Authorization" not in flow.request.headers
+
+    def test_allows_foreign_credentials_when_enabled(self) -> None:
+        """Keeps Authorization header when allow_foreign_credentials is True."""
+        pf = ProxyFilter()
+        pf.domains = ["api.github.com"]
+        pf.replacements = {
+            self._SURROGATE: _github_app_replacement(
+                self._SURROGATE,
+                allow_foreign_credentials=True,
+            ),
+        }
+
+        flow = _flow(
+            host="api.github.com",
+            path="/repos/org/repo",
+            headers={"Authorization": "Bearer foreign-token"},
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.request.headers["Authorization"] == "Bearer foreign-token"
+
+    def test_skipped_in_replace_tokens(self) -> None:
+        """GitHub App entries are skipped by _replace_tokens."""
+        pf = ProxyFilter()
+        pf.domains = ["api.github.com"]
+        pf.replacements = {
+            self._SURROGATE: _github_app_replacement(self._SURROGATE),
+        }
+
+        flow = _flow(
+            host="api.github.com",
+            path="/",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+        )
+
+        # Call _replace_tokens directly — should not replace anything
+        replaced, dropped = pf._replace_tokens(flow)
+        assert replaced == 0
+        assert self._SURROGATE in flow.request.headers["Authorization"]
+
+    def test_wildcard_scopes(self) -> None:
+        """Wildcard scopes match subdomains."""
+        pf = ProxyFilter()
+        pf.domains = ["uploads.github.com"]
+        pf.replacements = {
+            self._SURROGATE: _github_app_replacement(
+                self._SURROGATE,
+                scopes=["*.github.com"],
+            ),
+        }
+
+        flow = _flow(
+            host="uploads.github.com",
+            path="/repos/org/repo/releases",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+        )
+
+        with (
+            patch(
+                "airut._bundled.proxy.proxy_filter.generate_jwt",
+                return_value="fake-jwt",
+            ),
+            patch(
+                "airut._bundled.proxy.proxy_filter.fetch_installation_token",
+                return_value=("ghs_wildcard_token", 9999999999.0),
+            ),
+        ):
+            pf.requestheaders(flow)
+            pf.request(flow)
+
+        assert (
+            flow.request.headers["Authorization"] == "Bearer ghs_wildcard_token"
+        )
+
+    def test_passes_permissions_and_repositories(self) -> None:
+        """Permissions and repositories are passed to fetch function."""
+        pf = ProxyFilter()
+        pf.domains = ["api.github.com"]
+        pf.replacements = {
+            self._SURROGATE: _github_app_replacement(
+                self._SURROGATE,
+                permissions={"contents": "write"},
+                repositories=["my-repo"],
+            ),
+        }
+
+        flow = _flow(
+            host="api.github.com",
+            path="/repos/org/repo",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+        )
+
+        with (
+            patch(
+                "airut._bundled.proxy.proxy_filter.generate_jwt",
+                return_value="fake-jwt",
+            ),
+            patch(
+                "airut._bundled.proxy.proxy_filter.fetch_installation_token",
+                return_value=("ghs_scoped", 9999999999.0),
+            ) as mock_fetch,
+        ):
+            pf.requestheaders(flow)
+            pf.request(flow)
+
+        mock_fetch.assert_called_once_with(
+            "https://api.github.com",
+            "12345",
+            "fake-jwt",
+            permissions={"contents": "write"},
+            repositories=["my-repo"],
+        )
+
+    def test_replaces_surrogate_in_basic_auth(self) -> None:
+        """Surrogate in Basic Auth password is replaced (git push)."""
+        import base64
+
+        pf = ProxyFilter()
+        pf.domains = ["github.com"]
+        pf.replacements = {
+            self._SURROGATE: _github_app_replacement(
+                self._SURROGATE, scopes=["github.com"]
+            ),
+        }
+
+        # git credential helpers send Basic Auth: x-access-token:<token>
+        basic = base64.b64encode(
+            f"x-access-token:{self._SURROGATE}".encode()
+        ).decode()
+        flow = _flow(
+            host="github.com",
+            path="/org/repo.git/info/refs",
+            headers={"Authorization": f"Basic {basic}"},
+        )
+
+        with (
+            patch(
+                "airut._bundled.proxy.proxy_filter.generate_jwt",
+                return_value="fake-jwt",
+            ),
+            patch(
+                "airut._bundled.proxy.proxy_filter.fetch_installation_token",
+                return_value=("ghs_real_token_value", 9999999999.0),
+            ),
+        ):
+            pf.requestheaders(flow)
+            pf.request(flow)
+
+        # Verify the header was re-encoded as Basic Auth with real token
+        expected_basic = base64.b64encode(
+            b"x-access-token:ghs_real_token_value"
+        ).decode()
+        assert (
+            flow.request.headers["Authorization"] == f"Basic {expected_basic}"
+        )
+        assert flow.metadata["masked_count"] == 1
+
+    def test_basic_auth_uses_cached_token(self) -> None:
+        """Cached token is used for Basic Auth without refresh."""
+        import base64
+        import time as time_mod
+
+        from airut._bundled.proxy.github_app import CachedToken
+
+        pf = ProxyFilter()
+        pf.domains = ["github.com"]
+        pf.replacements = {
+            self._SURROGATE: _github_app_replacement(
+                self._SURROGATE, scopes=["github.com"]
+            ),
+        }
+        pf._github_app_cache[self._SURROGATE] = CachedToken(
+            token="ghs_cached_basic",
+            expires_at=time_mod.time() + 3600,
+        )
+
+        basic = base64.b64encode(
+            f"x-access-token:{self._SURROGATE}".encode()
+        ).decode()
+        flow = _flow(
+            host="github.com",
+            path="/org/repo.git/git-receive-pack",
+            headers={"Authorization": f"Basic {basic}"},
+        )
+
+        with patch(
+            "airut._bundled.proxy.proxy_filter.fetch_installation_token"
+        ) as mock_fetch:
+            pf.requestheaders(flow)
+            pf.request(flow)
+
+        mock_fetch.assert_not_called()
+        expected_basic = base64.b64encode(
+            b"x-access-token:ghs_cached_basic"
+        ).decode()
+        assert (
+            flow.request.headers["Authorization"] == f"Basic {expected_basic}"
+        )

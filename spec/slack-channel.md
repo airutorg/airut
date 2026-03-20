@@ -517,7 +517,7 @@ repos:
     masked_secrets:
       GH_TOKEN:
         value: !env GH_TOKEN
-        scopes: ["api.github.com"]
+        scopes: ["github.com", "api.github.com"]
         headers: ["Authorization"]
 ```
 

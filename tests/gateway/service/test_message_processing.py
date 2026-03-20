@@ -1753,6 +1753,58 @@ class TestConvertReplacementMap:
             is True
         )
 
+    def test_github_app_entries_converted(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """GitHubAppEntry entries are properly converted."""
+        from airut.gateway.config import GitHubAppEntry
+
+        svc, handler, mock_ss, adapter = self._setup_svc(email_config, tmp_path)
+
+        replacement_map = {
+            "ghs_SurrogateToken1234567890abcdefgh": GitHubAppEntry(
+                app_id="Iv23liXyz",
+                private_key="test-key",
+                installation_id="12345",
+                base_url="https://api.github.com",
+                scopes=("api.github.com",),
+                permissions={"contents": "write"},
+                repositories=("my-repo",),
+            ),
+        }
+
+        rc = _make_repo_config(network_sandbox_enabled=True)
+        parsed = _make_parsed_message(body="Do something")
+
+        with (
+            patch(
+                "airut.gateway.service.message_processing."
+                "RepoConfig.from_mirror",
+                return_value=(rc, replacement_map),
+            ),
+            patch(
+                "airut.gateway.service.message_processing.ConversationStore",
+                return_value=mock_ss,
+            ),
+        ):
+            reason, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
+
+        assert reason == CompletionReason.SUCCESS
+
+        create_task_call = svc.sandbox.create_task.call_args
+        network_sandbox = create_task_call[1]["network_sandbox"]
+        replacements_dict = network_sandbox.replacements.to_dict()
+        key = "ghs_SurrogateToken1234567890abcdefgh"
+        assert key in replacements_dict
+        assert replacements_dict[key]["type"] == "github-app"
+        assert replacements_dict[key]["app_id"] == "Iv23liXyz"
+        assert replacements_dict[key]["private_key"] == "test-key"
+        assert replacements_dict[key]["installation_id"] == "12345"
+        assert replacements_dict[key]["permissions"] == {"contents": "write"}
+        assert replacements_dict[key]["repositories"] == ["my-repo"]
+
 
 class TestBuildRecoveryPrompt:
     """Tests for build_recovery_prompt."""

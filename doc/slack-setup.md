@@ -121,6 +121,7 @@ repos:
       GH_TOKEN:
         value: !env GH_TOKEN
         scopes:
+          - "github.com"
           - "api.github.com"
           - "*.githubusercontent.com"
         headers:

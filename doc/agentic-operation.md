@@ -80,8 +80,8 @@ autonomous operation:
   to reduce errors
 - **Branch protection** — GitHub settings that require PR approval before merge,
   creating a human-in-the-loop checkpoint
-- **Dedicated agent account** — A GitHub account with limited permissions for
-  the agent to push branches and create PRs
+- **Dedicated agent identity** — A GitHub App (recommended) or dedicated machine
+  user with limited permissions for the agent to push branches and create PRs
 - **CI sandbox** — GitHub Actions workflows that run agent-steerable code inside
   the Airut sandbox (see [ci-sandbox.md](ci-sandbox.md))
 - **`.airut/` configuration** — Container Dockerfile, network allowlist, and
@@ -104,14 +104,18 @@ This creates a permission boundary: agents can propose changes (including to
 their own Dockerfile or network allowlist), but those changes only take effect
 after human review and merge.
 
-The agent's GitHub account should have:
+The agent's GitHub identity should have:
 
 - Write access to create branches and PRs
 - No admin privileges (cannot bypass branch protection)
+- No workflow file modification ability (GitHub App without `Workflows`
+  permission, or PAT without `workflow` scope)
 - Token scoped to repository operations
 
-This provides a clear audit trail (commits attributed to the agent account)
-while ensuring humans remain in control.
+This provides a clear audit trail (commits attributed to the agent identity)
+while ensuring humans remain in control. A GitHub App is recommended -- it
+provides a bot identity, short-lived tokens, and granular permissions without
+consuming an organization seat. See [github-app-setup.md](github-app-setup.md).
 
 **Note:** Running without branch protection ("YOLO mode") defeats the security
 model — the agent can push to main and modify its own sandbox configuration.
@@ -318,14 +322,14 @@ it codifies them as heuristics. This builds institutional knowledge over time.
 
 Agentic operation with Airut requires:
 
-| Component               | Purpose                                            |
-| ----------------------- | -------------------------------------------------- |
-| Airut                   | Channel handling, sandboxing, session state        |
-| `CLAUDE.md`             | Workflow instructions and codebase docs            |
-| Workflow tools          | Reliable CI/PR operations                          |
-| Branch protection       | Human-in-the-loop checkpoint                       |
-| Dedicated agent account | Limited permissions, clear audit trail             |
-| CI sandbox              | Agent-steerable CI runs inside sandboxed container |
+| Component                | Purpose                                            |
+| ------------------------ | -------------------------------------------------- |
+| Airut                    | Channel handling, sandboxing, session state        |
+| `CLAUDE.md`              | Workflow instructions and codebase docs            |
+| Workflow tools           | Reliable CI/PR operations                          |
+| Branch protection        | Human-in-the-loop checkpoint                       |
+| Dedicated agent identity | Limited permissions, clear audit trail             |
+| CI sandbox               | Agent-steerable CI runs inside sandboxed container |
 
 The Airut repository demonstrates these practices. Adapt them when onboarding
 new repositories.
