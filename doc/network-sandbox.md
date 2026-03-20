@@ -40,6 +40,13 @@ so it works with all tools (Node.js, Go, curl, Python, git).
   - [Security Properties](#security-properties-1)
   - [Limitations](#limitations-2)
   - [Transparent Upgrade Path](#transparent-upgrade-path)
+- [GitHub App Credentials (Proxy-Managed Token Rotation)](#github-app-credentials-proxy-managed-token-rotation)
+  - [Problem](#problem-2)
+  - [Solution](#solution-2)
+  - [Security Properties](#security-properties-2)
+  - [Comparison With Masked Secrets](#comparison-with-masked-secrets)
+  - [Limitations](#limitations-3)
+  - [When to Use](#when-to-use-1)
 - [Troubleshooting](#troubleshooting)
   - [Broken allowlist checked into main](#broken-allowlist-checked-into-main)
   - [Masked secrets stopped working](#masked-secrets-stopped-working)
@@ -59,15 +66,16 @@ servers.
 The network sandbox breaks this exfiltration path: even if the agent is tricked
 into making a request, it can only reach pre-approved hosts.
 
-**Combined with masked secrets and signing credentials** (see
-[Masked Secrets](#masked-secrets-token-replacement) and
-[Signing Credentials](#signing-credentials-aws-sigv4-re-signing)), real
-credentials never enter the container — they stay with the proxy and are only
-inserted into upstream requests to scoped hosts. A compromised container can
-still make authenticated requests to scoped hosts through the proxy, but cannot
-extract the real credentials for use elsewhere. The attacker's ability to act is
-bound to the container's lifetime and the proxy's scope — once the container
-stops, the credentials are inaccessible.
+**Combined with surrogate credentials** (see
+[Masked Secrets](#masked-secrets-token-replacement),
+[Signing Credentials](#signing-credentials-aws-sigv4-re-signing), and
+[GitHub App Credentials](#github-app-credentials-proxy-managed-token-rotation)),
+real credentials never enter the container — they stay with the proxy and are
+only inserted into upstream requests to scoped hosts. A compromised container
+can still make authenticated requests to scoped hosts through the proxy, but
+cannot extract the real credentials for use elsewhere. The attacker's ability to
+act is bound to the container's lifetime and the proxy's scope — once the
+container stops, the credentials are inaccessible.
 
 ## Security Model
 
@@ -351,6 +359,7 @@ repos:
       GH_TOKEN:
         value: !env GH_TOKEN
         scopes:
+          - "github.com"
           - "api.github.com"
           - "*.githubusercontent.com"
         headers:
@@ -403,6 +412,12 @@ Use `masked_secrets` for credentials that are used via `Authorization`,
 `X-Api-Key`, or `X-Auth-Token` headers and should only be usable with specific
 hosts. Use plain `secrets` for credentials passed in request bodies or that need
 to work with arbitrary hosts.
+
+**For GitHub tokens specifically**, prefer
+[`github_app_credentials`](#github-app-credentials-proxy-managed-token-rotation)
+over `masked_secrets` with a classic PAT. GitHub App credentials provide
+short-lived tokens that mitigate the response echo risk and eliminate repository
+creation as an exfiltration vector.
 
 See [spec/masked-secrets.md](../spec/masked-secrets.md) for the full
 specification (surrogate format, replacement map, proxy addon details).
@@ -506,6 +521,131 @@ See [spec/aws-sigv4-resigning.md](../spec/aws-sigv4-resigning.md) for the full
 specification (surrogate generation, re-signing algorithm, chunked transfer
 encoding, data flow).
 
+## GitHub App Credentials (Proxy-Managed Token Rotation)
+
+Masked secrets handle credentials that appear as static tokens in headers.
+GitHub App credentials extend the proxy to manage the full token lifecycle --
+generating short-lived installation tokens from a private key and rotating them
+automatically.
+
+### Problem
+
+Even with masked secrets, GitHub API responses can echo the authentication token
+back in the response body. The proxy only scrubs outbound request headers, not
+inbound response bodies. If a classic PAT is used as a masked secret, a
+compromised container can extract the real PAT from a GitHub API response. Since
+classic PATs are long-lived (months to years), this provides persistent access
+beyond the sandbox session.
+
+Additionally, classic PATs cannot prevent repository creation. A compromised
+agent could create public repositories under the dedicated user's account via
+the GraphQL endpoint and leak information through repository names or
+descriptions -- even with the network allowlist restricting which hosts the
+agent can push to.
+
+### Solution
+
+`github_app_credentials` in the server config inject a **surrogate** `ghs_`
+token into the container. The proxy holds the GitHub App's RSA private key and
+manages installation tokens:
+
+1. Container sends a request with the surrogate in the `Authorization` header.
+   The surrogate may appear as a **Bearer token** (`Bearer ghs_...`) for API
+   calls, or inside **Basic Auth** (`Basic base64(x-access-token:ghs_...)`) for
+   git operations via credential helpers.
+2. Proxy detects the surrogate and checks scope match
+3. Proxy generates a JWT from the private key (in-memory, never written to disk)
+4. Proxy exchanges the JWT for a short-lived installation token (1-hour expiry)
+5. Proxy caches the token and reuses it until near expiry (5-minute margin)
+6. Proxy replaces the surrogate with the real installation token in the header.
+   For Basic Auth, the proxy decodes the Base64 payload, replaces the surrogate
+   in the password field, and re-encodes — the same mechanism used for
+   [masked secrets](#basic-auth-support).
+7. Request goes to GitHub with a valid, short-lived token
+
+```yaml
+# In ~/.config/airut/airut.yaml (server config)
+repos:
+  my-project:
+    github_app_credentials:
+      GH_TOKEN:
+        app_id: !env GH_APP_ID
+        private_key: !env GH_APP_PRIVATE_KEY
+        installation_id: !env GH_APP_INSTALLATION_ID
+        scopes:
+          - "github.com"
+          - "api.github.com"
+          - "*.githubusercontent.com"
+        # Optional: restrict token permissions
+        permissions:
+          contents: write
+          pull_requests: write
+        # Optional: restrict token to specific repos
+        repositories:
+          - "my-repo"
+```
+
+The repo config uses standard `!secret` references -- it doesn't know GitHub App
+credentials are involved:
+
+```yaml
+# In .airut/airut.yaml (repo config)
+container_env:
+  GH_TOKEN: !secret GH_TOKEN
+```
+
+### Security Properties
+
+| Property                    | Mechanism                                                  |
+| --------------------------- | ---------------------------------------------------------- |
+| Private key isolation       | Key only in proxy container, never in client container     |
+| Short-lived tokens          | Installation tokens expire in 1 hour                       |
+| No token escalation         | Leaked token cannot generate new tokens (requires JWT)     |
+| No repository creation      | GitHub Apps cannot create repos without explicit grant     |
+| Surrogate stability         | Container sees unchanging surrogate for entire session     |
+| Scope enforcement           | Proxy only replaces for matching hosts                     |
+| Foreign credential blocking | Non-surrogate Authorization headers stripped by default    |
+| Fail-secure                 | If proxy fails, surrogate is not a valid token             |
+| Audit trail                 | Network log shows `[github-app: cached/refreshed]`         |
+| No new dependencies         | Uses `cryptography` (existing) + `urllib.request` (stdlib) |
+
+### Comparison With Masked Secrets
+
+| Aspect                   | Masked Secret (PAT)      | GitHub App Credential             |
+| ------------------------ | ------------------------ | --------------------------------- |
+| Token lifetime           | Months/years (or never)  | 1 hour                            |
+| Token rotation           | None (static value)      | Automatic (proxy-managed)         |
+| Real token in container  | Never (surrogate)        | Never (surrogate)                 |
+| Proxy complexity         | Stateless string replace | Stateful (cache + HTTP refresh)   |
+| Network call from proxy  | None                     | 1 call per hour to GitHub API     |
+| Response echo risk       | High (PAT valid forever) | Low (token expires in 1 hour)     |
+| Repository creation risk | Cannot prevent           | Impossible without explicit grant |
+
+### Limitations
+
+1. **Stateful**: Requires network access from the proxy container to the GitHub
+   API for token refresh. If the proxy cannot reach GitHub, token refresh fails
+   and requests return HTTP 502.
+2. **Requires sandbox**: Like masked secrets, GitHub App credentials depend on
+   the proxy. When the sandbox is disabled, the container receives a surrogate
+   that is not a valid token.
+3. **GitHub-specific**: This credential type only works with GitHub (and GHES).
+   For other services, use `masked_secrets` or `signing_credentials`.
+
+### When to Use
+
+For GitHub API access, prefer `github_app_credentials` over `masked_secrets`
+with a classic PAT. The short-lived tokens mitigate the response echo risk, and
+the fine-grained permissions eliminate repository creation as a data
+exfiltration vector.
+
+Use `masked_secrets` for non-GitHub tokens (e.g., other API keys) and
+`signing_credentials` for AWS credentials.
+
+See [github-app-setup.md](github-app-setup.md) for the setup guide and
+[spec/github-app-credential.md](../spec/github-app-credential.md) for the full
+specification.
+
 ## Troubleshooting
 
 ### Broken allowlist checked into main
@@ -564,6 +704,9 @@ When investigating connectivity problems from inside a container:
   specification
 - [spec/aws-sigv4-resigning.md](../spec/aws-sigv4-resigning.md) — AWS
   SigV4/SigV4A re-signing specification
+- [spec/github-app-credential.md](../spec/github-app-credential.md) — GitHub App
+  credential specification
+- [github-app-setup.md](github-app-setup.md) — GitHub App setup guide
 - [ci-sandbox.md](ci-sandbox.md) — Using the sandbox for CI pipelines
 - [execution-sandbox.md](execution-sandbox.md) — Container isolation
 - [security.md](security.md) — Overall security model

@@ -333,6 +333,7 @@ def process_message(
             repo_handler.config.secrets,
             repo_handler.config.masked_secrets,
             repo_handler.config.signing_credentials,
+            repo_handler.config.github_app_credentials,
             server_sandbox_enabled=repo_handler.config.network_sandbox_enabled,
             server_resource_limits=service.global_config.resource_limits,
         )
@@ -778,16 +779,20 @@ def _convert_replacement_map(
         SecretReplacements for the sandbox.
     """
     from airut.gateway.config import (
+        GitHubAppEntry,
         ReplacementEntry,
         SigningCredentialEntry,
     )
     from airut.sandbox.secrets import (
         SecretReplacements,
+        _GitHubAppEntry,
         _ReplacementEntry,
         _SigningCredentialEntry,
     )
 
-    internal_map: dict[str, _ReplacementEntry | _SigningCredentialEntry] = {}
+    internal_map: dict[
+        str, _ReplacementEntry | _SigningCredentialEntry | _GitHubAppEntry
+    ] = {}
 
     for surrogate, entry in replacement_map.items():
         if isinstance(entry, ReplacementEntry):
@@ -804,6 +809,17 @@ def _convert_replacement_map(
                 session_token=entry.session_token,
                 surrogate_session_token=entry.surrogate_session_token,
                 scopes=entry.scopes,
+            )
+        elif isinstance(entry, GitHubAppEntry):
+            internal_map[surrogate] = _GitHubAppEntry(
+                app_id=entry.app_id,
+                private_key=entry.private_key,
+                installation_id=entry.installation_id,
+                base_url=entry.base_url,
+                scopes=entry.scopes,
+                allow_foreign_credentials=entry.allow_foreign_credentials,
+                permissions=entry.permissions,
+                repositories=entry.repositories,
             )
 
     return SecretReplacements(_map=internal_map)

@@ -27,7 +27,7 @@ repos:
     masked_secrets:
       GH_TOKEN:
         value: !env GH_TOKEN
-        scopes: ["api.github.com"]
+        scopes: ["github.com", "api.github.com"]
         headers: ["Authorization"]
 
     signing_credentials:
@@ -193,7 +193,7 @@ class SigningCredentialEntry:
   },
   "ghp_surrogate123...": {
     "value": "ghp_realtoken...",
-    "scopes": ["api.github.com"],
+    "scopes": ["github.com", "api.github.com"],
     "headers": ["Authorization"]
   }
 }

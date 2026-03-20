@@ -95,6 +95,9 @@ def get_storage_dir(repo_id: str) -> Path:
 #: Signing type identifier for AWS SigV4/SigV4A credential re-signing.
 SIGNING_TYPE_AWS_SIGV4 = "aws-sigv4"
 
+#: Credential type identifier for GitHub App proxy-managed token rotation.
+CREDENTIAL_TYPE_GITHUB_APP = "github-app"
+
 _BOOL_TRUTHY = frozenset({"true", "1", "yes", "on"})
 _BOOL_FALSY = frozenset({"false", "0", "no", "off"})
 
@@ -235,8 +238,87 @@ class SigningCredentialEntry:
         }
 
 
+@dataclass(frozen=True)
+class GitHubAppCredential:
+    """GitHub App credential for proxy-managed token rotation.
+
+    The proxy holds the private key and generates short-lived installation
+    access tokens on demand.  The container sees only a stable surrogate.
+
+    Attributes:
+        app_id: GitHub App Client ID or numeric App ID.
+        private_key: PEM-encoded RSA private key.
+        installation_id: Installation ID for the target org/user.
+        scopes: Fnmatch patterns for hosts where token replacement applies.
+        allow_foreign_credentials: If False (default), non-surrogate
+            Authorization headers on scoped hosts are stripped.
+        base_url: GitHub API base URL (default: https://api.github.com).
+        permissions: Optional token permission restrictions.
+        repositories: Optional token repository restrictions.
+    """
+
+    app_id: str
+    private_key: str
+    installation_id: str
+    scopes: frozenset[str]
+    allow_foreign_credentials: bool = False
+    base_url: str = "https://api.github.com"
+    permissions: dict[str, str] | None = None
+    repositories: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
+class GitHubAppEntry:
+    """Entry in the replacement map for GitHub App credentials.
+
+    Keyed by the surrogate ``ghs_``-prefixed token.  The proxy detects
+    requests with the surrogate in the Authorization header and replaces
+    it with a real installation access token (generating/refreshing as
+    needed).
+
+    Attributes:
+        app_id: GitHub App Client ID or numeric App ID.
+        private_key: PEM-encoded RSA private key.
+        installation_id: Installation ID for the target org/user.
+        base_url: GitHub API base URL.
+        scopes: Host patterns where replacement is allowed.
+        allow_foreign_credentials: Whether to allow non-surrogate credentials.
+        permissions: Optional token permission restrictions.
+        repositories: Optional token repository restrictions.
+    """
+
+    app_id: str
+    private_key: str
+    installation_id: str
+    base_url: str
+    scopes: tuple[str, ...]
+    allow_foreign_credentials: bool = False
+    permissions: dict[str, str] | None = None
+    repositories: tuple[str, ...] | None = None
+
+    def to_dict(self) -> JsonDict:
+        """Serialize to dict for JSON export."""
+        d: JsonDict = {
+            "type": CREDENTIAL_TYPE_GITHUB_APP,
+            "app_id": self.app_id,
+            "private_key": self.private_key,
+            "installation_id": self.installation_id,
+            "base_url": self.base_url,
+            "scopes": list(self.scopes),
+        }
+        if self.allow_foreign_credentials:
+            d["allow_foreign_credentials"] = True
+        if self.permissions is not None:
+            d["permissions"] = dict(self.permissions)
+        if self.repositories is not None:
+            d["repositories"] = list(self.repositories)
+        return d
+
+
 #: Mapping of surrogate token to replacement entry.
-ReplacementMap = dict[str, ReplacementEntry | SigningCredentialEntry]
+ReplacementMap = dict[
+    str, ReplacementEntry | SigningCredentialEntry | GitHubAppEntry
+]
 
 
 # Known token prefixes to preserve during surrogate generation.
@@ -323,6 +405,23 @@ def generate_session_token_surrogate() -> str:
         secrets_module.choice(charset)
         for _ in range(_SESSION_TOKEN_SURROGATE_LENGTH)
     )
+
+
+# Template for GitHub App surrogates: ghs_ prefix + 36 mixed-case
+# alphanumeric chars = 40 chars total (matches real ghs_ token format).
+_GITHUB_APP_SURROGATE_TEMPLATE = "ghs_" + "aA0" * 12
+
+
+def generate_github_app_surrogate() -> str:
+    """Generate a ``ghs_``-prefixed surrogate for GitHub App credentials.
+
+    The surrogate mimics a real GitHub installation token format:
+    ``ghs_`` prefix followed by 36 alphanumeric characters.
+
+    Returns:
+        A random ``ghs_``-prefixed 40-character alphanumeric string.
+    """
+    return generate_surrogate(_GITHUB_APP_SURROGATE_TEMPLATE)
 
 
 # ---------------------------------------------------------------------------
@@ -750,6 +849,8 @@ class RepoServerConfig:
         secrets: Per-repo secrets pool for ``!secret`` resolution.
         masked_secrets: Secrets with scope restrictions for proxy replacement.
         signing_credentials: Signing credentials for proxy re-signing.
+        github_app_credentials: GitHub App credentials for proxy-managed
+            token rotation.
         network_sandbox_enabled: Server-side override for the network sandbox.
             Effective sandbox state is the logical AND of this value and the
             repo config's ``network.sandbox_enabled``.  Defaults to ``True``.
@@ -766,6 +867,9 @@ class RepoServerConfig:
     secrets: dict[str, str] = field(default_factory=dict)
     masked_secrets: dict[str, MaskedSecret] = field(default_factory=dict)
     signing_credentials: dict[str, SigningCredential] = field(
+        default_factory=dict
+    )
+    github_app_credentials: dict[str, GitHubAppCredential] = field(
         default_factory=dict
     )
     network_sandbox_enabled: bool = True
@@ -793,6 +897,10 @@ class RepoServerConfig:
             SecretFilter.register_secret(signing.secret_access_key.value)
             if signing.session_token:
                 SecretFilter.register_secret(signing.session_token.value)
+
+        # Register GitHub App private keys for log redaction
+        for gh_app in self.github_app_credentials.values():
+            SecretFilter.register_secret(gh_app.private_key)
 
         if not self.git_repo_url:
             raise ValueError(
@@ -1031,6 +1139,12 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
     raw_signing = raw.get("signing_credentials", {})
     signing_credentials = _resolve_signing_credentials(raw_signing, prefix)
 
+    # Resolve GitHub App credentials
+    raw_github_app = raw.get("github_app_credentials", {})
+    github_app_credentials = _resolve_github_app_credentials(
+        raw_github_app, prefix
+    )
+
     # Parse each channel block
     channels: dict[str, ChannelConfig] = {}
     if "email" in raw:
@@ -1049,6 +1163,7 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
         secrets=secrets,
         masked_secrets=masked_secrets,
         signing_credentials=signing_credentials,
+        github_app_credentials=github_app_credentials,
         network_sandbox_enabled=_resolve(
             network.get("sandbox_enabled"), bool, default=True
         ),
@@ -1405,6 +1520,105 @@ def _resolve_signing_credentials(
     return result
 
 
+def _resolve_github_app_credentials(
+    raw_github_app: dict,
+    prefix: str,
+) -> dict[str, GitHubAppCredential]:
+    """Resolve github_app_credentials from server config.
+
+    Args:
+        raw_github_app: Raw github_app_credentials mapping from YAML.
+        prefix: Config path prefix for error messages.
+
+    Returns:
+        Mapping of credential name to GitHubAppCredential.
+
+    Raises:
+        ConfigError: If structure is invalid or required fields missing.
+    """
+    result: dict[str, GitHubAppCredential] = {}
+
+    for name, config in raw_github_app.items():
+        name = str(name)
+        key = f"{prefix}.github_app_credentials.{name}"
+
+        if not isinstance(config, dict):
+            raise ConfigError(f"{key} must be a mapping")
+
+        # Resolve app_id (required, supports !env)
+        raw_app_id = config.get("app_id")
+        app_id = raw_resolve(raw_app_id)
+        if not app_id:
+            raise ConfigError(f"{key}.app_id is required")
+
+        # Resolve private_key (required, supports !env)
+        raw_private_key = config.get("private_key")
+        private_key = raw_resolve(raw_private_key)
+        if not private_key:
+            raise ConfigError(f"{key}.private_key is required")
+
+        # Resolve installation_id (required, supports !env, must be numeric)
+        raw_installation_id = config.get("installation_id")
+        installation_id = raw_resolve(raw_installation_id)
+        if not installation_id:
+            raise ConfigError(f"{key}.installation_id is required")
+        if not installation_id.isdigit():
+            raise ConfigError(f"{key}.installation_id must be numeric")
+
+        # Parse scopes (required)
+        raw_scopes = config.get("scopes")
+        if raw_scopes is None:
+            raise ConfigError(f"{key}.scopes is required")
+        if not isinstance(raw_scopes, list):
+            raise ConfigError(f"{key}.scopes must be a list")
+        if not raw_scopes:
+            raise ConfigError(f"{key}.scopes cannot be empty")
+
+        scopes = frozenset(str(s) for s in raw_scopes)
+
+        # Parse allow_foreign_credentials (optional, default False)
+        allow_foreign = bool(config.get("allow_foreign_credentials", False))
+
+        # Parse base_url (optional, supports !env)
+        raw_base_url = config.get("base_url")
+        base_url = (
+            raw_resolve(raw_base_url) if raw_base_url is not None else None
+        )
+        if not base_url:
+            base_url = "https://api.github.com"
+        if not base_url.startswith("https://"):
+            raise ConfigError(f"{key}.base_url must use HTTPS")
+
+        # Parse permissions (optional)
+        raw_permissions = config.get("permissions")
+        permissions: dict[str, str] | None = None
+        if raw_permissions is not None:
+            if not isinstance(raw_permissions, dict):
+                raise ConfigError(f"{key}.permissions must be a mapping")
+            permissions = {str(k): str(v) for k, v in raw_permissions.items()}
+
+        # Parse repositories (optional)
+        raw_repositories = config.get("repositories")
+        repositories: tuple[str, ...] | None = None
+        if raw_repositories is not None:
+            if not isinstance(raw_repositories, list):
+                raise ConfigError(f"{key}.repositories must be a list")
+            repositories = tuple(str(r) for r in raw_repositories)
+
+        result[name] = GitHubAppCredential(
+            app_id=app_id,
+            private_key=private_key,
+            installation_id=installation_id,
+            scopes=scopes,
+            allow_foreign_credentials=allow_foreign,
+            base_url=base_url,
+            permissions=permissions,
+            repositories=repositories,
+        )
+
+    return result
+
+
 # Repo configuration (loaded from .airut/airut.yaml in git mirror)
 # ---------------------------------------------------------------------------
 
@@ -1457,6 +1671,7 @@ class RepoConfig:
         server_secrets: dict[str, str],
         masked_secrets: dict[str, MaskedSecret] | None = None,
         signing_credentials: dict[str, SigningCredential] | None = None,
+        github_app_credentials: dict[str, GitHubAppCredential] | None = None,
         *,
         server_sandbox_enabled: bool = True,
         server_resource_limits: ResourceLimits | None = None,
@@ -1476,11 +1691,17 @@ class RepoConfig:
         with surrogates. A ``SigningCredentialEntry`` is added to the
         replacement map for the proxy to re-sign requests.
 
+        When ``github_app_credentials`` is provided, ``!secret``
+        references matching credential names generate ``ghs_``-prefixed
+        surrogates. A ``GitHubAppEntry`` is added to the replacement map
+        for the proxy to manage token rotation.
+
         Args:
             mirror: Git mirror cache to read the file from.
             server_secrets: Server's secrets pool (name -> value).
             masked_secrets: Server's masked secrets pool with scope info.
             signing_credentials: Server's signing credentials pool.
+            github_app_credentials: Server's GitHub App credentials pool.
             server_sandbox_enabled: Server-side network sandbox setting.
                 The effective sandbox state is the logical AND of this
                 value and the repo config's ``network.sandbox_enabled``.
@@ -1514,6 +1735,7 @@ class RepoConfig:
             server_secrets,
             masked_secrets or {},
             signing_credentials=signing_credentials or {},
+            github_app_credentials=github_app_credentials or {},
             server_sandbox_enabled=server_sandbox_enabled,
             server_resource_limits=server_resource_limits,
         )
@@ -1526,6 +1748,7 @@ class RepoConfig:
         masked_secrets: dict[str, MaskedSecret],
         *,
         signing_credentials: dict[str, SigningCredential] | None = None,
+        github_app_credentials: dict[str, GitHubAppCredential] | None = None,
         server_sandbox_enabled: bool = True,
         server_resource_limits: ResourceLimits | None = None,
     ) -> tuple["RepoConfig", ReplacementMap]:
@@ -1543,6 +1766,7 @@ class RepoConfig:
             server_secrets,
             masked_secrets,
             signing_credentials=signing_credentials or {},
+            github_app_credentials=github_app_credentials or {},
         )
 
         repo_sandbox = _resolve(
@@ -1686,6 +1910,7 @@ def _resolve_container_env(
     masked_secrets: dict[str, MaskedSecret],
     *,
     signing_credentials: dict[str, SigningCredential] | None = None,
+    github_app_credentials: dict[str, GitHubAppCredential] | None = None,
 ) -> tuple[dict[str, str], ReplacementMap]:
     """Resolve container_env entries from repo config.
 
@@ -1703,11 +1928,23 @@ def _resolve_container_env(
     ``SigningCredentialEntry`` is added to the replacement map keyed by
     the surrogate access key ID.
 
+    GitHub App credentials are resolved by matching the ``!secret`` name
+    against the ``github_app_credentials`` keys.  A ``ghs_``-prefixed
+    surrogate is generated and a ``GitHubAppEntry`` is added to the
+    replacement map.
+
+    Resolution priority:
+    1. Signing credentials
+    2. GitHub App credentials
+    3. Masked secrets
+    4. Plain secrets
+
     Args:
         raw_env: Raw container_env mapping from YAML.
         server_secrets: Server's plain secrets pool.
         masked_secrets: Server's masked secrets pool with scope info.
         signing_credentials: Server's signing credentials pool.
+        github_app_credentials: Server's GitHub App credentials pool.
 
     Returns:
         Tuple of (resolved env vars, replacement map for proxy).
@@ -1719,6 +1956,7 @@ def _resolve_container_env(
     resolved: dict[str, str] = {}
     replacement_map: ReplacementMap = {}
     signing_secret_map = _build_signing_secret_map(signing_credentials or {})
+    gh_app_creds = github_app_credentials or {}
 
     # Track signing credentials that have been referenced so we can
     # build a single SigningCredentialEntry per credential set.
@@ -1745,6 +1983,23 @@ def _resolve_container_env(
                 signing_refs[cred_name][signing_info.field_name] = (
                     str(key),
                     surrogate,
+                )
+                continue
+
+            # Check GitHub App credentials
+            if value.name in gh_app_creds:
+                gh_cred = gh_app_creds[value.name]
+                surrogate = generate_github_app_surrogate()
+                resolved[str(key)] = surrogate
+                replacement_map[surrogate] = GitHubAppEntry(
+                    app_id=gh_cred.app_id,
+                    private_key=gh_cred.private_key,
+                    installation_id=gh_cred.installation_id,
+                    base_url=gh_cred.base_url,
+                    scopes=tuple(sorted(gh_cred.scopes)),
+                    allow_foreign_credentials=gh_cred.allow_foreign_credentials,
+                    permissions=gh_cred.permissions,
+                    repositories=gh_cred.repositories,
                 )
                 continue
 

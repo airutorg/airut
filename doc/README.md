@@ -18,14 +18,16 @@ Named "Airut" (Finnish: herald/messenger).
 
 1. **[Deployment](deployment.md)** — Install Airut, configure the server, set up
    git credentials and secrets
-2. **Set up a channel:**
+2. **[GitHub App setup](github-app-setup.md)** (recommended) — Create a GitHub
+   App for the agent's GitHub identity
+3. **Set up a channel:**
    - [Email setup](email-setup.md) — IMAP/SMTP provider, DMARC, sender
      authorization
    - [Slack setup](slack-setup.md) — App creation, Socket Mode, authorization
      rules
-3. **[Repo onboarding](repo-onboarding.md)** — Add `.airut/` configuration,
+4. **[Repo onboarding](repo-onboarding.md)** — Add `.airut/` configuration,
    container Dockerfile, and network allowlist to your repository
-4. **Send a message** — email or Slack — and Airut handles workspace creation,
+5. **Send a message** — email or Slack — and Airut handles workspace creation,
    container isolation, and cleanup
 
 ## Architecture and Security

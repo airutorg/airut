@@ -35,9 +35,10 @@ Code interaction via email and/or Slack.
     Airut deletes processed messages)
   - **Slack**: Slack app installed to your workspace (see
     [slack-setup.md](slack-setup.md))
-- **Dedicated GitHub account** for the agent with a properly scoped personal
-  access token (see [deployment.md](deployment.md#dedicated-github-account)).
-  The PAT should **not** include the `workflow` scope -- see
+- **GitHub authentication** for the agent: either a GitHub App (recommended) or
+  a dedicated machine user with a classic PAT. See
+  [deployment.md](deployment.md#github-app-recommended) for setup options. If
+  using a PAT, it should **not** include the `workflow` scope -- see
   [ci-sandbox.md](ci-sandbox.md#1-protecting-workflow-files)
 - Claude API credentials
 
@@ -168,6 +169,8 @@ development Dockerfile for your project.
 the `gh auth git-credential` credential helper. This ensures all git operations
 use HTTPS, and authentication is handled by the `GH_TOKEN` environment variable.
 Pass `GH_TOKEN` as a
+[GitHub App credential](network-sandbox.md#github-app-credentials-proxy-managed-token-rotation)
+(recommended) or
 [masked secret](network-sandbox.md#masked-secrets-token-replacement) so the real
 token never enters the container — the proxy injects it only for scoped hosts.
 
@@ -278,12 +281,27 @@ repos:
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
 
-    # Masked secrets (surrogate injected, real value only at proxy for scoped hosts)
-    # Prevents credential exfiltration even if container is compromised
+    # GitHub App credentials (recommended) — proxy manages short-lived tokens
+    github_app_credentials:
+      GH_TOKEN:
+        app_id: !env GH_APP_ID
+        private_key: !env GH_APP_PRIVATE_KEY
+        installation_id: !env GH_APP_INSTALLATION_ID
+        scopes:
+          - "github.com"
+          - "api.github.com"
+          - "*.githubusercontent.com"
+```
+
+If using a classic PAT instead of a GitHub App, use `masked_secrets`:
+
+```yaml
+    # Alternative: masked secrets with classic PAT
     masked_secrets:
       GH_TOKEN:
         value: !env GH_TOKEN_YOUR_REPO
         scopes:
+          - "github.com"
           - "api.github.com"
           - "*.githubusercontent.com"
         headers:
@@ -307,27 +325,27 @@ repos:
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
 
-    masked_secrets:
+    # GitHub App credentials (recommended)
+    github_app_credentials:
       GH_TOKEN:
-        value: !env GH_TOKEN_YOUR_REPO
+        app_id: !env GH_APP_ID
+        private_key: !env GH_APP_PRIVATE_KEY
+        installation_id: !env GH_APP_INSTALLATION_ID
         scopes:
+          - "github.com"
           - "api.github.com"
           - "*.githubusercontent.com"
-        headers:
-          - "Authorization"
 ```
 
 Both channels can coexist — include both `email:` and `slack:` blocks under the
 same repo. See [slack-setup.md](slack-setup.md) for the full Slack setup guide.
 
-For credentials that should only be usable with specific services, prefer
-`masked_secrets` over `secrets`. Headers use fnmatch patterns (`*` for all). For
-AWS credentials, use `signing_credentials` — the proxy re-signs requests instead
-of replacing header tokens. See
-[network-sandbox.md](network-sandbox.md#masked-secrets-token-replacement) for
-masked secrets and
-[network-sandbox.md](network-sandbox.md#signing-credentials-aws-sigv4-re-signing)
-for signing credentials.
+For GitHub API access, prefer `github_app_credentials` (short-lived tokens,
+automatic rotation) over `masked_secrets` with a classic PAT. See
+[github-app-setup.md](github-app-setup.md) for the full setup guide. For other
+credentials that should only be usable with specific services, use
+`masked_secrets`. For AWS credentials, use `signing_credentials`. See
+[network-sandbox.md](network-sandbox.md) for details on all credential types.
 
 Add secrets to `~/.config/airut/.env`:
 
@@ -336,7 +354,14 @@ YOUR_REPO_EMAIL_PASSWORD=password
 SLACK_BOT_TOKEN=xoxb-...
 SLACK_APP_TOKEN=xapp-...
 ANTHROPIC_API_KEY=sk-ant-...
-GH_TOKEN_YOUR_REPO=ghp_...
+# GitHub App credentials (recommended)
+GH_APP_ID=Iv23liXXXXXXXXXX
+GH_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----
+...
+-----END RSA PRIVATE KEY-----"
+GH_APP_INSTALLATION_ID=12345678
+# Or classic PAT (alternative)
+# GH_TOKEN_YOUR_REPO=ghp_...
 ```
 
 Restart the service:
@@ -394,8 +419,9 @@ and network sandbox that the Airut gateway uses.
              pr_sha: ${{ github.event.pull_request.head.sha }}
    ```
 
-3. Ensure the agent's PAT lacks the `workflow` scope (or add a repository
-   ruleset blocking `.github/workflows/**` changes). See
+3. Ensure the agent cannot modify workflow files: use a GitHub App without
+   `Workflows` permission, omit the `workflow` scope from a classic PAT, or add
+   a repository ruleset blocking `.github/workflows/**` changes. See
    [ci-sandbox.md](ci-sandbox.md#1-protecting-workflow-files).
 
 This is the recommended configuration. Without CI sandboxing, auto-triggered
@@ -470,10 +496,12 @@ journalctl --user -u airut | grep -i build
 
 Verify:
 
-- `GH_TOKEN` has repo access (for `workflow` scope guidance, see
-  [security.md](security.md#github-actions-workflow-escape))
-- Token is passed via `!secret GH_TOKEN`
+- `GH_TOKEN` is configured — via `github_app_credentials` (recommended) or
+  `masked_secrets` with a classic PAT
+- Token is referenced via `!secret GH_TOKEN` in repo config
 - `gitconfig` uses `gh auth git-credential`
+- If using a GitHub App, check that the app is installed on the target
+  repository
 
 ### Session Not Resuming
 
