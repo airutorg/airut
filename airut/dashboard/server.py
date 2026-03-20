@@ -250,7 +250,11 @@ class DashboardServer:
         """Stop the dashboard server."""
         if self._server:
             self._server.shutdown()
-            logger.info("Dashboard server stopped")
+            self._server.server_close()
+        if self._thread:
+            self._thread.join(timeout=5)
+            self._thread = None
+        logger.info("Dashboard server stopped")
 
     def _wsgi_app(
         self,
