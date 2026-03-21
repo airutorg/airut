@@ -321,13 +321,13 @@ dashboard:
 
 container_command: podman    # or docker
 
-# Server-wide resource limit ceilings (all optional).
-# Repos cannot exceed these values. Omitted fields mean no ceiling.
+# Server-wide resource limit defaults (all optional).
+# Per-repo values override these. Omitted fields mean no default.
 # resource_limits:
-#   timeout: 7200       # Max allowed timeout (seconds)
-#   memory: "8g"        # Max allowed memory
-#   cpus: 4             # Max allowed CPUs
-#   pids_limit: 1024    # Max allowed process count
+#   timeout: 7200       # Default timeout (seconds)
+#   memory: "8g"        # Default memory limit
+#   cpus: 4             # Default CPU limit
+#   pids_limit: 1024    # Default process limit
 
 repos:
   my-project:

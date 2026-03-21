@@ -331,8 +331,8 @@ def process_message(
         repo_cfg = repo_handler.config
         task_env, replacement_map = repo_cfg.build_task_env()
 
-        # Clamp per-repo resource limits to server-wide ceilings
-        resource_limits = repo_cfg.resource_limits.clamp(
+        # Apply server-wide defaults, then let repo overrides take priority
+        resource_limits = repo_cfg.resource_limits.with_defaults(
             service.global_config.resource_limits
         )
 

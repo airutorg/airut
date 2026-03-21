@@ -162,21 +162,20 @@ thrashing.
 ### Two-Layer Configuration
 
 The server config also supports a top-level `resource_limits` block that defines
-ceiling values across all repos:
+default values for all repos:
 
 ```yaml
 # ~/.config/airut/airut.yaml (server config, top level)
 resource_limits:
-  timeout: 7200       # Max allowed timeout
-  memory: "8g"        # Max allowed memory
-  cpus: 4             # Max allowed CPUs
-  pids_limit: 1024    # Max allowed process count
+  timeout: 7200       # Default timeout
+  memory: "8g"        # Default memory limit
+  cpus: 4             # Default CPU limit
+  pids_limit: 1024    # Default process limit
 ```
 
-Per-repo values are clamped to these ceilings. For each field independently:
-`effective = min(repo_value, server_ceiling)`. If only the repo sets a value,
-it's used directly. If neither sets a value, no limit is enforced for that
-dimension.
+Per-repo values override these defaults. For each field independently: the repo
+value is used if set, otherwise the server default applies. If neither sets a
+value, no limit is enforced for that dimension.
 
 ### cgroup v2 Requirement
 
