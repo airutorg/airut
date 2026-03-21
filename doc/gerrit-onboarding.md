@@ -11,7 +11,7 @@ then apply the Gerrit-specific overrides below.
 <!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
 
 - [Server-Side: Git Credentials](#server-side-git-credentials)
-- [Repo Settings (`.airut/airut.yaml`)](#repo-settings-airutairutyaml)
+- [Server Config for Gerrit Credentials](#server-config-for-gerrit-credentials)
 - [Network Allowlist](#network-allowlist)
 - [Container Setup](#container-setup)
 - [Server Configuration](#server-configuration)
@@ -44,23 +44,11 @@ Using HTTP credentials (rather than SSH) is recommended because it enables
 Airut's masked-secret credential injection — the proxy can swap surrogate tokens
 for the real password only when requests target the Gerrit host.
 
-## Repo Settings (`.airut/airut.yaml`)
+## Server Config for Gerrit Credentials
 
-The Gerrit HTTP password should be passed through `container_env` as a masked
-secret reference so the container can push changes:
-
-```yaml
-default_model: opus
-timeout: 300
-
-network:
-  sandbox_enabled: true
-
-container_env:
-  ANTHROPIC_API_KEY: !secret ANTHROPIC_API_KEY
-  GERRIT_USER: !secret GERRIT_USER
-  GERRIT_HTTP_PASSWORD: !secret GERRIT_HTTP_PASSWORD
-```
+The Gerrit HTTP password should be configured as a masked secret in the server
+config so the container can push changes. All secrets are auto-injected into
+containers as environment variables — no repo-side configuration is needed.
 
 ## Network Allowlist
 

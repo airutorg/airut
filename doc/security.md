@@ -224,18 +224,16 @@ Actual values come from environment variables or `~/.config/airut/.env`.
 
 ### Container Secrets
 
-Repo config (`.airut/airut.yaml`) references server secrets with `!secret`:
-
-```yaml
-container_env:
-  GH_TOKEN: !secret GH_TOKEN              # Required
-  API_KEY: !secret? API_KEY               # Optional (skip if missing)
-```
+Secrets from the server config's `secrets` pool are auto-injected into
+containers as environment variables — the pool key becomes the env var name.
+Credential surrogates (from `masked_secrets`, `signing_credentials`, and
+`github_app_credentials`) are also auto-injected.
 
 **Security properties:**
 
-- Repo config cannot use `!env` (prevents reading arbitrary server state)
-- Secrets resolved at task start, not stored in repo
+- All credential configuration lives in the server config (operator-controlled)
+- No secret references in the repository — the operator decides what is
+  available
 - All resolved values registered for log redaction
 - Container sees environment variables, not files
 
@@ -278,8 +276,8 @@ AWS SDK signs requests normally using the surrogates, and the proxy **re-signs**
 with the real credentials for scoped hosts. This works with any S3-compatible
 API (AWS, Cloudflare R2, MinIO, etc.).
 
-As with masked secrets, the repo config is transparent — it uses
-`!secret AWS_ACCESS_KEY_ID` just like any other secret. The server admin decides
+As with masked secrets, the repo is unaware of the credential type — secrets and
+surrogates are auto-injected from the server config. The server admin decides
 whether to use plain secrets or signing credentials.
 
 See
@@ -361,14 +359,11 @@ This is acceptable for a single-user system behind authentication.
 
 ### Repo Config Protection
 
-Repo configuration (`.airut/airut.yaml`) is read from the git mirror's default
-branch, not the workspace. The agent cannot modify:
-
-- Network sandbox settings
-- Container environment variables
-- Timeout limits
-
-Changes require a merged PR, providing human review.
+All operational configuration (model, resource limits, secrets, network sandbox)
+lives in the server config, which the agent has no access to. The only
+repo-checked-in configuration files are the network allowlist and container
+Dockerfile, both of which are read from the git mirror's default branch (not the
+workspace). The agent cannot modify the active configuration during a task.
 
 ### Network Allowlist Protection
 
@@ -391,8 +386,9 @@ arbitrary server files during build:
 - `COPY` instructions can only access files within the build context
 
 A malicious Dockerfile cannot `COPY /etc/passwd` or use `../` traversal to
-escape the build context. This mirrors the `!secret` vs `!env` restriction:
-repos declare what they need, the server controls what's actually available.
+escape the build context. This mirrors the overall security model: repos define
+their build environment, while the server controls what credentials and
+resources are actually available.
 
 ## Fail-Secure Defaults
 

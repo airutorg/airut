@@ -439,8 +439,8 @@ repos:
           - "*.amazonaws.com"
 ```
 
-The repo config references these with standard `!secret` tags — it doesn't need
-to know about signing credentials. See
+Surrogate credentials are auto-injected into containers from the server config —
+no repo-side configuration is needed. See
 [network-sandbox.md](network-sandbox.md#signing-credentials-aws-sigv4-re-signing)
 for an overview and
 [spec/aws-sigv4-resigning.md](../spec/aws-sigv4-resigning.md) for the full

@@ -9,14 +9,13 @@ Code interaction via email and/or Slack.
 - [Example Project](#example-project)
 - [Onboarding Steps](#onboarding-steps)
   - [1. Create `.airut/` Directory](#1-create-airut-directory)
-  - [2. Configure Repo Settings](#2-configure-repo-settings)
-  - [3. Configure Network Allowlist](#3-configure-network-allowlist)
-  - [4. Create Container Dockerfile](#4-create-container-dockerfile)
-  - [5. Write CLAUDE.md](#5-write-claudemd)
-  - [6. Configure Server](#6-configure-server)
-  - [7. Set Up Branch Protection](#7-set-up-branch-protection)
-  - [8. Set Up CI Sandbox (Recommended)](#8-set-up-ci-sandbox-recommended)
-  - [9. Test the Setup](#9-test-the-setup)
+  - [2. Configure Network Allowlist](#2-configure-network-allowlist)
+  - [3. Create Container Dockerfile](#3-create-container-dockerfile)
+  - [4. Write CLAUDE.md](#4-write-claudemd)
+  - [5. Configure Server](#5-configure-server)
+  - [6. Set Up Branch Protection](#6-set-up-branch-protection)
+  - [7. Set Up CI Sandbox (Recommended)](#7-set-up-ci-sandbox-recommended)
+  - [8. Test the Setup](#8-test-the-setup)
 - [Alternative: Gerrit-Based Repositories](#alternative-gerrit-based-repositories)
 - [Configuration Reference](#configuration-reference)
 - [Troubleshooting](#troubleshooting)
@@ -58,40 +57,7 @@ Add the configuration directory to your repository:
 mkdir -p .airut/container
 ```
 
-### 2. Configure Repo Settings
-
-Create `.airut/airut.yaml`:
-
-```yaml
-# Claude model (opus, sonnet, haiku)
-default_model: opus
-
-# Container resource limits (all optional — omitted fields mean no limit)
-# resource_limits:
-#   timeout: 300        # Max execution time in seconds (>= 10)
-#   memory: "4g"        # Memory limit, e.g. "2g", "512m"
-#   cpus: 2             # CPU limit (float, e.g. 1.5 for 1.5 cores)
-#   pids_limit: 256     # Process limit (fork bomb protection)
-
-network:
-  # Enable network allowlist enforcement
-  sandbox_enabled: true
-
-container_env:
-  # Claude authentication (required)
-  ANTHROPIC_API_KEY: !secret ANTHROPIC_API_KEY
-
-  # GitHub token for git/gh operations (optional, but required for
-  # pushing branches, creating PRs, and using gh CLI)
-  GH_TOKEN: !secret? GH_TOKEN
-```
-
-**YAML tags:**
-
-- `!secret NAME` — Required secret from server pool (error if missing)
-- `!secret? NAME` — Optional secret (skip if missing)
-
-### 3. Configure Network Allowlist
+### 2. Configure Network Allowlist
 
 Create `.airut/network-allowlist.yaml`:
 
@@ -155,7 +121,7 @@ url_prefixes:
 Start restrictive and add hosts as needed. The agent will tell you when it
 encounters blocked requests.
 
-### 4. Create Container Dockerfile
+### 3. Create Container Dockerfile
 
 Create `.airut/container/Dockerfile`. This can be based on an existing
 development Dockerfile for your project.
@@ -228,7 +194,7 @@ If using GitHub with `gh` for authentication, create
 
 See the Airut repository's `.airut/container/` directory for a working example.
 
-### 5. Write CLAUDE.md
+### 4. Write CLAUDE.md
 
 Create a `CLAUDE.md` in your repository root with operating instructions for the
 agent. A well-crafted `CLAUDE.md` enables the message-to-PR workflow — the agent
@@ -246,7 +212,7 @@ writing effective agent instructions, including:
 The Airut repository's own `CLAUDE.md` serves as a reference implementation and
 can be used as inspiration.
 
-### 6. Configure Server
+### 5. Configure Server
 
 Add the repository to your Airut server config (`~/.config/airut/airut.yaml`).
 Configure at least one channel (email, Slack, or both).
@@ -370,7 +336,7 @@ Restart the service:
 systemctl --user restart airut
 ```
 
-### 7. Set Up Branch Protection
+### 6. Set Up Branch Protection
 
 On GitHub, configure branch protection for `main`:
 
@@ -382,7 +348,7 @@ On GitHub, configure branch protection for `main`:
    - Require status checks to pass
 4. Save changes
 
-### 8. Set Up CI Sandbox (Recommended)
+### 7. Set Up CI Sandbox (Recommended)
 
 If the repository uses GitHub Actions for CI, configure
 [`airutorg/sandbox-action`](ci-sandbox.md) to run CI commands inside the Airut
@@ -429,7 +395,7 @@ workflows that execute repository code (which most CI workflows do) allow the
 agent to run unsandboxed code on GitHub Actions runners. See
 [ci-sandbox.md](ci-sandbox.md) for the full guide and security requirements.
 
-### 9. Test the Setup
+### 8. Test the Setup
 
 **Email:** Send a test email:
 
@@ -468,9 +434,9 @@ configuration, and Gerrit-specific workflow instructions.
 
 ## Configuration Reference
 
-See [spec/repo-config.md](../spec/repo-config.md) for the full
-`.airut/airut.yaml` schema and [network-sandbox.md](network-sandbox.md) for the
-network allowlist format.
+See [spec/repo-config.md](../spec/repo-config.md) for the full server config
+schema and [network-sandbox.md](network-sandbox.md) for the network allowlist
+format.
 
 ## Troubleshooting
 
@@ -496,9 +462,8 @@ journalctl --user -u airut | grep -i build
 
 Verify:
 
-- `GH_TOKEN` is configured — via `github_app_credentials` (recommended) or
-  `masked_secrets` with a classic PAT
-- Token is referenced via `!secret GH_TOKEN` in repo config
+- `GH_TOKEN` is configured in the server config — via `github_app_credentials`
+  (recommended) or `masked_secrets` with a classic PAT
 - `gitconfig` uses `gh auth git-credential`
 - If using a GitHub App, check that the app is installed on the target
   repository

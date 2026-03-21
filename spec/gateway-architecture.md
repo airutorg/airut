@@ -306,10 +306,9 @@ addressing):
 - **New conversation**: Model extracted from To address and stored in session
 - **Resumed conversation**: Stored model is used; any model in To address is
   ignored
-- **No model specified**: Uses `default_model` from repo config (defaults to
+- **No model specified**: Uses `model` from the server config (defaults to
   "opus")
-- **Server override**: When `model` is set in the server config for a repo, it
-  takes precedence over both subaddressing and `default_model` for new
+- **Server config `model`**: Takes precedence over subaddressing for new
   conversations
 
 **Supported models**: `opus`, `sonnet`, `haiku` (or any valid Claude Code model
@@ -450,10 +449,11 @@ for git user name and email, configured in the Dockerfile.
 
 ### Container Environment Variables
 
-The executor passes environment variables defined in the `container_env:`
-section of `.airut/airut.yaml` (repo config) to the container. Values can be
-inline strings or `!secret` references resolved from the server's secrets pool.
-Only entries with non-empty resolved values are passed.
+The executor passes environment variables to the container, built from the
+server config's `secrets` pool (auto-injected as env vars), `container_env`
+(non-secret inline values), and credential surrogates (from `masked_secrets`,
+`signing_credentials`, `github_app_credentials`). Only entries with non-empty
+resolved values are passed.
 
 See [repo-config.md](repo-config.md) for the full schema and examples.
 
@@ -534,13 +534,13 @@ Configuration is split into two layers:
   tags to resolve from environment variables. A `.env` file is automatically
   loaded from `~/.config/airut/.env` (and from the working directory, if
   present) before resolving tags.
-- **Repo config** (`.airut/airut.yaml`) — repo-specific behavior: model,
-  timeout, network allowlist, and container environment variables. Loaded from
-  the git mirror at the start of each task. Uses `!secret` tags to reference the
-  server's secrets pool; `!env` tags are rejected.
+- **Repo-side files** (`.airut/`) — network allowlist and container Dockerfile,
+  loaded from the git mirror's default branch at each task start. All other
+  per-repo configuration (model, resource limits, secrets, network sandbox) is
+  in the server config.
 
-See [repo-config.md](repo-config.md) for the full repo config schema, YAML tag
-semantics, and loading flow.
+See [repo-config.md](repo-config.md) for the full config schema and loading
+flow.
 
 ## Security Model
 
@@ -561,7 +561,7 @@ separate authentication from authorization.
 ### Credential Management
 
 - **Claude credentials**: `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`
-  configured in `container_env:` (use `!env` tags for secrets)
+  configured in the server config's `secrets` pool (auto-injected as env vars)
 - **Email credentials**: Either password auth or Microsoft OAuth2 (XOAUTH2):
   - **Password auth**: `password: !env EMAIL_PASSWORD` in server config
   - **Microsoft OAuth2**: `email.microsoft_oauth2:` block with `tenant_id`,
@@ -572,10 +572,11 @@ separate authentication from authorization.
   in server config under `slack.bot_token` and `slack.app_token`. Both support
   `!env` tags and are registered with `SecretFilter` for log redaction. See
   [slack-channel.md](slack-channel.md#credential-management).
-- **Git credentials**: `GH_TOKEN` in `container_env:` with
-  `gh auth git-credential` helper (no SSH keys mounted)
-- **AI service credentials**: Configured in `container_env:` (e.g.,
-  `GEMINI_API_KEY: !env GEMINI_API_KEY`)
+- **Git credentials**: `GH_TOKEN` in the server config's `secrets` pool (or
+  `github_app_credentials` / `masked_secrets`) with `gh auth git-credential`
+  helper (no SSH keys mounted)
+- **AI service credentials**: Configured in the server config's `secrets` pool
+  (e.g., `GEMINI_API_KEY: !env GEMINI_API_KEY`)
 
 No host credential files are mounted — all authentication uses environment
 variables passed via the config file. See `config/airut.example.yaml` for the
@@ -639,8 +640,8 @@ oldest inactive conversations.
 The container filesystem (outside mounted directories) is rebuilt from the
 repository's default branch at every task start. This enables a self-service
 workflow: the agent can propose changes to its own environment (Dockerfile,
-network allowlist, repo config) via a PR, and once the user merges it, the next
-task automatically runs with those changes. Persistent mounts (`/workspace`,
+network allowlist) via a PR, and once the user merges it, the next task
+automatically runs with those changes. Persistent mounts (`/workspace`,
 `/storage`, etc.) preserve conversation state across this rebuild cycle.
 
 ### Why Podman Instead of Direct Execution?

@@ -6,8 +6,7 @@
 """YAML ``!env`` tag resolution for host environment variables.
 
 Shared by the gateway (``airut.gateway.config``) and the sandbox CLI
-(``airut.sandbox_cli``).  The gateway adds ``!secret`` and ``!secret?``
-tags on top; the sandbox CLI uses ``!env`` only.
+(``airut.sandbox_cli``).  Both use ``!env`` only.
 """
 
 import os

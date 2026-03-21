@@ -77,16 +77,18 @@ masked_secrets:
 
 ## Resolution Behavior
 
-When repo config references `!secret NAME` or `!secret? NAME`:
+All secrets and credential surrogates are auto-injected from the server config.
+When building the container environment:
 
-1. Check `masked_secrets[NAME]` first
-2. If found and value non-empty → generate surrogate, add to replacement map
-3. If not found → check `secrets[NAME]` (plain injection)
-4. If `!secret` and missing/empty → `ConfigError`
-5. If `!secret?` and missing/empty → skip (no env var set)
+1. `secrets` pool entries are injected as plain env vars (pool key = env var
+   name)
+2. `masked_secrets` entries generate surrogates that overwrite any plain secret
+   with the same key
+3. `signing_credentials` and `github_app_credentials` entries similarly
+   auto-inject surrogates
 
-The repo config is unaware of masking — it uses `!secret` for both plain and
-masked secrets. The server determines protection level at resolution time.
+The server determines the protection level. There is no repo-side configuration
+for secrets.
 
 ## Surrogate Format
 
@@ -199,12 +201,11 @@ Body and query parameter tokens are **not** replaced.
 ## Data Flow
 
 ```
-Gateway config resolution
+Server config resolution
     │
-    ├─ Parse .airut/airut.yaml
-    ├─ Resolve !secret references against masked_secrets + secrets
+    ├─ Build container_env from secrets + container_env + credential surrogates
     │
-    └─ Provide MaskedSecret / SigningCredential to sandbox
+    └─ Provide MaskedSecret / SigningCredential / GitHubAppCredential to sandbox
            │
            ▼
 prepare_secrets() (airut/sandbox/secrets.py)

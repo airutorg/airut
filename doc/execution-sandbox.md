@@ -20,7 +20,7 @@ for running arbitrary commands in CI pipelines and other environments. See
 - [Network Isolation](#network-isolation)
 - [Container Runtime](#container-runtime)
 - [Resource Limits](#resource-limits)
-  - [Two-Layer Configuration](#two-layer-configuration)
+  - [Global Ceilings](#global-ceilings)
   - [cgroup v2 Requirement](#cgroup-v2-requirement)
   - [Other Limits](#other-limits)
 - [Fail-Secure Behavior](#fail-secure-behavior)
@@ -82,24 +82,28 @@ conversations.
 
 ### Credential Isolation
 
-Credentials are passed via environment variables, not files:
+Credentials are passed via environment variables, not files. All secrets
+configured in the server config's `secrets` pool are auto-injected into
+containers — the pool key becomes the environment variable name:
 
 ```yaml
-# In .airut/airut.yaml (repo config)
-container_env:
-  GH_TOKEN: !secret GH_TOKEN              # Required
-  ANTHROPIC_API_KEY: !secret? ANTHROPIC_API_KEY  # Optional
+# In ~/.config/airut/airut.yaml (server config)
+repos:
+  my-project:
+    secrets:
+      ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
+      GH_TOKEN: !env GH_TOKEN
 ```
 
-- `!secret NAME` resolves from server's secrets pool (error if missing)
-- `!secret? NAME` silently skips if missing
-- All resolved values are registered for log redaction
-- Values loaded from git mirror's default branch (not workspace)
+- All secret values are registered for log redaction
+- The operator controls which secrets are available to each repo
 
 For credentials that should only be usable with specific services (e.g., GitHub
-tokens for GitHub APIs), use **masked secrets** in the server config. The
-container receives a surrogate token; the proxy swaps it for the real value only
-when the request matches scoped hosts. See
+tokens for GitHub APIs), use **masked secrets**, **signing credentials**, or
+**GitHub App credentials** in the server config. The container receives a
+surrogate token; the proxy swaps it for the real value only when the request
+matches scoped hosts. Credential surrogates are auto-injected alongside plain
+secrets. See
 [network-sandbox.md](network-sandbox.md#masked-secrets-token-replacement) for
 details.
 
@@ -140,12 +144,16 @@ build details.
 
 ## Resource Limits
 
-Container resource limits are configured via the `resource_limits` block in
-`.airut/airut.yaml`. All fields are optional — when omitted, the corresponding
-podman flag is not passed and no limit is enforced.
+Container resource limits are configured via the `resource_limits` block in the
+server config (`~/.config/airut/airut.yaml`, per-repo). All fields are optional
+— when omitted, the corresponding podman flag is not passed and no limit is
+enforced.
 
 ```yaml
-# .airut/airut.yaml (repo config)
+# ~/.config/airut/airut.yaml (server config, per-repo)
+# repos:
+#   my-project:
+#     resource_limits:
 resource_limits:
   timeout: 6000       # Max execution time in seconds (>= 10)
   memory: "4g"        # Memory limit, e.g. "2g", "512m" (--memory)
@@ -163,13 +171,13 @@ resource_limits:
 Setting `--memory-swap` equal to `--memory` disables swap, preventing slow OOM
 thrashing.
 
-### Two-Layer Configuration
+### Global Ceilings
 
-The server config (`~/.config/airut/airut.yaml`) can define ceiling values that
-cap what any repo can request:
+The server config (`~/.config/airut/airut.yaml`) can define global ceiling
+values that cap what any per-repo limit can be:
 
 ```yaml
-# ~/.config/airut/airut.yaml (server config)
+# ~/.config/airut/airut.yaml (server config, top-level)
 resource_limits:
   timeout: 7200       # Max allowed timeout
   memory: "8g"        # Max allowed memory
@@ -177,9 +185,9 @@ resource_limits:
   pids_limit: 1024    # Max allowed process count
 ```
 
-For each field independently: `effective = min(repo_value, server_ceiling)`. If
-only the repo sets a value, it's used directly. If neither sets a value, no
-limit is enforced for that dimension.
+For each field independently: `effective = min(per_repo_value, global_ceiling)`.
+If only the per-repo section sets a value, it's used directly. If neither sets a
+value, no limit is enforced for that dimension.
 
 ### cgroup v2 Requirement
 

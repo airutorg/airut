@@ -180,18 +180,10 @@ repos:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
 ```
 
-The repo config (`.airut/airut.yaml`) needs no changes -- it uses
-`!secret GH_TOKEN` the same way regardless of whether the server uses a GitHub
-App or a masked secret PAT:
-
-```yaml
-container_env:
-  GH_TOKEN: !secret GH_TOKEN
-  ANTHROPIC_API_KEY: !secret ANTHROPIC_API_KEY
-```
-
-The container receives a surrogate token; the proxy transparently replaces it
-with a short-lived installation token for requests to scoped hosts. See
+No repo-side configuration is needed. The `GH_TOKEN` surrogate is auto-injected
+into containers from the server config. The container receives a surrogate
+token; the proxy transparently replaces it with a short-lived installation token
+for requests to scoped hosts. See
 [network-sandbox.md](network-sandbox.md#github-app-credentials-proxy-managed-token-rotation)
 for the security model.
 

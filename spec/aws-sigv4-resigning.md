@@ -18,7 +18,7 @@ For general masked secrets (bearer tokens, API keys), see
 
 AWS signing credentials are declared in a `signing_credentials` block alongside
 `masked_secrets`. Each field uses a `name`/`value` structure — `name` declares
-the secret name visible to repo config (via `!secret`), and `value` provides the
+the env var name for auto-injection into containers, and `value` provides the
 real credential:
 
 ```yaml
@@ -58,10 +58,9 @@ repos:
           - "*.r2.cloudflarestorage.com"
 ```
 
-Each `name` registers a secret into the server's secrets pool. The repo config
-references these names with plain `!secret` — exactly like masked secrets or
-plain secrets. The repo author doesn't know (or care) that signing credentials
-are handled specially.
+Each `name` registers a secret into the server's secrets pool. Surrogates are
+auto-injected into containers using the `name` as the env var name. The repo
+author doesn't know (or care) that signing credentials are handled specially.
 
 ### Fields
 
@@ -77,22 +76,14 @@ are handled specially.
 | `signing_credentials.<name>.session_token.value`     | string/!env | No       | STS session token (`X-Amz-Security-Token`) |
 | `signing_credentials.<name>.scopes`                  | list[str]   | Yes      | Fnmatch patterns for allowed hosts         |
 
-### Repo Config
+### Container Environment
 
-Repo config references signing credentials with `!secret`, exactly like any
-other secret. The repo author doesn't need to know about signing credentials —
-the server decides whether masking and re-signing is used.
+Surrogate credentials are auto-injected into containers from the server config.
+No repo-side configuration is needed. The repo author doesn't need to know about
+signing credentials — the server decides whether masking and re-signing is used.
 
-```yaml
-container_env:
-  AWS_ACCESS_KEY_ID: !secret AWS_ACCESS_KEY_ID
-  AWS_SECRET_ACCESS_KEY: !secret AWS_SECRET_ACCESS_KEY
-  AWS_SESSION_TOKEN: !secret? AWS_SESSION_TOKEN
-```
-
-This is identical to referencing plain secrets. If the server later decides to
-switch from signing credentials to plain secrets (for debugging, fallback,
-etc.), only the server config changes — the repo config is untouched.
+If the server later decides to switch from signing credentials to plain secrets
+(for debugging, fallback, etc.), only the server config changes.
 
 ### Transparent upgrade path
 
@@ -126,9 +117,10 @@ signing_credentials:
     scopes: ["*.amazonaws.com"]
 ```
 
-In both cases, the repo config uses `!secret AWS_ACCESS_KEY_ID`. The difference
-is only in whether the container receives real values or surrogates, and whether
-the proxy performs re-signing.
+In both cases, the container receives `AWS_ACCESS_KEY_ID` as an env var
+(auto-injected from the server config). The difference is only in whether the
+container receives real values or surrogates, and whether the proxy performs
+re-signing.
 
 ## Surrogate Generation
 
@@ -603,10 +595,9 @@ _parse_repo_server_config()
     └─ Returns RepoServerConfig
            │
            ▼
-RepoConfig.from_mirror(server_secrets, masked_secrets, signing_credentials)
+RepoConfig.from_server_config(server_config)
     │
-    ├─ Parse .airut/airut.yaml
-    ├─ Resolve !secret references (all types handled uniformly)
+    ├─ Build container_env from secrets + container_env + credential surrogates
     ├─ For signing credential secrets:
     │   ├─ Generate surrogates for key ID, secret key, session token
     │   ├─ Add SigningCredentialEntry to replacement map (keyed by surrogate key ID)

@@ -104,10 +104,11 @@ repos:
 
 ### Key Design Decisions
 
-- **Secrets are per-repo.** Both repos can declare `GH_TOKEN: !secret GH_TOKEN`
-  in their `.airut/airut.yaml`, but the server resolves them from different
-  environment variables (`GH_TOKEN_AIRUT` vs `GH_TOKEN_OTHER`). This applies to
-  `secrets`, `masked_secrets`, and `signing_credentials` alike.
+- **Secrets are per-repo.** Both repos can have a `GH_TOKEN` in their server
+  config `secrets` pool, but resolved from different environment variables
+  (`GH_TOKEN_AIRUT` vs `GH_TOKEN_OTHER`). Secrets are auto-injected into
+  containers. This applies to `secrets`, `masked_secrets`,
+  `signing_credentials`, and `github_app_credentials` alike.
 - **SMTP is per-repo.** Replies come from the same email address that receives
   tasks for that repo.
 - **Authorization is per-repo and per-channel.** Email uses
@@ -127,12 +128,12 @@ At config load time:
   block (`email:`, `slack:`, or both). Channel keys must match recognized types.
 - **At least one repo:** The `repos` mapping must have at least one entry.
 
-## Repo Configuration
+## Repo-Side Files
 
-The repo config (`.airut/airut.yaml`) is unchanged. It remains per-repo by
-nature — each repository has its own `.airut/airut.yaml` in its git mirror. The
-`from_mirror()` method receives the per-repo `secrets` dict from the server
-config.
+The gateway does not read `.airut/airut.yaml` from repos. All operational
+settings are in the server config. Files that remain in the repo are the network
+allowlist (`.airut/network-allowlist.yaml`) and container Dockerfile
+(`.airut/container/Dockerfile`), both read from the git mirror's default branch.
 
 ## Storage Layout
 
@@ -308,9 +309,8 @@ class ServerConfig:
     repos: dict[str, RepoServerConfig]
 ```
 
-`RepoConfig` (loaded from `.airut/airut.yaml` in the git mirror) is unchanged.
-Its `from_mirror()` receives the per-repo `secrets`, `masked_secrets`, and
-`signing_credentials` dicts.
+`RepoConfig` is built from the server config via
+`RepoConfig.from_server_config()`. There is no repo-side YAML to parse.
 
 ## Dashboard Changes
 

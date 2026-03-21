@@ -101,22 +101,17 @@ When `base_url` is absent, the proxy uses `https://api.github.com` as default.
 
 ## Resolution Flow
 
-Repo config is unaware of the credential type -- it uses plain `!secret`:
+Credential surrogates are auto-injected from the server config. The repo does
+not need any configuration for this.
 
-```yaml
-# .airut/airut.yaml (repo config)
-container_env:
-  GH_TOKEN: !secret GH_TOKEN
-```
+Auto-injection priority (later wins on key conflict):
 
-Resolution priority in `_resolve_container_env()` (extended):
+1. `secrets` pool (plain injection)
+2. `masked_secrets` (surrogate injection)
+3. `github_app_credentials` (surrogate injection)
+4. `signing_credentials` (surrogate injection)
 
-1. Check `signing_credentials` (existing)
-2. **Check `github_app_credentials`** (new)
-3. Check `masked_secrets` (existing)
-4. Fall back to `secrets` (existing)
-
-When a GitHub App credential is matched:
+When a GitHub App credential is processed:
 
 1. Generate a surrogate with `ghs_` prefix and 36 random alphanumeric characters
    (mimics a real `ghs_` installation token format -- 40 chars total).
@@ -268,10 +263,9 @@ and the app could be reinstated).
 ## Data Flow
 
 ```
-Gateway config resolution
+Server config resolution
     │
-    ├─ Parse .airut/airut.yaml
-    ├─ Resolve !secret references against github_app_credentials + others
+    ├─ Build container_env from secrets + container_env + credential surrogates
     │
     └─ Provide GitHubAppCredential to sandbox
            │

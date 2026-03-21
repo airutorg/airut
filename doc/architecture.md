@@ -386,8 +386,7 @@ Each conversation maps to a directory under the XDG state dir
 ```
 
 The git mirror is refreshed before each task starts. After refreshing, the
-per-repo configuration (`.airut/airut.yaml`), container Dockerfile
-(`.airut/container/Dockerfile`), and network allowlist
+container Dockerfile (`.airut/container/Dockerfile`) and network allowlist
 (`.airut/network-allowlist.yaml`) are read from the mirror's default branch.
 Workspaces are full clones (no shared objects) for isolation.
 
@@ -407,27 +406,29 @@ Each repository has its own `RepoHandler` with isolated components.
 
 ### Configuration
 
-Airut uses a two-layer configuration model:
+The server config (`~/.config/airut/airut.yaml`) is the **sole source** for all
+repository settings. The gateway does not read `.airut/airut.yaml` from repos.
 
-**Server config** (`~/.config/airut/airut.yaml`) — deployment infrastructure
+**Server config** (`~/.config/airut/airut.yaml`) — all operational settings
 managed by the operator:
 
 - Channel credentials (email: IMAP/SMTP; Slack: bot and app tokens)
 - Authorization configuration (email: sender allowlist; Slack: rules)
 - Repository URL and storage paths
-- Secrets pool (values repos can reference)
+- Secrets pool (auto-injected as container env vars — pool key = env var name)
+- Model, effort, resource limits, and network sandbox settings
 - Concurrency limits and dashboard settings
 
-**Repo config** (`.airut/airut.yaml`) — per-repository behavior checked into the
-target repo:
+**Repo-side files** (`.airut/` in the target repository):
 
-- Default model and timeout
-- Container environment variables (with `!secret` references to server secrets)
-- Network allowlist toggle
+- `.airut/network-allowlist.yaml` — network allowlist (agent proposes changes
+  via PR)
+- `.airut/container/Dockerfile` — repo-specific container build context
 
-This separation lets repos declare what they need (e.g., "I need GH_TOKEN")
-while the server controls actual secret values. Repo config is read from the git
-mirror at task start, so changes take effect after merge without server restart.
+Secrets from the server pool are auto-injected into containers as environment
+variables. Credential surrogates (masked secrets, signing credentials, GitHub
+App credentials) are also auto-injected. The operator controls what credentials
+are available; there is no repo-side configuration for secrets.
 
 See [spec/repo-config.md](../spec/repo-config.md) for the full schema.
 

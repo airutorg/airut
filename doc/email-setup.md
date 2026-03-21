@@ -228,7 +228,7 @@ provider doesn't support IDLE, set `use_idle: false` and configure
 Email supports model selection via subaddressing. To use a specific model,
 address the email to `airut+opus@example.com` or `airut+sonnet@example.com`. The
 part after `+` is used as a model hint. If no subaddress is provided, the repo's
-`default_model` from `.airut/airut.yaml` is used.
+`model` from the server config is used.
 
 ## Troubleshooting
 

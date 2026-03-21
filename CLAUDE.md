@@ -77,13 +77,13 @@ details.
 
 Key files:
 
-- `.airut/airut.yaml` — repo config (model, timeout, container environment)
 - `.airut/network-allowlist.yaml` — domains and URL prefixes the container can
   access
 - `.airut/container/Dockerfile` — repo-defined container base image
 
-Server config (`~/.config/airut/airut.yaml`) is separate and handles deployment
-infrastructure. See `spec/repo-config.md` for the full schema.
+Server config (`~/.config/airut/airut.yaml`) is the sole source for all
+operational settings (model, secrets, resource limits, network sandbox). See
+`spec/repo-config.md` for the full schema.
 
 ## Security Model
 
