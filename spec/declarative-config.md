@@ -57,12 +57,8 @@ class FieldMeta:
 
     doc: str  # Human-readable description
     scope: Scope  # Reload scope
-    secret: bool = False  # Auto-register with SecretFilter
-    since_version: int = 1  # Schema version that introduced this
-    removed_version: int | None = None  # Schema version that removed it
-    yaml_key: str | None = (
-        None  # Override key name in YAML (None = use field name)
-    )
+    secret: bool = False  # Informational flag for UI (see Secret Handling)
+    since_version: int = 1  # Schema version that introduced this field
 ```
 
 A helper keeps field declarations concise:
@@ -70,8 +66,49 @@ A helper keeps field declarations concise:
 ```python
 def meta(doc: str, scope: Scope, **kwargs) -> dict[str, FieldMeta]:
     """Attach FieldMeta via dataclass field(metadata=meta(...))."""
-    return {"config": FieldMeta(doc=doc, scope=scope, **kwargs)}
+    return {"airut_config": FieldMeta(doc=doc, scope=scope, **kwargs)}
 ```
+
+The metadata dict uses the key `"airut_config"` to avoid collisions with other
+metadata consumers.
+
+Fields without `FieldMeta` (e.g. computed fields, internal state) are excluded
+from schema introspection and serialization.
+
+### Secret Handling
+
+`FieldMeta.secret` is an **informational flag** for UI rendering (e.g. masking
+password inputs, hiding values in diff output). It does **not** automatically
+register values with `SecretFilter`.
+
+Secret registration remains in `__post_init__` methods as it is today. The
+existing manual calls to `SecretFilter.register_secret()` in
+`EmailChannelConfig`, `SlackChannelConfig`, and `RepoServerConfig` are
+unchanged. Derived secrets (surrogates) continue to be registered in
+`_build_task_env()`.
+
+### Which Classes Get Annotated
+
+All frozen config dataclasses that represent user-visible settings receive
+`FieldMeta` annotations:
+
+- `GlobalConfig` — server-wide settings
+- `RepoServerConfig` — per-repo settings
+- `EmailChannelConfig` — email channel settings
+- `SlackChannelConfig` — Slack channel settings
+- `ResourceLimits` — container resource limits
+
+**Excluded** from `FieldMeta` annotations:
+
+- `MaskedSecret`, `SigningCredential`, `SigningCredentialField`,
+  `GitHubAppCredential` — credential pool entries have dynamic keys (the user
+  chooses env var names) and variable structure. They cannot be represented as
+  fixed-schema UI forms. The UI will handle credential pools through a
+  specialized key-value editor, not through `schema_for_ui()`.
+- `ServerConfig` — a thin container for `GlobalConfig` + repos dict; not
+  directly user-editable.
+- Internal types like `ReplacementEntry`, `SigningCredentialEntry`,
+  `GitHubAppEntry` — runtime-only, never in config files.
 
 ### Annotated Config Classes
 
@@ -109,11 +146,28 @@ class GlobalConfig:
         default=5200,
         metadata=meta("Dashboard HTTP server port", Scope.SERVER),
     )
+    dashboard_base_url: str | None = field(
+        default=None,
+        metadata=meta(
+            "Public URL for dashboard links in emails (None = omit links)",
+            Scope.SERVER,
+        ),
+    )
+    container_command: str = field(
+        default="podman",
+        metadata=meta(
+            "Container runtime command (podman or docker)", Scope.SERVER
+        ),
+    )
+    upstream_dns: str | None = field(
+        default=None,
+        metadata=meta(
+            "Upstream DNS server for proxy resolution (None = auto-detect)",
+            Scope.SERVER,
+        ),
+    )
     # ... remaining fields follow the same pattern
 ```
-
-Fields without `FieldMeta` (e.g. computed fields, internal state) are excluded
-from schema introspection and serialization.
 
 ### Config Source Protocol
 
@@ -139,13 +193,67 @@ class ConfigSource(Protocol):
 Implementations:
 
 - `YamlConfigSource(path)` — current YAML file loading (wraps existing
-  `yaml.load` with `make_env_loader()`)
+  `yaml.load` with `make_env_loader()`). The `load()` method calls
+  `load_dotenv_once()` before parsing to ensure `!env` tags can resolve.
 - Future: `TomlConfigSource`, `JsonConfigSource`, `DatabaseConfigSource`
 
 `ServerConfig` gains a `from_source(source: ConfigSource)` class method that
 calls `source.load()`, applies migrations, then runs the existing
 resolution/validation pipeline. The current `from_yaml()` becomes a thin wrapper
 that constructs a `YamlConfigSource` and delegates to `from_source()`.
+
+### YAML Structure Mapping
+
+The YAML config uses nested sub-blocks (e.g. `execution.max_concurrent`,
+`dashboard.host`, `email.imap.poll_interval`) that map to flat dataclass field
+names (e.g. `max_concurrent_executions`, `dashboard_host`,
+`poll_interval_seconds`). This nesting is a **serialization concern**, not a
+schema concern.
+
+The mapping between nested YAML paths and flat dataclass fields is handled by
+the parsing layer — specifically the `_from_raw()`,
+`_parse_repo_server_config()`, and `_parse_*_channel_config()` functions that
+already perform this mapping today. These functions translate nested YAML dicts
+into flat dataclass constructor kwargs.
+
+`FieldMeta` intentionally does **not** encode YAML paths. The YAML structure is
+a property of `YamlConfigSource`, not of the config schema. A future
+`TomlConfigSource` or `DatabaseConfigSource` may use an entirely different
+structure. Instead:
+
+- **Serialization mapping** lives in `ConfigSource` implementations. Each source
+  knows how to map its format to/from the canonical flat dict that `to_dict()`
+  produces.
+- **`to_dict()`** produces a flat dict keyed by dataclass field names (the
+  canonical representation). `ConfigSource.save()` transforms this flat dict
+  into the format-specific structure (e.g. nesting `dashboard_host` under
+  `dashboard.host` for YAML).
+- **`provided_keys`** tracks dataclass field names (flat), not YAML paths. The
+  parser maps raw YAML keys to field names during construction.
+
+#### Flat-to-Nested Mapping for YAML
+
+`YamlConfigSource.save()` uses a static mapping to reconstruct the nested YAML
+structure from the flat canonical dict:
+
+```python
+#: Maps flat field names to nested YAML paths.
+_YAML_STRUCTURE: dict[str, tuple[str, ...]] = {
+    "max_concurrent_executions": ("execution", "max_concurrent"),
+    "shutdown_timeout_seconds": ("execution", "shutdown_timeout"),
+    "dashboard_enabled": ("dashboard", "enabled"),
+    "dashboard_host": ("dashboard", "host"),
+    "dashboard_port": ("dashboard", "port"),
+    "dashboard_base_url": ("dashboard", "base_url"),
+    "poll_interval_seconds": ("imap", "poll_interval"),
+    "use_imap_idle": ("imap", "use_idle"),
+    # ... etc. Fields not listed map to their own name at the top level.
+}
+```
+
+This mapping is co-located with `YamlConfigSource`, not with the config schema.
+Other `ConfigSource` implementations define their own mappings (or none if the
+format uses flat keys natively).
 
 ### Tracking User-Set Values
 
@@ -171,40 +279,96 @@ class ConfigSnapshot[T]:
         return self._provided_keys
 
     def to_dict(self, *, include_defaults: bool = False) -> dict[str, Any]:
-        """Serialize to dict.
+        """Serialize to flat dict keyed by dataclass field names.
 
         When include_defaults is False (the default), only fields in
         provided_keys are included — defaults are not baked in.
+        Nested ConfigSnapshot values are serialized recursively.
         """
         ...
 ```
 
-The parser builds `provided_keys` by checking which keys exist in the raw dict
-before applying defaults. Nested config objects (e.g. `EmailChannelConfig`
-inside `RepoServerConfig`) are themselves wrapped in `ConfigSnapshot`, so
-user-set tracking is recursive.
+#### Computing `provided_keys`
+
+`provided_keys` uses **dataclass field names** (flat), not YAML keys. The
+parsing functions compute them by tracking which raw dict keys they actually
+read before applying defaults.
+
+For `GlobalConfig`, where multiple YAML sub-blocks map to one dataclass:
+
+```python
+# In _from_raw():
+execution = raw.get("execution", {})
+dashboard = raw.get("dashboard", {})
+
+provided = set()
+if "max_concurrent" in execution:
+    provided.add("max_concurrent_executions")
+if "shutdown_timeout" in execution:
+    provided.add("shutdown_timeout_seconds")
+if "enabled" in dashboard:
+    provided.add("dashboard_enabled")
+# ... etc.
+```
+
+A field is "provided" when its corresponding raw dict key exists, regardless of
+the resolved value. Specifically:
+
+- `password: !env PASSWORD` where `$PASSWORD` is unset — the key `password`
+  exists in the raw dict, so the field **is** provided. Resolution may still
+  raise `ConfigError` if the field is required, but the provenance tracking is
+  separate from validation.
+- `password:` (YAML null) — the key exists, so the field **is** provided.
+- Key absent from YAML entirely — the field is **not** provided; the default
+  applies.
+
+This means `provided_keys` tracks **user intent** ("the user wrote this key in
+the config file") rather than **resolved availability**.
+
+#### Handling Nested and Polymorphic Fields
+
+For `RepoServerConfig.channels` (`dict[str, ChannelConfig]`), the `channels`
+field as a whole is tracked in `provided_keys` by channel type. Each channel
+config within it is itself wrapped in a `ConfigSnapshot`:
+
+```python
+channels: dict[str, ConfigSnapshot[ChannelConfig]]
+```
+
+`to_dict()` recurses into nested `ConfigSnapshot` values. For dict-typed fields
+like `secrets`, `masked_secrets`, and `container_env`, the entire dict is the
+value — if the YAML key exists, the whole dict is "provided." There is no
+per-entry tracking within these dicts (credential pool entries use dynamic
+user-chosen keys, not fixed schema fields).
 
 #### Round-Trip Flow
 
 ```
-┌──────────┐    load()     ┌──────────┐   resolve/validate   ┌──────────────┐
-│  Source   │ ──────────► │ raw dict │ ─────────────────► │ ConfigSnapshot│
-│ (YAML)   │              │ + version│                     │   .value      │
-└──────────┘              └──────────┘                     │   .provided   │
-                                                           └──────┬───────┘
-                                                                  │
-                                          to_dict(defaults=False) │
-                                                                  ▼
-┌──────────┐    save()     ┌──────────┐◄──────────────────────────┘
-│  Source   │ ◄─────────── │ raw dict │  only user-set values
-│ (YAML)   │              │ + version│
-└──────────┘              └──────────┘
+load()           apply_migrations()    resolve + track provided
+Source ──────► raw nested dict ──────► raw nested dict ──────► ConfigSnapshot
+(YAML)         + config_version        (migrated)               .value (dataclass)
+                                                                .provided_keys
+
+                          to_dict(defaults=False)     save()
+ConfigSnapshot ──────► flat canonical dict ──────► Source
+                       (user-set only)              (YAML)
 ```
 
-When saving, `ConfigSnapshot.to_dict(include_defaults=False)` produces a dict
-containing only the fields the user explicitly set. The `ConfigSource.save()`
-implementation writes this dict back in the target format. Defaults are never
-persisted.
+When saving, `ConfigSnapshot.to_dict(include_defaults=False)` produces a flat
+canonical dict with only user-set fields. `ConfigSource.save()` transforms this
+into the format-specific structure (e.g. nesting for YAML) and writes it.
+
+**`!env` tags and round-trip:** The `to_dict()` output contains **resolved**
+values, not `EnvVar` placeholders. A round-trip through `to_dict()` + `save()`
+replaces `!env` references with their resolved string values. This is acceptable
+because:
+
+- Config files using `!env` tags are typically not edited via UI round-trip; the
+  UI would set concrete values.
+- Users who want to preserve `!env` tags edit the YAML file directly.
+- A future enhancement could optionally preserve `EnvVar` placeholders by
+  storing them alongside resolved values, but this is not required for the
+  initial implementation.
 
 ### Schema Migration
 
@@ -246,12 +410,32 @@ After loading, if the file's version is behind `CURRENT_CONFIG_VERSION`, the
 gateway logs a warning suggesting the user run `airut config migrate` to update
 the file on disk (optional — the in-memory migration is always applied).
 
-#### Replacing Legacy Field Detection
+#### Security-Sensitive Migrations
 
-The current ad-hoc `_LEGACY_EMAIL_FIELDS` detection in
-`_parse_repo_server_config` becomes the `_migrate_v1_to_v2` function. The
-detection-and-error pattern is replaced by automatic transformation with a
-logged warning.
+Some migrations involve fields that affect authorization (e.g.
+`authorized_senders`). For these, the migration function must **reject the
+config with a `ConfigError`** rather than silently transforming it. The current
+`_LEGACY_EMAIL_FIELDS` detection raises `ConfigError` with explicit migration
+instructions — this behavior is preserved in the migration function.
+
+The rule: migration functions may automatically transform **non-security** field
+renames and restructuring, but must raise `ConfigError` for changes that could
+affect authentication or authorization if the automatic transformation has a
+bug.
+
+```python
+def _migrate_v1_to_v2(raw: dict) -> dict:
+    """Migrate v1 → v2: detect legacy email field placement."""
+    for repo_id, repo in raw.get("repos", {}).items():
+        legacy = {"authorized_senders", "trusted_authserv_id"} & repo.keys()
+        if legacy:
+            # Security-critical: refuse to auto-migrate, require manual fix
+            raise ConfigError(
+                f"repos.{repo_id}: {', '.join(sorted(legacy))} must be "
+                f"nested under 'email:'. See config/airut.example.yaml."
+            )
+    return raw
+```
 
 ### Config Diffing
 
@@ -282,13 +466,20 @@ def diff_by_scope(
     ...
 ```
 
+#### Secret Masking in Diffs
+
+Diff output for fields with `secret=True` in `FieldMeta` must be masked before
+logging or UI display. The diff functions return actual values (needed for
+applying changes), but consumers must check `FieldMeta.secret` and replace
+values with `"<changed>"` when displaying to users or writing to logs.
+
 #### Use Cases
 
 - **Dashboard UI**: show which settings changed and whether a restart is needed.
 - **Future live reload**: if `diff_by_scope()` returns changes only in
   `Scope.TASK`, apply them without any restart. If `Scope.REPO` changes exist,
   restart only affected repos.
-- **Audit**: log what changed on config reload.
+- **Audit**: log what changed on config reload (with secret masking).
 
 ### Schema Introspection
 
@@ -305,8 +496,8 @@ def schema_for_ui(config_cls: type) -> list[FieldSchema]:
 class FieldSchema:
     """UI-consumable field description."""
 
-    name: str  # Field name
-    type_name: str  # Human-readable type (e.g. "int", "str", "bool")
+    name: str  # Field name (dataclass field name)
+    type_name: str  # Python annotation as string (e.g. "str | None")
     default: Any  # Default value (MISSING if required)
     required: bool  # True if no default
     doc: str  # Human-readable description
@@ -314,12 +505,21 @@ class FieldSchema:
     secret: bool  # Whether the field holds a secret
 ```
 
+`type_name` uses Python's annotation string representation (`str(annotation)`),
+e.g. `"int"`, `"str | None"`, `"bool"`. Complex types like `dict[str, str]` and
+`list[str]` are rendered as-is. The UI interprets these strings to choose
+appropriate input widgets.
+
 The UI calls `schema_for_ui(GlobalConfig)` and `schema_for_ui(RepoServerConfig)`
-to render settings forms with labels, defaults, and scope indicators.
+to render settings forms with labels, defaults, and scope indicators. Credential
+pool entries (`MaskedSecret`, `SigningCredential`, etc.) are not covered by
+`schema_for_ui()` — the UI handles these through specialized key-value editors.
 
 ## Scope Assignments
 
-All config fields are assigned one of three scopes:
+All config fields are assigned one of three scopes. Scopes describe the
+**intended** granularity of reload. Currently all changes require a full server
+restart. The scope metadata enables future partial-reload support.
 
 ### `Scope.SERVER` — Requires Full Server Restart
 
@@ -332,6 +532,9 @@ Settings that affect server-wide infrastructure or shared resources:
 - `dashboard.*` — HTTP server lifecycle
 - `container_command` — container runtime binary
 - `upstream_dns` — proxy DNS configuration
+- `resource_limits.*` (server-wide defaults) — currently read from
+  `GlobalConfig` at startup and not re-read per-task; will move to `Scope.TASK`
+  when live-reload is implemented
 
 ### `Scope.REPO` — Reloadable Per-Repo
 
@@ -353,9 +556,9 @@ Settings that are read at task creation time and don't require any restart:
 
 - `repos.*.model` — Claude model for new conversations
 - `repos.*.effort` — effort level for new conversations
-- `repos.*.resource_limits.*` — container limits (timeout, memory, cpus, pids)
+- `repos.*.resource_limits.*` — per-repo container limits (timeout, memory,
+  cpus, pids)
 - `repos.*.container_env` — plain environment variables
-- `resource_limits.*` (server-wide defaults) — used when repo doesn't override
 
 ## File Layout
 
@@ -387,25 +590,32 @@ behavior unchanged — metadata is inert until read.
 ### Phase 3: Config Source
 
 Add `ConfigSource` protocol and `YamlConfigSource`. Refactor
-`ServerConfig.from_yaml()` to delegate to `from_source()`. No behavior change.
+`ServerConfig.from_yaml()` to delegate to `from_source()`. `YamlConfigSource`
+includes the `_YAML_STRUCTURE` mapping for save-time nesting. No behavior
+change.
 
-### Phase 4: User-Set Tracking
-
-Add `ConfigSnapshot` and integrate it into the parsing pipeline. The parser
-records which raw dict keys were present before applying defaults. Returned
-`ServerConfig` is wrapped in `ConfigSnapshot`.
-
-### Phase 5: Schema Migration
+### Phase 4: Schema Migration
 
 Add `config_migration.py`. Move `_LEGACY_EMAIL_FIELDS` logic into
-`_migrate_v1_to_v2`. Add `config_version` handling to `from_source()`.
+`_migrate_v1_to_v2` (preserving the `ConfigError` for security-sensitive
+fields). Add `config_version` handling to `from_source()`. This phase can be
+implemented before or after Phase 5 — the migration operates on the raw dict
+before `ConfigSnapshot` exists.
+
+### Phase 5: User-Set Tracking
+
+Add `ConfigSnapshot` and integrate it into the parsing pipeline. The parser
+records which raw dict keys were present before applying defaults. This requires
+modifying `_from_raw()`, `_parse_repo_server_config()`, and
+`_parse_*_channel_config()` to track provided keys alongside existing resolution
+logic — a significant refactor of the parsing functions.
 
 ### Phase 6: Config Diffing
 
 Add `config_diff.py` with `diff_configs()` and `diff_by_scope()`.
 
 Each phase is a separate PR. Phases 1-3 are backward-compatible and can merge
-independently.
+independently. Phase 4 is independent of Phase 5. Phase 6 depends on Phase 5.
 
 ## Compatibility
 
@@ -423,6 +633,14 @@ No breaking changes. Existing YAML files work without modification:
 `ServerConfig.from_source()` and `ConfigSnapshot`, but the old path is
 preserved.
 
+### Relationship to spec/repo-config.md
+
+This spec defines the config **infrastructure** (metadata, migration, diffing,
+round-trip). `spec/repo-config.md` remains the authoritative reference for the
+config **schema** (what fields exist, their types, defaults, and semantics).
+When this spec is implemented, the "Loading Flow" section of
+`spec/repo-config.md` should be updated to reference the migration step.
+
 ### Testing
 
 - Each migration function has unit tests with before/after dicts.
@@ -430,3 +648,4 @@ preserved.
   round-trip produces only user-set values.
 - `schema_for_ui()` is tested to verify it extracts correct metadata.
 - `diff_by_scope()` is tested to verify correct scope grouping.
+- Secret masking in diff output is tested.
