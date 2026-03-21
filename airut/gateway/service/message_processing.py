@@ -330,11 +330,7 @@ def process_message(
         # Load repo config from git mirror
         repo_config, replacement_map = RepoConfig.from_mirror(
             conv_mgr.mirror,
-            repo_handler.config.secrets,
-            repo_handler.config.masked_secrets,
-            repo_handler.config.signing_credentials,
-            repo_handler.config.github_app_credentials,
-            server_sandbox_enabled=repo_handler.config.network_sandbox_enabled,
+            repo_handler.config,
             server_resource_limits=service.global_config.resource_limits,
         )
 

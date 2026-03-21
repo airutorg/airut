@@ -1,8 +1,10 @@
 # Airut Server Configuration
 #
 # Server-side settings: infrastructure, credentials, and operator controls.
-# Repo-specific behaviour (git identity, model, resource limits, container env,
-# network) is in .airut/airut.yaml (loaded from each repo's git mirror).
+# All repo-specific settings (model, limits, env vars, secrets) can be
+# configured here per repo.  Repo-side .airut/airut.yaml is optional —
+# if present, its container_env entries merge on top (for renaming secrets
+# or adding inline values).
 #
 # Run `airut init` to create a stub at ~/.config/airut/airut.yaml,
 # then use this file as a reference for all available options.
@@ -129,29 +131,39 @@ repos:
       # Repository URL cloned into each conversation workspace.
       repo_url: https://github.com/you/my-project.git
 
-    # Named pool of secrets available for this repo to reference via !secret
-    # and !secret? tags in .airut/airut.yaml.  Keys are logical names; values
-    # are resolved from the environment.
-    #
-    # Plain secrets are injected directly into the container environment.
-    # Use for credentials that don't support header-based auth or need to be
-    # used with arbitrary hosts.
+    # Named pool of secrets.  Each entry is auto-injected into the
+    # container environment using the pool key as the env var name.
+    # Masked secrets, signing credentials, and GitHub App credentials
+    # (below) also auto-inject surrogates — no repo-side config needed.
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
 
-    # Server-side model override.  Takes precedence over channel hints
-    # (e.g. email subaddressing) and repo default_model for new
-    # conversations.  Resumed conversations keep their stored model.
-    # model: sonnet
+    # Default Claude model for new conversations.  Takes precedence over
+    # channel hints (e.g. email subaddressing) and repo-side default_model.
+    # Resumed conversations keep their stored model.  Default: opus.
+    # model: opus
 
-    # Server-side effort override.  Takes precedence over repo
-    # default_effort for new conversations.
-    # effort: medium
+    # Default effort level for new conversations.  Takes precedence over
+    # repo-side default_effort.
+    # effort: max
 
-    # Server-side network sandbox override.  Both server and repo config
-    # default to true; the effective value is the logical AND — if either
-    # is false, the sandbox is disabled for this repo.  Useful as a
-    # break-glass when a broken allowlist gets checked in.
+    # Per-repo resource limits (all optional).
+    # Clamped to server-wide ceilings if configured above.
+    # resource_limits:
+    #   timeout: 6000       # Max execution time in seconds (>= 10)
+    #   memory: "4g"        # Memory limit, e.g. "2g", "512m"
+    #   cpus: 2             # CPU limit (float, e.g. 1.5 for 1.5 cores)
+    #   pids_limit: 256     # Process limit (fork bomb protection)
+
+    # Non-secret environment variables for containers.
+    # Use for inline values like bucket names, flags, etc.
+    # container_env:
+    #   R2_ACCOUNT_ID: "7ef1d25e..."
+    #   CI: "true"
+
+    # Network sandbox.  Both server and repo config default to true;
+    # the effective value is the logical AND — if either is false,
+    # the sandbox is disabled.  Useful as a break-glass override.
     #
     # network:
     #   sandbox_enabled: true

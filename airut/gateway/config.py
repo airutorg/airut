@@ -851,6 +851,11 @@ class RepoServerConfig:
         signing_credentials: Signing credentials for proxy re-signing.
         github_app_credentials: GitHub App credentials for proxy-managed
             token rotation.
+        resource_limits: Per-repo resource limits.  When set, these are the
+            primary limits for this repo.  Repo-side config fills gaps for
+            unset fields.  Result is clamped to global server ceilings.
+        container_env: Non-secret environment variables for containers.
+            Merged with auto-injected secrets to form the final env.
         network_sandbox_enabled: Server-side override for the network sandbox.
             Effective sandbox state is the logical AND of this value and the
             repo config's ``network.sandbox_enabled``.  Defaults to ``True``.
@@ -872,6 +877,8 @@ class RepoServerConfig:
     github_app_credentials: dict[str, GitHubAppCredential] = field(
         default_factory=dict
     )
+    resource_limits: ResourceLimits = field(default_factory=ResourceLimits)
+    container_env: dict[str, str] = field(default_factory=dict)
     network_sandbox_enabled: bool = True
     model: str | None = None
     effort: str | None = None
@@ -1152,6 +1159,15 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
     if "slack" in raw:
         channels["slack"] = _parse_slack_channel_config(raw["slack"], prefix)
 
+    # Resolve per-repo container_env (non-secret inline values)
+    raw_container_env = raw.get("container_env", {})
+    container_env: dict[str, str] = {}
+    if isinstance(raw_container_env, dict):
+        for key, value in raw_container_env.items():
+            resolved = raw_resolve(value)
+            if resolved is not None:
+                container_env[str(key)] = resolved
+
     return RepoServerConfig(
         repo_id=repo_id,
         git_repo_url=_resolve(
@@ -1164,6 +1180,11 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
         masked_secrets=masked_secrets,
         signing_credentials=signing_credentials,
         github_app_credentials=github_app_credentials,
+        resource_limits=(
+            _parse_resource_limits(raw.get("resource_limits"))
+            or ResourceLimits()
+        ),
+        container_env=container_env,
         network_sandbox_enabled=_resolve(
             network.get("sandbox_enabled"), bool, default=True
         ),
@@ -1668,75 +1689,65 @@ class RepoConfig:
     def from_mirror(
         cls,
         mirror: "GitMirrorCache",
-        server_secrets: dict[str, str],
-        masked_secrets: dict[str, MaskedSecret] | None = None,
-        signing_credentials: dict[str, SigningCredential] | None = None,
-        github_app_credentials: dict[str, GitHubAppCredential] | None = None,
+        server_config: RepoServerConfig,
         *,
-        server_sandbox_enabled: bool = True,
         server_resource_limits: ResourceLimits | None = None,
     ) -> tuple["RepoConfig", ReplacementMap]:
         """Load repo config from the git mirror.
 
-        Reads ``.airut/airut.yaml`` from the mirror's default branch,
-        parses it with ``!secret`` tag support, and resolves secret
-        references against the server's secrets pool.
+        If ``.airut/airut.yaml`` exists in the mirror, it is loaded and
+        its values are merged with the server config.  If the file does
+        not exist, config is built entirely from server-side values.
 
-        When ``masked_secrets`` is provided, secrets found in that pool
-        are replaced with surrogates, and a replacement map is returned
-        for the proxy to swap them back for authorized hosts.
+        Container environment is built by layering:
 
-        When ``signing_credentials`` is provided, ``!secret`` references
-        whose names match signing credential field names are resolved
-        with surrogates. A ``SigningCredentialEntry`` is added to the
-        replacement map for the proxy to re-sign requests.
+        1. Server ``secrets`` pool (auto-injected as env vars)
+        2. Server ``container_env`` (non-secret inline values)
+        3. Credential surrogates (masked, signing, GitHub App)
+        4. Repo ``.airut/airut.yaml`` ``container_env`` (if file exists)
 
-        When ``github_app_credentials`` is provided, ``!secret``
-        references matching credential names generate ``ghs_``-prefixed
-        surrogates. A ``GitHubAppEntry`` is added to the replacement map
-        for the proxy to manage token rotation.
+        Later layers win on key conflict.
 
         Args:
             mirror: Git mirror cache to read the file from.
-            server_secrets: Server's secrets pool (name -> value).
-            masked_secrets: Server's masked secrets pool with scope info.
-            signing_credentials: Server's signing credentials pool.
-            github_app_credentials: Server's GitHub App credentials pool.
-            server_sandbox_enabled: Server-side network sandbox setting.
-                The effective sandbox state is the logical AND of this
-                value and the repo config's ``network.sandbox_enabled``.
-            server_resource_limits: Server-side resource limit ceilings.
-                Repo limits are clamped to these maximums.
+            server_config: Per-repo server configuration.
+            server_resource_limits: Global resource limit ceilings.
+                Effective limits are clamped to these maximums.
 
         Returns:
             Tuple of (RepoConfig, ReplacementMap). The ReplacementMap
             will be empty if no masked secrets were referenced.
 
         Raises:
-            ConfigError: If the file is missing, malformed, or references
-                unknown secrets.
+            ConfigError: If the file exists but is malformed, or if
+                required ``!secret`` references cannot be resolved.
         """
+        # Try to read repo config; it's optional.
+        raw: dict = {}
         try:
             data = mirror.read_file(cls.CONFIG_PATH)
+            parsed = yaml.load(data, Loader=_make_repo_loader())
+            if isinstance(parsed, dict):
+                raw = parsed
+            elif parsed is not None:
+                raise ConfigError(
+                    f"Repo config must be a YAML mapping: {cls.CONFIG_PATH}"
+                )
+        except ConfigError:
+            raise
+        except FileNotFoundError:
+            logger.info(
+                "No repo config (%s); using server config only",
+                cls.CONFIG_PATH,
+            )
         except Exception as e:
             raise ConfigError(
                 f"Failed to read repo config from mirror: {e}"
             ) from e
 
-        raw = yaml.load(data, Loader=_make_repo_loader())
-
-        if not isinstance(raw, dict):
-            raise ConfigError(
-                f"Repo config must be a YAML mapping: {cls.CONFIG_PATH}"
-            )
-
         return cls._from_raw(
             raw,
-            server_secrets,
-            masked_secrets or {},
-            signing_credentials=signing_credentials or {},
-            github_app_credentials=github_app_credentials or {},
-            server_sandbox_enabled=server_sandbox_enabled,
+            server_config=server_config,
             server_resource_limits=server_resource_limits,
         )
 
@@ -1744,30 +1755,65 @@ class RepoConfig:
     def _from_raw(
         cls,
         raw: dict,
-        server_secrets: dict[str, str],
-        masked_secrets: dict[str, MaskedSecret],
         *,
-        signing_credentials: dict[str, SigningCredential] | None = None,
-        github_app_credentials: dict[str, GitHubAppCredential] | None = None,
-        server_sandbox_enabled: bool = True,
+        server_config: RepoServerConfig,
         server_resource_limits: ResourceLimits | None = None,
     ) -> tuple["RepoConfig", ReplacementMap]:
-        """Build repo config from parsed YAML dict."""
+        """Build repo config from parsed YAML dict.
+
+        Args:
+            raw: Parsed repo-side YAML dict (may be empty).
+            server_config: Per-repo server config.
+            server_resource_limits: Global resource limit ceilings.
+        """
         # Reject !secret tags outside container_env — they would be
         # silently stringified by _resolve/raw_resolve.
         _reject_stray_secret_refs(raw)
 
+        # Extract server-side values.
+        server_secrets = server_config.secrets
+        masked_secrets = server_config.masked_secrets
+        signing_credentials = server_config.signing_credentials
+        github_app_credentials = server_config.github_app_credentials
+        server_sandbox_enabled = server_config.network_sandbox_enabled
+        server_repo_limits = server_config.resource_limits
+        server_container_env = server_config.container_env
+
         network_raw = raw.get("network", {})
 
-        # Resolve container_env: inline values + !secret references
+        # --- Container environment ---
+        # Layer 1: auto-inject plain secrets as env vars
+        base_env: dict[str, str] = dict(server_secrets)
+        # Layer 2: server container_env (non-secret inline values)
+        base_env.update(server_container_env)
+
+        # Layer 3: credential surrogates (built by _resolve_container_env
+        # from repo-side container_env if present, otherwise from a
+        # synthetic manifest of all credential keys).
         raw_container_env = raw.get("container_env", {})
-        container_env, replacement_map = _resolve_container_env(
-            raw_container_env,
-            server_secrets,
-            masked_secrets,
-            signing_credentials=signing_credentials or {},
-            github_app_credentials=github_app_credentials or {},
-        )
+        if raw_container_env:
+            # Repo-side container_env exists: resolve it (handles
+            # !secret refs, masked secrets, signing creds, etc.)
+            repo_env, replacement_map = _resolve_container_env(
+                raw_container_env,
+                server_secrets,
+                masked_secrets,
+                signing_credentials=signing_credentials,
+                github_app_credentials=github_app_credentials,
+            )
+            # Layer 3: repo-side entries win on conflict
+            base_env.update(repo_env)
+        else:
+            # No repo-side container_env: auto-inject surrogates for all
+            # configured credentials using their key name as the env var.
+            replacement_map = _auto_inject_credentials(
+                base_env,
+                masked_secrets,
+                signing_credentials,
+                github_app_credentials,
+            )
+
+        container_env = base_env
 
         repo_sandbox = _resolve(
             network_raw.get("sandbox_enabled"), bool, default=True
@@ -1792,9 +1838,9 @@ class RepoConfig:
                 "re-enable the sandbox."
             )
 
-        # Build resource limits: resource_limits block takes precedence,
-        # with top-level timeout as fallback.
-        repo_limits = (
+        # --- Resource limits ---
+        # Server per-repo limits are primary; repo-side fills gaps.
+        repo_file_limits = (
             _parse_resource_limits(raw.get("resource_limits"))
             or ResourceLimits()
         )
@@ -1802,16 +1848,19 @@ class RepoConfig:
         # Backwards compat: top-level timeout fills in when
         # resource_limits.timeout is not set.
         top_level_timeout = _resolve(raw.get("timeout"), int)
-        if repo_limits.timeout is None and top_level_timeout is not None:
-            repo_limits = ResourceLimits(
+        if repo_file_limits.timeout is None and top_level_timeout is not None:
+            repo_file_limits = ResourceLimits(
                 timeout=top_level_timeout,
-                memory=repo_limits.memory,
-                cpus=repo_limits.cpus,
-                pids_limit=repo_limits.pids_limit,
+                memory=repo_file_limits.memory,
+                cpus=repo_file_limits.cpus,
+                pids_limit=repo_file_limits.pids_limit,
             )
 
-        # Clamp to server-side ceilings.
-        repo_limits = repo_limits.clamp(server_resource_limits)
+        # Server per-repo limits take precedence; repo fills gaps.
+        effective_limits = server_repo_limits.fill_gaps(repo_file_limits)
+
+        # Clamp to global server-wide ceilings.
+        effective_limits = effective_limits.clamp(server_resource_limits)
 
         config = cls(
             default_model=_resolve(
@@ -1820,7 +1869,7 @@ class RepoConfig:
             default_effort=_resolve(
                 raw.get("default_effort"), str, default=None
             ),
-            resource_limits=repo_limits,
+            resource_limits=effective_limits,
             network_sandbox_enabled=effective_sandbox,
             container_env=container_env,
         )
@@ -2068,3 +2117,109 @@ def _resolve_container_env(
         )
 
     return resolved, replacement_map
+
+
+def _auto_inject_credentials(
+    base_env: dict[str, str],
+    masked_secrets: dict[str, MaskedSecret],
+    signing_credentials: dict[str, SigningCredential],
+    github_app_credentials: dict[str, GitHubAppCredential],
+) -> ReplacementMap:
+    """Auto-inject credential surrogates when no repo container_env exists.
+
+    For each configured credential type, generates surrogates and injects
+    them into *base_env* using the credential key as the env var name.
+    Credentials override plain secrets with the same key (the surrogate
+    replaces the plain value in *base_env*).
+
+    Args:
+        base_env: Mutable env dict to inject surrogates into.
+        masked_secrets: Masked secrets from server config.
+        signing_credentials: Signing credentials from server config.
+        github_app_credentials: GitHub App credentials from server config.
+
+    Returns:
+        Replacement map for the proxy.
+    """
+    replacement_map: ReplacementMap = {}
+
+    # Process in ascending priority order so higher-priority types
+    # overwrite lower-priority ones for the same key name.
+    # Priority: signing > GitHub App > masked > plain (layer 1).
+
+    # Masked secrets (lowest credential priority).
+    for secret_name, masked in masked_secrets.items():
+        if masked.value:
+            surrogate = generate_surrogate(masked.value)
+            base_env[secret_name] = surrogate
+            replacement_map[surrogate] = ReplacementEntry(
+                real_value=masked.value,
+                scopes=tuple(sorted(masked.scopes)),
+                headers=masked.headers,
+                allow_foreign_credentials=masked.allow_foreign_credentials,
+            )
+        else:
+            base_env[secret_name] = ""
+
+    # GitHub App credentials (medium priority).
+    for cred_name, gh_cred in github_app_credentials.items():
+        surrogate = generate_github_app_surrogate()
+        base_env[cred_name] = surrogate
+        replacement_map[surrogate] = GitHubAppEntry(
+            app_id=gh_cred.app_id,
+            private_key=gh_cred.private_key,
+            installation_id=gh_cred.installation_id,
+            base_url=gh_cred.base_url,
+            scopes=tuple(sorted(gh_cred.scopes)),
+            allow_foreign_credentials=gh_cred.allow_foreign_credentials,
+            permissions=gh_cred.permissions,
+            repositories=gh_cred.repositories,
+        )
+
+    # Signing credentials (highest priority): inject surrogates for
+    # each field name.
+    signing_refs: dict[str, dict[str, tuple[str, str]]] = {}
+
+    for cred_name, cred in signing_credentials.items():
+        # access_key_id
+        ak_surrogate = generate_surrogate(cred.access_key_id.value)
+        base_env[cred.access_key_id.name] = ak_surrogate
+        signing_refs[cred_name] = {
+            "access_key_id": (cred.access_key_id.name, ak_surrogate),
+        }
+
+        # secret_access_key
+        sk_surrogate = generate_surrogate(cred.secret_access_key.value)
+        base_env[cred.secret_access_key.name] = sk_surrogate
+        signing_refs[cred_name]["secret_access_key"] = (
+            cred.secret_access_key.name,
+            sk_surrogate,
+        )
+
+        # session_token (optional)
+        if cred.session_token:
+            st_surrogate = generate_session_token_surrogate()
+            base_env[cred.session_token.name] = st_surrogate
+            signing_refs[cred_name]["session_token"] = (
+                cred.session_token.name,
+                st_surrogate,
+            )
+
+    # Build SigningCredentialEntry for each signing credential.
+    for cred_name, fields in signing_refs.items():
+        cred = signing_credentials[cred_name]
+        surrogate_key_id = fields["access_key_id"][1]
+        surrogate_session_token = (
+            fields["session_token"][1] if "session_token" in fields else None
+        )
+        replacement_map[surrogate_key_id] = SigningCredentialEntry(
+            access_key_id=cred.access_key_id.value,
+            secret_access_key=cred.secret_access_key.value,
+            session_token=(
+                cred.session_token.value if cred.session_token else None
+            ),
+            surrogate_session_token=surrogate_session_token,
+            scopes=tuple(sorted(cred.scopes)),
+        )
+
+    return replacement_map

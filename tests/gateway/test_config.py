@@ -29,6 +29,7 @@ from airut.gateway.config import (
     SigningCredential,
     SigningCredentialEntry,
     SigningCredentialField,
+    _auto_inject_credentials,
     _coerce_bool,
     _make_repo_loader,
     _parse_resource_limits,
@@ -1018,6 +1019,58 @@ class TestFromYaml:
         config = ServerConfig.from_yaml(yaml_path)
         assert config.repos["test"].effort == "medium"
 
+    def test_container_env_parsed(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """container_env in per-repo server config is parsed."""
+        yaml_content = (
+            _MINIMAL_YAML.format(repo_url=master_repo)
+            + "    container_env:\n"
+            + '      CI: "true"\n'
+            + "      BUCKET: my-bucket\n"
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        config = ServerConfig.from_yaml(yaml_path)
+        assert config.repos["test"].container_env == {
+            "CI": "true",
+            "BUCKET": "my-bucket",
+        }
+
+    def test_container_env_default_empty(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """container_env defaults to empty dict."""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
+        config = ServerConfig.from_yaml(yaml_path)
+        assert config.repos["test"].container_env == {}
+
+    def test_per_repo_resource_limits_parsed(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """resource_limits in per-repo server config is parsed."""
+        yaml_content = (
+            _MINIMAL_YAML.format(repo_url=master_repo)
+            + "    resource_limits:\n"
+            + "      timeout: 3600\n"
+            + '      memory: "4g"\n'
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        config = ServerConfig.from_yaml(yaml_path)
+        assert config.repos["test"].resource_limits.timeout == 3600
+        assert config.repos["test"].resource_limits.memory == "4g"
+
+    def test_per_repo_resource_limits_default_empty(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """resource_limits defaults to empty ResourceLimits."""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
+        config = ServerConfig.from_yaml(yaml_path)
+        assert config.repos["test"].resource_limits == ResourceLimits()
+
     def test_model_empty_string_normalized_to_none(
         self, master_repo: Path, tmp_path: Path
     ) -> None:
@@ -1497,6 +1550,38 @@ class TestResourceLimits:
         clamped = rl.clamp(ceiling)
         assert clamped.cpus == 1.5
 
+    def test_fill_gaps_no_fallback(self) -> None:
+        """fill_gaps with None fallback returns self unchanged."""
+        rl = ResourceLimits(timeout=600)
+        assert rl.fill_gaps(None) == rl
+
+    def test_fill_gaps_fills_missing_fields(self) -> None:
+        """fill_gaps fills None fields from fallback."""
+        rl = ResourceLimits(timeout=600)
+        fallback = ResourceLimits(
+            timeout=300, memory="4g", cpus=2, pids_limit=128
+        )
+        filled = rl.fill_gaps(fallback)
+        assert filled.timeout == 600  # self wins
+        assert filled.memory == "4g"  # from fallback
+        assert filled.cpus == 2  # from fallback
+        assert filled.pids_limit == 128  # from fallback
+
+    def test_fill_gaps_preserves_all_set_fields(self) -> None:
+        """fill_gaps preserves all fields when self has all set."""
+        rl = ResourceLimits(timeout=600, memory="8g", cpus=4, pids_limit=256)
+        fallback = ResourceLimits(
+            timeout=300, memory="4g", cpus=2, pids_limit=128
+        )
+        filled = rl.fill_gaps(fallback)
+        assert filled == rl
+
+    def test_fill_gaps_all_none_fallback(self) -> None:
+        """fill_gaps with all-None fallback returns self unchanged."""
+        rl = ResourceLimits(timeout=600)
+        filled = rl.fill_gaps(ResourceLimits())
+        assert filled == rl
+
 
 class TestParseResourceLimits:
     """Tests for _parse_resource_limits."""
@@ -1572,13 +1657,58 @@ class TestRepoConfigDirect:
         assert "my-secret-val" in SecretFilter._secrets
 
 
+def _stub_server_config(
+    *,
+    secrets: dict[str, str] | None = None,
+    masked_secrets: dict[str, MaskedSecret] | None = None,
+    signing_credentials: dict[str, SigningCredential] | None = None,
+    github_app_credentials: dict[str, GitHubAppCredential] | None = None,
+    network_sandbox_enabled: bool = True,
+    resource_limits: ResourceLimits | None = None,
+    container_env: dict[str, str] | None = None,
+    model: str | None = None,
+    effort: str | None = None,
+) -> RepoServerConfig:
+    """Create a minimal RepoServerConfig for unit tests.
+
+    Uses a dummy email channel config so we don't need real paths.
+    """
+    email = EmailChannelConfig(
+        imap_server="imap.test",
+        imap_port=993,
+        smtp_server="smtp.test",
+        smtp_port=587,
+        username="u",
+        password="p",  # noqa: S106 - test fixture
+        from_address="t@test",
+        authorized_senders=["t@test"],
+        trusted_authserv_id="mx.test",
+    )
+    return RepoServerConfig(
+        repo_id="test",
+        git_repo_url="https://example.com/repo.git",
+        channels={"email": email},
+        secrets=secrets or {},
+        masked_secrets=masked_secrets or {},
+        signing_credentials=signing_credentials or {},
+        github_app_credentials=github_app_credentials or {},
+        resource_limits=resource_limits or ResourceLimits(),
+        container_env=container_env or {},
+        network_sandbox_enabled=network_sandbox_enabled,
+        model=model,
+        effort=effort,
+    )
+
+
 class TestRepoConfigFromRaw:
     """Tests for RepoConfig._from_raw."""
 
     def test_minimal(self) -> None:
         """Minimal repo config with defaults."""
         raw: dict = {}
-        rc, replacement_map = RepoConfig._from_raw(raw, {}, {})
+        rc, replacement_map = RepoConfig._from_raw(
+            raw, server_config=_stub_server_config()
+        )
         assert rc.default_model == "opus"
         assert rc.default_effort is None
         assert rc.resource_limits == ResourceLimits()
@@ -1603,8 +1733,8 @@ class TestRepoConfigFromRaw:
                 "FROM_SERVER": _SecretRef("GH_TOKEN"),
             },
         }
-        secrets = {"GH_TOKEN": "ghp_tok"}
-        rc, replacement_map = RepoConfig._from_raw(raw, secrets, {})
+        sc = _stub_server_config(secrets={"GH_TOKEN": "ghp_tok"})
+        rc, replacement_map = RepoConfig._from_raw(raw, server_config=sc)
         assert rc.default_model == "sonnet"
         assert rc.default_effort == "max"
         assert rc.resource_limits.timeout == 6000
@@ -1612,16 +1742,14 @@ class TestRepoConfigFromRaw:
         assert rc.resource_limits.cpus == 2
         assert rc.resource_limits.pids_limit == 256
         assert rc.network_sandbox_enabled is False
-        assert rc.container_env == {
-            "INLINE": "value",
-            "FROM_SERVER": "ghp_tok",
-        }
+        assert rc.container_env["INLINE"] == "value"
+        assert rc.container_env["FROM_SERVER"] == "ghp_tok"
         assert replacement_map == {}
 
     def test_legacy_top_level_timeout(self) -> None:
         """Top-level timeout is used when resource_limits.timeout is not set."""
         raw = {"timeout": 6000}
-        rc, _ = RepoConfig._from_raw(raw, {}, {})
+        rc, _ = RepoConfig._from_raw(raw, server_config=_stub_server_config())
         assert rc.resource_limits.timeout == 6000
 
     def test_resource_limits_timeout_takes_precedence(self) -> None:
@@ -1630,11 +1758,11 @@ class TestRepoConfigFromRaw:
             "timeout": 300,
             "resource_limits": {"timeout": 6000},
         }
-        rc, _ = RepoConfig._from_raw(raw, {}, {})
+        rc, _ = RepoConfig._from_raw(raw, server_config=_stub_server_config())
         assert rc.resource_limits.timeout == 6000
 
     def test_server_resource_limits_clamp(self) -> None:
-        """Repo limits are clamped to server ceilings."""
+        """Repo limits are clamped to global server ceilings."""
         raw = {
             "resource_limits": {
                 "timeout": 7200,
@@ -1646,7 +1774,9 @@ class TestRepoConfigFromRaw:
             timeout=3600, memory="4g", cpus=4, pids_limit=512
         )
         rc, _ = RepoConfig._from_raw(
-            raw, {}, {}, server_resource_limits=server_limits
+            raw,
+            server_config=_stub_server_config(),
+            server_resource_limits=server_limits,
         )
         assert rc.resource_limits.timeout == 3600
         assert rc.resource_limits.memory == "4g"
@@ -1657,38 +1787,42 @@ class TestRepoConfigFromRaw:
     def test_no_server_limits_no_clamp(self) -> None:
         """Without server limits, repo values are unclamped."""
         raw = {"resource_limits": {"timeout": 7200, "memory": "8g"}}
-        rc, _ = RepoConfig._from_raw(raw, {}, {})
+        rc, _ = RepoConfig._from_raw(raw, server_config=_stub_server_config())
         assert rc.resource_limits.timeout == 7200
         assert rc.resource_limits.memory == "8g"
 
     def test_server_sandbox_false_overrides_repo_true(self) -> None:
         """Server sandbox_enabled=false disables even when repo is true."""
         raw: dict = {}
-        rc, _ = RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=False)
+        sc = _stub_server_config(network_sandbox_enabled=False)
+        rc, _ = RepoConfig._from_raw(raw, server_config=sc)
         assert rc.network_sandbox_enabled is False
 
     def test_repo_sandbox_false_overrides_server_true(self) -> None:
         """Repo sandbox_enabled=false disables even when server is true."""
         raw = {"network": {"sandbox_enabled": False}}
-        rc, _ = RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=True)
+        sc = _stub_server_config(network_sandbox_enabled=True)
+        rc, _ = RepoConfig._from_raw(raw, server_config=sc)
         assert rc.network_sandbox_enabled is False
 
     def test_both_sandbox_false(self) -> None:
         """Both false results in disabled."""
         raw = {"network": {"sandbox_enabled": False}}
-        rc, _ = RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=False)
+        sc = _stub_server_config(network_sandbox_enabled=False)
+        rc, _ = RepoConfig._from_raw(raw, server_config=sc)
         assert rc.network_sandbox_enabled is False
 
     def test_both_sandbox_true(self) -> None:
         """Both true results in enabled."""
         raw: dict = {}
-        rc, _ = RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=True)
+        sc = _stub_server_config(network_sandbox_enabled=True)
+        rc, _ = RepoConfig._from_raw(raw, server_config=sc)
         assert rc.network_sandbox_enabled is True
 
     def test_server_sandbox_default_is_true(self) -> None:
         """server_sandbox_enabled defaults to True when not passed."""
         raw: dict = {}
-        rc, _ = RepoConfig._from_raw(raw, {}, {})
+        rc, _ = RepoConfig._from_raw(raw, server_config=_stub_server_config())
         assert rc.network_sandbox_enabled is True
 
     def test_warning_logged_when_server_disables_sandbox(
@@ -1696,8 +1830,9 @@ class TestRepoConfigFromRaw:
     ) -> None:
         """Warning logged when server config disables sandbox."""
         raw: dict = {}
+        sc = _stub_server_config(network_sandbox_enabled=False)
         with caplog.at_level(logging.WARNING, logger="airut.gateway.config"):
-            RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=False)
+            RepoConfig._from_raw(raw, server_config=sc)
         assert "sandbox disabled" in caplog.text.lower()
         assert "server=False" in caplog.text
         assert "repo=True" in caplog.text
@@ -1707,8 +1842,9 @@ class TestRepoConfigFromRaw:
     ) -> None:
         """Warning logged when repo config disables sandbox."""
         raw = {"network": {"sandbox_enabled": False}}
+        sc = _stub_server_config(network_sandbox_enabled=True)
         with caplog.at_level(logging.WARNING, logger="airut.gateway.config"):
-            RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=True)
+            RepoConfig._from_raw(raw, server_config=sc)
         assert "sandbox disabled" in caplog.text.lower()
         assert "server=True" in caplog.text
         assert "repo=False" in caplog.text
@@ -1718,8 +1854,9 @@ class TestRepoConfigFromRaw:
     ) -> None:
         """Warning logged when both sides disable sandbox."""
         raw = {"network": {"sandbox_enabled": False}}
+        sc = _stub_server_config(network_sandbox_enabled=False)
         with caplog.at_level(logging.WARNING, logger="airut.gateway.config"):
-            RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=False)
+            RepoConfig._from_raw(raw, server_config=sc)
         assert "sandbox disabled" in caplog.text.lower()
         assert "server=False" in caplog.text
         assert "repo=False" in caplog.text
@@ -1729,8 +1866,9 @@ class TestRepoConfigFromRaw:
     ) -> None:
         """No warning when sandbox is enabled."""
         raw: dict = {}
+        sc = _stub_server_config(network_sandbox_enabled=True)
         with caplog.at_level(logging.WARNING, logger="airut.gateway.config"):
-            RepoConfig._from_raw(raw, {}, {}, server_sandbox_enabled=True)
+            RepoConfig._from_raw(raw, server_config=sc)
         assert "sandbox disabled" not in caplog.text.lower()
 
     def test_warning_logged_when_sandbox_disabled_with_masked_secrets(
@@ -1747,10 +1885,12 @@ class TestRepoConfigFromRaw:
         raw = {
             "container_env": {"GH_TOKEN": _SecretRef("GH_TOKEN")},
         }
+        sc = _stub_server_config(
+            masked_secrets=masked_secrets,
+            network_sandbox_enabled=False,
+        )
         with caplog.at_level(logging.WARNING, logger="airut.gateway.config"):
-            RepoConfig._from_raw(
-                raw, {}, masked_secrets, server_sandbox_enabled=False
-            )
+            RepoConfig._from_raw(raw, server_config=sc)
         assert "masked secrets are configured" in caplog.text
 
     def test_no_masked_warning_when_sandbox_enabled(
@@ -1767,10 +1907,12 @@ class TestRepoConfigFromRaw:
         raw = {
             "container_env": {"GH_TOKEN": _SecretRef("GH_TOKEN")},
         }
+        sc = _stub_server_config(
+            masked_secrets=masked_secrets,
+            network_sandbox_enabled=True,
+        )
         with caplog.at_level(logging.WARNING, logger="airut.gateway.config"):
-            RepoConfig._from_raw(
-                raw, {}, masked_secrets, server_sandbox_enabled=True
-            )
+            RepoConfig._from_raw(raw, server_config=sc)
         assert "masked secrets are configured" not in caplog.text
 
 
@@ -1781,7 +1923,8 @@ class TestRepoConfigFromMirror:
         """Loads and parses config from git mirror."""
         mirror = MagicMock()
         mirror.read_file.return_value = "default_model: sonnet\ntimeout: 600\n"
-        rc, replacement_map = RepoConfig.from_mirror(mirror, {})
+        sc = _stub_server_config()
+        rc, replacement_map = RepoConfig.from_mirror(mirror, sc)
         mirror.read_file.assert_called_once_with(".airut/airut.yaml")
         assert rc.default_model == "sonnet"
         assert rc.resource_limits.timeout == 600
@@ -1797,42 +1940,56 @@ class TestRepoConfigFromMirror:
             "  cpus: 2\n"
             "  pids_limit: 256\n"
         )
-        rc, _ = RepoConfig.from_mirror(mirror, {})
+        sc = _stub_server_config()
+        rc, _ = RepoConfig.from_mirror(mirror, sc)
         assert rc.resource_limits.timeout == 3600
         assert rc.resource_limits.memory == "4g"
         assert rc.resource_limits.cpus == 2
         assert rc.resource_limits.pids_limit == 256
 
     def test_server_resource_limits_passed_through(self) -> None:
-        """Server resource limits are passed to _from_raw for clamping."""
+        """Global server ceilings are passed to _from_raw for clamping."""
         mirror = MagicMock()
         mirror.read_file.return_value = "resource_limits:\n  timeout: 7200\n"
         server_limits = ResourceLimits(timeout=3600)
+        sc = _stub_server_config()
         rc, _ = RepoConfig.from_mirror(
-            mirror, {}, server_resource_limits=server_limits
+            mirror, sc, server_resource_limits=server_limits
         )
         assert rc.resource_limits.timeout == 3600
 
-    def test_mirror_read_error(self) -> None:
-        """Mirror read failure raises ConfigError."""
+    def test_missing_repo_config_uses_defaults(self) -> None:
+        """Missing .airut/airut.yaml uses server config defaults."""
         mirror = MagicMock()
-        mirror.read_file.side_effect = RuntimeError("not found")
+        mirror.read_file.side_effect = FileNotFoundError("not found")
+        sc = _stub_server_config(secrets={"MY_SECRET": "val"})
+        rc, _ = RepoConfig.from_mirror(mirror, sc)
+        assert rc.default_model == "opus"
+        assert rc.container_env == {"MY_SECRET": "val"}
+
+    def test_mirror_read_error(self) -> None:
+        """Mirror read failure (non-FileNotFoundError) raises ConfigError."""
+        mirror = MagicMock()
+        mirror.read_file.side_effect = RuntimeError("disk error")
+        sc = _stub_server_config()
         with pytest.raises(ConfigError, match="Failed to read repo config"):
-            RepoConfig.from_mirror(mirror, {})
+            RepoConfig.from_mirror(mirror, sc)
 
     def test_env_tag_rejected(self) -> None:
         """!env tags in repo config raise ConfigError."""
         mirror = MagicMock()
         mirror.read_file.return_value = "timeout: !env MY_TIMEOUT\n"
+        sc = _stub_server_config()
         with pytest.raises(ConfigError, match="!env tags are not allowed"):
-            RepoConfig.from_mirror(mirror, {})
+            RepoConfig.from_mirror(mirror, sc)
 
     def test_not_a_mapping(self) -> None:
         """Non-mapping YAML raises ConfigError."""
         mirror = MagicMock()
         mirror.read_file.return_value = "- item1\n- item2\n"
+        sc = _stub_server_config()
         with pytest.raises(ConfigError, match="YAML mapping"):
-            RepoConfig.from_mirror(mirror, {})
+            RepoConfig.from_mirror(mirror, sc)
 
     def test_secret_resolved(self) -> None:
         """!secret tags resolve from server secrets pool."""
@@ -1840,8 +1997,9 @@ class TestRepoConfigFromMirror:
         mirror.read_file.return_value = (
             "container_env:\n  MY_KEY: !secret SERVER_KEY\n"
         )
-        rc, _ = RepoConfig.from_mirror(mirror, {"SERVER_KEY": "secret-val"})
-        assert rc.container_env == {"MY_KEY": "secret-val"}
+        sc = _stub_server_config(secrets={"SERVER_KEY": "secret-val"})
+        rc, _ = RepoConfig.from_mirror(mirror, sc)
+        assert rc.container_env["MY_KEY"] == "secret-val"
 
     def test_unknown_secret_raises(self) -> None:
         """Unknown !secret reference raises ConfigError."""
@@ -1849,8 +2007,9 @@ class TestRepoConfigFromMirror:
         mirror.read_file.return_value = (
             "container_env:\n  MY_KEY: !secret UNKNOWN\n"
         )
+        sc = _stub_server_config()
         with pytest.raises(ConfigError, match="!secret 'UNKNOWN' not found"):
-            RepoConfig.from_mirror(mirror, {})
+            RepoConfig.from_mirror(mirror, sc)
 
     def test_optional_secret_missing_skipped(self) -> None:
         """!secret? tag with missing secret is silently skipped."""
@@ -1858,8 +2017,9 @@ class TestRepoConfigFromMirror:
         mirror.read_file.return_value = (
             "container_env:\n  MY_KEY: !secret? MISSING\n"
         )
-        rc, _ = RepoConfig.from_mirror(mirror, {})
-        assert rc.container_env == {}
+        sc = _stub_server_config()
+        rc, _ = RepoConfig.from_mirror(mirror, sc)
+        assert "MY_KEY" not in rc.container_env
 
     def test_optional_secret_present_resolved(self) -> None:
         """!secret? tag with present secret is resolved."""
@@ -1867,8 +2027,9 @@ class TestRepoConfigFromMirror:
         mirror.read_file.return_value = (
             "container_env:\n  MY_KEY: !secret? SERVER_KEY\n"
         )
-        rc, _ = RepoConfig.from_mirror(mirror, {"SERVER_KEY": "secret-val"})
-        assert rc.container_env == {"MY_KEY": "secret-val"}
+        sc = _stub_server_config(secrets={"SERVER_KEY": "secret-val"})
+        rc, _ = RepoConfig.from_mirror(mirror, sc)
+        assert rc.container_env["MY_KEY"] == "secret-val"
 
     def test_secret_empty_string_resolved(self) -> None:
         """!secret tag with empty string value resolves successfully."""
@@ -1876,43 +2037,118 @@ class TestRepoConfigFromMirror:
         mirror.read_file.return_value = (
             "container_env:\n  MY_KEY: !secret SERVER_KEY\n"
         )
-        rc, _ = RepoConfig.from_mirror(mirror, {"SERVER_KEY": ""})
-        assert rc.container_env == {"MY_KEY": ""}
+        sc = _stub_server_config(secrets={"SERVER_KEY": ""})
+        rc, _ = RepoConfig.from_mirror(mirror, sc)
+        assert rc.container_env["MY_KEY"] == ""
 
     def test_secret_tag_outside_container_env_raises(self) -> None:
         """!secret tag outside container_env raises ConfigError."""
         mirror = MagicMock()
         mirror.read_file.return_value = "default_model: !secret MODEL\n"
+        sc = _stub_server_config(secrets={"MODEL": "sonnet"})
         with pytest.raises(ConfigError, match="!secret.*outside container_env"):
-            RepoConfig.from_mirror(mirror, {"MODEL": "sonnet"})
+            RepoConfig.from_mirror(mirror, sc)
 
     def test_optional_secret_tag_outside_container_env_raises(self) -> None:
         """!secret? tag outside container_env raises ConfigError."""
         mirror = MagicMock()
         mirror.read_file.return_value = "timeout: !secret? TIMEOUT\n"
+        sc = _stub_server_config()
         with pytest.raises(ConfigError, match="!secret.*outside container_env"):
-            RepoConfig.from_mirror(mirror, {})
+            RepoConfig.from_mirror(mirror, sc)
 
     def test_secret_tag_in_nested_list_raises(self) -> None:
         """!secret tag nested inside a list outside container_env raises."""
         mirror = MagicMock()
         mirror.read_file.return_value = "extra:\n  - !secret NESTED_SECRET\n"
+        sc = _stub_server_config(secrets={"NESTED_SECRET": "val"})
         with pytest.raises(ConfigError, match="!secret.*outside container_env"):
-            RepoConfig.from_mirror(mirror, {"NESTED_SECRET": "val"})
+            RepoConfig.from_mirror(mirror, sc)
 
     def test_server_sandbox_override(self) -> None:
-        """server_sandbox_enabled=False overrides repo default."""
+        """Server network_sandbox_enabled=False overrides repo default."""
         mirror = MagicMock()
         mirror.read_file.return_value = "default_model: opus\n"
-        rc, _ = RepoConfig.from_mirror(mirror, {}, server_sandbox_enabled=False)
+        sc = _stub_server_config(network_sandbox_enabled=False)
+        rc, _ = RepoConfig.from_mirror(mirror, sc)
         assert rc.network_sandbox_enabled is False
 
     def test_server_sandbox_default_true(self) -> None:
-        """server_sandbox_enabled defaults to True."""
+        """Server network_sandbox_enabled defaults to True."""
         mirror = MagicMock()
         mirror.read_file.return_value = "default_model: opus\n"
-        rc, _ = RepoConfig.from_mirror(mirror, {})
+        sc = _stub_server_config()
+        rc, _ = RepoConfig.from_mirror(mirror, sc)
         assert rc.network_sandbox_enabled is True
+
+    def test_auto_inject_secrets(self) -> None:
+        """Server secrets are auto-injected when no repo container_env."""
+        mirror = MagicMock()
+        mirror.read_file.return_value = "default_model: opus\n"
+        sc = _stub_server_config(secrets={"MY_TOKEN": "tok123"})
+        rc, _ = RepoConfig.from_mirror(mirror, sc)
+        assert rc.container_env["MY_TOKEN"] == "tok123"
+
+    def test_server_container_env_injected(self) -> None:
+        """Server container_env values are injected."""
+        mirror = MagicMock()
+        mirror.read_file.return_value = "default_model: opus\n"
+        sc = _stub_server_config(container_env={"CI": "true"})
+        rc, _ = RepoConfig.from_mirror(mirror, sc)
+        assert rc.container_env["CI"] == "true"
+
+    def test_server_per_repo_limits_primary(self) -> None:
+        """Server per-repo limits take precedence over repo-side."""
+        mirror = MagicMock()
+        mirror.read_file.return_value = (
+            "resource_limits:\n  timeout: 7200\n  memory: 8g\n"
+        )
+        sc = _stub_server_config(resource_limits=ResourceLimits(timeout=3600))
+        rc, _ = RepoConfig.from_mirror(mirror, sc)
+        # Server per-repo timeout wins
+        assert rc.resource_limits.timeout == 3600
+        # Repo fills the gap for memory
+        assert rc.resource_limits.memory == "8g"
+
+    def test_repo_env_overrides_server_secrets(self) -> None:
+        """Repo container_env overrides auto-injected server secrets."""
+        mirror = MagicMock()
+        mirror.read_file.return_value = (
+            "container_env:\n  RENAMED: !secret MY_TOKEN\n"
+        )
+        sc = _stub_server_config(secrets={"MY_TOKEN": "tok123"})
+        rc, _ = RepoConfig.from_mirror(mirror, sc)
+        # Repo-side renamed the secret
+        assert rc.container_env["RENAMED"] == "tok123"
+        # Auto-injected under original name too
+        assert rc.container_env["MY_TOKEN"] == "tok123"
+
+    def test_repo_env_skips_auto_inject_for_unreferenced_credentials(
+        self,
+    ) -> None:
+        """Unreferenced credentials stay plain with repo env."""
+        mirror = MagicMock()
+        # Only references MY_TOKEN via !secret; does not reference MASKED_KEY.
+        mirror.read_file.return_value = (
+            "container_env:\n  TOKEN: !secret MY_TOKEN\n"
+        )
+        sc = _stub_server_config(
+            secrets={"MY_TOKEN": "tok123", "MASKED_KEY": "plain_fallback"},
+            masked_secrets={
+                "MASKED_KEY": MaskedSecret(
+                    value="real_secret",
+                    scopes=frozenset(["api.example.com"]),
+                    headers=("Authorization",),
+                ),
+            },
+        )
+        rc, rmap = RepoConfig.from_mirror(mirror, sc)
+        # MY_TOKEN resolved as plain secret via !secret
+        assert rc.container_env["TOKEN"] == "tok123"
+        # MASKED_KEY present from layer 1 (plain value), no surrogate
+        assert rc.container_env["MASKED_KEY"] == "plain_fallback"
+        # No surrogate was generated for MASKED_KEY
+        assert len(rmap) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -2021,6 +2257,103 @@ class TestResolveContainerEnv:
         }
         with pytest.raises(ConfigError, match="not found"):
             _resolve_container_env({"K": _SecretRef("NOPE")}, {}, masked)
+
+
+# ---------------------------------------------------------------------------
+# _auto_inject_credentials
+# ---------------------------------------------------------------------------
+
+
+class TestAutoInjectCredentials:
+    """Tests for _auto_inject_credentials."""
+
+    def test_masked_secret_injected(self) -> None:
+        """Masked secrets generate surrogates in env."""
+        base_env: dict[str, str] = {}
+        masked = {
+            "GH_TOKEN": MaskedSecret(
+                value="ghp_realtoken",
+                scopes=frozenset(["api.github.com"]),
+                headers=("Authorization",),
+            )
+        }
+        rmap = _auto_inject_credentials(base_env, masked, {}, {})
+        # Surrogate injected under the credential key
+        assert "GH_TOKEN" in base_env
+        assert base_env["GH_TOKEN"] != "ghp_realtoken"
+        assert len(rmap) == 1
+        entry = next(iter(rmap.values()))
+        assert isinstance(entry, ReplacementEntry)
+        assert entry.real_value == "ghp_realtoken"
+
+    def test_masked_secret_empty_value(self) -> None:
+        """Masked secret with empty value sets empty string."""
+        base_env: dict[str, str] = {}
+        masked = {
+            "EMPTY": MaskedSecret(
+                value="",
+                scopes=frozenset(["x"]),
+                headers=("*",),
+            )
+        }
+        rmap = _auto_inject_credentials(base_env, masked, {}, {})
+        assert base_env["EMPTY"] == ""
+        assert rmap == {}
+
+    def test_github_app_injected(self) -> None:
+        """GitHub App credentials generate surrogates."""
+        base_env: dict[str, str] = {}
+        gh_apps = {
+            "GH_TOKEN": GitHubAppCredential(
+                app_id="123",
+                private_key="pem",
+                installation_id="456",
+                scopes=frozenset(["api.github.com"]),
+            )
+        }
+        rmap = _auto_inject_credentials(base_env, {}, {}, gh_apps)
+        assert "GH_TOKEN" in base_env
+        assert base_env["GH_TOKEN"].startswith("ghs_")
+        assert len(rmap) == 1
+        entry = next(iter(rmap.values()))
+        assert isinstance(entry, GitHubAppEntry)
+
+    def test_signing_credential_injected(self) -> None:
+        """Signing credentials generate surrogates for all fields."""
+        base_env: dict[str, str] = {}
+        signing = {
+            "AWS": SigningCredential(
+                access_key_id=SigningCredentialField(
+                    name="AWS_ACCESS_KEY_ID",
+                    value="AKIAIOSFODNN7EXAMPLE",
+                ),
+                secret_access_key=SigningCredentialField(
+                    name="AWS_SECRET_ACCESS_KEY",
+                    value="wJalrXUtnFEMI",
+                ),
+                session_token=SigningCredentialField(
+                    name="AWS_SESSION_TOKEN",
+                    value="session123",
+                ),
+                scopes=frozenset(["*.amazonaws.com"]),
+            )
+        }
+        rmap = _auto_inject_credentials(base_env, {}, signing, {})
+        assert "AWS_ACCESS_KEY_ID" in base_env
+        assert "AWS_SECRET_ACCESS_KEY" in base_env
+        assert "AWS_SESSION_TOKEN" in base_env
+        # Surrogates are different from real values
+        assert base_env["AWS_ACCESS_KEY_ID"] != "AKIAIOSFODNN7EXAMPLE"
+        assert len(rmap) == 1
+        entry = next(iter(rmap.values()))
+        assert isinstance(entry, SigningCredentialEntry)
+
+    def test_empty_credentials(self) -> None:
+        """No credentials produces empty map."""
+        base_env: dict[str, str] = {}
+        rmap = _auto_inject_credentials(base_env, {}, {}, {})
+        assert rmap == {}
+        assert base_env == {}
 
 
 # ---------------------------------------------------------------------------
