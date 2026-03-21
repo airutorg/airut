@@ -11,8 +11,7 @@ For high-level documentation, see [doc/](../doc/).
   channel abstraction, data flow, container execution
 - [authentication.md](authentication.md) — Per-channel authentication and
   authorization (DMARC for email, workspace/group/user rules for Slack)
-- [repo-config.md](repo-config.md) — Repo config schema (`.airut/airut.yaml`)
-  and server/repo split
+- [repo-config.md](repo-config.md) — Per-repo schema in server config
 - [multi-repo.md](multi-repo.md) — Multi-repository support design
 - [slack-channel.md](slack-channel.md) — Slack channel implementation (Socket
   Mode, Agents & AI Apps)

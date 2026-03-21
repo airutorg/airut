@@ -849,8 +849,9 @@ The existing `TaskState` already stores all needed fields:
   email subject)
 - `sender`: Set to the Slack user ID (canonical identifier — email uses the
   sender email address)
-- `repo_id`: Set from the repo config (same as email)
-- `model`: Set from the repo config default (Slack has no model selection UX)
+- `repo_id`: Set from the server config (same as email)
+- `model`: Set from the server config per-repo `model` (Slack has no model
+  selection UX)
 
 No dashboard code changes are needed. The dashboard is already channel-agnostic
 — it works with `TaskState` and `ConversationMetadata`, neither of which

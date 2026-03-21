@@ -82,19 +82,13 @@ conversations.
 
 ### Credential Isolation
 
-Credentials are passed via environment variables, not files:
+Credentials are passed via environment variables, not files. All credential pool
+entries (`secrets`, `masked_secrets`, `signing_credentials`,
+`github_app_credentials`) in the server config auto-inject into the container as
+environment variables by their key name.
 
-```yaml
-# In .airut/airut.yaml (repo config)
-container_env:
-  GH_TOKEN: !secret GH_TOKEN              # Required
-  ANTHROPIC_API_KEY: !secret? ANTHROPIC_API_KEY  # Optional
-```
-
-- `!secret NAME` resolves from server's secrets pool (error if missing)
-- `!secret? NAME` silently skips if missing
 - All resolved values are registered for log redaction
-- Values loaded from git mirror's default branch (not workspace)
+- No host credential files are mounted
 
 For credentials that should only be usable with specific services (e.g., GitHub
 tokens for GitHub APIs), use **masked secrets** in the server config. The
@@ -140,17 +134,19 @@ build details.
 
 ## Resource Limits
 
-Container resource limits are configured via the `resource_limits` block in
-`.airut/airut.yaml`. All fields are optional — when omitted, the corresponding
-podman flag is not passed and no limit is enforced.
+Container resource limits are configured via the `resource_limits` block in the
+server config per repo. All fields are optional — when omitted, the
+corresponding podman flag is not passed and no limit is enforced.
 
 ```yaml
-# .airut/airut.yaml (repo config)
-resource_limits:
-  timeout: 6000       # Max execution time in seconds (>= 10)
-  memory: "4g"        # Memory limit, e.g. "2g", "512m" (--memory)
-  cpus: 2             # CPU limit, supports fractional (--cpus)
-  pids_limit: 256     # Process limit, fork bomb protection (--pids-limit)
+# ~/.config/airut/airut.yaml (server config, per repo)
+repos:
+  my-project:
+    resource_limits:
+      timeout: 6000       # Max execution time in seconds (>= 10)
+      memory: "4g"        # Memory limit, e.g. "2g", "512m" (--memory)
+      cpus: 2             # CPU limit, supports fractional (--cpus)
+      pids_limit: 256     # Process limit, fork bomb protection (--pids-limit)
 ```
 
 | Field        | Podman flag                  | Effect                       |
@@ -165,11 +161,11 @@ thrashing.
 
 ### Two-Layer Configuration
 
-The server config (`~/.config/airut/airut.yaml`) can define ceiling values that
-cap what any repo can request:
+The server config also supports a top-level `resource_limits` block that defines
+ceiling values across all repos:
 
 ```yaml
-# ~/.config/airut/airut.yaml (server config)
+# ~/.config/airut/airut.yaml (server config, top level)
 resource_limits:
   timeout: 7200       # Max allowed timeout
   memory: "8g"        # Max allowed memory
@@ -177,9 +173,10 @@ resource_limits:
   pids_limit: 1024    # Max allowed process count
 ```
 
-For each field independently: `effective = min(repo_value, server_ceiling)`. If
-only the repo sets a value, it's used directly. If neither sets a value, no
-limit is enforced for that dimension.
+Per-repo values are clamped to these ceilings. For each field independently:
+`effective = min(repo_value, server_ceiling)`. If only the repo sets a value,
+it's used directly. If neither sets a value, no limit is enforced for that
+dimension.
 
 ### cgroup v2 Requirement
 

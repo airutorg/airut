@@ -20,7 +20,7 @@
 - [Dashboard Security](#dashboard-security)
 - [Attack Surface Analysis](#attack-surface-analysis)
 - [Configuration Security](#configuration-security)
-  - [Repo Config Protection](#repo-config-protection)
+  - [Server Config Protection](#server-config-protection)
   - [Network Allowlist Protection](#network-allowlist-protection)
   - [Container Image Build Isolation](#container-image-build-isolation)
 - [Fail-Secure Defaults](#fail-secure-defaults)
@@ -224,18 +224,13 @@ Actual values come from environment variables or `~/.config/airut/.env`.
 
 ### Container Secrets
 
-Repo config (`.airut/airut.yaml`) references server secrets with `!secret`:
-
-```yaml
-container_env:
-  GH_TOKEN: !secret GH_TOKEN              # Required
-  API_KEY: !secret? API_KEY               # Optional (skip if missing)
-```
+All credential pool entries in the server config (`secrets`, `masked_secrets`,
+`signing_credentials`, `github_app_credentials`) auto-inject into the container
+as environment variables by their key name.
 
 **Security properties:**
 
-- Repo config cannot use `!env` (prevents reading arbitrary server state)
-- Secrets resolved at task start, not stored in repo
+- All per-repo settings live in the server config (operator-controlled)
 - All resolved values registered for log redaction
 - Container sees environment variables, not files
 
@@ -278,9 +273,8 @@ AWS SDK signs requests normally using the surrogates, and the proxy **re-signs**
 with the real credentials for scoped hosts. This works with any S3-compatible
 API (AWS, Cloudflare R2, MinIO, etc.).
 
-As with masked secrets, the repo config is transparent — it uses
-`!secret AWS_ACCESS_KEY_ID` just like any other secret. The server admin decides
-whether to use plain secrets or signing credentials.
+The server admin decides whether to use plain secrets or signing credentials —
+the container sees the same env var names either way.
 
 See
 [network-sandbox.md](network-sandbox.md#signing-credentials-aws-sigv4-re-signing)
@@ -359,16 +353,12 @@ This is acceptable for a single-user system behind authentication.
 
 ## Configuration Security
 
-### Repo Config Protection
+### Server Config Protection
 
-Repo configuration (`.airut/airut.yaml`) is read from the git mirror's default
-branch, not the workspace. The agent cannot modify:
-
-- Network sandbox settings
-- Container environment variables
-- Timeout limits
-
-Changes require a merged PR, providing human review.
+All per-repo configuration (model, effort, resource limits, container env,
+network sandbox, credential pools) lives in the server config
+(`~/.config/airut/airut.yaml`), which is operator-controlled and not accessible
+to the container. The agent cannot modify these settings.
 
 ### Network Allowlist Protection
 
@@ -391,8 +381,8 @@ arbitrary server files during build:
 - `COPY` instructions can only access files within the build context
 
 A malicious Dockerfile cannot `COPY /etc/passwd` or use `../` traversal to
-escape the build context. This mirrors the `!secret` vs `!env` restriction:
-repos declare what they need, the server controls what's actually available.
+escape the build context. The server operator controls what credentials are
+available — repos only define the container image and network allowlist.
 
 ## Fail-Secure Defaults
 

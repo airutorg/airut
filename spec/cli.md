@@ -273,8 +273,7 @@ Color is enabled when:
 | `~/.local/bin/airut`              | Default binary location (uv tool)  |
 | `~/.local/state/airut/<repo_id>/` | Per-repo runtime state (XDG state) |
 
-See [repo-config.md](repo-config.md) for the server/repo config split and YAML
-schema.
+See [repo-config.md](repo-config.md) for the per-repo schema in server config.
 
 ## Design Decisions
 

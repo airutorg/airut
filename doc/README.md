@@ -25,8 +25,8 @@ Named "Airut" (Finnish: herald/messenger).
      authorization
    - [Slack setup](slack-setup.md) — App creation, Socket Mode, authorization
      rules
-4. **[Repo onboarding](repo-onboarding.md)** — Add `.airut/` configuration,
-   container Dockerfile, and network allowlist to your repository
+4. **[Repo onboarding](repo-onboarding.md)** — Add `.airut/` directory (network
+   allowlist, container Dockerfile) to your repository
 5. **Send a message** — email or Slack — and Airut handles workspace creation,
    container isolation, and cleanup
 

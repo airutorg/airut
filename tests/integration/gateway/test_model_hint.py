@@ -32,9 +32,9 @@ class TestModelHint:
     ) -> None:
         """Model hint in To address overrides default for new conversations.
 
-        The test repo's default_model is "sonnet". Sending to
+        The server config's model defaults to "opus". Sending to
         claude+opus@test.local should create a conversation using
-        model "opus" instead.
+        the hinted model "opus".
 
         Validates:
         - Tracker records the hinted model
@@ -99,9 +99,9 @@ events = [
     ) -> None:
         """Model hint on resumed conversation is ignored.
 
-        First message creates conversation with default model ("sonnet").
-        Second message sent to claude+opus@test.local should still use
-        "sonnet" (the stored model), not "opus".
+        First message creates conversation with default model ("opus").
+        Second message sent to claude+sonnet@test.local should still use
+        "opus" (the stored model), not "sonnet".
 
         Validates:
         - First task uses the default model
@@ -144,8 +144,8 @@ events = [
                 service.tracker, conv_id, timeout=10.0
             )
             assert task1 is not None
-            assert task1.model == "sonnet", (
-                f"First task should use default 'sonnet', got '{task1.model}'"
+            assert task1.model == "opus", (
+                f"First task should use default 'opus', got '{task1.model}'"
             )
 
             integration_env.email_server.clear_outbox()
@@ -161,7 +161,7 @@ events = [
             msg2 = create_email(
                 subject=f"Re: [ID:{conv_id}] Resume model test",
                 body=second_mock,
-                recipient="claude+opus@test.local",
+                recipient="claude+sonnet@test.local",
                 in_reply_to=ack.get("Message-ID"),
                 references=[ack.get("Message-ID")]
                 if ack.get("Message-ID")
@@ -179,8 +179,8 @@ events = [
             tasks = service.tracker.get_tasks_for_conversation(conv_id)
             assert len(tasks) >= 2
             newest = tasks[0]
-            assert newest.model == "sonnet", (
-                f"Resumed task should use stored 'sonnet', got '{newest.model}'"
+            assert newest.model == "opus", (
+                f"Resumed task should use stored 'opus', got '{newest.model}'"
             )
 
         finally:

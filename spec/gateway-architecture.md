@@ -306,20 +306,16 @@ addressing):
 - **New conversation**: Model extracted from To address and stored in session
 - **Resumed conversation**: Stored model is used; any model in To address is
   ignored
-- **No model specified**: Uses `default_model` from repo config (defaults to
-  "opus")
-- **Server override**: When `model` is set in the server config for a repo, it
-  takes precedence over both subaddressing and `default_model` for new
-  conversations
+- **No model specified**: Uses `model` from server config (defaults to "opus")
 
 **Supported models**: `opus`, `sonnet`, `haiku` (or any valid Claude Code model
 name)
 
 **Implementation**: Model is passed to Claude Code via `--model` CLI parameter,
 not embedded in settings.json. Effort level is passed via `--effort` when
-configured. Server-side `model` and `effort` overrides (in the server config's
-per-repo section) take precedence over channel hints and repo defaults for new
-conversations. See `spec/repo-config.md` for the full precedence table.
+configured. Channel hints (e.g. email subaddressing) override the server
+config's per-repo `model` for new conversations. See `spec/repo-config.md` for
+the full precedence table.
 
 **Acknowledgment**: The auto-reply confirms work has started: "I've started
 working on this and will reply shortly." If a dashboard URL is configured, a
@@ -450,12 +446,13 @@ for git user name and email, configured in the Dockerfile.
 
 ### Container Environment Variables
 
-The executor passes environment variables defined in the `container_env:`
-section of `.airut/airut.yaml` (repo config) to the container. Values can be
-inline strings or `!secret` references resolved from the server's secrets pool.
-Only entries with non-empty resolved values are passed.
+The executor passes environment variables to the container from multiple sources
+in the server config: `container_env` (plain values), `secrets`,
+`masked_secrets`, `signing_credentials`, and `github_app_credentials`. All
+credential pool entries auto-inject by their key name. Only entries with
+non-empty resolved values are passed.
 
-See [repo-config.md](repo-config.md) for the full schema and examples.
+See [repo-config.md](repo-config.md) for the full schema and priority ordering.
 
 **Note:** `conversation.json` and `events.jsonl` are stored in
 `{STORAGE}/conversations/{ID}/` and are **NOT** mounted to the container,
@@ -527,20 +524,21 @@ in the dashboard's actions viewer (`/conversation/{id}/actions`).
 
 ## Configuration
 
-Configuration is split into two layers:
+All configuration lives in the **server config** (`~/.config/airut/airut.yaml`).
+This includes deployment infrastructure, channel credentials, operator controls,
+per-repo settings (model, effort, resource limits, network sandbox toggle,
+container environment), and all credential pools. Values use `!env` tags to
+resolve from environment variables. A `.env` file is automatically loaded from
+`~/.config/airut/.env` (and from the working directory, if present) before
+resolving tags.
 
-- **Server config** (`~/.config/airut/airut.yaml`) — deployment infrastructure,
-  mail credentials, operator controls, and a `secrets` pool. Values use `!env`
-  tags to resolve from environment variables. A `.env` file is automatically
-  loaded from `~/.config/airut/.env` (and from the working directory, if
-  present) before resolving tags.
-- **Repo config** (`.airut/airut.yaml`) — repo-specific behavior: model,
-  timeout, network allowlist, and container environment variables. Loaded from
-  the git mirror at the start of each task. Uses `!secret` tags to reference the
-  server's secrets pool; `!env` tags are rejected.
+Repository-side files that remain in `.airut/`:
 
-See [repo-config.md](repo-config.md) for the full repo config schema, YAML tag
-semantics, and loading flow.
+- `.airut/network-allowlist.yaml` — read from the git mirror's default branch
+- `.airut/container/Dockerfile` — repo-defined container base image
+
+See [repo-config.md](repo-config.md) for the full per-repo schema and loading
+flow.
 
 ## Security Model
 
@@ -561,7 +559,7 @@ separate authentication from authorization.
 ### Credential Management
 
 - **Claude credentials**: `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`
-  configured in `container_env:` (use `!env` tags for secrets)
+  configured in `secrets` (auto-injected as env vars)
 - **Email credentials**: Either password auth or Microsoft OAuth2 (XOAUTH2):
   - **Password auth**: `password: !env EMAIL_PASSWORD` in server config
   - **Microsoft OAuth2**: `email.microsoft_oauth2:` block with `tenant_id`,
@@ -572,9 +570,10 @@ separate authentication from authorization.
   in server config under `slack.bot_token` and `slack.app_token`. Both support
   `!env` tags and are registered with `SecretFilter` for log redaction. See
   [slack-channel.md](slack-channel.md#credential-management).
-- **Git credentials**: `GH_TOKEN` in `container_env:` with
-  `gh auth git-credential` helper (no SSH keys mounted)
-- **AI service credentials**: Configured in `container_env:` (e.g.,
+- **Git credentials**: `GH_TOKEN` in a credential pool (e.g.
+  `github_app_credentials` or `masked_secrets`) with `gh auth git-credential`
+  helper (no SSH keys mounted)
+- **AI service credentials**: Configured in `secrets` or `masked_secrets` (e.g.,
   `GEMINI_API_KEY: !env GEMINI_API_KEY`)
 
 No host credential files are mounted — all authentication uses environment
@@ -639,8 +638,8 @@ oldest inactive conversations.
 The container filesystem (outside mounted directories) is rebuilt from the
 repository's default branch at every task start. This enables a self-service
 workflow: the agent can propose changes to its own environment (Dockerfile,
-network allowlist, repo config) via a PR, and once the user merges it, the next
-task automatically runs with those changes. Persistent mounts (`/workspace`,
+network allowlist) via a PR, and once the user merges it, the next task
+automatically runs with those changes. Persistent mounts (`/workspace`,
 `/storage`, etc.) preserve conversation state across this rebuild cycle.
 
 ### Why Podman Instead of Direct Execution?

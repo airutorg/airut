@@ -75,13 +75,6 @@ def create_test_repo(path: Path) -> Path:
     (airut_dir / "network-allowlist.yaml").write_text(
         "domains: []\nurl_prefixes: []\n"
     )
-    (airut_dir / "airut.yaml").write_text(
-        "git:\n"
-        "  user: Test User\n"
-        "  email: test@test.local\n"
-        "default_model: sonnet\n"
-        "timeout: 30\n"
-    )
 
     # Add container Dockerfile (read from git mirror by Sandbox)
     container_dir = airut_dir / "container"

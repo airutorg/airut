@@ -386,8 +386,7 @@ Each conversation maps to a directory under the XDG state dir
 ```
 
 The git mirror is refreshed before each task starts. After refreshing, the
-per-repo configuration (`.airut/airut.yaml`), container Dockerfile
-(`.airut/container/Dockerfile`), and network allowlist
+container Dockerfile (`.airut/container/Dockerfile`) and network allowlist
 (`.airut/network-allowlist.yaml`) are read from the mirror's default branch.
 Workspaces are full clones (no shared objects) for isolation.
 
@@ -407,27 +406,27 @@ Each repository has its own `RepoHandler` with isolated components.
 
 ### Configuration
 
-Airut uses a two-layer configuration model:
+All per-repo configuration lives in the server config
+(`~/.config/airut/airut.yaml`), managed by the operator. There is no
+`.airut/airut.yaml` repo config file for the gateway.
 
-**Server config** (`~/.config/airut/airut.yaml`) — deployment infrastructure
-managed by the operator:
+**Server config** (`~/.config/airut/airut.yaml`) includes per-repo:
 
 - Channel credentials (email: IMAP/SMTP; Slack: bot and app tokens)
 - Authorization configuration (email: sender allowlist; Slack: rules)
 - Repository URL and storage paths
-- Secrets pool (values repos can reference)
+- Model, effort, resource limits, container environment
+- Credential pools (secrets, masked_secrets, signing_credentials,
+  github_app_credentials) — all auto-injected into the container as environment
+  variables by their key name
 - Concurrency limits and dashboard settings
 
-**Repo config** (`.airut/airut.yaml`) — per-repository behavior checked into the
-target repo:
+**Repository-side files** (checked into the target repo under `.airut/`):
 
-- Default model and timeout
-- Container environment variables (with `!secret` references to server secrets)
-- Network allowlist toggle
-
-This separation lets repos declare what they need (e.g., "I need GH_TOKEN")
-while the server controls actual secret values. Repo config is read from the git
-mirror at task start, so changes take effect after merge without server restart.
+- `.airut/network-allowlist.yaml` — network allowlist (read from git mirror at
+  task start)
+- `.airut/container/Dockerfile` — container base image (read from git mirror at
+  task start)
 
 See [spec/repo-config.md](../spec/repo-config.md) for the full schema.
 

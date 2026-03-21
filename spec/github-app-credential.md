@@ -101,20 +101,17 @@ When `base_url` is absent, the proxy uses `https://api.github.com` as default.
 
 ## Resolution Flow
 
-Repo config is unaware of the credential type -- it uses plain `!secret`:
+GitHub App credentials are declared in the server config per repo. The key name
+(e.g. `GH_TOKEN`) becomes the environment variable name auto-injected into the
+container.
 
-```yaml
-# .airut/airut.yaml (repo config)
-container_env:
-  GH_TOKEN: !secret GH_TOKEN
-```
+Resolution priority for duplicate env var names:
 
-Resolution priority in `_resolve_container_env()` (extended):
-
-1. Check `signing_credentials` (existing)
-2. **Check `github_app_credentials`** (new)
-3. Check `masked_secrets` (existing)
-4. Fall back to `secrets` (existing)
+1. **Check `signing_credentials`** (highest priority)
+2. Check `github_app_credentials`
+3. Check `masked_secrets`
+4. Fall back to `secrets`
+5. Fall back to `container_env`
 
 When a GitHub App credential is matched:
 
@@ -268,10 +265,10 @@ and the app could be reinstated).
 ## Data Flow
 
 ```
-Gateway config resolution
+Server config resolution
     │
-    ├─ Parse .airut/airut.yaml
-    ├─ Resolve !secret references against github_app_credentials + others
+    ├─ Parse per-repo github_app_credentials from server config
+    ├─ Resolve credential values (via !env tags)
     │
     └─ Provide GitHubAppCredential to sandbox
            │
