@@ -5,16 +5,11 @@
 
 """Tests for scripts/update_vendor.py."""
 
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
-
-# Import the module under test
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
-import update_vendor  # type: ignore[import-not-found]
+import scripts.update_vendor as update_vendor
 
 
 class TestParseVersionFile:
@@ -60,7 +55,7 @@ class TestGetLatestVersion:
     def test_returns_version_without_v_prefix(self) -> None:
         """Strips 'v' prefix from tag name."""
         with patch(
-            "update_vendor.urlopen",
+            "scripts.update_vendor.urlopen",
         ) as mock_urlopen:
             mock_response = mock_urlopen.return_value.__enter__.return_value
             mock_response.read.return_value = b'{"tag_name": "v2.0.9"}'
@@ -71,7 +66,7 @@ class TestGetLatestVersion:
     def test_raises_on_non_dict_response(self) -> None:
         """Raises ValueError for unexpected response."""
         with (
-            patch("update_vendor.urlopen") as mock_urlopen,
+            patch("scripts.update_vendor.urlopen") as mock_urlopen,
             pytest.raises(ValueError, match="Unexpected response"),
         ):
             mock_response = mock_urlopen.return_value.__enter__.return_value
@@ -84,7 +79,7 @@ class TestDownloadFile:
 
     def test_returns_content(self) -> None:
         """Downloads and returns file content."""
-        with patch("update_vendor.urlopen") as mock_urlopen:
+        with patch("scripts.update_vendor.urlopen") as mock_urlopen:
             mock_response = mock_urlopen.return_value.__enter__.return_value
             mock_response.read.return_value = b"file content"
             result = update_vendor.download_file("https://example.com/f")
@@ -107,7 +102,9 @@ class TestUpdatePackage:
             "file": "htmx.min.js",
             "unpkg_path": "dist/htmx.min.js",
         }
-        with patch("update_vendor.get_latest_version", return_value="2.0.8"):
+        with patch(
+            "scripts.update_vendor.get_latest_version", return_value="2.0.8"
+        ):
             current, latest, updated = update_vendor.update_package(
                 "htmx", info, versions, check_only=False
             )
@@ -130,7 +127,9 @@ class TestUpdatePackage:
             "file": "htmx.min.js",
             "unpkg_path": "dist/htmx.min.js",
         }
-        with patch("update_vendor.get_latest_version", return_value="2.0.8"):
+        with patch(
+            "scripts.update_vendor.get_latest_version", return_value="2.0.8"
+        ):
             current, latest, updated = update_vendor.update_package(
                 "htmx", info, versions, check_only=True
             )
@@ -155,9 +154,11 @@ class TestUpdatePackage:
             "unpkg_path": "dist/htmx.min.js",
         }
         with (
-            patch("update_vendor.get_latest_version", return_value="2.0.8"),
             patch(
-                "update_vendor.download_file",
+                "scripts.update_vendor.get_latest_version", return_value="2.0.8"
+            ),
+            patch(
+                "scripts.update_vendor.download_file",
                 return_value=b"new js content",
             ),
             patch.object(update_vendor, "VENDOR_DIR", tmp_path),
@@ -184,7 +185,7 @@ class TestUpdatePackage:
             "file": "htmx.min.js",
             "unpkg_path": "dist/htmx.min.js",
         }
-        with patch("update_vendor.get_latest_version", return_value=""):
+        with patch("scripts.update_vendor.get_latest_version", return_value=""):
             current, latest, updated = update_vendor.update_package(
                 "htmx", info, versions, check_only=False
             )
@@ -217,11 +218,11 @@ class TestMain:
             patch.object(update_vendor, "VENDOR_DIR", vendor_dir),
             patch.object(update_vendor, "VERSION_FILE", version_file),
             patch(
-                "update_vendor.get_latest_version",
+                "scripts.update_vendor.get_latest_version",
                 side_effect=mock_latest,
             ),
-            patch("update_vendor.download_file"),
-            patch("sys.argv", ["update_vendor.py"]),
+            patch("scripts.update_vendor.download_file"),
+            patch("sys.argv", ["scripts.update_vendor.py"]),
         ):
             result = update_vendor.main()
 
@@ -241,7 +242,7 @@ class TestMain:
                 "VENDOR_DIR",
                 tmp_path / "nonexistent",
             ),
-            patch("sys.argv", ["update_vendor.py"]),
+            patch("sys.argv", ["scripts.update_vendor.py"]),
         ):
             result = update_vendor.main()
 
@@ -269,14 +270,14 @@ class TestMain:
             patch.object(update_vendor, "VENDOR_DIR", vendor_dir),
             patch.object(update_vendor, "VERSION_FILE", version_file),
             patch(
-                "update_vendor.get_latest_version",
+                "scripts.update_vendor.get_latest_version",
                 side_effect=mock_latest,
             ),
             patch(
-                "update_vendor.download_file",
+                "scripts.update_vendor.download_file",
                 side_effect=URLError("timeout"),
             ),
-            patch("sys.argv", ["update_vendor.py"]),
+            patch("sys.argv", ["scripts.update_vendor.py"]),
         ):
             result = update_vendor.main()
 
@@ -299,10 +300,10 @@ class TestMain:
             patch.object(update_vendor, "VENDOR_DIR", vendor_dir),
             patch.object(update_vendor, "VERSION_FILE", version_file),
             patch(
-                "update_vendor.get_latest_version",
+                "scripts.update_vendor.get_latest_version",
                 return_value="2.0.8",
             ),
-            patch("sys.argv", ["update_vendor.py", "--check"]),
+            patch("sys.argv", ["scripts.update_vendor.py", "--check"]),
         ):
             result = update_vendor.main()
 
@@ -325,14 +326,14 @@ class TestMain:
             patch.object(update_vendor, "VENDOR_DIR", vendor_dir),
             patch.object(update_vendor, "VERSION_FILE", version_file),
             patch(
-                "update_vendor.get_latest_version",
+                "scripts.update_vendor.get_latest_version",
                 return_value="2.0.8",
             ),
             patch(
-                "update_vendor.download_file",
+                "scripts.update_vendor.download_file",
                 return_value=b"new content",
             ),
-            patch("sys.argv", ["update_vendor.py"]),
+            patch("sys.argv", ["scripts.update_vendor.py"]),
         ):
             result = update_vendor.main()
 

@@ -18,62 +18,25 @@ Usage:
 
 import json
 import sys
-from pathlib import Path
 from typing import cast
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from scripts.update_vendor import PACKAGES as _PACKAGES
+from scripts.update_vendor import VERSION_FILE, parse_version_file
 
-# GitHub API for global security advisories (no auth required)
+
+# GitHub API for global security advisories (no auth required).
+# Uses the ``affects`` parameter to filter by ecosystem and package name.
 _ADVISORIES_URL = (
     "https://api.github.com/advisories"
-    "?ecosystem=npm&package={package}&per_page=100"
+    "?affects={ecosystem}:{package}&per_page=100"
 )
-
-# GitHub API for latest release
-_RELEASES_URL = "https://api.github.com/repos/{owner}/{repo}/releases/latest"
 
 _GITHUB_HEADERS = {
     "Accept": "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
 }
-
-# Vendored packages and their GitHub repos for release checking
-_PACKAGES = {
-    "htmx": {
-        "npm_package": "htmx.org",
-        "github_owner": "bigskysoftware",
-        "github_repo": "htmx",
-    },
-    "htmx-ext-sse": {
-        "npm_package": "htmx-ext-sse",
-        "github_owner": "bigskysoftware",
-        "github_repo": "htmx-ext-sse",
-    },
-}
-
-VERSION_FILE = Path("airut/dashboard/static/vendor/VERSION")
-
-
-def parse_version_file(path: Path) -> dict[str, str]:
-    """Parse the VERSION file into a dict of package -> version.
-
-    Args:
-        path: Path to the VERSION file.
-
-    Returns:
-        Dict mapping package name to version string.
-    """
-    versions: dict[str, str] = {}
-    content = path.read_text()
-    for line in content.strip().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = line.split()
-        if len(parts) == 2:
-            versions[parts[0]] = parts[1]
-    return versions
 
 
 def _github_get(url: str) -> object:
@@ -105,7 +68,7 @@ def check_advisories(
     Returns:
         List of advisory dicts with 'ghsa_id', 'severity', and 'summary'.
     """
-    url = _ADVISORIES_URL.format(package=npm_package)
+    url = _ADVISORIES_URL.format(ecosystem="npm", package=npm_package)
     advisories = _github_get(url)
     if not isinstance(advisories, list):
         return []
@@ -237,7 +200,7 @@ def get_latest_version(owner: str, repo: str) -> str | None:
     Returns:
         Version string (without 'v' prefix), or None on failure.
     """
-    url = _RELEASES_URL.format(owner=owner, repo=repo)
+    url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
     try:
         data = _github_get(url)
     except URLError:
@@ -280,7 +243,7 @@ def main() -> int:
             advisories = check_advisories(info["npm_package"], version)
         except URLError as e:
             print(f"WARNING: Could not check advisories for {name}: {e}")
-            continue
+            advisories = []
 
         if advisories:
             has_vulnerability = True
@@ -293,7 +256,7 @@ def main() -> int:
                 if adv["html_url"]:
                     print(f"  Details: {adv['html_url']}")
 
-        # Check for newer versions
+        # Check for newer versions (independent of advisory check)
         latest = get_latest_version(info["github_owner"], info["github_repo"])
         if latest and latest != version:
             latest_tuple = _parse_version(latest)

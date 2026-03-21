@@ -5,16 +5,11 @@
 
 """Tests for scripts/check_vendor_security.py."""
 
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
-
-# Import the module under test
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
-import check_vendor_security  # type: ignore[import-not-found]
+import scripts.check_vendor_security as check_vendor_security
 
 
 class TestParseVersionFile:
@@ -158,7 +153,8 @@ class TestCheckAdvisories:
             }
         ]
         with patch(
-            "check_vendor_security._github_get", return_value=api_response
+            "scripts.check_vendor_security._github_get",
+            return_value=api_response,
         ):
             result = check_vendor_security.check_advisories("htmx.org", "2.0.8")
 
@@ -186,7 +182,8 @@ class TestCheckAdvisories:
             }
         ]
         with patch(
-            "check_vendor_security._github_get", return_value=api_response
+            "scripts.check_vendor_security._github_get",
+            return_value=api_response,
         ):
             result = check_vendor_security.check_advisories("htmx.org", "2.0.8")
 
@@ -212,7 +209,8 @@ class TestCheckAdvisories:
             }
         ]
         with patch(
-            "check_vendor_security._github_get", return_value=api_response
+            "scripts.check_vendor_security._github_get",
+            return_value=api_response,
         ):
             result = check_vendor_security.check_advisories("htmx.org", "2.0.8")
 
@@ -238,7 +236,8 @@ class TestCheckAdvisories:
             }
         ]
         with patch(
-            "check_vendor_security._github_get", return_value=api_response
+            "scripts.check_vendor_security._github_get",
+            return_value=api_response,
         ):
             result = check_vendor_security.check_advisories("htmx.org", "2.0.8")
 
@@ -247,7 +246,8 @@ class TestCheckAdvisories:
     def test_handles_non_list_response(self) -> None:
         """Returns empty list for unexpected API response."""
         with patch(
-            "check_vendor_security._github_get", return_value={"error": True}
+            "scripts.check_vendor_security._github_get",
+            return_value={"error": True},
         ):
             result = check_vendor_security.check_advisories("htmx.org", "2.0.8")
 
@@ -257,7 +257,8 @@ class TestCheckAdvisories:
         """Skips non-dict items in advisory list."""
         api_response = ["not a dict", 42, None]
         with patch(
-            "check_vendor_security._github_get", return_value=api_response
+            "scripts.check_vendor_security._github_get",
+            return_value=api_response,
         ):
             result = check_vendor_security.check_advisories("htmx.org", "2.0.8")
 
@@ -272,7 +273,8 @@ class TestCheckAdvisories:
             }
         ]
         with patch(
-            "check_vendor_security._github_get", return_value=api_response
+            "scripts.check_vendor_security._github_get",
+            return_value=api_response,
         ):
             result = check_vendor_security.check_advisories("htmx.org", "2.0.8")
 
@@ -287,7 +289,8 @@ class TestCheckAdvisories:
             }
         ]
         with patch(
-            "check_vendor_security._github_get", return_value=api_response
+            "scripts.check_vendor_security._github_get",
+            return_value=api_response,
         ):
             result = check_vendor_security.check_advisories("htmx.org", "2.0.8")
 
@@ -304,7 +307,8 @@ class TestCheckAdvisories:
             }
         ]
         with patch(
-            "check_vendor_security._github_get", return_value=api_response
+            "scripts.check_vendor_security._github_get",
+            return_value=api_response,
         ):
             result = check_vendor_security.check_advisories("htmx.org", "2.0.8")
 
@@ -327,7 +331,8 @@ class TestCheckAdvisories:
             }
         ]
         with patch(
-            "check_vendor_security._github_get", return_value=api_response
+            "scripts.check_vendor_security._github_get",
+            return_value=api_response,
         ):
             result = check_vendor_security.check_advisories("htmx.org", "2.0.8")
 
@@ -339,7 +344,7 @@ class TestGithubGet:
 
     def test_returns_parsed_json(self) -> None:
         """Fetches and parses JSON from GitHub API."""
-        with patch("check_vendor_security.urlopen") as mock_urlopen:
+        with patch("scripts.check_vendor_security.urlopen") as mock_urlopen:
             mock_response = mock_urlopen.return_value.__enter__.return_value
             mock_response.read.return_value = b'{"key": "value"}'
             result = check_vendor_security._github_get(
@@ -355,7 +360,7 @@ class TestGetLatestVersion:
     def test_returns_version_without_v_prefix(self) -> None:
         """Strips 'v' prefix from tag name."""
         with patch(
-            "check_vendor_security._github_get",
+            "scripts.check_vendor_security._github_get",
             return_value={"tag_name": "v2.0.9"},
         ):
             result = check_vendor_security.get_latest_version(
@@ -367,7 +372,7 @@ class TestGetLatestVersion:
     def test_returns_version_without_prefix(self) -> None:
         """Handles tags without 'v' prefix."""
         with patch(
-            "check_vendor_security._github_get",
+            "scripts.check_vendor_security._github_get",
             return_value={"tag_name": "2.2.5"},
         ):
             result = check_vendor_security.get_latest_version(
@@ -381,7 +386,7 @@ class TestGetLatestVersion:
         from urllib.error import URLError
 
         with patch(
-            "check_vendor_security._github_get",
+            "scripts.check_vendor_security._github_get",
             side_effect=URLError("timeout"),
         ):
             result = check_vendor_security.get_latest_version(
@@ -393,7 +398,7 @@ class TestGetLatestVersion:
     def test_returns_none_on_non_dict_response(self) -> None:
         """Returns None when the API response is not a dict."""
         with patch(
-            "check_vendor_security._github_get",
+            "scripts.check_vendor_security._github_get",
             return_value=[],
         ):
             result = check_vendor_security.get_latest_version(
@@ -405,7 +410,7 @@ class TestGetLatestVersion:
     def test_returns_none_on_non_string_tag(self) -> None:
         """Returns None when tag_name is not a string."""
         with patch(
-            "check_vendor_security._github_get",
+            "scripts.check_vendor_security._github_get",
             return_value={"tag_name": 123},
         ):
             result = check_vendor_security.get_latest_version(
@@ -434,11 +439,11 @@ class TestMain:
                 version_file,
             ),
             patch(
-                "check_vendor_security.check_advisories",
+                "scripts.check_vendor_security.check_advisories",
                 return_value=[],
             ),
             patch(
-                "check_vendor_security.get_latest_version",
+                "scripts.check_vendor_security.get_latest_version",
                 return_value="2.0.8",
             ),
         ):
@@ -476,11 +481,11 @@ class TestMain:
                 version_file,
             ),
             patch(
-                "check_vendor_security.check_advisories",
+                "scripts.check_vendor_security.check_advisories",
                 side_effect=mock_check,
             ),
             patch(
-                "check_vendor_security.get_latest_version",
+                "scripts.check_vendor_security.get_latest_version",
                 return_value="2.0.8",
             ),
         ):
@@ -512,11 +517,11 @@ class TestMain:
                 version_file,
             ),
             patch(
-                "check_vendor_security.check_advisories",
+                "scripts.check_vendor_security.check_advisories",
                 return_value=[],
             ),
             patch(
-                "check_vendor_security.get_latest_version",
+                "scripts.check_vendor_security.get_latest_version",
                 side_effect=mock_latest,
             ),
         ):
@@ -580,11 +585,11 @@ class TestMain:
                 version_file,
             ),
             patch(
-                "check_vendor_security.check_advisories",
+                "scripts.check_vendor_security.check_advisories",
                 return_value=[],
             ),
             patch(
-                "check_vendor_security.get_latest_version",
+                "scripts.check_vendor_security.get_latest_version",
                 return_value="2.0.8",
             ),
         ):
@@ -621,11 +626,11 @@ class TestMain:
                 version_file,
             ),
             patch(
-                "check_vendor_security.check_advisories",
+                "scripts.check_vendor_security.check_advisories",
                 side_effect=mock_check,
             ),
             patch(
-                "check_vendor_security.get_latest_version",
+                "scripts.check_vendor_security.get_latest_version",
                 return_value="2.2.4",
             ),
         ):

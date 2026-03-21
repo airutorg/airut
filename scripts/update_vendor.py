@@ -36,8 +36,9 @@ _GITHUB_HEADERS = {
 VENDOR_DIR = Path("airut/dashboard/static/vendor")
 VERSION_FILE = VENDOR_DIR / "VERSION"
 
-# Package definitions: maps logical name to download info
-_PACKAGES = {
+# Package definitions: maps logical name to download info.
+# Also imported by check_vendor_security.py.
+PACKAGES = {
     "htmx": {
         "npm_package": "htmx.org",
         "github_owner": "bigskysoftware",
@@ -205,7 +206,7 @@ def main() -> int:
     current_versions = parse_version_file(VERSION_FILE)
     any_updated = False
 
-    for name, info in _PACKAGES.items():
+    for name, info in PACKAGES.items():
         try:
             _, _, updated = update_package(
                 name, info, current_versions, args.check
