@@ -229,36 +229,6 @@ class ResourceLimits:
             pids_limit=pids_limit,
         )
 
-    def fill_gaps(self, fallback: ResourceLimits | None) -> ResourceLimits:
-        """Return a copy with ``None`` fields filled from *fallback*.
-
-        For each field where ``self`` has ``None`` and *fallback* has a
-        value, the fallback value is used.  Fields already set in
-        ``self`` are preserved unchanged.
-
-        Args:
-            fallback: Values to use for unset fields.  ``None`` means
-                no fallback (return self unchanged).
-
-        Returns:
-            New ResourceLimits with gaps filled.
-        """
-        if fallback is None:
-            return self
-
-        return ResourceLimits(
-            timeout=self.timeout
-            if self.timeout is not None
-            else fallback.timeout,
-            memory=self.memory if self.memory is not None else fallback.memory,
-            cpus=self.cpus if self.cpus is not None else fallback.cpus,
-            pids_limit=(
-                self.pids_limit
-                if self.pids_limit is not None
-                else fallback.pids_limit
-            ),
-        )
-
 
 @dataclass(frozen=True)
 class CommandResult:

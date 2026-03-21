@@ -31,16 +31,13 @@ from airut.gateway.config import (
     SigningCredentialField,
     _auto_inject_credentials,
     _coerce_bool,
-    _make_repo_loader,
     _parse_resource_limits,
     _parse_slack_channel_config,
     _resolve,
-    _resolve_container_env,
     _resolve_github_app_credentials,
     _resolve_masked_secrets,
     _resolve_signing_credentials,
     _resolve_string_list,
-    _SecretRef,
     generate_github_app_surrogate,
     generate_session_token_surrogate,
     generate_surrogate,
@@ -197,35 +194,6 @@ class TestYamlLoader:
         import yaml
 
         loader = make_env_loader()
-        result = yaml.load("key: hello", Loader=loader)
-        assert result["key"] == "hello"
-
-
-class TestRepoYamlLoader:
-    """Tests for repo config YAML loader."""
-
-    def test_secret_tag_parsed(self) -> None:
-        """!secret tags produce _SecretRef objects."""
-        import yaml
-
-        loader = _make_repo_loader()
-        result = yaml.load("key: !secret MY_SECRET", Loader=loader)
-        assert isinstance(result["key"], _SecretRef)
-        assert result["key"].name == "MY_SECRET"
-
-    def test_env_tag_rejected(self) -> None:
-        """!env tags raise ConfigError in repo config."""
-        import yaml
-
-        loader = _make_repo_loader()
-        with pytest.raises(ConfigError, match="!env tags are not allowed"):
-            yaml.load("key: !env MY_VAR", Loader=loader)
-
-    def test_plain_values_unchanged(self) -> None:
-        """Plain values load normally."""
-        import yaml
-
-        loader = _make_repo_loader()
         result = yaml.load("key: hello", Loader=loader)
         assert result["key"] == "hello"
 
@@ -1550,38 +1518,6 @@ class TestResourceLimits:
         clamped = rl.clamp(ceiling)
         assert clamped.cpus == 1.5
 
-    def test_fill_gaps_no_fallback(self) -> None:
-        """fill_gaps with None fallback returns self unchanged."""
-        rl = ResourceLimits(timeout=600)
-        assert rl.fill_gaps(None) == rl
-
-    def test_fill_gaps_fills_missing_fields(self) -> None:
-        """fill_gaps fills None fields from fallback."""
-        rl = ResourceLimits(timeout=600)
-        fallback = ResourceLimits(
-            timeout=300, memory="4g", cpus=2, pids_limit=128
-        )
-        filled = rl.fill_gaps(fallback)
-        assert filled.timeout == 600  # self wins
-        assert filled.memory == "4g"  # from fallback
-        assert filled.cpus == 2  # from fallback
-        assert filled.pids_limit == 128  # from fallback
-
-    def test_fill_gaps_preserves_all_set_fields(self) -> None:
-        """fill_gaps preserves all fields when self has all set."""
-        rl = ResourceLimits(timeout=600, memory="8g", cpus=4, pids_limit=256)
-        fallback = ResourceLimits(
-            timeout=300, memory="4g", cpus=2, pids_limit=128
-        )
-        filled = rl.fill_gaps(fallback)
-        assert filled == rl
-
-    def test_fill_gaps_all_none_fallback(self) -> None:
-        """fill_gaps with all-None fallback returns self unchanged."""
-        rl = ResourceLimits(timeout=600)
-        filled = rl.fill_gaps(ResourceLimits())
-        assert filled == rl
-
 
 class TestParseResourceLimits:
     """Tests for _parse_resource_limits."""
@@ -1700,15 +1636,13 @@ def _stub_server_config(
     )
 
 
-class TestRepoConfigFromRaw:
-    """Tests for RepoConfig._from_raw."""
+class TestRepoConfigFromServerConfig:
+    """Tests for RepoConfig.from_server_config."""
 
-    def test_minimal(self) -> None:
-        """Minimal repo config with defaults."""
-        raw: dict = {}
-        rc, replacement_map = RepoConfig._from_raw(
-            raw, server_config=_stub_server_config()
-        )
+    def test_basic_defaults(self) -> None:
+        """Default server config produces sensible repo config defaults."""
+        sc = _stub_server_config()
+        rc, replacement_map = RepoConfig.from_server_config(sc)
         assert rc.default_model == "opus"
         assert rc.default_effort is None
         assert rc.resource_limits == ResourceLimits()
@@ -1716,67 +1650,53 @@ class TestRepoConfigFromRaw:
         assert rc.container_env == {}
         assert replacement_map == {}
 
-    def test_full(self) -> None:
-        """Full repo config with all fields."""
-        raw = {
-            "default_model": "sonnet",
-            "default_effort": "max",
-            "resource_limits": {
-                "timeout": 6000,
-                "memory": "4g",
-                "cpus": 2,
-                "pids_limit": 256,
-            },
-            "network": {"sandbox_enabled": False},
-            "container_env": {
-                "INLINE": "value",
-                "FROM_SERVER": _SecretRef("GH_TOKEN"),
-            },
-        }
-        sc = _stub_server_config(secrets={"GH_TOKEN": "ghp_tok"})
-        rc, replacement_map = RepoConfig._from_raw(raw, server_config=sc)
+    def test_model_from_server_config(self) -> None:
+        """Model comes from server_config.model."""
+        sc = _stub_server_config(model="sonnet")
+        rc, _ = RepoConfig.from_server_config(sc)
         assert rc.default_model == "sonnet"
+
+    def test_model_defaults_to_opus(self) -> None:
+        """Model defaults to 'opus' when server_config.model is None."""
+        sc = _stub_server_config(model=None)
+        rc, _ = RepoConfig.from_server_config(sc)
+        assert rc.default_model == "opus"
+
+    def test_effort_from_server_config(self) -> None:
+        """Effort comes from server_config.effort."""
+        sc = _stub_server_config(effort="max")
+        rc, _ = RepoConfig.from_server_config(sc)
         assert rc.default_effort == "max"
-        assert rc.resource_limits.timeout == 6000
+
+    def test_effort_defaults_to_none(self) -> None:
+        """Effort defaults to None when not set."""
+        sc = _stub_server_config()
+        rc, _ = RepoConfig.from_server_config(sc)
+        assert rc.default_effort is None
+
+    def test_resource_limits_from_server_config(self) -> None:
+        """Resource limits come from server_config.resource_limits."""
+        sc = _stub_server_config(
+            resource_limits=ResourceLimits(
+                timeout=3600, memory="4g", cpus=2, pids_limit=256
+            )
+        )
+        rc, _ = RepoConfig.from_server_config(sc)
+        assert rc.resource_limits.timeout == 3600
         assert rc.resource_limits.memory == "4g"
         assert rc.resource_limits.cpus == 2
         assert rc.resource_limits.pids_limit == 256
-        assert rc.network_sandbox_enabled is False
-        assert rc.container_env["INLINE"] == "value"
-        assert rc.container_env["FROM_SERVER"] == "ghp_tok"
-        assert replacement_map == {}
 
-    def test_legacy_top_level_timeout(self) -> None:
-        """Top-level timeout is used when resource_limits.timeout is not set."""
-        raw = {"timeout": 6000}
-        rc, _ = RepoConfig._from_raw(raw, server_config=_stub_server_config())
-        assert rc.resource_limits.timeout == 6000
-
-    def test_resource_limits_timeout_takes_precedence(self) -> None:
-        """resource_limits.timeout takes precedence over top-level timeout."""
-        raw = {
-            "timeout": 300,
-            "resource_limits": {"timeout": 6000},
-        }
-        rc, _ = RepoConfig._from_raw(raw, server_config=_stub_server_config())
-        assert rc.resource_limits.timeout == 6000
-
-    def test_server_resource_limits_clamp(self) -> None:
-        """Repo limits are clamped to global server ceilings."""
-        raw = {
-            "resource_limits": {
-                "timeout": 7200,
-                "memory": "8g",
-                "cpus": 8,
-            },
-        }
+    def test_resource_limits_clamped_to_server_ceiling(self) -> None:
+        """Per-repo limits are clamped to global server ceilings."""
+        sc = _stub_server_config(
+            resource_limits=ResourceLimits(timeout=7200, memory="8g", cpus=8)
+        )
         server_limits = ResourceLimits(
             timeout=3600, memory="4g", cpus=4, pids_limit=512
         )
-        rc, _ = RepoConfig._from_raw(
-            raw,
-            server_config=_stub_server_config(),
-            server_resource_limits=server_limits,
+        rc, _ = RepoConfig.from_server_config(
+            sc, server_resource_limits=server_limits
         )
         assert rc.resource_limits.timeout == 3600
         assert rc.resource_limits.memory == "4g"
@@ -1784,97 +1704,49 @@ class TestRepoConfigFromRaw:
         # pids_limit not set in repo, stays None
         assert rc.resource_limits.pids_limit is None
 
-    def test_no_server_limits_no_clamp(self) -> None:
-        """Without server limits, repo values are unclamped."""
-        raw = {"resource_limits": {"timeout": 7200, "memory": "8g"}}
-        rc, _ = RepoConfig._from_raw(raw, server_config=_stub_server_config())
+    def test_no_server_ceiling_no_clamp(self) -> None:
+        """Without server ceilings, repo values are unclamped."""
+        sc = _stub_server_config(
+            resource_limits=ResourceLimits(timeout=7200, memory="8g")
+        )
+        rc, _ = RepoConfig.from_server_config(sc)
         assert rc.resource_limits.timeout == 7200
         assert rc.resource_limits.memory == "8g"
 
-    def test_server_sandbox_false_overrides_repo_true(self) -> None:
-        """Server sandbox_enabled=false disables even when repo is true."""
-        raw: dict = {}
+    def test_network_sandbox_from_server_config(self) -> None:
+        """Network sandbox comes from server_config.network_sandbox_enabled."""
         sc = _stub_server_config(network_sandbox_enabled=False)
-        rc, _ = RepoConfig._from_raw(raw, server_config=sc)
+        rc, _ = RepoConfig.from_server_config(sc)
         assert rc.network_sandbox_enabled is False
 
-    def test_repo_sandbox_false_overrides_server_true(self) -> None:
-        """Repo sandbox_enabled=false disables even when server is true."""
-        raw = {"network": {"sandbox_enabled": False}}
-        sc = _stub_server_config(network_sandbox_enabled=True)
-        rc, _ = RepoConfig._from_raw(raw, server_config=sc)
-        assert rc.network_sandbox_enabled is False
-
-    def test_both_sandbox_false(self) -> None:
-        """Both false results in disabled."""
-        raw = {"network": {"sandbox_enabled": False}}
-        sc = _stub_server_config(network_sandbox_enabled=False)
-        rc, _ = RepoConfig._from_raw(raw, server_config=sc)
-        assert rc.network_sandbox_enabled is False
-
-    def test_both_sandbox_true(self) -> None:
-        """Both true results in enabled."""
-        raw: dict = {}
-        sc = _stub_server_config(network_sandbox_enabled=True)
-        rc, _ = RepoConfig._from_raw(raw, server_config=sc)
+    def test_network_sandbox_default_true(self) -> None:
+        """Network sandbox defaults to True."""
+        sc = _stub_server_config()
+        rc, _ = RepoConfig.from_server_config(sc)
         assert rc.network_sandbox_enabled is True
 
-    def test_server_sandbox_default_is_true(self) -> None:
-        """server_sandbox_enabled defaults to True when not passed."""
-        raw: dict = {}
-        rc, _ = RepoConfig._from_raw(raw, server_config=_stub_server_config())
-        assert rc.network_sandbox_enabled is True
-
-    def test_warning_logged_when_server_disables_sandbox(
+    def test_warning_logged_when_sandbox_disabled(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Warning logged when server config disables sandbox."""
-        raw: dict = {}
+        """Warning logged when sandbox is disabled."""
         sc = _stub_server_config(network_sandbox_enabled=False)
         with caplog.at_level(logging.WARNING, logger="airut.gateway.config"):
-            RepoConfig._from_raw(raw, server_config=sc)
+            RepoConfig.from_server_config(sc)
         assert "sandbox disabled" in caplog.text.lower()
-        assert "server=False" in caplog.text
-        assert "repo=True" in caplog.text
-
-    def test_warning_logged_when_repo_disables_sandbox(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """Warning logged when repo config disables sandbox."""
-        raw = {"network": {"sandbox_enabled": False}}
-        sc = _stub_server_config(network_sandbox_enabled=True)
-        with caplog.at_level(logging.WARNING, logger="airut.gateway.config"):
-            RepoConfig._from_raw(raw, server_config=sc)
-        assert "sandbox disabled" in caplog.text.lower()
-        assert "server=True" in caplog.text
-        assert "repo=False" in caplog.text
-
-    def test_warning_logged_when_both_disable_sandbox(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """Warning logged when both sides disable sandbox."""
-        raw = {"network": {"sandbox_enabled": False}}
-        sc = _stub_server_config(network_sandbox_enabled=False)
-        with caplog.at_level(logging.WARNING, logger="airut.gateway.config"):
-            RepoConfig._from_raw(raw, server_config=sc)
-        assert "sandbox disabled" in caplog.text.lower()
-        assert "server=False" in caplog.text
-        assert "repo=False" in caplog.text
 
     def test_no_warning_when_sandbox_enabled(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """No warning when sandbox is enabled."""
-        raw: dict = {}
         sc = _stub_server_config(network_sandbox_enabled=True)
         with caplog.at_level(logging.WARNING, logger="airut.gateway.config"):
-            RepoConfig._from_raw(raw, server_config=sc)
+            RepoConfig.from_server_config(sc)
         assert "sandbox disabled" not in caplog.text.lower()
 
-    def test_warning_logged_when_sandbox_disabled_with_masked_secrets(
+    def test_warning_when_sandbox_disabled_with_masked_secrets(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Warning when sandbox disabled but masked secrets are configured."""
+        """Warning when sandbox disabled but masked secrets configured."""
         masked_secrets = {
             "GH_TOKEN": MaskedSecret(
                 value="ghp_realtoken1234",
@@ -1882,15 +1754,12 @@ class TestRepoConfigFromRaw:
                 headers=("Authorization",),
             )
         }
-        raw = {
-            "container_env": {"GH_TOKEN": _SecretRef("GH_TOKEN")},
-        }
         sc = _stub_server_config(
             masked_secrets=masked_secrets,
             network_sandbox_enabled=False,
         )
         with caplog.at_level(logging.WARNING, logger="airut.gateway.config"):
-            RepoConfig._from_raw(raw, server_config=sc)
+            RepoConfig.from_server_config(sc)
         assert "masked secrets are configured" in caplog.text
 
     def test_no_masked_warning_when_sandbox_enabled(
@@ -1904,359 +1773,65 @@ class TestRepoConfigFromRaw:
                 headers=("Authorization",),
             )
         }
-        raw = {
-            "container_env": {"GH_TOKEN": _SecretRef("GH_TOKEN")},
-        }
         sc = _stub_server_config(
             masked_secrets=masked_secrets,
             network_sandbox_enabled=True,
         )
         with caplog.at_level(logging.WARNING, logger="airut.gateway.config"):
-            RepoConfig._from_raw(raw, server_config=sc)
+            RepoConfig.from_server_config(sc)
         assert "masked secrets are configured" not in caplog.text
 
-
-class TestRepoConfigFromMirror:
-    """Tests for RepoConfig.from_mirror."""
-
-    def test_loads_from_mirror(self) -> None:
-        """Loads and parses config from git mirror."""
-        mirror = MagicMock()
-        mirror.read_file.return_value = "default_model: sonnet\ntimeout: 600\n"
-        sc = _stub_server_config()
-        rc, replacement_map = RepoConfig.from_mirror(mirror, sc)
-        mirror.read_file.assert_called_once_with(".airut/airut.yaml")
-        assert rc.default_model == "sonnet"
-        assert rc.resource_limits.timeout == 600
-        assert replacement_map == {}
-
-    def test_loads_resource_limits_from_mirror(self) -> None:
-        """Loads resource_limits block from git mirror."""
-        mirror = MagicMock()
-        mirror.read_file.return_value = (
-            "resource_limits:\n"
-            "  timeout: 3600\n"
-            "  memory: 4g\n"
-            "  cpus: 2\n"
-            "  pids_limit: 256\n"
-        )
-        sc = _stub_server_config()
-        rc, _ = RepoConfig.from_mirror(mirror, sc)
-        assert rc.resource_limits.timeout == 3600
-        assert rc.resource_limits.memory == "4g"
-        assert rc.resource_limits.cpus == 2
-        assert rc.resource_limits.pids_limit == 256
-
-    def test_server_resource_limits_passed_through(self) -> None:
-        """Global server ceilings are passed to _from_raw for clamping."""
-        mirror = MagicMock()
-        mirror.read_file.return_value = "resource_limits:\n  timeout: 7200\n"
-        server_limits = ResourceLimits(timeout=3600)
-        sc = _stub_server_config()
-        rc, _ = RepoConfig.from_mirror(
-            mirror, sc, server_resource_limits=server_limits
-        )
-        assert rc.resource_limits.timeout == 3600
-
-    def test_missing_repo_config_uses_defaults(self) -> None:
-        """Missing .airut/airut.yaml uses server config defaults."""
-        mirror = MagicMock()
-        mirror.read_file.side_effect = FileNotFoundError("not found")
-        sc = _stub_server_config(secrets={"MY_SECRET": "val"})
-        rc, _ = RepoConfig.from_mirror(mirror, sc)
-        assert rc.default_model == "opus"
-        assert rc.container_env == {"MY_SECRET": "val"}
-
-    def test_mirror_read_error(self) -> None:
-        """Mirror read failure (non-FileNotFoundError) raises ConfigError."""
-        mirror = MagicMock()
-        mirror.read_file.side_effect = RuntimeError("disk error")
-        sc = _stub_server_config()
-        with pytest.raises(ConfigError, match="Failed to read repo config"):
-            RepoConfig.from_mirror(mirror, sc)
-
-    def test_env_tag_rejected(self) -> None:
-        """!env tags in repo config raise ConfigError."""
-        mirror = MagicMock()
-        mirror.read_file.return_value = "timeout: !env MY_TIMEOUT\n"
-        sc = _stub_server_config()
-        with pytest.raises(ConfigError, match="!env tags are not allowed"):
-            RepoConfig.from_mirror(mirror, sc)
-
-    def test_not_a_mapping(self) -> None:
-        """Non-mapping YAML raises ConfigError."""
-        mirror = MagicMock()
-        mirror.read_file.return_value = "- item1\n- item2\n"
-        sc = _stub_server_config()
-        with pytest.raises(ConfigError, match="YAML mapping"):
-            RepoConfig.from_mirror(mirror, sc)
-
-    def test_secret_resolved(self) -> None:
-        """!secret tags resolve from server secrets pool."""
-        mirror = MagicMock()
-        mirror.read_file.return_value = (
-            "container_env:\n  MY_KEY: !secret SERVER_KEY\n"
-        )
-        sc = _stub_server_config(secrets={"SERVER_KEY": "secret-val"})
-        rc, _ = RepoConfig.from_mirror(mirror, sc)
-        assert rc.container_env["MY_KEY"] == "secret-val"
-
-    def test_unknown_secret_raises(self) -> None:
-        """Unknown !secret reference raises ConfigError."""
-        mirror = MagicMock()
-        mirror.read_file.return_value = (
-            "container_env:\n  MY_KEY: !secret UNKNOWN\n"
-        )
-        sc = _stub_server_config()
-        with pytest.raises(ConfigError, match="!secret 'UNKNOWN' not found"):
-            RepoConfig.from_mirror(mirror, sc)
-
-    def test_optional_secret_missing_skipped(self) -> None:
-        """!secret? tag with missing secret is silently skipped."""
-        mirror = MagicMock()
-        mirror.read_file.return_value = (
-            "container_env:\n  MY_KEY: !secret? MISSING\n"
-        )
-        sc = _stub_server_config()
-        rc, _ = RepoConfig.from_mirror(mirror, sc)
-        assert "MY_KEY" not in rc.container_env
-
-    def test_optional_secret_present_resolved(self) -> None:
-        """!secret? tag with present secret is resolved."""
-        mirror = MagicMock()
-        mirror.read_file.return_value = (
-            "container_env:\n  MY_KEY: !secret? SERVER_KEY\n"
-        )
-        sc = _stub_server_config(secrets={"SERVER_KEY": "secret-val"})
-        rc, _ = RepoConfig.from_mirror(mirror, sc)
-        assert rc.container_env["MY_KEY"] == "secret-val"
-
-    def test_secret_empty_string_resolved(self) -> None:
-        """!secret tag with empty string value resolves successfully."""
-        mirror = MagicMock()
-        mirror.read_file.return_value = (
-            "container_env:\n  MY_KEY: !secret SERVER_KEY\n"
-        )
-        sc = _stub_server_config(secrets={"SERVER_KEY": ""})
-        rc, _ = RepoConfig.from_mirror(mirror, sc)
-        assert rc.container_env["MY_KEY"] == ""
-
-    def test_secret_tag_outside_container_env_raises(self) -> None:
-        """!secret tag outside container_env raises ConfigError."""
-        mirror = MagicMock()
-        mirror.read_file.return_value = "default_model: !secret MODEL\n"
-        sc = _stub_server_config(secrets={"MODEL": "sonnet"})
-        with pytest.raises(ConfigError, match="!secret.*outside container_env"):
-            RepoConfig.from_mirror(mirror, sc)
-
-    def test_optional_secret_tag_outside_container_env_raises(self) -> None:
-        """!secret? tag outside container_env raises ConfigError."""
-        mirror = MagicMock()
-        mirror.read_file.return_value = "timeout: !secret? TIMEOUT\n"
-        sc = _stub_server_config()
-        with pytest.raises(ConfigError, match="!secret.*outside container_env"):
-            RepoConfig.from_mirror(mirror, sc)
-
-    def test_secret_tag_in_nested_list_raises(self) -> None:
-        """!secret tag nested inside a list outside container_env raises."""
-        mirror = MagicMock()
-        mirror.read_file.return_value = "extra:\n  - !secret NESTED_SECRET\n"
-        sc = _stub_server_config(secrets={"NESTED_SECRET": "val"})
-        with pytest.raises(ConfigError, match="!secret.*outside container_env"):
-            RepoConfig.from_mirror(mirror, sc)
-
-    def test_server_sandbox_override(self) -> None:
-        """Server network_sandbox_enabled=False overrides repo default."""
-        mirror = MagicMock()
-        mirror.read_file.return_value = "default_model: opus\n"
-        sc = _stub_server_config(network_sandbox_enabled=False)
-        rc, _ = RepoConfig.from_mirror(mirror, sc)
-        assert rc.network_sandbox_enabled is False
-
-    def test_server_sandbox_default_true(self) -> None:
-        """Server network_sandbox_enabled defaults to True."""
-        mirror = MagicMock()
-        mirror.read_file.return_value = "default_model: opus\n"
-        sc = _stub_server_config()
-        rc, _ = RepoConfig.from_mirror(mirror, sc)
-        assert rc.network_sandbox_enabled is True
-
     def test_auto_inject_secrets(self) -> None:
-        """Server secrets are auto-injected when no repo container_env."""
-        mirror = MagicMock()
-        mirror.read_file.return_value = "default_model: opus\n"
+        """Server secrets are auto-injected as container env vars."""
         sc = _stub_server_config(secrets={"MY_TOKEN": "tok123"})
-        rc, _ = RepoConfig.from_mirror(mirror, sc)
+        rc, _ = RepoConfig.from_server_config(sc)
         assert rc.container_env["MY_TOKEN"] == "tok123"
 
     def test_server_container_env_injected(self) -> None:
         """Server container_env values are injected."""
-        mirror = MagicMock()
-        mirror.read_file.return_value = "default_model: opus\n"
         sc = _stub_server_config(container_env={"CI": "true"})
-        rc, _ = RepoConfig.from_mirror(mirror, sc)
+        rc, _ = RepoConfig.from_server_config(sc)
         assert rc.container_env["CI"] == "true"
 
-    def test_server_per_repo_limits_primary(self) -> None:
-        """Server per-repo limits take precedence over repo-side."""
-        mirror = MagicMock()
-        mirror.read_file.return_value = (
-            "resource_limits:\n  timeout: 7200\n  memory: 8g\n"
-        )
-        sc = _stub_server_config(resource_limits=ResourceLimits(timeout=3600))
-        rc, _ = RepoConfig.from_mirror(mirror, sc)
-        # Server per-repo timeout wins
-        assert rc.resource_limits.timeout == 3600
-        # Repo fills the gap for memory
-        assert rc.resource_limits.memory == "8g"
-
-    def test_repo_env_overrides_server_secrets(self) -> None:
-        """Repo container_env overrides auto-injected server secrets."""
-        mirror = MagicMock()
-        mirror.read_file.return_value = (
-            "container_env:\n  RENAMED: !secret MY_TOKEN\n"
-        )
-        sc = _stub_server_config(secrets={"MY_TOKEN": "tok123"})
-        rc, _ = RepoConfig.from_mirror(mirror, sc)
-        # Repo-side renamed the secret
-        assert rc.container_env["RENAMED"] == "tok123"
-        # Auto-injected under original name too
-        assert rc.container_env["MY_TOKEN"] == "tok123"
-
-    def test_repo_env_skips_auto_inject_for_unreferenced_credentials(
-        self,
-    ) -> None:
-        """Unreferenced credentials stay plain with repo env."""
-        mirror = MagicMock()
-        # Only references MY_TOKEN via !secret; does not reference MASKED_KEY.
-        mirror.read_file.return_value = (
-            "container_env:\n  TOKEN: !secret MY_TOKEN\n"
-        )
+    def test_container_env_overrides_secrets(self) -> None:
+        """Server container_env overrides plain secrets on key conflict."""
         sc = _stub_server_config(
-            secrets={"MY_TOKEN": "tok123", "MASKED_KEY": "plain_fallback"},
-            masked_secrets={
-                "MASKED_KEY": MaskedSecret(
-                    value="real_secret",
-                    scopes=frozenset(["api.example.com"]),
-                    headers=("Authorization",),
-                ),
-            },
+            secrets={"KEY": "from_secrets"},
+            container_env={"KEY": "from_container_env"},
         )
-        rc, rmap = RepoConfig.from_mirror(mirror, sc)
-        # MY_TOKEN resolved as plain secret via !secret
-        assert rc.container_env["TOKEN"] == "tok123"
-        # MASKED_KEY present from layer 1 (plain value), no surrogate
-        assert rc.container_env["MASKED_KEY"] == "plain_fallback"
-        # No surrogate was generated for MASKED_KEY
-        assert len(rmap) == 0
+        rc, _ = RepoConfig.from_server_config(sc)
+        assert rc.container_env["KEY"] == "from_container_env"
 
-
-# ---------------------------------------------------------------------------
-# _resolve_container_env
-# ---------------------------------------------------------------------------
-
-
-class TestResolveContainerEnv:
-    """Tests for _resolve_container_env."""
-
-    def test_inline_values(self) -> None:
-        """Inline string values pass through."""
-        result, replacement_map = _resolve_container_env({"K": "v"}, {}, {})
-        assert result == {"K": "v"}
-        assert replacement_map == {}
-
-    def test_secret_refs(self) -> None:
-        """SecretRef values resolve from server secrets."""
-        result, replacement_map = _resolve_container_env(
-            {"K": _SecretRef("S")}, {"S": "val"}, {}
-        )
-        assert result == {"K": "val"}
-        assert replacement_map == {}
-
-    def test_missing_secret_raises(self) -> None:
-        """Missing secret raises ConfigError."""
-        with pytest.raises(ConfigError, match="not found"):
-            _resolve_container_env({"K": _SecretRef("S")}, {}, {})
-
-    def test_empty_values_skipped(self) -> None:
-        """Empty inline values are skipped."""
-        result, _ = _resolve_container_env({"K": None}, {}, {})
-        assert result == {}
-
-    def test_empty_string_secret_resolved(self) -> None:
-        """Secret configured with empty string is a valid value."""
-        result, _ = _resolve_container_env(
-            {"K": _SecretRef("S")}, {"S": ""}, {}
-        )
-        assert result == {"K": ""}
-
-    def test_missing_required_secret_not_in_pool_raises(self) -> None:
-        """Required !secret for name absent from server pool raises."""
-        with pytest.raises(ConfigError, match="not found"):
-            _resolve_container_env(
-                {"K": _SecretRef("NOPE")}, {"OTHER": "v"}, {}
-            )
-
-    def test_optional_secret_empty_string_resolved(self) -> None:
-        """Optional !secret? with empty string value resolves it."""
-        result, _ = _resolve_container_env(
-            {"K": _SecretRef("S", optional=True)}, {"S": ""}, {}
-        )
-        assert result == {"K": ""}
-
-    def test_optional_secret_missing_skipped(self) -> None:
-        """Missing optional secret (!secret?) is silently skipped."""
-        result, _ = _resolve_container_env(
-            {"K": _SecretRef("S", optional=True)}, {}, {}
-        )
-        assert result == {}
-
-    def test_optional_secret_present_resolved(self) -> None:
-        """Present optional secret (!secret?) is resolved normally."""
-        result, _ = _resolve_container_env(
-            {"K": _SecretRef("S", optional=True)}, {"S": "val"}, {}
-        )
-        assert result == {"K": "val"}
-
-    def test_mixed_required_optional_secrets(self) -> None:
-        """Mix of required and optional secrets works correctly."""
-        raw = {
-            "REQ": _SecretRef("REQUIRED"),
-            "OPT_PRESENT": _SecretRef("OPTIONAL_A", optional=True),
-            "OPT_MISSING": _SecretRef("OPTIONAL_B", optional=True),
-        }
-        secrets = {"REQUIRED": "req-val", "OPTIONAL_A": "opt-val"}
-        result, _ = _resolve_container_env(raw, secrets, {})
-        # Required + present optional resolved; missing optional skipped
-        assert result == {"REQ": "req-val", "OPT_PRESENT": "opt-val"}
-
-    def test_empty_string_masked_secret_resolved(self) -> None:
-        """Masked secret with empty string value is resolved."""
-        masked = {
-            "S": MaskedSecret(
-                value="",
-                scopes=frozenset(["api.example.com"]),
-                headers=("*",),
+    def test_masked_secret_generates_surrogate(self) -> None:
+        """Masked secrets generate surrogates in container_env."""
+        masked_secrets = {
+            "GH_TOKEN": MaskedSecret(
+                value="ghp_realtoken1234",
+                scopes=frozenset(["api.github.com"]),
+                headers=("Authorization",),
             )
         }
-        # Empty string is still a valid configured value — should be set
-        result, rmap = _resolve_container_env(
-            {"K": _SecretRef("S")}, {}, masked
-        )
-        assert result == {"K": ""}
-        assert rmap == {}
+        sc = _stub_server_config(masked_secrets=masked_secrets)
+        rc, rmap = RepoConfig.from_server_config(sc)
+        # Surrogate injected, not the real value
+        assert "GH_TOKEN" in rc.container_env
+        assert rc.container_env["GH_TOKEN"] != "ghp_realtoken1234"
+        assert len(rmap) == 1
 
-    def test_missing_masked_required_secret_raises(self) -> None:
-        """Required !secret absent from masked pool and plain pool raises."""
-        masked = {
-            "OTHER": MaskedSecret(
-                value="val",
-                scopes=frozenset(["api.example.com"]),
-                headers=("*",),
+    def test_github_app_generates_surrogate(self) -> None:
+        """GitHub App credentials generate ghs_ surrogates."""
+        gh_apps = {
+            "GH_TOKEN": GitHubAppCredential(
+                app_id="123",
+                private_key="pem",
+                installation_id="456",
+                scopes=frozenset(["api.github.com"]),
             )
         }
-        with pytest.raises(ConfigError, match="not found"):
-            _resolve_container_env({"K": _SecretRef("NOPE")}, {}, masked)
+        sc = _stub_server_config(github_app_credentials=gh_apps)
+        rc, rmap = RepoConfig.from_server_config(sc)
+        assert rc.container_env["GH_TOKEN"].startswith("ghs_")
+        assert len(rmap) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -2354,6 +1929,97 @@ class TestAutoInjectCredentials:
         rmap = _auto_inject_credentials(base_env, {}, {}, {})
         assert rmap == {}
         assert base_env == {}
+
+    def test_signing_overrides_masked_same_key(self) -> None:
+        """Signing credential overrides masked secret on same env var."""
+        base_env: dict[str, str] = {}
+        masked = {
+            "AWS_ACCESS_KEY_ID": MaskedSecret(
+                value="ghp_masked",
+                scopes=frozenset(["api.github.com"]),
+                headers=("Authorization",),
+            )
+        }
+        signing = {
+            "AWS": SigningCredential(
+                access_key_id=SigningCredentialField(
+                    name="AWS_ACCESS_KEY_ID",
+                    value="AKIAIOSFODNN7EXAMPLE",
+                ),
+                secret_access_key=SigningCredentialField(
+                    name="AWS_SECRET_ACCESS_KEY",
+                    value="wJalrXUtnFEMI",
+                ),
+                session_token=None,
+                scopes=frozenset(["*.amazonaws.com"]),
+            )
+        }
+        rmap = _auto_inject_credentials(base_env, masked, signing, {})
+        # Signing has higher priority, so env var holds signing surrogate
+        assert base_env["AWS_ACCESS_KEY_ID"] != "ghp_masked"
+        assert base_env["AWS_ACCESS_KEY_ID"] != "AKIAIOSFODNN7EXAMPLE"
+        # Replacement map contains signing entry (not masked)
+        signing_entries = [
+            e for e in rmap.values() if isinstance(e, SigningCredentialEntry)
+        ]
+        assert len(signing_entries) == 1
+
+    def test_github_app_overrides_masked_same_key(self) -> None:
+        """GitHub App credential overrides masked secret on same key."""
+        base_env: dict[str, str] = {}
+        masked = {
+            "GH_TOKEN": MaskedSecret(
+                value="ghp_masked",
+                scopes=frozenset(["api.github.com"]),
+                headers=("Authorization",),
+            )
+        }
+        gh_apps = {
+            "GH_TOKEN": GitHubAppCredential(
+                app_id="123",
+                private_key="pem",
+                installation_id="456",
+                scopes=frozenset(["api.github.com"]),
+            )
+        }
+        rmap = _auto_inject_credentials(base_env, masked, {}, gh_apps)
+        # GitHub App has higher priority
+        assert base_env["GH_TOKEN"].startswith("ghs_")
+        gh_entries = [e for e in rmap.values() if isinstance(e, GitHubAppEntry)]
+        assert len(gh_entries) == 1
+
+    def test_signing_overrides_github_app_same_key(self) -> None:
+        """Signing credential overrides GitHub App on same env var."""
+        base_env: dict[str, str] = {}
+        gh_apps = {
+            "AWS_ACCESS_KEY_ID": GitHubAppCredential(
+                app_id="123",
+                private_key="pem",
+                installation_id="456",
+                scopes=frozenset(["api.github.com"]),
+            )
+        }
+        signing = {
+            "AWS": SigningCredential(
+                access_key_id=SigningCredentialField(
+                    name="AWS_ACCESS_KEY_ID",
+                    value="AKIAIOSFODNN7EXAMPLE",
+                ),
+                secret_access_key=SigningCredentialField(
+                    name="AWS_SECRET_ACCESS_KEY",
+                    value="wJalrXUtnFEMI",
+                ),
+                session_token=None,
+                scopes=frozenset(["*.amazonaws.com"]),
+            )
+        }
+        rmap = _auto_inject_credentials(base_env, {}, signing, gh_apps)
+        # Signing has highest priority
+        assert not base_env["AWS_ACCESS_KEY_ID"].startswith("ghs_")
+        signing_entries = [
+            e for e in rmap.values() if isinstance(e, SigningCredentialEntry)
+        ]
+        assert len(signing_entries) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -2605,155 +2271,6 @@ class TestResolveMaskedSecrets:
         }
         result = _resolve_masked_secrets(raw, "repos.test")
         assert result["GH_TOKEN"].allow_foreign_credentials is False
-
-
-# ---------------------------------------------------------------------------
-# Masked secrets in container_env resolution
-# ---------------------------------------------------------------------------
-
-
-class TestMaskedSecretResolution:
-    """Tests for masked secrets in _resolve_container_env."""
-
-    def test_masked_secret_generates_surrogate(self) -> None:
-        """Masked secret generates surrogate in container_env."""
-        raw_env = {"GH_TOKEN": _SecretRef("GH_TOKEN")}
-        masked_secrets = {
-            "GH_TOKEN": MaskedSecret(
-                value="ghp_realtoken1234",
-                scopes=frozenset(["api.github.com"]),
-                headers=("Authorization",),
-            )
-        }
-        result, replacement_map = _resolve_container_env(
-            raw_env, {}, masked_secrets
-        )
-
-        # container_env should have a surrogate, not the real value
-        assert "GH_TOKEN" in result
-        assert result["GH_TOKEN"] != "ghp_realtoken1234"
-        assert result["GH_TOKEN"].startswith("ghp_")
-
-        # replacement_map should have the mapping
-        surrogate = result["GH_TOKEN"]
-        assert surrogate in replacement_map
-        entry = replacement_map[surrogate]
-        assert isinstance(entry, ReplacementEntry)
-        assert entry.real_value == "ghp_realtoken1234"
-        assert "api.github.com" in entry.scopes
-        assert entry.headers == ("Authorization",)
-
-    def test_masked_secret_with_custom_headers(self) -> None:
-        """Custom headers are passed through to replacement_map."""
-        raw_env = {"API_KEY": _SecretRef("API_KEY")}
-        masked_secrets = {
-            "API_KEY": MaskedSecret(
-                value="secret_value",
-                scopes=frozenset(["api.example.com"]),
-                headers=("X-Custom-Header",),
-            )
-        }
-        result, replacement_map = _resolve_container_env(
-            raw_env, {}, masked_secrets
-        )
-
-        surrogate = result["API_KEY"]
-        entry = replacement_map[surrogate]
-        assert isinstance(entry, ReplacementEntry)
-        assert entry.headers == ("X-Custom-Header",)
-
-    def test_masked_secret_takes_priority_over_plain(self) -> None:
-        """Masked secret is used even if plain secret exists."""
-        raw_env = {"GH_TOKEN": _SecretRef("GH_TOKEN")}
-        plain_secrets = {"GH_TOKEN": "plain_value"}
-        masked_secrets = {
-            "GH_TOKEN": MaskedSecret(
-                value="masked_value",
-                scopes=frozenset(["api.github.com"]),
-                headers=("Authorization",),
-            )
-        }
-        result, replacement_map = _resolve_container_env(
-            raw_env, plain_secrets, masked_secrets
-        )
-
-        # Should use masked secret, not plain
-        assert result["GH_TOKEN"] != "plain_value"
-        assert result["GH_TOKEN"] != "masked_value"
-        assert len(replacement_map) == 1
-
-    def test_plain_secret_used_when_not_masked(self) -> None:
-        """Plain secret is used when no masked secret exists."""
-        raw_env = {"API_KEY": _SecretRef("API_KEY")}
-        plain_secrets = {"API_KEY": "plain_key"}
-        result, replacement_map = _resolve_container_env(
-            raw_env, plain_secrets, {}
-        )
-
-        assert result == {"API_KEY": "plain_key"}
-        assert replacement_map == {}
-
-    def test_mixed_masked_and_plain(self) -> None:
-        """Mix of masked and plain secrets works correctly."""
-        raw_env = {
-            "GH_TOKEN": _SecretRef("GH_TOKEN"),
-            "API_KEY": _SecretRef("API_KEY"),
-        }
-        plain_secrets = {"API_KEY": "plain_api_key"}
-        masked_secrets = {
-            "GH_TOKEN": MaskedSecret(
-                value="ghp_secret",
-                scopes=frozenset(["api.github.com"]),
-                headers=("Authorization",),
-            )
-        }
-        result, replacement_map = _resolve_container_env(
-            raw_env, plain_secrets, masked_secrets
-        )
-
-        # GH_TOKEN should be masked, API_KEY should be plain
-        assert result["GH_TOKEN"] != "ghp_secret"
-        assert result["API_KEY"] == "plain_api_key"
-        assert len(replacement_map) == 1
-
-    def test_allow_foreign_credentials_threaded_to_replacement(self) -> None:
-        """allow_foreign_credentials is passed through to ReplacementEntry."""
-        raw_env = {"TOKEN": _SecretRef("TOKEN")}
-        masked_secrets = {
-            "TOKEN": MaskedSecret(
-                value="secret_value",
-                scopes=frozenset(["api.example.com"]),
-                headers=("Authorization",),
-                allow_foreign_credentials=True,
-            )
-        }
-        result, replacement_map = _resolve_container_env(
-            raw_env, {}, masked_secrets
-        )
-
-        surrogate = result["TOKEN"]
-        entry = replacement_map[surrogate]
-        assert isinstance(entry, ReplacementEntry)
-        assert entry.allow_foreign_credentials is True
-
-    def test_allow_foreign_credentials_default_in_replacement(self) -> None:
-        """Default allow_foreign_credentials=False passes through."""
-        raw_env = {"TOKEN": _SecretRef("TOKEN")}
-        masked_secrets = {
-            "TOKEN": MaskedSecret(
-                value="secret_value",
-                scopes=frozenset(["api.example.com"]),
-                headers=("Authorization",),
-            )
-        }
-        result, replacement_map = _resolve_container_env(
-            raw_env, {}, masked_secrets
-        )
-
-        surrogate = result["TOKEN"]
-        entry = replacement_map[surrogate]
-        assert isinstance(entry, ReplacementEntry)
-        assert entry.allow_foreign_credentials is False
 
 
 # ---------------------------------------------------------------------------
@@ -3186,168 +2703,6 @@ class TestResolveSigningCredentials:
         }
         result = _resolve_signing_credentials(raw, "repos.test")
         assert result["AWS"].session_token is None
-
-
-# ---------------------------------------------------------------------------
-# Signing credential resolution in _resolve_container_env
-# ---------------------------------------------------------------------------
-
-
-class TestSigningCredentialResolution:
-    """Tests for signing credentials in _resolve_container_env."""
-
-    def _make_signing_cred(
-        self,
-        key_id: str = "AKIAIOSFODNN7EXAMPLE",
-        secret: str = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-        session_token: str | None = None,
-    ) -> SigningCredential:
-        return SigningCredential(
-            access_key_id=SigningCredentialField(
-                name="AWS_ACCESS_KEY_ID", value=key_id
-            ),
-            secret_access_key=SigningCredentialField(
-                name="AWS_SECRET_ACCESS_KEY", value=secret
-            ),
-            session_token=(
-                SigningCredentialField(
-                    name="AWS_SESSION_TOKEN", value=session_token
-                )
-                if session_token
-                else None
-            ),
-            scopes=frozenset(["*.amazonaws.com"]),
-        )
-
-    def test_basic_signing_credential_resolution(self) -> None:
-        """Signing credential fields generate surrogates via !secret."""
-        raw_env = {
-            "AWS_ACCESS_KEY_ID": _SecretRef("AWS_ACCESS_KEY_ID"),
-            "AWS_SECRET_ACCESS_KEY": _SecretRef("AWS_SECRET_ACCESS_KEY"),
-        }
-        signing_creds = {"AWS_PROD": self._make_signing_cred()}
-
-        result, replacement_map = _resolve_container_env(
-            raw_env, {}, {}, signing_credentials=signing_creds
-        )
-
-        # Container env should have surrogates
-        assert result["AWS_ACCESS_KEY_ID"].startswith("AKIA")
-        assert result["AWS_ACCESS_KEY_ID"] != "AKIAIOSFODNN7EXAMPLE"
-        assert result["AWS_SECRET_ACCESS_KEY"] != (
-            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-        )
-
-        # Replacement map should have a SigningCredentialEntry
-        surrogate_key_id = result["AWS_ACCESS_KEY_ID"]
-        assert surrogate_key_id in replacement_map
-        entry = replacement_map[surrogate_key_id]
-        assert isinstance(entry, SigningCredentialEntry)
-        assert entry.access_key_id == "AKIAIOSFODNN7EXAMPLE"
-        assert entry.secret_access_key == (
-            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-        )
-
-    def test_with_session_token(self) -> None:
-        """Session token generates fixed-length surrogate."""
-        raw_env = {
-            "AWS_ACCESS_KEY_ID": _SecretRef("AWS_ACCESS_KEY_ID"),
-            "AWS_SECRET_ACCESS_KEY": _SecretRef("AWS_SECRET_ACCESS_KEY"),
-            "AWS_SESSION_TOKEN": _SecretRef("AWS_SESSION_TOKEN"),
-        }
-        signing_creds = {
-            "AWS": self._make_signing_cred(session_token="real-token-value")
-        }
-
-        result, replacement_map = _resolve_container_env(
-            raw_env, {}, {}, signing_credentials=signing_creds
-        )
-
-        # Session token surrogate should be 512 chars
-        assert len(result["AWS_SESSION_TOKEN"]) == 512
-
-        # Entry should have real and surrogate session tokens
-        surrogate_key_id = result["AWS_ACCESS_KEY_ID"]
-        entry = replacement_map[surrogate_key_id]
-        assert isinstance(entry, SigningCredentialEntry)
-        assert entry.session_token == "real-token-value"
-        assert entry.surrogate_session_token == result["AWS_SESSION_TOKEN"]
-
-    def test_optional_session_token_skipped(self) -> None:
-        """Missing session token with !secret? is silently skipped."""
-        raw_env = {
-            "AWS_ACCESS_KEY_ID": _SecretRef("AWS_ACCESS_KEY_ID"),
-            "AWS_SECRET_ACCESS_KEY": _SecretRef("AWS_SECRET_ACCESS_KEY"),
-            "AWS_SESSION_TOKEN": _SecretRef("AWS_SESSION_TOKEN", optional=True),
-        }
-        signing_creds = {"AWS": self._make_signing_cred()}
-
-        result, replacement_map = _resolve_container_env(
-            raw_env, {}, {}, signing_credentials=signing_creds
-        )
-
-        # session_token is None, so !secret? resolves to nothing; secret name
-        # falls through to plain secrets where it's also not found; optional
-        # so silently skipped.
-        assert "AWS_SESSION_TOKEN" not in result
-        surrogate_key_id = result["AWS_ACCESS_KEY_ID"]
-        entry = replacement_map[surrogate_key_id]
-        assert isinstance(entry, SigningCredentialEntry)
-        assert entry.session_token is None
-        assert entry.surrogate_session_token is None
-
-    def test_missing_key_id_mapping_raises(self) -> None:
-        """Referencing only secret_access_key without key_id raises."""
-        raw_env = {
-            "AWS_SECRET": _SecretRef("AWS_SECRET_ACCESS_KEY"),
-        }
-        signing_creds = {"AWS": self._make_signing_cred()}
-
-        with pytest.raises(ConfigError, match="access_key_id.*not mapped"):
-            _resolve_container_env(
-                raw_env, {}, {}, signing_credentials=signing_creds
-            )
-
-    def test_unknown_secret_name_falls_through(self) -> None:
-        """Secret name not matching any signing field falls through."""
-        raw_env = {
-            "AWS_ACCESS_KEY_ID": _SecretRef("AWS_ACCESS_KEY_ID"),
-            "AWS_SECRET_ACCESS_KEY": _SecretRef("AWS_SECRET_ACCESS_KEY"),
-            "OTHER": _SecretRef("NONEXISTENT_SECRET", optional=True),
-        }
-        signing_creds = {"AWS": self._make_signing_cred()}
-
-        result, _ = _resolve_container_env(
-            raw_env, {}, {}, signing_credentials=signing_creds
-        )
-
-        # NONEXISTENT_SECRET is not in any pool; optional, so silently skipped.
-        assert "OTHER" not in result
-
-    def test_mixed_signing_and_masked(self) -> None:
-        """Signing credentials coexist with masked secrets."""
-        raw_env = {
-            "AWS_ACCESS_KEY_ID": _SecretRef("AWS_ACCESS_KEY_ID"),
-            "AWS_SECRET_ACCESS_KEY": _SecretRef("AWS_SECRET_ACCESS_KEY"),
-            "GH_TOKEN": _SecretRef("GH_TOKEN"),
-        }
-        signing_creds = {"AWS": self._make_signing_cred()}
-        masked = {
-            "GH_TOKEN": MaskedSecret(
-                value="ghp_real",
-                scopes=frozenset(["api.github.com"]),
-                headers=("Authorization",),
-            )
-        }
-
-        result, replacement_map = _resolve_container_env(
-            raw_env, {}, masked, signing_credentials=signing_creds
-        )
-
-        # Both should be in replacement map
-        assert len(replacement_map) == 2
-        assert result["GH_TOKEN"].startswith("ghp_")
-        assert result["AWS_ACCESS_KEY_ID"].startswith("AKIA")
 
 
 # ---------------------------------------------------------------------------
@@ -3973,128 +3328,6 @@ class TestResolveGitHubAppCredentials:
         }
         with pytest.raises(ConfigError, match="repositories must be a list"):
             _resolve_github_app_credentials(raw, "repos.test")
-
-
-class TestResolveContainerEnvGitHubApp:
-    """Tests for GitHub App credential resolution in _resolve_container_env."""
-
-    def _make_github_app_cred(
-        self,
-        *,
-        app_id: str = "Iv23liXyz",
-        private_key: str = "test-key",
-        installation_id: str = "12345",
-    ) -> GitHubAppCredential:
-        return GitHubAppCredential(
-            app_id=app_id,
-            private_key=private_key,
-            installation_id=installation_id,
-            scopes=frozenset(["api.github.com"]),
-        )
-
-    def test_github_app_generates_ghs_surrogate(self) -> None:
-        """GitHub App credential generates a ghs_ prefixed surrogate."""
-        raw_env = {"GH_TOKEN": _SecretRef("GH_TOKEN")}
-        gh_creds = {"GH_TOKEN": self._make_github_app_cred()}
-
-        result, replacement_map = _resolve_container_env(
-            raw_env, {}, {}, github_app_credentials=gh_creds
-        )
-
-        surrogate = result["GH_TOKEN"]
-        assert surrogate.startswith("ghs_")
-        assert len(surrogate) == 40
-
-    def test_github_app_adds_entry_to_replacement_map(self) -> None:
-        """GitHub App credential adds GitHubAppEntry to replacement map."""
-        raw_env = {"GH_TOKEN": _SecretRef("GH_TOKEN")}
-        gh_creds = {"GH_TOKEN": self._make_github_app_cred()}
-
-        result, replacement_map = _resolve_container_env(
-            raw_env, {}, {}, github_app_credentials=gh_creds
-        )
-
-        surrogate = result["GH_TOKEN"]
-        assert surrogate in replacement_map
-        entry = replacement_map[surrogate]
-        assert isinstance(entry, GitHubAppEntry)
-        assert entry.app_id == "Iv23liXyz"
-        assert entry.private_key == "test-key"
-        assert entry.installation_id == "12345"
-        assert entry.base_url == "https://api.github.com"
-
-    def test_github_app_priority_over_masked_secrets(self) -> None:
-        """GitHub App credential takes priority over masked secret."""
-        raw_env = {"GH_TOKEN": _SecretRef("GH_TOKEN")}
-        gh_creds = {"GH_TOKEN": self._make_github_app_cred()}
-        masked = {
-            "GH_TOKEN": MaskedSecret(
-                value="ghp_realtoken",
-                scopes=frozenset(["api.github.com"]),
-                headers=("Authorization",),
-            )
-        }
-
-        result, replacement_map = _resolve_container_env(
-            raw_env, {}, masked, github_app_credentials=gh_creds
-        )
-
-        surrogate = result["GH_TOKEN"]
-        assert surrogate.startswith("ghs_")
-        assert isinstance(replacement_map[surrogate], GitHubAppEntry)
-
-    def test_github_app_with_permissions_and_repos(self) -> None:
-        """GitHub App entry includes permissions and repositories."""
-        cred = GitHubAppCredential(
-            app_id="Iv23li",
-            private_key="key",
-            installation_id="123",
-            scopes=frozenset(["api.github.com"]),
-            permissions={"contents": "write"},
-            repositories=("my-repo",),
-        )
-        raw_env = {"GH_TOKEN": _SecretRef("GH_TOKEN")}
-
-        result, replacement_map = _resolve_container_env(
-            raw_env, {}, {}, github_app_credentials={"GH_TOKEN": cred}
-        )
-
-        surrogate = result["GH_TOKEN"]
-        entry = replacement_map[surrogate]
-        assert isinstance(entry, GitHubAppEntry)
-        assert entry.permissions == {"contents": "write"}
-        assert entry.repositories == ("my-repo",)
-
-    def test_signing_credential_priority_over_github_app(self) -> None:
-        """Signing credential takes priority over GitHub App credential."""
-        raw_env = {"AWS_ACCESS_KEY_ID": _SecretRef("AWS_ACCESS_KEY_ID")}
-        gh_creds = {
-            "AWS_ACCESS_KEY_ID": self._make_github_app_cred(app_id="conflict")
-        }
-        signing_creds = {
-            "AWS_PROD": SigningCredential(
-                access_key_id=SigningCredentialField(
-                    name="AWS_ACCESS_KEY_ID", value="AKIAIOSFODNN7EXAMPLE"
-                ),
-                secret_access_key=SigningCredentialField(
-                    name="AWS_SECRET_ACCESS_KEY", value="secret"
-                ),
-                session_token=None,
-                scopes=frozenset(["s3.amazonaws.com"]),
-            )
-        }
-
-        result, replacement_map = _resolve_container_env(
-            raw_env,
-            {},
-            {},
-            signing_credentials=signing_creds,
-            github_app_credentials=gh_creds,
-        )
-
-        surrogate = result["AWS_ACCESS_KEY_ID"]
-        # Should be signing credential, not GitHub App
-        assert surrogate.startswith("AKIA")
 
 
 class TestRepoServerConfigGitHubApp:

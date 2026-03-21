@@ -34,7 +34,7 @@ repos:
       AWS_PROD:
         type: aws-sigv4                        # signing protocol
         access_key_id:
-          name: AWS_ACCESS_KEY_ID              # secret name for repo config
+          name: AWS_ACCESS_KEY_ID              # env var name for container injection
           value: !env PROD_AWS_ACCESS_KEY_ID
         secret_access_key:
           name: AWS_SECRET_ACCESS_KEY
@@ -68,11 +68,11 @@ author doesn't know (or care) that signing credentials are handled specially.
 | ---------------------------------------------------- | ----------- | -------- | ------------------------------------------ |
 | `signing_credentials`                                | mapping     | No       | Named signing credential sets              |
 | `signing_credentials.<name>.type`                    | string      | Yes      | Signing protocol (`aws-sigv4`)             |
-| `signing_credentials.<name>.access_key_id.name`      | string      | Yes      | Secret name for repo config                |
+| `signing_credentials.<name>.access_key_id.name`      | string      | Yes      | Env var name for container injection       |
 | `signing_credentials.<name>.access_key_id.value`     | string/!env | Yes      | AWS access key ID                          |
-| `signing_credentials.<name>.secret_access_key.name`  | string      | Yes      | Secret name for repo config                |
+| `signing_credentials.<name>.secret_access_key.name`  | string      | Yes      | Env var name for container injection       |
 | `signing_credentials.<name>.secret_access_key.value` | string/!env | Yes      | AWS secret access key                      |
-| `signing_credentials.<name>.session_token.name`      | string      | Yes      | Secret name for repo config                |
+| `signing_credentials.<name>.session_token.name`      | string      | Yes      | Env var name for container injection       |
 | `signing_credentials.<name>.session_token.value`     | string/!env | No       | STS session token (`X-Amz-Security-Token`) |
 | `signing_credentials.<name>.scopes`                  | list[str]   | Yes      | Fnmatch patterns for allowed hosts         |
 
@@ -88,7 +88,7 @@ If the server later decides to switch from signing credentials to plain secrets
 ### Transparent upgrade path
 
 The server admin can migrate between plain secrets and signing credentials
-without any repo config changes:
+without any configuration changes:
 
 **Plain secrets (no masking):**
 

@@ -20,6 +20,7 @@ from airut.gateway.config import (
     EmailChannelConfig,
     GlobalConfig,
     RepoServerConfig,
+    ResourceLimits,
     ServerConfig,
     get_storage_dir,
 )
@@ -75,13 +76,8 @@ def create_test_repo(path: Path) -> Path:
     (airut_dir / "network-allowlist.yaml").write_text(
         "domains: []\nurl_prefixes: []\n"
     )
-    (airut_dir / "airut.yaml").write_text(
-        "git:\n"
-        "  user: Test User\n"
-        "  email: test@test.local\n"
-        "default_model: sonnet\n"
-        "timeout: 30\n"
-    )
+    # Note: model and timeout are configured in RepoServerConfig,
+    # not in repo-side config (which is no longer loaded by the gateway).
 
     # Add container Dockerfile (read from git mirror by Sandbox)
     container_dir = airut_dir / "container"
@@ -191,6 +187,8 @@ class IntegrationEnvironment:
         repo_config = RepoServerConfig(
             repo_id="test",
             git_repo_url=str(master_repo),
+            model="sonnet",
+            resource_limits=ResourceLimits(timeout=30),
             channels={
                 "email": EmailChannelConfig(
                     imap_server="127.0.0.1",
@@ -309,6 +307,8 @@ class IntegrationEnvironment:
             repos[repo_id] = RepoServerConfig(
                 repo_id=repo_id,
                 git_repo_url=str(master_repo),
+                model="sonnet",
+                resource_limits=ResourceLimits(timeout=30),
                 channels={
                     "email": EmailChannelConfig(
                         imap_server="127.0.0.1",
@@ -422,6 +422,8 @@ class IntegrationEnvironment:
         repo_config = RepoServerConfig(
             repo_id="test",
             git_repo_url=str(master_repo),
+            model="sonnet",
+            resource_limits=ResourceLimits(timeout=30),
             channels={"slack": slack_config},
         )
 

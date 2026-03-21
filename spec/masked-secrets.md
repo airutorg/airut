@@ -270,7 +270,7 @@ Existing `secrets` continue to work. To mask a secret:
 1. Move entry from `secrets` to `masked_secrets` in server config
 2. Add `scopes` list (fnmatch patterns for allowed hosts)
 3. Add `headers` list (fnmatch patterns, e.g., `["Authorization"]` or `["*"]`)
-4. No repo config changes needed
+4. No configuration changes needed
 
 ## AWS Credentials
 

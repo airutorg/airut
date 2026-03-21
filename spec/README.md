@@ -11,7 +11,7 @@ For high-level documentation, see [doc/](../doc/).
   channel abstraction, data flow, container execution
 - [authentication.md](authentication.md) — Per-channel authentication and
   authorization (DMARC for email, workspace/group/user rules for Slack)
-- [repo-config.md](repo-config.md) — Repo config schema and server/repo split
+- [repo-config.md](repo-config.md) — Server config schema
 - [config-unification.md](config-unification.md) — Config unification design
   (server as primary source)
 - [multi-repo.md](multi-repo.md) — Multi-repository support design

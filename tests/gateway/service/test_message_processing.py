@@ -366,11 +366,11 @@ class TestMakeTodoCallback:
 class TestProcessMessage:
     @pytest.fixture(autouse=True)
     def _patch_repo_config(self):
-        """Patch RepoConfig.from_mirror for all process message tests."""
+        """Patch RepoConfig.from_server_config for all process message tests."""
         rc = _make_repo_config()
-        # from_mirror now returns (RepoConfig, ReplacementMap) tuple
+        # from_server_config now returns (RepoConfig, ReplacementMap) tuple
         with patch(
-            "airut.gateway.service.message_processing.RepoConfig.from_mirror",
+            "airut.gateway.service.message_processing.RepoConfig.from_server_config",
             return_value=(rc, {}),
         ) as mock_rc:
             self._mock_repo_config = mock_rc
@@ -552,7 +552,7 @@ class TestProcessMessage:
         rc = _make_repo_config(timeout=None)
         with (
             patch(
-                "airut.gateway.service.message_processing.RepoConfig.from_mirror",
+                "airut.gateway.service.message_processing.RepoConfig.from_server_config",
                 return_value=(rc, {}),
             ),
             patch(
@@ -1359,10 +1359,10 @@ class TestBuildImageErrors:
 
     @pytest.fixture(autouse=True)
     def _patch_repo_config(self):
-        """Patch RepoConfig.from_mirror for all build image error tests."""
+        """Patch from_server_config for build image error tests."""
         rc = _make_repo_config()
         with patch(
-            "airut.gateway.service.message_processing.RepoConfig.from_mirror",
+            "airut.gateway.service.message_processing.RepoConfig.from_server_config",
             return_value=(rc, {}),
         ) as mock_rc:
             self._mock_repo_config = mock_rc
@@ -1508,10 +1508,10 @@ class TestAllowlistParseError:
 
     @pytest.fixture(autouse=True)
     def _patch_repo_config(self):
-        """Patch RepoConfig.from_mirror with network sandbox enabled."""
+        """Patch RepoConfig.from_server_config with network sandbox enabled."""
         rc = _make_repo_config(network_sandbox_enabled=True)
         with patch(
-            "airut.gateway.service.message_processing.RepoConfig.from_mirror",
+            "airut.gateway.service.message_processing.RepoConfig.from_server_config",
             return_value=(rc, {}),
         ) as mock_rc:
             self._mock_repo_config = mock_rc
@@ -1675,7 +1675,7 @@ class TestConvertReplacementMap:
         with (
             patch(
                 "airut.gateway.service.message_processing."
-                "RepoConfig.from_mirror",
+                "RepoConfig.from_server_config",
                 return_value=(rc, replacement_map),
             ),
             patch(
@@ -1731,7 +1731,7 @@ class TestConvertReplacementMap:
         with (
             patch(
                 "airut.gateway.service.message_processing."
-                "RepoConfig.from_mirror",
+                "RepoConfig.from_server_config",
                 return_value=(rc, replacement_map),
             ),
             patch(
@@ -1779,7 +1779,7 @@ class TestConvertReplacementMap:
         with (
             patch(
                 "airut.gateway.service.message_processing."
-                "RepoConfig.from_mirror",
+                "RepoConfig.from_server_config",
                 return_value=(rc, replacement_map),
             ),
             patch(

@@ -1,11 +1,9 @@
 # Repo Configuration
 
-The server config (`~/.config/airut/airut.yaml`) is the **primary source** for
-all repo settings. The repo-side `.airut/airut.yaml` is **optional** — if
-present, its `container_env` entries merge on top (useful for renaming secrets
-to different env var names). If absent, everything comes from the server config.
+The server config (`~/.config/airut/airut.yaml`) is the **sole source** for all
+repo settings. The gateway does not read `.airut/airut.yaml` from repos.
 
-Files that must remain in the repo:
+Files that remain in the repo:
 
 - `.airut/network-allowlist.yaml` — agent proposes changes via PR
 - `.airut/container/Dockerfile` — repo-specific build context
@@ -77,38 +75,9 @@ layers (later layers win on key conflict):
 2. Server repos.<id>.container_env   — non-secret inline values
 3. Credential surrogates             — from masked_secrets, signing_credentials,
                                        github_app_credentials (auto-injected)
-4. Repo .airut/airut.yaml            — container_env entries (if file exists)
 ```
 
-Layer 4 (repo-side) can rename secrets via `!secret` tags, add inline values, or
-override any key from layers 1-3. Entries with empty values are excluded.
-
-## Repo Config Schema (Optional)
-
-File: `.airut/airut.yaml` (loaded from git mirror if present)
-
-```yaml
-default_model: opus                    # Default Claude model
-default_effort: max                    # Default effort level (optional)
-
-resource_limits:
-  timeout: 6000                       # Fills gaps in server per-repo limits
-
-network:
-  sandbox_enabled: true                # Logical AND with server setting
-
-container_env:                         # Merges on top of server-derived env
-  GH_TOKEN: !secret GH_TOKEN          # Rename: pool "GH_TOKEN" → env "GH_TOKEN"
-  CUSTOM_NAME: !secret API_KEY        # Rename: pool "API_KEY" → env "CUSTOM_NAME"
-  R2_ACCOUNT_ID: "7ef1d25e..."        # Inline value (non-secret)
-```
-
-### YAML Tags (repo config only)
-
-- **`!secret NAME`** — Resolve from the server's `secrets` pool. Error if
-  missing.
-- **`!secret? NAME`** — Optional secret. Skip the entry if not in the pool.
-- **`!env` is NOT allowed** — Repo config cannot read server env vars.
+Priority within layer 3: signing > GitHub App > masked > plain.
 
 ## Model and Effort Resolution
 
@@ -117,9 +86,8 @@ Precedence for new conversations:
 | Priority | Model                       | Effort                       |
 | -------- | --------------------------- | ---------------------------- |
 | 1        | `repos.<id>.model` (server) | `repos.<id>.effort` (server) |
-| 2        | channel `model_hint`        | repo `default_effort`        |
-| 3        | repo `default_model`        | *(none — Claude default)*    |
-| 4        | `"opus"` (built-in default) |                              |
+| 2        | channel `model_hint`        | *(none — Claude default)*    |
+| 3        | `"opus"` (built-in default) |                              |
 
 Resumed conversations always use the model and effort stored at conversation
 creation time.
@@ -127,22 +95,15 @@ creation time.
 ## Resource Limit Resolution
 
 ```
-effective = server repos.<id>.resource_limits   (primary)
-            fill gaps from repo .airut/airut.yaml resource_limits (if file exists)
+effective = server repos.<id>.resource_limits
             clamp to global resource_limits ceilings
 ```
 
-Server per-repo limits are primary. Repo-side limits only fill in fields not set
-on the server. The result is then clamped to the global server-wide ceiling for
-each field independently.
-
 Memory comparison is done in bytes (e.g. `"4g"` vs `"8g"`).
 
-## Network Sandbox Resolution
+## Network Sandbox
 
-The effective sandbox state is the logical AND of the server per-repo
-`network.sandbox_enabled` and the repo-side `network.sandbox_enabled` (if the
-file exists, default `true`). Either side can disable the sandbox independently.
+Controlled solely by `repos.<id>.network.sandbox_enabled` (default: `true`).
 
 See
 [doc/network-sandbox.md](../doc/network-sandbox.md#enablingdisabling-the-sandbox)
@@ -181,15 +142,10 @@ block (`email:` or `slack:`). A repo must have at least one channel block.
 
 1. Service starts, loads server config (`ServerConfig.from_yaml()`)
 2. Mirror is updated (`mirror.update_mirror()`)
-3. Per-conversation: `RepoConfig.from_mirror(mirror, server_config)`:
-   1. Try to read `.airut/airut.yaml` from mirror (optional; empty dict if
-      absent)
-   2. Build base `container_env` from server secrets + server container_env
-   3. If repo config has `container_env`, resolve it (surrogates only for
-      explicitly referenced `!secret` tags); otherwise auto-inject credential
-      surrogates for all configured masked/signing/GitHub App credentials
-   4. Build resource limits: server per-repo primary, repo fills gaps, clamp to
-      global ceiling
+3. Per-conversation: `RepoConfig.from_server_config(server_config)`:
+   1. Build `container_env` from server secrets + server container_env
+   2. Auto-inject credential surrogates for all configured credentials
+   3. Clamp resource limits to global ceilings
 4. Fields are validated (timeout >= 10, etc.)
 
 ## Multi-Repo Support

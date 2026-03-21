@@ -6,25 +6,18 @@
 """Integration tests for container resource limits.
 
 Tests the resource limits configuration flow end-to-end:
-1. Repo config specifies resource_limits (and/or legacy timeout)
-2. Server config specifies resource_limits ceilings
+1. Server per-repo config specifies resource_limits
+2. Server global config specifies resource_limits ceilings
 3. Effective limits are clamped and threaded to sandbox.create_task()
 4. Task applies limits as podman flags
 
 Since integration tests use mock_podman (which wraps `uv run`), we cannot
 verify actual cgroup enforcement.  Instead, we verify that:
-- Resource limits from repo config are threaded through to create_task
-- Server-side ceilings clamp repo values
-- Legacy top-level timeout is honoured
+- Resource limits from server config are threaded through to create_task
+- Server-side ceilings clamp per-repo values
 """
 
-import subprocess
-import sys
 import threading
-from pathlib import Path
-
-
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from airut.gateway.config import GlobalConfig
 from airut.sandbox.types import ResourceLimits
@@ -36,27 +29,6 @@ from .conftest import (
 from .environment import IntegrationEnvironment
 
 
-def _update_repo_config(
-    repo_path: Path,
-    config_yaml: str,
-) -> None:
-    """Update .airut/airut.yaml in a test repo and commit."""
-    airut_yaml = repo_path / ".airut" / "airut.yaml"
-    airut_yaml.write_text(config_yaml)
-    subprocess.run(
-        ["git", "add", ".airut/airut.yaml"],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "commit", "-m", "Update resource limits"],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
-
-
 class TestResourceLimits:
     """Test resource limits configuration end-to-end."""
 
@@ -66,20 +38,18 @@ class TestResourceLimits:
         create_email,
         extract_conversation_id,
     ) -> None:
-        """Resource limits from repo config are passed to create_task.
+        """Resource limits from server config are passed to create_task.
 
-        Updates the repo config to include resource_limits, then verifies
+        The server per-repo config has resource_limits set. Verifies
         that sandbox.create_task() receives a ResourceLimits object with
         the configured values.
         """
-        _update_repo_config(
-            integration_env.master_repo,
-            "default_model: sonnet\n"
-            "resource_limits:\n"
-            "  timeout: 120\n"
-            "  memory: 2g\n"
-            "  cpus: 1.5\n"
-            "  pids_limit: 256\n",
+        # Override resource limits in the repo server config
+        repo_config = integration_env.config.repos["test"]
+        object.__setattr__(
+            repo_config,
+            "resource_limits",
+            ResourceLimits(timeout=120, memory="2g", cpus=1.5, pids_limit=256),
         )
 
         msg = create_email(
@@ -133,81 +103,23 @@ class TestResourceLimits:
             service.stop()
             service_thread.join(timeout=10.0)
 
-    def test_legacy_timeout_in_resource_limits(
-        self,
-        integration_env: IntegrationEnvironment,
-        create_email,
-        extract_conversation_id,
-    ) -> None:
-        """Legacy top-level timeout flows through as resource_limits.timeout.
-
-        The repo config uses the old top-level ``timeout`` field. Verifies
-        that it appears in the ResourceLimits passed to create_task.
-        """
-        _update_repo_config(
-            integration_env.master_repo,
-            "default_model: sonnet\ntimeout: 45\n",
-        )
-
-        msg = create_email(
-            subject="Legacy timeout test",
-            body="Hello, world!",
-        )
-        integration_env.email_server.inject_message(msg)
-
-        service = integration_env.create_service()
-
-        original_create_task = service.sandbox.create_task
-        captured_limits: list[ResourceLimits] = []
-
-        def spy_create_task(**kwargs):
-            rl = kwargs.get("resource_limits")
-            if rl is not None:
-                captured_limits.append(rl)
-            return original_create_task(**kwargs)
-
-        service.sandbox.create_task = spy_create_task
-
-        service_thread = threading.Thread(target=service.start, daemon=True)
-        service_thread.start()
-
-        try:
-            ack = integration_env.email_server.wait_for_sent(
-                lambda m: "started working" in get_message_text(m).lower(),
-                timeout=15.0,
-            )
-            assert ack is not None
-            conv_id = extract_conversation_id(ack["Subject"])
-            assert conv_id is not None
-
-            task = wait_for_conv_completion(
-                service.tracker, conv_id, timeout=30.0
-            )
-            assert task is not None
-            assert len(captured_limits) >= 1
-            assert captured_limits[0].timeout == 45
-
-        finally:
-            service.stop()
-            service_thread.join(timeout=10.0)
-
     def test_server_ceiling_clamps_repo_limits(
         self,
         integration_env: IntegrationEnvironment,
         create_email,
         extract_conversation_id,
     ) -> None:
-        """Server resource_limits ceiling clamps repo values.
+        """Server resource_limits ceiling clamps per-repo values.
 
-        Sets repo timeout=7200 but server ceiling timeout=300.
+        Sets per-repo timeout=7200 but server ceiling timeout=300.
         Verifies effective timeout is 300.
         """
-        _update_repo_config(
-            integration_env.master_repo,
-            "default_model: sonnet\n"
-            "resource_limits:\n"
-            "  timeout: 7200\n"
-            "  memory: 16g\n",
+        # Set high limits on the repo config
+        repo_config = integration_env.config.repos["test"]
+        object.__setattr__(
+            repo_config,
+            "resource_limits",
+            ResourceLimits(timeout=7200, memory="16g"),
         )
 
         msg = create_email(

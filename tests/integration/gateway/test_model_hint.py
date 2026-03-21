@@ -30,16 +30,20 @@ class TestModelHint:
         create_email,
         extract_conversation_id,
     ) -> None:
-        """Model hint in To address overrides default for new conversations.
+        """Model hint in To address sets model for new conversations.
 
-        The test repo's default_model is "sonnet". Sending to
+        The server config model is unset (None). Sending to
         claude+opus@test.local should create a conversation using
-        model "opus" instead.
+        model "opus" from the hint.
 
         Validates:
         - Tracker records the hinted model
         - ConversationStore persists the hinted model
         """
+        # Clear server model so the channel hint can take effect
+        repo_cfg = integration_env.config.repos["test"]
+        object.__setattr__(repo_cfg, "model", None)
+
         mock_code = """
 events = [
     generate_system_event(session_id),

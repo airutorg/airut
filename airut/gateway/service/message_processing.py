@@ -327,16 +327,14 @@ def process_message(
         assert conv_id is not None
         service._conv_repo_map[conv_id] = repo_id
 
-        # Load repo config from git mirror
-        repo_config, replacement_map = RepoConfig.from_mirror(
-            conv_mgr.mirror,
+        # Build repo config from server config
+        repo_config, replacement_map = RepoConfig.from_server_config(
             repo_handler.config,
             server_resource_limits=service.global_config.resource_limits,
         )
 
         if is_new:
-            # Server overrides take precedence over channel hints and
-            # repo defaults for new conversations.
+            # Server model takes precedence; channel hint is fallback.
             server_model = repo_handler.config.model
             server_effort = repo_handler.config.effort
             model = (
@@ -350,15 +348,6 @@ def process_message(
                     repo_id,
                     server_model,
                     parsed.model_hint,
-                    conv_id,
-                )
-            if server_effort and repo_config.default_effort:
-                logger.info(
-                    "Repo '%s': server effort=%s overrides "
-                    "repo default_effort=%s for conversation %s",
-                    repo_id,
-                    server_effort,
-                    repo_config.default_effort,
                     conv_id,
                 )
             logger.info(

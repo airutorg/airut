@@ -44,7 +44,7 @@ dashboard:
 container_command: podman
 
 # Server-wide resource limit ceilings (all optional).
-# These are maximum values — repo configs cannot exceed them.
+# These are maximum values — per-repo settings cannot exceed them.
 # Omitted fields mean no ceiling for that dimension.
 # resource_limits:
 #   timeout: 7200       # Max allowed timeout (seconds)
@@ -138,13 +138,12 @@ repos:
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
 
-    # Default Claude model for new conversations.  Takes precedence over
-    # channel hints (e.g. email subaddressing) and repo-side default_model.
-    # Resumed conversations keep their stored model.  Default: opus.
+    # Default Claude model for new conversations.  Falls back to channel
+    # hint (e.g. email subaddressing), then built-in default (opus).
+    # Resumed conversations keep their stored model.
     # model: opus
 
-    # Default effort level for new conversations.  Takes precedence over
-    # repo-side default_effort.
+    # Default effort level for new conversations.
     # effort: max
 
     # Per-repo resource limits (all optional).
@@ -161,9 +160,8 @@ repos:
     #   R2_ACCOUNT_ID: "7ef1d25e..."
     #   CI: "true"
 
-    # Network sandbox.  Both server and repo config default to true;
-    # the effective value is the logical AND — if either is false,
-    # the sandbox is disabled.  Useful as a break-glass override.
+    # Network sandbox.  The server config controls whether the sandbox
+    # is enabled per repo.  Useful as a break-glass override.
     #
     # network:
     #   sandbox_enabled: true
@@ -193,9 +191,9 @@ repos:
     # re-signs outbound requests with real AWS credentials.  Containers
     # receive format-preserving surrogates that the AWS SDK uses normally.
     #
-    # Each field has a name (the secret name repos reference via !secret)
-    # and a value (the real credential).  The repo config is transparent —
-    # it uses !secret AWS_ACCESS_KEY_ID just like any other secret.
+    # Each field has a name (the env var name injected into the container)
+    # and a value (the real credential).  Surrogates are auto-injected
+    # into the container environment under the field name.
     #
     # Works with any S3-compatible API (AWS, Cloudflare R2, MinIO, etc.).
     # signing_credentials:

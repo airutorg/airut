@@ -91,13 +91,6 @@ def master_repo(tmp_path: Path) -> Path:
 
     airut_dir = repo_path / ".airut"
     airut_dir.mkdir()
-    (airut_dir / "airut.yaml").write_text(
-        "git:\n"
-        "  user: Test User\n"
-        "  email: test@example.com\n"
-        "default_model: sonnet\n"
-        "timeout: 300\n"
-    )
     (airut_dir / "network-allowlist.yaml").write_text(
         "domains: []\nurl_prefixes: []\n"
     )
