@@ -43,14 +43,14 @@ dashboard:
 # Container runtime executable (podman or docker).
 container_command: podman
 
-# Server-wide resource limit ceilings (all optional).
-# These are maximum values — per-repo values are clamped to these ceilings.
-# Omitted fields mean no ceiling for that dimension.
+# Server-wide resource limit defaults (all optional).
+# These provide default values — per-repo values override them.
+# Omitted fields mean no default for that dimension.
 # resource_limits:
-#   timeout: 7200       # Max allowed timeout (seconds)
-#   memory: "8g"        # Max allowed memory
-#   cpus: 4             # Max allowed CPUs
-#   pids_limit: 1024    # Max allowed process count
+#   timeout: 7200       # Default timeout (seconds)
+#   memory: "8g"        # Default memory limit
+#   cpus: 4             # Default CPU limit
+#   pids_limit: 1024    # Default process limit
 
 # Network settings.
 # network:
@@ -143,8 +143,8 @@ repos:
     # effort: max
 
     # Per-repo resource limits (all optional).
-    # Values are clamped to the server-wide ceilings above.
-    # Omitted fields mean no limit for that dimension.
+    # Override server-wide defaults above.
+    # Omitted fields fall back to server defaults (if set).
     # resource_limits:
     #   timeout: 6000       # Max execution time in seconds (>= 10)
     #   memory: "4g"        # Memory limit, e.g. "2g", "512m"

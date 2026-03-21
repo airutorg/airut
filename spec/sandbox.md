@@ -265,9 +265,9 @@ preventing slow OOM thrashing.
 Resource limits are configured in the server config
 (`~/.config/airut/airut.yaml`) at two levels:
 
-1. **Server-wide ceilings** (top-level `resource_limits`) — optional maximums
-2. **Per-repo values** (under `repos.<name>.resource_limits`) — clamped to
-   ceilings
+1. **Server-wide defaults** (top-level `resource_limits`) — optional defaults
+2. **Per-repo overrides** (under `repos.<name>.resource_limits`) — override
+   defaults
 
 See `spec/repo-config.md` for the full resolution logic.
 

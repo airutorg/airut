@@ -7,14 +7,15 @@
 
 Tests the resource limits configuration flow end-to-end:
 1. Server config specifies per-repo resource_limits
-2. Server config specifies global resource_limits ceilings
-3. Effective limits are clamped and threaded to sandbox.create_task()
+2. Server config specifies global resource_limits defaults
+3. Effective limits (repo overrides + server defaults) are threaded to
+   sandbox.create_task()
 4. Task applies limits as podman flags
 
 Since integration tests use mock_podman (which wraps `uv run`), we cannot
 verify actual cgroup enforcement.  Instead, we verify that:
 - Resource limits from server config are threaded through to create_task
-- Server-side ceilings clamp per-repo values
+- Server-wide defaults are applied, and repos can override them
 """
 
 import sys
@@ -108,26 +109,28 @@ class TestResourceLimits:
             service.stop()
             service_thread.join(timeout=10.0)
 
-    def test_server_ceiling_clamps_repo_limits(
+    def test_repo_overrides_server_defaults(
         self,
         integration_env: IntegrationEnvironment,
         create_email,
         extract_conversation_id,
     ) -> None:
-        """Server resource_limits ceiling clamps per-repo values.
+        """Repo resource_limits override server defaults.
 
-        Sets per-repo timeout=7200 but server ceiling timeout=300.
-        Verifies effective timeout is 300.
+        Sets server defaults timeout=300, memory="4g", cpus=2.
+        Sets per-repo timeout=7200, memory="16g" (no cpus).
+        Verifies repo values win for timeout/memory, server default
+        fills in cpus.
         """
         msg = create_email(
-            subject="Server ceiling test",
+            subject="Server defaults test",
             body="Hello, world!",
         )
         integration_env.email_server.inject_message(msg)
 
         service = integration_env.create_service()
 
-        # Set per-repo resource limits (high values)
+        # Set per-repo resource limits (overrides)
         repo_handler = service.repo_handlers["test"]
         object.__setattr__(
             repo_handler.config,
@@ -135,8 +138,8 @@ class TestResourceLimits:
             ResourceLimits(timeout=7200, memory="16g"),
         )
 
-        # Set server-wide ceilings (lower values)
-        server_limits = ResourceLimits(timeout=300, memory="4g")
+        # Set server-wide defaults
+        server_limits = ResourceLimits(timeout=300, memory="4g", cpus=2)
         original_global = service.global_config
         service.global_config = GlobalConfig(
             max_concurrent_executions=original_global.max_concurrent_executions,
@@ -180,8 +183,9 @@ class TestResourceLimits:
             assert task is not None
             assert len(captured_limits) >= 1
             rl = captured_limits[0]
-            assert rl.timeout == 300  # Clamped from 7200 to 300
-            assert rl.memory == "4g"  # Clamped from 16g to 4g
+            assert rl.timeout == 7200  # Repo override wins
+            assert rl.memory == "16g"  # Repo override wins
+            assert rl.cpus == 2  # Filled from server defaults
 
         finally:
             service.stop()

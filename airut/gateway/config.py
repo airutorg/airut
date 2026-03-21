@@ -614,8 +614,8 @@ class GlobalConfig:
         container_command: Container runtime command (podman or docker).
         upstream_dns: Upstream DNS server for proxy container resolution.
             ``None`` means auto-detect from ``/etc/resolv.conf``.
-        resource_limits: Server-wide resource limit ceilings.  Repo limits
-            are clamped to these values.  ``None`` means no ceilings.
+        resource_limits: Server-wide default resource limits.  Repos can
+            override individual fields.  ``None`` means no defaults.
     """
 
     max_concurrent_executions: int = 3
@@ -794,7 +794,7 @@ class RepoServerConfig:
         effort: Default effort level for Claude Code.  ``None`` means
             the flag is omitted and Claude Code uses its own default.
         resource_limits: Container resource limits (timeout, memory,
-            cpus, pids_limit).  Clamped to server-wide ceilings.
+            cpus, pids_limit).  Overrides server-wide defaults.
         container_env: Plain (non-secret) environment variables passed
             to containers.  For values like account IDs, bucket names.
             Credential pools take priority over these for same-name keys.

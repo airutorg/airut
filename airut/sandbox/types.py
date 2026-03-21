@@ -127,24 +127,6 @@ def _validate_memory(value: str) -> None:
         )
 
 
-def _parse_memory_bytes(value: str) -> int:
-    """Parse a memory limit string to bytes for comparison.
-
-    The caller must ensure *value* has already been validated by
-    :func:`_validate_memory`; this function does not re-validate.
-
-    Args:
-        value: Memory limit string (e.g. "2g", "512m").
-
-    Returns:
-        Number of bytes.
-    """
-    unit = value[-1].lower()
-    number = int(value[:-1])
-    multipliers = {"b": 1, "k": 1024, "m": 1024**2, "g": 1024**3}
-    return number * multipliers[unit]
-
-
 @dataclass(frozen=True)
 class ResourceLimits:
     """Container resource limits.
@@ -154,9 +136,8 @@ class ResourceLimits:
 
     Used in two contexts:
 
-    - **Server config** — defines ceilings (maximums) for all repos.
-    - **Repo config** — defines per-repo limits, clamped to server
-      ceilings when both are set.
+    - **Server config** — defines defaults for all repos.
+    - **Repo config** — overrides server defaults per repo.
 
     Attributes:
         timeout: Max container execution time in seconds.
@@ -186,47 +167,33 @@ class ResourceLimits:
         if self.memory is not None:
             _validate_memory(self.memory)
 
-    def clamp(self, ceiling: ResourceLimits | None) -> ResourceLimits:
-        """Return a copy with values clamped to a ceiling.
+    def with_defaults(self, defaults: ResourceLimits | None) -> ResourceLimits:
+        """Return a copy with ``None`` fields filled from *defaults*.
 
-        For each field where both ``self`` and ``ceiling`` have a value,
-        the effective value is ``min(self, ceiling)``.  For memory,
-        comparison is done in bytes.
+        For each field, uses ``self``'s value if set, otherwise falls
+        back to the corresponding value in *defaults*.
 
         Args:
-            ceiling: Server-side maximum limits.  ``None`` or per-field
-                ``None`` means no ceiling for that field.
+            defaults: Server-wide default limits.  ``None`` means no
+                defaults (return ``self`` unchanged).
 
         Returns:
-            New ResourceLimits with clamped values.
+            New ResourceLimits with defaults applied.
         """
-        if ceiling is None:
+        if defaults is None:
             return self
 
-        timeout = self.timeout
-        if timeout is not None and ceiling.timeout is not None:
-            timeout = min(timeout, ceiling.timeout)
-
-        memory = self.memory
-        if memory is not None and ceiling.memory is not None:
-            self_bytes = _parse_memory_bytes(memory)
-            ceil_bytes = _parse_memory_bytes(ceiling.memory)
-            if self_bytes > ceil_bytes:
-                memory = ceiling.memory
-
-        cpus = self.cpus
-        if cpus is not None and ceiling.cpus is not None:
-            cpus = min(cpus, ceiling.cpus)
-
-        pids_limit = self.pids_limit
-        if pids_limit is not None and ceiling.pids_limit is not None:
-            pids_limit = min(pids_limit, ceiling.pids_limit)
-
         return ResourceLimits(
-            timeout=timeout,
-            memory=memory,
-            cpus=cpus,
-            pids_limit=pids_limit,
+            timeout=self.timeout
+            if self.timeout is not None
+            else defaults.timeout,
+            memory=self.memory if self.memory is not None else defaults.memory,
+            cpus=self.cpus if self.cpus is not None else defaults.cpus,
+            pids_limit=(
+                self.pids_limit
+                if self.pids_limit is not None
+                else defaults.pids_limit
+            ),
         )
 
 

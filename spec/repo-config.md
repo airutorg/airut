@@ -37,7 +37,7 @@ repos:
     # Effort level passed as --effort to Claude Code (optional)
     # effort: max
 
-    # Per-repo resource limits (all optional, clamped to server ceilings)
+    # Per-repo resource limits (all optional, override server defaults)
     # resource_limits:
     #   timeout: 6000
     #   memory: "4g"
@@ -116,33 +116,30 @@ The `model` field defaults to `"opus"`. For new conversations, the priority is:
 Resumed conversations always use the model and effort stored at conversation
 creation time, regardless of current server config.
 
-## Resource Limit Clamping
+## Resource Limit Defaults
 
-Per-repo resource limits are clamped to server-wide ceilings. For each field
-independently:
+Server-wide resource limits serve as defaults. Per-repo values override them.
+For each field independently:
 
 ```
-effective = min(repo_value, server_ceiling)  if both set
-          = repo_value                       if only repo set
-          = None (no limit)                  if neither set
+effective = repo_value     if repo sets the field
+          = server_default if only server sets the field
+          = None (no limit) if neither sets the field
 ```
 
-Memory comparison is done in bytes (e.g. `"4g"` vs `"8g"`).
-
-### Server-Wide Ceilings
+### Server-Wide Defaults
 
 ```yaml
 # ~/.config/airut/airut.yaml (server config, top level)
 resource_limits:
-  timeout: 7200       # Max allowed timeout (seconds)
-  memory: "8g"        # Max allowed memory
-  cpus: 4             # Max allowed CPUs
-  pids_limit: 1024    # Max allowed process count
+  timeout: 7200       # Default timeout (seconds)
+  memory: "8g"        # Default memory limit
+  cpus: 4             # Default CPU limit
+  pids_limit: 1024    # Default process limit
 ```
 
-All fields are optional. Omitted fields mean no ceiling for that dimension.
-These are **ceilings only** — they do not inject defaults. A repo that omits a
-field gets no limit for that dimension, regardless of the server ceiling.
+All fields are optional. Omitted fields mean no default for that dimension.
+Repos can override any field to a higher or lower value.
 
 ## What Stays in the Repository
 
@@ -187,7 +184,7 @@ top level.
 - `model` — Claude model for new conversations (default: `"opus"`)
 - `effort` — Effort level for Claude Code (optional)
 - `resource_limits.*` — Per-repo resource limits (timeout, memory, cpus,
-  pids_limit), clamped to server-wide ceilings
+  pids_limit), override server-wide defaults
 - `network.sandbox_enabled` — Network sandbox toggle (default: `true`)
 - `container_env` — Plain (non-secret) environment variables for containers
 - `secrets` — Plain secrets injected as container env vars
@@ -198,7 +195,7 @@ top level.
   `conversation_max_age_days`, `image_prune`
 - `dashboard.*` — Web UI configuration
 - `container_command` — Container runtime (podman/docker)
-- `resource_limits.*` (top-level) — Server-wide resource limit ceilings
+- `resource_limits.*` (top-level) — Server-wide resource limit defaults
 
 **Important:** All channel-specific fields must be nested under their channel
 block (`email:` or `slack:`). A repo must have at least one channel block

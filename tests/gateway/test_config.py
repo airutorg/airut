@@ -1398,72 +1398,59 @@ class TestResourceLimits:
             rl = ResourceLimits(memory=mem)
             assert rl.memory == mem
 
-    def test_clamp_no_ceiling(self) -> None:
-        """Clamp with None ceiling returns self unchanged."""
+    def test_with_defaults_none(self) -> None:
+        """with_defaults with None returns self unchanged."""
         rl = ResourceLimits(timeout=600, memory="4g", cpus=4, pids_limit=512)
-        clamped = rl.clamp(None)
-        assert clamped == rl
+        result = rl.with_defaults(None)
+        assert result == rl
 
-    def test_clamp_below_ceiling(self) -> None:
-        """Values below ceiling are preserved."""
+    def test_with_defaults_repo_values_take_priority(self) -> None:
+        """Repo values override defaults."""
         rl = ResourceLimits(timeout=300, memory="2g", cpus=2, pids_limit=128)
-        ceiling = ResourceLimits(
+        defaults = ResourceLimits(
             timeout=600, memory="4g", cpus=4, pids_limit=256
         )
-        clamped = rl.clamp(ceiling)
-        assert clamped == rl
+        result = rl.with_defaults(defaults)
+        assert result == rl
 
-    def test_clamp_above_ceiling(self) -> None:
-        """Values above ceiling are clamped."""
-        rl = ResourceLimits(timeout=600, memory="8g", cpus=8, pids_limit=1024)
-        ceiling = ResourceLimits(
-            timeout=300, memory="4g", cpus=4, pids_limit=256
-        )
-        clamped = rl.clamp(ceiling)
-        assert clamped.timeout == 300
-        assert clamped.memory == "4g"
-        assert clamped.cpus == 4
-        assert clamped.pids_limit == 256
-
-    def test_clamp_partial_ceiling(self) -> None:
-        """Only fields set in ceiling are clamped."""
-        rl = ResourceLimits(timeout=600, memory="8g", cpus=8, pids_limit=1024)
-        ceiling = ResourceLimits(timeout=300)  # only timeout ceiling
-        clamped = rl.clamp(ceiling)
-        assert clamped.timeout == 300
-        assert clamped.memory == "8g"  # unclamped
-        assert clamped.cpus == 8  # unclamped
-        assert clamped.pids_limit == 1024  # unclamped
-
-    def test_clamp_none_repo_values_unaffected(self) -> None:
-        """None repo values stay None even with ceiling set."""
+    def test_with_defaults_fills_none_fields(self) -> None:
+        """None fields in repo are filled from defaults."""
         rl = ResourceLimits()
-        ceiling = ResourceLimits(
+        defaults = ResourceLimits(
             timeout=300, memory="4g", cpus=4, pids_limit=256
         )
-        clamped = rl.clamp(ceiling)
-        assert clamped == ResourceLimits()
+        result = rl.with_defaults(defaults)
+        assert result.timeout == 300
+        assert result.memory == "4g"
+        assert result.cpus == 4
+        assert result.pids_limit == 256
 
-    def test_clamp_memory_byte_comparison(self) -> None:
-        """Memory clamping compares by byte value."""
-        rl = ResourceLimits(memory="8192m")  # 8GB in MB
-        ceiling = ResourceLimits(memory="4g")  # 4GB
-        clamped = rl.clamp(ceiling)
-        assert clamped.memory == "4g"
+    def test_with_defaults_partial_repo(self) -> None:
+        """Repo sets some fields, defaults fill the rest."""
+        rl = ResourceLimits(timeout=600, memory="8g")
+        defaults = ResourceLimits(
+            timeout=300, memory="4g", cpus=4, pids_limit=256
+        )
+        result = rl.with_defaults(defaults)
+        assert result.timeout == 600  # repo override
+        assert result.memory == "8g"  # repo override
+        assert result.cpus == 4  # from defaults
+        assert result.pids_limit == 256  # from defaults
 
-    def test_clamp_memory_equal_preserves_repo_string(self) -> None:
-        """Equal byte values preserve the repo's original string."""
-        rl = ResourceLimits(memory="4096m")  # 4GB in MB
-        ceiling = ResourceLimits(memory="4g")  # 4GB
-        clamped = rl.clamp(ceiling)
-        assert clamped.memory == "4096m"  # repo string preserved
+    def test_with_defaults_partial_defaults(self) -> None:
+        """Defaults only fill fields they define."""
+        rl = ResourceLimits(timeout=600)
+        defaults = ResourceLimits(cpus=2)  # only cpus default
+        result = rl.with_defaults(defaults)
+        assert result.timeout == 600  # repo value
+        assert result.memory is None  # neither set
+        assert result.cpus == 2  # from defaults
+        assert result.pids_limit is None  # neither set
 
-    def test_clamp_float_cpus(self) -> None:
-        """Fractional CPU values are clamped correctly."""
-        rl = ResourceLimits(cpus=2.5)
-        ceiling = ResourceLimits(cpus=1.5)
-        clamped = rl.clamp(ceiling)
-        assert clamped.cpus == 1.5
+    def test_with_defaults_both_empty(self) -> None:
+        """Both empty ResourceLimits results in all None."""
+        result = ResourceLimits().with_defaults(ResourceLimits())
+        assert result == ResourceLimits()
 
 
 class TestParseResourceLimits:
