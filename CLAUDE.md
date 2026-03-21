@@ -256,7 +256,7 @@ config/                     - Server configuration templates
 airut/                        - Library code
   _bundled/                 - Static resources bundled into wheel
     assets/                 - Logo SVG
-    proxy/                  - Network sandbox (proxy filter, DNS, AWS signing)
+    proxy/                  - Network sandbox (proxy filter, DNS, AWS signing, GitHub App tokens)
   claude_output/            - Typed Claude streaming JSON output parser
   conversation/             - Conversation directory layout and preparation
   dashboard/                - Web dashboard server

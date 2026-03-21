@@ -201,6 +201,32 @@ repos:
     #     scopes:
     #       - "*.amazonaws.com"
 
+    # GitHub App credentials use proxy-managed token rotation for GitHub
+    # API access.  The proxy generates short-lived installation tokens
+    # from the App's private key and rotates them automatically.
+    # Containers receive a surrogate token (ghs_...) that the proxy
+    # replaces with a real token on matching requests.
+    #
+    # Recommended over masked_secrets for GitHub — real credentials
+    # never enter the container, and tokens auto-expire within 1 hour.
+    # See doc/github-app-setup.md for the full setup guide.
+    # github_app_credentials:
+    #   GH_TOKEN:
+    #     app_id: !env GH_APP_ID                    # Client ID (Iv23li...)
+    #     private_key: !env GH_APP_PRIVATE_KEY       # PEM-encoded RSA key
+    #     installation_id: !env GH_APP_INSTALLATION_ID
+    #     scopes:
+    #       - "github.com"
+    #       - "api.github.com"
+    #       - "*.githubusercontent.com"
+    #     # Optional: restrict token permissions (subset of app's grants)
+    #     # permissions:
+    #     #   contents: write
+    #     #   pull_requests: write
+    #     # Optional: restrict token to specific repos
+    #     # repositories:
+    #     #   - "my-repo"
+
     # Slack channel (optional, can coexist with email).
     # See config/slack-app-manifest.json for app setup.
     #
