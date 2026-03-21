@@ -71,22 +71,27 @@ installed. Action versions mirror airut releases:
 | `@v0`      | latest 0.x.y | PyPI `airut==<latest>` | Stable, auto-updates with minor  |
 | `@v0.16.0` | `0.16.0`     | PyPI `airut==0.16.0`   | Pinned to exact version          |
 
-The `v0` branch is the stable release ref. Consumers using `@v0` resolve to this
-branch and automatically pick up minor and patch releases when PRs merge.
+Consumers using `@v0` resolve to a **floating tag** that is automatically
+updated to point at the latest `vX.Y.Z` release tag when a release is published.
 
 ### Branching Strategy
 
-The `vN` branches are protected and serve as the source of truth for released
-versions. There are two development tracks:
+The `releases/vN` branches are protected and hold the `VERSION` file for each
+release track. There are two development tracks:
 
 - **Action implementation changes** happen on `main` and are cherry-picked to
-  `vN` via reviewed PRs when they need to ship.
-- **Airut version bumps** happen via PRs directly against `vN` that update the
-  `VERSION` file.
+  `releases/vN` via reviewed PRs when they need to ship.
+- **Airut version bumps** happen via PRs directly against `releases/vN` that
+  update the `VERSION` file.
 
-Pinned release tags (`vN.x.y`) point to commits on `vN`. The release branch is
-never force-pushed or reset to `main`, preserving compatibility within a major
-version.
+Pinned release tags (`vN.x.y`) point to commits on `releases/vN` and are created
+via GitHub releases. The `update-floating-tag.yml` workflow runs on release
+publish and force-pushes the `vN` floating tag to point at the new release tag.
+A dedicated `airut-release-bot` GitHub App provides the tag push permissions
+(since `GITHUB_TOKEN` cannot bypass tag rulesets).
+
+The release branch is never force-pushed or reset to `main`, preserving
+compatibility within a major version.
 
 See [workflows/sandbox-action.md](../workflows/sandbox-action.md) for the
 release process.
