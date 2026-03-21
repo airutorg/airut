@@ -87,6 +87,17 @@ url_prefixes:
     path: /rest/runs*
     methods: [GET, POST]
 
+  # htmx vendored dependency — security advisory checks (CI) and downloads (update script)
+  - host: api.github.com
+    path: /repos/bigskysoftware/htmx*
+    methods: [GET]
+  - host: unpkg.com
+    path: /htmx.org*
+    methods: [GET, HEAD]
+  - host: unpkg.com
+    path: /htmx-ext-sse*
+    methods: [GET, HEAD]
+
   # Slack API documentation — read-only reference
   - host: docs.slack.dev
     path: ""
