@@ -89,6 +89,9 @@ url_prefixes:
 
   # htmx vendored dependency — security advisory checks (CI) and downloads (update script)
   - host: api.github.com
+    path: /advisories*
+    methods: [GET]
+  - host: api.github.com
     path: /repos/bigskysoftware/htmx*
     methods: [GET]
   - host: unpkg.com
