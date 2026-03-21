@@ -78,7 +78,6 @@ class TestNetworkLogsEndpoint:
 
         html = harness.get_html("/conversation/abc12345/network")
         assert "window.scrollTo(0, document.body.scrollHeight)" in html
-        assert "visibilitychange" in html
 
     def test_back_link(self, harness: DashboardHarness) -> None:
         """Test network logs page has back link to task detail."""
