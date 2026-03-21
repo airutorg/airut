@@ -11,7 +11,7 @@ then apply the Gerrit-specific overrides below.
 <!-- mdformat-toc start --slug=github --no-anchors --maxlevel=6 --minlevel=2 -->
 
 - [Server-Side: Git Credentials](#server-side-git-credentials)
-- [Repo Settings (`.airut/airut.yaml`)](#repo-settings-airutairutyaml)
+- [Server Config: Per-Repo Settings](#server-config-per-repo-settings)
 - [Network Allowlist](#network-allowlist)
 - [Container Setup](#container-setup)
 - [Server Configuration](#server-configuration)
@@ -44,23 +44,35 @@ Using HTTP credentials (rather than SSH) is recommended because it enables
 Airut's masked-secret credential injection — the proxy can swap surrogate tokens
 for the real password only when requests target the Gerrit host.
 
-## Repo Settings (`.airut/airut.yaml`)
+## Server Config: Per-Repo Settings
 
-The Gerrit HTTP password should be passed through `container_env` as a masked
-secret reference so the container can push changes:
+The Gerrit HTTP password and other credentials are configured in the server
+config under the repo's credential pools. Model, effort, resource limits, and
+network sandbox are also configured here (not in the repository):
 
 ```yaml
-default_model: opus
-timeout: 300
-
-network:
-  sandbox_enabled: true
-
-container_env:
-  ANTHROPIC_API_KEY: !secret ANTHROPIC_API_KEY
-  GERRIT_USER: !secret GERRIT_USER
-  GERRIT_HTTP_PASSWORD: !secret GERRIT_HTTP_PASSWORD
+repos:
+  my-project:
+    model: opus
+    # resource_limits:
+    #   timeout: 300
+    # network:
+    #   sandbox_enabled: true
+    secrets:
+      GERRIT_USER: !env GERRIT_USER
+    masked_secrets:
+      ANTHROPIC_API_KEY:
+        value: !env ANTHROPIC_API_KEY
+        scopes: ["api.anthropic.com", "statsig.anthropic.com"]
+        headers: ["x-api-key", "Authorization"]
+      GERRIT_HTTP_PASSWORD:
+        value: !env GERRIT_HTTP_PASSWORD
+        scopes: ["gerrit.example.com"]
+        headers: ["Authorization"]
 ```
+
+There is no `.airut/airut.yaml` repo config file for the gateway. All per-repo
+settings live in the server config.
 
 ## Network Allowlist
 
@@ -169,6 +181,11 @@ Note that `gh` CLI is **not** installed — it is not needed for Gerrit workflow
 
 ## Server Configuration
 
+The server config includes all per-repo settings (model, effort, resource
+limits, credentials). The example above in
+[Server Config: Per-Repo Settings](#server-config-per-repo-settings) shows the
+credential pools. Add the channel and git configuration:
+
 ```yaml
 repos:
   my-project:
@@ -189,11 +206,11 @@ repos:
     git:
       repo_url: https://gerrit.example.com/a/my-project
 
-    # Plain secrets (injected directly into container)
+    model: opus
+
     secrets:
       GERRIT_USER: !env GERRIT_USER
 
-    # Masked secrets (surrogate injected, real value swapped at proxy)
     masked_secrets:
       ANTHROPIC_API_KEY:
         value: !env ANTHROPIC_API_KEY

@@ -14,12 +14,9 @@ follows the XDG Base Directory Specification:
 ``!env`` tags resolve values from environment variables.
 
 The server config defines global settings (execution limits, dashboard) and
-per-repo settings (channel credentials, authorization, secrets).  Each repo
-entry under ``repos:`` becomes a ``RepoServerConfig``.
-
-Repo configuration (behaviour) is loaded from ``.airut/airut.yaml`` in each
-repo's git mirror with support for ``!secret`` tags resolved against the
-per-repo secrets pool.  ``!env`` is **not** allowed in repo config.
+per-repo settings (channel credentials, authorization, secrets, model,
+resource limits, container environment).  Each repo entry under ``repos:``
+becomes a ``RepoServerConfig``.
 
 The module is self-contained (no dependency on ``airut/config.py``) so the
 gateway can be deployed independently.
@@ -29,7 +26,7 @@ import logging
 import secrets as secrets_module
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NoReturn, cast, overload
+from typing import TYPE_CHECKING, Any, cast, overload
 
 import yaml
 from platformdirs import user_config_path, user_state_path
@@ -44,7 +41,6 @@ from airut.yaml_env import EnvVar, YamlValue, make_env_loader, raw_resolve
 
 if TYPE_CHECKING:
     from airut.gateway.slack.config import SlackChannelConfig
-    from airut.git_mirror import GitMirrorCache
 
 
 logger = logging.getLogger(__name__)
@@ -173,7 +169,7 @@ class ReplacementEntry:
 class SigningCredentialField:
     """A single field in a signing credential with name/value pair.
 
-    The ``name`` is the secret name visible to repo config (via ``!secret``),
+    The ``name`` is the environment variable name injected into the container,
     and ``value`` is the real credential.
     """
 
@@ -189,8 +185,8 @@ class SigningCredential:
     require the proxy to re-sign requests using the real secret key.
 
     Each field has a ``name``/``value`` structure. The name declares the
-    secret name visible to repo config; the repo uses plain ``!secret``
-    references without knowing about signing credentials.
+    environment variable name injected into the container; the value is the
+    real credential used by the proxy for re-signing.
 
     Attributes:
         access_key_id: Access key ID with name/value.
@@ -422,69 +418,6 @@ def generate_github_app_surrogate() -> str:
         A random ``ghs_``-prefixed 40-character alphanumeric string.
     """
     return generate_surrogate(_GITHUB_APP_SURROGATE_TEMPLATE)
-
-
-# ---------------------------------------------------------------------------
-# YAML tag placeholders
-# ---------------------------------------------------------------------------
-
-
-class _SecretRef:
-    """Placeholder for ``!secret`` or ``!secret?`` tag in repo config.
-
-    Attributes:
-        name: The secret name to look up in the server's secrets pool.
-        optional: If True (from ``!secret?``), missing secrets are silently
-            skipped rather than raising an error.
-    """
-
-    def __init__(self, name: str, *, optional: bool = False) -> None:
-        self.name = name
-        self.optional = optional
-
-
-def _secret_constructor(loader: yaml.SafeLoader, node: yaml.Node) -> _SecretRef:
-    """Handle ``!secret NAME`` in YAML (required secret)."""
-    value = loader.construct_scalar(node)
-    return _SecretRef(str(value), optional=False)
-
-
-def _secret_optional_constructor(
-    loader: yaml.SafeLoader, node: yaml.Node
-) -> _SecretRef:
-    """Handle ``!secret? NAME`` in YAML (optional secret)."""
-    value = loader.construct_scalar(node)
-    return _SecretRef(str(value), optional=True)
-
-
-def _reject_env_constructor(
-    loader: yaml.SafeLoader, node: yaml.Node
-) -> NoReturn:
-    """Reject ``!env`` tags in repo config."""
-    value = loader.construct_scalar(node)
-    raise ConfigError(
-        f"!env tags are not allowed in repo config "
-        f"(found !env {value}). Use !secret to reference "
-        f"server-provided secrets instead."
-    )
-
-
-def _make_repo_loader() -> type[yaml.SafeLoader]:
-    """Create a YAML loader for repo config.
-
-    Handles:
-        - ``!secret NAME`` — required secret (error if missing)
-        - ``!secret? NAME`` — optional secret (skip if missing)
-        - ``!env`` — rejected (not allowed in repo config)
-    """
-
-    class RepoLoader(yaml.SafeLoader):
-        pass
-
-    RepoLoader.add_constructor("!secret", _secret_constructor)
-    RepoLoader.add_constructor("!secret?", _secret_optional_constructor)
-    RepoLoader.add_constructor("!env", _reject_env_constructor)
-    return RepoLoader
 
 
 # ---------------------------------------------------------------------------
@@ -834,9 +767,10 @@ CHANNEL_KEYS = {"email", "slack"}
 class RepoServerConfig:
     """Per-repo server-side configuration.
 
-    Contains the channel configurations, secrets, and shared settings for a
-    single repository.  Loaded from the ``repos.<name>`` section of the
-    server config file.
+    Contains all configuration for a single repository: channel configs,
+    credentials, model/effort defaults, resource limits, and container
+    environment.  Loaded from the ``repos.<name>`` section of the server
+    config file.
 
     Storage location is determined by ``get_storage_dir(repo_id)`` using
     XDG state directory conventions.
@@ -846,19 +780,24 @@ class RepoServerConfig:
         git_repo_url: Git repository URL to clone from.
         channels: Channel configurations keyed by channel type
             (e.g. ``{"email": EmailChannelConfig(...)}``)
-        secrets: Per-repo secrets pool for ``!secret`` resolution.
+        secrets: Per-repo secrets pool.  Keys become container env var names.
         masked_secrets: Secrets with scope restrictions for proxy replacement.
+            Keys become container env var names with surrogates injected.
         signing_credentials: Signing credentials for proxy re-signing.
+            Field ``.name`` values become container env var names.
         github_app_credentials: GitHub App credentials for proxy-managed
-            token rotation.
-        network_sandbox_enabled: Server-side override for the network sandbox.
-            Effective sandbox state is the logical AND of this value and the
-            repo config's ``network.sandbox_enabled``.  Defaults to ``True``.
-        model: Server-side model override.  When set, takes precedence over
-            channel ``model_hint`` and repo ``default_model`` for new
-            conversations.
-        effort: Server-side effort override.  When set, takes precedence over
-            repo ``default_effort`` for new conversations.
+            token rotation.  Keys become container env var names.
+        network_sandbox_enabled: Whether to enable the network sandbox.
+            Defaults to ``True``.
+        model: Default Claude model for new conversations.  Channel
+            ``model_hint`` overrides this.  Defaults to ``"opus"``.
+        effort: Default effort level for Claude Code.  ``None`` means
+            the flag is omitted and Claude Code uses its own default.
+        resource_limits: Container resource limits (timeout, memory,
+            cpus, pids_limit).  Clamped to server-wide ceilings.
+        container_env: Plain (non-secret) environment variables passed
+            to containers.  For values like account IDs, bucket names.
+            Credential pools take priority over these for same-name keys.
     """
 
     repo_id: str
@@ -873,8 +812,10 @@ class RepoServerConfig:
         default_factory=dict
     )
     network_sandbox_enabled: bool = True
-    model: str | None = None
+    model: str = "opus"
     effort: str | None = None
+    resource_limits: ResourceLimits = field(default_factory=ResourceLimits)
+    container_env: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate configuration and register secrets.
@@ -901,6 +842,11 @@ class RepoServerConfig:
         # Register GitHub App private keys for log redaction
         for gh_app in self.github_app_credentials.values():
             SecretFilter.register_secret(gh_app.private_key)
+
+        # Register plain container_env values for log redaction
+        for value in self.container_env.values():
+            if value:
+                SecretFilter.register_secret(value)
 
         if not self.git_repo_url:
             raise ValueError(
@@ -934,6 +880,33 @@ class RepoServerConfig:
     def storage_dir(self) -> Path:
         """Return the XDG state directory for this repo's persistent data."""
         return get_storage_dir(self.repo_id)
+
+    def build_task_env(self) -> tuple[dict[str, str], ReplacementMap]:
+        """Build container environment and replacement map for a task.
+
+        All credentials from all pools are automatically injected into
+        the container environment using their key/name as the env var
+        name.  Surrogates are generated fresh per call (each task gets
+        unique surrogates).
+
+        Resolution priority (first match wins for duplicate env var names):
+
+        1. Signing credentials (by field ``.name``)
+        2. GitHub App credentials (by key)
+        3. Masked secrets (by key)
+        4. Plain secrets (by key)
+        5. ``container_env`` (by key) — plain values only
+
+        Returns:
+            Tuple of (container env vars, replacement map for proxy).
+        """
+        return _build_task_env(
+            self.secrets,
+            self.masked_secrets,
+            self.signing_credentials,
+            self.github_app_credentials,
+            self.container_env,
+        )
 
 
 @dataclass(frozen=True)
@@ -1152,6 +1125,15 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
     if "slack" in raw:
         channels["slack"] = _parse_slack_channel_config(raw["slack"], prefix)
 
+    # Parse plain container_env (non-secret values)
+    raw_container_env = raw.get("container_env", {})
+    container_env: dict[str, str] = {}
+    if isinstance(raw_container_env, dict):
+        for key, value in raw_container_env.items():
+            resolved = raw_resolve(value)
+            if resolved is not None:
+                container_env[str(key)] = resolved
+
     return RepoServerConfig(
         repo_id=repo_id,
         git_repo_url=_resolve(
@@ -1167,8 +1149,13 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
         network_sandbox_enabled=_resolve(
             network.get("sandbox_enabled"), bool, default=True
         ),
-        model=_resolve(raw.get("model"), str, default=None) or None,
+        model=_resolve(raw.get("model"), str, default="opus") or "opus",
         effort=_resolve(raw.get("effort"), str, default=None) or None,
+        resource_limits=(
+            _parse_resource_limits(raw.get("resource_limits"))
+            or ResourceLimits()
+        ),
+        container_env=container_env,
     )
 
 
@@ -1451,7 +1438,7 @@ def _resolve_signing_credentials(
     """Resolve signing_credentials from server config.
 
     Each credential field uses a ``name``/``value`` structure where
-    ``name`` declares the secret name visible to repo config, and
+    ``name`` declares the container environment variable name, and
     ``value`` provides the real credential.
 
     Args:
@@ -1619,274 +1606,56 @@ def _resolve_github_app_credentials(
     return result
 
 
-# Repo configuration (loaded from .airut/airut.yaml in git mirror)
+# ---------------------------------------------------------------------------
+# Task environment builder
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class RepoConfig:
-    """Repo-specific configuration loaded from ``.airut/airut.yaml``.
-
-    Loaded from the git mirror at the start of each task.  Values tagged
-    with ``!secret NAME`` are resolved from the server's secrets pool.
-    ``!env`` tags are rejected.
-
-    Attributes:
-        default_model: Default Claude model when not specified via
-            email subaddressing.
-        default_effort: Default effort level for Claude Code
-            (e.g. ``"medium"``, ``"high"``, ``"max"``).  Passed
-            as ``--effort`` to the CLI.  ``None`` means the flag is
-            omitted and Claude Code uses its own default.
-        resource_limits: Container resource limits (timeout, memory,
-            cpus, pids_limit).  All fields optional.
-        network_sandbox_enabled: Whether to enable the network sandbox.
-        container_env: Environment variables passed to Claude containers.
-            All values are redacted from logs.
-    """
-
-    default_model: str = "opus"
-    default_effort: str | None = None
-    resource_limits: ResourceLimits = field(default_factory=ResourceLimits)
-    network_sandbox_enabled: bool = True
-    container_env: dict[str, str] = field(default_factory=dict)
-
-    #: Path to the repo config file inside the repository.
-    CONFIG_PATH = ".airut/airut.yaml"
-
-    def __post_init__(self) -> None:
-        """Validate configuration and register secrets.
-
-        Raises:
-            ValueError: If configuration is invalid.
-        """
-        for value in self.container_env.values():
-            if value:
-                SecretFilter.register_secret(value)
-
-    @classmethod
-    def from_mirror(
-        cls,
-        mirror: "GitMirrorCache",
-        server_secrets: dict[str, str],
-        masked_secrets: dict[str, MaskedSecret] | None = None,
-        signing_credentials: dict[str, SigningCredential] | None = None,
-        github_app_credentials: dict[str, GitHubAppCredential] | None = None,
-        *,
-        server_sandbox_enabled: bool = True,
-        server_resource_limits: ResourceLimits | None = None,
-    ) -> tuple["RepoConfig", ReplacementMap]:
-        """Load repo config from the git mirror.
-
-        Reads ``.airut/airut.yaml`` from the mirror's default branch,
-        parses it with ``!secret`` tag support, and resolves secret
-        references against the server's secrets pool.
-
-        When ``masked_secrets`` is provided, secrets found in that pool
-        are replaced with surrogates, and a replacement map is returned
-        for the proxy to swap them back for authorized hosts.
-
-        When ``signing_credentials`` is provided, ``!secret`` references
-        whose names match signing credential field names are resolved
-        with surrogates. A ``SigningCredentialEntry`` is added to the
-        replacement map for the proxy to re-sign requests.
-
-        When ``github_app_credentials`` is provided, ``!secret``
-        references matching credential names generate ``ghs_``-prefixed
-        surrogates. A ``GitHubAppEntry`` is added to the replacement map
-        for the proxy to manage token rotation.
-
-        Args:
-            mirror: Git mirror cache to read the file from.
-            server_secrets: Server's secrets pool (name -> value).
-            masked_secrets: Server's masked secrets pool with scope info.
-            signing_credentials: Server's signing credentials pool.
-            github_app_credentials: Server's GitHub App credentials pool.
-            server_sandbox_enabled: Server-side network sandbox setting.
-                The effective sandbox state is the logical AND of this
-                value and the repo config's ``network.sandbox_enabled``.
-            server_resource_limits: Server-side resource limit ceilings.
-                Repo limits are clamped to these maximums.
-
-        Returns:
-            Tuple of (RepoConfig, ReplacementMap). The ReplacementMap
-            will be empty if no masked secrets were referenced.
-
-        Raises:
-            ConfigError: If the file is missing, malformed, or references
-                unknown secrets.
-        """
-        try:
-            data = mirror.read_file(cls.CONFIG_PATH)
-        except Exception as e:
-            raise ConfigError(
-                f"Failed to read repo config from mirror: {e}"
-            ) from e
-
-        raw = yaml.load(data, Loader=_make_repo_loader())
-
-        if not isinstance(raw, dict):
-            raise ConfigError(
-                f"Repo config must be a YAML mapping: {cls.CONFIG_PATH}"
-            )
-
-        return cls._from_raw(
-            raw,
-            server_secrets,
-            masked_secrets or {},
-            signing_credentials=signing_credentials or {},
-            github_app_credentials=github_app_credentials or {},
-            server_sandbox_enabled=server_sandbox_enabled,
-            server_resource_limits=server_resource_limits,
-        )
-
-    @classmethod
-    def _from_raw(
-        cls,
-        raw: dict,
-        server_secrets: dict[str, str],
-        masked_secrets: dict[str, MaskedSecret],
-        *,
-        signing_credentials: dict[str, SigningCredential] | None = None,
-        github_app_credentials: dict[str, GitHubAppCredential] | None = None,
-        server_sandbox_enabled: bool = True,
-        server_resource_limits: ResourceLimits | None = None,
-    ) -> tuple["RepoConfig", ReplacementMap]:
-        """Build repo config from parsed YAML dict."""
-        # Reject !secret tags outside container_env — they would be
-        # silently stringified by _resolve/raw_resolve.
-        _reject_stray_secret_refs(raw)
-
-        network_raw = raw.get("network", {})
-
-        # Resolve container_env: inline values + !secret references
-        raw_container_env = raw.get("container_env", {})
-        container_env, replacement_map = _resolve_container_env(
-            raw_container_env,
-            server_secrets,
-            masked_secrets,
-            signing_credentials=signing_credentials or {},
-            github_app_credentials=github_app_credentials or {},
-        )
-
-        repo_sandbox = _resolve(
-            network_raw.get("sandbox_enabled"), bool, default=True
-        )
-        # Effective sandbox = logical AND of server and repo settings.
-        # Either side can disable it independently.
-        effective_sandbox = server_sandbox_enabled and repo_sandbox
-
-        if not effective_sandbox:
-            logger.warning(
-                "Network sandbox disabled (server=%s, repo=%s)",
-                server_sandbox_enabled,
-                repo_sandbox,
-            )
-
-        if not effective_sandbox and replacement_map:
-            logger.warning(
-                "Network sandbox is disabled but masked secrets are "
-                "configured. Masked secrets require the proxy to swap "
-                "surrogates for real values — they will not work without "
-                "the sandbox. Consider using plain secrets instead, or "
-                "re-enable the sandbox."
-            )
-
-        # Build resource limits: resource_limits block takes precedence,
-        # with top-level timeout as fallback.
-        repo_limits = (
-            _parse_resource_limits(raw.get("resource_limits"))
-            or ResourceLimits()
-        )
-
-        # Backwards compat: top-level timeout fills in when
-        # resource_limits.timeout is not set.
-        top_level_timeout = _resolve(raw.get("timeout"), int)
-        if repo_limits.timeout is None and top_level_timeout is not None:
-            repo_limits = ResourceLimits(
-                timeout=top_level_timeout,
-                memory=repo_limits.memory,
-                cpus=repo_limits.cpus,
-                pids_limit=repo_limits.pids_limit,
-            )
-
-        # Clamp to server-side ceilings.
-        repo_limits = repo_limits.clamp(server_resource_limits)
-
-        config = cls(
-            default_model=_resolve(
-                raw.get("default_model"), str, default="opus"
-            ),
-            default_effort=_resolve(
-                raw.get("default_effort"), str, default=None
-            ),
-            resource_limits=repo_limits,
-            network_sandbox_enabled=effective_sandbox,
-            container_env=container_env,
-        )
-
-        return config, replacement_map
-
-
-def _reject_stray_secret_refs(raw: dict) -> None:
-    """Raise if ``_SecretRef`` objects appear outside ``container_env``.
-
-    The YAML loader creates ``_SecretRef`` for every ``!secret`` /
-    ``!secret?`` tag, but only ``container_env`` knows how to resolve
-    them.  Anywhere else they'd be silently stringified to garbage.
-    """
-    for key, value in raw.items():
-        if key == "container_env":
-            continue
-        _check_secret_ref(value, key)
-
-
-def _check_secret_ref(value: YamlValue | _SecretRef, path: str) -> None:
-    """Recursively check for ``_SecretRef`` in a parsed YAML value."""
-    if isinstance(value, _SecretRef):
-        tag = "!secret?" if value.optional else "!secret"
-        raise ConfigError(
-            f"{path}: {tag} '{value.name}' outside container_env — "
-            f"!secret tags are only supported inside container_env"
-        )
-    if isinstance(value, dict):
-        for k, v in cast(dict[str, YamlValue | _SecretRef], value).items():
-            _check_secret_ref(v, f"{path}.{k}")
-    if isinstance(value, list):
-        for i, v in enumerate(
-            cast(list[YamlValue | _SecretRef], value),
-        ):
-            _check_secret_ref(v, f"{path}[{i}]")
-
-
-@dataclass(frozen=True)
-class _SigningSecretInfo:
-    """Internal: links a secret name to its signing credential group."""
-
-    cred_name: str
-    field_name: str  # "access_key_id" | "secret_access_key" | "session_token"
-    real_value: str
-    credential: SigningCredential
-
-
-def _build_signing_secret_map(
+def _build_task_env(
+    secrets: dict[str, str],
+    masked_secrets: dict[str, MaskedSecret],
     signing_credentials: dict[str, SigningCredential],
-) -> dict[str, _SigningSecretInfo]:
-    """Build a mapping from secret name to signing credential info.
+    github_app_credentials: dict[str, GitHubAppCredential],
+    container_env: dict[str, str],
+) -> tuple[dict[str, str], ReplacementMap]:
+    """Build container environment and replacement map for a task.
 
-    This enables transparent ``!secret`` resolution — the repo config
-    references secret names (e.g., ``AWS_ACCESS_KEY_ID``) without knowing
-    they belong to a signing credential group.
+    All credentials from all pools are automatically injected into
+    the container environment using their key/name as the env var name.
+    Surrogates are generated fresh per call.
+
+    Resolution priority (first match wins for duplicate env var names):
+
+    1. Signing credentials (by field ``.name``)
+    2. GitHub App credentials (by key)
+    3. Masked secrets (by key)
+    4. Plain secrets (by key)
+    5. ``container_env`` (by key) — plain values only
 
     Args:
-        signing_credentials: Resolved signing credentials from server config.
+        secrets: Plain secrets pool (key = env var name).
+        masked_secrets: Masked secrets with scope info.
+        signing_credentials: Signing credentials for proxy re-signing.
+        github_app_credentials: GitHub App credentials for token rotation.
+        container_env: Plain (non-secret) environment variables.
 
     Returns:
-        Mapping of secret name to signing credential info.
+        Tuple of (container env vars, replacement map for proxy).
     """
-    result: dict[str, _SigningSecretInfo] = {}
+    resolved: dict[str, str] = {}
+    replacement_map: ReplacementMap = {}
+
+    # 1. Signing credentials: each field's .name becomes an env var.
+    # Track per-credential group to build a single SigningCredentialEntry.
+    signing_refs: dict[str, dict[str, str]] = {}
 
     for cred_name, cred in signing_credentials.items():
+        # Skip entire credential if access_key_id name is already taken.
+        # Without access_key_id in the replacement map, the proxy cannot
+        # detect the credential set.
+        if cred.access_key_id.name in resolved:
+            continue
+
         for field_name, field_obj in [
             ("access_key_id", cred.access_key_id),
             ("secret_access_key", cred.secret_access_key),
@@ -1894,168 +1663,26 @@ def _build_signing_secret_map(
         ]:
             if field_obj is None:
                 continue
-            result[field_obj.name] = _SigningSecretInfo(
-                cred_name=cred_name,
-                field_name=field_name,
-                real_value=field_obj.value,
-                credential=cred,
-            )
-
-    return result
-
-
-def _resolve_container_env(
-    raw_env: dict,
-    server_secrets: dict[str, str],
-    masked_secrets: dict[str, MaskedSecret],
-    *,
-    signing_credentials: dict[str, SigningCredential] | None = None,
-    github_app_credentials: dict[str, GitHubAppCredential] | None = None,
-) -> tuple[dict[str, str], ReplacementMap]:
-    """Resolve container_env entries from repo config.
-
-    Inline string values pass through.  ``_SecretRef`` placeholders
-    are resolved from the server's secrets pool or masked_secrets pool.
-
-    For masked secrets, a surrogate token is generated and added to the
-    replacement map. The container receives the surrogate; the proxy
-    swaps it for the real value when the request host matches the scopes.
-
-    Signing credentials are resolved transparently: the repo config uses
-    plain ``!secret`` references (e.g., ``!secret AWS_ACCESS_KEY_ID``),
-    and the resolver detects that the secret name belongs to a signing
-    credential group. Surrogates are generated and a
-    ``SigningCredentialEntry`` is added to the replacement map keyed by
-    the surrogate access key ID.
-
-    GitHub App credentials are resolved by matching the ``!secret`` name
-    against the ``github_app_credentials`` keys.  A ``ghs_``-prefixed
-    surrogate is generated and a ``GitHubAppEntry`` is added to the
-    replacement map.
-
-    Resolution priority:
-    1. Signing credentials
-    2. GitHub App credentials
-    3. Masked secrets
-    4. Plain secrets
-
-    Args:
-        raw_env: Raw container_env mapping from YAML.
-        server_secrets: Server's plain secrets pool.
-        masked_secrets: Server's masked secrets pool with scope info.
-        signing_credentials: Server's signing credentials pool.
-        github_app_credentials: Server's GitHub App credentials pool.
-
-    Returns:
-        Tuple of (resolved env vars, replacement map for proxy).
-
-    Raises:
-        ConfigError: If a required ``!secret`` reference (not ``!secret?``)
-            is not in either secrets pool.
-    """
-    resolved: dict[str, str] = {}
-    replacement_map: ReplacementMap = {}
-    signing_secret_map = _build_signing_secret_map(signing_credentials or {})
-    gh_app_creds = github_app_credentials or {}
-
-    # Track signing credentials that have been referenced so we can
-    # build a single SigningCredentialEntry per credential set.
-    # Maps credential name -> {field_name: (env_key, surrogate)}
-    signing_refs: dict[str, dict[str, tuple[str, str]]] = {}
-
-    for key, value in raw_env.items():
-        if isinstance(value, _SecretRef):
-            # Check if secret name belongs to a signing credential
-            signing_info = signing_secret_map.get(value.name)
-            if signing_info is not None:
-                # Generate surrogate for the signing credential field
-                if signing_info.field_name == "session_token":
-                    surrogate = generate_session_token_surrogate()
-                else:
-                    surrogate = generate_surrogate(signing_info.real_value)
-
-                resolved[str(key)] = surrogate
-
-                # Track for building SigningCredentialEntry later
-                cred_name = signing_info.cred_name
-                if cred_name not in signing_refs:
-                    signing_refs[cred_name] = {}
-                signing_refs[cred_name][signing_info.field_name] = (
-                    str(key),
-                    surrogate,
-                )
+            env_key = field_obj.name
+            if env_key in resolved:
                 continue
 
-            # Check GitHub App credentials
-            if value.name in gh_app_creds:
-                gh_cred = gh_app_creds[value.name]
-                surrogate = generate_github_app_surrogate()
-                resolved[str(key)] = surrogate
-                replacement_map[surrogate] = GitHubAppEntry(
-                    app_id=gh_cred.app_id,
-                    private_key=gh_cred.private_key,
-                    installation_id=gh_cred.installation_id,
-                    base_url=gh_cred.base_url,
-                    scopes=tuple(sorted(gh_cred.scopes)),
-                    allow_foreign_credentials=gh_cred.allow_foreign_credentials,
-                    permissions=gh_cred.permissions,
-                    repositories=gh_cred.repositories,
-                )
-                continue
+            if field_name == "session_token":
+                surrogate = generate_session_token_surrogate()
+            else:
+                surrogate = generate_surrogate(field_obj.value)
 
-            # Check masked_secrets first
-            if value.name in masked_secrets:
-                masked = masked_secrets[value.name]
-                if masked.value:
-                    # Non-empty masked secret: generate surrogate
-                    surrogate = generate_surrogate(masked.value)
-                    resolved[str(key)] = surrogate
-                    replacement_map[surrogate] = ReplacementEntry(
-                        real_value=masked.value,
-                        scopes=tuple(sorted(masked.scopes)),
-                        headers=masked.headers,
-                        allow_foreign_credentials=masked.allow_foreign_credentials,
-                    )
-                else:
-                    # Empty string is a valid configured value
-                    resolved[str(key)] = ""
-                continue
+            resolved[env_key] = surrogate
 
-            # Fall back to plain secrets
-            if value.name in server_secrets:
-                resolved[str(key)] = server_secrets[value.name]
-                continue
+            if cred_name not in signing_refs:
+                signing_refs[cred_name] = {}
+            signing_refs[cred_name][field_name] = surrogate
 
-            # Not found in any pool
-            if value.optional:
-                # !secret? — gracefully skip missing optional secrets
-                continue
-            raise ConfigError(
-                f"container_env.{key}: !secret '{value.name}' "
-                f"not found in server secrets pool"
-            )
-        else:
-            # Inline value
-            str_value = raw_resolve(value)
-            if str_value is not None:
-                resolved[str(key)] = str_value
-
-    # Build SigningCredentialEntry for each referenced signing credential.
-    # Keyed by the surrogate access_key_id so the proxy can detect it.
+    # Build SigningCredentialEntry for each credential set.
     for cred_name, fields in signing_refs.items():
-        signing_creds = signing_credentials or {}
-        cred = signing_creds[cred_name]
-
-        if "access_key_id" not in fields:
-            raise ConfigError(
-                f"Signing credential '{cred_name}' referenced but "
-                f"'access_key_id' field not mapped in container_env"
-            )
-
-        surrogate_key_id = fields["access_key_id"][1]
-        surrogate_session_token = (
-            fields["session_token"][1] if "session_token" in fields else None
-        )
+        cred = signing_credentials[cred_name]
+        surrogate_key_id = fields["access_key_id"]
+        surrogate_session_token = fields.get("session_token")
 
         replacement_map[surrogate_key_id] = SigningCredentialEntry(
             access_key_id=cred.access_key_id.value,
@@ -2066,5 +1693,57 @@ def _resolve_container_env(
             surrogate_session_token=surrogate_session_token,
             scopes=tuple(sorted(cred.scopes)),
         )
+
+    # 2. GitHub App credentials: key becomes env var name.
+    for name, gh_cred in github_app_credentials.items():
+        if name in resolved:
+            continue
+        surrogate = generate_github_app_surrogate()
+        resolved[name] = surrogate
+        replacement_map[surrogate] = GitHubAppEntry(
+            app_id=gh_cred.app_id,
+            private_key=gh_cred.private_key,
+            installation_id=gh_cred.installation_id,
+            base_url=gh_cred.base_url,
+            scopes=tuple(sorted(gh_cred.scopes)),
+            allow_foreign_credentials=gh_cred.allow_foreign_credentials,
+            permissions=gh_cred.permissions,
+            repositories=gh_cred.repositories,
+        )
+
+    # 3. Masked secrets: key becomes env var name.
+    for name, masked in masked_secrets.items():
+        if name in resolved:
+            continue
+        if masked.value:
+            surrogate = generate_surrogate(masked.value)
+            resolved[name] = surrogate
+            replacement_map[surrogate] = ReplacementEntry(
+                real_value=masked.value,
+                scopes=tuple(sorted(masked.scopes)),
+                headers=masked.headers,
+                allow_foreign_credentials=masked.allow_foreign_credentials,
+            )
+        else:
+            resolved[name] = ""
+
+    # 4. Plain secrets: key becomes env var name.
+    for name, value in secrets.items():
+        if name in resolved:
+            continue
+        if value:
+            resolved[name] = value
+
+    # 5. Plain container_env values (lowest priority).
+    for name, value in container_env.items():
+        if name in resolved:
+            continue
+        if value:
+            resolved[name] = value
+
+    # Register all resolved values for log redaction.
+    for value in resolved.values():
+        if value:
+            SecretFilter.register_secret(value)
 
     return resolved, replacement_map

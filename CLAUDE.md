@@ -31,7 +31,7 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
 - `spec/gateway-architecture.md` — core gateway design, channel abstraction,
   data flow, container execution
 - `spec/authentication.md` — DMARC verification and sender authorization
-- `spec/repo-config.md` — repo config schema and server/repo split
+- `spec/repo-config.md` — per-repo schema in server config
 - `spec/multi-repo.md` — multi-repository support design
 - `spec/slack-channel.md` — Slack channel implementation (Socket Mode)
 - `spec/integration-tests.md` — end-to-end test specification
@@ -72,18 +72,20 @@ update them if outdated.
 
 ## Configuration
 
-Repo-specific configuration lives in `.airut/`. See `.airut/README.md` for
+Repository-level configuration lives in `.airut/`. See `.airut/README.md` for
 details.
 
 Key files:
 
-- `.airut/airut.yaml` — repo config (model, timeout, container environment)
 - `.airut/network-allowlist.yaml` — domains and URL prefixes the container can
   access
 - `.airut/container/Dockerfile` — repo-defined container base image
+- `.airut/sandbox.yaml` — sandbox-action configuration (CI only, not used by
+  gateway)
 
-Server config (`~/.config/airut/airut.yaml`) is separate and handles deployment
-infrastructure. See `spec/repo-config.md` for the full schema.
+All per-repo settings (model, effort, resource limits, credentials, container
+environment) are configured in the server config (`~/.config/airut/airut.yaml`).
+See `spec/repo-config.md` for the full schema.
 
 ## Security Model
 

@@ -39,7 +39,7 @@ from airut.gateway.channel import (
     ParsedMessage,
     PlanStreamer,
 )
-from airut.gateway.config import ReplacementMap, RepoConfig
+from airut.gateway.config import ReplacementMap
 from airut.gateway.conversation import GitCloneError
 from airut.gateway.service.usage_stats import UsageStats
 from airut.sandbox import (
@@ -327,44 +327,19 @@ def process_message(
         assert conv_id is not None
         service._conv_repo_map[conv_id] = repo_id
 
-        # Load repo config from git mirror
-        repo_config, replacement_map = RepoConfig.from_mirror(
-            conv_mgr.mirror,
-            repo_handler.config.secrets,
-            repo_handler.config.masked_secrets,
-            repo_handler.config.signing_credentials,
-            repo_handler.config.github_app_credentials,
-            server_sandbox_enabled=repo_handler.config.network_sandbox_enabled,
-            server_resource_limits=service.global_config.resource_limits,
+        # Build task environment from server config credentials
+        repo_cfg = repo_handler.config
+        task_env, replacement_map = repo_cfg.build_task_env()
+
+        # Clamp per-repo resource limits to server-wide ceilings
+        resource_limits = repo_cfg.resource_limits.clamp(
+            service.global_config.resource_limits
         )
 
         if is_new:
-            # Server overrides take precedence over channel hints and
-            # repo defaults for new conversations.
-            server_model = repo_handler.config.model
-            server_effort = repo_handler.config.effort
-            model = (
-                server_model or parsed.model_hint or repo_config.default_model
-            )
-            effort = server_effort or repo_config.default_effort
-            if server_model and parsed.model_hint:
-                logger.info(
-                    "Repo '%s': server model=%s overrides "
-                    "channel model_hint=%s for conversation %s",
-                    repo_id,
-                    server_model,
-                    parsed.model_hint,
-                    conv_id,
-                )
-            if server_effort and repo_config.default_effort:
-                logger.info(
-                    "Repo '%s': server effort=%s overrides "
-                    "repo default_effort=%s for conversation %s",
-                    repo_id,
-                    server_effort,
-                    repo_config.default_effort,
-                    conv_id,
-                )
+            # Channel hint overrides server default for new conversations.
+            model = parsed.model_hint or repo_cfg.model
+            effort = repo_cfg.effort
             logger.info(
                 "Repo '%s': using model=%s, effort=%s for new "
                 "conversation %s (model_hint=%s)",
@@ -384,10 +359,8 @@ def process_message(
         else:
             conversation_dir = conv_mgr.get_conversation_dir(conv_id)
             conversation_store = ConversationStore(conversation_dir)
-            model = conversation_store.get_model() or repo_config.default_model
-            effort = (
-                conversation_store.get_effort() or repo_config.default_effort
-            )
+            model = conversation_store.get_model() or repo_cfg.model
+            effort = conversation_store.get_effort() or repo_cfg.effort
             if parsed.model_hint and parsed.model_hint != model:
                 logger.warning(
                     "Repo '%s': ignoring model=%s in resumed "
@@ -448,11 +421,20 @@ def process_message(
         ]
 
         # Build container environment
-        env = ContainerEnv(variables=repo_config.container_env)
+        env = ContainerEnv(variables=task_env)
 
         # Build network sandbox config if enabled
         network_sandbox: NetworkSandboxConfig | None = None
-        if repo_config.network_sandbox_enabled:
+        if not repo_cfg.network_sandbox_enabled:
+            logger.warning("Repo '%s': network sandbox disabled", repo_id)
+            if replacement_map:
+                logger.warning(
+                    "Repo '%s': network sandbox is disabled but masked "
+                    "secrets are configured. Masked secrets require the "
+                    "proxy — they will not work without the sandbox.",
+                    repo_id,
+                )
+        if repo_cfg.network_sandbox_enabled:
             try:
                 allowlist_data = conv_mgr.mirror.read_file(
                     ".airut/network-allowlist.yaml"
@@ -483,7 +465,7 @@ def process_message(
                 else None
             ),
             network_sandbox=network_sandbox,
-            resource_limits=repo_config.resource_limits,
+            resource_limits=resource_limits,
         )
 
         # Register task for stop functionality
@@ -569,7 +551,7 @@ def process_message(
                     else None
                 ),
                 network_sandbox=network_sandbox,
-                resource_limits=repo_config.resource_limits,
+                resource_limits=resource_limits,
             )
 
             # Persist recovery prompt for dashboard visibility
@@ -604,8 +586,8 @@ def process_message(
             # set, so only treat as subscription (hide cost) when OAuth is
             # present without an API key.
             is_subscription = bool(
-                repo_config.container_env.get("CLAUDE_CODE_OAUTH_TOKEN")
-            ) and not bool(repo_config.container_env.get("ANTHROPIC_API_KEY"))
+                task_env.get("CLAUDE_CODE_OAUTH_TOKEN")
+            ) and not bool(task_env.get("ANTHROPIC_API_KEY"))
             usage_stats = UsageStats(
                 total_cost_usd=result.total_cost_usd
                 if result.total_cost_usd > 0
@@ -638,7 +620,7 @@ def process_message(
                 parsed, conv_id, response_body, usage_footer, outbox_files
             )
         elif result.outcome == Outcome.TIMEOUT:
-            timeout_val = repo_config.resource_limits.timeout
+            timeout_val = resource_limits.timeout
             if timeout_val is not None:
                 interrupted = (
                     f"The task was interrupted after {timeout_val} seconds."

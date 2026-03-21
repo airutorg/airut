@@ -9,34 +9,6 @@ For a minimal working example of `.airut/` configuration, see the
 
 ## Files
 
-### `airut.yaml` — Repo Config
-
-Controls repo-specific behavior:
-
-```yaml
-default_model: opus         # Claude model (overridable via email subaddressing)
-
-resource_limits:            # Container resource limits (all optional)
-  timeout: 6000             # Max execution time in seconds (>= 10)
-  memory: "4g"              # Memory limit, e.g. "2g", "512m"
-  cpus: 2                   # CPU limit (float, e.g. 1.5 for 1.5 cores)
-  pids_limit: 256           # Process limit (fork bomb protection)
-
-network:
-  sandbox_enabled: true     # Enable network allowlist enforcement
-
-container_env:              # Environment variables for containers
-  GH_TOKEN: !secret GH_TOKEN              # Required secret from server pool
-  API_KEY: !secret? API_KEY               # Optional secret (skip if missing)
-  BUCKET_NAME: "my-bucket"                # Inline value (non-secret)
-```
-
-**YAML Tags:**
-
-- `!secret NAME` — resolve from server's secrets pool (error if missing)
-- `!secret? NAME` — optional secret (skip entry if missing)
-- `!env` is NOT allowed in repo config (security: prevents reading server env)
-
 ### `network-allowlist.yaml` — Network Sandbox
 
 Defines which hosts containers can access. All HTTP(S) traffic is proxied and
@@ -115,12 +87,17 @@ handles:
 - Channel credentials (email: IMAP/SMTP; Slack: bot and app tokens)
 - Authorization configuration (email: sender allowlist; Slack: rules)
 - Git repo URL and storage directory
-- Secrets pool (values that `!secret` tags reference)
-- GitHub App credentials (`github_app_credentials`) — proxy-managed token
-  rotation with short-lived installation tokens
-- Masked secrets (`masked_secrets`) — surrogate token replacement for scoped
-  hosts
-- Signing credentials (`signing_credentials`) — AWS SigV4 re-signing
+- Per-repo settings (model, effort, resource limits, container environment
+  variables, network sandbox toggle)
+- Credential pools per repo:
+  - `secrets` — plain values injected as container environment variables
+  - `masked_secrets` — surrogate token replacement for scoped hosts
+  - `signing_credentials` — AWS SigV4 re-signing
+  - `github_app_credentials` — proxy-managed GitHub App token rotation
+
+All credential pool entries (secrets, masked secrets, signing credentials,
+GitHub App credentials) auto-inject into the container as environment variables
+by their key name.
 
 A repo can have email, Slack, or both channels active simultaneously. See
 `doc/email-setup.md` and `doc/slack-setup.md` for channel-specific guides.

@@ -77,16 +77,17 @@ masked_secrets:
 
 ## Resolution Behavior
 
-When repo config references `!secret NAME` or `!secret? NAME`:
+All credential pools are defined in the server config per repo. Masked secret
+entries auto-inject into the container as environment variables by their key
+name. For each masked secret:
 
-1. Check `masked_secrets[NAME]` first
-2. If found and value non-empty → generate surrogate, add to replacement map
-3. If not found → check `secrets[NAME]` (plain injection)
-4. If `!secret` and missing/empty → `ConfigError`
-5. If `!secret?` and missing/empty → skip (no env var set)
+1. If value is non-empty → generate surrogate, add to replacement map, inject
+   surrogate as env var
+2. If value is empty → skip (no env var set)
 
-The repo config is unaware of masking — it uses `!secret` for both plain and
-masked secrets. The server determines protection level at resolution time.
+The server determines protection level based on which credential pool the entry
+belongs to. See [repo-config.md](repo-config.md#credential-auto-injection) for
+the full priority ordering when the same env var name appears in multiple pools.
 
 ## Surrogate Format
 
@@ -199,12 +200,12 @@ Body and query parameter tokens are **not** replaced.
 ## Data Flow
 
 ```
-Gateway config resolution
+Server config resolution
     │
-    ├─ Parse .airut/airut.yaml
-    ├─ Resolve !secret references against masked_secrets + secrets
+    ├─ Parse per-repo masked_secrets from server config
+    ├─ Resolve credential values (via !env tags)
     │
-    └─ Provide MaskedSecret / SigningCredential to sandbox
+    └─ Provide MaskedSecret entries to sandbox
            │
            ▼
 prepare_secrets() (airut/sandbox/secrets.py)
@@ -242,7 +243,7 @@ proxy_filter.py request()
 
 Masked secrets depend on the network sandbox proxy to function. The proxy is
 what swaps surrogates for real values on matching requests. When the sandbox is
-disabled (`network.sandbox_enabled: false` in either repo or server config):
+disabled (`network.sandbox_enabled: false` in server config):
 
 - Surrogates are **still generated** and injected into the container
 - The proxy **never starts**, so surrogates are never swapped for real values
@@ -264,12 +265,11 @@ A warning is logged when this condition is detected:
 
 ## Migration
 
-Existing `secrets` continue to work. To mask a secret:
+To mask a secret that is currently a plain `secrets` entry:
 
 1. Move entry from `secrets` to `masked_secrets` in server config
 2. Add `scopes` list (fnmatch patterns for allowed hosts)
 3. Add `headers` list (fnmatch patterns, e.g., `["Authorization"]` or `["*"]`)
-4. No repo config changes needed
 
 ## AWS Credentials
 

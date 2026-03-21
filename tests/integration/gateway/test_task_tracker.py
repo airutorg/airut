@@ -823,9 +823,9 @@ events = [
             )
             assert task is not None
 
-            # Default model from test repo config is "sonnet"
-            assert task.model == "sonnet", (
-                f"Expected model='sonnet', got '{task.model}'"
+            # Default model from server config is "opus"
+            assert task.model == "opus", (
+                f"Expected model='opus', got '{task.model}'"
             )
 
         finally:

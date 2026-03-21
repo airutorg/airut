@@ -189,39 +189,28 @@ recovery details.
 
 ### Enabling/Disabling the Sandbox
 
-The network sandbox is controlled at two levels. Both default to `true`; the
-effective value is the **logical AND** — if either is `false`, the sandbox is
-disabled.
-
-**Repo config** (`.airut/airut.yaml`):
+The network sandbox is controlled in the server config per repo. It defaults to
+`true`.
 
 ```yaml
-network:
-  sandbox_enabled: true  # default; set to false to disable (break-glass)
-```
-
-**Server config** (`~/.config/airut/airut.yaml`, per-repo):
-
-```yaml
+# ~/.config/airut/airut.yaml (server config, per-repo)
 repos:
   my-project:
     network:
-      sandbox_enabled: true  # default; set to false to override repo config
+      sandbox_enabled: true  # default; set to false to disable (break-glass)
 ```
 
 When disabled, containers get unrestricted network access without the proxy.
 **Use only for debugging or emergencies** — this removes the exfiltration
 protection.
 
-The server-side setting is useful as a **break-glass** for operators: if a
-broken allowlist gets checked in, the operator can disable the sandbox
-server-side while a fix is prepared. Note that server config changes require a
-**server restart** to take effect.
+This setting is useful as a **break-glass** for operators: if a broken allowlist
+gets checked in, the operator can disable the sandbox while a fix is prepared.
+Note that server config changes require a **server restart** to take effect.
 
-When the sandbox is disabled, a warning is logged showing both settings. If
-masked secrets are configured, an additional warning is logged because masked
-secrets depend on the proxy (see
-[Masked Secrets](#masked-secrets-token-replacement)).
+When the sandbox is disabled, a warning is logged. If masked secrets are
+configured, an additional warning is logged because masked secrets depend on the
+proxy (see [Masked Secrets](#masked-secrets-token-replacement)).
 
 ### Upstream DNS
 
@@ -459,7 +448,7 @@ repos:
       AWS_PROD:
         type: aws-sigv4
         access_key_id:
-          name: AWS_ACCESS_KEY_ID        # secret name for repo config
+          name: AWS_ACCESS_KEY_ID        # env var name injected into container
           value: !env AWS_ACCESS_KEY_ID
         secret_access_key:
           name: AWS_SECRET_ACCESS_KEY
@@ -471,16 +460,9 @@ repos:
           - "*.amazonaws.com"
 ```
 
-The repo config uses standard `!secret` references — it doesn't know signing
-credentials are involved:
-
-```yaml
-# In .airut/airut.yaml (repo config)
-container_env:
-  AWS_ACCESS_KEY_ID: !secret AWS_ACCESS_KEY_ID
-  AWS_SECRET_ACCESS_KEY: !secret AWS_SECRET_ACCESS_KEY
-  AWS_SESSION_TOKEN: !secret? AWS_SESSION_TOKEN
-```
+The container receives surrogate env vars (`AWS_ACCESS_KEY_ID`, etc.)
+auto-injected from the signing credential `.name` fields. The proxy re-signs
+requests with the real credentials for scoped hosts.
 
 ### What Gets Re-signed
 
@@ -513,9 +495,8 @@ container_env:
 
 ### Transparent Upgrade Path
 
-The server admin can switch between plain secrets and signing credentials
-without any repo config changes — the repo config uses `!secret` references
-either way.
+The server admin can switch between plain secrets and signing credentials by
+changing only the server config.
 
 See [spec/aws-sigv4-resigning.md](../spec/aws-sigv4-resigning.md) for the full
 specification (surrogate generation, re-signing algorithm, chunked transfer
@@ -585,14 +566,9 @@ repos:
           - "my-repo"
 ```
 
-The repo config uses standard `!secret` references -- it doesn't know GitHub App
-credentials are involved:
-
-```yaml
-# In .airut/airut.yaml (repo config)
-container_env:
-  GH_TOKEN: !secret GH_TOKEN
-```
+The container receives a surrogate `GH_TOKEN` env var auto-injected from the
+GitHub App credential key name. The proxy replaces the surrogate with a
+short-lived installation token for scoped hosts.
 
 ### Security Properties
 
@@ -670,10 +646,9 @@ the override (or setting it back to `true`) and restart again.
 ### Masked secrets stopped working
 
 If API calls that previously worked start failing with authentication errors,
-check whether the sandbox was disabled on either side:
+check whether the sandbox was disabled:
 
-1. Check repo config: `network.sandbox_enabled` in `.airut/airut.yaml`
-2. Check server config: `network.sandbox_enabled` under the repo's section
+1. Check server config: `network.sandbox_enabled` under the repo's section
 
 Masked secrets require the proxy to swap surrogates for real values. When the
 sandbox is disabled, the proxy doesn't start, and the container receives

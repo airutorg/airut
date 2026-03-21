@@ -439,8 +439,10 @@ repos:
           - "*.amazonaws.com"
 ```
 
-The repo config references these with standard `!secret` tags — it doesn't need
-to know about signing credentials. See
+Credential keys (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_SESSION_TOKEN`) are auto-injected into the container as environment
+variables. The container receives surrogate values; the proxy re-signs requests
+with the real credentials when the host matches scopes. See
 [network-sandbox.md](network-sandbox.md#signing-credentials-aws-sigv4-re-signing)
 for an overview and
 [spec/aws-sigv4-resigning.md](../spec/aws-sigv4-resigning.md) for the full

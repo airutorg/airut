@@ -16,6 +16,7 @@ from airut.gateway.channel import RawMessage
 from airut.gateway.config import RepoServerConfig
 from airut.gateway.service import GatewayService
 from airut.gateway.service.repo_handler import RepoHandler
+from airut.sandbox.types import ResourceLimits
 
 
 def make_message(
@@ -74,7 +75,8 @@ _EMAIL_FIELDS = {
 
 
 def update_repo(
-    handler: RepoHandler, **overrides: bool | int | str | None
+    handler: RepoHandler,
+    **overrides: bool | int | str | ResourceLimits | None,
 ) -> None:
     """Update repo config with new values (frozen dataclass)."""
     for key, value in overrides.items():

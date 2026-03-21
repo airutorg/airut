@@ -1,8 +1,10 @@
 # Airut Server Configuration
 #
-# Server-side settings: infrastructure, credentials, and operator controls.
-# Repo-specific behaviour (git identity, model, resource limits, container env,
-# network) is in .airut/airut.yaml (loaded from each repo's git mirror).
+# Server-side settings: infrastructure, credentials, and per-repo controls.
+# All per-repo configuration (model, effort, resource limits, container env,
+# network, secrets) is managed here.  There is no repo-side airut.yaml —
+# only .airut/network-allowlist.yaml and .airut/container/Dockerfile live
+# in the repository.
 #
 # Run `airut init` to create a stub at ~/.config/airut/airut.yaml,
 # then use this file as a reference for all available options.
@@ -42,7 +44,7 @@ dashboard:
 container_command: podman
 
 # Server-wide resource limit ceilings (all optional).
-# These are maximum values — repo configs cannot exceed them.
+# These are maximum values — per-repo values are clamped to these ceilings.
 # Omitted fields mean no ceiling for that dimension.
 # resource_limits:
 #   timeout: 7200       # Max allowed timeout (seconds)
@@ -129,32 +131,49 @@ repos:
       # Repository URL cloned into each conversation workspace.
       repo_url: https://github.com/you/my-project.git
 
-    # Named pool of secrets available for this repo to reference via !secret
-    # and !secret? tags in .airut/airut.yaml.  Keys are logical names; values
-    # are resolved from the environment.
+    # Claude model for new conversations (default: "opus").
+    # Channel hints (e.g. email subaddressing airut+sonnet@...) override
+    # this for new conversations.  Resumed conversations keep their
+    # stored model.
+    model: opus
+
+    # Effort level passed as --effort to Claude Code (optional).
+    # Common values: "medium", "high", "max".  Omit to use Claude Code's
+    # built-in default.
+    # effort: max
+
+    # Per-repo resource limits (all optional).
+    # Values are clamped to the server-wide ceilings above.
+    # Omitted fields mean no limit for that dimension.
+    # resource_limits:
+    #   timeout: 6000       # Max execution time in seconds (>= 10)
+    #   memory: "4g"        # Memory limit, e.g. "2g", "512m"
+    #   cpus: 2             # CPU limit (float, e.g. 1.5 for 1.5 cores)
+    #   pids_limit: 256     # Process limit (fork bomb protection)
+
+    # Network sandbox toggle (default: true).
+    # When enabled, containers are placed on an isolated network and all
+    # HTTP(S) traffic is routed through a proxy that enforces the network
+    # allowlist (see .airut/network-allowlist.yaml in the repository).
+    # Set to false for unrestricted network access (break-glass override).
+    # network:
+    #   sandbox_enabled: true
+
+    # Plain environment variables for containers (non-secret values).
+    # Use for configuration that doesn't need credential protection.
+    # container_env:
+    #   BUCKET_NAME: "my-bucket"
+    #   R2_ACCOUNT_ID: "7ef1d25e..."
+
+    # Named pool of secrets for this repo.  Keys become environment variable
+    # names in the container automatically.  Values are resolved from the
+    # environment via !env tags.
     #
     # Plain secrets are injected directly into the container environment.
     # Use for credentials that don't support header-based auth or need to be
     # used with arbitrary hosts.
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
-
-    # Server-side model override.  Takes precedence over channel hints
-    # (e.g. email subaddressing) and repo default_model for new
-    # conversations.  Resumed conversations keep their stored model.
-    # model: sonnet
-
-    # Server-side effort override.  Takes precedence over repo
-    # default_effort for new conversations.
-    # effort: medium
-
-    # Server-side network sandbox override.  Both server and repo config
-    # default to true; the effective value is the logical AND — if either
-    # is false, the sandbox is disabled for this repo.  Useful as a
-    # break-glass when a broken allowlist gets checked in.
-    #
-    # network:
-    #   sandbox_enabled: true
 
     # Masked secrets inject surrogate tokens into containers.  The proxy swaps
     # surrogates for real values only when the request host matches scopes.
@@ -181,9 +200,8 @@ repos:
     # re-signs outbound requests with real AWS credentials.  Containers
     # receive format-preserving surrogates that the AWS SDK uses normally.
     #
-    # Each field has a name (the secret name repos reference via !secret)
-    # and a value (the real credential).  The repo config is transparent —
-    # it uses !secret AWS_ACCESS_KEY_ID just like any other secret.
+    # Each credential field has a name (the env var name injected into the
+    # container) and a value (the real credential).
     #
     # Works with any S3-compatible API (AWS, Cloudflare R2, MinIO, etc.).
     # signing_credentials:
@@ -271,6 +289,9 @@ repos:
   #
   #   git:
   #     repo_url: https://github.com/you/another-repo.git
+  #
+  #   model: opus
+  #
   #   secrets:
   #     ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
   #     GH_TOKEN: !env GH_TOKEN

@@ -14,31 +14,13 @@ import pytest
 from airut.claude_output.types import Usage
 from airut.dashboard.tracker import CompletionReason
 from airut.gateway.channel import ChannelSendError, ParsedMessage
-from airut.gateway.config import RepoConfig, RepoServerConfig
+from airut.gateway.config import RepoServerConfig
 from airut.gateway.service import build_recovery_prompt
 from airut.gateway.service.message_processing import process_message
 from airut.sandbox import ExecutionResult, Outcome
 from airut.sandbox.types import ResourceLimits
 
 from .conftest import make_service, update_global, update_repo
-
-
-def _make_repo_config(
-    *,
-    default_model: str = "sonnet",
-    default_effort: str | None = None,
-    timeout: int | None = 300,
-    network_sandbox_enabled: bool = True,
-    container_env: dict[str, str] | None = None,
-) -> RepoConfig:
-    """Create a RepoConfig for testing."""
-    return RepoConfig(
-        default_model=default_model,
-        default_effort=default_effort,
-        resource_limits=ResourceLimits(timeout=timeout),
-        network_sandbox_enabled=network_sandbox_enabled,
-        container_env=container_env or {},
-    )
 
 
 def _make_parsed_message(
@@ -365,16 +347,14 @@ class TestMakeTodoCallback:
 
 class TestProcessMessage:
     @pytest.fixture(autouse=True)
-    def _patch_repo_config(self):
-        """Patch RepoConfig.from_mirror for all process message tests."""
-        rc = _make_repo_config()
-        # from_mirror now returns (RepoConfig, ReplacementMap) tuple
-        with patch(
-            "airut.gateway.service.message_processing.RepoConfig.from_mirror",
-            return_value=(rc, {}),
-        ) as mock_rc:
-            self._mock_repo_config = mock_rc
-            self._repo_config = rc
+    def _patch_build_task_env(self):
+        """Patch build_task_env for all process message tests."""
+        with patch.object(
+            RepoServerConfig,
+            "build_task_env",
+            return_value=({}, {}),
+        ) as mock_bte:
+            self._mock_build_task_env = mock_bte
             yield
 
     def _setup_svc(
@@ -382,6 +362,7 @@ class TestProcessMessage:
     ) -> tuple[Any, Any, MagicMock, MagicMock]:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_base_url=None)
+        update_repo(handler, resource_limits=ResourceLimits(timeout=300))
 
         repo_path = tmp_path / "repo"
         repo_path.mkdir()
@@ -542,6 +523,7 @@ class TestProcessMessage:
     ) -> None:
         """Timeout message is clean when no timeout value is configured."""
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        update_repo(handler, resource_limits=ResourceLimits(timeout=None))
         svc._mock_task.execute = AsyncMock(
             return_value=_make_failure_result(
                 outcome=Outcome.TIMEOUT,
@@ -549,16 +531,9 @@ class TestProcessMessage:
         )
         parsed = _make_parsed_message(body="Do something")
 
-        rc = _make_repo_config(timeout=None)
-        with (
-            patch(
-                "airut.gateway.service.message_processing.RepoConfig.from_mirror",
-                return_value=(rc, {}),
-            ),
-            patch(
-                "airut.gateway.service.message_processing.ConversationStore",
-                return_value=mock_cs,
-            ),
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
         ):
             reason, conv_id = process_message(
                 svc, parsed, "task1", handler, adapter
@@ -667,10 +642,7 @@ class TestProcessMessage:
         self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
-
-        # Override repo config to include default_effort
-        rc = _make_repo_config(default_effort="max")
-        self._mock_repo_config.return_value = (rc, {})
+        update_repo(handler, effort="max")
 
         parsed = _make_parsed_message(body="Do stuff")
 
@@ -753,14 +725,11 @@ class TestProcessMessage:
         call_kwargs = svc._mock_task.execute.call_args[1]
         assert call_kwargs["effort"] == "low"
 
-    def test_no_server_override_falls_through(
+    def test_channel_hint_overrides_server_model(
         self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
-        # Server model and effort are None by default
-
-        rc = _make_repo_config(default_model="opus", default_effort="max")
-        self._mock_repo_config.return_value = (rc, {})
+        update_repo(handler, model="opus", effort="max")
 
         parsed = _make_parsed_message(body="Do stuff", model_hint="sonnet")
 
@@ -770,11 +739,11 @@ class TestProcessMessage:
         ):
             process_message(svc, parsed, "task1", handler, adapter)
         call_kwargs = svc._mock_task.execute.call_args[1]
-        # Channel hint wins over repo default when no server override
+        # Channel hint overrides server model
         assert call_kwargs["model"] == "sonnet"
         assert call_kwargs["effort"] == "max"
 
-    def test_server_model_overrides_channel_hint(
+    def test_channel_hint_overrides_server_model_preference(
         self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
@@ -788,16 +757,14 @@ class TestProcessMessage:
         ):
             process_message(svc, parsed, "task1", handler, adapter)
         call_kwargs = svc._mock_task.execute.call_args[1]
-        assert call_kwargs["model"] == "haiku"
+        # Channel hint takes priority over server model
+        assert call_kwargs["model"] == "opus"
 
-    def test_server_model_overrides_repo_default(
+    def test_server_model_used_when_no_channel_hint(
         self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         update_repo(handler, model="haiku")
-
-        rc = _make_repo_config(default_model="opus")
-        self._mock_repo_config.return_value = (rc, {})
 
         parsed = _make_parsed_message(body="Do stuff")
 
@@ -809,14 +776,11 @@ class TestProcessMessage:
         call_kwargs = svc._mock_task.execute.call_args[1]
         assert call_kwargs["model"] == "haiku"
 
-    def test_server_effort_overrides_repo_default(
+    def test_server_effort_used_directly(
         self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         update_repo(handler, effort="low")
-
-        rc = _make_repo_config(default_effort="max")
-        self._mock_repo_config.return_value = (rc, {})
 
         parsed = _make_parsed_message(body="Do stuff")
 
@@ -999,10 +963,10 @@ class TestProcessMessage:
         self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """Cost shown when only ANTHROPIC_API_KEY is set."""
-        rc = _make_repo_config(
-            container_env={"ANTHROPIC_API_KEY": "sk-test"},
+        self._mock_build_task_env.return_value = (
+            {"ANTHROPIC_API_KEY": "sk-test"},
+            {},
         )
-        self._mock_repo_config.return_value = (rc, {})
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         parsed = _make_parsed_message(body="Check")
 
@@ -1017,10 +981,10 @@ class TestProcessMessage:
         self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """Cost hidden when only OAuth token is set."""
-        rc = _make_repo_config(
-            container_env={"CLAUDE_CODE_OAUTH_TOKEN": "tok"},
+        self._mock_build_task_env.return_value = (
+            {"CLAUDE_CODE_OAUTH_TOKEN": "tok"},
+            {},
         )
-        self._mock_repo_config.return_value = (rc, {})
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         parsed = _make_parsed_message(body="Check")
 
@@ -1035,13 +999,13 @@ class TestProcessMessage:
         self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
         """Cost shown when both are set (API key takes priority)."""
-        rc = _make_repo_config(
-            container_env={
+        self._mock_build_task_env.return_value = (
+            {
                 "ANTHROPIC_API_KEY": "sk-test",
                 "CLAUDE_CODE_OAUTH_TOKEN": "tok",
             },
+            {},
         )
-        self._mock_repo_config.return_value = (rc, {})
         svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
         parsed = _make_parsed_message(body="Check")
 
@@ -1354,19 +1318,130 @@ class TestProcessMessage:
         assert svc.sandbox.create_task.call_count == 1
 
 
+class TestSandboxDisabledWarning:
+    """Tests for sandbox-disabled warning log messages."""
+
+    def _setup_svc(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> tuple[Any, Any, MagicMock, MagicMock]:
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, dashboard_base_url=None)
+        update_repo(
+            handler,
+            network_sandbox_enabled=False,
+            resource_limits=ResourceLimits(timeout=300),
+        )
+
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        (repo_path / "inbox").mkdir()
+        (repo_path / "outbox").mkdir()
+
+        handler.conversation_manager.exists.return_value = False
+        handler.conversation_manager.initialize_new.return_value = (
+            "conv1",
+            repo_path,
+        )
+        handler.conversation_manager.get_workspace_path.return_value = repo_path
+        mock_mirror = MagicMock()
+        mock_mirror.list_directory.return_value = ["Dockerfile"]
+        mock_mirror.read_file.return_value = b"FROM python:3.13-slim\n"
+        handler.conversation_manager.mirror = mock_mirror
+
+        mock_cs = MagicMock()
+        mock_cs.get_session_id_for_resume.return_value = None
+        mock_cs.get_model.return_value = None
+        mock_cs.get_effort.return_value = None
+
+        mock_task = MagicMock()
+        mock_task.execute = AsyncMock(return_value=_make_success_result())
+        mock_task.event_log = MagicMock()
+        svc.sandbox.ensure_image.return_value = "airut:test"
+        svc.sandbox.create_task.return_value = mock_task
+
+        adapter = MagicMock()
+        adapter.save_attachments.return_value = []
+
+        return svc, handler, mock_cs, adapter
+
+    def test_sandbox_disabled_logs_warning(
+        self,
+        email_config: RepoServerConfig,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Disabling sandbox logs a warning."""
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        parsed = _make_parsed_message(body="Hello")
+
+        import logging
+
+        with (
+            caplog.at_level(logging.WARNING),
+            patch(
+                "airut.gateway.service.message_processing.ConversationStore",
+                return_value=mock_cs,
+            ),
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+
+        assert any(
+            "network sandbox disabled" in r.message for r in caplog.records
+        )
+
+    def test_sandbox_disabled_with_masked_secrets_logs_extra_warning(
+        self,
+        email_config: RepoServerConfig,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Disabled sandbox with masked secrets logs additional warning."""
+        from airut.gateway.config import MaskedSecret
+
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+
+        # Add masked secret to trigger the extra warning
+        object.__setattr__(
+            handler.config,
+            "masked_secrets",
+            {
+                "GH_TOKEN": MaskedSecret(
+                    value="ghp_test",
+                    scopes=frozenset(["api.github.com"]),
+                    headers=("Authorization",),
+                )
+            },
+        )
+
+        parsed = _make_parsed_message(body="Hello")
+
+        import logging
+
+        with (
+            caplog.at_level(logging.WARNING),
+            patch(
+                "airut.gateway.service.message_processing.ConversationStore",
+                return_value=mock_cs,
+            ),
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+
+        assert any(
+            "masked secrets" in r.message.lower() for r in caplog.records
+        )
+
+
 class TestBuildImageErrors:
     """Tests for _build_image error paths exercised through process_message."""
 
     @pytest.fixture(autouse=True)
-    def _patch_repo_config(self):
-        """Patch RepoConfig.from_mirror for all build image error tests."""
-        rc = _make_repo_config()
-        with patch(
-            "airut.gateway.service.message_processing.RepoConfig.from_mirror",
-            return_value=(rc, {}),
-        ) as mock_rc:
-            self._mock_repo_config = mock_rc
-            self._repo_config = rc
+    def _patch_build_task_env(self):
+        """Patch build_task_env for all build image error tests."""
+        with patch.object(
+            RepoServerConfig,
+            "build_task_env",
+            return_value=({}, {}),
+        ):
             yield
 
     def _setup_svc(
@@ -1507,15 +1582,13 @@ class TestAllowlistParseError:
     """Tests for network allowlist read/parse failure path."""
 
     @pytest.fixture(autouse=True)
-    def _patch_repo_config(self):
-        """Patch RepoConfig.from_mirror with network sandbox enabled."""
-        rc = _make_repo_config(network_sandbox_enabled=True)
-        with patch(
-            "airut.gateway.service.message_processing.RepoConfig.from_mirror",
-            return_value=(rc, {}),
-        ) as mock_rc:
-            self._mock_repo_config = mock_rc
-            self._repo_config = rc
+    def _patch_build_task_env(self):
+        """Patch build_task_env for allowlist error tests."""
+        with patch.object(
+            RepoServerConfig,
+            "build_task_env",
+            return_value=({}, {}),
+        ):
             yield
 
     def _setup_svc(
@@ -1668,15 +1741,13 @@ class TestConvertReplacementMap:
             ),
         }
 
-        rc = _make_repo_config(network_sandbox_enabled=True)
-
         parsed = _make_parsed_message(body="Do something")
 
         with (
-            patch(
-                "airut.gateway.service.message_processing."
-                "RepoConfig.from_mirror",
-                return_value=(rc, replacement_map),
+            patch.object(
+                RepoServerConfig,
+                "build_task_env",
+                return_value=({}, replacement_map),
             ),
             patch(
                 "airut.gateway.service.message_processing.ConversationStore",
@@ -1725,14 +1796,13 @@ class TestConvertReplacementMap:
             ),
         }
 
-        rc = _make_repo_config(network_sandbox_enabled=True)
         parsed = _make_parsed_message(body="Do something")
 
         with (
-            patch(
-                "airut.gateway.service.message_processing."
-                "RepoConfig.from_mirror",
-                return_value=(rc, replacement_map),
+            patch.object(
+                RepoServerConfig,
+                "build_task_env",
+                return_value=({}, replacement_map),
             ),
             patch(
                 "airut.gateway.service.message_processing.ConversationStore",
@@ -1773,14 +1843,13 @@ class TestConvertReplacementMap:
             ),
         }
 
-        rc = _make_repo_config(network_sandbox_enabled=True)
         parsed = _make_parsed_message(body="Do something")
 
         with (
-            patch(
-                "airut.gateway.service.message_processing."
-                "RepoConfig.from_mirror",
-                return_value=(rc, replacement_map),
+            patch.object(
+                RepoServerConfig,
+                "build_task_env",
+                return_value=({}, replacement_map),
             ),
             patch(
                 "airut.gateway.service.message_processing.ConversationStore",

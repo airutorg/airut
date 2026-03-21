@@ -25,7 +25,6 @@ from airut.gateway.config import (
     ConfigError,
     EmailChannelConfig,
     GlobalConfig,
-    RepoConfig,
     RepoServerConfig,
     ServerConfig,
 )
@@ -72,7 +71,6 @@ __all__ = [
     "ConfigError",
     "EmailChannelConfig",
     "GlobalConfig",
-    "RepoConfig",
     "RepoServerConfig",
     "ServerConfig",
     # conversation

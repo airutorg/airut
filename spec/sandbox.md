@@ -262,10 +262,12 @@ preventing slow OOM thrashing.
 
 ### Configuration Layers
 
-Resource limits flow from two configuration layers:
+Resource limits are configured in the server config
+(`~/.config/airut/airut.yaml`) at two levels:
 
-1. **Server config** (`~/.config/airut/airut.yaml`) — optional ceilings
-2. **Repo config** (`.airut/airut.yaml`) — per-repo values, clamped to ceilings
+1. **Server-wide ceilings** (top-level `resource_limits`) — optional maximums
+2. **Per-repo values** (under `repos.<name>.resource_limits`) — clamped to
+   ceilings
 
 See `spec/repo-config.md` for the full resolution logic.
 
