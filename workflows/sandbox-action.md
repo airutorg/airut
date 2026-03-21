@@ -55,34 +55,45 @@ cd /storage/sandbox-action && git fetch origin && git checkout main && git pull
 
 ## Branching Model
 
-The repository uses `vN` branches as protected release branches. Consumers using
-`@v0` resolve to the `v0` branch directly (no floating tag). There are two
-independent development tracks:
+Consumers reference the action via `@v0`, which resolves to a **floating tag**
+that is automatically updated to point at the latest `vX.Y.Z` release tag. The
+`releases/v0` branch holds the release-track source and `VERSION` file.
+
+There are two independent development tracks:
 
 **(a) Action implementation changes** -- developed on `main`, cherry-picked to
-`vN` as needed via reviewed PRs.
+`releases/vN` as needed via reviewed PRs.
 
-**(b) Airut version bumps** -- happen directly on `vN` via PRs that update the
-`VERSION` file.
+**(b) Airut version bumps** -- happen directly on `releases/vN` via PRs that
+update the `VERSION` file.
 
-| Ref            | VERSION file | airut-sandbox source | Purpose                             |
-| -------------- | ------------ | -------------------- | ----------------------------------- |
-| `main`         | `main`       | `git+.../airut@main` | Development, airut repo's own CI    |
-| `v0` (branch)  | `X.Y.Z`      | PyPI `airut==X.Y.Z`  | Stable release; `@v0` resolves here |
-| `vX.Y.Z` (tag) | `X.Y.Z`      | PyPI `airut==X.Y.Z`  | Pinned version                      |
+| Ref                    | VERSION file | airut-sandbox source | Purpose                               |
+| ---------------------- | ------------ | -------------------- | ------------------------------------- |
+| `main`                 | `main`       | `git+.../airut@main` | Development, airut repo's own CI      |
+| `releases/v0` (branch) | `X.Y.Z`      | PyPI `airut==X.Y.Z`  | Release branch; PRs for version bumps |
+| `v0` (floating tag)    | `X.Y.Z`      | PyPI `airut==X.Y.Z`  | Consumer ref; auto-updated on release |
+| `vX.Y.Z` (tag)         | `X.Y.Z`      | PyPI `airut==X.Y.Z`  | Pinned version                        |
 
-_(e.g., `X.Y.Z` = `0.17.0`)_
+_(e.g., `X.Y.Z` = `0.18.0`)_
 
 **`main` is never modified during releases.** The `VERSION` file on `main`
-always contains `main`. Only `vN` branches have PyPI versions in `VERSION`.
+always contains `main`. Only `releases/vN` branches have PyPI versions in
+`VERSION`.
 
-**`vN` branches are protected** and only advance through merged PRs. They are
-never force-pushed or reset to `main`.
+**`releases/vN` branches are protected** and only advance through merged PRs.
+They are never force-pushed or reset to `main`.
 
-**Why branches, not floating tags?** GitHub Actions resolves `@v0` to both tags
-and branches (tags take priority). Using a branch means consumers automatically
-get updates when PRs merge -- no tag deletion/recreation needed. This avoids
-race conditions and simplifies the release process.
+### Floating Tag Workflow
+
+The `update-floating-tag.yml` workflow runs on `release: published` events (and
+supports `workflow_dispatch` as a fallback). It extracts the major version from
+the release tag (e.g., `v0.18.0` -> `v0`) and force-pushes the floating tag to
+point at the release tag.
+
+The workflow uses a dedicated **`airut-release-bot`** GitHub App for tag push
+permissions, since `GITHUB_TOKEN` cannot bypass repository tag rulesets. The App
+ID is stored in repository variables (`vars.RELEASE_BOT_APP_ID`) and the private
+key in secrets (`secrets.RELEASE_BOT_PRIVATE_KEY`).
 
 ## Cherry-Picking Action Changes to a Release Branch
 
@@ -95,48 +106,50 @@ When an action implementation change on `main` needs to ship to consumers:
    ```bash
    cd /storage/sandbox-action
    git fetch origin
-   git checkout -b cherry-pick/description origin/v0
+   git checkout -b cherry-pick/description origin/releases/v0
    git cherry-pick <commit-sha>
    ```
 
    Resolve any conflicts (the release branch may diverge from `main` in
    `VERSION` and potentially other files).
 
-3. Push and create a PR **targeting `v0`**:
+3. Push and create a PR **targeting `releases/v0`**:
 
    ```bash
    git push -u origin HEAD
-   gh pr create --base v0 --fill
+   gh pr create --base releases/v0 --fill
    ```
 
-4. After review and merge, consumers using `@v0` pick up the change on their
-   next CI run. If the change warrants a pinned release, tag it (see Releasing).
+4. After review and merge, create a pinned release tag to ship the change (see
+   Releasing). The floating `v0` tag is updated automatically when the release
+   is published.
 
 ## Releasing (After Airut Release)
 
-When a new airut version is published to PyPI (e.g., `v0.17.0`):
+When a new airut version is published to PyPI (e.g., `v0.18.0`):
 
 1. Create a branch off the release branch and update `VERSION`:
 
    ```bash
    cd /storage/sandbox-action
    git fetch origin
-   git checkout -b bump/v0.17.0 origin/v0
-   echo "0.17.0" > VERSION
+   git checkout -b bump/v0.18.0 origin/releases/v0
+   echo "0.18.0" > VERSION
    git add VERSION
-   git commit -m "Bump airut to v0.17.0"
+   git commit -m "Bump airut to v0.18.0"
    git push -u origin HEAD
    ```
 
-2. Create a PR **targeting `v0`**:
+2. Create a PR **targeting `releases/v0`**:
 
    ```bash
-   gh pr create --base v0 --title "Bump airut to v0.17.0" \
-     --body "Updates VERSION to 0.17.0 for the new airut release."
+   gh pr create --base releases/v0 --title "Bump airut to v0.18.0" \
+     --body "Updates VERSION to 0.18.0 for the new airut release."
    ```
 
-3. After the PR is merged, consumers using `@v0` immediately get the new
-   version. Draft release notes and create a pinned release tag.
+3. After the PR is merged, draft release notes and create a release. Publishing
+   the release triggers the `update-floating-tag` workflow, which automatically
+   updates the `v0` floating tag so consumers pick up the new version.
 
    **Writing release notes:** Analyze changes in the **airut** repo between the
    previous sandbox-action version and the new one to identify what matters for
@@ -178,17 +191,20 @@ When a new airut version is published to PyPI (e.g., `v0.17.0`):
    f. Create the draft release:
 
    ```bash
-   gh release create v0.17.0 --draft --title "v0.17.0" \
-     --target v0 --notes "<release-notes>"
+   gh release create v0.18.0 --draft --title "v0.18.0" \
+     --target releases/v0 --notes "<release-notes>"
    ```
 
-4. Publish the draft release from the GitHub UI.
+4. Publish the draft release from the GitHub UI. The `update-floating-tag`
+   workflow will automatically update the `v0` tag. Verify it ran successfully
+   in the Actions tab.
 
 ## Files Overview
 
-| File         | Purpose                                      |
-| ------------ | -------------------------------------------- |
-| `action.yml` | Composite action definition (steps, inputs)  |
-| `VERSION`    | Airut version to install (`main` or `0.x.y`) |
-| `README.md`  | Consumer-facing documentation                |
-| `LICENSE`    | License file                                 |
+| File                                        | Purpose                                      |
+| ------------------------------------------- | -------------------------------------------- |
+| `action.yml`                                | Composite action definition (steps, inputs)  |
+| `VERSION`                                   | Airut version to install (`main` or `0.x.y`) |
+| `.github/workflows/update-floating-tag.yml` | Auto-updates `v0` tag on release publish     |
+| `README.md`                                 | Consumer-facing documentation                |
+| `LICENSE`                                   | License file                                 |
