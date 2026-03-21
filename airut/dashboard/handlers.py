@@ -326,12 +326,12 @@ class RequestHandlers:
         Returns:
             HTML response with actions viewer.
         """
-        result = self._load_task_with_conversation(conversation_id)
-        if result is None:
-            return Response("Conversation not found", status=404)
-        task, conversation = result
-
-        # Load events from event log for the actions view
+        # Read events.jsonl BEFORE conversation.json to avoid a race
+        # condition: if a reply completes between the two reads, the
+        # stale pending_request_text from conversation.json would
+        # duplicate the completed reply's prompt.  By reading
+        # conversation.json second, it always reflects the latest
+        # state relative to the events already captured.
         conversation_dir = self._find_conversation_dir(conversation_id)
         event_groups = None
         event_log_offset = 0
@@ -341,6 +341,11 @@ class RequestHandlers:
             # Capture byte offset so SSE starts after already-rendered events
             if event_log.file_path.exists():
                 event_log_offset = event_log.file_path.stat().st_size
+
+        result = self._load_task_with_conversation(conversation_id)
+        if result is None:
+            return Response("Conversation not found", status=404)
+        task, conversation = result
 
         return Response(
             views.render_actions_page(
