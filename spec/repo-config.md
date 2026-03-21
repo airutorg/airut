@@ -90,13 +90,13 @@ variables by their key name. There is no separate `container_env` mapping needed
 to reference credentials — declaring a secret in any credential pool
 automatically makes it available as an env var.
 
-**Priority ordering** for duplicate env var names (highest wins):
+**Priority ordering** for duplicate env var names (first match wins):
 
-1. `github_app_credentials` keys
-2. `signing_credentials` field `.name` values
-3. `masked_secrets` keys
-4. `secrets` keys
-5. `container_env` keys
+1. `signing_credentials` (by field `.name` values)
+2. `github_app_credentials` (by key)
+3. `masked_secrets` (by key)
+4. `secrets` (by key)
+5. `container_env` (by key)
 
 When the same env var name appears in multiple pools, the highest-priority pool
 wins. This allows upgrading a credential from plain `secrets` to
