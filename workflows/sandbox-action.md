@@ -136,11 +136,50 @@ When a new airut version is published to PyPI (e.g., `v0.17.0`):
    ```
 
 3. After the PR is merged, consumers using `@v0` immediately get the new
-   version. Create a pinned release tag:
+   version. Draft release notes and create a pinned release tag.
+
+   **Writing release notes:** Analyze changes in the **airut** repo between the
+   previous sandbox-action version and the new one to identify what matters for
+   sandbox-action consumers. Not every airut change is relevant — focus on
+   changes that affect the sandbox, container execution, network proxy, image
+   building, or the `airut-sandbox` CLI interface.
+
+   a. Find the previous sandbox-action release version:
+
+   ```bash
+   gh release list --repo airutorg/sandbox-action --limit 5
+   ```
+
+   b. Review airut changes between the two versions:
+
+   ```bash
+   # In the airut repo
+   git log v<previous>..v<new> --oneline
+   ```
+
+   c. For each PR, review details to assess relevance:
+
+   ```bash
+   gh pr view <number> --json title,body
+   ```
+
+   d. Write release notes covering only changes relevant to sandbox-action
+   users. **Relevant categories:** sandbox behavior, container/image changes,
+   network allowlist or proxy changes, `airut-sandbox` CLI options, action
+   inputs, security model changes, runner compatibility. **Irrelevant
+   categories:** gateway/email/Slack channel changes, dashboard, server
+   configuration, internal refactoring with no user-visible effect.
+
+   e. Follow the airut release notes style (see `workflows/release.md`):
+   **Highlights** section with bold feature names and em-dash intros for
+   significant changes, **Other Changes** bullet list for smaller items,
+   user-facing descriptions focused on what changed and why.
+
+   f. Create the draft release:
 
    ```bash
    gh release create v0.17.0 --draft --title "v0.17.0" \
-     --target v0 --notes "Bump airut to v0.17.0."
+     --target v0 --notes "<release-notes>"
    ```
 
 4. Publish the draft release from the GitHub UI.
