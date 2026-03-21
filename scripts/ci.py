@@ -128,6 +128,11 @@ STEPS: list[Step] = [
         ),
         workflow="security",
     ),
+    Step(
+        name="Vendor security check",
+        command="uv run python scripts/check_vendor_security.py",
+        workflow="security",
+    ),
     # Integration steps
     Step(
         name="Integration tests",
