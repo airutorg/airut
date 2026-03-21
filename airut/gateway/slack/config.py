@@ -11,8 +11,9 @@ Holds bot token, app-level token, and authorization rules.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from airut.config.schema import Scope, meta
 from airut.gateway.channel import ChannelConfig
 from airut.logging import SecretFilter
 
@@ -37,9 +38,27 @@ class SlackChannelConfig(ChannelConfig):
             (str Slack user ID).  First match grants access.
     """
 
-    bot_token: str
-    app_token: str
-    authorized: tuple[dict[str, str | bool], ...] = ()
+    bot_token: str = field(
+        metadata=meta(
+            "Bot User OAuth Token (xoxb-...) for Slack API calls",
+            Scope.REPO,
+            secret=True,
+        ),
+    )
+    app_token: str = field(
+        metadata=meta(
+            "App-Level Token (xapp-...) for Socket Mode WebSocket",
+            Scope.REPO,
+            secret=True,
+        ),
+    )
+    authorized: tuple[dict[str, str | bool], ...] = field(
+        default=(),
+        metadata=meta(
+            "Authorization rules (first match grants access)",
+            Scope.REPO,
+        ),
+    )
 
     def __post_init__(self) -> None:
         """Validate configuration and register secrets.

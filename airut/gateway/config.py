@@ -28,18 +28,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast, overload
 
-import yaml
 from platformdirs import user_config_path, user_state_path
 
 from airut._json_types import JsonDict
+from airut.config.schema import Scope, meta
 from airut.gateway.channel import ChannelConfig
-from airut.gateway.dotenv_loader import load_dotenv_once
 from airut.logging import SecretFilter
 from airut.sandbox.types import ResourceLimits
-from airut.yaml_env import EnvVar, YamlValue, make_env_loader, raw_resolve
+from airut.yaml_env import EnvVar, YamlValue, raw_resolve
 
 
 if TYPE_CHECKING:
+    from airut.config.source import ConfigSource
     from airut.gateway.slack.config import SlackChannelConfig
 
 
@@ -618,17 +618,77 @@ class GlobalConfig:
             override individual fields.  ``None`` means no defaults.
     """
 
-    max_concurrent_executions: int = 3
-    shutdown_timeout_seconds: int = 60
-    conversation_max_age_days: int = 7
-    image_prune: bool = True
-    dashboard_enabled: bool = True
-    dashboard_host: str = "127.0.0.1"
-    dashboard_port: int = 5200
-    dashboard_base_url: str | None = None
-    container_command: str = "podman"
-    upstream_dns: str | None = None
-    resource_limits: ResourceLimits | None = None
+    max_concurrent_executions: int = field(
+        default=3,
+        metadata=meta(
+            "Maximum parallel Claude containers across all repos",
+            Scope.SERVER,
+        ),
+    )
+    shutdown_timeout_seconds: int = field(
+        default=60,
+        metadata=meta(
+            "Seconds to wait for running tasks during graceful shutdown",
+            Scope.SERVER,
+        ),
+    )
+    conversation_max_age_days: int = field(
+        default=7,
+        metadata=meta(
+            "Max age in days before conversations are garbage-collected",
+            Scope.SERVER,
+        ),
+    )
+    image_prune: bool = field(
+        default=True,
+        metadata=meta(
+            "Prune dangling container images during garbage collection",
+            Scope.SERVER,
+        ),
+    )
+    dashboard_enabled: bool = field(
+        default=True,
+        metadata=meta(
+            "Enable the web dashboard for task monitoring",
+            Scope.SERVER,
+        ),
+    )
+    dashboard_host: str = field(
+        default="127.0.0.1",
+        metadata=meta("Dashboard HTTP server bind address", Scope.SERVER),
+    )
+    dashboard_port: int = field(
+        default=5200,
+        metadata=meta("Dashboard HTTP server port", Scope.SERVER),
+    )
+    dashboard_base_url: str | None = field(
+        default=None,
+        metadata=meta(
+            "Public URL for dashboard links in emails (None = omit links)",
+            Scope.SERVER,
+        ),
+    )
+    container_command: str = field(
+        default="podman",
+        metadata=meta(
+            "Container runtime command (podman or docker)",
+            Scope.SERVER,
+        ),
+    )
+    upstream_dns: str | None = field(
+        default=None,
+        metadata=meta(
+            "Upstream DNS server for proxy resolution (None = auto-detect)",
+            Scope.SERVER,
+        ),
+    )
+    resource_limits: ResourceLimits | None = field(
+        default=None,
+        metadata=meta(
+            "Server-wide default resource limits for containers",
+            Scope.SERVER,
+        ),
+    )
 
     def __post_init__(self) -> None:
         """Validate configuration.
@@ -690,23 +750,85 @@ class EmailChannelConfig(ChannelConfig):
             (auto-redacted in logs).
     """
 
-    imap_server: str
-    imap_port: int
-    smtp_server: str
-    smtp_port: int
-    username: str
-    password: str
-    from_address: str
-    authorized_senders: list[str]
-    trusted_authserv_id: str
-    poll_interval_seconds: int = 60
-    use_imap_idle: bool = True
-    idle_reconnect_interval_seconds: int = 29 * 60
-    smtp_require_auth: bool = True
-    microsoft_internal_auth_fallback: bool = False
-    microsoft_oauth2_tenant_id: str | None = None
-    microsoft_oauth2_client_id: str | None = None
-    microsoft_oauth2_client_secret: str | None = None
+    imap_server: str = field(
+        metadata=meta("IMAP server hostname", Scope.REPO),
+    )
+    imap_port: int = field(
+        metadata=meta("IMAP port", Scope.REPO),
+    )
+    smtp_server: str = field(
+        metadata=meta("SMTP server hostname", Scope.REPO),
+    )
+    smtp_port: int = field(
+        metadata=meta("SMTP port", Scope.REPO),
+    )
+    username: str = field(
+        metadata=meta("Email account username", Scope.REPO),
+    )
+    password: str = field(
+        metadata=meta("Email account password", Scope.REPO, secret=True),
+    )
+    from_address: str = field(
+        metadata=meta("From address for outgoing emails", Scope.REPO),
+    )
+    authorized_senders: list[str] = field(
+        metadata=meta(
+            "Email patterns allowed to send commands (e.g. *@company.com)",
+            Scope.REPO,
+        ),
+    )
+    trusted_authserv_id: str = field(
+        metadata=meta(
+            "Trusted authserv-id in Authentication-Results headers",
+            Scope.REPO,
+        ),
+    )
+    poll_interval_seconds: int = field(
+        default=60,
+        metadata=meta("Seconds between IMAP polls", Scope.REPO),
+    )
+    use_imap_idle: bool = field(
+        default=True,
+        metadata=meta("Use IMAP IDLE instead of polling", Scope.REPO),
+    )
+    idle_reconnect_interval_seconds: int = field(
+        default=29 * 60,
+        metadata=meta(
+            "Reconnect interval for IDLE mode (seconds)",
+            Scope.REPO,
+        ),
+    )
+    smtp_require_auth: bool = field(
+        default=True,
+        metadata=meta("Whether SMTP requires authentication", Scope.REPO),
+    )
+    microsoft_internal_auth_fallback: bool = field(
+        default=False,
+        metadata=meta(
+            "Accept X-MS-Exchange AuthAs: Internal",
+            Scope.REPO,
+        ),
+    )
+    microsoft_oauth2_tenant_id: str | None = field(
+        default=None,
+        metadata=meta(
+            "Azure AD tenant ID for OAuth2 client credentials flow",
+            Scope.REPO,
+            secret=True,
+        ),
+    )
+    microsoft_oauth2_client_id: str | None = field(
+        default=None,
+        metadata=meta("Azure AD application (client) ID", Scope.REPO),
+    )
+    microsoft_oauth2_client_secret: str | None = field(
+        default=None,
+        metadata=meta(
+            "Azure AD client secret value",
+            Scope.REPO,
+            secret=True,
+        ),
+    )
 
     def __post_init__(self) -> None:
         """Validate email configuration and register secrets.
@@ -800,22 +922,79 @@ class RepoServerConfig:
             Credential pools take priority over these for same-name keys.
     """
 
-    repo_id: str
-    git_repo_url: str
-    channels: dict[str, ChannelConfig]
-    secrets: dict[str, str] = field(default_factory=dict)
-    masked_secrets: dict[str, MaskedSecret] = field(default_factory=dict)
+    repo_id: str = field(
+        metadata=meta("Repository identifier", Scope.REPO),
+    )
+    git_repo_url: str = field(
+        metadata=meta("Git repository URL to clone from", Scope.REPO),
+    )
+    channels: dict[str, ChannelConfig] = field(
+        metadata=meta("Channel configurations keyed by type", Scope.REPO),
+    )
+    secrets: dict[str, str] = field(
+        default_factory=dict,
+        metadata=meta(
+            "Per-repo secrets pool (keys become container env var names)",
+            Scope.REPO,
+            secret=True,
+        ),
+    )
+    masked_secrets: dict[str, MaskedSecret] = field(
+        default_factory=dict,
+        metadata=meta(
+            "Secrets with scope restrictions for proxy replacement",
+            Scope.REPO,
+            secret=True,
+        ),
+    )
     signing_credentials: dict[str, SigningCredential] = field(
-        default_factory=dict
+        default_factory=dict,
+        metadata=meta(
+            "AWS SigV4/SigV4A signing credentials for proxy re-signing",
+            Scope.REPO,
+            secret=True,
+        ),
     )
     github_app_credentials: dict[str, GitHubAppCredential] = field(
-        default_factory=dict
+        default_factory=dict,
+        metadata=meta(
+            "GitHub App credentials for proxy-managed token rotation",
+            Scope.REPO,
+            secret=True,
+        ),
     )
-    network_sandbox_enabled: bool = True
-    model: str = "opus"
-    effort: str | None = None
-    resource_limits: ResourceLimits = field(default_factory=ResourceLimits)
-    container_env: dict[str, str] = field(default_factory=dict)
+    network_sandbox_enabled: bool = field(
+        default=True,
+        metadata=meta(
+            "Enable the network sandbox (proxy toggle)",
+            Scope.REPO,
+        ),
+    )
+    model: str = field(
+        default="opus",
+        metadata=meta("Claude model for new conversations", Scope.TASK),
+    )
+    effort: str | None = field(
+        default=None,
+        metadata=meta(
+            "Effort level for Claude Code (None = Claude default)",
+            Scope.TASK,
+        ),
+    )
+    resource_limits: ResourceLimits = field(
+        default_factory=ResourceLimits,
+        metadata=meta(
+            "Per-repo container resource limits (timeout, memory, cpus, pids)",
+            Scope.TASK,
+        ),
+    )
+    container_env: dict[str, str] = field(
+        default_factory=dict,
+        metadata=meta(
+            "Plain environment variables passed to containers",
+            Scope.TASK,
+        ),
+    )
 
     def __post_init__(self) -> None:
         """Validate configuration and register secrets.
@@ -960,6 +1139,31 @@ class ServerConfig:
         )
 
     @classmethod
+    def from_source(
+        cls,
+        source: "ConfigSource",
+    ) -> "ServerConfig":
+        """Load configuration from an arbitrary ``ConfigSource``.
+
+        Loads the raw dict, applies schema migrations, then runs the
+        existing resolution/validation pipeline.
+
+        Args:
+            source: Config source to load from.
+
+        Returns:
+            ServerConfig instance.
+
+        Raises:
+            ConfigError: If required values are absent or validation fails.
+        """
+        from airut.config.migration import apply_migrations
+
+        raw = source.load()
+        raw = apply_migrations(raw)
+        return cls._from_raw(raw)
+
+    @classmethod
     def from_yaml(cls, config_path: Path | None = None) -> "ServerConfig":
         """Load configuration from a YAML file.
 
@@ -977,23 +1181,18 @@ class ServerConfig:
         Raises:
             ConfigError: If the file is missing or required values are absent.
         """
-        load_dotenv_once()
+        from airut.config.source import YamlConfigSource
 
         if config_path is None:
             config_path = get_config_path()
 
-        if not config_path.exists():
-            raise ConfigError(f"Config file not found: {config_path}")
-
-        with open(config_path) as f:
-            raw = yaml.load(f, Loader=make_env_loader())
-
-        if not isinstance(raw, dict):
-            raise ConfigError(
-                f"Config file must be a YAML mapping: {config_path}"
-            )
-
-        return cls._from_raw(raw)
+        try:
+            source = YamlConfigSource(config_path)
+            return cls.from_source(source)
+        except FileNotFoundError as e:
+            raise ConfigError(f"Config file not found: {config_path}") from e
+        except ValueError as e:
+            raise ConfigError(str(e)) from e
 
     @classmethod
     def _from_raw(cls, raw: dict) -> "ServerConfig":

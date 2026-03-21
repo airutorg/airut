@@ -1155,7 +1155,7 @@ class TestFromYaml:
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
 
-        with patch("airut.gateway.config.load_dotenv_once") as mock_dotenv:
+        with patch("airut.config.source.load_dotenv_once") as mock_dotenv:
             ServerConfig.from_yaml(yaml_path)
 
         mock_dotenv.assert_called_once()
@@ -1336,6 +1336,21 @@ class TestFromYaml:
         yaml_path.write_text(yaml_content)
         with pytest.raises(ConfigError, match="no channel configured"):
             ServerConfig.from_yaml(yaml_path)
+
+    def test_legacy_field_detected_via_from_raw(self) -> None:
+        """Legacy email fields caught by _from_raw (defense-in-depth)."""
+        raw = {
+            "config_version": 2,
+            "repos": {
+                "test": {
+                    "authorized_senders": ["user@test.com"],
+                    "email": {},
+                    "git": {"repo_url": "/tmp/repo"},
+                },
+            },
+        }
+        with pytest.raises(ConfigError, match="must be nested under 'email:'"):
+            ServerConfig._from_raw(raw)
 
 
 # ---------------------------------------------------------------------------

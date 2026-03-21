@@ -32,6 +32,8 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
   data flow, container execution
 - `spec/authentication.md` — DMARC verification and sender authorization
 - `spec/repo-config.md` — per-repo schema in server config
+- `spec/declarative-config.md` — declarative config layer (schema metadata,
+  migration, diffing, round-trip)
 - `spec/multi-repo.md` — multi-repository support design
 - `spec/slack-channel.md` — Slack channel implementation (Socket Mode)
 - `spec/integration-tests.md` — end-to-end test specification
@@ -259,6 +261,7 @@ airut/                        - Library code
   _bundled/                 - Static resources bundled into wheel
     assets/                 - Logo SVG
     proxy/                  - Network sandbox (proxy filter, DNS, AWS signing, GitHub App tokens)
+  config/                   - Declarative configuration layer
   claude_output/            - Typed Claude streaming JSON output parser
   conversation/             - Conversation directory layout and preparation
   dashboard/                - Web dashboard server

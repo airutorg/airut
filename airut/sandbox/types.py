@@ -17,6 +17,7 @@ from enum import Enum
 from pathlib import Path
 
 from airut.claude_output.types import Usage
+from airut.config.schema import Scope, meta
 
 
 @dataclass(frozen=True)
@@ -147,10 +148,34 @@ class ResourceLimits:
         pids_limit: Process limit for ``--pids-limit``.
     """
 
-    timeout: int | None = None
-    memory: str | None = None
-    cpus: float | None = None
-    pids_limit: int | None = None
+    timeout: int | None = field(
+        default=None,
+        metadata=meta(
+            "Max container execution time in seconds",
+            Scope.TASK,
+        ),
+    )
+    memory: str | None = field(
+        default=None,
+        metadata=meta(
+            "Memory limit for container (e.g. '512m', '2g')",
+            Scope.TASK,
+        ),
+    )
+    cpus: float | None = field(
+        default=None,
+        metadata=meta(
+            "CPU limit for container (supports fractional cores, e.g. 1.5)",
+            Scope.TASK,
+        ),
+    )
+    pids_limit: int | None = field(
+        default=None,
+        metadata=meta(
+            "Process limit for container",
+            Scope.TASK,
+        ),
+    )
 
     def __post_init__(self) -> None:
         """Validate resource limit values.
