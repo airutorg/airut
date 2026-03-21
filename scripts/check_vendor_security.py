@@ -238,11 +238,13 @@ def main() -> int:
             print(f"WARNING: {name} not found in {VERSION_FILE}")
             continue
 
-        # Check for security advisories
+        # Check for security advisories (fatal on failure — a blocked or
+        # failed request means we cannot confirm the package is safe).
         try:
             advisories = check_advisories(info["npm_package"], version)
         except URLError as e:
-            print(f"WARNING: Could not check advisories for {name}: {e}")
+            print(f"ERROR: Could not check advisories for {name}: {e}")
+            has_vulnerability = True
             advisories = []
 
         if advisories:
