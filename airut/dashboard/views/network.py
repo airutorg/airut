@@ -80,18 +80,7 @@ def render_network_page(
         {logs_html}
     </div>
     {status_notice}
-    <script>
-        window.scrollTo(0, document.body.scrollHeight);
-        document.addEventListener('visibilitychange', function() {{
-            if (!document.hidden) {{
-                requestAnimationFrame(function() {{
-                    window.scrollTo(0, window._savedScrollY || 0);
-                }});
-            }} else {{
-                window._savedScrollY = window.scrollY;
-            }}
-        }});
-    </script>
+    <script>window.scrollTo(0, document.body.scrollHeight);</script>
     {sse_script}
 </body>
 </html>"""
