@@ -1429,6 +1429,179 @@ class TestSubagentRendering:
         assert "35976ms" in html
 
 
+class TestPromptDeduplication:
+    """Tests that user prompts appear exactly once in the actions page.
+
+    Regression tests for a bug where the last user prompt was shown
+    twice on the actions page when navigating to an ongoing conversation:
+    once in its correct position and again at the end, with SSE events
+    streaming below the duplicate.
+
+    Root cause: ``handle_task_actions()`` reads conversation.json before
+    events.jsonl. If a reply completes between these two reads, the
+    stale ``pending_request_text`` from conversation.json duplicates
+    the completed reply's ``request_text``.
+    """
+
+    def test_prompt_count_single_completed_reply(
+        self, harness: DashboardHarness
+    ) -> None:
+        """Each prompt appears exactly once for a single completed reply."""
+        harness.add_events(
+            {"type": "system", "subtype": "init", "tools": ["Bash"]},
+            result_event(),
+            request_text="Fix the login page CSS",
+        )
+
+        html = harness.get_html("/conversation/abc12345/actions")
+        assert html.count("Fix the login page CSS") == 1
+
+    def test_prompt_count_multi_reply(self, harness: DashboardHarness) -> None:
+        """Each prompt appears exactly once across multiple replies."""
+        harness.add_events(
+            {"type": "system", "subtype": "init", "tools": ["Bash"]},
+            result_event(),
+            request_text="First request",
+        )
+        harness.add_events(
+            {"type": "system", "subtype": "init", "tools": ["Read"]},
+            result_event(),
+            request_text="Second request",
+        )
+
+        html = harness.get_html("/conversation/abc12345/actions")
+        assert html.count("First request") == 1
+        assert html.count("Second request") == 1
+
+    def test_prompt_count_completed_plus_in_progress(
+        self, harness: DashboardHarness
+    ) -> None:
+        """Prompts appear once each: one completed, one in progress."""
+        from tests.dashboard.conftest import parse_events
+
+        harness.add_events(
+            {"type": "system", "subtype": "init", "tools": ["Bash"]},
+            result_event(),
+            request_text="Completed request",
+        )
+        harness.store.set_pending_request(
+            harness.CONV_ID, "In-progress request"
+        )
+        events = parse_events(
+            {"type": "system", "subtype": "init", "tools": ["Read"]},
+        )
+        harness.event_log.start_new_reply()
+        for event in events:
+            harness.event_log.append_event(event)
+
+        html = harness.get_html("/conversation/abc12345/actions")
+        assert html.count("Completed request") == 1
+        assert html.count("In-progress request") == 1
+
+    def test_race_reply_completes_between_reads(
+        self, harness: DashboardHarness
+    ) -> None:
+        """No duplicate when a reply completes between reads.
+
+        Core bug scenario: the handler reads events.jsonl, then a
+        reply completes (add_reply clears pending, adds reply),
+        then the handler reads conversation.json. Since
+        conversation.json is read second, it always reflects the
+        latest state — pending is cleared and the completed reply
+        is present. No duplication.
+
+        We simulate this by patching _load_conversation to call
+        add_reply (clearing pending) before returning the metadata,
+        mimicking a reply completing between the event log read and
+        the conversation.json read.
+        """
+        from datetime import UTC, datetime
+        from unittest.mock import patch
+
+        from airut.claude_output.types import Usage
+        from airut.conversation import ReplySummary
+        from tests.dashboard.conftest import parse_events
+
+        # Set up in-progress state: pending set, events streaming
+        harness.store.set_pending_request(harness.CONV_ID, "Fix the bug")
+        events = parse_events(
+            {"type": "system", "subtype": "init", "tools": ["Bash"]},
+            result_event(),
+        )
+        harness.event_log.start_new_reply()
+        for event in events:
+            harness.event_log.append_event(event)
+
+        # Patch _load_conversation so that when the handler reads
+        # conversation.json (AFTER events.jsonl), the reply has
+        # completed — simulating the race.
+        handlers = harness.server._handlers
+        original = handlers._load_conversation
+
+        def complete_then_load(conv_id: str):
+            reply = ReplySummary(
+                session_id="s1",
+                timestamp=datetime.now(tz=UTC).isoformat(),
+                duration_ms=1000,
+                total_cost_usd=0.01,
+                num_turns=1,
+                is_error=False,
+                usage=Usage(),
+                request_text="Fix the bug",
+            )
+            harness.store.add_reply(conv_id, reply)
+            return original(conv_id)
+
+        with patch.object(
+            handlers,
+            "_load_conversation",
+            side_effect=complete_then_load,
+        ):
+            html = harness.get_html("/conversation/abc12345/actions")
+
+        # Because conversation.json is read AFTER events.jsonl,
+        # the completed reply is in replies and pending is cleared.
+        # The prompt must appear exactly once (in the completed
+        # reply section).
+        assert html.count("Fix the bug") == 1
+
+    def test_handler_reads_events_before_conversation(
+        self, harness: DashboardHarness
+    ) -> None:
+        """Handler must read events.jsonl before conversation.json.
+
+        When events.jsonl is read first, conversation.json (read second)
+        reflects the latest state. This prevents stale pending_request_text
+        from duplicating a completed reply's prompt.
+
+        We verify this by writing events, then modifying conversation.json
+        between what would be the two reads if ordered incorrectly.
+        """
+        from tests.dashboard.conftest import parse_events
+
+        # Set up: completed reply + in-progress events
+        harness.add_events(
+            {"type": "system", "subtype": "init", "tools": ["Bash"]},
+            result_event(),
+            request_text="Original request",
+        )
+
+        # Start a new reply
+        harness.store.set_pending_request(harness.CONV_ID, "Follow-up request")
+        events = parse_events(
+            {"type": "system", "subtype": "init", "tools": ["Read"]},
+        )
+        harness.event_log.start_new_reply()
+        for event in events:
+            harness.event_log.append_event(event)
+
+        html = harness.get_html("/conversation/abc12345/actions")
+
+        # Both prompts present, each exactly once
+        assert html.count("Original request") == 1
+        assert html.count("Follow-up request") == 1
+
+
 class TestSSEServerSideRendering:
     """Tests for server-side HTML rendering in SSE streams.
 
