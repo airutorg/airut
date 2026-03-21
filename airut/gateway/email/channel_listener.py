@@ -250,6 +250,8 @@ class EmailChannelListener(ChannelListener):
                 time.sleep(self._config.poll_interval_seconds)
 
             except IMAPConnectionError as e:
+                if not self._running:
+                    return  # Shutting down; don't attempt reconnection
                 try:
                     reconnect_attempts = self._reconnect_with_backoff(
                         reconnect_attempts, max_reconnect_attempts, error=e
@@ -336,6 +338,8 @@ class EmailChannelListener(ChannelListener):
                     last_reconnect = 0
 
             except IMAPConnectionError as e:
+                if not self._running:
+                    return  # Shutting down; don't attempt reconnection
                 try:
                     reconnect_attempts = self._reconnect_with_backoff(
                         reconnect_attempts, max_reconnect_attempts, error=e

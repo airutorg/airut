@@ -144,6 +144,56 @@ def test_connect_retry_exhausted(email_config):
     assert listener.connection is None
 
 
+def test_connect_closes_socket_on_login_failure(email_config):
+    """Test that connect() closes the SSL socket when login() fails.
+
+    If IMAP4_SSL() succeeds but login() fails, the partially-connected
+    socket must be closed before retrying to prevent resource leaks.
+    """
+    listener = EmailListener(email_config.channels["email"])
+
+    with patch("imaplib.IMAP4_SSL") as mock_imap:
+        failed_conn = MagicMock()
+        failed_conn.login.side_effect = imaplib.IMAP4.error("auth failed")
+        failed_sock = MagicMock()
+        failed_conn.socket.return_value = failed_sock
+
+        good_conn = MagicMock()
+        mock_imap.side_effect = [failed_conn, good_conn]
+
+        with patch("time.sleep"):
+            listener.connect(max_retries=2)
+
+        # The failed connection's socket must have been closed
+        failed_sock.close.assert_called_once()
+        assert listener.connection is good_conn
+
+
+def test_connect_handles_socket_close_error(email_config):
+    """Test that connect() tolerates errors when closing a failed socket.
+
+    If sock.close() raises during cleanup of a failed connection,
+    the error should be silently suppressed and the retry should proceed.
+    """
+    listener = EmailListener(email_config.channels["email"])
+
+    with patch("imaplib.IMAP4_SSL") as mock_imap:
+        failed_conn = MagicMock()
+        failed_conn.login.side_effect = imaplib.IMAP4.error("auth failed")
+        failed_sock = MagicMock()
+        failed_sock.close.side_effect = OSError("already closed")
+        failed_conn.socket.return_value = failed_sock
+
+        good_conn = MagicMock()
+        mock_imap.side_effect = [failed_conn, good_conn]
+
+        with patch("time.sleep"):
+            listener.connect(max_retries=2)
+
+        # Should succeed despite the close error
+        assert listener.connection is good_conn
+
+
 def test_connect_oserror_retry(email_config):
     """Test connection retries on OSError."""
     listener = EmailListener(email_config.channels["email"])

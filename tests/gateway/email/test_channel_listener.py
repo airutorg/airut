@@ -236,6 +236,33 @@ class TestPollingLoop:
         assert raw_msg.sender == "user@example.com"
         assert raw_msg.display_title == "Test"
 
+    def test_no_reconnect_during_shutdown(self) -> None:
+        """Polling loop skips reconnection when _running is False.
+
+        When stop() interrupts the socket during fetch_unread(), the
+        resulting IMAPConnectionError should not trigger reconnection
+        if the listener is shutting down.  Attempting to reconnect
+        during shutdown can create a new SSL socket that nobody
+        closes, leaking the socket and triggering
+        PytestUnraisableExceptionWarning in CI.
+        """
+        cl, mock_el = _make_polling_listener()
+        cl._submit = MagicMock()
+
+        def fake_fetch():
+            # Simulate interrupt: the socket was shut down
+            cl._running = False
+            raise IMAPConnectionError("socket shutdown")
+
+        mock_el.fetch_unread.side_effect = fake_fetch
+
+        with patch("time.sleep"):
+            cl._polling_loop()
+
+        # Should NOT have attempted reconnection
+        mock_el.disconnect.assert_not_called()
+        mock_el.connect.assert_not_called()
+
     def test_reconnects_on_imap_error(self) -> None:
         """Polling loop reconnects on IMAPConnectionError."""
         cl, mock_el = _make_polling_listener()
@@ -492,6 +519,25 @@ class TestIdleLoop:
         ]
 
         cl._idle_loop()
+
+    def test_idle_no_reconnect_during_shutdown(self) -> None:
+        """IDLE loop skips reconnection when _running is False.
+
+        Same as test_no_reconnect_during_shutdown but for the IDLE loop.
+        """
+        cl, mock_el = _make_idle_listener()
+
+        def fake_fetch():
+            cl._running = False
+            raise IMAPConnectionError("socket shutdown")
+
+        mock_el.fetch_unread.side_effect = fake_fetch
+
+        with patch("time.sleep"):
+            cl._idle_loop()
+
+        mock_el.disconnect.assert_not_called()
+        mock_el.connect.assert_not_called()
 
     def test_imap_connection_error_reconnects(self) -> None:
         """IDLE loop reconnects on IMAPConnectionError."""

@@ -140,6 +140,18 @@ class EmailListener:
                 OSError,
                 MicrosoftOAuth2TokenError,
             ) as e:
+                # Close any partially-connected socket to prevent
+                # resource leaks when the constructor succeeded but
+                # login/authenticate failed.
+                if self.connection is not None:
+                    try:
+                        sock = self.connection.socket()
+                        if sock:
+                            sock.close()
+                    except Exception:
+                        pass
+                    self.connection = None
+
                 logger.warning(
                     "IMAP connection attempt %d/%d failed: %s",
                     attempt,
