@@ -599,25 +599,16 @@ class TestMain:
         captured = capsys.readouterr()
         assert "htmx-ext-sse not found" in captured.out
 
-    def test_continues_on_advisory_check_failure(
+    def test_fails_on_advisory_check_failure(
         self,
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """Continues when advisory check fails for one package."""
+        """Returns 1 when advisory check cannot be completed."""
         from urllib.error import URLError
 
         version_file = tmp_path / "VERSION"
         version_file.write_text("htmx 2.0.8\nhtmx-ext-sse 2.2.4\n")
-
-        call_count = 0
-
-        def mock_check(pkg: str, ver: str) -> list[dict[str, str]]:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                raise URLError("connection refused")
-            return []
 
         with (
             patch.object(
@@ -627,15 +618,11 @@ class TestMain:
             ),
             patch(
                 "scripts.check_vendor_security.check_advisories",
-                side_effect=mock_check,
-            ),
-            patch(
-                "scripts.check_vendor_security.get_latest_version",
-                return_value="2.2.4",
+                side_effect=URLError("connection refused"),
             ),
         ):
             result = check_vendor_security.main()
 
-        assert result == 0
+        assert result == 1
         captured = capsys.readouterr()
         assert "Could not check advisories" in captured.out
