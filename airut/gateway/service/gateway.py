@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import collections
 import concurrent.futures
+import dataclasses
 import logging
 import signal
 import threading
@@ -29,6 +30,10 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
+from airut.config.schema import Scope, get_field_meta
+from airut.config.snapshot import ConfigSnapshot
+from airut.config.source import ConfigSource, YamlConfigSource
+from airut.config.watcher import ConfigFileWatcher
 from airut.dashboard import (
     DashboardServer,
     TaskTracker,
@@ -51,7 +56,14 @@ from airut.gateway.channel import (
     ParsedMessage,
     RawMessage,
 )
-from airut.gateway.config import RepoServerConfig, ServerConfig
+from airut.gateway.config import (
+    GlobalConfig,
+    RepoServerConfig,
+    ServerConfig,
+    get_config_path,
+)
+from airut.gateway.dotenv_loader import reset_dotenv_state
+from airut.gateway.service.adapter_factory import create_adapters
 from airut.gateway.service.message_processing import (
     process_message,
 )
@@ -132,6 +144,8 @@ class GatewayService:
         config: ServerConfig,
         repo_root: Path | None = None,
         egress_network: str | None = None,
+        config_source: ConfigSource | None = None,
+        config_snapshot: ConfigSnapshot[ServerConfig] | None = None,
     ) -> None:
         """Initialize service with configuration.
 
@@ -141,12 +155,28 @@ class GatewayService:
             egress_network: Override for proxy egress network name. If None,
                 uses the default ``airut-egress``. Useful for tests to avoid
                 conflicts when running in parallel.
+            config_source: Config source for live reload. When None,
+                the file watcher is not started and reload is disabled.
+            config_snapshot: Initial ConfigSnapshot from loading. Stored
+                for diffing on reload.
         """
         self._egress_network = egress_network
         self.config = config
         self.global_config = config.global_config
         self._running = True
         self._stopped = False
+
+        # Config reload state
+        self._config_source = config_source
+        self._config_snapshot = config_snapshot
+        self._reload_lock = threading.Lock()
+        self._reload_requested = threading.Event()
+        self._pending_repo_reload: dict[str, RepoServerConfig | None] = {}
+        self._pending_server_config: ServerConfig | None = None
+        self._pending_server_old_global: GlobalConfig | None = None
+        self._config_generation = 0
+        self._last_reload_error: str | None = None
+        self._watcher: ConfigFileWatcher | None = None
 
         if repo_root is None:
             repo_root = Path(__file__).parent.parent.parent.parent
@@ -166,19 +196,20 @@ class GatewayService:
 
         # Per-conversation pending message queue.
         #
-        # Lock ordering invariant: ``_pending_messages_lock`` and the
-        # tracker's internal ``_lock`` must NEVER be held at the same
-        # time.  Code that holds ``_pending_messages_lock`` may call
-        # tracker methods (which briefly acquire/release ``_lock``
-        # internally), but no code path may acquire
-        # ``_pending_messages_lock`` while the tracker ``_lock`` is
-        # already held by the same thread.  In practice this is
-        # guaranteed because ``_drain_pending`` (which acquires
-        # ``_pending_messages_lock``) is always called *after*
-        # ``complete_task`` returns (i.e. after the tracker ``_lock``
-        # is released).  Violating this invariant would create a
-        # deadlock between the enqueue path (pending lock → tracker
-        # lock) and the drain path (tracker lock → pending lock).
+        # Lock ordering invariant (nested acquisition):
+        #   _reload_lock → _pending_messages_lock → tracker._lock
+        #
+        # ``_pending_messages_lock`` and the tracker's internal
+        # ``_lock`` must NEVER be held at the same time.  Code that
+        # holds ``_pending_messages_lock`` may call tracker methods
+        # (which briefly acquire/release ``_lock`` internally), but
+        # no code path may acquire ``_pending_messages_lock`` while
+        # the tracker ``_lock`` is already held.
+        #
+        # ``_reload_lock`` is non-blocking in ``_on_config_changed``
+        # (concurrent watcher triggers are dropped) but blocking in
+        # ``_check_pending_repo_reload`` (worker threads wait briefly
+        # for any in-progress reload to finish).
         self._pending_messages: dict[
             str, collections.deque[PendingMessage]
         ] = {}
@@ -321,6 +352,7 @@ class GatewayService:
             repos_store=self._repos_store,
             clock=self._clock,
             git_version_info=self._git_version_info,
+            status_callback=self._get_reload_status,
         )
         self.dashboard.start()
 
@@ -467,6 +499,25 @@ class GatewayService:
             started_count,
         )
 
+        # Start config file watcher after boot completes
+        self._start_config_watcher()
+
+    def _start_config_watcher(self) -> None:
+        """Start config file watcher if a file-based source is available."""
+        if self._config_source is None:
+            return
+
+        if not isinstance(self._config_source, YamlConfigSource):
+            return
+
+        config_path = self._config_source.path
+        self._watcher = ConfigFileWatcher(
+            config_path,
+            self._on_config_changed,
+            reload_requested=self._reload_requested,
+        )
+        self._watcher.start()
+
     def _get_work_dirs(self) -> list[Path]:
         """Return current work dirs for the dashboard.
 
@@ -495,6 +546,10 @@ class GatewayService:
         logger.info("Stopping gateway service...")
         self._running = False
         self._shutdown_event.set()
+
+        # Stop config watcher before listeners
+        if self._watcher:
+            self._watcher.stop()
 
         # Shutdown sandbox
         self.sandbox.shutdown()
@@ -537,6 +592,449 @@ class GatewayService:
             self.dashboard.stop()
 
         logger.info("Service stopped")
+
+    # ------------------------------------------------------------------ #
+    # Config Reload
+    # ------------------------------------------------------------------ #
+
+    def _get_reload_status(self) -> dict[str, object]:
+        """Return config reload status for the dashboard API."""
+        return {
+            "config_generation": self._config_generation,
+            "server_reload_pending": self._pending_server_config is not None,
+            "last_reload_error": self._last_reload_error,
+        }
+
+    def _on_config_changed(self) -> None:
+        """Handle config file change (inotify or SIGHUP).
+
+        Serialized: concurrent calls are dropped (only one reload runs
+        at a time).
+
+        Lock ordering:
+        ``_reload_lock`` → ``_pending_messages_lock`` → ``tracker._lock``
+        """
+        if self._config_source is None:
+            return
+
+        if not self._reload_lock.acquire(blocking=False):
+            return  # another reload is in progress
+
+        try:
+            # 1. Re-read and parse
+            reset_dotenv_state()
+            new_snapshot = ServerConfig.from_source(self._config_source)
+            new_config = new_snapshot.value
+
+            # 2. Diff: global_config and per-repo
+            global_changed = self._diff_global(new_config)
+            repo_changes = self._diff_repos(new_config)
+
+            if not global_changed and not repo_changes:
+                logger.debug("Config reload: no effective changes")
+                self._last_reload_error = None
+                return
+
+            # 3. Log changes
+            self._log_config_diff(global_changed, repo_changes)
+
+            # 4. Apply by scope — save old repo configs before task-scope
+            #    swap so repo-scope reload can detect git_repo_url changes.
+            old_repo_configs = {
+                rid: h.config for rid, h in self.repo_handlers.items()
+            }
+            self._apply_task_scope(new_config)
+            self._apply_repo_scope(new_config, repo_changes, old_repo_configs)
+            self._apply_server_scope(new_config, global_changed)
+
+            # 4b. Try immediate server reload if service is idle
+            self._try_immediate_server_reload()
+
+            # 5. Update stored snapshot
+            self._config_snapshot = new_snapshot
+            self.config = new_config
+            self.global_config = new_config.global_config
+            self._config_generation += 1
+            self._last_reload_error = None
+
+            logger.info(
+                "Config reload successful (generation=%d)",
+                self._config_generation,
+            )
+
+        except Exception:
+            logger.exception("Config reload failed, keeping current config")
+            self._last_reload_error = traceback.format_exc()
+        finally:
+            self._reload_lock.release()
+
+    def _diff_global(self, new_config: ServerConfig) -> bool:
+        """Return True if any GlobalConfig field changed."""
+        return self.config.global_config != new_config.global_config
+
+    def _diff_repos(self, new_config: ServerConfig) -> dict[str, str]:
+        """Return {repo_id: change_type} for repos that changed.
+
+        change_type is one of: "task", "repo", "added", "removed".
+        "task" means only task-scope fields changed (swap suffices).
+        "repo" means at least one repo-scope field changed (listener
+        restart required).
+        """
+        result: dict[str, str] = {}
+        old_repos = self.config.repos
+        new_repos = new_config.repos
+
+        for repo_id in new_repos.keys() - old_repos.keys():
+            result[repo_id] = "added"
+        for repo_id in old_repos.keys() - new_repos.keys():
+            result[repo_id] = "removed"
+
+        for repo_id in old_repos.keys() & new_repos.keys():
+            old_cfg = old_repos[repo_id]
+            new_cfg = new_repos[repo_id]
+            if old_cfg == new_cfg:
+                continue
+            has_repo_scope = False
+            for f in dataclasses.fields(old_cfg):
+                fm = get_field_meta(f)
+                if fm and fm.scope == Scope.REPO:
+                    if getattr(old_cfg, f.name) != getattr(new_cfg, f.name):
+                        has_repo_scope = True
+                        break
+            result[repo_id] = "repo" if has_repo_scope else "task"
+
+        return result
+
+    def _log_config_diff(
+        self,
+        global_changed: bool,
+        repo_changes: dict[str, str],
+    ) -> None:
+        """Log config changes at INFO level."""
+        parts: list[str] = []
+        if global_changed:
+            parts.append("global config changed")
+        for repo_id, change_type in repo_changes.items():
+            parts.append(f"repo '{repo_id}': {change_type}")
+        logger.info("Config reload: %s", "; ".join(parts))
+
+    def _apply_task_scope(self, new_config: ServerConfig) -> None:
+        """Swap repo configs for task-scope changes (atomic)."""
+        for repo_id, new_repo_cfg in new_config.repos.items():
+            handler = self.repo_handlers.get(repo_id)
+            if handler:
+                handler.config = new_repo_cfg
+
+    def _apply_repo_scope(
+        self,
+        new_config: ServerConfig,
+        repo_changes: dict[str, str],
+        old_repo_configs: dict[str, RepoServerConfig] | None = None,
+    ) -> None:
+        """Handle repo-scope changes: restart listeners or defer."""
+        for repo_id, change_type in repo_changes.items():
+            if change_type == "added":
+                self._add_repo(repo_id, new_config.repos[repo_id])
+            elif change_type == "removed":
+                self._remove_repo(repo_id)
+            elif change_type == "repo":
+                if self.tracker.has_active_tasks_for_repo(repo_id):
+                    old_cfg = (
+                        old_repo_configs.get(repo_id)
+                        if old_repo_configs
+                        else None
+                    )
+                    self._pending_repo_reload[repo_id] = old_cfg
+                    self._set_repo_status(repo_id, RepoStatus.RELOAD_PENDING)
+                    logger.info(
+                        "Repo '%s': reload deferred (active tasks)",
+                        repo_id,
+                    )
+                else:
+                    old_cfg = (
+                        old_repo_configs.get(repo_id)
+                        if old_repo_configs
+                        else None
+                    )
+                    self._apply_single_repo_reload(repo_id, old_cfg)
+
+    def _apply_server_scope(
+        self,
+        new_config: ServerConfig,
+        global_changed: bool,
+    ) -> None:
+        """Handle server-scope changes: defer until globally idle."""
+        if not global_changed:
+            return
+        # Preserve the first baseline when successive reloads arrive
+        if self._pending_server_config is None:
+            self._pending_server_old_global = self.global_config
+        self._pending_server_config = new_config
+        logger.info(
+            "Server-scope config change detected, "
+            "deferring until service is idle"
+        )
+
+    def _try_immediate_server_reload(self) -> None:
+        """Try to apply pending server reload if the service is idle.
+
+        Called from ``_on_config_changed()`` while ``_reload_lock`` is
+        already held.  Applies the server-scope reload immediately when
+        no tasks are active and no messages are pending — avoids the
+        need for a subsequent task completion to trigger the check.
+        """
+        if self._pending_server_config is None:
+            return
+
+        for rid in list(self.repo_handlers):
+            if self.tracker.has_active_tasks_for_repo(rid):
+                return
+
+        with self._pending_messages_lock:
+            if self._pending_messages:
+                return
+
+        pending = self._pending_server_config
+        old_global = self._pending_server_old_global
+        self._pending_server_config = None
+        self._pending_server_old_global = None
+
+        try:
+            self._apply_server_reload(pending, old_global)
+        except Exception:
+            logger.exception(
+                "Immediate server-scope reload failed, keeping current config"
+            )
+
+    def _add_repo(self, repo_id: str, repo_config: RepoServerConfig) -> None:
+        """Add a new repo handler and start its listeners."""
+        try:
+            handler = RepoHandler(repo_config, self)
+            handler.start_listener()
+            self.repo_handlers[repo_id] = handler
+
+            repo_state = RepoState(
+                repo_id=repo_id,
+                status=RepoStatus.LIVE,
+                git_repo_url=repo_config.git_repo_url,
+                channels=_build_channel_infos(repo_config),
+                storage_dir=str(repo_config.storage_dir),
+            )
+            self._update_repos_store_entry(repo_id, repo_state)
+            logger.info("Repo '%s': added and started", repo_id)
+        except Exception:
+            logger.exception("Repo '%s': failed to add on reload", repo_id)
+
+    def _remove_repo(self, repo_id: str) -> None:
+        """Remove a repo, deferring if it has active tasks.
+
+        Stops listeners immediately to prevent new messages, but keeps
+        the handler until active tasks drain.
+        """
+        handler = self.repo_handlers.get(repo_id)
+        if self.tracker.has_active_tasks_for_repo(repo_id):
+            if handler:
+                handler.stop()
+            self._pending_repo_reload[repo_id] = None
+            self._set_repo_status(repo_id, RepoStatus.RELOAD_PENDING)
+            logger.info("Repo '%s': removal deferred (active tasks)", repo_id)
+            return
+
+        handler = self.repo_handlers.pop(repo_id, None)
+        if handler:
+            handler.stop()
+        self._remove_repos_store_entry(repo_id)
+        logger.info("Repo '%s': removed", repo_id)
+
+    def _apply_single_repo_reload(
+        self,
+        repo_id: str,
+        old_config: RepoServerConfig | None = None,
+    ) -> None:
+        """Restart a single repo's listeners with new config."""
+        handler = self.repo_handlers.get(repo_id)
+        if not handler:
+            return
+
+        if old_config is None:
+            old_config = handler.config
+        self._set_repo_status(repo_id, RepoStatus.RELOADING)
+
+        try:
+            handler.stop()
+            handler.adapters = create_adapters(handler.config)
+
+            if handler.config.git_repo_url != old_config.git_repo_url:
+                from airut.gateway.conversation import (
+                    ConversationManager,
+                )
+
+                handler.conversation_manager = ConversationManager(
+                    repo_url=handler.config.git_repo_url,
+                    storage_dir=handler.config.storage_dir,
+                )
+
+            handler.start_listener()
+            self._set_repo_status(repo_id, RepoStatus.LIVE)
+            logger.info("Repo '%s': reload complete", repo_id)
+        except Exception:
+            logger.exception(
+                "Repo '%s': reload failed, reverting config", repo_id
+            )
+            # Attempt rollback.  Note: self.config.repos still has the
+            # new config; the next reload will detect the mismatch and
+            # retry the repo-scope reload.
+            handler.config = old_config
+            try:
+                handler.adapters = create_adapters(old_config)
+                handler.start_listener()
+                self._set_repo_status(repo_id, RepoStatus.LIVE)
+            except Exception:
+                logger.exception("Repo '%s': rollback also failed", repo_id)
+                self._set_repo_status(repo_id, RepoStatus.FAILED)
+
+    def _check_pending_repo_reload(self, repo_id: str) -> None:
+        """Check and apply pending repo reload after task completion.
+
+        All checks are performed under ``_reload_lock`` to prevent a
+        TOCTOU race where a new task starts between the idle check and
+        the reload application.
+        """
+        with self._reload_lock:
+            if repo_id not in self._pending_repo_reload:
+                return
+            if self.tracker.has_active_tasks_for_repo(repo_id):
+                return  # still busy
+
+            old_cfg = self._pending_repo_reload.pop(repo_id)
+
+            if repo_id not in self.config.repos:
+                handler = self.repo_handlers.pop(repo_id, None)
+                if handler:
+                    handler.stop()
+                self._remove_repos_store_entry(repo_id)
+                logger.info("Repo '%s': deferred removal applied", repo_id)
+            else:
+                self._apply_single_repo_reload(repo_id, old_cfg)
+
+    def _check_pending_server_reload(self) -> None:
+        """Check and apply pending server reload when globally idle.
+
+        All checks are performed under ``_reload_lock`` to prevent a
+        TOCTOU race where a new task starts between the idle check and
+        the reload application.
+        """
+        with self._reload_lock:
+            pending = self._pending_server_config
+            if pending is None:
+                return
+
+            # Check if any repo has active tasks (snapshot keys to
+            # avoid RuntimeError from concurrent dict modification).
+            for repo_id in list(self.repo_handlers):
+                if self.tracker.has_active_tasks_for_repo(repo_id):
+                    return  # still busy
+
+            # Also check that no pending messages are queued
+            with self._pending_messages_lock:
+                if self._pending_messages:
+                    return
+
+            old_global = self._pending_server_old_global
+            self._pending_server_config = None
+            self._pending_server_old_global = None
+
+            try:
+                self._apply_server_reload(pending, old_global)
+            except Exception:
+                logger.exception(
+                    "Server-scope reload failed, keeping current config"
+                )
+
+    def _apply_server_reload(
+        self,
+        new_config: ServerConfig,
+        old_global: GlobalConfig | None = None,
+    ) -> None:
+        """Apply server-scope config changes.
+
+        Recreates thread pool, dashboard, or sandbox as needed.
+
+        Args:
+            new_config: New server config to apply.
+            old_global: Global config snapshot from when the change was
+                detected.  Falls back to ``self.global_config`` if not
+                provided (for tests).
+        """
+        if old_global is None:
+            old_global = self.global_config
+        new_global = new_config.global_config
+
+        # Thread pool
+        if (
+            old_global.max_concurrent_executions
+            != new_global.max_concurrent_executions
+        ):
+            if self._executor_pool:
+                self._executor_pool.shutdown(wait=False)
+            self._executor_pool = ThreadPoolExecutor(
+                max_workers=new_global.max_concurrent_executions,
+                thread_name_prefix="ClaudeWorker",
+            )
+            logger.info(
+                "Recreated execution pool with %d workers",
+                new_global.max_concurrent_executions,
+            )
+
+        # Dashboard
+        dashboard_changed = (
+            old_global.dashboard_enabled != new_global.dashboard_enabled
+            or old_global.dashboard_host != new_global.dashboard_host
+            or old_global.dashboard_port != new_global.dashboard_port
+            or old_global.dashboard_base_url != new_global.dashboard_base_url
+        )
+        if dashboard_changed:
+            if self.dashboard:
+                self.dashboard.stop()
+                self.dashboard = None
+            self.global_config = new_global
+            self._start_dashboard_early()
+
+        # Note: container_command, upstream_dns, resource_limits,
+        # conversation_max_age_days, image_prune, and
+        # shutdown_timeout_seconds require a service restart to apply.
+        # These fields are detected as changed but take effect on next
+        # restart.  Sandbox recreation is deferred to a future release.
+
+        logger.info("Server-scope reload applied")
+
+    def _set_repo_status(self, repo_id: str, status: RepoStatus) -> None:
+        """Update a single repo's status in the repos store.
+
+        Read-modify-write on VersionedStore; callers must hold
+        ``_reload_lock`` for synchronization (except during boot).
+        """
+        current = self._repos_store.get().value
+        updated = tuple(
+            replace(r, status=status) if r.repo_id == repo_id else r
+            for r in current
+        )
+        self._repos_store.update(updated)
+
+    def _update_repos_store_entry(
+        self, repo_id: str, new_state: RepoState
+    ) -> None:
+        """Add or replace a repo entry in the repos store."""
+        current = self._repos_store.get().value
+        entries = [r for r in current if r.repo_id != repo_id]
+        entries.append(new_state)
+        self._repos_store.update(tuple(entries))
+
+    def _remove_repos_store_entry(self, repo_id: str) -> None:
+        """Remove a repo entry from the repos store."""
+        current = self._repos_store.get().value
+        updated = tuple(r for r in current if r.repo_id != repo_id)
+        self._repos_store.update(updated)
 
     def register_active_task(
         self, conversation_id: str, task: AgentTask
@@ -897,6 +1395,11 @@ class GatewayService:
             if drain_conv_id:
                 self._drain_pending(drain_conv_id)
 
+            # Check for deferred config reloads
+            repo_id = repo_handler.config.repo_id
+            self._check_pending_repo_reload(repo_id)
+            self._check_pending_server_reload()
+
     def _process_pending_message(self, pending: PendingMessage) -> None:
         """Execute a previously-authenticated pending message.
 
@@ -1078,14 +1581,20 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("Airut Gateway Service starting...")
 
     try:
-        snapshot = ServerConfig.from_yaml(config_path=args.config)
+        config_path = args.config or get_config_path()
+        source = YamlConfigSource(config_path)
+        snapshot = ServerConfig.from_source(source)
         config = snapshot.value
     except (ValueError, Exception) as e:
         logger.critical("Configuration error: %s", e)
         return 1
 
     try:
-        service = GatewayService(config)
+        service = GatewayService(
+            config,
+            config_source=source,
+            config_snapshot=snapshot,
+        )
     except Exception as e:
         logger.exception("Failed to initialize service: %s", e)
         return 2
@@ -1097,6 +1606,10 @@ def main(argv: list[str] | None = None) -> int:
 
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
+    signal.signal(
+        signal.SIGHUP,
+        lambda *_: service._reload_requested.set(),
+    )
 
     try:
         service.start(resilient=args.resilient)

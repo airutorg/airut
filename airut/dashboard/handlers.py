@@ -81,6 +81,7 @@ class RequestHandlers:
         clock: VersionClock | None = None,
         sse_manager: SSEConnectionManager | None = None,
         git_version_info: GitVersionInfo | None = None,
+        status_callback: Callable[[], dict[str, object]] | None = None,
     ) -> None:
         """Initialize request handlers.
 
@@ -95,6 +96,9 @@ class RequestHandlers:
             clock: Shared version clock for SSE streaming.
             sse_manager: SSE connection manager for enforcing limits.
             git_version_info: Git version info for upstream update checks.
+            status_callback: Optional callable returning config reload status
+                dict with keys: config_generation, server_reload_pending,
+                last_reload_error.
         """
         self.tracker = tracker
         self.version_info = version_info
@@ -105,6 +109,7 @@ class RequestHandlers:
         self._clock = clock
         self._sse_manager = sse_manager or SSEConnectionManager()
         self._git_version_info = git_version_info
+        self._status_callback = status_callback
 
     def _get_boot_state(self) -> BootState | None:
         """Read current boot state from versioned store."""
@@ -863,6 +868,34 @@ class RequestHandlers:
             json.dumps(result),
             content_type="application/json",
             headers={"ETag": etag, "Cache-Control": "no-cache"},
+        )
+
+    def handle_api_status(self, request: Request) -> Response:
+        """Handle config reload status endpoint.
+
+        Returns service-level status including config generation counter,
+        server reload pending flag, and last reload error.
+
+        Args:
+            request: Incoming request.
+
+        Returns:
+            JSON response with config reload status.
+        """
+        if self._status_callback:
+            data = self._status_callback()
+        else:
+            data = cast(
+                JsonDict,
+                {
+                    "config_generation": 0,
+                    "server_reload_pending": False,
+                    "last_reload_error": None,
+                },
+            )
+        return Response(
+            json.dumps(data),
+            content_type="application/json",
         )
 
     def handle_api_task_stop(

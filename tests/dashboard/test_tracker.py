@@ -1086,3 +1086,37 @@ class TestDiskTaskId:
     def test_prefix_constant(self) -> None:
         """DISK_TASK_ID_PREFIX matches the prefix used by make/parse."""
         assert make_disk_task_id("x").startswith(DISK_TASK_ID_PREFIX)
+
+
+class TestHasActiveTasksForRepo:
+    """Tests for TaskTracker.has_active_tasks_for_repo."""
+
+    def test_empty_repo_id(self) -> None:
+        """Returns False for empty string repo_id."""
+        tracker = TaskTracker()
+        assert not tracker.has_active_tasks_for_repo("")
+
+    def test_no_tasks(self) -> None:
+        """Returns False when no tasks exist."""
+        tracker = TaskTracker()
+        assert not tracker.has_active_tasks_for_repo("my-repo")
+
+    def test_active_task_present(self) -> None:
+        """Returns True when matching active task exists."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Test task", repo_id="my-repo")
+        assert tracker.has_active_tasks_for_repo("my-repo")
+
+    def test_completed_task_not_active(self) -> None:
+        """Returns False when matching task is completed."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Test task", repo_id="my-repo")
+        tracker.set_authenticating("t1")
+        tracker.complete_task("t1", CompletionReason.SUCCESS)
+        assert not tracker.has_active_tasks_for_repo("my-repo")
+
+    def test_different_repo(self) -> None:
+        """Returns False for a different repo_id."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Test task", repo_id="other-repo")
+        assert not tracker.has_active_tasks_for_repo("my-repo")

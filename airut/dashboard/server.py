@@ -96,6 +96,7 @@ class DashboardServer:
         repos_store: VersionedStore[tuple[RepoState, ...]] | None = None,
         clock: VersionClock | None = None,
         git_version_info: GitVersionInfo | None = None,
+        status_callback: Callable[[], dict[str, object]] | None = None,
     ) -> None:
         """Initialize dashboard server.
 
@@ -112,6 +113,8 @@ class DashboardServer:
             repos_store: Versioned repo states store.
             clock: Shared version clock for SSE streaming.
             git_version_info: Git version info for upstream update checks.
+            status_callback: Optional callable returning config reload
+                status dict.
         """
         self.tracker = tracker
         self.host = host
@@ -133,6 +136,7 @@ class DashboardServer:
             clock=clock,
             sse_manager=self._sse_manager,
             git_version_info=git_version_info,
+            status_callback=status_callback,
         )
 
         self._url_map = Map(
@@ -204,6 +208,7 @@ class DashboardServer:
                     endpoint="api_network_poll",
                 ),
                 Rule("/api/health", endpoint="health"),
+                Rule("/api/status", endpoint="api_status"),
                 Rule("/api/tracker", endpoint="api_tracker"),
             ]
         )
@@ -234,6 +239,7 @@ class DashboardServer:
             "network_log_stream": (self._handlers.handle_network_log_stream),
             "api_network_poll": self._handlers.handle_api_network_poll,
             "health": self._handlers.handle_health,
+            "api_status": self._handlers.handle_api_status,
             "api_tracker": self._handlers.handle_api_tracker,
         }
 

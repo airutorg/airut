@@ -34,6 +34,8 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
 - `spec/repo-config.md` — per-repo schema in server config
 - `spec/declarative-config.md` — declarative config layer (schema metadata,
   migration, diffing, round-trip, config variables)
+- `spec/config-reload.md` — live config reload (file watching, scope-aware
+  application, deferred reload)
 - `spec/multi-repo.md` — multi-repository support design
 - `spec/slack-channel.md` — Slack channel implementation (Socket Mode)
 - `spec/integration-tests.md` — end-to-end test specification

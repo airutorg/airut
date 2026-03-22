@@ -610,7 +610,7 @@ class TestEmailServer:
             self._inbox,
             self._username,
             self._password,
-            inboxes=self._inboxes if self._inboxes else None,
+            inboxes=self._inboxes,
         )
 
         started = threading.Event()
@@ -700,8 +700,8 @@ class TestEmailServer:
     def add_inbox(self, username: str) -> None:
         """Register an additional inbox for multi-repo testing.
 
-        Must be called before start(). Each inbox is isolated and
-        accessible via inject_message_to().
+        Can be called before or after start(). Each inbox is isolated
+        and accessible via inject_message_to().
 
         Args:
             username: IMAP username for this inbox.
