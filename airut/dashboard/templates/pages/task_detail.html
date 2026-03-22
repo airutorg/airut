@@ -2,11 +2,6 @@
 
 {% block title %}Task {{ task.task_id }} - Dashboard{% endblock %}
 
-{% block styles %}
-<link rel="stylesheet" href="/static/styles/light.css">
-<link rel="stylesheet" href="/static/styles/components.css">
-{% endblock %}
-
 {% block body %}
 {% set success_class = 'success' if task.succeeded else ('failed' if task.status.value == 'completed' else '') %}
 {% set status_display = task.status.value.replace('_', ' ').upper() %}
@@ -20,8 +15,7 @@
         {% set success_text = ' - Failed' %}
     {% endif %}
 {% endif %}
-<div class="page" {% if is_active %}hx-ext="sse" sse-connect="/api/events/stream?format=html&task_id={{ task.task_id }}"{% endif %}>
-    <div class="back"><a href="/">&larr; Back to Dashboard</a></div>
+<div class="page" {% if is_active %}hx-ext="sse" sse-connect="/api/task/{{ task.task_id }}/events/stream?format=html"{% endif %}>
     <div class="card">
         <h1>Task: {{ task.task_id }}</h1>
 
@@ -120,8 +114,8 @@
 
 {% block scripts %}
 {% if is_active %}
-<script src="/static/vendor/htmx.min.js"></script>
-<script src="/static/vendor/sse.min.js"></script>
-<script src="/static/js/sse-fallback.js"></script>
+<script src="{{ static_url('vendor/htmx.min.js') }}"></script>
+<script src="{{ static_url('vendor/sse.min.js') }}"></script>
+<script src="{{ static_url('js/sse-fallback.js') }}"></script>
 {% endif %}
 {% endblock %}

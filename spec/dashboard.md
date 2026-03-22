@@ -144,8 +144,10 @@ credential problems) while others continue processing emails.
 | `/static/<path>`                        | GET    | Static assets (CSS, JS, vendor)             |
 | `/task/{task_id}`                       | GET    | Task detail view (primary detail page)      |
 | `/conversation/{conv_id}`               | GET    | Conversation overview (all tasks + replies) |
-| `/conversation/{conv_id}/actions`       | GET    | Actions timeline viewer                     |
-| `/conversation/{conv_id}/network`       | GET    | Network logs viewer                         |
+| `/task/{task_id}/actions`               | GET    | Actions timeline viewer (by task)           |
+| `/task/{task_id}/network`               | GET    | Network logs viewer (by task)               |
+| `/conversation/{conv_id}/actions`       | GET    | Actions timeline viewer (by conversation)   |
+| `/conversation/{conv_id}/network`       | GET    | Network logs viewer (by conversation)       |
 | `/repo/{repo_id}`                       | GET    | Repository detail view                      |
 | `/api/version`                          | GET    | Structured version info (JSON)              |
 | `/api/update`                           | GET    | Upstream update check (JSON or HTML)        |
@@ -156,6 +158,7 @@ credential problems) while others continue processing emails.
 | `/api/conversation/{id}/stop`           | POST   | Stop a running task                         |
 | `/api/tracker`                          | GET    | JSON API for full tracker state (ETag)      |
 | `/api/events/stream`                    | GET    | SSE state stream (real-time updates)        |
+| `/api/task/{task_id}/events/stream`     | GET    | SSE state stream (task-scoped, HTML mode)   |
 | `/api/conversation/{id}/events/stream`  | GET    | SSE event log stream (per-task)             |
 | `/api/conversation/{id}/events/poll`    | GET    | Events polling fallback                     |
 | `/api/conversation/{id}/network/stream` | GET    | SSE network log stream (per-task)           |
@@ -225,11 +228,12 @@ to polling when SSE is unavailable.
 
 Three SSE endpoint types serve different update needs:
 
-| Endpoint                                | Purpose                  | Cursor         |
-| --------------------------------------- | ------------------------ | -------------- |
-| `/api/events/stream`                    | Task + boot + repo state | Version number |
-| `/api/conversation/{id}/events/stream`  | Claude streaming events  | Byte offset    |
-| `/api/conversation/{id}/network/stream` | Network log lines        | Byte offset    |
+| Endpoint                                | Purpose                       | Cursor         |
+| --------------------------------------- | ----------------------------- | -------------- |
+| `/api/events/stream`                    | Task + boot + repo state      | Version number |
+| `/api/task/{id}/events/stream`          | Task-scoped state (HTML mode) | Version number |
+| `/api/conversation/{id}/events/stream`  | Claude streaming events       | Byte offset    |
+| `/api/conversation/{id}/network/stream` | Network log lines             | Byte offset    |
 
 ### State Stream (`/api/events/stream`)
 
@@ -296,7 +300,7 @@ Connection lifecycle:
 | Page           | SSE Source                                   | htmx Swap                | Behavior                                         |
 | -------------- | -------------------------------------------- | ------------------------ | ------------------------------------------------ |
 | Main dashboard | `/api/events/stream?format=html`             | Per-region `sse-swap`    | Updates task lists, boot, repos via named events |
-| Task detail    | `/api/events/stream?format=html&task_id=...` | Per-field `sse-swap`     | Updates status, timing, todo progress            |
+| Task detail    | `/api/task/{id}/events/stream`               | Per-field `sse-swap`     | Updates status, timing, todo progress            |
 | Actions viewer | `/api/conversation/{id}/events/stream`       | `sse-swap="html"` append | Appends events to timeline                       |
 | Network viewer | `/api/conversation/{id}/network/stream`      | `sse-swap="html"` append | Appends log lines                                |
 | Repo detail    | `/api/events/stream?format=html&repo_id=...` | Per-field `sse-swap`     | Updates status badge, error section              |
@@ -458,22 +462,24 @@ loading. Both the HTML task detail page and the JSON API endpoint support the
 `disk-{conv_id}` task ID format, falling back to disk when the task is not found
 in memory.
 
-### Actions Viewer (`/conversation/{conv_id}/actions`)
+### Actions Viewer (`/task/{task_id}/actions`)
 
-Dark-themed terminal-style page that renders the timeline of Claude streaming
-events (system, assistant text, tool use/result, result summaries) for a
-conversation. Events are grouped per reply, paired with request text and reply
-metadata.
+Timeline of Claude streaming events (system, assistant text, tool use/result,
+result summaries) for a conversation. Events are grouped per reply, paired with
+request text and reply metadata. Uses the unified theme with a `.log-container`
+card for monospace content. Also accessible via
+`/conversation/{conv_id}/actions`.
 
 **Subagent event annotation**: Events produced by Claude's subagent (Task tool)
 calls are visually distinguished in the timeline:
 
 - Events with a non-null `parent_tool_use_id` field are rendered with left
-  indentation (`margin-left: 20px`), a colored left border, and a badge showing
+  indentation, a colored left border, and a badge showing
   `{subagent_type}:{short_id}` (where `short_id` is the last 6 characters of the
   `parent_tool_use_id`).
-- Border and badge colors are assigned deterministically from a fixed palette
-  based on the `parent_tool_use_id`, so events from the same subagent share a
+- Border and badge colors are assigned deterministically from a fixed palette of
+  6 CSS color classes (`--subagent-color-0` through `--subagent-color-5`) based
+  on the `parent_tool_use_id`, so events from the same subagent share a
   consistent color.
 - The label map (`subagent_type` values like "Explore", "CodeReview", etc.) is
   built by pre-scanning the event group for Task `tool_use` blocks and
@@ -491,17 +497,51 @@ JavaScript SSE handlers.
   blocks for `title`, `styles`, `body`, `scripts`. Component templates
   (`components/`) are reused via `{% include %}`. Page templates (`pages/`)
   extend `base.html`.
-- **Static CSS** (`static/styles/`): `base.css` (shared layout), `light.css`
-  (dashboard/detail pages), `dark.css` (actions/network viewers),
-  `components.css` (shared component styles). CSS custom properties for theming.
+- **Static CSS** (`static/styles/`): `base.css` (design tokens, CSS custom
+  properties with `prefers-color-scheme` dark mode), `components.css` (reusable
+  component styles — navbar, cards, badges, buttons), `pages.css` (page-specific
+  layouts — dashboard grid, log containers, detail pages).
 - **Static JS** (`static/js/`): `local-time.js` (timestamp formatting),
   `auto-scroll.js` (terminal auto-scroll), `actions.js` (event toggle),
   `sse-fallback.js` (htmx SSE connection status).
 - **No inline styles or scripts**: CSP uses
   `script-src 'self'; style-src 'self'` (no `'unsafe-inline'`).
 
+### Navigation
+
+A persistent navigation bar appears on every page with:
+
+- **Logo**: Links to the main dashboard (`/`).
+- **Breadcrumbs**: Hierarchical path showing the user's position. Handlers pass
+  a `breadcrumbs` list of `(label, url)` tuples to templates. The last crumb
+  (current page) is rendered without a link. Example:
+  `Main / my-repo / conv abc12345 / Task def67890`.
+
+Breadcrumb structure per page:
+
+| Page           | Breadcrumbs                                     |
+| -------------- | ----------------------------------------------- |
+| Dashboard      | _(none)_                                        |
+| Repo detail    | `repo_id`                                       |
+| Task detail    | `repo_id` > `conv {id}` > `Task {id}`           |
+| Conversation   | `repo_id` > `conv {id}`                         |
+| Actions viewer | `repo_id` > `conv {id}` > `Task {id}` > Actions |
+| Network viewer | `repo_id` > `conv {id}` > `Task {id}` > Network |
+
+### URL Structure for Access Control
+
+URLs are grouped by access scope to support reverse proxy rules:
+
+- `/task/*` — task detail, actions, network (per-task access)
+- `/conversation/*` — conversation overview, actions, network (per-conversation)
+- `/repo/*` — repository detail (per-repo access)
+- `/` — main dashboard (admin-level)
+- `/api/*` — JSON APIs and SSE streams
+
 ### Styling
 
+- Unified theme across all pages (no separate dark terminal theme)
+- Light/dark mode via `prefers-color-scheme` CSS media query (no JS toggle)
 - Real-time updates via htmx SSE extension (no custom JS SSE handlers)
 - Responsive layout (single column on mobile)
 - Color coding: yellow (queued), blue (in-progress), green (success), red

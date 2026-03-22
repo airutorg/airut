@@ -1974,6 +1974,50 @@ class TestEventsLogStreamEndpoint:
         )
         assert response.status_code == 200
 
+    def test_events_log_stream_last_event_id(self, tmp_path: Path) -> None:
+        """Last-Event-ID header takes priority over offset query param."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get(
+            "/api/conversation/abc12345/events/stream?offset=0",
+            headers={"Last-Event-ID": "100"},
+        )
+        assert response.status_code == 200
+
+    def test_events_log_stream_invalid_last_event_id(
+        self, tmp_path: Path
+    ) -> None:
+        """Invalid Last-Event-ID falls back to offset 0."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get(
+            "/api/conversation/abc12345/events/stream",
+            headers={"Last-Event-ID": "not-a-number"},
+        )
+        assert response.status_code == 200
+
 
 class TestNetworkLogStreamEndpoint:
     """Tests for the per-conversation network log SSE stream endpoint."""
@@ -2070,6 +2114,50 @@ class TestNetworkLogStreamEndpoint:
         )
         assert response.status_code == 200
 
+    def test_network_log_stream_last_event_id(self, tmp_path: Path) -> None:
+        """Last-Event-ID header takes priority over offset query param."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get(
+            "/api/conversation/abc12345/network/stream?offset=0",
+            headers={"Last-Event-ID": "200"},
+        )
+        assert response.status_code == 200
+
+    def test_network_log_stream_invalid_last_event_id(
+        self, tmp_path: Path
+    ) -> None:
+        """Invalid Last-Event-ID falls back to offset 0."""
+        tracker = TaskTracker()
+        tracker.add_task("abc12345", "Test")
+        tracker.set_conversation_id("abc12345", "abc12345")
+        tracker.set_authenticating("abc12345")
+        tracker.set_executing("abc12345")
+        tracker.complete_task("abc12345", CompletionReason.SUCCESS)
+
+        conv_dir = tmp_path / "abc12345"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get(
+            "/api/conversation/abc12345/network/stream",
+            headers={"Last-Event-ID": "bad"},
+        )
+        assert response.status_code == 200
+
 
 class TestSSELivePages:
     """Tests for SSE integration in HTML pages."""
@@ -2106,7 +2194,8 @@ class TestSSELivePages:
 
         assert 'hx-ext="sse"' in html
         assert "sse-connect" in html
-        assert "/api/events/stream" in html
+        assert "/api/task/" in html
+        assert "/events/stream" in html
 
     def test_task_detail_no_sse_for_completed(self) -> None:
         """Task detail page has no SSE script for completed tasks."""
@@ -3461,3 +3550,200 @@ class TestConversationOverviewCoverage:
         assert "Reply #1" in html
         assert "Follow-up question" in html
         assert "Pending Request" in html
+
+
+class TestTaskScopedEndpoints:
+    """Tests for task-scoped URL endpoints (/task/<id>/actions, /network)."""
+
+    def test_task_actions_by_id(self, tmp_path: Path) -> None:
+        """Test /task/<task_id>/actions resolves task and renders actions."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Test Task", repo_id="my-repo")
+        tracker.set_conversation_id("t1", "conv1")
+
+        conv_dir = tmp_path / "conv1"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/t1/actions")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Actions" in html
+        # Breadcrumbs include repo
+        assert 'href="/repo/my-repo"' in html
+
+    def test_task_actions_by_id_not_found(self) -> None:
+        """Test /task/<id>/actions returns 404 for unknown task."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/nonexistent/actions")
+        assert response.status_code == 404
+
+    def test_task_actions_by_id_no_conversation(self) -> None:
+        """Test /task/<id>/actions returns 404 when task has no conversation."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Test Task")
+        # Do NOT set conversation_id
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/t1/actions")
+        assert response.status_code == 404
+        assert "No conversation" in response.get_data(as_text=True)
+
+    def test_task_network_by_id(self, tmp_path: Path) -> None:
+        """Test /task/<task_id>/network resolves task and renders logs."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Test Task", repo_id="my-repo")
+        tracker.set_conversation_id("t1", "conv1")
+
+        conv_dir = tmp_path / "conv1"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/t1/network")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Network" in html
+        assert 'href="/repo/my-repo"' in html
+
+    def test_task_network_by_id_not_found(self) -> None:
+        """Test /task/<id>/network returns 404 for unknown task."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/nonexistent/network")
+        assert response.status_code == 404
+
+    def test_task_network_by_id_no_conversation(self) -> None:
+        """Test /task/<id>/network returns 404 when task has no conversation."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Test Task")
+
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/t1/network")
+        assert response.status_code == 404
+        assert "No conversation" in response.get_data(as_text=True)
+
+    def test_task_events_stream_endpoint(self) -> None:
+        """Test /api/task/<id>/events/stream returns SSE for valid task."""
+        from airut.dashboard.versioned import VersionClock
+
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "conv1")
+
+        server = DashboardServer(tracker, clock=clock)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/task/t1/events/stream")
+        assert response.status_code == 200
+        assert response.content_type == "text/event-stream"
+
+    def test_task_events_stream_not_found(self) -> None:
+        """Test /api/task/<id>/events/stream returns 404 for unknown task."""
+        from airut.dashboard.versioned import VersionClock
+
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        server = DashboardServer(tracker, clock=clock)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/task/nonexistent/events/stream")
+        assert response.status_code == 404
+
+
+class TestBreadcrumbNavigation:
+    """Tests for breadcrumb navigation on all pages."""
+
+    def test_task_detail_breadcrumbs_with_repo(self, tmp_path: Path) -> None:
+        """Task detail page shows repo in breadcrumbs when available."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Test", repo_id="my-repo")
+        tracker.set_conversation_id("t1", "conv1")
+
+        conv_dir = tmp_path / "conv1"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/task/t1")
+        html = response.get_data(as_text=True)
+        assert 'href="/repo/my-repo"' in html
+        assert 'href="/conversation/conv1"' in html
+
+    def test_conversation_breadcrumbs_with_repo(self, tmp_path: Path) -> None:
+        """Conversation page shows repo in breadcrumbs when available."""
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Test", repo_id="my-repo")
+        tracker.set_conversation_id("t1", "conv1")
+
+        conv_dir = tmp_path / "conv1"
+        conv_dir.mkdir()
+
+        server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
+        client = Client(server._wsgi_app)
+
+        response = client.get("/conversation/conv1")
+        html = response.get_data(as_text=True)
+        assert 'href="/repo/my-repo"' in html
+
+    def test_repo_detail_breadcrumbs(self) -> None:
+        """Repo detail page shows repo name in breadcrumbs."""
+        from airut.dashboard.tracker import (
+            ChannelInfo,
+            RepoState,
+            RepoStatus,
+        )
+        from airut.dashboard.versioned import VersionClock, VersionedStore
+
+        tracker = TaskTracker()
+        clock = VersionClock()
+        repos_store: VersionedStore[tuple[RepoState, ...]] = VersionedStore(
+            (
+                RepoState(
+                    repo_id="test-repo",
+                    status=RepoStatus.LIVE,
+                    git_repo_url="https://github.com/test/repo",
+                    channels=(
+                        ChannelInfo(
+                            channel_type="email", info="imap.example.com"
+                        ),
+                    ),
+                    storage_dir="/storage/test-repo",
+                ),
+            ),
+            clock,
+        )
+        server = DashboardServer(tracker, repos_store=repos_store)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/repo/test-repo")
+        html = response.get_data(as_text=True)
+        # Repo name appears in navbar breadcrumb
+        assert "test-repo" in html
+        assert "navbar" in html
+
+    def test_dashboard_has_empty_breadcrumbs(self) -> None:
+        """Dashboard page has no breadcrumbs (just logo)."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/")
+        html = response.get_data(as_text=True)
+        assert "navbar" in html
+        # No separator should appear (no breadcrumbs)
+        assert "navbar-sep" not in html

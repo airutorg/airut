@@ -1,0 +1,16 @@
+{# Navigation bar — expects: breadcrumbs (list of (label, url) tuples, optional) #}
+<nav class="navbar">
+    <a href="/" class="navbar-logo" title="Airut Dashboard">
+        {% include "components/logo.html" %}
+    </a>
+    {% if breadcrumbs %}
+    {% for crumb in breadcrumbs %}
+    <span class="navbar-sep">/</span>
+    {% if loop.last %}
+    <span class="navbar-crumb current">{{ crumb[0] }}</span>
+    {% else %}
+    <span class="navbar-crumb"><a href="{{ crumb[1] }}">{{ crumb[0] }}</a></span>
+    {% endif %}
+    {% endfor %}
+    {% endif %}
+</nav>

@@ -21,8 +21,8 @@ from airut.dashboard.formatters import format_duration, format_timestamp
 
 
 # Load logo SVG once at import time for use as a Jinja2 global.
-# Add CSS class, aria-label, and replace fill with currentColor so the
-# logo inherits the text color and scales to match the h1 text height.
+# Add CSS class and aria-label.  Keep the original black fill —
+# dark-mode inversion is handled via CSS filter on the container.
 _LOGO_SVG = (
     files("airut._bundled.assets")
     .joinpath("logo.svg")
@@ -31,7 +31,6 @@ _LOGO_SVG = (
         'viewBox="0 0 2816 1536"',
         'class="logo" viewBox="0 0 2816 1536" aria-label="Airut logo"',
     )
-    .replace('fill="#000000"', 'fill="currentColor"')
 )
 
 
@@ -100,6 +99,46 @@ def _content_hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()[:12]
 
 
+def _build_static_hashes() -> dict[str, str]:
+    """Compute content hashes for all static files at startup.
+
+    Returns:
+        Dict mapping relative path to short hex hash.
+    """
+    hashes: dict[str, str] = {}
+    static_dir = _resolve_directory("airut.dashboard", "static")
+    for p in static_dir.rglob("*"):
+        if p.is_file():
+            rel = str(p.relative_to(static_dir))
+            h = hashlib.sha256(p.read_bytes()).hexdigest()[:12]
+            hashes[rel] = h
+    return hashes
+
+
+# Pre-computed hashes for cache-busted URLs.
+_STATIC_HASHES = _build_static_hashes()
+
+
+def static_url(path: str) -> str:
+    """Return a cache-busted URL for a static file.
+
+    Appends a content-hash query parameter so the browser fetches a
+    new copy whenever the file content changes, even if the filename
+    stays the same.  This is critical because static files are served
+    with ``Cache-Control: immutable``.
+
+    Args:
+        path: Path relative to ``static/`` (e.g. ``styles/base.css``).
+
+    Returns:
+        URL string like ``/static/styles/base.css?v=a1b2c3d4e5f6``.
+    """
+    h = _STATIC_HASHES.get(path, "")
+    if h:
+        return f"/static/{path}?v={h}"
+    return f"/static/{path}"
+
+
 def create_jinja_env() -> Environment:
     """Create and configure the shared Jinja2 environment.
 
@@ -121,6 +160,7 @@ def create_jinja_env() -> Environment:
     globals_dict["format_duration"] = format_duration
     globals_dict["format_timestamp"] = format_timestamp
     globals_dict["logo_svg"] = _LOGO_SVG
+    globals_dict["static_url"] = static_url
 
     return env
 

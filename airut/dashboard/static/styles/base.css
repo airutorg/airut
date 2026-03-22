@@ -1,46 +1,109 @@
-/* base.css - Reset, typography, CSS custom properties, shared classes */
+/* base.css - Reset, typography, CSS custom properties, shared utilities.
+ *
+ * Design system derived from airut.org landing page.
+ * Light/dark mode via prefers-color-scheme (no JS needed).
+ */
 
 :root {
-  --color-link: #337ab7;
-  --color-queued: #f0ad4e;
-  --color-executing: #5bc0de;
-  --color-success: #5cb85c;
-  --color-failed: #d9534f;
+  /* ---- Core palette (light) ---- */
+  --bg-page: #f0f2f6;
+  --bg-surface: #ffffff;
+  --bg-code: #eaedf3;
+  --bg-inset: #f5f7fa;
+  --border: #d2d8e3;
+  --border-light: #e4e8ef;
+  --text-primary: #111826;
+  --text-secondary: #475569;
+  --text-tertiary: #7c879c;
+  --accent: #1b6b8a;
+  --accent-hover: #155a75;
+  --accent-subtle: #e0f0f7;
+
+  /* ---- Status colors ---- */
+  --status-success: #1a7a45;
+  --status-success-bg: #e2f5eb;
+  --status-warning: #a86b10;
+  --status-warning-bg: #fdf3e0;
+  --status-error: #b83a3a;
+  --status-error-bg: #fce8e8;
+  --status-info: #1b6b8a;
+  --status-info-bg: #e0f0f7;
+
+  /* ---- Elevation ---- */
+  --shadow-sm: 0 1px 2px rgba(17,24,38,0.05);
+  --shadow-md: 0 2px 8px rgba(17,24,38,0.07), 0 1px 2px rgba(17,24,38,0.04);
+
+  /* ---- Typography ---- */
   --font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
-  --subagent-color-0: #e06c75;
-  --subagent-color-1: #61afef;
-  --subagent-color-2: #98c379;
-  --subagent-color-3: #e5c07b;
-  --subagent-color-4: #c678dd;
-  --subagent-color-5: #56b6c2;
+  --font-mono: "SF Mono", "Fira Code", Consolas, "Liberation Mono", Menlo, monospace;
+
+  /* ---- Subagent colors ---- */
+  --subagent-color-0: #c44d56;
+  --subagent-color-1: #1b6b8a;
+  --subagent-color-2: #1a7a45;
+  --subagent-color-3: #a86b10;
+  --subagent-color-4: #8b4fbf;
+  --subagent-color-5: #177e8a;
 }
 
-/* Reset */
-* { box-sizing: border-box; }
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-page: #0a0f18;
+    --bg-surface: #111827;
+    --bg-code: #161d2e;
+    --bg-inset: #161d2e;
+    --border: #253046;
+    --border-light: #1c2538;
+    --text-primary: #dfe5ef;
+    --text-secondary: #8898b0;
+    --text-tertiary: #5a6a82;
+    --accent: #5cb8d6;
+    --accent-hover: #49a3c2;
+    --accent-subtle: #132a38;
 
-/* Subagent color classes */
-.subagent-color-0 {
-  color: var(--subagent-color-0);
-  --subagent-border-color: var(--subagent-color-0);
+    --status-success: #3cc06e;
+    --status-success-bg: #123020;
+    --status-warning: #dea535;
+    --status-warning-bg: #2e2210;
+    --status-error: #e05555;
+    --status-error-bg: #301414;
+    --status-info: #5cb8d6;
+    --status-info-bg: #132a38;
+
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.25);
+    --shadow-md: 0 2px 8px rgba(0,0,0,0.3), 0 1px 2px rgba(0,0,0,0.2);
+
+    --subagent-color-0: #e06c75;
+    --subagent-color-1: #5cb8d6;
+    --subagent-color-2: #3cc06e;
+    --subagent-color-3: #dea535;
+    --subagent-color-4: #c678dd;
+    --subagent-color-5: #56b6c2;
+  }
 }
-.subagent-color-1 {
-  color: var(--subagent-color-1);
-  --subagent-border-color: var(--subagent-color-1);
+
+/* ---- Reset ---- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-stack);
+  background: var(--bg-page);
+  color: var(--text-primary);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
-.subagent-color-2 {
-  color: var(--subagent-color-2);
-  --subagent-border-color: var(--subagent-color-2);
-}
-.subagent-color-3 {
-  color: var(--subagent-color-3);
-  --subagent-border-color: var(--subagent-color-3);
-}
-.subagent-color-4 {
-  color: var(--subagent-color-4);
-  --subagent-border-color: var(--subagent-color-4);
-}
-.subagent-color-5 {
-  color: var(--subagent-color-5);
-  --subagent-border-color: var(--subagent-color-5);
-}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---- Subagent color classes ---- */
+.subagent-color-0 { color: var(--subagent-color-0); --subagent-border-color: var(--subagent-color-0); }
+.subagent-color-1 { color: var(--subagent-color-1); --subagent-border-color: var(--subagent-color-1); }
+.subagent-color-2 { color: var(--subagent-color-2); --subagent-border-color: var(--subagent-color-2); }
+.subagent-color-3 { color: var(--subagent-color-3); --subagent-border-color: var(--subagent-color-3); }
+.subagent-color-4 { color: var(--subagent-color-4); --subagent-border-color: var(--subagent-color-4); }
+.subagent-color-5 { color: var(--subagent-color-5); --subagent-border-color: var(--subagent-color-5); }
+
+/* ---- Spinner animation ---- */
+@keyframes spin { to { transform: rotate(360deg); } }

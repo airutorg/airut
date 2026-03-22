@@ -1,8 +1,8 @@
 {# Action buttons — expects: task (TaskState) #}
 <div class="action-buttons">
     {% if task.conversation_id %}
-    <a href="/conversation/{{ task.conversation_id }}/actions" class="action-btn primary">View Actions</a>
-    <a href="/conversation/{{ task.conversation_id }}/network" class="action-btn primary">View Network Logs</a>
+    <a href="/task/{{ task.task_id }}/actions" class="action-btn primary">View Actions</a>
+    <a href="/task/{{ task.task_id }}/network" class="action-btn primary">View Network Logs</a>
     {% endif %}
     {% if task.status.value == 'executing' %}
     <button id="stop-btn" class="stop-btn"

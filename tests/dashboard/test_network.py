@@ -24,7 +24,7 @@ class TestNetworkLogsEndpoint:
         )
 
         html = harness.get_html("/conversation/abc12345/network")
-        assert "Network Logs: abc12345" in html
+        assert "Network: abc12345" in html
         assert "Test Subject" in html
         assert "TASK START" in html
         assert "api.github.com" in html
@@ -79,13 +79,13 @@ class TestNetworkLogsEndpoint:
         html = harness.get_html("/conversation/abc12345/network")
         assert "auto-scroll.js" in html
 
-    def test_back_link(self, harness: DashboardHarness) -> None:
-        """Test network logs page has back link to task detail."""
+    def test_breadcrumb_links(self, harness: DashboardHarness) -> None:
+        """Test network logs page has breadcrumb navigation."""
         harness.write_log("allowed GET https://api.github.com -> 200\n")
 
         html = harness.get_html("/conversation/abc12345/network")
         assert 'href="/task/abc12345"' in html
-        assert "&larr; Back" in html
+        assert "Network" in html
 
     def test_detail_page_has_network_link(
         self, harness: DashboardHarness
@@ -94,7 +94,7 @@ class TestNetworkLogsEndpoint:
         harness.add_events(result_event())
 
         html = harness.get_html("/task/abc12345")
-        assert "/conversation/abc12345/network" in html
+        assert "/task/abc12345/network" in html
         assert "View Network Logs" in html
 
 
@@ -234,7 +234,7 @@ class TestNetworkLogStripped:
         """Test stripped class CSS is present in static stylesheet."""
         from airut.dashboard.templating import STATIC_DIR
 
-        css = (STATIC_DIR / "styles" / "dark.css").read_text()
+        css = (STATIC_DIR / "styles" / "pages.css").read_text()
         assert ".log-line.stripped" in css
         assert ".dropped-tag" in css
 
@@ -338,14 +338,13 @@ class TestNetworkLogCSS:
         """Test error class has styling in static CSS."""
         from airut.dashboard.templating import STATIC_DIR
 
-        css = (STATIC_DIR / "styles" / "dark.css").read_text()
+        css = (STATIC_DIR / "styles" / "pages.css").read_text()
         assert ".log-line.error" in css
         assert ".highlight" in css
 
     def test_conn_error_css_styling(self) -> None:
-        """Test conn-error class has red styling in static CSS."""
+        """Test conn-error class has styling in static CSS."""
         from airut.dashboard.templating import STATIC_DIR
 
-        css = (STATIC_DIR / "styles" / "dark.css").read_text()
+        css = (STATIC_DIR / "styles" / "pages.css").read_text()
         assert ".log-line.conn-error" in css
-        assert "#e05f5f" in css

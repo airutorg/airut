@@ -14,6 +14,7 @@ from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
 from typing import cast
+from urllib.parse import urlencode
 
 from werkzeug.wrappers import Request, Response
 
@@ -165,6 +166,7 @@ class RequestHandlers:
         return Response(
             render_template(
                 "pages/dashboard.html",
+                breadcrumbs=[],
                 version_info=self.version_info,
                 version_url=version_url,
                 boot_state=self._get_boot_state(),
@@ -392,9 +394,17 @@ class RequestHandlers:
             conversation_id, conversation
         )
 
+        # Build breadcrumbs: use repo from first task if available
+        repo_id = tasks[0].repo_id if tasks else None
+        crumbs: list[tuple[str, str]] = []
+        if repo_id:
+            crumbs.append((repo_id, f"/repo/{repo_id}"))
+        crumbs.append((f"Conversation {conversation_id}", ""))
+
         return Response(
             render_template(
                 "pages/conversation.html",
+                breadcrumbs=crumbs,
                 conversation_id=conversation_id,
                 tasks=tasks,
                 reply_count=reply_count,
@@ -406,13 +416,47 @@ class RequestHandlers:
             content_type="text/html; charset=utf-8",
         )
 
-    def handle_task_actions(
-        self, request: Request, conversation_id: str
+    def handle_task_actions_by_id(
+        self, request: Request, task_id: str
     ) -> Response:
-        """Handle actions viewer page.
+        """Handle actions viewer page via task ID.
+
+        Resolves the conversation_id from the task and delegates to
+        :meth:`_render_actions_page`.
 
         Args:
             request: Incoming request.
+            task_id: Task ID to show actions for.
+
+        Returns:
+            HTML response with actions viewer.
+        """
+        result = self._resolve_task_by_id(task_id)
+        if result is None:
+            return Response("Task not found", status=404)
+        task, _ = result
+        if not task.conversation_id:
+            return Response("No conversation for this task", status=404)
+        return self._render_actions_page(task.conversation_id)
+
+    def handle_task_actions(
+        self, request: Request, conversation_id: str
+    ) -> Response:
+        """Handle actions viewer page via conversation ID.
+
+        Args:
+            request: Incoming request.
+            conversation_id: Conversation ID to show actions for.
+
+        Returns:
+            HTML response with actions viewer.
+        """
+        return self._render_actions_page(conversation_id)
+
+    def _render_actions_page(self, conversation_id: str) -> Response:
+        """Render the actions viewer page.
+
+        Args:
             conversation_id: Conversation ID to show actions for.
 
         Returns:
@@ -457,9 +501,24 @@ class RequestHandlers:
 
         is_active = task.status in ACTIVE_STATUSES
 
+        # Build breadcrumbs
+        crumbs: list[tuple[str, str]] = []
+        if task.repo_id:
+            crumbs.append((task.repo_id, f"/repo/{task.repo_id}"))
+        if task.conversation_id:
+            crumbs.append(
+                (
+                    f"Conversation {task.conversation_id}",
+                    f"/conversation/{task.conversation_id}",
+                )
+            )
+        crumbs.append((f"Task {task.task_id}", f"/task/{task.task_id}"))
+        crumbs.append(("Actions", ""))
+
         return Response(
             render_template(
                 "pages/actions.html",
+                breadcrumbs=crumbs,
                 task=task,
                 is_active=is_active,
                 actions_content=actions_content,
@@ -468,13 +527,47 @@ class RequestHandlers:
             content_type="text/html; charset=utf-8",
         )
 
-    def handle_task_network(
-        self, request: Request, conversation_id: str
+    def handle_task_network_by_id(
+        self, request: Request, task_id: str
     ) -> Response:
-        """Handle network logs viewer page.
+        """Handle network logs viewer page via task ID.
+
+        Resolves the conversation_id from the task and delegates to
+        :meth:`_render_network_page`.
 
         Args:
             request: Incoming request.
+            task_id: Task ID to show network logs for.
+
+        Returns:
+            HTML response with network logs viewer.
+        """
+        result = self._resolve_task_by_id(task_id)
+        if result is None:
+            return Response("Task not found", status=404)
+        task, _ = result
+        if not task.conversation_id:
+            return Response("No conversation for this task", status=404)
+        return self._render_network_page(task.conversation_id)
+
+    def handle_task_network(
+        self, request: Request, conversation_id: str
+    ) -> Response:
+        """Handle network logs viewer page via conversation ID.
+
+        Args:
+            request: Incoming request.
+            conversation_id: Conversation ID to show network logs for.
+
+        Returns:
+            HTML response with network logs viewer.
+        """
+        return self._render_network_page(conversation_id)
+
+    def _render_network_page(self, conversation_id: str) -> Response:
+        """Render the network logs viewer page.
+
+        Args:
             conversation_id: Conversation ID to show network logs for.
 
         Returns:
@@ -511,9 +604,24 @@ class RequestHandlers:
 
         is_active = task.status in ACTIVE_STATUSES
 
+        # Build breadcrumbs
+        crumbs: list[tuple[str, str]] = []
+        if task.repo_id:
+            crumbs.append((task.repo_id, f"/repo/{task.repo_id}"))
+        if task.conversation_id:
+            crumbs.append(
+                (
+                    f"Conversation {task.conversation_id}",
+                    f"/conversation/{task.conversation_id}",
+                )
+            )
+        crumbs.append((f"Task {task.task_id}", f"/task/{task.task_id}"))
+        crumbs.append(("Network", ""))
+
         return Response(
             render_template(
                 "pages/network.html",
+                breadcrumbs=crumbs,
                 task=task,
                 is_active=is_active,
                 logs_html=logs_html,
@@ -641,9 +749,12 @@ class RequestHandlers:
             or "(none)"
         )
 
+        crumbs: list[tuple[str, str]] = [(repo_id, "")]
+
         return Response(
             render_template(
                 "pages/repo_detail.html",
+                breadcrumbs=crumbs,
                 repo=repo_state,
                 channels_display=channels_display,
             ),
@@ -832,6 +943,40 @@ class RequestHandlers:
                 content_type="application/json",
             )
 
+    def handle_task_events_stream(
+        self, request: Request, task_id: str
+    ) -> Response:
+        """Handle task-scoped SSE state stream endpoint.
+
+        Resolves the task and delegates to :meth:`handle_events_stream`
+        with the ``task_id`` query parameter set.  This provides a
+        URL that can be gated per-task by a reverse proxy
+        (``/api/task/<id>/events/stream``).
+
+        Args:
+            request: Incoming request.
+            task_id: Task ID to stream events for.
+
+        Returns:
+            SSE streaming response, or error response.
+        """
+        task = self.tracker.get_task(task_id)
+        if task is None:
+            return Response(
+                json.dumps({"error": "Task not found"}),
+                status=404,
+                content_type="application/json",
+            )
+
+        # Build a new request with task_id and format injected as
+        # query params, avoiding mutation of the original request.
+        args = dict(request.args)
+        args["task_id"] = task_id
+        args["format"] = "html"
+        environ = dict(request.environ)
+        environ["QUERY_STRING"] = urlencode(args)
+        return self.handle_events_stream(Request(environ))
+
     def handle_events_stream(self, request: Request) -> Response:
         """Handle SSE state stream endpoint.
 
@@ -938,12 +1083,19 @@ class RequestHandlers:
             )
 
         client_offset = 0
-        offset_param = request.args.get("offset")
-        if offset_param is not None:
+        last_event_id = request.headers.get("Last-Event-ID")
+        if last_event_id is not None:
             try:
-                client_offset = int(offset_param)
+                client_offset = int(last_event_id)
             except ValueError:
                 pass
+        else:
+            offset_param = request.args.get("offset")
+            if offset_param is not None:
+                try:
+                    client_offset = int(offset_param)
+                except ValueError:
+                    pass
 
         event_log = EventLog(conversation_dir)
 
@@ -1001,12 +1153,19 @@ class RequestHandlers:
             )
 
         client_offset = 0
-        offset_param = request.args.get("offset")
-        if offset_param is not None:
+        last_event_id = request.headers.get("Last-Event-ID")
+        if last_event_id is not None:
             try:
-                client_offset = int(offset_param)
+                client_offset = int(last_event_id)
             except ValueError:
                 pass
+        else:
+            offset_param = request.args.get("offset")
+            if offset_param is not None:
+                try:
+                    client_offset = int(offset_param)
+                except ValueError:
+                    pass
 
         network_log = NetworkLog(conversation_dir / NETWORK_LOG_FILENAME)
 
@@ -1261,8 +1420,22 @@ class RequestHandlers:
         replies_section = render_single_reply_section(task, conversation)
         is_active = task.status in ACTIVE_STATUSES
 
+        # Build breadcrumbs
+        crumbs: list[tuple[str, str]] = []
+        if task.repo_id:
+            crumbs.append((task.repo_id, f"/repo/{task.repo_id}"))
+        if task.conversation_id:
+            crumbs.append(
+                (
+                    f"Conversation {task.conversation_id}",
+                    f"/conversation/{task.conversation_id}",
+                )
+            )
+        crumbs.append((f"Task {task.task_id}", ""))
+
         return render_template(
             "pages/task_detail.html",
+            breadcrumbs=crumbs,
             task=task,
             todos=task.todos,
             is_active=is_active,

@@ -5,9 +5,8 @@
 
 """Actions viewer page and event rendering.
 
-Renders the dark-themed terminal-style page that shows the timeline
-of Claude streaming events (system, assistant text, tool use/result,
-result summaries) for a conversation.
+Renders the timeline of Claude streaming events (system, assistant
+text, tool use/result, result summaries) for a conversation.
 """
 
 import html
@@ -29,15 +28,9 @@ from airut.conversation import ConversationMetadata
 # Maximum lines shown for edit diffs and tool results before truncation.
 _EDIT_MAX_LINES = 20
 
-# Fixed palette of distinguishable colors for subagent borders/badges.
-_SUBAGENT_COLORS = [
-    "#e06c75",  # red
-    "#61afef",  # blue
-    "#98c379",  # green
-    "#e5c07b",  # yellow
-    "#c678dd",  # purple
-    "#56b6c2",  # cyan
-]
+# Number of distinct CSS color classes for subagent borders/badges.
+# Actual colors are defined as CSS variables (--subagent-color-0 .. -5).
+_SUBAGENT_COLOR_COUNT = 6
 
 
 def render_actions_timeline(
@@ -149,9 +142,9 @@ def _subagent_color_index(tool_use_id: str) -> int:
         tool_use_id: The parent tool_use_id identifying the subagent.
 
     Returns:
-        Index into the ``_SUBAGENT_COLORS`` palette (0–5).
+        Index into the subagent color palette (0–5).
     """
-    return sum(ord(c) for c in tool_use_id) % len(_SUBAGENT_COLORS)
+    return sum(ord(c) for c in tool_use_id) % _SUBAGENT_COLOR_COUNT
 
 
 def _render_subagent_badge(
@@ -394,7 +387,7 @@ def _render_unknown_event(event: StreamEvent) -> str:
     raw_obj = json.loads(event.raw)
     type_label = html.escape(str(raw_obj.get("type", "unknown")))
     return f"""<div class="event">
-            <div class="event-header" onclick="toggleEvent(this)">
+            <div class="event-header">
                 <span class="event-type">{type_label}</span>
                 <span class="event-meta"></span>
                 <span class="toggle-icon">+</span>

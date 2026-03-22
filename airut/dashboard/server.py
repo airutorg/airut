@@ -152,6 +152,14 @@ class DashboardServer:
                     endpoint="conversation_detail",
                 ),
                 Rule(
+                    "/task/<task_id>/actions",
+                    endpoint="task_actions_by_id",
+                ),
+                Rule(
+                    "/task/<task_id>/network",
+                    endpoint="task_network_by_id",
+                ),
+                Rule(
                     "/conversation/<conversation_id>/actions",
                     endpoint="task_actions",
                 ),
@@ -175,6 +183,10 @@ class DashboardServer:
                 ),
                 Rule("/api/repos", endpoint="api_repos"),
                 Rule("/api/events/stream", endpoint="events_stream"),
+                Rule(
+                    "/api/task/<task_id>/events/stream",
+                    endpoint="task_events_stream",
+                ),
                 Rule(
                     "/api/conversation/<conversation_id>/events/stream",
                     endpoint="events_log_stream",
@@ -206,7 +218,9 @@ class DashboardServer:
             "repo_detail": self._handlers.handle_repo_detail,
             "task_detail_by_id": (self._handlers.handle_task_detail_by_id),
             "conversation_detail": (self._handlers.handle_conversation_detail),
+            "task_actions_by_id": self._handlers.handle_task_actions_by_id,
             "task_actions": self._handlers.handle_task_actions,
+            "task_network_by_id": self._handlers.handle_task_network_by_id,
             "task_network": self._handlers.handle_task_network,
             "api_tasks": self._handlers.handle_api_tasks,
             "api_task_by_id": self._handlers.handle_api_task_by_id,
@@ -214,6 +228,7 @@ class DashboardServer:
             "api_task_stop": self._handlers.handle_api_task_stop,
             "api_repos": self._handlers.handle_api_repos,
             "events_stream": self._handlers.handle_events_stream,
+            "task_events_stream": self._handlers.handle_task_events_stream,
             "events_log_stream": (self._handlers.handle_events_log_stream),
             "api_events_poll": self._handlers.handle_api_events_poll,
             "network_log_stream": (self._handlers.handle_network_log_stream),
