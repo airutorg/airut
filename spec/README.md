@@ -14,6 +14,8 @@ For high-level documentation, see [doc/](../doc/).
 - [repo-config.md](repo-config.md) — Per-repo schema in server config
 - [declarative-config.md](declarative-config.md) — Declarative config layer
   (schema metadata, migration, diffing, round-trip)
+- [config-variables.md](config-variables.md) — Config variables (`vars:`
+  section, `!var` tag, value indirection for sharing across repos)
 - [multi-repo.md](multi-repo.md) — Multi-repository support design
 - [slack-channel.md](slack-channel.md) — Slack channel implementation (Socket
   Mode, Agents & AI Apps)
