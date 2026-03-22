@@ -9,9 +9,11 @@ import json
 from typing import NoReturn
 from unittest.mock import MagicMock, patch
 
+import pytest
 from werkzeug.test import Client
 from werkzeug.wrappers import Request
 
+from airut._json_types import JsonDict
 from airut.dashboard.formatters import VersionInfo
 from airut.dashboard.server import DashboardServer
 from airut.dashboard.tracker import (
@@ -486,8 +488,9 @@ class TestDashboardServer:
         assert "p1" in html
         assert "c1" in html
 
-        # Check SSE connectivity (replaced meta-refresh)
-        assert "EventSource" in html
+        # Check SSE connectivity via htmx
+        assert 'hx-ext="sse"' in html
+        assert "sse-connect" in html
         assert "/api/events/stream" in html
 
     def test_index_shows_repo_badge_and_sender(self) -> None:
@@ -727,9 +730,10 @@ class TestDashboardServer:
 
     def test_status_css_covers_all_task_statuses(self) -> None:
         """Every TaskStatus value must have a .status.<value> CSS rule."""
-        from airut.dashboard.views.styles import task_detail_styles
+        from airut.dashboard.templating import STATIC_DIR
 
-        css = task_detail_styles()
+        css = (STATIC_DIR / "styles" / "light.css").read_text()
+        css += (STATIC_DIR / "styles" / "components.css").read_text()
         for status in TaskStatus:
             # COMPLETED uses .status.completed.success / .failed
             if status == TaskStatus.COMPLETED:
@@ -742,9 +746,10 @@ class TestDashboardServer:
 
     def test_task_card_css_covers_executing_states(self) -> None:
         """Task card and column header CSS must cover dashboard columns."""
-        from airut.dashboard.views.styles import dashboard_styles
+        from airut.dashboard.templating import STATIC_DIR
 
-        css = dashboard_styles()
+        css = (STATIC_DIR / "styles" / "light.css").read_text()
+        css += (STATIC_DIR / "styles" / "components.css").read_text()
         # Dashboard groups tasks into pending/executing/completed columns
         # and applies these as CSS classes to task cards and column headers
         for cls in ("pending", "executing"):
@@ -1018,9 +1023,9 @@ class TestDashboardServer:
         assert "boot-banner" in html
         assert "boot-progress" in html
         assert "Starting repositories..." in html
-        assert "Starting repository &#x27;my-repo&#x27;..." in html
-        # SSE used for live updates (no meta-refresh)
-        assert "EventSource" in html
+        assert "Starting repository &#39;my-repo&#39;..." in html
+        # SSE used for live updates via htmx
+        assert 'hx-ext="sse"' in html
 
     def test_index_shows_boot_error_banner(self) -> None:
         """Test dashboard shows error banner when boot failed."""
@@ -1046,8 +1051,8 @@ class TestDashboardServer:
         assert "All repos failed" in html
         assert "boot-traceback" in html
         assert "Traceback:" in html
-        # SSE used for live updates (no meta-refresh)
-        assert "EventSource" in html
+        # SSE used for live updates via htmx
+        assert 'hx-ext="sse"' in html
 
     def test_index_no_boot_banner_when_ready(self) -> None:
         """Test dashboard hides boot banner when boot is complete."""
@@ -1066,8 +1071,8 @@ class TestDashboardServer:
 
         # The boot banner div should not be rendered in the body
         assert '<div class="boot-banner' not in html
-        # SSE used for live updates (no meta-refresh)
-        assert "EventSource" in html
+        # SSE used for live updates via htmx
+        assert 'hx-ext="sse"' in html
 
     def test_index_no_boot_banner_when_no_boot_state(self) -> None:
         """Test dashboard hides boot banner when no boot state provided."""
@@ -1670,6 +1675,109 @@ class TestUpdateEndpoint:
             f"https://github.com/airutorg/airut/commit/{new_sha}"
         )
 
+    def test_no_version_info_html_format(self) -> None:
+        """Test /api/update?format=html returns badge when no version info."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)  # No git_version_info
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/update?format=html")
+        assert response.status_code == 200
+        assert "text/html" in response.content_type
+
+        html = response.get_data(as_text=True)
+        assert "version-status" in html
+        assert "check-failed" in html
+
+    @patch("airut.dashboard.handlers.check_upstream_version")
+    def test_update_available_html_with_release_url(
+        self, mock_check: MagicMock
+    ) -> None:
+        """Test /api/update?format=html returns link when update available."""
+        from airut.version import GitVersionInfo, UpstreamVersion
+
+        git_info = GitVersionInfo(
+            version="v0.8.0",
+            sha_short="abc1234",
+            sha_full="abc1234567890abcdef1234567890abcdef123456",
+            full_status="...",
+        )
+        mock_check.return_value = UpstreamVersion(
+            source="pypi",
+            latest="0.9.0",
+            current="0.8.0",
+            update_available=True,
+        )
+
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, git_version_info=git_info)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/update?format=html")
+        assert response.status_code == 200
+        assert "text/html" in response.content_type
+
+        html = response.get_data(as_text=True)
+        assert "update-available" in html
+        assert "update available" in html
+        assert "<a " in html  # Should be a link
+        assert "v0.9.0" in html  # release URL contains version
+        assert "v0.8.0" in html  # title contains current version
+
+    def test_render_update_html_update_without_release_url(self) -> None:
+        """Test _render_update_html returns span when update has no URL."""
+        from airut.dashboard.handlers import RequestHandlers
+
+        tracker = TaskTracker()
+        handlers = RequestHandlers(tracker)
+
+        data: JsonDict = {
+            "update_available": True,
+            "current": "v0.8.0",
+            "latest": "0.9.0",
+            "release_url": None,
+        }
+        response = handlers._render_update_html(data)
+        html = response.get_data(as_text=True)
+
+        assert "update-available" in html
+        assert "update available" in html
+        assert "<a " not in html  # Should be a span, not a link
+        assert "<span " in html
+        assert "v0.8.0" in html  # current in title
+        assert "0.9.0" in html  # latest in title
+
+    @patch("airut.dashboard.handlers.check_upstream_version")
+    def test_up_to_date_html(self, mock_check: MagicMock) -> None:
+        """Test /api/update?format=html returns up to date badge."""
+        from airut.version import GitVersionInfo, UpstreamVersion
+
+        git_info = GitVersionInfo(
+            version="v0.8.0",
+            sha_short="abc1234",
+            sha_full="abc1234567890abcdef1234567890abcdef123456",
+            full_status="...",
+        )
+        mock_check.return_value = UpstreamVersion(
+            source="pypi",
+            latest="0.8.0",
+            current="0.8.0",
+            update_available=False,
+        )
+
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, git_version_info=git_info)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/update?format=html")
+        assert response.status_code == 200
+        assert "text/html" in response.content_type
+
+        html = response.get_data(as_text=True)
+        assert "up-to-date" in html
+        assert "up to date" in html
+        assert "<a " not in html  # Should not be a link
+
 
 class TestSecurityHeaders:
     """Tests for defense-in-depth security headers."""
@@ -1824,3 +1932,131 @@ class TestIsLoopback:
         from airut.dashboard.server import _is_loopback
 
         assert _is_loopback("192.168.1.1") is False
+
+
+class TestTemplating:
+    """Tests for the Jinja2 templating module."""
+
+    def test_render_template_string(self) -> None:
+        """Test rendering a template from a string source."""
+        from airut.dashboard.templating import render_template_string
+
+        result = render_template_string("Hello {{ name }}!", name="World")
+        assert result == "Hello World!"
+
+    def test_template_not_found(self) -> None:
+        """Test that missing templates raise TemplateNotFound."""
+        from jinja2 import TemplateNotFound
+
+        from airut.dashboard.templating import render_template
+
+        try:
+            render_template("nonexistent/page.html")
+            msg = "Expected TemplateNotFound"
+            raise AssertionError(msg)
+        except TemplateNotFound:
+            pass
+
+    def test_get_static_file_css(self) -> None:
+        """Test reading a CSS static file."""
+        from airut.dashboard.templating import get_static_file
+
+        result = get_static_file("styles/dark.css")
+        assert result is not None
+        data, content_type, etag = result
+        assert b".terminal" in data
+        assert content_type == "text/css; charset=utf-8"
+        assert etag.startswith('"') and etag.endswith('"')
+
+    def test_get_static_file_js(self) -> None:
+        """Test reading a JavaScript static file."""
+        from airut.dashboard.templating import get_static_file
+
+        result = get_static_file("js/actions.js")
+        assert result is not None
+        data, content_type, _etag = result
+        assert len(data) > 0
+        assert content_type == "application/javascript; charset=utf-8"
+
+    def test_get_static_file_not_found(self) -> None:
+        """Test that missing static files return None."""
+        from airut.dashboard.templating import get_static_file
+
+        result = get_static_file("nonexistent.css")
+        assert result is None
+
+    def test_get_static_file_directory_traversal(self) -> None:
+        """Test that directory traversal is blocked."""
+        from airut.dashboard.templating import get_static_file
+
+        result = get_static_file("../templating.py")
+        assert result is None
+
+    def test_template_path_traversal_blocked(self) -> None:
+        """Path traversal in template loader raises TemplateNotFound."""
+        from jinja2 import TemplateNotFound
+
+        from airut.dashboard.templating import render_template
+
+        with pytest.raises(TemplateNotFound):
+            render_template("../../../etc/passwd")
+
+    def test_content_hash(self) -> None:
+        """Test content hash produces consistent short hashes."""
+        from airut.dashboard.templating import _content_hash
+
+        h = _content_hash(b"test data")
+        assert len(h) == 12
+        assert h == _content_hash(b"test data")
+        assert h != _content_hash(b"different data")
+
+
+class TestStaticFileEndpoint:
+    """Tests for the /static/<path> endpoint."""
+
+    def test_serves_css(self) -> None:
+        """Test serving a CSS file."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/static/styles/dark.css")
+        assert response.status_code == 200
+        assert "text/css" in response.content_type
+
+    def test_serves_js(self) -> None:
+        """Test serving a JavaScript file."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/static/js/actions.js")
+        assert response.status_code == 200
+        assert "javascript" in response.content_type
+
+    def test_404_for_missing_file(self) -> None:
+        """Test 404 for nonexistent static file."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/static/nonexistent.css")
+        assert response.status_code == 404
+
+    def test_etag_conditional_request(self) -> None:
+        """Test ETag-based conditional requests return 304."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        # First request to get ETag
+        response = client.get("/static/styles/dark.css")
+        etag = response.headers.get("ETag")
+        assert etag is not None
+
+        # Conditional request with matching ETag
+        response2 = client.get(
+            "/static/styles/dark.css",
+            headers={"If-None-Match": etag},
+        )
+        assert response2.status_code == 304

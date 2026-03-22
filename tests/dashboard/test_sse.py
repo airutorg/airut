@@ -484,6 +484,51 @@ class TestSSEStateStream:
         assert len(data["tasks"]) == 1
         assert data["tasks"][0]["task_id"] == "t1"
 
+    def test_html_mode_initial_event(self) -> None:
+        """Test html_mode yields multiple HTML SSE events."""
+        clock = VersionClock()
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+
+        gen = sse_state_stream(clock, tracker, None, None, 0, html_mode=True)
+        first = next(gen)
+
+        # HTML mode emits multiple named events (boot-state, repos, etc.)
+        assert "event: boot-state\n" in first
+        assert "event: pending-header\n" in first
+        assert "event: executing-header\n" in first
+        assert "event: completed-header\n" in first
+        assert "retry: 1000\n" in first
+
+    def test_html_mode_state_change(self) -> None:
+        """Test html_mode emits HTML events on state change."""
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+
+        gen = sse_state_stream(
+            clock,
+            tracker,
+            None,
+            None,
+            0,
+            heartbeat_interval=5.0,
+            html_mode=True,
+        )
+        # Consume initial event
+        next(gen)
+
+        # Trigger a change
+        def add_task() -> None:
+            tracker.add_task("t1", "New Task")
+
+        t = threading.Thread(target=add_task)
+        t.start()
+        t.join()
+
+        event = next(gen)
+        assert "event: pending-header\n" in event
+        assert "retry:" not in event  # retry only on first event
+
 
 def _parse_sse_data(sse_text: str) -> dict:
     """Extract and parse JSON from an SSE event string."""
@@ -491,6 +536,14 @@ def _parse_sse_data(sse_text: str) -> dict:
         line[6:] for line in sse_text.split("\n") if line.startswith("data: ")
     ]
     return json.loads("".join(data_lines))
+
+
+def _extract_sse_data(sse_text: str) -> str:
+    """Extract raw data payload from an SSE event string."""
+    data_lines = [
+        line[6:] for line in sse_text.split("\n") if line.startswith("data: ")
+    ]
+    return "".join(data_lines)
 
 
 class TestSSEEventsLogStream:
@@ -513,9 +566,8 @@ class TestSSEEventsLogStream:
 
         assert "event: html\n" in first
         assert "retry: 1000\n" in first
-        data = _parse_sse_data(first)
-        assert data["html"] == ""
-        assert "offset" in data
+        html = _extract_sse_data(first)
+        assert html == ""
 
     def test_done_event_on_completed_task(self, tmp_path: Path) -> None:
         """Stream sends done event when task is completed."""
@@ -584,9 +636,9 @@ class TestSSEEventsLogStream:
         )
         first = next(gen)
 
-        data = _parse_sse_data(first)
-        assert "system:" in data["html"]
-        assert "init" in data["html"]
+        html = _extract_sse_data(first)
+        assert "system:" in html
+        assert "init" in html
 
     def test_heartbeat_on_idle(self, tmp_path: Path) -> None:
         """Stream sends heartbeat when idle."""
@@ -644,8 +696,8 @@ class TestSSEEventsLogStream:
         # Next poll should pick up the new events as HTML
         event = next(gen)
         assert "event: html\n" in event
-        data = _parse_sse_data(event)
-        assert "system:" in data["html"]
+        html = _extract_sse_data(event)
+        assert "system:" in html
 
         # Now complete the task
         tracker.complete_task("t1", CompletionReason.SUCCESS)
@@ -678,8 +730,8 @@ class TestSSEEventsLogStream:
         )
         # Initial snapshot includes the existing events as HTML
         first = next(gen)
-        data = _parse_sse_data(first)
-        assert "system:" in data["html"]
+        html = _extract_sse_data(first)
+        assert "system:" in html
 
         # Write more events and complete the task simultaneously
         events2 = parse_stream_events(
@@ -760,8 +812,8 @@ class TestSSEEventsLogStream:
         # Drain should have emitted HTML
         html_msgs = [e for e in remaining if "event: html\n" in e]
         assert len(html_msgs) >= 1
-        drain_data = _parse_sse_data(html_msgs[-1])
-        assert len(drain_data["html"]) > 0
+        drain_html = _extract_sse_data(html_msgs[-1])
+        assert len(drain_html) > 0
         assert any("event: done\n" in e for e in remaining)
 
     def test_heartbeat_resets_timestamp(self, tmp_path: Path) -> None:
@@ -815,8 +867,8 @@ class TestSSENetworkLogStream:
 
         assert "event: html\n" in first
         assert "retry: 1000\n" in first
-        data = _parse_sse_data(first)
-        assert data["html"] == ""
+        html = _extract_sse_data(first)
+        assert html == ""
 
     def test_streams_new_lines(self, tmp_path: Path) -> None:
         """Stream yields new lines as pre-rendered HTML."""
@@ -834,9 +886,9 @@ class TestSSENetworkLogStream:
         )
         first = next(gen)
 
-        data = _parse_sse_data(first)
-        assert "github.com" in data["html"]
-        assert "log-line" in data["html"]
+        html = _extract_sse_data(first)
+        assert "github.com" in html
+        assert "log-line" in html
 
     def test_done_event_on_completed_task(self, tmp_path: Path) -> None:
         """Stream sends done event when task is completed."""
@@ -906,9 +958,9 @@ class TestSSENetworkLogStream:
         # Next poll should pick up the new lines as HTML
         event = next(gen)
         assert "event: html\n" in event
-        data = _parse_sse_data(event)
-        assert "github.com" in data["html"]
-        assert "log-line" in data["html"]
+        html = _extract_sse_data(event)
+        assert "github.com" in html
+        assert "log-line" in html
 
         # Now complete the task
         tracker.complete_task("t1", CompletionReason.SUCCESS)
@@ -931,8 +983,8 @@ class TestSSENetworkLogStream:
         )
         # Consume initial snapshot
         first = next(gen)
-        data = _parse_sse_data(first)
-        assert "line1" in data["html"]
+        html = _extract_sse_data(first)
+        assert "line1" in html
 
         # Append more and complete
         with log_path.open("a") as f:
@@ -994,8 +1046,8 @@ class TestSSENetworkLogStream:
 
         html_msgs = [e for e in remaining if "event: html\n" in e]
         assert len(html_msgs) >= 1
-        drain_data = _parse_sse_data(html_msgs[-1])
-        assert len(drain_data["html"]) > 0
+        drain_html = _extract_sse_data(html_msgs[-1])
+        assert len(drain_html) > 0
         assert any("event: done\n" in e for e in remaining)
 
     def test_heartbeat_resets_timestamp(self, tmp_path: Path) -> None:
@@ -1026,3 +1078,346 @@ class TestSSENetworkLogStream:
         # Second heartbeat (tests timestamp was reset)
         hb2 = next(gen)
         assert hb2 == ": heartbeat\n\n"
+
+
+class TestBuildTaskDetailEvents:
+    """Tests for _build_task_detail_events via _build_html_state_events."""
+
+    def test_task_detail_events_for_executing_task(self) -> None:
+        """Task detail events include status, progress, and details."""
+        from airut.dashboard.sse import _build_html_state_events
+
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
+
+        result = _build_html_state_events(
+            tracker, None, None, version=1, task_id="t1"
+        )
+
+        assert "event: task-status\n" in result
+        assert "event: task-progress\n" in result
+        assert "event: task-details\n" in result
+        # Active task should have sse-swap for live updates
+        assert "sse-swap" in result
+        assert "EXECUTING" in result
+        # Should NOT have done event for active task
+        assert "event: done\n" not in result
+
+    def test_task_detail_events_for_completed_task(self) -> None:
+        """Completed task detail events include done event."""
+        from airut.dashboard.sse import _build_html_state_events
+
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
+        tracker.complete_task("t1", CompletionReason.SUCCESS)
+
+        result = _build_html_state_events(
+            tracker, None, None, version=1, task_id="t1"
+        )
+
+        assert "event: task-status\n" in result
+        assert "event: task-progress\n" in result
+        assert "event: task-details\n" in result
+        assert "event: done\n" in result
+        assert "COMPLETED" in result
+        assert "Success" in result
+
+    def test_task_detail_events_for_failed_task(self) -> None:
+        """Failed task detail events show failure reason."""
+        from airut.dashboard.sse import _build_html_state_events
+
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
+        tracker.complete_task("t1", CompletionReason.EXECUTION_FAILED)
+
+        result = _build_html_state_events(
+            tracker, None, None, version=1, task_id="t1"
+        )
+
+        assert "event: task-status\n" in result
+        assert "failed" in result
+        assert "Execution Failed" in result
+
+    def test_task_detail_events_missing_task(self) -> None:
+        """Missing task returns done event."""
+        from airut.dashboard.sse import _build_html_state_events
+
+        tracker = TaskTracker()
+
+        result = _build_html_state_events(
+            tracker, None, None, version=1, task_id="nonexistent"
+        )
+
+        assert "event: done\n" in result
+        # Should not have any task-specific events
+        assert "event: task-status\n" not in result
+
+    def test_task_detail_events_with_retry(self) -> None:
+        """Task detail events include retry on first event."""
+        from airut.dashboard.sse import _build_html_state_events
+
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
+
+        result = _build_html_state_events(
+            tracker, None, None, version=1, retry=1000, task_id="t1"
+        )
+
+        assert "retry: 1000\n" in result
+
+    def test_task_detail_completed_no_reason(self) -> None:
+        """Completed task without specific reason shows Failed."""
+        from airut.dashboard.sse import _build_html_state_events
+
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
+        # Complete without a reason (unlikely but covers the else branch)
+        task = tracker.get_task("t1")
+        assert task is not None
+        task.status = TaskStatus.COMPLETED
+        task.completion_reason = None
+
+        result = _build_html_state_events(
+            tracker, None, None, version=1, task_id="t1"
+        )
+
+        assert "Failed" in result
+
+
+class TestBuildRepoDetailEvents:
+    """Tests for _build_repo_detail_events via _build_html_state_events."""
+
+    def test_repo_detail_events_live_repo(self) -> None:
+        """Live repo detail events include status badge."""
+        from airut.dashboard.sse import _build_html_state_events
+
+        tracker = TaskTracker()
+        clock = VersionClock()
+        repo_states: tuple[RepoState, ...] = (
+            RepoState(
+                repo_id="my-repo",
+                status=RepoStatus.LIVE,
+                git_repo_url="https://github.com/test/repo",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
+                storage_dir="/storage/my-repo",
+            ),
+        )
+        repos_store: VersionedStore[tuple[RepoState, ...]] = VersionedStore(
+            repo_states, clock
+        )
+
+        result = _build_html_state_events(
+            tracker, None, repos_store, version=1, repo_id="my-repo"
+        )
+
+        assert "event: repo-status\n" in result
+        assert "event: repo-error\n" in result
+        assert "LIVE" in result
+
+    def test_repo_detail_events_failed_repo(self) -> None:
+        """Failed repo detail events include error details."""
+        from airut.dashboard.sse import _build_html_state_events
+
+        tracker = TaskTracker()
+        clock = VersionClock()
+        repo_states: tuple[RepoState, ...] = (
+            RepoState(
+                repo_id="broken-repo",
+                status=RepoStatus.FAILED,
+                error_message="Connection refused",
+                error_type="IMAPConnectionError",
+                git_repo_url="https://github.com/test/repo",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
+                storage_dir="/storage/broken",
+            ),
+        )
+        repos_store: VersionedStore[tuple[RepoState, ...]] = VersionedStore(
+            repo_states, clock
+        )
+
+        result = _build_html_state_events(
+            tracker, None, repos_store, version=1, repo_id="broken-repo"
+        )
+
+        assert "event: repo-status\n" in result
+        assert "event: repo-error\n" in result
+        assert "FAILED" in result
+        assert "Connection refused" in result
+        assert "IMAPConnectionError" in result
+
+    def test_repo_detail_events_missing_repo(self) -> None:
+        """Missing repo returns done event."""
+        from airut.dashboard.sse import _build_html_state_events
+
+        tracker = TaskTracker()
+        clock = VersionClock()
+        repos_store: VersionedStore[tuple[RepoState, ...]] = VersionedStore(
+            (), clock
+        )
+
+        result = _build_html_state_events(
+            tracker, None, repos_store, version=1, repo_id="nonexistent"
+        )
+
+        assert "event: done\n" in result
+        assert "event: repo-status\n" not in result
+
+    def test_repo_detail_events_no_store(self) -> None:
+        """No repos store returns done event."""
+        from airut.dashboard.sse import _build_html_state_events
+
+        tracker = TaskTracker()
+
+        result = _build_html_state_events(
+            tracker, None, None, version=1, repo_id="any-repo"
+        )
+
+        assert "event: done\n" in result
+
+    def test_repo_detail_events_with_retry(self) -> None:
+        """Repo detail events include retry on first event."""
+        from airut.dashboard.sse import _build_html_state_events
+
+        tracker = TaskTracker()
+        clock = VersionClock()
+        repo_states: tuple[RepoState, ...] = (
+            RepoState(
+                repo_id="my-repo",
+                status=RepoStatus.LIVE,
+                git_repo_url="https://github.com/test/repo",
+                channels=(),
+                storage_dir="/storage/my-repo",
+            ),
+        )
+        repos_store: VersionedStore[tuple[RepoState, ...]] = VersionedStore(
+            repo_states, clock
+        )
+
+        result = _build_html_state_events(
+            tracker, None, repos_store, version=1, retry=2000, repo_id="my-repo"
+        )
+
+        assert "retry: 2000\n" in result
+
+
+class TestSSEStateStreamWithTaskId:
+    """Tests for SSE state stream with task_id parameter."""
+
+    def test_html_mode_with_task_id(self) -> None:
+        """Test html_mode with task_id yields task detail events."""
+        clock = VersionClock()
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
+
+        gen = sse_state_stream(
+            clock, tracker, None, None, 0, html_mode=True, task_id="t1"
+        )
+        first = next(gen)
+
+        # Should emit task-specific events, not dashboard events
+        assert "event: task-status\n" in first
+        assert "event: task-progress\n" in first
+        assert "event: task-details\n" in first
+        assert "retry: 1000\n" in first
+        # Should NOT emit dashboard events
+        assert "event: boot-state\n" not in first
+        assert "event: pending-header\n" not in first
+
+    def test_html_mode_with_task_id_state_change(self) -> None:
+        """Test html_mode with task_id emits events on state change."""
+        clock = VersionClock()
+        tracker = TaskTracker(clock=clock)
+        tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "t1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
+
+        gen = sse_state_stream(
+            clock,
+            tracker,
+            None,
+            None,
+            0,
+            heartbeat_interval=5.0,
+            html_mode=True,
+            task_id="t1",
+        )
+        # Consume initial event
+        next(gen)
+
+        # Trigger a change
+        def complete_task() -> None:
+            tracker.complete_task("t1", CompletionReason.SUCCESS)
+
+        t = threading.Thread(target=complete_task)
+        t.start()
+        t.join()
+
+        event = next(gen)
+        assert "event: task-status\n" in event
+        assert "event: done\n" in event
+        assert "retry:" not in event  # retry only on first event
+
+
+class TestSSEStateStreamWithRepoId:
+    """Tests for SSE state stream with repo_id parameter."""
+
+    def test_html_mode_with_repo_id(self) -> None:
+        """Test html_mode with repo_id yields repo detail events."""
+        clock = VersionClock()
+        tracker = TaskTracker()
+        repo_states: tuple[RepoState, ...] = (
+            RepoState(
+                repo_id="my-repo",
+                status=RepoStatus.LIVE,
+                git_repo_url="https://github.com/test/repo",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
+                storage_dir="/storage/my-repo",
+            ),
+        )
+        repos_store: VersionedStore[tuple[RepoState, ...]] = VersionedStore(
+            repo_states, clock
+        )
+
+        gen = sse_state_stream(
+            clock,
+            tracker,
+            None,
+            repos_store,
+            0,
+            html_mode=True,
+            repo_id="my-repo",
+        )
+        first = next(gen)
+
+        # Should emit repo-specific events, not dashboard events
+        assert "event: repo-status\n" in first
+        assert "event: repo-error\n" in first
+        assert "retry: 1000\n" in first
+        # Should NOT emit dashboard events
+        assert "event: boot-state\n" not in first
+        assert "event: pending-header\n" not in first

@@ -1,0 +1,24 @@
+{# Boot state banner — expects: boot_state (BootState or None) #}
+{% if boot_state and boot_state.phase.value != 'ready' %}
+    {% if boot_state.phase.value == 'failed' %}
+<div id="boot-section" class="boot-banner boot-error">
+    <div class="boot-icon">&#x2717;</div>
+    <div class="boot-content">
+        <div class="boot-title">Boot Failed: {{ boot_state.error_type or 'Error' }}</div>
+        <div class="boot-message">{{ boot_state.error_message or 'Unknown error' }}</div>
+        {% if boot_state.error_traceback %}
+        <pre class="boot-traceback">{{ boot_state.error_traceback }}</pre>
+        {% endif %}
+    </div>
+</div>
+    {% else %}
+        {% set phase_labels = {'starting': 'Initializing', 'proxy': 'Starting proxy', 'repos': 'Starting repositories'} %}
+<div id="boot-section" class="boot-banner boot-progress">
+    <div class="boot-spinner"></div>
+    <div class="boot-content">
+        <div class="boot-title">{{ phase_labels.get(boot_state.phase.value, 'Booting') }}...</div>
+        <div class="boot-message">{{ boot_state.message }}</div>
+    </div>
+</div>
+    {% endif %}
+{% endif %}

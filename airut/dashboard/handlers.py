@@ -23,7 +23,6 @@ from airut.conversation import (
     ConversationMetadata,
     ConversationStore,
 )
-from airut.dashboard import views
 from airut.dashboard.formatters import VersionInfo
 from airut.dashboard.sse import (
     SSEConnectionManager,
@@ -33,6 +32,7 @@ from airut.dashboard.sse import (
     sse_network_log_stream,
     sse_state_stream,
 )
+from airut.dashboard.templating import get_static_file, render_template
 from airut.dashboard.tracker import (
     ACTIVE_STATUSES,
     BootState,
@@ -46,6 +46,9 @@ from airut.dashboard.tracker import (
 )
 from airut.dashboard.versioned import VersionClock, VersionedStore
 from airut.dashboard.views import get_favicon_svg
+from airut.dashboard.views.actions import render_actions_timeline
+from airut.dashboard.views.components import render_single_reply_section
+from airut.dashboard.views.network import render_network_log_lines
 from airut.gateway.conversation import CONVERSATION_ID_PATTERN
 from airut.sandbox import NETWORK_LOG_FILENAME, EventLog, NetworkLog
 from airut.version import (
@@ -143,7 +146,6 @@ class RequestHandlers:
             HTML response with dashboard.
         """
         counts = self.tracker.get_counts()
-        # Pending column: QUEUED + AUTHENTICATING + PENDING
         pending = (
             self.tracker.get_tasks_by_status(TaskStatus.QUEUED)
             + self.tracker.get_tasks_by_status(TaskStatus.AUTHENTICATING)
@@ -151,17 +153,28 @@ class RequestHandlers:
         )
         executing = self.tracker.get_tasks_by_status(TaskStatus.EXECUTING)
         completed = self.tracker.get_tasks_by_status(TaskStatus.COMPLETED)
-        boot_state = self._get_boot_state()
+
+        pending_count = (
+            counts.get("queued", 0)
+            + counts.get("authenticating", 0)
+            + counts.get("pending", 0)
+        )
+
+        version_url = self._version_url()
 
         return Response(
-            views.render_dashboard(
-                counts,
-                pending,
-                executing,
-                completed,
-                self.version_info,
-                self._get_repo_states(),
-                boot_state=boot_state,
+            render_template(
+                "pages/dashboard.html",
+                version_info=self.version_info,
+                version_url=version_url,
+                boot_state=self._get_boot_state(),
+                repo_states=self._get_repo_states(),
+                pending_tasks=pending,
+                executing_tasks=executing,
+                completed_tasks=completed,
+                pending_count=pending_count,
+                executing_count=counts.get("executing", 0),
+                completed_count=counts.get("completed", 0),
             ),
             content_type="text/html; charset=utf-8",
         )
@@ -206,13 +219,22 @@ class RequestHandlers:
         so this endpoint is separate from /api/version to avoid blocking
         dashboard load.
 
+        When ``format=html`` is in the query string, returns a rendered
+        HTML fragment suitable for htmx ``hx-swap="outerHTML"`` on the
+        version status badge.
+
         Args:
             request: Incoming request.
 
         Returns:
-            JSON response with current and latest version info.
+            JSON or HTML response with version update info.
         """
         if not self._git_version_info:
+            if request.args.get("format") == "html":
+                return Response(
+                    '<span class="version-status check-failed"></span>',
+                    content_type="text/html; charset=utf-8",
+                )
             return Response(
                 json.dumps({"error": "Version info not available"}),
                 status=404,
@@ -232,7 +254,6 @@ class RequestHandlers:
             data["latest"] = upstream.latest
             data["update_available"] = upstream.update_available
             data["source"] = upstream.source
-            # Provide a direct link to the new release/commit page.
             if upstream.update_available:
                 if upstream.source == "pypi":
                     data["release_url"] = github_release_url(upstream.latest)
@@ -246,12 +267,55 @@ class RequestHandlers:
             data["source"] = None
             data["release_url"] = None
 
+        if request.args.get("format") == "html":
+            return self._render_update_html(data)
+
         return Response(
             json.dumps(data),
             content_type="application/json",
             headers={
                 "Cache-Control": "no-cache, no-store, must-revalidate",
             },
+        )
+
+    def _render_update_html(self, data: JsonDict) -> Response:
+        """Render the update check result as an HTML badge fragment.
+
+        Args:
+            data: Update check data dict.
+
+        Returns:
+            HTML response with version status badge.
+        """
+        import html as html_mod
+
+        if data.get("update_available"):
+            release_url = data.get("release_url")
+            current = html_mod.escape(str(data.get("current", "")))
+            latest = html_mod.escape(str(data.get("latest", "")))
+            title = f"{current} \u2192 {latest}"
+            if release_url:
+                badge = (
+                    f'<a href="{html_mod.escape(str(release_url))}"'
+                    f' target="_blank" rel="noopener"'
+                    f' class="version-status update-available"'
+                    f' title="{title}">update available</a>'
+                )
+            else:
+                badge = (
+                    f'<span class="version-status update-available"'
+                    f' title="{title}">update available</span>'
+                )
+        else:
+            current = html_mod.escape(str(data.get("current", "")))
+            badge = (
+                f'<span class="version-status up-to-date"'
+                f' title="{current}">up to date</span>'
+            )
+
+        return Response(
+            badge,
+            content_type="text/html; charset=utf-8",
         )
 
     def handle_task_detail_by_id(
@@ -272,7 +336,7 @@ class RequestHandlers:
         task, conversation = result
 
         return Response(
-            views.render_task_detail(task, conversation),
+            self._render_task_detail_page(task, conversation),
             content_type="text/html; charset=utf-8",
         )
 
@@ -307,9 +371,37 @@ class RequestHandlers:
         if not tasks and conversation is None:
             return Response("Conversation not found", status=404)
 
+        # Compute aggregate stats
+        cost_display = "-"
+        turns_display = "-"
+        reply_count = "0"
+        model_display = "-"
+        if conversation:
+            if conversation.replies:
+                cost_display = f"${conversation.total_cost_usd:.4f}"
+                turns_display = str(conversation.total_turns)
+                reply_count = str(len(conversation.replies))
+            if conversation.model:
+                model_display = conversation.model
+
+        from airut.dashboard.views.components import (
+            render_conversation_replies_section,
+        )
+
+        replies_section = render_conversation_replies_section(
+            conversation_id, conversation
+        )
+
         return Response(
-            views.render_conversation_detail(
-                conversation_id, tasks, conversation
+            render_template(
+                "pages/conversation.html",
+                conversation_id=conversation_id,
+                tasks=tasks,
+                reply_count=reply_count,
+                cost_display=cost_display,
+                turns_display=turns_display,
+                model_display=model_display,
+                replies_section=replies_section,
             ),
             content_type="text/html; charset=utf-8",
         )
@@ -347,11 +439,30 @@ class RequestHandlers:
             return Response("Conversation not found", status=404)
         task, conversation = result
 
+        # Build actions content
+        has_replies = conversation is not None and len(conversation.replies) > 0
+        has_events = event_groups is not None and len(event_groups) > 0
+        has_pending = (
+            conversation is not None
+            and conversation.pending_request_text is not None
+        )
+        if not has_replies and not has_events and not has_pending:
+            actions_content = (
+                '<div class="no-actions">No actions recorded</div>'
+            )
+        else:
+            actions_content = render_actions_timeline(
+                conversation, event_groups
+            )
+
+        is_active = task.status in ACTIVE_STATUSES
+
         return Response(
-            views.render_actions_page(
-                task,
-                conversation,
-                event_groups,
+            render_template(
+                "pages/actions.html",
+                task=task,
+                is_active=is_active,
+                actions_content=actions_content,
                 event_log_offset=event_log_offset,
             ),
             content_type="text/html; charset=utf-8",
@@ -390,9 +501,23 @@ class RequestHandlers:
                         "Failed to read network log %s: %s", log_path, e
                     )
 
+        # Build network logs HTML
+        if log_content is None:
+            logs_html = '<div class="no-logs">No network logs available</div>'
+        elif not log_content.strip():
+            logs_html = '<div class="no-logs">Network log is empty</div>'
+        else:
+            logs_html = render_network_log_lines(log_content)
+
+        is_active = task.status in ACTIVE_STATUSES
+
         return Response(
-            views.render_network_page(
-                task, log_content, network_log_offset=network_log_offset
+            render_template(
+                "pages/network.html",
+                task=task,
+                is_active=is_active,
+                logs_html=logs_html,
+                network_log_offset=network_log_offset,
             ),
             content_type="text/html; charset=utf-8",
         )
@@ -509,8 +634,19 @@ class RequestHandlers:
         if repo_state is None:
             return Response("Repository not found", status=404)
 
+        channels_display = (
+            ", ".join(
+                f"{ch.channel_type}: {ch.info}" for ch in repo_state.channels
+            )
+            or "(none)"
+        )
+
         return Response(
-            views.render_repo_detail(repo_state),
+            render_template(
+                "pages/repo_detail.html",
+                repo=repo_state,
+                channels_display=channels_display,
+            ),
             content_type="text/html; charset=utf-8",
         )
 
@@ -741,6 +877,9 @@ class RequestHandlers:
                     pass
 
         clock = self._clock
+        html_mode = request.args.get("format") == "html"
+        task_id = request.args.get("task_id")
+        repo_id = request.args.get("repo_id")
 
         def generate() -> Iterable[str]:
             try:
@@ -750,6 +889,9 @@ class RequestHandlers:
                     self._boot_store,
                     self._repos_store,
                     client_version,
+                    html_mode=html_mode,
+                    task_id=task_id,
+                    repo_id=repo_id,
                 )
             finally:
                 self._sse_manager.release()
@@ -1047,6 +1189,106 @@ class RequestHandlers:
             content_type="application/json",
             headers={"ETag": etag, "Cache-Control": "no-cache"},
         )
+
+    def handle_static(self, request: Request, path: str) -> Response:
+        """Handle static file requests.
+
+        Serves files from the static/ package directory with
+        content-hash ETags for cache validation.
+
+        Args:
+            request: Incoming request.
+            path: File path relative to static/.
+
+        Returns:
+            File response with content-type and ETag, or 404.
+        """
+        result = get_static_file(path)
+        if result is None:
+            return Response("Not Found", status=404)
+
+        data, content_type, etag = result
+
+        # Check for conditional request
+        if request.headers.get("If-None-Match") == etag:
+            return Response(
+                status=304,
+                headers={"ETag": etag},
+            )
+
+        return Response(
+            data,
+            content_type=content_type,
+            headers={
+                "ETag": etag,
+                "Cache-Control": "public, max-age=3600, immutable",
+            },
+        )
+
+    def _render_task_detail_page(
+        self,
+        task: TaskState,
+        conversation: ConversationMetadata | None,
+    ) -> str:
+        """Render the task detail page using Jinja2 templates.
+
+        Prepares context variables (model, cost, turns, reply section)
+        and renders the ``pages/task_detail.html`` template.
+
+        Args:
+            task: Task to display.
+            conversation: Optional conversation metadata.
+
+        Returns:
+            Rendered HTML string.
+        """
+        model_display = task.model
+        if not model_display and conversation:
+            model_display = conversation.model
+        model_display = model_display or "-"
+
+        cost_display = "-"
+        turns_display = "-"
+        if (
+            conversation
+            and task.reply_index is not None
+            and task.reply_index < len(conversation.replies)
+        ):
+            reply = conversation.replies[task.reply_index]
+            cost_display = f"${reply.total_cost_usd:.4f}"
+            turns_display = str(reply.num_turns)
+
+        replies_section = render_single_reply_section(task, conversation)
+        is_active = task.status in ACTIVE_STATUSES
+
+        return render_template(
+            "pages/task_detail.html",
+            task=task,
+            todos=task.todos,
+            is_active=is_active,
+            model_display=model_display,
+            cost_display=cost_display,
+            turns_display=turns_display,
+            replies_section=replies_section,
+        )
+
+    def _version_url(self) -> str:
+        """Compute the GitHub URL for the current version.
+
+        If a clean version tag is set (no ``-N-gSHA`` suffix), links to
+        the GitHub release page.  Otherwise links to the commit page.
+
+        Returns:
+            GitHub URL string, or empty string if no version info.
+        """
+        if not self.version_info:
+            return ""
+        v = self.version_info.version
+        # Exact tag (e.g. "v0.7.0") → release page
+        if v and "-" not in v:
+            return github_release_url(v)
+        # Non-exact or no tag → commit page
+        return github_commit_url(self.version_info.git_sha_full)
 
     def _get_clock_version(self) -> int:
         """Get the current version clock value.

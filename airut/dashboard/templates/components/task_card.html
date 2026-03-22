@@ -1,0 +1,44 @@
+{# Single task card — expects: task (TaskState), status_class (str) #}
+{% set success_class = '' %}
+{% set status_icon = '' %}
+{% set time_label = '' %}
+{% if task.status.value == 'queued' %}
+    {% set time_label = 'Waiting: ' ~ format_duration(task.queue_duration()) %}
+{% elif task.status.value == 'authenticating' %}
+    {% set time_label = 'Authenticating...' %}
+{% elif task.status.value == 'pending' %}
+    {% set time_label = 'Queued behind active task' %}
+{% elif task.status.value == 'executing' %}
+    {% set time_label = 'Running: ' ~ format_duration(task.execution_duration()) %}
+{% elif task.status.value == 'completed' %}
+    {% if task.completion_reason and task.completion_reason.value == 'success' %}
+        {% set success_class = 'success' %}
+        {% set status_icon = '&#x2713;' %}
+    {% elif task.completion_reason and task.completion_reason.value in ['auth_failed', 'unauthorized', 'rejected'] %}
+        {% set success_class = 'failed' %}
+        {% set status_icon = '&#x2298;' %}
+    {% else %}
+        {% set success_class = 'failed' %}
+        {% set status_icon = '&#x2717;' %}
+    {% endif %}
+    {% set time_label = 'Took: ' ~ format_duration(task.execution_duration()) %}
+{% endif %}
+{% set escaped_title = task.display_title %}
+{% set truncated_title = escaped_title[:50] ~ '...' if escaped_title|length > 50 else escaped_title %}
+<div class="task {{ status_class }} {{ success_class }}">
+    <div class="task-id">
+        <a href="/task/{{ task.task_id }}">[{{ task.task_id }}]</a>
+        {% if task.conversation_id %}
+        <a href="/conversation/{{ task.conversation_id }}" class="conv-badge">{{ task.conversation_id }}</a>
+        {% endif %}
+        {% if task.repo_id %}
+        <span class="repo-badge">{{ task.repo_id }}</span>
+        {% endif %}
+        {% if status_icon %}<span class="status-icon">{{ status_icon|safe }}</span>{% endif %}
+    </div>
+    <div class="task-subject" title="{{ escaped_title }}">{{ truncated_title }}</div>
+    {% if task.sender %}
+    <div class="task-sender">{{ task.sender }}</div>
+    {% endif %}
+    <div class="task-time">{{ time_label }}</div>
+</div>

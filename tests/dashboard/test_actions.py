@@ -165,11 +165,11 @@ class TestActionsPageEndpoint:
         assert "No actions recorded" in html
 
     def test_toggle_script_present(self, harness: DashboardHarness) -> None:
-        """Test actions page includes toggleEvent JavaScript."""
+        """Test actions page includes toggle JavaScript."""
         harness.add_events(result_event())
 
         html = harness.get_html("/conversation/abc12345/actions")
-        assert "toggleEvent" in html
+        assert "actions.js" in html
 
     def test_detail_page_has_actions_link(
         self, harness: DashboardHarness
@@ -1240,26 +1240,26 @@ class TestSubagentRendering:
     def test_multiple_subagents_different_colors(
         self, harness: DashboardHarness
     ) -> None:
-        """Test multiple subagents get deterministic colors from palette."""
+        """Test multiple subagents get deterministic color indices."""
         from airut.dashboard.views.actions import (
             _SUBAGENT_COLORS,
-            _subagent_color,
+            _subagent_color_index,
         )
 
-        color_a = _subagent_color("toolu_aaaaaaaa")
-        color_b = _subagent_color("toolu_bbbbbbbb")
-        # Colors must be valid entries from the palette
-        assert color_a in _SUBAGENT_COLORS
-        assert color_b in _SUBAGENT_COLORS
+        idx_a = _subagent_color_index("toolu_aaaaaaaa")
+        idx_b = _subagent_color_index("toolu_bbbbbbbb")
+        # Indices must be valid entries in the palette
+        assert 0 <= idx_a < len(_SUBAGENT_COLORS)
+        assert 0 <= idx_b < len(_SUBAGENT_COLORS)
 
     def test_subagent_css_in_styles(self, harness: DashboardHarness) -> None:
         """Test subagent CSS classes are present in the page styles."""
-        harness.add_events(result_event())
+        from airut.dashboard.templating import STATIC_DIR
 
-        html = harness.get_html("/conversation/abc12345/actions")
-        assert ".subagent-event" in html
-        assert ".subagent-badge" in html
-        assert ".subagent-content" in html
+        css = (STATIC_DIR / "styles" / "dark.css").read_text()
+        assert ".subagent-event" in css
+        assert ".subagent-badge" in css
+        assert ".subagent-content" in css
 
     def test_subagent_content_in_flex_layout(
         self, harness: DashboardHarness
@@ -1611,11 +1611,11 @@ class TestSSEServerSideRendering:
     """
 
     def test_sse_script_is_minimal(self, harness: DashboardHarness) -> None:
-        """Test SSE script has no client-side rendering logic.
+        """Test SSE uses htmx with no client-side rendering logic.
 
-        When a task is in-progress, the actions page includes SSE
-        JavaScript that inserts pre-rendered HTML fragments from
-        the server. It should not contain any event rendering logic.
+        When a task is in-progress, the actions page uses htmx SSE
+        extension to insert pre-rendered HTML fragments from the
+        server. It should not contain any event rendering logic.
         """
         # Mark task as in-progress so SSE script is included
         harness.tracker.set_authenticating(harness.CONV_ID)
@@ -1623,8 +1623,9 @@ class TestSSEServerSideRendering:
 
         html = harness.get_html("/conversation/abc12345/actions")
 
-        # The SSE script should use the 'html' event type
-        assert "addEventListener('html'" in html
+        # The page should use htmx SSE extension
+        assert 'hx-ext="sse"' in html
+        assert "sse-connect" in html
         # Should NOT contain client-side rendering functions
         assert "renderStreamEvent" not in html
         assert "escapeHtml" not in html
@@ -1664,8 +1665,8 @@ class TestSSEServerSideRendering:
 
         html = harness.get_html("/conversation/abc12345/actions")
 
-        # SSE script must start from the current offset, not 0
-        assert f"var currentOffset = {file_size}" in html
+        # SSE must start from the current offset, not 0
+        assert f"offset={file_size}" in html
         assert "var currentOffset = 0" not in html
 
     def test_sse_catchup_does_not_duplicate_events(

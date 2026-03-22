@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+
+{% block title %}Task {{ task.task_id }} - Dashboard{% endblock %}
+
+{% block styles %}
+<link rel="stylesheet" href="/static/styles/light.css">
+<link rel="stylesheet" href="/static/styles/components.css">
+{% endblock %}
+
+{% block body %}
+{% set success_class = 'success' if task.succeeded else ('failed' if task.status.value == 'completed' else '') %}
+{% set status_display = task.status.value.replace('_', ' ').upper() %}
+{% set success_text = '' %}
+{% if task.status.value == 'completed' %}
+    {% if task.succeeded %}
+        {% set success_text = ' - Success' %}
+    {% elif task.completion_reason %}
+        {% set success_text = ' - ' ~ task.completion_reason.value.replace('_', ' ').title() %}
+    {% else %}
+        {% set success_text = ' - Failed' %}
+    {% endif %}
+{% endif %}
+<div class="page" {% if is_active %}hx-ext="sse" sse-connect="/api/events/stream?format=html&task_id={{ task.task_id }}"{% endif %}>
+    <div class="back"><a href="/">&larr; Back to Dashboard</a></div>
+    <div class="card">
+        <h1>Task: {{ task.task_id }}</h1>
+
+        <div class="field">
+            <div class="field-label">Subject</div>
+            <div class="field-value">{{ task.display_title }}</div>
+        </div>
+
+        <div class="field">
+            <div class="field-label">Repository</div>
+            <div class="field-value">{{ task.repo_id or '-' }}</div>
+        </div>
+
+        <div class="field">
+            <div class="field-label">Sender</div>
+            <div class="field-value">{{ task.sender or '-' }}</div>
+        </div>
+
+        {% if task.conversation_id %}
+        <div class="field">
+            <div class="field-label">Conversation</div>
+            <div class="field-value">
+                <a href="/conversation/{{ task.conversation_id }}">{{ task.conversation_id }}</a>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="field">
+            <div class="field-label">Status</div>
+            <div class="field-value">
+                <span id="task-status" {% if is_active %}sse-swap="task-status" hx-swap="outerHTML"{% endif %}
+                    class="status {{ task.status.value }} {{ success_class }}">
+                    {{ status_display }}{{ success_text }}
+                </span>
+            </div>
+        </div>
+
+        {% include "components/action_buttons.html" %}
+    </div>
+    {% if task.todos and is_active %}
+    <div {% if is_active %}sse-swap="task-progress" hx-swap="innerHTML"{% endif %}>
+        {% include "components/todo_progress.html" with context %}
+    </div>
+    {% elif is_active %}
+    <div sse-swap="task-progress" hx-swap="innerHTML"></div>
+    {% endif %}
+    <div class="card" {% if is_active %}sse-swap="task-details" hx-swap="innerHTML"{% endif %}>
+        <h2>Task Details</h2>
+
+        <div class="field">
+            <div class="field-label">Model</div>
+            <div id="task-model" class="field-value mono">{{ model_display }}</div>
+        </div>
+
+        <div class="details-grid">
+            <div class="detail-item">
+                <div class="field-label">Queued At</div>
+                <div class="field-value mono">{{ format_timestamp(task.queued_at) }}</div>
+            </div>
+            <div class="detail-item">
+                <div class="field-label">Started At</div>
+                <div id="task-started-at" class="field-value mono">{{ format_timestamp(task.started_at) }}</div>
+            </div>
+            <div class="detail-item">
+                <div class="field-label">Completed At</div>
+                <div id="task-completed-at" class="field-value mono">{{ format_timestamp(task.completed_at) }}</div>
+            </div>
+            <div class="detail-item">
+                <div class="field-label">Queue Time</div>
+                <div id="task-queue-time" class="field-value mono">{{ format_duration(task.queue_duration()) }}</div>
+            </div>
+            <div class="detail-item">
+                <div class="field-label">Execution Time</div>
+                <div id="task-exec-time" class="field-value mono">{{ format_duration(task.execution_duration()) }}</div>
+            </div>
+            <div class="detail-item">
+                <div class="field-label">Total Time</div>
+                <div id="task-total-time" class="field-value mono">{{ format_duration(task.total_duration()) }}</div>
+            </div>
+            <div class="detail-item">
+                <div class="field-label">Cost</div>
+                <div class="field-value mono">{{ cost_display }}</div>
+            </div>
+            <div class="detail-item">
+                <div class="field-label">Turns</div>
+                <div class="field-value mono">{{ turns_display }}</div>
+            </div>
+        </div>
+    </div>
+    {{ replies_section|safe }}
+</div>
+{% if is_active %}
+<div id="stream-status" class="stream-status">Connecting...</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if is_active %}
+<script src="/static/vendor/htmx.min.js"></script>
+<script src="/static/vendor/sse.min.js"></script>
+<script src="/static/js/sse-fallback.js"></script>
+{% endif %}
+{% endblock %}
