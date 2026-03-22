@@ -75,10 +75,8 @@ def render_single_reply_section(
                     <span class="reply-number">Pending Request</span>
                     <span class="reply-timestamp">in progress</span>
                 </div>
-                <div class="text-section">
-                    <div class="text-section-header">Request</div>
-                    <div class="text-content request">{escaped_pending}</div>
-                </div>
+                <div class="text-section-header">Request</div>
+                <div class="text-content request">{escaped_pending}</div>
             </div>
         </div>
     </div>"""
@@ -141,17 +139,13 @@ def _render_reply_inner(reply: ReplySummary, reply_num: int) -> str:
     if reply.request_text:
         escaped_request = html.escape(reply.request_text)
         text_sections_html += f"""
-                <div class="text-section">
-                    <div class="text-section-header">Request</div>
-                    <div class="text-content request">{escaped_request}</div>
-                </div>"""
+                <div class="text-section-header">Request</div>
+                <div class="text-content request">{escaped_request}</div>"""
     if reply.response_text:
         escaped_response = html.escape(reply.response_text)
         text_sections_html += f"""
-                <div class="text-section">
-                    <div class="text-section-header">Response</div>
-                    <div class="text-content response">{escaped_response}</div>
-                </div>"""
+                <div class="text-section-header">Response</div>
+                <div class="text-content response">{escaped_response}</div>"""
 
     return f"""
             <div class="reply {error_class}">
@@ -237,10 +231,8 @@ def render_conversation_replies_section(
                     <span class="reply-number">Pending Request</span>
                     <span class="reply-timestamp">in progress</span>
                 </div>
-                <div class="text-section">
-                    <div class="text-section-header">Request</div>
-                    <div class="text-content request">{escaped_pending}</div>
-                </div>
+                <div class="text-section-header">Request</div>
+                <div class="text-content request">{escaped_pending}</div>
             </div>
         </div>
     </div>"""
@@ -261,10 +253,8 @@ def render_conversation_replies_section(
                     <span class="reply-number">Pending Request</span>
                     <span class="reply-timestamp">in progress</span>
                 </div>
-                <div class="text-section">
-                    <div class="text-section-header">Request</div>
-                    <div class="text-content request">{escaped_pending}</div>
-                </div>
+                <div class="text-section-header">Request</div>
+                <div class="text-content request">{escaped_pending}</div>
             </div>"""
 
     return f"""

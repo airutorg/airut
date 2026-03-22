@@ -40,15 +40,11 @@
     </div>
     {% endif %}
     {% if reply.request_text %}
-    <div class="text-section">
-        <div class="text-section-header">Request</div>
-        <div class="text-content request">{{ reply.request_text }}</div>
-    </div>
+    <div class="text-section-header">Request</div>
+    <div class="text-content request">{{ reply.request_text }}</div>
     {% endif %}
     {% if reply.response_text %}
-    <div class="text-section">
-        <div class="text-section-header">Response</div>
-        <div class="text-content response">{{ reply.response_text }}</div>
-    </div>
+    <div class="text-section-header">Response</div>
+    <div class="text-content response">{{ reply.response_text }}</div>
     {% endif %}
 </div>
