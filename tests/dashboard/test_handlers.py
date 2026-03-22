@@ -687,7 +687,7 @@ class TestConversationDataIntegration:
         html = response.get_data(as_text=True)
 
         # Request/Response sections should not be present
-        assert 'class="text-section"' not in html
+        assert 'class="text-section-header"' not in html
 
     def test_api_task_includes_request_response(self, tmp_path: Path) -> None:
         """Test /api/conversation/<id> includes request/response text."""
