@@ -9,8 +9,8 @@
 Reads the VERSION file from the vendored htmx directory, queries the GitHub
 Advisory Database for known vulnerabilities, and checks for newer versions.
 
-Fails CI if the vendored version has a known security advisory.
-Warns (without failing) if a newer version is available.
+Fails CI if the vendored version has a known security advisory, or if any
+check (advisory lookup, latest version lookup) cannot be completed.
 
 Usage:
     uv run python scripts/check_vendor_security.py
@@ -71,7 +71,8 @@ def check_advisories(
     url = _ADVISORIES_URL.format(ecosystem="npm", package=npm_package)
     advisories = _github_get(url)
     if not isinstance(advisories, list):
-        return []
+        msg = f"Unexpected advisory API response for {npm_package}"
+        raise ValueError(msg)
 
     affected: list[dict[str, str]] = []
     for item in advisories:
@@ -190,28 +191,29 @@ def _check_condition(ver: tuple[int, ...], condition: str) -> bool:
     return False
 
 
-def get_latest_version(owner: str, repo: str) -> str | None:
-    """Get the latest release version from GitHub.
+def get_latest_version(npm_package: str) -> str | None:
+    """Get the latest version of an npm package via unpkg.
 
     Args:
-        owner: Repository owner.
-        repo: Repository name.
+        npm_package: The npm package name (e.g., "htmx.org").
 
     Returns:
-        Version string (without 'v' prefix), or None on failure.
+        Version string, or None on failure.
     """
-    url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+    url = f"https://unpkg.com/{npm_package}/package.json"
+    request = Request(url)
     try:
-        data = _github_get(url)
+        with urlopen(request, timeout=30) as response:
+            data = json.loads(response.read())
     except URLError:
         return None
     if not isinstance(data, dict):
         return None
-    release = cast(dict[str, object], data)
-    tag = release.get("tag_name", "")
-    if not isinstance(tag, str):
+    pkg = cast(dict[str, object], data)
+    version = pkg.get("version")
+    if not isinstance(version, str):
         return None
-    return tag.lstrip("v")
+    return version
 
 
 def main() -> int:
@@ -241,7 +243,7 @@ def main() -> int:
         # Check for security advisories — must succeed or CI fails
         try:
             advisories = check_advisories(info["npm_package"], version)
-        except URLError as e:
+        except (URLError, ValueError) as e:
             print(f"ERROR: Could not check advisories for {name}: {e}")
             return 1
 
@@ -256,9 +258,12 @@ def main() -> int:
                 if adv["html_url"]:
                     print(f"  Details: {adv['html_url']}")
 
-        # Check for newer versions (independent of advisory check)
-        latest = get_latest_version(info["github_owner"], info["github_repo"])
-        if latest and latest != version:
+        # Check for newer versions — must succeed or CI fails
+        latest = get_latest_version(info["npm_package"])
+        if latest is None:
+            print(f"ERROR: Could not check latest version for {name}")
+            return 1
+        elif latest != version:
             latest_tuple = _parse_version(latest)
             current_tuple = _parse_version(version)
             if (
