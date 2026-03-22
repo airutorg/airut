@@ -1,0 +1,26 @@
+{# Todo progress checklist — expects: todos (list[TodoItem]) #}
+{% if todos %}
+<div id="progress-section" class="card progress-card">
+    <h2>Progress</h2>
+    <div id="todo-list" class="todo-list">
+        {% for todo in todos %}
+            {% if todo.status.value == 'completed' %}
+        <div class="todo-item completed">
+            <span class="todo-icon completed">&#x2713;</span>
+            <span class="todo-label">{{ todo.content }}</span>
+        </div>
+            {% elif todo.status.value == 'in_progress' %}
+        <div class="todo-item in-progress">
+            <span class="todo-spinner"></span>
+            <span class="todo-label">{{ todo.active_form or todo.content }}</span>
+        </div>
+            {% else %}
+        <div class="todo-item pending">
+            <span class="todo-icon pending">&#x25CB;</span>
+            <span class="todo-label">{{ todo.content }}</span>
+        </div>
+            {% endif %}
+        {% endfor %}
+    </div>
+</div>
+{% endif %}

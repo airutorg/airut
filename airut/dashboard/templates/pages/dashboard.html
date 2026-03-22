@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block title %}Airut Dashboard{% endblock %}
+
+{% block styles %}
+<link rel="stylesheet" href="/static/styles/light.css">
+<link rel="stylesheet" href="/static/styles/components.css">
+{% endblock %}
+
+{% block body %}
+<div class="page">
+    <div class="title-row">
+        {% include "components/logo.html" %}
+        <h1>Airut Dashboard</h1>
+    </div>
+    {% include "components/version_info.html" %}
+    <div id="dashboard-live" hx-ext="sse"
+         sse-connect="/api/events/stream?format=html">
+        <div id="boot-container" sse-swap="boot-state" hx-swap="innerHTML">
+            {% include "components/boot_state.html" %}
+        </div>
+        <div id="repos-container" sse-swap="repos" hx-swap="innerHTML">
+            {% include "components/repos_section.html" %}
+        </div>
+        <div class="dashboard">
+            <div class="column">
+                <div id="pending-header" class="column-header pending"
+                     sse-swap="pending-header" hx-swap="outerHTML">
+                    Pending ({{ pending_count }})
+                </div>
+                <div id="pending-list" sse-swap="pending-tasks" hx-swap="innerHTML">
+                    {% if pending_tasks %}
+                        {% for task in pending_tasks %}
+                            {% with status_class='pending' %}
+                                {% include "components/task_card.html" %}
+                            {% endwith %}
+                        {% endfor %}
+                    {% else %}
+                    <div class="empty">No conversations</div>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="column">
+                <div id="executing-header" class="column-header executing"
+                     sse-swap="executing-header" hx-swap="outerHTML">
+                    Executing ({{ executing_count }})
+                </div>
+                <div id="executing-list" sse-swap="executing-tasks" hx-swap="innerHTML">
+                    {% if executing_tasks %}
+                        {% for task in executing_tasks %}
+                            {% with status_class='executing' %}
+                                {% include "components/task_card.html" %}
+                            {% endwith %}
+                        {% endfor %}
+                    {% else %}
+                    <div class="empty">No conversations</div>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="column">
+                <div id="completed-header" class="column-header completed"
+                     sse-swap="completed-header" hx-swap="outerHTML">
+                    Done ({{ completed_count }})
+                </div>
+                <div id="completed-list" sse-swap="completed-tasks" hx-swap="innerHTML">
+                    {% if completed_tasks %}
+                        {% for task in completed_tasks %}
+                            {% with status_class='completed' %}
+                                {% include "components/task_card.html" %}
+                            {% endwith %}
+                        {% endfor %}
+                    {% else %}
+                    <div class="empty">No conversations</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    <div id="stream-status" class="stream-status">Connecting...</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/vendor/htmx.min.js"></script>
+<script src="/static/vendor/sse.min.js"></script>
+<script src="/static/js/local-time.js"></script>
+<script src="/static/js/sse-fallback.js"></script>
+{% endblock %}

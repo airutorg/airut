@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}Conversation {{ conversation_id }} - Dashboard{% endblock %}
+
+{% block styles %}
+<link rel="stylesheet" href="/static/styles/light.css">
+<link rel="stylesheet" href="/static/styles/components.css">
+{% endblock %}
+
+{% block body %}
+<div class="page">
+    <div class="back"><a href="/">&larr; Back to Dashboard</a></div>
+    <div class="card">
+        <h1>Conversation: {{ conversation_id }}</h1>
+
+        <div class="conversation-summary">
+            <div class="summary-item">
+                <div class="summary-value">{{ reply_count }}</div>
+                <div class="summary-label">Replies</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-value">{{ cost_display }}</div>
+                <div class="summary-label">Total Cost</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-value">{{ turns_display }}</div>
+                <div class="summary-label">Total Turns</div>
+            </div>
+            <div class="summary-item">
+                <div class="summary-value">{{ model_display }}</div>
+                <div class="summary-label">Model</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Tasks ({{ tasks|length }})</h2>
+        {% for task in tasks %}
+        {% set status_display = task.status.value.replace('_', ' ').upper() %}
+        {% if task.status.value == 'completed' %}
+            {% if task.succeeded %}
+                {% set status_class = 'success' %}
+                {% set icon = '&#x2713;' %}
+            {% elif task.completion_reason and task.completion_reason.value in ['auth_failed', 'unauthorized', 'rejected'] %}
+                {% set status_class = 'failed' %}
+                {% set icon = '&#x2298;' %}
+            {% else %}
+                {% set status_class = 'failed' %}
+                {% set icon = '&#x2717;' %}
+            {% endif %}
+        {% elif task.status.value == 'executing' %}
+            {% set status_class = 'executing' %}
+            {% set icon = '&#x25B6;' %}
+        {% else %}
+            {% set status_class = 'pending' %}
+            {% set icon = '&#x25CB;' %}
+        {% endif %}
+        {% if task.status.value == 'executing' %}
+            {% set time_label = 'Running: ' ~ format_duration(task.execution_duration()) %}
+        {% elif task.status.value == 'completed' %}
+            {% set time_label = 'Took: ' ~ format_duration(task.execution_duration()) %}
+        {% elif task.status.value == 'pending' %}
+            {% set time_label = 'Queued behind active task' %}
+        {% else %}
+            {% set time_label = 'Waiting: ' ~ format_duration(task.queue_duration()) %}
+        {% endif %}
+        {% set escaped_title = task.display_title %}
+        {% set truncated = escaped_title[:50] ~ '...' if escaped_title|length > 50 else escaped_title %}
+        <div class="task-row {{ status_class }}">
+            <div class="task-row-id">
+                <a href="/task/{{ task.task_id }}">{{ task.task_id }}</a>
+                <span class="status-icon">{{ icon|safe }}</span>
+                <span class="status {{ task.status.value }} {{ status_class }}">
+                    {{ status_display }}
+                </span>
+            </div>
+            <div class="task-row-title" title="{{ escaped_title }}">
+                {{ truncated }}
+            </div>
+            <div class="task-row-time">{{ time_label }}</div>
+        </div>
+        {% endfor %}
+    </div>
+
+    {{ replies_section|safe }}
+</div>
+{% endblock %}

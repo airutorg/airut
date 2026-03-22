@@ -24,8 +24,6 @@ from airut.claude_output.types import (
     ToolUseBlock,
 )
 from airut.conversation import ConversationMetadata
-from airut.dashboard.tracker import ACTIVE_STATUSES, TaskState
-from airut.dashboard.views.styles import actions_styles
 
 
 # Maximum lines shown for edit diffs and tool results before truncation.
@@ -40,185 +38,6 @@ _SUBAGENT_COLORS = [
     "#c678dd",  # purple
     "#56b6c2",  # cyan
 ]
-
-
-def render_actions_page(
-    task: TaskState,
-    conversation: ConversationMetadata | None,
-    event_groups: list[list[StreamEvent]] | None = None,
-    *,
-    event_log_offset: int = 0,
-) -> str:
-    """Render actions viewer page HTML.
-
-    Args:
-        task: Task to display.
-        conversation: Conversation metadata with reply summaries.
-        event_groups: Events grouped by reply from EventLog.
-        event_log_offset: Current byte offset in the event log file.
-            Used as the starting offset for SSE streaming so the
-            client only receives events written after the page rendered.
-
-    Returns:
-        HTML string for actions page.
-    """
-    escaped_title = html.escape(task.display_title)
-
-    # Build actions content
-    has_replies = conversation is not None and len(conversation.replies) > 0
-    has_events = event_groups is not None and len(event_groups) > 0
-    has_pending = (
-        conversation is not None
-        and conversation.pending_request_text is not None
-    )
-    if not has_replies and not has_events and not has_pending:
-        actions_content = '<div class="no-actions">No actions recorded</div>'
-    else:
-        actions_content = render_actions_timeline(conversation, event_groups)
-
-    is_active = task.status in ACTIVE_STATUSES
-    sse_script = (
-        _sse_events_script(task.conversation_id, event_log_offset)
-        if is_active
-        else ""
-    )
-    status_notice = (
-        '<div id="stream-status" class="stream-status">Connecting...</div>'
-        if is_active
-        else ""
-    )
-
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Actions - {task.conversation_id}</title>
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <style>
-        {actions_styles()}
-    </style>
-    <script>
-        function toggleEvent(el) {{
-            var body = el.parentElement.querySelector('.event-body');
-            var icon = el.querySelector('.toggle-icon');
-            if (body.classList.contains('expanded')) {{
-                body.classList.remove('expanded');
-                icon.textContent = '+';
-            }} else {{
-                body.classList.add('expanded');
-                icon.textContent = '-';
-            }}
-        }}
-    </script>
-</head>
-<body>
-    <div class="header">
-        <a href="/task/{task.task_id}">&larr; Back</a>
-        <h1>Actions: {task.conversation_id}</h1>
-        <span class="subtitle">{escaped_title}</span>
-    </div>
-    <div class="terminal" id="events-container">
-        {actions_content}
-    </div>
-    {status_notice}
-    <script>window.scrollTo(0, document.body.scrollHeight);</script>
-    {sse_script}
-</body>
-</html>"""
-
-
-def _sse_events_script(conversation_id: str, initial_offset: int = 0) -> str:
-    """JavaScript for SSE-based live event streaming.
-
-    Connects to the per-conversation events stream endpoint and
-    appends new events to the timeline DOM as they arrive.
-
-    Args:
-        conversation_id: Conversation ID to stream events for.
-        initial_offset: Byte offset to start streaming from.
-            Set to the current event log file size so the SSE
-            only sends events written after the page rendered.
-
-    Returns:
-        HTML <script> tag with SSE event streaming logic.
-    """
-    return f"""
-    <script>
-        var currentOffset = {initial_offset};
-        var autoScroll = true;
-
-        // Track if user has scrolled up (disable auto-scroll)
-        window.addEventListener('scroll', function() {{
-            var nearBottom = (
-                window.innerHeight + window.scrollY
-                >= document.body.offsetHeight - 100
-            );
-            autoScroll = nearBottom;
-        }});
-
-        function appendHtml(html) {{
-            var container = document.getElementById('events-container');
-            if (html) {{
-                container.insertAdjacentHTML('beforeend', html);
-            }}
-            if (html && autoScroll) {{
-                window.scrollTo(0, document.body.scrollHeight);
-            }}
-        }}
-
-        function connectEventsSSE() {{
-            var url = '/api/conversation/{conversation_id}/events/stream'
-                + '?offset=' + currentOffset;
-            var source = new EventSource(url);
-            var status = document.getElementById('stream-status');
-
-            source.addEventListener('html', function(e) {{
-                try {{
-                    var data = JSON.parse(e.data);
-                    currentOffset = data.offset || currentOffset;
-                    appendHtml(data.html);
-                    if (status) status.textContent = 'Live';
-                }} catch (err) {{ /* ignore parse errors */ }}
-            }});
-
-            source.addEventListener('done', function(e) {{
-                source.close();
-                if (status) status.textContent = 'Complete';
-            }});
-
-            source.onerror = function() {{
-                source.close();
-                if (status) status.textContent = 'Polling (3s)';
-                startEventsPolling();
-            }};
-
-            if (status) status.textContent = 'Live';
-        }}
-
-        function startEventsPolling() {{
-            var status = document.getElementById('stream-status');
-            var timer = setInterval(function() {{
-                var url = '/api/conversation/{conversation_id}/events/poll'
-                    + '?offset=' + currentOffset;
-                fetch(url).then(function(resp) {{
-                    if (resp.status === 304) return null;
-                    if (resp.status === 200) return resp.json();
-                    return null;
-                }}).then(function(data) {{
-                    if (!data) return;
-                    currentOffset = data.offset || currentOffset;
-                    appendHtml(data.html);
-                    if (data.done) {{
-                        clearInterval(timer);
-                        if (status) status.textContent = 'Complete';
-                    }}
-                }}).catch(function() {{ /* ignore fetch errors */ }});
-            }}, 3000);
-        }}
-
-        connectEventsSSE();
-    </script>"""
 
 
 def render_actions_timeline(
@@ -323,17 +142,16 @@ def render_actions_timeline(
     return "".join(sections)
 
 
-def _subagent_color(tool_use_id: str) -> str:
-    """Deterministic color for a subagent based on its tool_use_id.
+def _subagent_color_index(tool_use_id: str) -> int:
+    """Deterministic color index for a subagent based on its tool_use_id.
 
     Args:
         tool_use_id: The parent tool_use_id identifying the subagent.
 
     Returns:
-        CSS color string from the palette.
+        Index into the ``_SUBAGENT_COLORS`` palette (0–5).
     """
-    idx = sum(ord(c) for c in tool_use_id) % len(_SUBAGENT_COLORS)
-    return _SUBAGENT_COLORS[idx]
+    return sum(ord(c) for c in tool_use_id) % len(_SUBAGENT_COLORS)
 
 
 def _render_subagent_badge(
@@ -354,11 +172,11 @@ def _render_subagent_badge(
     Returns:
         HTML string for the badge.
     """
-    color = _subagent_color(parent_tool_use_id)
+    color_idx = _subagent_color_index(parent_tool_use_id)
     escaped_id = html.escape(parent_tool_use_id)
     escaped_label = html.escape(subagent_label)
     return (
-        f'<span class="subagent-badge" style="color: {color}">'
+        f'<span class="subagent-badge subagent-color-{color_idx}">'
         f"{escaped_label}:{escaped_id}</span>"
     )
 
@@ -427,11 +245,11 @@ def render_single_event(
         inner_html = _render_unknown_event(event)
 
     if event.parent_tool_use_id:
-        color = _subagent_color(event.parent_tool_use_id)
+        color_idx = _subagent_color_index(event.parent_tool_use_id)
         label = subagent_label or "subagent"
         badge = _render_subagent_badge(event.parent_tool_use_id, label)
         return (
-            f'<div class="subagent-event" style="border-left-color: {color}">'
+            f'<div class="subagent-event subagent-color-{color_idx}">'
             f"{badge}"
             f'<div class="subagent-content">{inner_html}</div>'
             f"</div>"

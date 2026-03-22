@@ -236,6 +236,352 @@ def build_state_snapshot(
     )
 
 
+def _build_html_state_events(
+    tracker: TaskTracker,
+    boot_store: VersionedStore[BootState] | None,
+    repos_store: VersionedStore[tuple[RepoState, ...]] | None,
+    version: int,
+    event_id: str | None = None,
+    retry: int | None = None,
+    task_id: str | None = None,
+    repo_id: str | None = None,
+) -> str:
+    """Build HTML-mode SSE events with separate named events per region.
+
+    Each dashboard region gets its own SSE event name so htmx's
+    ``sse-swap`` can target each element independently.
+
+    When ``task_id`` is set, emits task-specific events (``task-status``,
+    ``task-progress``, ``task-details``) instead of dashboard events.
+    When ``repo_id`` is set, emits repo-specific events (``repo-status``,
+    ``repo-error``) instead of dashboard events.
+
+    Args:
+        tracker: Task tracker for current tasks.
+        boot_store: Versioned boot state store.
+        repos_store: Versioned repo states store.
+        version: Version number for event ID.
+        event_id: Optional event ID override.
+        retry: Optional retry interval for initial event.
+        task_id: If set, emit task detail events for this task.
+        repo_id: If set, emit repo detail events for this repo.
+
+    Returns:
+        Concatenated SSE-formatted event strings.
+    """
+    eid = event_id or str(version)
+
+    if task_id is not None:
+        return _build_task_detail_events(tracker, eid, retry, task_id)
+
+    if repo_id is not None:
+        return _build_repo_detail_events(repos_store, eid, retry, repo_id)
+
+    return _build_dashboard_events(tracker, boot_store, repos_store, eid, retry)
+
+
+def _build_task_detail_events(
+    tracker: TaskTracker,
+    eid: str,
+    retry: int | None,
+    task_id: str,
+) -> str:
+    """Build SSE events for the task detail page.
+
+    Emits ``task-status``, ``task-progress``, and ``task-details``
+    events matching the ``sse-swap`` attributes in the task detail
+    template.
+
+    Args:
+        tracker: Task tracker.
+        eid: Event ID string.
+        retry: Optional retry interval.
+        task_id: Task to render events for.
+
+    Returns:
+        Concatenated SSE-formatted event strings.
+    """
+    from airut.dashboard.formatters import format_duration, format_timestamp
+    from airut.dashboard.templating import render_template
+
+    task = tracker.get_task(task_id)
+    if task is None:
+        return format_sse_event("done", "", event_id=eid, retry=retry)
+
+    parts: list[str] = []
+
+    # task-status: the status badge
+    success_class = ""
+    success_text = ""
+    if task.status == TaskStatus.COMPLETED:
+        if task.succeeded:
+            success_class = "success"
+            success_text = " - Success"
+        elif task.completion_reason:
+            success_class = "failed"
+            success_text = (
+                " - " + task.completion_reason.value.replace("_", " ").title()
+            )
+        else:
+            success_class = "failed"
+            success_text = " - Failed"
+
+    status_display = task.status.value.replace("_", " ").upper()
+    is_active = task.status in (
+        TaskStatus.QUEUED,
+        TaskStatus.AUTHENTICATING,
+        TaskStatus.PENDING,
+        TaskStatus.EXECUTING,
+    )
+    swap_attr = (
+        ' sse-swap="task-status" hx-swap="outerHTML"' if is_active else ""
+    )
+    status_html = (
+        f'<span id="task-status"{swap_attr}'
+        f' class="status {task.status.value} {success_class}">'
+        f"{status_display}{success_text}</span>"
+    )
+    parts.append(
+        format_sse_event("task-status", status_html, event_id=eid, retry=retry)
+    )
+
+    # task-progress: todo checklist
+    progress_html = render_template(
+        "components/todo_progress.html", todos=task.todos
+    )
+    parts.append(format_sse_event("task-progress", progress_html, event_id=eid))
+
+    # task-details: timing and stats card content
+    details_html = (
+        f"<h2>Task Details</h2>"
+        f'<div class="field">'
+        f'<div class="field-label">Model</div>'
+        f'<div id="task-model" class="field-value mono">'
+        f"{task.model or '-'}</div></div>"
+        f'<div class="details-grid">'
+        f'<div class="detail-item">'
+        f'<div class="field-label">Queued At</div>'
+        f'<div class="field-value mono">'
+        f"{format_timestamp(task.queued_at)}</div></div>"
+        f'<div class="detail-item">'
+        f'<div class="field-label">Started At</div>'
+        f'<div id="task-started-at" class="field-value mono">'
+        f"{format_timestamp(task.started_at)}</div></div>"
+        f'<div class="detail-item">'
+        f'<div class="field-label">Completed At</div>'
+        f'<div id="task-completed-at" class="field-value mono">'
+        f"{format_timestamp(task.completed_at)}</div></div>"
+        f'<div class="detail-item">'
+        f'<div class="field-label">Queue Time</div>'
+        f'<div id="task-queue-time" class="field-value mono">'
+        f"{format_duration(task.queue_duration())}</div></div>"
+        f'<div class="detail-item">'
+        f'<div class="field-label">Execution Time</div>'
+        f'<div id="task-exec-time" class="field-value mono">'
+        f"{format_duration(task.execution_duration())}</div></div>"
+        f'<div class="detail-item">'
+        f'<div class="field-label">Total Time</div>'
+        f'<div id="task-total-time" class="field-value mono">'
+        f"{format_duration(task.total_duration())}</div></div>"
+        f"</div>"
+    )
+    parts.append(format_sse_event("task-details", details_html, event_id=eid))
+
+    # Send done event when task completes
+    if task.status == TaskStatus.COMPLETED:
+        parts.append(format_sse_event("done", "", event_id=eid))
+
+    return "".join(parts)
+
+
+def _build_repo_detail_events(
+    repos_store: VersionedStore[tuple[RepoState, ...]] | None,
+    eid: str,
+    retry: int | None,
+    repo_id: str,
+) -> str:
+    """Build SSE events for the repo detail page.
+
+    Emits ``repo-status`` and ``repo-error`` events matching the
+    ``sse-swap`` attributes in the repo detail template.
+
+    Args:
+        repos_store: Versioned repo states store.
+        eid: Event ID string.
+        retry: Optional retry interval.
+        repo_id: Repository to render events for.
+
+    Returns:
+        Concatenated SSE-formatted event strings.
+    """
+    import html as html_mod
+
+    repo_states = list(repos_store.get().value) if repos_store else []
+    repo = next((r for r in repo_states if r.repo_id == repo_id), None)
+    if repo is None:
+        return format_sse_event("done", "", event_id=eid, retry=retry)
+
+    parts: list[str] = []
+
+    # repo-status: the status badge
+    status_html = (
+        f'<span id="repo-status" sse-swap="repo-status" hx-swap="outerHTML"'
+        f' class="status-badge {repo.status.value}">'
+        f"{repo.status.value.upper()}</span>"
+    )
+    parts.append(
+        format_sse_event("repo-status", status_html, event_id=eid, retry=retry)
+    )
+
+    # repo-error: error details section
+    if repo.status.value == "failed" and repo.error_message:
+        error_type = html_mod.escape(repo.error_type or "Unknown")
+        error_msg = html_mod.escape(repo.error_message)
+        error_html = (
+            f'<div class="detail-section error-section">'
+            f'<div class="detail-label">Error Type</div>'
+            f'<div class="detail-value error-type">{error_type}</div>'
+            f'<div class="detail-label">Error Message</div>'
+            f'<div class="detail-value error-message">{error_msg}</div>'
+            f"</div>"
+        )
+    else:
+        error_html = ""
+    parts.append(format_sse_event("repo-error", error_html, event_id=eid))
+
+    return "".join(parts)
+
+
+def _build_dashboard_events(
+    tracker: TaskTracker,
+    boot_store: VersionedStore[BootState] | None,
+    repos_store: VersionedStore[tuple[RepoState, ...]] | None,
+    eid: str,
+    retry: int | None,
+) -> str:
+    """Build SSE events for the main dashboard page.
+
+    Emits per-region events (boot-state, repos, pending-header, etc.)
+    matching the ``sse-swap`` attributes in the dashboard template.
+
+    Args:
+        tracker: Task tracker for current tasks.
+        boot_store: Versioned boot state store.
+        repos_store: Versioned repo states store.
+        eid: Event ID string.
+        retry: Optional retry interval for initial event.
+
+    Returns:
+        Concatenated SSE-formatted event strings.
+    """
+    from airut.dashboard.templating import render_template
+
+    # Gather state
+    boot_state = boot_store.get().value if boot_store else None
+    repo_states = list(repos_store.get().value) if repos_store else []
+    all_tasks = tracker.get_all_tasks()
+
+    pending = [
+        t
+        for t in all_tasks
+        if t.status
+        in (TaskStatus.QUEUED, TaskStatus.AUTHENTICATING, TaskStatus.PENDING)
+    ]
+    executing = [t for t in all_tasks if t.status == TaskStatus.EXECUTING]
+    completed = [t for t in all_tasks if t.status == TaskStatus.COMPLETED]
+
+    parts: list[str] = []
+
+    # Boot state
+    boot_html = render_template(
+        "components/boot_state.html", boot_state=boot_state
+    )
+    parts.append(
+        format_sse_event("boot-state", boot_html, event_id=eid, retry=retry)
+    )
+
+    # Repos
+    repos_html = render_template(
+        "components/repos_section.html", repo_states=repo_states
+    )
+    parts.append(format_sse_event("repos", repos_html, event_id=eid))
+
+    # Pending header + tasks
+    parts.append(
+        format_sse_event(
+            "pending-header",
+            f'<div id="pending-header" class="column-header pending"'
+            f' sse-swap="pending-header" hx-swap="outerHTML">'
+            f"Pending ({len(pending)})</div>",
+            event_id=eid,
+        )
+    )
+    pending_cards = (
+        "".join(
+            render_template(
+                "components/task_card.html",
+                task=t,
+                status_class="pending",
+            )
+            for t in pending
+        )
+        or '<div class="empty">No conversations</div>'
+    )
+    parts.append(format_sse_event("pending-tasks", pending_cards, event_id=eid))
+
+    # Executing header + tasks
+    parts.append(
+        format_sse_event(
+            "executing-header",
+            f'<div id="executing-header" class="column-header executing"'
+            f' sse-swap="executing-header" hx-swap="outerHTML">'
+            f"Executing ({len(executing)})</div>",
+            event_id=eid,
+        )
+    )
+    executing_cards = (
+        "".join(
+            render_template(
+                "components/task_card.html",
+                task=t,
+                status_class="executing",
+            )
+            for t in executing
+        )
+        or '<div class="empty">No conversations</div>'
+    )
+    parts.append(
+        format_sse_event("executing-tasks", executing_cards, event_id=eid)
+    )
+
+    # Completed header + tasks
+    parts.append(
+        format_sse_event(
+            "completed-header",
+            f'<div id="completed-header" class="column-header completed"'
+            f' sse-swap="completed-header" hx-swap="outerHTML">'
+            f"Done ({len(completed)})</div>",
+            event_id=eid,
+        )
+    )
+    completed_cards = (
+        "".join(
+            render_template(
+                "components/task_card.html",
+                task=t,
+                status_class="completed",
+            )
+            for t in completed
+        )
+        or '<div class="empty">No conversations</div>'
+    )
+    parts.append(
+        format_sse_event("completed-tasks", completed_cards, event_id=eid)
+    )
+
+    return "".join(parts)
+
+
 def sse_state_stream(
     clock: VersionClock,
     tracker: TaskTracker,
@@ -243,6 +589,9 @@ def sse_state_stream(
     repos_store: VersionedStore[tuple[RepoState, ...]] | None,
     client_version: int,
     heartbeat_interval: float = 15.0,
+    html_mode: bool = False,
+    task_id: str | None = None,
+    repo_id: str | None = None,
 ) -> Generator[str]:
     """Generate SSE events for the state stream.
 
@@ -257,6 +606,10 @@ def sse_state_stream(
         repos_store: Versioned repo states store.
         client_version: Client's last known version.
         heartbeat_interval: Seconds between heartbeat comments.
+        html_mode: If True, send pre-rendered HTML fragments as
+            separate named SSE events instead of JSON snapshots.
+        task_id: If set with html_mode, emit task detail events.
+        repo_id: If set with html_mode, emit repo detail events.
 
     Yields:
         SSE-formatted event strings.
@@ -265,12 +618,24 @@ def sse_state_stream(
     # Capture version BEFORE yielding so the next iteration uses the
     # correct baseline (the generator suspends at yield).
     known = clock.version
-    yield format_sse_event(
-        "state",
-        build_state_snapshot(tracker, boot_store, repos_store, known),
-        event_id=str(known),
-        retry=1000,
-    )
+
+    if html_mode:
+        yield _build_html_state_events(
+            tracker,
+            boot_store,
+            repos_store,
+            known,
+            retry=1000,
+            task_id=task_id,
+            repo_id=repo_id,
+        )
+    else:
+        yield format_sse_event(
+            "state",
+            build_state_snapshot(tracker, boot_store, repos_store, known),
+            event_id=str(known),
+            retry=1000,
+        )
 
     while True:
         new_version = clock.wait(known, timeout=heartbeat_interval)
@@ -282,11 +647,23 @@ def sse_state_stream(
 
         # State changed — send new snapshot
         known = new_version
-        yield format_sse_event(
-            "state",
-            build_state_snapshot(tracker, boot_store, repos_store, new_version),
-            event_id=str(new_version),
-        )
+        if html_mode:
+            yield _build_html_state_events(
+                tracker,
+                boot_store,
+                repos_store,
+                new_version,
+                task_id=task_id,
+                repo_id=repo_id,
+            )
+        else:
+            yield format_sse_event(
+                "state",
+                build_state_snapshot(
+                    tracker, boot_store, repos_store, new_version
+                ),
+                event_id=str(new_version),
+            )
 
 
 def render_events_html(events: list[StreamEvent]) -> str:
@@ -316,9 +693,9 @@ def sse_events_log_stream(
 ) -> Generator[str]:
     """Generate SSE events for a conversation's event log stream.
 
-    Polls ``EventLog.tail()`` for new events and yields them as SSE
-    messages containing pre-rendered HTML fragments. Sends a terminal
-    ``done`` event when the task completes.
+    Sends raw HTML in the ``data:`` field with byte offset in the SSE
+    ``id:`` field. The htmx SSE extension uses ``sse-swap="html"`` with
+    ``hx-swap="beforeend"`` to append content directly.
 
     Args:
         event_log: EventLog instance for the conversation.
@@ -337,20 +714,15 @@ def sse_events_log_stream(
     # Send initial catch-up with retry interval
     events, offset = event_log.tail(offset)
     html = render_events_html(events) if events else ""
-    data = json.dumps({"offset": offset, "html": html})
-    yield format_sse_event("html", data, retry=1000)
+    yield format_sse_event("html", html, event_id=str(offset), retry=1000)
 
     while True:
-        # Check for new events first, then completion, then sleep.
-        # Checking before the sleep avoids a needless delay when the
-        # task is already done by the time the loop starts.
         events, new_offset = event_log.tail(offset)
         if events:
             offset = new_offset
             last_heartbeat = time.monotonic()
             html = render_events_html(events)
-            data = json.dumps({"offset": offset, "html": html})
-            yield format_sse_event("html", data)
+            yield format_sse_event("html", html, event_id=str(offset))
 
         # Check if all tasks for this conversation are done
         tasks = tracker.get_tasks_for_conversation(conversation_id)
@@ -362,9 +734,8 @@ def sse_events_log_stream(
             events, offset = event_log.tail(offset)
             if events:
                 html = render_events_html(events)
-                data = json.dumps({"offset": offset, "html": html})
-                yield format_sse_event("html", data)
-            yield format_sse_event("done", json.dumps({"offset": offset}))
+                yield format_sse_event("html", html, event_id=str(offset))
+            yield format_sse_event("done", "", event_id=str(offset))
             return
 
         # Send heartbeat if idle
@@ -403,9 +774,9 @@ def sse_network_log_stream(
 ) -> Generator[str]:
     """Generate SSE events for a conversation's network log stream.
 
-    Polls ``NetworkLog.tail()`` for new lines and yields them as SSE
-    messages containing pre-rendered HTML fragments. Sends a terminal
-    ``done`` event when the task completes.
+    Sends raw HTML in the ``data:`` field with byte offset in the SSE
+    ``id:`` field. The htmx SSE extension uses ``sse-swap="html"`` with
+    ``hx-swap="beforeend"`` to append content directly.
 
     Args:
         network_log: NetworkLog instance for the conversation.
@@ -424,20 +795,15 @@ def sse_network_log_stream(
     # Send initial catch-up with retry interval
     lines, offset = network_log.tail(offset)
     html = render_network_lines_html(lines) if lines else ""
-    data = json.dumps({"offset": offset, "html": html})
-    yield format_sse_event("html", data, retry=1000)
+    yield format_sse_event("html", html, event_id=str(offset), retry=1000)
 
     while True:
-        # Check for new lines first, then completion, then sleep.
-        # Checking before the sleep avoids a needless delay when the
-        # task is already done by the time the loop starts.
         lines, new_offset = network_log.tail(offset)
         if lines:
             offset = new_offset
             last_heartbeat = time.monotonic()
             html = render_network_lines_html(lines)
-            data = json.dumps({"offset": offset, "html": html})
-            yield format_sse_event("html", data)
+            yield format_sse_event("html", html, event_id=str(offset))
 
         # Check if all tasks for this conversation are done
         tasks = tracker.get_tasks_for_conversation(conversation_id)
@@ -449,9 +815,8 @@ def sse_network_log_stream(
             lines, offset = network_log.tail(offset)
             if lines:
                 html = render_network_lines_html(lines)
-                data = json.dumps({"offset": offset, "html": html})
-                yield format_sse_event("html", data)
-            yield format_sse_event("done", json.dumps({"offset": offset}))
+                yield format_sse_event("html", html, event_id=str(offset))
+            yield format_sse_event("done", "", event_id=str(offset))
             return
 
         # Send heartbeat if idle

@@ -1,0 +1,14 @@
+{# Version info bar — expects: version_info (VersionInfo), version_url (str) #}
+{% if version_info %}
+<div class="version-info">
+    <a href="{{ version_url }}" class="version-sha"
+        target="_blank" rel="noopener">{{ version_info.version or version_info.git_sha }}</a>
+    <span id="update-status" class="version-status checking"
+        hx-get="/api/update?format=html" hx-trigger="load" hx-swap="outerHTML"
+    >checking...</span>
+    <span class="version-started">Started: <span
+        class="local-time"
+        data-timestamp="{{ version_info.started_at }}"
+    ></span></span>
+</div>
+{% endif %}

@@ -46,8 +46,8 @@ _SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
     "Content-Security-Policy": (
         "default-src 'self'; "
-        "style-src 'self' 'unsafe-inline'; "
-        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self'; "
+        "script-src 'self'; "
         "img-src 'self' data:; "
         "connect-src 'self'; "
         "frame-ancestors 'none'"
@@ -139,6 +139,7 @@ class DashboardServer:
             [
                 Rule("/", endpoint="index"),
                 Rule("/favicon.svg", endpoint="favicon"),
+                Rule("/static/<path:path>", endpoint="static"),
                 Rule("/api/version", endpoint="version"),
                 Rule("/api/update", endpoint="update"),
                 Rule("/repo/<repo_id>", endpoint="repo_detail"),
@@ -199,6 +200,7 @@ class DashboardServer:
         self._endpoint_handlers: dict[str, Callable[..., Response]] = {
             "index": self._handlers.handle_index,
             "favicon": self._handlers.handle_favicon,
+            "static": self._handlers.handle_static,
             "version": self._handlers.handle_version,
             "update": self._handlers.handle_update,
             "repo_detail": self._handlers.handle_repo_detail,

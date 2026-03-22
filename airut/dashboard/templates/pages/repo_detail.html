@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Repo: {{ repo.repo_id }} - Airut Dashboard{% endblock %}
+
+{% block styles %}
+<link rel="stylesheet" href="/static/styles/light.css">
+<link rel="stylesheet" href="/static/styles/components.css">
+{% endblock %}
+
+{% block body %}
+<div class="page" hx-ext="sse" sse-connect="/api/events/stream?format=html&repo_id={{ repo.repo_id }}">
+    <div class="back-link"><a href="/">&larr; Back to Dashboard</a></div>
+    <div class="repo-header">
+        <h1>{{ repo.repo_id }}</h1>
+        <span id="repo-status" sse-swap="repo-status" hx-swap="outerHTML"
+            class="status-badge {{ repo.status.value }}">{{ repo.status.value.upper() }}</span>
+    </div>
+    <div class="detail-card">
+        <div class="detail-section">
+            <div class="detail-label">Git Repository</div>
+            <div class="detail-value mono">{{ repo.git_repo_url }}</div>
+        </div>
+        <div class="detail-section">
+            <div class="detail-label">Channels</div>
+            <div class="detail-value mono">{{ channels_display }}</div>
+        </div>
+        <div class="detail-section">
+            <div class="detail-label">Storage Directory</div>
+            <div class="detail-value mono">{{ repo.storage_dir }}</div>
+        </div>
+        <div id="error-section" sse-swap="repo-error" hx-swap="innerHTML">
+            {% if repo.status.value == 'failed' and repo.error_message %}
+            <div class="detail-section error-section">
+                <div class="detail-label">Error Type</div>
+                <div class="detail-value error-type">{{ repo.error_type or 'Unknown' }}</div>
+                <div class="detail-label">Error Message</div>
+                <div class="detail-value error-message">{{ repo.error_message }}</div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+<div id="stream-status" class="stream-status">Connecting...</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/vendor/htmx.min.js"></script>
+<script src="/static/vendor/sse.min.js"></script>
+<script src="/static/js/sse-fallback.js"></script>
+{% endblock %}

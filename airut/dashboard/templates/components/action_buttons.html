@@ -1,0 +1,18 @@
+{# Action buttons — expects: task (TaskState) #}
+<div class="action-buttons">
+    {% if task.conversation_id %}
+    <a href="/conversation/{{ task.conversation_id }}/actions" class="action-btn primary">View Actions</a>
+    <a href="/conversation/{{ task.conversation_id }}/network" class="action-btn primary">View Network Logs</a>
+    {% endif %}
+    {% if task.status.value == 'executing' %}
+    <button id="stop-btn" class="stop-btn"
+        hx-post="/api/conversation/{{ task.conversation_id }}/stop"
+        hx-headers='{"X-Requested-With": "XMLHttpRequest"}'
+        hx-swap="outerHTML"
+        hx-target="#stop-area"
+    >Stop</button>
+    {% endif %}
+</div>
+<div id="stop-area">
+    <div id="stop-result" class="stop-result"></div>
+</div>

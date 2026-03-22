@@ -46,7 +46,6 @@ For high-level documentation, see [doc/](../doc/).
 ## Dashboard
 
 - [dashboard.md](dashboard.md) — Web dashboard for task monitoring
-- [live-dashboard.md](live-dashboard.md) — Real-time dashboard updates via SSE
 
 ## Infrastructure
 

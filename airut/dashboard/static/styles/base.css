@@ -1,0 +1,46 @@
+/* base.css - Reset, typography, CSS custom properties, shared classes */
+
+:root {
+  --color-link: #337ab7;
+  --color-queued: #f0ad4e;
+  --color-executing: #5bc0de;
+  --color-success: #5cb85c;
+  --color-failed: #d9534f;
+  --font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+  --subagent-color-0: #e06c75;
+  --subagent-color-1: #61afef;
+  --subagent-color-2: #98c379;
+  --subagent-color-3: #e5c07b;
+  --subagent-color-4: #c678dd;
+  --subagent-color-5: #56b6c2;
+}
+
+/* Reset */
+* { box-sizing: border-box; }
+
+/* Subagent color classes */
+.subagent-color-0 {
+  color: var(--subagent-color-0);
+  --subagent-border-color: var(--subagent-color-0);
+}
+.subagent-color-1 {
+  color: var(--subagent-color-1);
+  --subagent-border-color: var(--subagent-color-1);
+}
+.subagent-color-2 {
+  color: var(--subagent-color-2);
+  --subagent-border-color: var(--subagent-color-2);
+}
+.subagent-color-3 {
+  color: var(--subagent-color-3);
+  --subagent-border-color: var(--subagent-color-3);
+}
+.subagent-color-4 {
+  color: var(--subagent-color-4);
+  --subagent-border-color: var(--subagent-color-4);
+}
+.subagent-color-5 {
+  color: var(--subagent-color-5);
+  --subagent-border-color: var(--subagent-color-5);
+}

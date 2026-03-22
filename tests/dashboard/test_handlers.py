@@ -932,13 +932,14 @@ class TestTodoProgressDisplay:
         assert "todos" not in data[0]
 
     def test_render_progress_section_empty_list(self) -> None:
-        """_render_progress_section returns empty string for empty list."""
-        from airut.dashboard.views.task_detail import _render_progress_section
+        """Todo progress template returns empty string for empty list."""
+        from airut.dashboard.templating import render_template
 
-        assert _render_progress_section([]) == ""
+        result = render_template("components/todo_progress.html", todos=[])
+        assert result.strip() == ""
 
-    def test_task_detail_renders_todo_js(self) -> None:
-        """Task detail for active task includes renderTodos JS."""
+    def test_task_detail_has_sse_for_active_task(self) -> None:
+        """Task detail for active task includes htmx SSE for live updates."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
         tracker.set_conversation_id("abc12345", "abc12345")
@@ -950,10 +951,11 @@ class TestTodoProgressDisplay:
 
         response = client.get("/task/abc12345")
         html = response.get_data(as_text=True)
-        assert "renderTodos" in html
+        assert 'hx-ext="sse"' in html
+        assert "sse-connect" in html
 
-    def test_task_detail_polling_fallback_updates_todos(self) -> None:
-        """Polling fallback JS calls updateTaskFromData (including todos)."""
+    def test_task_detail_includes_sse_fallback_script(self) -> None:
+        """Task detail for active task includes SSE fallback script."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Subject")
         tracker.set_conversation_id("abc12345", "abc12345")
@@ -965,9 +967,11 @@ class TestTodoProgressDisplay:
 
         response = client.get("/task/abc12345")
         html = response.get_data(as_text=True)
-        # Polling fallback must use the shared updateTaskFromData function
-        assert "updateTaskFromData" in html
-        assert "startTaskPolling" in html
+        # Fallback script is loaded for active tasks
+        assert "sse-fallback.js" in html
+        # htmx and SSE extension are loaded
+        assert "htmx.min.js" in html
+        assert "sse.min.js" in html
 
 
 class TestLoadPastTasks:
@@ -1818,17 +1822,17 @@ class TestStopEndpoint:
         assert response.status_code == 200
 
         html = response.get_data(as_text=True)
-        # Check stop button is present
-        assert "stopTask()" in html
-        assert 'stopTask()">Stop</button>' in html
+        # Check stop button is present (now uses htmx hx-post)
+        assert "stop-btn" in html
+        assert "hx-post" in html
+        assert ">Stop</button>" in html
 
-    def test_stop_script_handles_non_json_error(self) -> None:
-        """Stop button JS must handle non-JSON error responses.
+    def test_stop_button_uses_htmx(self) -> None:
+        """Stop button uses htmx hx-post for server interaction.
 
-        When _dispatch catches an unhandled exception during early task
-        startup, the response may not be JSON.  The script must check
-        ``response.ok`` before calling ``response.json()`` to avoid a
-        ``SyntaxError`` in the browser.
+        The stop button now uses htmx attributes instead of inline
+        JavaScript, so error handling is managed by htmx's built-in
+        response handling.
         """
         tracker = TaskTracker()
         task_id = "abc12345"
@@ -1846,9 +1850,9 @@ class TestStopEndpoint:
         response = client.get(f"/task/{task_id}")
         html = response.get_data(as_text=True)
 
-        # The script should guard against non-JSON responses by checking
-        # response.ok before attempting JSON parse.
-        assert "response.ok" in html
+        # Stop button should use htmx with proper headers
+        assert "hx-post" in html
+        assert "X-Requested-With" in html
 
     def test_task_detail_without_stop_button(self) -> None:
         """Test task detail page excludes stop button for completed."""
@@ -2087,7 +2091,7 @@ class TestSSELivePages:
         assert 'meta http-equiv="refresh"' not in html
 
     def test_task_detail_has_sse_for_active(self) -> None:
-        """Task detail page includes SSE script for active tasks."""
+        """Task detail page includes htmx SSE for active tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
         tracker.set_conversation_id("abc12345", "abc12345")
@@ -2100,7 +2104,8 @@ class TestSSELivePages:
         response = client.get("/task/abc12345")
         html = response.get_data(as_text=True)
 
-        assert "connectTaskSSE" in html
+        assert 'hx-ext="sse"' in html
+        assert "sse-connect" in html
         assert "/api/events/stream" in html
 
     def test_task_detail_no_sse_for_completed(self) -> None:
@@ -2153,7 +2158,8 @@ class TestSSELivePages:
         html = response.get_data(as_text=True)
 
         assert 'meta http-equiv="refresh"' not in html
-        assert "connectRepoSSE" in html
+        assert 'hx-ext="sse"' in html
+        assert "sse-connect" in html
 
     def test_actions_page_has_sse_for_active(self, tmp_path: Path) -> None:
         """Actions page includes SSE script for active tasks."""
@@ -2172,7 +2178,8 @@ class TestSSELivePages:
         response = client.get("/conversation/abc12345/actions")
         html_text = response.get_data(as_text=True)
 
-        assert "connectEventsSSE" in html_text
+        assert 'hx-ext="sse"' in html_text
+        assert "sse-connect" in html_text
         assert "/events/stream" in html_text
 
     def test_actions_page_no_sse_for_completed(self, tmp_path: Path) -> None:
@@ -2212,7 +2219,8 @@ class TestSSELivePages:
         response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
-        assert "connectNetworkSSE" in html
+        assert 'hx-ext="sse"' in html
+        assert "sse-connect" in html
         assert "/network/stream" in html
 
     def test_network_page_sse_offset_matches_log_size(
@@ -2244,8 +2252,9 @@ class TestSSELivePages:
         response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
-        assert f"var currentOffset = {file_size}" in html
-        assert "var currentOffset = 0" not in html
+        # SSE connect URL should include file_size as offset param
+        assert f"offset={file_size}" in html
+        assert "offset=0" not in html
 
     def test_network_page_sse_catchup_does_not_duplicate_lines(
         self, tmp_path: Path
@@ -2654,11 +2663,11 @@ class TestNetworkLogPollEndpoint:
         assert response.status_code == 200
 
 
-class TestPollingFallbackJS:
-    """Tests for polling fallback JavaScript in view pages."""
+class TestSSEFallbackJS:
+    """Tests for SSE fallback JavaScript in view pages."""
 
-    def test_actions_page_has_polling_fallback(self, tmp_path: Path) -> None:
-        """Actions page JS includes polling fallback for active tasks."""
+    def test_actions_page_has_sse_fallback(self, tmp_path: Path) -> None:
+        """Actions page includes SSE fallback script for active tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
         tracker.set_conversation_id("abc12345", "abc12345")
@@ -2674,11 +2683,11 @@ class TestPollingFallbackJS:
         response = client.get("/conversation/abc12345/actions")
         html = response.get_data(as_text=True)
 
-        assert "startEventsPolling" in html
-        assert "/events/poll" in html
+        assert "sse-fallback.js" in html
+        assert 'hx-ext="sse"' in html
 
-    def test_network_page_has_polling_fallback(self, tmp_path: Path) -> None:
-        """Network page JS includes polling fallback for active tasks."""
+    def test_network_page_has_sse_fallback(self, tmp_path: Path) -> None:
+        """Network page includes SSE fallback script for active tasks."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
         tracker.set_conversation_id("abc12345", "abc12345")
@@ -2694,11 +2703,11 @@ class TestPollingFallbackJS:
         response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
-        assert "startNetworkPolling" in html
-        assert "/network/poll" in html
+        assert "sse-fallback.js" in html
+        assert 'hx-ext="sse"' in html
 
-    def test_task_detail_has_polling_fallback(self) -> None:
-        """Task detail page JS includes polling fallback."""
+    def test_task_detail_has_sse_fallback(self) -> None:
+        """Task detail page includes SSE fallback script."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
         tracker.set_conversation_id("abc12345", "abc12345")
@@ -2711,11 +2720,11 @@ class TestPollingFallbackJS:
         response = client.get("/task/abc12345")
         html = response.get_data(as_text=True)
 
-        assert "startTaskPolling" in html
-        assert "/api/conversations" in html
+        assert "sse-fallback.js" in html
+        assert 'hx-ext="sse"' in html
 
-    def test_repo_detail_has_polling_fallback(self) -> None:
-        """Repo detail page JS includes polling fallback."""
+    def test_repo_detail_has_sse_fallback(self) -> None:
+        """Repo detail page includes SSE fallback script."""
         from airut.dashboard.tracker import ChannelInfo, RepoState, RepoStatus
         from airut.dashboard.versioned import VersionClock, VersionedStore
 
@@ -2742,11 +2751,11 @@ class TestPollingFallbackJS:
         response = client.get("/repo/test-repo")
         html = response.get_data(as_text=True)
 
-        assert "startRepoPolling" in html
-        assert "/api/repos" in html
+        assert "sse-fallback.js" in html
+        assert 'hx-ext="sse"' in html
 
-    def test_completed_actions_page_no_polling(self, tmp_path: Path) -> None:
-        """Completed tasks don't include polling fallback JS."""
+    def test_completed_actions_page_no_sse(self, tmp_path: Path) -> None:
+        """Completed tasks don't include SSE scripts."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
         tracker.set_conversation_id("abc12345", "abc12345")
@@ -2763,10 +2772,10 @@ class TestPollingFallbackJS:
         response = client.get("/conversation/abc12345/actions")
         html = response.get_data(as_text=True)
 
-        assert "startEventsPolling" not in html
+        assert 'hx-ext="sse"' not in html
 
-    def test_completed_network_page_no_polling(self, tmp_path: Path) -> None:
-        """Completed tasks don't include polling fallback JS."""
+    def test_completed_network_page_no_sse(self, tmp_path: Path) -> None:
+        """Completed tasks don't include SSE scripts."""
         tracker = TaskTracker()
         tracker.add_task("abc12345", "Test Task")
         tracker.set_conversation_id("abc12345", "abc12345")
@@ -2783,7 +2792,7 @@ class TestPollingFallbackJS:
         response = client.get("/conversation/abc12345/network")
         html = response.get_data(as_text=True)
 
-        assert "startNetworkPolling" not in html
+        assert 'hx-ext="sse"' not in html
 
 
 class TestTaskDetailByIdEndpoint:

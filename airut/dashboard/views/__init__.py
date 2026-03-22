@@ -3,75 +3,40 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""HTML rendering for dashboard views.
+"""HTML rendering helpers for dashboard views.
 
-Provides functions for rendering all dashboard HTML pages including
-the main dashboard, task details, actions timeline, and network logs.
+Most page rendering has moved to Jinja2 templates
+(``airut.dashboard.templates``).  This package retains
+renderers still used by SSE streaming and handler helpers:
 
-This package is split into modules by concern:
-    - ``styles`` — shared CSS generation
-    - ``components`` — reusable HTML fragments
-    - ``dashboard`` — main dashboard page
-    - ``task_detail`` — per-task detail page (keyed by task_id)
-    - ``conversation_detail`` — conversation overview page (all tasks)
-    - ``repo_detail`` — repository detail page
-    - ``actions`` — actions viewer and event renderers
-    - ``network`` — network logs viewer
-
-All public symbols are re-exported here for backward compatibility.
+    - ``components`` — ``get_favicon_svg``, reply section renderers
+    - ``actions`` — event rendering (``render_single_event``, etc.)
+    - ``network`` — network log line rendering
 """
 
 from airut.dashboard.views.actions import (
-    render_actions_page,
     render_actions_timeline,
     render_events_list,
     render_single_event,
 )
 from airut.dashboard.views.components import (
     get_favicon_svg,
-    render_action_buttons,
-    render_boot_state,
     render_conversation_replies_section,
-    render_logo,
-    render_repos_section,
     render_single_reply_section,
-    render_stop_script,
-    render_task_list,
-    render_version_info,
-    update_check_script,
 )
-from airut.dashboard.views.conversation_detail import render_conversation_detail
-from airut.dashboard.views.dashboard import render_dashboard
 from airut.dashboard.views.network import (
     render_network_log_line,
     render_network_log_lines,
-    render_network_page,
 )
-from airut.dashboard.views.repo_detail import render_repo_detail
-from airut.dashboard.views.task_detail import render_task_detail
 
 
 __all__ = [
     "get_favicon_svg",
-    "render_action_buttons",
-    "render_actions_page",
     "render_actions_timeline",
-    "render_boot_state",
-    "render_conversation_detail",
     "render_conversation_replies_section",
-    "render_dashboard",
     "render_events_list",
-    "render_logo",
     "render_network_log_line",
     "render_network_log_lines",
-    "render_network_page",
-    "render_repo_detail",
-    "render_repos_section",
     "render_single_event",
     "render_single_reply_section",
-    "render_stop_script",
-    "render_task_detail",
-    "render_task_list",
-    "render_version_info",
-    "update_check_script",
 ]

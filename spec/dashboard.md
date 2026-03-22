@@ -25,6 +25,7 @@ tasks).
 - Allow inspecting individual task details
 - In-memory task tracking for active tasks
 - Load past tasks from disk when accessed via direct URL
+- Real-time updates with sub-second latency
 
 ### Non-Goals
 
@@ -48,15 +49,40 @@ The dashboard consists of these components in `airut/dashboard/`:
   `VersionClock`.
 - **DashboardServer** (`server.py`): WSGI application using Werkzeug, runs in
   background thread.
+- **Templating** (`templating.py`): Jinja2 environment with auto-escaping,
+  `importlib.resources`-based template loader, `render_template()` helper, and
+  static file serving with content-hash ETags.
+- **Templates** (`templates/`): Jinja2 templates split into `base.html`,
+  `components/` (reusable fragments), and `pages/` (full page templates).
+- **Static assets** (`static/`): CSS (`styles/`), JavaScript (`js/`), and
+  vendored htmx (`vendor/`). Served via `/static/<path>` with ETag caching.
 
 ### State Management
 
-All dashboard-visible state flows through versioned interfaces. See
-[live-dashboard.md](live-dashboard.md) for the full versioned state design
-(VersionClock, VersionedStore, immutability contract, and append-only log
-streaming).
+All dashboard-visible state flows through versioned interfaces.
 
-Key stores:
+**Design principles:**
+
+- **All dashboard-visible state flows through a versioned interface.** No direct
+  field mutations on shared mutable objects.
+- **Immutable snapshots.** State objects are frozen dataclasses. Mutations
+  create new instances via `dataclasses.replace()`.
+- **Single version clock.** One global monotonic counter tracks all state
+  changes. SSE clients wait on one condition variable.
+- **Append-only logs use file offsets as cursors.** No versioning needed — the
+  append-only property guarantees offset stability.
+
+**Contract: if the dashboard displays it, it must live in a VersionedStore (or
+be an append-only log with offset-based tailing).**
+
+State objects in a `VersionedStore` must be immutable (frozen dataclasses or
+tuples). This guarantees:
+
+- **Atomicity**: readers always see a consistent snapshot (no torn reads)
+- **Versioning**: every change has a monotonic version number
+- **Notification**: SSE waiters wake on every change
+
+**Key stores:**
 
 - **BootState**: Frozen dataclass wrapped in `VersionedStore[BootState]`.
 - **RepoStates**: Frozen dataclass collection wrapped in
@@ -85,10 +111,6 @@ visibility into startup progress and errors from the moment the service starts.
    connection)
 4. **Ready** — Boot complete, service operational (banner hidden)
 5. **Failed** — Boot error with full details (error type, message, traceback)
-
-The main dashboard receives real-time updates via Server-Sent Events (SSE). When
-SSE is unavailable, it falls back to ETag-based polling (5-second interval). See
-`spec/live-dashboard.md` for the full SSE specification.
 
 The `/api/health` endpoint reflects boot state: `"booting"` during startup,
 `"error"` on boot failure, `"ok"` when running with live repos, `"degraded"`
@@ -119,13 +141,14 @@ credential problems) while others continue processing emails.
 | Route                                   | Method | Description                                 |
 | --------------------------------------- | ------ | ------------------------------------------- |
 | `/`                                     | GET    | Main dashboard with task lists              |
+| `/static/<path>`                        | GET    | Static assets (CSS, JS, vendor)             |
 | `/task/{task_id}`                       | GET    | Task detail view (primary detail page)      |
 | `/conversation/{conv_id}`               | GET    | Conversation overview (all tasks + replies) |
 | `/conversation/{conv_id}/actions`       | GET    | Actions timeline viewer                     |
 | `/conversation/{conv_id}/network`       | GET    | Network logs viewer                         |
 | `/repo/{repo_id}`                       | GET    | Repository detail view                      |
 | `/api/version`                          | GET    | Structured version info (JSON)              |
-| `/api/update`                           | GET    | Upstream update check (JSON)                |
+| `/api/update`                           | GET    | Upstream update check (JSON or HTML)        |
 | `/api/repos`                            | GET    | JSON API for repository status (ETag)       |
 | `/api/conversations`                    | GET    | JSON API for task list (ETag)               |
 | `/api/task/{task_id}`                   | GET    | JSON API for single task by task_id         |
@@ -134,7 +157,9 @@ credential problems) while others continue processing emails.
 | `/api/tracker`                          | GET    | JSON API for full tracker state (ETag)      |
 | `/api/events/stream`                    | GET    | SSE state stream (real-time updates)        |
 | `/api/conversation/{id}/events/stream`  | GET    | SSE event log stream (per-task)             |
+| `/api/conversation/{id}/events/poll`    | GET    | Events polling fallback                     |
 | `/api/conversation/{id}/network/stream` | GET    | SSE network log stream (per-task)           |
+| `/api/conversation/{id}/network/poll`   | GET    | Network log polling fallback                |
 | `/api/health`                           | GET    | Health check endpoint (ETag)                |
 
 ### `GET /api/tracker`
@@ -191,6 +216,114 @@ Supports `ETag` / `If-None-Match` conditional requests — returns
 `304 Not Modified` when the version clock has not advanced since the client's
 last request.
 
+## Real-Time Updates
+
+All dashboard pages receive real-time updates via SSE, with automatic fallback
+to polling when SSE is unavailable.
+
+### SSE Stream Types
+
+Three SSE endpoint types serve different update needs:
+
+| Endpoint                                | Purpose                  | Cursor         |
+| --------------------------------------- | ------------------------ | -------------- |
+| `/api/events/stream`                    | Task + boot + repo state | Version number |
+| `/api/conversation/{id}/events/stream`  | Claude streaming events  | Byte offset    |
+| `/api/conversation/{id}/network/stream` | Network log lines        | Byte offset    |
+
+### State Stream (`/api/events/stream`)
+
+Pushes a composite state snapshot whenever any versioned state changes. Full
+snapshots (not deltas) — state is small enough that this avoids client-side
+delta application complexity.
+
+**JSON mode** (default):
+
+```
+event: state
+data: {"version": 42, "tasks": [...], "boot": {...}, "repos": [...]}
+```
+
+**HTML mode** (`?format=html`): Sends separate named SSE events per dashboard
+region, each containing pre-rendered HTML. The htmx SSE extension uses
+`sse-swap="<event-name>"` to target each element independently:
+
+- `boot-state`, `repos`
+- `pending-header`, `pending-tasks`
+- `executing-header`, `executing-tasks`
+- `completed-header`, `completed-tasks`
+
+### Append-Only Log Streams
+
+Event log and network log streams send raw HTML fragments in the SSE `data:`
+field with the byte offset in the SSE `id:` field. The htmx SSE extension uses
+`sse-swap="html"` with `hx-swap="beforeend"` to append content directly.
+
+```
+id: 1234
+event: html
+data: <div class="event">...rendered HTML...</div>
+```
+
+Events are rendered server-side using the same rendering functions as the
+initial page load, ensuring consistent output between static and streaming
+views. A terminal `done` event signals task completion.
+
+Both log streams follow the same protocol:
+
+1. Client connects with `?offset=<N>` (byte offset at page render time)
+2. Server tails the log file and sends new data as HTML fragments
+3. Heartbeat comments (`: heartbeat`) every 15 seconds
+4. When task completes, drains remaining data and sends `done` event
+
+### SSE Transport
+
+SSE connections hold a WSGI thread for their duration. A global connection
+manager enforces a maximum of 8 concurrent SSE connections. When the limit is
+reached, the server responds with `429 Too Many Requests` and `Retry-After: 5`.
+
+Connection lifecycle:
+
+- **Reconnection**: SSE `retry:` field set to 1000ms for automatic browser
+  reconnection
+- **Catch-up**: `Last-Event-ID` carries the last version/offset for resumption
+- **Restart detection**: if the client's version exceeds the server's current
+  version (stale from previous server lifetime), return immediately to force
+  client reset
+
+### Page Update Strategy
+
+| Page           | SSE Source                                   | htmx Swap                | Behavior                                         |
+| -------------- | -------------------------------------------- | ------------------------ | ------------------------------------------------ |
+| Main dashboard | `/api/events/stream?format=html`             | Per-region `sse-swap`    | Updates task lists, boot, repos via named events |
+| Task detail    | `/api/events/stream?format=html&task_id=...` | Per-field `sse-swap`     | Updates status, timing, todo progress            |
+| Actions viewer | `/api/conversation/{id}/events/stream`       | `sse-swap="html"` append | Appends events to timeline                       |
+| Network viewer | `/api/conversation/{id}/network/stream`      | `sse-swap="html"` append | Appends log lines                                |
+| Repo detail    | `/api/events/stream?format=html&repo_id=...` | Per-field `sse-swap`     | Updates status badge, error section              |
+
+Active tasks connect to SSE via htmx. Completed tasks render static content
+without SSE.
+
+### Graceful Degradation
+
+Three levels of fallback:
+
+1. **SSE available**: real-time push via htmx SSE extension, sub-second latency
+2. **SSE unavailable** (connection limit, network issue): `sse-fallback.js`
+   detects `htmx:sseError` and falls back to full page reload. Append-only log
+   pages (actions, network) fall back to polling dedicated endpoints (3s
+   interval) that return `{offset, html, done}` JSON.
+3. **JavaScript disabled**: server-rendered HTML at page load, manual refresh
+
+Polling fallback endpoints for append-only logs:
+
+- `GET /api/conversation/{id}/events/poll?offset=N`
+- `GET /api/conversation/{id}/network/poll?offset=N`
+
+These return `{offset, html, done}` JSON with ETag support (format
+`"o<offset>"`). The `done` field indicates task completion, allowing the client
+to stop polling.
+
 ## Configuration
 
 ### Environment Variables
@@ -211,12 +344,11 @@ task progress (e.g.,
 
 ## Dependencies
 
-Uses only existing project dependencies:
-
 - **werkzeug**: WSGI utilities (via fava dependency)
-- **threading**, **dataclasses**, **json**, **html**: stdlib
-
-No new dependencies required.
+- **jinja2**: Template engine with auto-escaping
+- **htmx** (vendored): Declarative HTML-over-the-wire updates via htmx SSE
+  extension. Vendored at `static/vendor/` — see `scripts/update_vendor.py`
+- **threading**, **dataclasses**, **json**: stdlib
 
 ## UI Design
 
@@ -349,9 +481,28 @@ calls are visually distinguished in the timeline:
 - For SSE-streamed events (arriving after the initial page render), the Task
   context is not available, so a fallback label of `"subagent"` is used instead.
 
+### Rendering Architecture
+
+Pages are rendered server-side using Jinja2 templates with auto-escaping. Live
+updates use htmx's SSE extension for declarative DOM updates — no custom
+JavaScript SSE handlers.
+
+- **Templates** (`templates/`): `base.html` defines the page skeleton with
+  blocks for `title`, `styles`, `body`, `scripts`. Component templates
+  (`components/`) are reused via `{% include %}`. Page templates (`pages/`)
+  extend `base.html`.
+- **Static CSS** (`static/styles/`): `base.css` (shared layout), `light.css`
+  (dashboard/detail pages), `dark.css` (actions/network viewers),
+  `components.css` (shared component styles). CSS custom properties for theming.
+- **Static JS** (`static/js/`): `local-time.js` (timestamp formatting),
+  `auto-scroll.js` (terminal auto-scroll), `actions.js` (event toggle),
+  `sse-fallback.js` (htmx SSE connection status).
+- **No inline styles or scripts**: CSP uses
+  `script-src 'self'; style-src 'self'` (no `'unsafe-inline'`).
+
 ### Styling
 
-- Real-time updates via SSE on all pages (no polling or meta-refresh)
+- Real-time updates via htmx SSE extension (no custom JS SSE handlers)
 - Responsive layout (single column on mobile)
 - Color coding: yellow (queued), blue (in-progress), green (success), red
   (failed)

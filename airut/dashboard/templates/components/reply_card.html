@@ -1,0 +1,54 @@
+{# Single reply card — expects: reply (ReplySummary), reply_num (int) #}
+{% set error_class = 'error' if reply.is_error else '' %}
+<div class="reply {{ error_class }}">
+    <div class="reply-header">
+        <span class="reply-number">Reply #{{ reply_num }}</span>
+        <span class="reply-timestamp">{{ reply.timestamp }}</span>
+    </div>
+    <div class="reply-stats">
+        <div class="reply-stat">
+            <span class="reply-stat-label">Cost</span>
+            <span class="reply-stat-value">${{ '%.4f'|format(reply.total_cost_usd) }}</span>
+        </div>
+        <div class="reply-stat">
+            <span class="reply-stat-label">Duration</span>
+            <span class="reply-stat-value">{{ format_duration(reply.duration_ms / 1000) }}</span>
+        </div>
+        <div class="reply-stat">
+            <span class="reply-stat-label">Turns</span>
+            <span class="reply-stat-value">{{ reply.num_turns }}</span>
+        </div>
+        <div class="reply-stat">
+            <span class="reply-stat-label">Session ID</span>
+            <span class="reply-stat-value">{{ reply.session_id }}</span>
+        </div>
+    </div>
+    {% set usage = reply.usage %}
+    {% set usage_items = [] %}
+    {% if usage.input_tokens %}{% set _ = usage_items.append(('Input', '{:,}'.format(usage.input_tokens))) %}{% endif %}
+    {% if usage.output_tokens %}{% set _ = usage_items.append(('Output', '{:,}'.format(usage.output_tokens))) %}{% endif %}
+    {% if usage.cache_read_input_tokens %}{% set _ = usage_items.append(('Cache Read', '{:,}'.format(usage.cache_read_input_tokens))) %}{% endif %}
+    {% if usage.cache_creation_input_tokens %}{% set _ = usage_items.append(('Cache Write', '{:,}'.format(usage.cache_creation_input_tokens))) %}{% endif %}
+    {% if usage_items %}
+    <div class="usage-grid">
+        {% for label, value in usage_items %}
+        <div class="usage-item">
+            <div class="usage-label">{{ label }}</div>
+            <div class="usage-value">{{ value }}</div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% if reply.request_text %}
+    <div class="text-section">
+        <div class="text-section-header">Request</div>
+        <div class="text-content request">{{ reply.request_text }}</div>
+    </div>
+    {% endif %}
+    {% if reply.response_text %}
+    <div class="text-section">
+        <div class="text-section-header">Response</div>
+        <div class="text-content response">{{ reply.response_text }}</div>
+    </div>
+    {% endif %}
+</div>

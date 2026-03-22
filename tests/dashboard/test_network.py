@@ -77,7 +77,7 @@ class TestNetworkLogsEndpoint:
         harness.write_log("allowed GET https://api.github.com -> 200\n")
 
         html = harness.get_html("/conversation/abc12345/network")
-        assert "window.scrollTo(0, document.body.scrollHeight)" in html
+        assert "auto-scroll.js" in html
 
     def test_back_link(self, harness: DashboardHarness) -> None:
         """Test network logs page has back link to task detail."""
@@ -230,16 +230,13 @@ class TestNetworkLogStripped:
         assert 'class="log-line error"' in html
         assert '<span class="dropped-tag">[dropped: 1]</span>' in html
 
-    def test_stripped_css_present(self, harness: DashboardHarness) -> None:
-        """Test stripped class CSS is present in page."""
-        harness.write_log(
-            "STRIPPED header 'authorization' from"
-            " GET https://example.com (foreign credential blocked)\n"
-        )
+    def test_stripped_css_present(self) -> None:
+        """Test stripped class CSS is present in static stylesheet."""
+        from airut.dashboard.templating import STATIC_DIR
 
-        html = harness.get_html("/conversation/abc12345/network")
-        assert ".log-line.stripped" in html
-        assert ".dropped-tag" in html
+        css = (STATIC_DIR / "styles" / "dark.css").read_text()
+        assert ".log-line.stripped" in css
+        assert ".dropped-tag" in css
 
 
 class TestNetworkLogHighlighting:
@@ -335,22 +332,20 @@ class TestNetworkLogDNS:
 
 
 class TestNetworkLogCSS:
-    """Tests for CSS presence in the network logs page."""
+    """Tests for CSS presence in the static stylesheet."""
 
-    def test_error_css_styling(self, harness: DashboardHarness) -> None:
-        """Test error class has orange styling in CSS."""
-        harness.write_log("allowed GET https://api.example.com -> 500\n")
+    def test_error_css_styling(self) -> None:
+        """Test error class has styling in static CSS."""
+        from airut.dashboard.templating import STATIC_DIR
 
-        html = harness.get_html("/conversation/abc12345/network")
-        assert ".log-line.error" in html
-        assert ".highlight" in html
+        css = (STATIC_DIR / "styles" / "dark.css").read_text()
+        assert ".log-line.error" in css
+        assert ".highlight" in css
 
-    def test_conn_error_css_styling(self, harness: DashboardHarness) -> None:
-        """Test conn-error class has red styling in CSS."""
-        harness.write_log(
-            "ERROR GET https://api.example.com -> Connection failed\n"
-        )
+    def test_conn_error_css_styling(self) -> None:
+        """Test conn-error class has red styling in static CSS."""
+        from airut.dashboard.templating import STATIC_DIR
 
-        html = harness.get_html("/conversation/abc12345/network")
-        assert ".log-line.conn-error" in html
-        assert "#e05f5f" in html
+        css = (STATIC_DIR / "styles" / "dark.css").read_text()
+        assert ".log-line.conn-error" in css
+        assert "#e05f5f" in css
