@@ -243,15 +243,16 @@ class TestCheckAdvisories:
 
         assert result == []
 
-    def test_handles_non_list_response(self) -> None:
-        """Returns empty list for unexpected API response."""
-        with patch(
-            "scripts.check_vendor_security._github_get",
-            return_value={"error": True},
+    def test_raises_on_non_list_response(self) -> None:
+        """Raises ValueError for unexpected API response."""
+        with (
+            patch(
+                "scripts.check_vendor_security._github_get",
+                return_value={"message": "API rate limit exceeded"},
+            ),
+            pytest.raises(ValueError, match="Unexpected advisory API response"),
         ):
-            result = check_vendor_security.check_advisories("htmx.org", "2.0.8")
-
-        assert result == []
+            check_vendor_security.check_advisories("htmx.org", "2.0.8")
 
     def test_skips_non_dict_items(self) -> None:
         """Skips non-dict items in advisory list."""
@@ -357,65 +358,51 @@ class TestGithubGet:
 class TestGetLatestVersion:
     """Tests for get_latest_version."""
 
-    def test_returns_version_without_v_prefix(self) -> None:
-        """Strips 'v' prefix from tag name."""
-        with patch(
-            "scripts.check_vendor_security._github_get",
-            return_value={"tag_name": "v2.0.9"},
-        ):
-            result = check_vendor_security.get_latest_version(
-                "bigskysoftware", "htmx"
-            )
+    def test_returns_version_from_unpkg(self) -> None:
+        """Returns version from unpkg package.json."""
+        with patch("scripts.check_vendor_security.urlopen") as mock_urlopen:
+            mock_response = mock_urlopen.return_value.__enter__.return_value
+            mock_response.read.return_value = b'{"version": "2.0.9"}'
+            result = check_vendor_security.get_latest_version("htmx.org")
 
         assert result == "2.0.9"
 
-    def test_returns_version_without_prefix(self) -> None:
-        """Handles tags without 'v' prefix."""
-        with patch(
-            "scripts.check_vendor_security._github_get",
-            return_value={"tag_name": "2.2.5"},
-        ):
-            result = check_vendor_security.get_latest_version(
-                "bigskysoftware", "htmx-ext-sse"
-            )
-
-        assert result == "2.2.5"
-
     def test_returns_none_on_url_error(self) -> None:
-        """Returns None when the API request fails."""
+        """Returns None when the request fails."""
         from urllib.error import URLError
 
         with patch(
-            "scripts.check_vendor_security._github_get",
+            "scripts.check_vendor_security.urlopen",
             side_effect=URLError("timeout"),
         ):
-            result = check_vendor_security.get_latest_version(
-                "bigskysoftware", "htmx"
-            )
+            result = check_vendor_security.get_latest_version("htmx.org")
 
         assert result is None
 
     def test_returns_none_on_non_dict_response(self) -> None:
-        """Returns None when the API response is not a dict."""
-        with patch(
-            "scripts.check_vendor_security._github_get",
-            return_value=[],
-        ):
-            result = check_vendor_security.get_latest_version(
-                "bigskysoftware", "htmx"
-            )
+        """Returns None when the response is not a dict."""
+        with patch("scripts.check_vendor_security.urlopen") as mock_urlopen:
+            mock_response = mock_urlopen.return_value.__enter__.return_value
+            mock_response.read.return_value = b"[]"
+            result = check_vendor_security.get_latest_version("htmx.org")
 
         assert result is None
 
-    def test_returns_none_on_non_string_tag(self) -> None:
-        """Returns None when tag_name is not a string."""
-        with patch(
-            "scripts.check_vendor_security._github_get",
-            return_value={"tag_name": 123},
-        ):
-            result = check_vendor_security.get_latest_version(
-                "bigskysoftware", "htmx"
-            )
+    def test_returns_none_on_non_string_version(self) -> None:
+        """Returns None when version field is not a string."""
+        with patch("scripts.check_vendor_security.urlopen") as mock_urlopen:
+            mock_response = mock_urlopen.return_value.__enter__.return_value
+            mock_response.read.return_value = b'{"version": 123}'
+            result = check_vendor_security.get_latest_version("htmx.org")
+
+        assert result is None
+
+    def test_returns_none_on_missing_version(self) -> None:
+        """Returns None when version field is missing."""
+        with patch("scripts.check_vendor_security.urlopen") as mock_urlopen:
+            mock_response = mock_urlopen.return_value.__enter__.return_value
+            mock_response.read.return_value = b'{"name": "htmx.org"}'
+            result = check_vendor_security.get_latest_version("htmx.org")
 
         assert result is None
 
@@ -505,8 +492,8 @@ class TestMain:
         version_file = tmp_path / "VERSION"
         version_file.write_text("htmx 2.0.8\nhtmx-ext-sse 2.2.4\n")
 
-        def mock_latest(owner: str, repo: str) -> str:
-            if repo == "htmx":
+        def mock_latest(npm_package: str) -> str:
+            if npm_package == "htmx.org":
                 return "2.0.9"
             return "2.2.4"
 
@@ -599,12 +586,48 @@ class TestMain:
         captured = capsys.readouterr()
         assert "htmx-ext-sse not found" in captured.out
 
-    def test_fails_on_advisory_check_failure(
+    def test_fails_when_latest_version_check_fails(
         self,
         tmp_path: Path,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """Returns 1 when advisory check cannot be completed."""
+        """Returns 1 when latest version cannot be determined."""
+        version_file = tmp_path / "VERSION"
+        version_file.write_text("htmx 2.0.8\nhtmx-ext-sse 2.2.4\n")
+
+        def mock_latest(npm_package: str) -> str | None:
+            if npm_package == "htmx-ext-sse":
+                return None
+            return "2.0.8"
+
+        with (
+            patch.object(
+                check_vendor_security,
+                "VERSION_FILE",
+                version_file,
+            ),
+            patch(
+                "scripts.check_vendor_security.check_advisories",
+                return_value=[],
+            ),
+            patch(
+                "scripts.check_vendor_security.get_latest_version",
+                side_effect=mock_latest,
+            ),
+        ):
+            result = check_vendor_security.main()
+
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "Could not check latest version" in captured.out
+        assert "htmx-ext-sse" in captured.out
+
+    def test_fails_on_advisory_check_network_failure(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Returns 1 when advisory check network request fails."""
         from urllib.error import URLError
 
         version_file = tmp_path / "VERSION"
@@ -619,6 +642,32 @@ class TestMain:
             patch(
                 "scripts.check_vendor_security.check_advisories",
                 side_effect=URLError("connection refused"),
+            ),
+        ):
+            result = check_vendor_security.main()
+
+        assert result == 1
+        captured = capsys.readouterr()
+        assert "Could not check advisories" in captured.out
+
+    def test_fails_on_advisory_check_invalid_response(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Returns 1 when advisory API returns unexpected response format."""
+        version_file = tmp_path / "VERSION"
+        version_file.write_text("htmx 2.0.8\nhtmx-ext-sse 2.2.4\n")
+
+        with (
+            patch.object(
+                check_vendor_security,
+                "VERSION_FILE",
+                version_file,
+            ),
+            patch(
+                "scripts.check_vendor_security.check_advisories",
+                side_effect=ValueError("Unexpected advisory API response"),
             ),
         ):
             result = check_vendor_security.main()
