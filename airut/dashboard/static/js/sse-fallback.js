@@ -5,12 +5,17 @@
 //
 // Append-only pages (actions, network): poll dedicated JSON endpoints that
 // return {offset, html, done} and append new content.
+//
+// Visibility change: when a tab returns from background, state-based pages
+// reload immediately if the SSE connection died (rather than waiting for
+// the htmx SSE extension's exponential backoff, which can take up to 64s).
 (function() {
     var MAX_FAILURES = 3;
     var POLL_INTERVAL = 3000;
     var RELOAD_INTERVAL = 5000;
     var failureCount = 0;
     var polling = false;
+    var sseConnected = false;
 
     function startPolling(container) {
         if (polling) return;
@@ -75,7 +80,33 @@
 
     document.addEventListener('htmx:sseOpen', function() {
         failureCount = 0;
+        sseConnected = true;
         var status = document.getElementById('stream-status');
         if (status) status.textContent = 'Live';
+    });
+
+    // When a browser tab returns from background, the SSE connection may
+    // be dead. The htmx SSE extension uses exponential backoff (up to 64s)
+    // which leaves the page showing stale state. For state-based pages,
+    // reload immediately to get fresh server-rendered HTML and a new SSE
+    // connection. Append-only pages (actions, network) rely on existing
+    // backoff/polling mechanisms since they need offset-based resumption.
+    document.addEventListener('visibilitychange', function() {
+        if (document.visibilityState !== 'visible') return;
+        if (!sseConnected || polling) return;
+
+        var container = document.querySelector('[sse-connect]');
+        if (!container) return;
+
+        // Append-only pages have data-poll-url; skip them
+        if (container.hasAttribute('data-poll-url')) return;
+
+        // Check if SSE connection is still healthy
+        var internal = container['htmx-internal-data'] || {};
+        var source = internal.sseEventSource;
+        if (source && source.readyState === EventSource.OPEN) return;
+
+        // Connection is dead or reconnecting — reload for fresh state
+        window.location.reload();
     });
 })();

@@ -294,6 +294,9 @@ Connection lifecycle:
 - **Restart detection**: if the client's version exceeds the server's current
   version (stale from previous server lifetime), return immediately to force
   client reset
+- **Visibility change**: when a tab returns from background, state-based pages
+  reload immediately if the SSE connection is no longer open (avoids the htmx
+  SSE extension's exponential backoff delay of up to 64 seconds)
 
 ### Page Update Strategy
 
@@ -310,14 +313,19 @@ without SSE.
 
 ### Graceful Degradation
 
-Three levels of fallback:
+Four levels of fallback:
 
 1. **SSE available**: real-time push via htmx SSE extension, sub-second latency
-2. **SSE unavailable** (connection limit, network issue): `sse-fallback.js`
+2. **Tab backgrounded**: `visibilitychange` listener detects tab return;
+   state-based pages (dashboard, task detail, repo detail) reload immediately
+   when SSE connection is no longer open, bypassing exponential backoff.
+   Append-only pages (actions, network) rely on existing backoff/polling since
+   they need offset-based resumption via `Last-Event-ID`.
+3. **SSE unavailable** (connection limit, network issue): `sse-fallback.js`
    detects `htmx:sseError` and falls back to full page reload. Append-only log
    pages (actions, network) fall back to polling dedicated endpoints (3s
    interval) that return `{offset, html, done}` JSON.
-3. **JavaScript disabled**: server-rendered HTML at page load, manual refresh
+4. **JavaScript disabled**: server-rendered HTML at page load, manual refresh
 
 Polling fallback endpoints for append-only logs:
 
