@@ -2,28 +2,26 @@
 
 {% block title %}Actions - {{ task.conversation_id }}{% endblock %}
 
-{% block styles %}
-<link rel="stylesheet" href="/static/styles/dark.css">
-<link rel="stylesheet" href="/static/styles/components.css">
-{% endblock %}
+{% block body_attrs %} class="console-body"{% endblock %}
 
 {% block body %}
-<div class="header">
-    <a href="/task/{{ task.task_id }}">&larr; Back</a>
-    <h1>Actions: {{ task.conversation_id }}</h1>
-    <span class="subtitle">{{ task.display_title }}</span>
-</div>
-<div class="terminal" id="events-container"
-    {% if is_active %}
-    hx-ext="sse"
-    sse-connect="/api/conversation/{{ task.conversation_id }}/events/stream?offset={{ event_log_offset }}"
-    sse-swap="html"
-    hx-swap="beforeend"
-    data-poll-url="/api/conversation/{{ task.conversation_id }}/events/poll"
-    data-poll-offset="{{ event_log_offset }}"
-    {% endif %}
->
-    {{ actions_content|safe }}
+<div class="console-page">
+    <div class="console-header">
+        <span class="console-title">Actions: {{ task.conversation_id }}</span>
+        <span class="console-subtitle">{{ task.display_title }}</span>
+    </div>
+    <div id="events-container"
+        {% if is_active %}
+        hx-ext="sse"
+        sse-connect="/api/conversation/{{ task.conversation_id }}/events/stream?offset={{ event_log_offset }}"
+        sse-swap="html"
+        hx-swap="beforeend"
+        data-poll-url="/api/conversation/{{ task.conversation_id }}/events/poll"
+        data-poll-offset="{{ event_log_offset }}"
+        {% endif %}
+    >
+        {{ actions_content|safe }}
+    </div>
 </div>
 {% if is_active %}
 <div id="stream-status" class="stream-status">Connecting...</div>
@@ -31,11 +29,11 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/actions.js"></script>
+<script src="{{ static_url('js/actions.js') }}"></script>
 {% if is_active %}
-<script src="/static/vendor/htmx.min.js"></script>
-<script src="/static/vendor/sse.min.js"></script>
-<script src="/static/js/sse-fallback.js"></script>
+<script src="{{ static_url('vendor/htmx.min.js') }}"></script>
+<script src="{{ static_url('vendor/sse.min.js') }}"></script>
+<script src="{{ static_url('js/sse-fallback.js') }}"></script>
 {% endif %}
-<script src="/static/js/auto-scroll.js"></script>
+<script src="{{ static_url('js/auto-scroll.js') }}"></script>
 {% endblock %}

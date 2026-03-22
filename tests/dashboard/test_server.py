@@ -646,7 +646,6 @@ class TestDashboardServer:
         assert "Conversation: abc12345" in html
         assert "Test Subject" in html
         assert "QUEUED" in html
-        assert "Back to Dashboard" in html
 
         # Check HTML escaping (XSS prevention)
         # The user-provided subject should be escaped
@@ -732,8 +731,7 @@ class TestDashboardServer:
         """Every TaskStatus value must have a .status.<value> CSS rule."""
         from airut.dashboard.templating import STATIC_DIR
 
-        css = (STATIC_DIR / "styles" / "light.css").read_text()
-        css += (STATIC_DIR / "styles" / "components.css").read_text()
+        css = (STATIC_DIR / "styles" / "components.css").read_text()
         for status in TaskStatus:
             # COMPLETED uses .status.completed.success / .failed
             if status == TaskStatus.COMPLETED:
@@ -748,7 +746,7 @@ class TestDashboardServer:
         """Task card and column header CSS must cover dashboard columns."""
         from airut.dashboard.templating import STATIC_DIR
 
-        css = (STATIC_DIR / "styles" / "light.css").read_text()
+        css = (STATIC_DIR / "styles" / "pages.css").read_text()
         css += (STATIC_DIR / "styles" / "components.css").read_text()
         # Dashboard groups tasks into pending/executing/completed columns
         # and applies these as CSS classes to task cards and column headers
@@ -1961,10 +1959,10 @@ class TestTemplating:
         """Test reading a CSS static file."""
         from airut.dashboard.templating import get_static_file
 
-        result = get_static_file("styles/dark.css")
+        result = get_static_file("styles/pages.css")
         assert result is not None
         data, content_type, etag = result
-        assert b".terminal" in data
+        assert b".console-page" in data
         assert content_type == "text/css; charset=utf-8"
         assert etag.startswith('"') and etag.endswith('"')
 
@@ -1984,6 +1982,21 @@ class TestTemplating:
 
         result = get_static_file("nonexistent.css")
         assert result is None
+
+    def test_static_url_cache_busting(self) -> None:
+        """Test static_url returns hash-busted URL for known files."""
+        from airut.dashboard.templating import static_url
+
+        url = static_url("styles/base.css")
+        assert url.startswith("/static/styles/base.css?v=")
+        assert len(url.split("?v=")[1]) == 12
+
+    def test_static_url_fallback_for_unknown_file(self) -> None:
+        """Test static_url returns plain URL for unknown files."""
+        from airut.dashboard.templating import static_url
+
+        url = static_url("nonexistent.css")
+        assert url == "/static/nonexistent.css"
 
     def test_get_static_file_directory_traversal(self) -> None:
         """Test that directory traversal is blocked."""
@@ -2020,7 +2033,7 @@ class TestStaticFileEndpoint:
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
 
-        response = client.get("/static/styles/dark.css")
+        response = client.get("/static/styles/pages.css")
         assert response.status_code == 200
         assert "text/css" in response.content_type
 
@@ -2050,13 +2063,13 @@ class TestStaticFileEndpoint:
         client = Client(server._wsgi_app)
 
         # First request to get ETag
-        response = client.get("/static/styles/dark.css")
+        response = client.get("/static/styles/pages.css")
         etag = response.headers.get("ETag")
         assert etag is not None
 
         # Conditional request with matching ETag
         response2 = client.get(
-            "/static/styles/dark.css",
+            "/static/styles/pages.css",
             headers={"If-None-Match": etag},
         )
         assert response2.status_code == 304

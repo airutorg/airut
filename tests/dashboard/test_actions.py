@@ -178,7 +178,7 @@ class TestActionsPageEndpoint:
         harness.add_events(result_event())
 
         html = harness.get_html("/task/abc12345")
-        assert "/conversation/abc12345/actions" in html
+        assert "/task/abc12345/actions" in html
         assert "View Actions" in html
 
 
@@ -252,7 +252,7 @@ class TestEventRendering:
 
         html = harness.get_html("/conversation/abc12345/actions")
         assert "ping" in html
-        assert "toggleEvent" in html
+        assert "event-header" in html
 
     def test_empty_events_list(self, harness: DashboardHarness) -> None:
         """Test rendering with reply but no events in event log."""
@@ -1242,21 +1242,21 @@ class TestSubagentRendering:
     ) -> None:
         """Test multiple subagents get deterministic color indices."""
         from airut.dashboard.views.actions import (
-            _SUBAGENT_COLORS,
+            _SUBAGENT_COLOR_COUNT,
             _subagent_color_index,
         )
 
         idx_a = _subagent_color_index("toolu_aaaaaaaa")
         idx_b = _subagent_color_index("toolu_bbbbbbbb")
         # Indices must be valid entries in the palette
-        assert 0 <= idx_a < len(_SUBAGENT_COLORS)
-        assert 0 <= idx_b < len(_SUBAGENT_COLORS)
+        assert 0 <= idx_a < _SUBAGENT_COLOR_COUNT
+        assert 0 <= idx_b < _SUBAGENT_COLOR_COUNT
 
     def test_subagent_css_in_styles(self, harness: DashboardHarness) -> None:
         """Test subagent CSS classes are present in the page styles."""
         from airut.dashboard.templating import STATIC_DIR
 
-        css = (STATIC_DIR / "styles" / "dark.css").read_text()
+        css = (STATIC_DIR / "styles" / "components.css").read_text()
         assert ".subagent-event" in css
         assert ".subagent-badge" in css
         assert ".subagent-content" in css

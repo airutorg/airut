@@ -2,14 +2,8 @@
 
 {% block title %}Repo: {{ repo.repo_id }} - Airut Dashboard{% endblock %}
 
-{% block styles %}
-<link rel="stylesheet" href="/static/styles/light.css">
-<link rel="stylesheet" href="/static/styles/components.css">
-{% endblock %}
-
 {% block body %}
 <div class="page" hx-ext="sse" sse-connect="/api/events/stream?format=html&repo_id={{ repo.repo_id }}">
-    <div class="back-link"><a href="/">&larr; Back to Dashboard</a></div>
     <div class="repo-header">
         <h1>{{ repo.repo_id }}</h1>
         <span id="repo-status" sse-swap="repo-status" hx-swap="outerHTML"
@@ -44,7 +38,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/vendor/htmx.min.js"></script>
-<script src="/static/vendor/sse.min.js"></script>
-<script src="/static/js/sse-fallback.js"></script>
+<script src="{{ static_url('vendor/htmx.min.js') }}"></script>
+<script src="{{ static_url('vendor/sse.min.js') }}"></script>
+<script src="{{ static_url('js/sse-fallback.js') }}"></script>
 {% endblock %}

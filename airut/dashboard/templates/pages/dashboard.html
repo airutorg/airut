@@ -2,17 +2,8 @@
 
 {% block title %}Airut Dashboard{% endblock %}
 
-{% block styles %}
-<link rel="stylesheet" href="/static/styles/light.css">
-<link rel="stylesheet" href="/static/styles/components.css">
-{% endblock %}
-
 {% block body %}
-<div class="page">
-    <div class="title-row">
-        {% include "components/logo.html" %}
-        <h1>Airut Dashboard</h1>
-    </div>
+<div class="page dashboard-page">
     {% include "components/version_info.html" %}
     <div id="dashboard-live" hx-ext="sse"
          sse-connect="/api/events/stream?format=html">
@@ -81,8 +72,8 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/vendor/htmx.min.js"></script>
-<script src="/static/vendor/sse.min.js"></script>
-<script src="/static/js/local-time.js"></script>
-<script src="/static/js/sse-fallback.js"></script>
+<script src="{{ static_url('vendor/htmx.min.js') }}"></script>
+<script src="{{ static_url('vendor/sse.min.js') }}"></script>
+<script src="{{ static_url('js/local-time.js') }}"></script>
+<script src="{{ static_url('js/sse-fallback.js') }}"></script>
 {% endblock %}
