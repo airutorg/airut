@@ -1,35 +1,47 @@
 // Auto-scroll for append-only pages (actions, network).
 //
-// The htmx SSE extension's swap bypasses htmx:afterSwap and
-// htmx:sseMessage doesn't reliably fire after the DOM update.
-// Instead, we use a MutationObserver to detect new children
-// appended to the container and scroll to the bottom.
+// The htmx SSE extension fires htmx:sseMessage (not htmx:afterSwap)
+// after swapping content into the DOM.  We listen for that event on
+// the document and scroll to the bottom when the user hasn't scrolled
+// up manually.
+//
+// We guard programmatic scrollTo calls so they don't re-trigger the
+// scroll listener with intermediate positions (which can falsely
+// disable auto-scroll on iOS, especially iPad).
 (function() {
     var autoScroll = true;
+    var scrolling = false;
+
+    function docHeight() {
+        return document.documentElement.scrollHeight;
+    }
+
+    function scrollToBottom() {
+        scrolling = true;
+        window.scrollTo(0, docHeight());
+        requestAnimationFrame(function() { scrolling = false; });
+    }
 
     // Scroll to bottom on initial load
-    window.scrollTo(0, document.body.scrollHeight);
+    scrollToBottom();
 
-    // Track if user has scrolled up (disable auto-scroll)
+    // Track if user has scrolled up (disable auto-scroll).
+    // Ignore scroll events caused by our own scrollTo calls.
     window.addEventListener('scroll', function() {
-        var nearBottom = (
+        if (scrolling) return;
+        autoScroll = (
             window.innerHeight + window.scrollY
-            >= document.body.offsetHeight - 100
+            >= docHeight() - 100
         );
-        autoScroll = nearBottom;
     });
 
-    // Observe the container for new child elements added by SSE swap.
-    var container =
-        document.getElementById('events-container') ||
-        document.getElementById('logs-container');
-
-    if (container) {
-        var observer = new MutationObserver(function() {
-            if (autoScroll) {
-                window.scrollTo(0, document.body.scrollHeight);
-            }
-        });
-        observer.observe(container, { childList: true });
-    }
+    // htmx SSE extension dispatches htmx:sseMessage on the element
+    // with sse-swap after the swap completes.
+    document.addEventListener('htmx:sseMessage', function(evt) {
+        if (autoScroll && evt.target &&
+            (evt.target.id === 'events-container' ||
+             evt.target.id === 'logs-container')) {
+            scrollToBottom();
+        }
+    });
 })();
