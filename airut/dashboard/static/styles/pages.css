@@ -346,13 +346,6 @@ h2 {
 /* ---- Console layout (actions/network) ---- */
 body.console-body {
   background: var(--bg-code);
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-  min-height: 100dvh;
-}
-body.console-body .console-page {
-  flex: 1;
 }
 .console-page {
   background: var(--bg-code);
@@ -360,6 +353,8 @@ body.console-body .console-page {
   font-size: 12px;
   line-height: 1.6;
   color: var(--text-primary);
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 .console-header {
   padding: 10px 20px;
