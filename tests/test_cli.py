@@ -465,12 +465,13 @@ class TestFetchRunningVersion:
 
 class TestHasVersionMismatch:
     def _mock_config(self) -> MagicMock:
-        return MagicMock(
+        config = MagicMock(
             global_config=MagicMock(
                 dashboard_host="127.0.0.1",
                 dashboard_port=5200,
             )
         )
+        return MagicMock(value=config)
 
     def _mock_vi(self) -> MagicMock:
         return MagicMock(
@@ -667,7 +668,7 @@ class TestGetActiveTaskCounts:
 
         config = MagicMock()
         config.global_config = FakeGlobal()
-        mock_from_yaml.return_value = config
+        mock_from_yaml.return_value = MagicMock(value=config)
         mock_health.return_value = {
             "status": "ok",
             "tasks": {"queued": 1, "executing": 2, "completed": 5},
@@ -699,7 +700,7 @@ class TestGetActiveTaskCounts:
 
         config = MagicMock()
         config.global_config = FakeGlobal()
-        mock_from_yaml.return_value = config
+        mock_from_yaml.return_value = MagicMock(value=config)
         mock_health.return_value = {
             "status": "ok",
             "tasks": {
@@ -761,7 +762,7 @@ class TestGetActiveTaskCounts:
 
         config = MagicMock()
         config.global_config = FakeGlobal()
-        mock_from_yaml.return_value = config
+        mock_from_yaml.return_value = MagicMock(value=config)
 
         assert _get_active_task_counts() is None
 
@@ -788,7 +789,7 @@ class TestGetActiveTaskCounts:
 
         config = MagicMock()
         config.global_config = FakeGlobal()
-        mock_from_yaml.return_value = config
+        mock_from_yaml.return_value = MagicMock(value=config)
         mock_health.return_value = {"status": "ok"}
 
         assert _get_active_task_counts() is None
@@ -816,7 +817,7 @@ class TestGetActiveTaskCounts:
 
         config = MagicMock()
         config.global_config = FakeGlobal()
-        mock_from_yaml.return_value = config
+        mock_from_yaml.return_value = MagicMock(value=config)
         mock_health.return_value = {
             "status": "ok",
             "tasks": {"queued": "one", "executing": 0, "completed": 0},

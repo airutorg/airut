@@ -39,6 +39,7 @@ from airut.yaml_env import EnvVar, YamlValue, raw_resolve
 
 
 if TYPE_CHECKING:
+    from airut.config.snapshot import ConfigSnapshot
     from airut.config.source import ConfigSource
     from airut.gateway.slack.config import SlackChannelConfig
 
@@ -1142,41 +1143,60 @@ class ServerConfig:
     def from_source(
         cls,
         source: "ConfigSource",
-    ) -> "ServerConfig":
+    ) -> "ConfigSnapshot[ServerConfig]":
         """Load configuration from an arbitrary ``ConfigSource``.
 
-        Loads the raw dict, applies schema migrations, then runs the
-        existing resolution/validation pipeline.
+        Loads the raw dict, applies schema migrations, resolves ``!var``
+        references, then runs the existing resolution/validation pipeline.
+        Returns a ``ConfigSnapshot`` holding both the resolved config and
+        the raw YAML document (with ``VarRef``/``EnvVar`` preserved).
 
         Args:
             source: Config source to load from.
 
         Returns:
-            ServerConfig instance.
+            ConfigSnapshot wrapping a ServerConfig instance.
 
         Raises:
             ConfigError: If required values are absent or validation fails.
         """
+        import copy
+
         from airut.config.migration import apply_migrations
+        from airut.config.snapshot import ConfigSnapshot
+        from airut.config.vars import resolve_var_refs, resolve_vars_section
 
         raw = source.load()
         raw = apply_migrations(raw)
-        return cls._from_raw(raw)
+
+        # Preserve raw document before var resolution (for round-trip)
+        doc_raw = copy.deepcopy(raw)
+
+        # Resolve vars: section and !var references
+        vars_table = resolve_vars_section(raw)
+        raw = resolve_var_refs(raw, vars_table)
+
+        instance = cls._from_raw(raw)
+        provided = frozenset({"global_config", "repos"})
+        return ConfigSnapshot(instance, provided, raw=doc_raw)
 
     @classmethod
-    def from_yaml(cls, config_path: Path | None = None) -> "ServerConfig":
+    def from_yaml(
+        cls, config_path: Path | None = None
+    ) -> "ConfigSnapshot[ServerConfig]":
         """Load configuration from a YAML file.
 
         Values tagged with ``!env VAR_NAME`` are resolved from the
         environment at load time.  A ``.env`` file is loaded first if
-        present.
+        present.  ``!var`` references are resolved from the ``vars:``
+        section.
 
         Args:
             config_path: Path to YAML config file.  Defaults to
                 ``~/.config/airut/airut.yaml`` (XDG).
 
         Returns:
-            ServerConfig instance.
+            ConfigSnapshot wrapping a ServerConfig instance.
 
         Raises:
             ConfigError: If the file is missing or required values are absent.

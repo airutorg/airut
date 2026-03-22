@@ -13,6 +13,15 @@
 # Values tagged with !env are resolved from environment variables at load
 # time.  Use !env for secrets; put everything else inline.  Set env vars
 # in ~/.config/airut/.env (auto-loaded by the service).
+#
+# Use the vars: section to define shared values.  Reference them anywhere
+# with !var.  This avoids repeating the same server address, API key, or
+# token across multiple repos.
+#
+# vars:
+#   mail_server: mail.example.com
+#   anthropic_key: sk-ant-api03-...
+#   gh_token: !env GH_TOKEN           # vars can reference !env too
 
 execution:
   # Maximum number of Claude containers running in parallel (global).

@@ -1078,7 +1078,8 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("Airut Gateway Service starting...")
 
     try:
-        config = ServerConfig.from_yaml(config_path=args.config)
+        snapshot = ServerConfig.from_yaml(config_path=args.config)
+        config = snapshot.value
     except (ValueError, Exception) as e:
         logger.critical("Configuration error: %s", e)
         return 1

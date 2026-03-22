@@ -33,7 +33,7 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
 - `spec/authentication.md` — DMARC verification and sender authorization
 - `spec/repo-config.md` — per-repo schema in server config
 - `spec/declarative-config.md` — declarative config layer (schema metadata,
-  migration, diffing, round-trip)
+  migration, diffing, round-trip, config variables)
 - `spec/multi-repo.md` — multi-repository support design
 - `spec/slack-channel.md` — Slack channel implementation (Socket Mode)
 - `spec/integration-tests.md` — end-to-end test specification

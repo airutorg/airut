@@ -144,6 +144,27 @@ class TestConfigSnapshotListAndDataclass:
         assert result == {"inner": {"x": 1, "y": 2}}
 
 
+class TestConfigSnapshotRaw:
+    def test_raw_default_none(self) -> None:
+        config = SampleConfig()
+        snap = ConfigSnapshot(config, frozenset())
+        assert snap.raw is None
+
+    def test_raw_preserved(self) -> None:
+        raw_doc = {"host": "example.com", "vars": {"key": "val"}}
+        config = SampleConfig(host="example.com")
+        snap = ConfigSnapshot(config, frozenset({"host"}), raw=raw_doc)
+        assert snap.raw is raw_doc
+        assert snap.raw["vars"]["key"] == "val"
+
+    def test_raw_not_in_equality(self) -> None:
+        """Raw does not affect equality comparison."""
+        config = SampleConfig()
+        a = ConfigSnapshot(config, frozenset(), raw={"x": 1})
+        b = ConfigSnapshot(config, frozenset(), raw={"y": 2})
+        assert a == b
+
+
 class TestConfigSnapshotEquality:
     def test_equal(self) -> None:
         config = SampleConfig()

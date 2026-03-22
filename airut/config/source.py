@@ -17,7 +17,7 @@ from typing import Any, Protocol
 import yaml
 
 from airut.gateway.dotenv_loader import load_dotenv_once
-from airut.yaml_env import make_env_loader
+from airut.yaml_env import EnvVar, VarRef, make_env_loader
 
 
 class ConfigSource(Protocol):
@@ -127,6 +127,27 @@ def flat_to_nested_repo(flat: dict[str, Any]) -> dict[str, Any]:
     return _flat_to_nested(flat, _YAML_REPO_STRUCTURE)
 
 
+def _env_representer(dumper: yaml.Dumper, data: EnvVar) -> yaml.Node:
+    """Emit ``!env VAR_NAME`` tags when dumping YAML."""
+    return dumper.represent_scalar("!env", data.var_name)
+
+
+def _var_representer(dumper: yaml.Dumper, data: VarRef) -> yaml.Node:
+    """Emit ``!var VAR_NAME`` tags when dumping YAML."""
+    return dumper.represent_scalar("!var", data.var_name)
+
+
+def make_tag_dumper() -> type[yaml.Dumper]:
+    """Create a YAML ``Dumper`` that preserves ``!env`` and ``!var`` tags."""
+
+    class _TagDumper(yaml.Dumper):
+        pass
+
+    _TagDumper.add_representer(EnvVar, _env_representer)
+    _TagDumper.add_representer(VarRef, _var_representer)
+    return _TagDumper
+
+
 class YamlConfigSource:
     """Load and save config from/to a YAML file with ``!env`` support.
 
@@ -169,9 +190,18 @@ class YamlConfigSource:
         names).  Callers should use ``flat_to_nested_*`` helpers to
         convert from flat canonical dicts before calling ``save()``.
 
+        Uses a custom Dumper that preserves ``!env`` and ``!var`` tags
+        for round-trip fidelity.
+
         Args:
             data: Config dict in nested YAML format.
         """
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.path, "w") as f:
-            yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+            yaml.dump(
+                data,
+                f,
+                Dumper=make_tag_dumper(),
+                default_flow_style=False,
+                sort_keys=False,
+            )

@@ -146,21 +146,157 @@ whole dict is "provided." There is no per-entry tracking within these dicts
 #### Round-Trip Flow
 
 ```
-load()           apply_migrations()    resolve + track provided
-Source ──────► raw nested dict ──────► raw nested dict ──────► ConfigSnapshot
-(YAML)         + config_version        (migrated)               .value (dataclass)
-                                                                .provided_keys
+load()           apply_migrations()    deepcopy → _raw    resolve vars + fields
+Source ──────► raw nested dict ──────► raw dict ──────────► ConfigSnapshot
+(YAML)         + config_version        (migrated)           .value (dataclass)
+                                                            .provided_keys
+                                                            .raw (preserved doc)
 
-                          to_dict(defaults=False)     save()
-ConfigSnapshot ──────► flat canonical dict ──────► Source
-                       (user-set only)              (YAML)
+                  .raw (edit in place)          save()
+ConfigSnapshot ──────────────────────► raw dict ──────► Source
+                                       (tags intact)    (YAML)
 ```
 
-**`!env` tags and round-trip:** `to_dict()` output contains **resolved** values,
-not `EnvVar` placeholders. A round-trip through `to_dict()` + `save()` replaces
-`!env` references with their resolved string values. This is acceptable because
-config files using `!env` tags are typically not edited via UI round-trip; users
-who want to preserve `!env` tags edit the YAML file directly.
+**Tag-preserving round-trip:** `ConfigSnapshot.raw` holds a deep copy of the raw
+YAML dict with `VarRef` and `EnvVar` objects preserved. The dashboard config
+editor reads and modifies `.raw` directly, then saves via
+`YamlConfigSource.save()` which uses custom YAML representers to emit `!var` and
+`!env` tags. This preserves indirection end-to-end.
+
+`to_dict()` continues to return **resolved** values for diffing and
+change-detection. It is not used for the save path.
+
+### Config Variables
+
+A `vars:` top-level section and `!var` YAML tag provide value indirection.
+Variables let multiple repos share values (server addresses, API keys, tokens)
+from a single definition.
+
+#### Syntax
+
+```yaml
+vars:
+  mail_server: mail.example.com
+  anthropic_key: sk-ant-api03-aBcDeFgHiJkLmNoPqRsT...
+  azure_secret: !env AZURE_CLIENT_SECRET
+
+repos:
+  my-project:
+    email:
+      imap_server: !var mail_server
+      smtp_server: !var mail_server
+      password: !env EMAIL_PASSWORD    # !env still works directly
+    secrets:
+      ANTHROPIC_API_KEY: !var anthropic_key
+
+  another-project:
+    email:
+      imap_server: !var mail_server
+      smtp_server: !var mail_server
+```
+
+Variable values are **literals** or **`!env` references**. The `vars:` section
+is a flat mapping — keys are variable names, values are scalars.
+
+`!var name` references a variable by name, usable anywhere a YAML scalar value
+is expected.
+
+#### Design Boundaries
+
+- No string interpolation (`${var}` embedding). `!var` replaces the entire
+  scalar.
+- No nested namespaces (`!var mail.server`). Flat `name: value` mapping.
+- No var-to-var references (`vars: x: !var y`). Single-pass resolution, no cycle
+  detection needed.
+
+#### Resolution Pipeline
+
+```
+source.load()
+  │  raw YAML dict with EnvVar + VarRef + vars: section
+  ▼
+apply_migrations()
+  │  migrated raw dict (tags and vars: still present)
+  ▼
+doc_raw = deepcopy(raw)                    ← preserved for round-trip
+  │
+vars_table = resolve_vars_section(raw)     ← {name: resolved_str | None}
+  │
+work_raw = resolve_var_refs(raw, vars_table)
+  │  VarRef replaced with resolved values; EnvVar still present
+  │  vars: key removed
+  ▼
+ServerConfig._from_raw(work_raw)
+  │  _resolve() handles EnvVar as today, builds frozen dataclasses
+  ▼
+ConfigSnapshot(instance, provided_keys, doc_raw)
+```
+
+Key properties:
+
+- **`_from_raw()` and `_resolve()` are unchanged.** They never see `VarRef`.
+- **`VarRef` and `EnvVar` flow through migrations unresolved**, consistent with
+  the migration contract ("must not resolve `EnvVar` placeholders").
+- **The vars table is ephemeral.** Computed during loading, used to resolve
+  `VarRef` in the work copy, discarded. The `vars:` section in `doc_raw` is the
+  durable source of truth.
+
+#### Change Detection
+
+Operates on **resolved values** — variable changes propagate automatically. When
+a var value changes, all fields referencing it resolve differently, and
+`diff_configs()` detects the changes. `diff_by_scope()` classifies them by the
+scope of each referencing field. Variables don't need their own scope.
+
+Edge case: renaming a var (without changing its value) produces zero diff. Same
+resolved values → no effective change.
+
+#### Dashboard Editor Interaction
+
+The dashboard editor operates on `snapshot.raw`:
+
+1. Read resolved values from `snapshot.value` for display. Detect indirection
+   from `snapshot.raw` where values are `VarRef` / `EnvVar`.
+2. Edit `snapshot.raw` directly — set literal, `!var`, or `!env`. Edit
+   `raw["vars"]` to add / remove / rename variables.
+3. Validate by resolving the modified raw dict through the resolution pipeline.
+4. Save via `YamlConfigSource.save()` with tag representers.
+
+#### Error Handling
+
+| Condition                                 | Behavior                                                              |
+| ----------------------------------------- | --------------------------------------------------------------------- |
+| `!var unknown_name` (not in `vars:`)      | `ConfigError` at load time                                            |
+| `!var` in vars values (`vars: x: !var y`) | `ConfigError` — var-to-var not allowed                                |
+| `vars:` section absent                    | No-op, backward compatible                                            |
+| `vars:` section empty                     | No-op                                                                 |
+| `!var` used as mapping key                | `ConfigError` — scalar values only                                    |
+| Non-scalar var value (list, dict)         | `ConfigError` — variable values must be scalars                       |
+| Var value is `!env UNSET_VAR`             | `None` in vars table; downstream required-field validation catches it |
+
+#### Secret Handling
+
+Variables don't carry their own secret metadata. A variable used in a
+`secret=True` field has its resolved value registered automatically through the
+existing field-level mechanism in `__post_init__`. The dashboard derives which
+vars hold secrets by cross-referencing `raw` values against field schema
+metadata.
+
+#### Schema Version
+
+No config migration needed. `vars:` is a new top-level key silently ignored by
+`_from_raw()` if not extracted first. Config version stays at 2. The feature is
+purely additive.
+
+#### Retiring .env
+
+With `vars:`, secrets can live directly in `airut.yaml` — a local,
+non-version-controlled file with the same security posture as `.env`.
+
+- `!env` and `.env` loading remain functional. No breaking changes.
+- New documentation recommends `vars:` for sharing values and consolidation.
+- `.env` becomes optional — recommended only for environments that prefer
+  env-var injection (containers, systemd `EnvironmentFile=`, etc.).
 
 ### Schema Migration
 
@@ -278,12 +414,19 @@ No breaking changes. Existing YAML files work without modification:
 
 ### Python API
 
-`ServerConfig.from_yaml()` continues to work unchanged. New code uses
-`ServerConfig.from_source()` and `ConfigSnapshot`, but the old path is
-preserved.
+`from_source()` and `from_yaml()` return `ConfigSnapshot[ServerConfig]` instead
+of `ServerConfig`. All callers access the resolved config via `.value`.
+
+`to_dict()` continues to return resolved values. `diff_configs()` and
+`diff_by_scope()` are unchanged.
+
+Existing YAML files without `vars:` work identically — `resolve_vars_section()`
+returns an empty table, `resolve_var_refs()` is a no-op.
 
 ### Relationship to spec/repo-config.md
 
 This spec defines the config **infrastructure** (metadata, migration, diffing,
-round-trip). `spec/repo-config.md` remains the authoritative reference for the
-config **schema** (what fields exist, their types, defaults, and semantics).
+round-trip, variables). `spec/repo-config.md` remains the authoritative
+reference for the config **schema** (what fields exist, their types, defaults,
+and semantics). The `vars:` section and `!var` tag are documented there as part
+of the config schema.

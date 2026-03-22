@@ -459,7 +459,8 @@ def cmd_check(argv: list[str]) -> int:
         all_ok = False
     else:
         try:
-            config = ServerConfig.from_yaml(config_path)
+            snapshot = ServerConfig.from_yaml(config_path)
+            config = snapshot.value
             repo_ids = ", ".join(sorted(config.repos))
             print(
                 f"  Status:      {s.green('ok')} — "
@@ -557,7 +558,8 @@ def _get_active_task_counts() -> tuple[int, int] | None:
         return None
 
     try:
-        config = ServerConfig.from_yaml(config_path)
+        snapshot = ServerConfig.from_yaml(config_path)
+        config = snapshot.value
     except (ConfigError, ValueError, Exception):
         return None
 
@@ -606,7 +608,8 @@ def _has_version_mismatch() -> bool:
         return False
 
     try:
-        config = ServerConfig.from_yaml(config_path)
+        snapshot = ServerConfig.from_yaml(config_path)
+        config = snapshot.value
     except (ConfigError, ValueError, Exception):
         return False
 
