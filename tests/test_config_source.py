@@ -18,7 +18,9 @@ from airut.config.source import (
     flat_to_nested_email,
     flat_to_nested_global,
     flat_to_nested_repo,
+    make_tag_dumper,
 )
+from airut.yaml_env import EnvVar, VarRef
 
 
 class TestSetNested:
@@ -214,3 +216,48 @@ class TestYamlConfigSource:
         with patch("airut.config.source.load_dotenv_once"):
             reloaded = source.load()
         assert reloaded == loaded
+
+
+class TestTagDumper:
+    def test_env_var_represented(self) -> None:
+        """EnvVar objects are dumped as !env tags."""
+        data = {"password": EnvVar("MY_SECRET")}
+        output = yaml.dump(data, Dumper=make_tag_dumper())
+        assert "!env" in output
+        assert "MY_SECRET" in output
+
+    def test_var_ref_represented(self) -> None:
+        """VarRef objects are dumped as !var tags."""
+        data = {"server": VarRef("mail_server")}
+        output = yaml.dump(data, Dumper=make_tag_dumper())
+        assert "!var" in output
+        assert "mail_server" in output
+
+    def test_round_trip_with_tags(self, tmp_path: Path) -> None:
+        """Save and reload preserves !env and !var tags."""
+        from airut.yaml_env import make_env_loader
+
+        data: dict[str, Any] = {
+            "vars": {"key": EnvVar("API_KEY")},
+            "repos": {
+                "test": {
+                    "server": VarRef("mail"),
+                    "password": EnvVar("PW"),
+                    "model": "opus",
+                },
+            },
+        }
+        config_file = tmp_path / "config.yaml"
+        source = YamlConfigSource(config_file)
+        source.save(data)
+
+        # Reload with env loader (which understands !env and !var)
+        with open(config_file) as f:
+            reloaded = yaml.load(f, Loader=make_env_loader())
+
+        assert isinstance(reloaded["vars"]["key"], EnvVar)
+        assert reloaded["vars"]["key"].var_name == "API_KEY"
+        assert isinstance(reloaded["repos"]["test"]["server"], VarRef)
+        assert reloaded["repos"]["test"]["server"].var_name == "mail"
+        assert isinstance(reloaded["repos"]["test"]["password"], EnvVar)
+        assert reloaded["repos"]["test"]["model"] == "opus"

@@ -11,9 +11,11 @@ import yaml.constructor
 
 from airut.yaml_env import (
     EnvVar,
+    VarRef,
     env_constructor,
     make_env_loader,
     raw_resolve,
+    var_constructor,
 )
 
 
@@ -30,6 +32,43 @@ class TestEnvVar:
         for name in ("HOME", "PATH", "A_B_C_123", ""):
             ev = EnvVar(name)
             assert ev.var_name == name
+
+    def test_repr(self) -> None:
+        """EnvVar has a readable repr."""
+        ev = EnvVar("MY_VAR")
+        assert repr(ev) == "EnvVar('MY_VAR')"
+
+
+class TestVarRef:
+    """Tests for VarRef placeholder class."""
+
+    def test_construction(self) -> None:
+        """VarRef stores the variable name."""
+        vr = VarRef("my_var")
+        assert vr.var_name == "my_var"
+
+    def test_different_names(self) -> None:
+        """VarRef works with various names."""
+        for name in ("mail_server", "api_key", "x"):
+            vr = VarRef(name)
+            assert vr.var_name == name
+
+    def test_repr(self) -> None:
+        """VarRef has a readable repr."""
+        vr = VarRef("my_var")
+        assert repr(vr) == "VarRef('my_var')"
+
+
+class TestVarConstructor:
+    """Tests for var_constructor()."""
+
+    def test_returns_varref(self) -> None:
+        """var_constructor returns a VarRef from a YAML scalar node."""
+        loader = yaml.SafeLoader("!var my_var")
+        node = yaml.ScalarNode(tag="!var", value="my_var")
+        result = var_constructor(loader, node)
+        assert isinstance(result, VarRef)
+        assert result.var_name == "my_var"
 
 
 class TestEnvConstructor:
@@ -83,6 +122,22 @@ class TestMakeEnvLoader:
         assert result["a"].var_name == "VAR_A"
         assert isinstance(result["b"], EnvVar)
         assert result["b"].var_name == "VAR_B"
+        assert result["c"] == "plain"
+
+    def test_handles_var_tag(self) -> None:
+        """Loader parses ``!var VAR_NAME`` into VarRef."""
+        loader_cls = make_env_loader()
+        result = yaml.load("key: !var my_var", Loader=loader_cls)
+        assert isinstance(result["key"], VarRef)
+        assert result["key"].var_name == "my_var"
+
+    def test_mixed_env_and_var_tags(self) -> None:
+        """Loader handles both ``!env`` and ``!var`` in one doc."""
+        loader_cls = make_env_loader()
+        doc = "a: !env VAR_A\nb: !var my_var\nc: plain"
+        result = yaml.load(doc, Loader=loader_cls)
+        assert isinstance(result["a"], EnvVar)
+        assert isinstance(result["b"], VarRef)
         assert result["c"] == "plain"
 
     def test_does_not_pollute_base_loader(self) -> None:

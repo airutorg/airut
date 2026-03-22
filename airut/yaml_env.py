@@ -21,16 +21,30 @@ class EnvVar:
     def __init__(self, var_name: str) -> None:
         self.var_name = var_name
 
+    def __repr__(self) -> str:
+        return f"EnvVar({self.var_name!r})"
 
-#: Type alias for any value produced by YAML parsing with ``!env`` support.
-#: PyYAML SafeLoader produces str, int, float, bool, None, list, dict;
-#: the custom ``!env`` tag produces :class:`EnvVar`.
+
+class VarRef:
+    """Placeholder for an unresolved ``!var VAR_NAME`` tag."""
+
+    def __init__(self, var_name: str) -> None:
+        self.var_name = var_name
+
+    def __repr__(self) -> str:
+        return f"VarRef({self.var_name!r})"
+
+
+#: Type alias for any value produced by YAML parsing with ``!env``/``!var``
+#: support.  PyYAML SafeLoader produces str, int, float, bool, None, list,
+#: dict; the custom tags produce :class:`EnvVar` and :class:`VarRef`.
 type YamlValue = (
     str
     | int
     | float
     | bool
     | EnvVar
+    | VarRef
     | None
     | list[YamlValue]
     | dict[str, YamlValue]
@@ -43,13 +57,20 @@ def env_constructor(loader: yaml.SafeLoader, node: yaml.Node) -> EnvVar:
     return EnvVar(str(value))
 
 
+def var_constructor(loader: yaml.SafeLoader, node: yaml.Node) -> VarRef:
+    """Handle ``!var VAR_NAME`` in YAML."""
+    value = loader.construct_scalar(node)
+    return VarRef(str(value))
+
+
 def make_env_loader() -> type[yaml.SafeLoader]:
-    """Create a YAML ``SafeLoader`` subclass that understands ``!env``."""
+    """Create a YAML ``SafeLoader`` subclass with ``!env``/``!var``."""
 
     class _EnvLoader(yaml.SafeLoader):
         pass
 
     _EnvLoader.add_constructor("!env", env_constructor)
+    _EnvLoader.add_constructor("!var", var_constructor)
     return _EnvLoader
 
 

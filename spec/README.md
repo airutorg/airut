@@ -13,7 +13,7 @@ For high-level documentation, see [doc/](../doc/).
   authorization (DMARC for email, workspace/group/user rules for Slack)
 - [repo-config.md](repo-config.md) — Per-repo schema in server config
 - [declarative-config.md](declarative-config.md) — Declarative config layer
-  (schema metadata, migration, diffing, round-trip)
+  (schema metadata, migration, diffing, round-trip, config variables)
 - [multi-repo.md](multi-repo.md) — Multi-repository support design
 - [slack-channel.md](slack-channel.md) — Slack channel implementation (Socket
   Mode, Agents & AI Apps)

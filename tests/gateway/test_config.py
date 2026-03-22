@@ -835,7 +835,7 @@ class TestFromYaml:
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
 
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         repo = config.repos["test"]
 
         # Global config defaults
@@ -870,7 +870,7 @@ class TestFromYaml:
             "os.environ",
             {"EMAIL_PASSWORD": "env_pw", "GH_TOKEN": "ghp_tok"},
         ):
-            config = ServerConfig.from_yaml(yaml_path)
+            config = ServerConfig.from_yaml(yaml_path).value
 
         repo = config.repos["test"]
 
@@ -917,7 +917,7 @@ class TestFromYaml:
         )
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         rl = config.global_config.resource_limits
         assert rl is not None
         assert rl.timeout == 3600
@@ -931,7 +931,7 @@ class TestFromYaml:
         """network_sandbox_enabled defaults to True when not specified."""
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         assert config.repos["test"].network_sandbox_enabled is True
 
     def test_network_sandbox_enabled_false(
@@ -944,7 +944,7 @@ class TestFromYaml:
         )
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         assert config.repos["test"].network_sandbox_enabled is False
 
     def test_model_default_opus(
@@ -953,7 +953,7 @@ class TestFromYaml:
         """Model defaults to 'opus' when not specified."""
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         assert config.repos["test"].model == "opus"
 
     def test_model_parsed(self, master_repo: Path, tmp_path: Path) -> None:
@@ -963,7 +963,7 @@ class TestFromYaml:
         )
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         assert config.repos["test"].model == "sonnet"
 
     def test_effort_default_none(
@@ -972,7 +972,7 @@ class TestFromYaml:
         """Effort defaults to None when not specified."""
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         assert config.repos["test"].effort is None
 
     def test_effort_parsed(self, master_repo: Path, tmp_path: Path) -> None:
@@ -982,7 +982,7 @@ class TestFromYaml:
         )
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         assert config.repos["test"].effort == "medium"
 
     def test_model_empty_string_falls_back_to_default(
@@ -994,7 +994,7 @@ class TestFromYaml:
         )
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         # Empty string is normalized to the default "opus"
         assert config.repos["test"].model == "opus"
 
@@ -1007,7 +1007,7 @@ class TestFromYaml:
         )
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         assert config.repos["test"].effort is None
 
     def test_missing_file(self, tmp_path: Path) -> None:
@@ -1051,7 +1051,7 @@ class TestFromYaml:
         yaml_path.write_text(yaml_content)
 
         with patch.dict("os.environ", {}, clear=True):
-            config = ServerConfig.from_yaml(yaml_path)
+            config = ServerConfig.from_yaml(yaml_path).value
 
         assert config.repos["test"].secrets == {"PRESENT": "value"}
 
@@ -1070,7 +1070,7 @@ class TestFromYaml:
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
 
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         repo = config.repos["test"]
 
         assert repo.storage_dir == get_storage_dir("test")
@@ -1088,7 +1088,7 @@ class TestFromYaml:
             "airut.gateway.config.get_config_path",
             return_value=yaml_path,
         ):
-            config = ServerConfig.from_yaml()
+            config = ServerConfig.from_yaml().value
 
         email_ch = config.repos["test"].channels["email"]
         assert isinstance(email_ch, EmailChannelConfig)
@@ -1107,7 +1107,7 @@ class TestFromYaml:
         yaml_path.write_text(yaml_content)
 
         with patch.dict("os.environ", {"USE_IDLE": "false"}):
-            config = ServerConfig.from_yaml(yaml_path)
+            config = ServerConfig.from_yaml(yaml_path).value
 
         email_ch = config.repos["test"].channels["email"]
         assert isinstance(email_ch, EmailChannelConfig)
@@ -1126,7 +1126,7 @@ class TestFromYaml:
         yaml_path.write_text(yaml_content)
 
         with patch.dict("os.environ", {"POLL_INTERVAL": "120"}):
-            config = ServerConfig.from_yaml(yaml_path)
+            config = ServerConfig.from_yaml(yaml_path).value
 
         email_ch = config.repos["test"].channels["email"]
         assert isinstance(email_ch, EmailChannelConfig)
@@ -1180,7 +1180,7 @@ class TestFromYaml:
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
 
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         repo = config.repos["test"]
 
         email_ch = repo.channels["email"]
@@ -1215,7 +1215,7 @@ class TestFromYaml:
                 "AZURE_CLIENT_SECRET": "env-secret",
             },
         ):
-            config = ServerConfig.from_yaml(yaml_path)
+            config = ServerConfig.from_yaml(yaml_path).value
 
         repo = config.repos["test"]
         email_ch = repo.channels["email"]
@@ -1245,7 +1245,7 @@ class TestFromYaml:
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
 
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         repo = config.repos["test"]
 
         email_ch = repo.channels["email"]
@@ -1260,7 +1260,7 @@ class TestFromYaml:
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
 
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         repo = config.repos["test"]
 
         email_ch = repo.channels["email"]
@@ -1282,7 +1282,7 @@ class TestFromYaml:
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
 
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         repo = config.repos["test"]
         email_ch = repo.channels["email"]
         assert isinstance(email_ch, EmailChannelConfig)
@@ -1295,7 +1295,7 @@ class TestFromYaml:
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
 
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         repo = config.repos["test"]
         email_ch = repo.channels["email"]
         assert isinstance(email_ch, EmailChannelConfig)
@@ -1883,7 +1883,7 @@ class TestRepoServerConfigFromYaml:
         )
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         rl = config.repos["test"].resource_limits
         assert rl.timeout == 600
         assert rl.memory == "2g"
@@ -1896,7 +1896,7 @@ class TestRepoServerConfigFromYaml:
         """resource_limits defaults to ResourceLimits() when not specified."""
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         assert config.repos["test"].resource_limits == ResourceLimits()
 
     def test_container_env_parsed_from_repo(
@@ -1911,7 +1911,7 @@ class TestRepoServerConfigFromYaml:
         )
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         assert config.repos["test"].container_env == {
             "BUCKET": "my-bucket",
             "REGION": "us-east-1",
@@ -1923,7 +1923,7 @@ class TestRepoServerConfigFromYaml:
         """container_env defaults to empty dict when not specified."""
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         assert config.repos["test"].container_env == {}
 
     def test_model_defaults_to_opus(
@@ -1932,8 +1932,101 @@ class TestRepoServerConfigFromYaml:
         """Model defaults to 'opus' when not specified in YAML."""
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
-        config = ServerConfig.from_yaml(yaml_path)
+        config = ServerConfig.from_yaml(yaml_path).value
         assert config.repos["test"].model == "opus"
+
+
+class TestFromYamlVars:
+    """Tests for !var resolution through ServerConfig.from_yaml."""
+
+    def test_var_resolves_in_repo(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """!var references in repo config resolve from vars: section."""
+        yaml_content = f"""\
+vars:
+  mail: imap.test.com
+  smtp: smtp.test.com
+repos:
+  test:
+    email:
+      imap_server: !var mail
+      smtp_server: !var smtp
+      username: user
+      password: plain_password
+      from: "T <t@e.com>"
+      authorized_senders:
+        - a@b.com
+      trusted_authserv_id: mx
+    git:
+      repo_url: {master_repo}
+"""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        snapshot = ServerConfig.from_yaml(yaml_path)
+        config = snapshot.value
+        email_ch = config.repos["test"].channels["email"]
+        assert isinstance(email_ch, EmailChannelConfig)
+        assert email_ch.imap_server == "imap.test.com"
+        assert email_ch.smtp_server == "smtp.test.com"
+
+    def test_snapshot_has_raw(self, master_repo: Path, tmp_path: Path) -> None:
+        """from_yaml returns snapshot with raw document preserved."""
+        yaml_content = f"""\
+vars:
+  mail: imap.test.com
+repos:
+  test:
+    email:
+      imap_server: !var mail
+      smtp_server: smtp.test.com
+      username: user
+      password: pw
+      from: "T <t@e.com>"
+      authorized_senders:
+        - a@b.com
+      trusted_authserv_id: mx
+    git:
+      repo_url: {master_repo}
+"""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        snapshot = ServerConfig.from_yaml(yaml_path)
+
+        assert snapshot.raw is not None
+        assert "vars" in snapshot.raw
+        assert snapshot.raw["vars"]["mail"] == "imap.test.com"
+
+    def test_undefined_var_raises(self, tmp_path: Path) -> None:
+        """Referencing an undefined var raises ConfigError."""
+        yaml_content = """\
+repos:
+  test:
+    email:
+      imap_server: !var undefined_server
+      smtp_server: smtp.test.com
+      username: user
+      password: pw
+      from: "T <t@e.com>"
+      authorized_senders:
+        - a@b.com
+      trusted_authserv_id: mx
+    git:
+      repo_url: https://example.com/repo.git
+"""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        with pytest.raises(ConfigError, match="undefined variable"):
+            ServerConfig.from_yaml(yaml_path)
+
+    def test_no_vars_section_works(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Config without vars: works (backwards compatible)."""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
+        config = ServerConfig.from_yaml(yaml_path).value
+        assert "test" in config.repos
 
 
 # ---------------------------------------------------------------------------
@@ -3115,7 +3208,7 @@ repos:
     config_path = tmp_path / "airut.yaml"
     config_path.write_text(yaml_text)
 
-    server = ServerConfig.from_yaml(config_path)
+    server = ServerConfig.from_yaml(config_path).value
     repo = server.repos["test-slack"]
     assert "slack" in repo.channels
     slack_config = repo.channels["slack"]
@@ -3152,7 +3245,7 @@ repos:
     config_path = tmp_path / "airut.yaml"
     config_path.write_text(yaml_text)
 
-    server = ServerConfig.from_yaml(config_path)
+    server = ServerConfig.from_yaml(config_path).value
     repo = server.repos["dual"]
     assert len(repo.channels) == 2
     assert "email" in repo.channels

@@ -21,11 +21,20 @@ class ConfigSnapshot[T]:
     Attributes:
         _instance: The underlying config dataclass instance.
         _provided_keys: Field names explicitly set in the source data.
+        _raw: Complete raw YAML dict with ``vars:``, ``VarRef``, and
+            ``EnvVar`` preserved for round-trip serialization.  ``None``
+            when no raw document is available (e.g. synthetic snapshots).
     """
 
-    def __init__(self, instance: T, provided_keys: frozenset[str]) -> None:
+    def __init__(
+        self,
+        instance: T,
+        provided_keys: frozenset[str],
+        raw: dict[str, Any] | None = None,
+    ) -> None:
         self._instance = instance
         self._provided_keys = provided_keys
+        self._raw = raw
 
     @property
     def value(self) -> T:
@@ -36,6 +45,11 @@ class ConfigSnapshot[T]:
     def provided_keys(self) -> frozenset[str]:
         """Field names that were explicitly set in the source data."""
         return self._provided_keys
+
+    @property
+    def raw(self) -> dict[str, Any] | None:
+        """Raw YAML dict with tags and vars: preserved (for editor / save)."""
+        return self._raw
 
     def to_dict(self, *, include_defaults: bool = False) -> dict[str, Any]:
         """Serialize to flat dict keyed by dataclass field names.
