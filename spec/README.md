@@ -18,6 +18,8 @@ For high-level documentation, see [doc/](../doc/).
 - [slack-channel.md](slack-channel.md) — Slack channel implementation (Socket
   Mode, Agents & AI Apps)
 - [integration-tests.md](integration-tests.md) — End-to-end test specification
+- [config-reload.md](config-reload.md) — Live config reload (file watching,
+  scope-aware application, deferred reload)
 
 ## Sandbox
 
