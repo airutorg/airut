@@ -341,6 +341,11 @@ class GatewayService:
         if not self.global_config.dashboard_enabled:
             return
 
+        # Pass config_source only if it's a YamlConfigSource (file-backed).
+        yaml_source: YamlConfigSource | None = None
+        if isinstance(self._config_source, YamlConfigSource):
+            yaml_source = self._config_source
+
         self.dashboard = DashboardServer(
             tracker=self.tracker,
             host=self.global_config.dashboard_host,
@@ -353,6 +358,7 @@ class GatewayService:
             clock=self._clock,
             git_version_info=self._git_version_info,
             status_callback=self._get_reload_status,
+            config_source=yaml_source,
         )
         self.dashboard.start()
 

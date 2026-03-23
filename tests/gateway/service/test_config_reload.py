@@ -742,6 +742,23 @@ class TestApplyServerReload:
         mock_dashboard.stop.assert_called_once()
         mock_ds.assert_called_once()
 
+    def test_dashboard_receives_config_source(self, tmp_path: Path) -> None:
+        """Dashboard gets config_source when YamlConfigSource is set."""
+        from airut.config.source import YamlConfigSource
+
+        svc = _make_service(
+            tmp_path, dashboard_enabled=True, dashboard_port=5200
+        )
+        yaml_source = MagicMock(spec=YamlConfigSource)
+        svc._config_source = yaml_source
+
+        with patch("airut.gateway.service.gateway.DashboardServer") as mock_ds:
+            mock_ds.return_value = MagicMock()
+            svc._start_dashboard_early()
+
+        call_kwargs = mock_ds.call_args.kwargs
+        assert call_kwargs["config_source"] is yaml_source
+
 
 class TestTryImmediateServerReload:
     """Tests for _try_immediate_server_reload."""
