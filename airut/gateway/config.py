@@ -1417,6 +1417,9 @@ def _parse_email_channel_config(email: dict, prefix: str) -> EmailChannelConfig:
             required=f"{prefix}.email.smtp_server",
         ),
         smtp_port=_resolve(email.get("smtp_port"), int, default=587),
+        smtp_require_auth=_resolve(
+            email.get("smtp_require_auth"), bool, default=True
+        ),
         username=_resolve(
             email.get("username"),
             str,

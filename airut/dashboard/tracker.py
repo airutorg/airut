@@ -62,10 +62,15 @@ class CompletionReason(Enum):
 
 
 class RepoStatus(Enum):
-    """Repository initialization status."""
+    """Repository status.
+
+    Tracks both initialization and runtime reload status.
+    """
 
     LIVE = "live"
     FAILED = "failed"
+    RELOADING = "reloading"
+    RELOAD_PENDING = "reload_pending"
 
 
 class BootPhase(Enum):
@@ -631,6 +636,26 @@ class TaskTracker:
             return any(
                 t.conversation_id == conversation_id
                 and t.status in ACTIVE_STATUSES
+                for t in self._tasks.values()
+            )
+
+    def has_active_tasks_for_repo(self, repo_id: str) -> bool:
+        """Check if a repo has any active (non-completed) tasks.
+
+        Scans all tasks for any matching the given ``repo_id``
+        whose status is in ``ACTIVE_STATUSES``.
+
+        Args:
+            repo_id: Repository identifier to check.
+
+        Returns:
+            True if at least one active task exists, False otherwise.
+        """
+        if not repo_id:
+            return False
+        with self._lock:
+            return any(
+                t.repo_id == repo_id and t.status in ACTIVE_STATUSES
                 for t in self._tasks.values()
             )
 

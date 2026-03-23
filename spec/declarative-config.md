@@ -24,7 +24,9 @@ per-field metadata for UI rendering.
 - Preserving YAML comments or formatting on round-trip.
 - Supporting multiple config file merging / layered file sources. The server has
   a single config source; `!env` tags and `.env` files handle secret injection.
-- Runtime config hot-reload (future work that builds on the scoping groundwork).
+- Runtime config hot-reload — now covered by
+  [config-reload.md](config-reload.md), which builds on the scoping groundwork
+  defined here.
 
 ## Design
 

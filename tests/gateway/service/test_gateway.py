@@ -1431,8 +1431,15 @@ class TestMain:
                 "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "airut.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_source",
                 side_effect=ValueError("missing ENV"),
+            ),
+            patch(
+                "airut.gateway.service.gateway.YamlConfigSource",
+            ),
+            patch(
+                "airut.gateway.service.gateway.get_config_path",
+                return_value=Path("/tmp/test.yaml"),
             ),
         ):
             mock_ap.return_value.parse_args.return_value = MagicMock(
@@ -1448,8 +1455,15 @@ class TestMain:
                 "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "airut.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_source",
                 return_value=mock_config,
+            ),
+            patch(
+                "airut.gateway.service.gateway.YamlConfigSource",
+            ),
+            patch(
+                "airut.gateway.service.gateway.get_config_path",
+                return_value=Path("/tmp/test.yaml"),
             ),
             patch(
                 "airut.gateway.service.gateway.GatewayService",
@@ -1471,8 +1485,15 @@ class TestMain:
                 "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "airut.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_source",
                 return_value=mock_config,
+            ),
+            patch(
+                "airut.gateway.service.gateway.YamlConfigSource",
+            ),
+            patch(
+                "airut.gateway.service.gateway.get_config_path",
+                return_value=Path("/tmp/test.yaml"),
             ),
             patch(
                 "airut.gateway.service.gateway.GatewayService",
@@ -1496,8 +1517,15 @@ class TestMain:
                 "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "airut.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_source",
                 return_value=mock_config,
+            ),
+            patch(
+                "airut.gateway.service.gateway.YamlConfigSource",
+            ),
+            patch(
+                "airut.gateway.service.gateway.get_config_path",
+                return_value=Path("/tmp/test.yaml"),
             ),
             patch(
                 "airut.gateway.service.gateway.GatewayService",
@@ -1520,8 +1548,15 @@ class TestMain:
                 "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "airut.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_source",
                 return_value=mock_config,
+            ),
+            patch(
+                "airut.gateway.service.gateway.YamlConfigSource",
+            ),
+            patch(
+                "airut.gateway.service.gateway.get_config_path",
+                return_value=Path("/tmp/test.yaml"),
             ),
             patch(
                 "airut.gateway.service.gateway.GatewayService",
@@ -1546,8 +1581,13 @@ class TestMain:
                 "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "airut.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_source",
                 return_value=mock_config,
+            ),
+            patch("airut.gateway.service.gateway.YamlConfigSource"),
+            patch(
+                "airut.gateway.service.gateway.get_config_path",
+                return_value=Path("/tmp/test.yaml"),
             ),
             patch(
                 "airut.gateway.service.gateway.GatewayService",
@@ -1575,8 +1615,13 @@ class TestMain:
                 "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "airut.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_source",
                 return_value=mock_config,
+            ),
+            patch("airut.gateway.service.gateway.YamlConfigSource"),
+            patch(
+                "airut.gateway.service.gateway.get_config_path",
+                return_value=Path("/tmp/test.yaml"),
             ),
             patch(
                 "airut.gateway.service.gateway.GatewayService",
@@ -1593,6 +1638,7 @@ class TestMain:
         sig_calls = [c[0][0] for c in mock_sig.call_args_list]
         assert sig_mod.SIGINT in sig_calls
         assert sig_mod.SIGTERM in sig_calls
+        assert sig_mod.SIGHUP in sig_calls
 
     def test_shutdown_handler(self) -> None:
         """Test that the shutdown handler calls service.stop()."""
@@ -1611,8 +1657,13 @@ class TestMain:
                 "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "airut.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_source",
                 return_value=mock_config,
+            ),
+            patch("airut.gateway.service.gateway.YamlConfigSource"),
+            patch(
+                "airut.gateway.service.gateway.get_config_path",
+                return_value=Path("/tmp/test.yaml"),
             ),
             patch(
                 "airut.gateway.service.gateway.GatewayService",
@@ -1646,8 +1697,13 @@ class TestMain:
                 "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "airut.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_source",
                 return_value=mock_config,
+            ),
+            patch("airut.gateway.service.gateway.YamlConfigSource"),
+            patch(
+                "airut.gateway.service.gateway.get_config_path",
+                return_value=Path("/tmp/test.yaml"),
             ),
             patch(
                 "airut.gateway.service.gateway.GatewayService",
@@ -1662,7 +1718,7 @@ class TestMain:
         mock_svc.start.assert_called_once_with(resilient=True)
 
     def test_config_path_override(self) -> None:
-        """Test that --config passes the path to ServerConfig.from_yaml()."""
+        """--config passes the path to YamlConfigSource."""
         mock_config = MagicMock()
         mock_svc = MagicMock()
         custom_path = Path("/tmp/custom-airut.yaml")
@@ -1672,9 +1728,16 @@ class TestMain:
                 "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "airut.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_source",
                 return_value=mock_config,
-            ) as mock_from_yaml,
+            ),
+            patch(
+                "airut.gateway.service.gateway.YamlConfigSource",
+            ) as mock_source,
+            patch(
+                "airut.gateway.service.gateway.get_config_path",
+                return_value=Path("/tmp/test.yaml"),
+            ),
             patch(
                 "airut.gateway.service.gateway.GatewayService",
                 return_value=mock_svc,
@@ -1685,21 +1748,29 @@ class TestMain:
                 debug=False, resilient=False, config=custom_path
             )
             assert main() == 0
-        mock_from_yaml.assert_called_once_with(config_path=custom_path)
+        mock_source.assert_called_once_with(custom_path)
 
     def test_config_path_default_none(self) -> None:
-        """Test that without --config, from_yaml() gets config_path=None."""
+        """Without --config, uses get_config_path() default."""
         mock_config = MagicMock()
         mock_svc = MagicMock()
+        default_path = Path("/root/.config/airut/airut.yaml")
         with (
             patch("airut.gateway.service.gateway.configure_logging"),
             patch(
                 "airut.gateway.service.gateway.argparse.ArgumentParser"
             ) as mock_ap,
             patch(
-                "airut.gateway.service.gateway.ServerConfig.from_yaml",
+                "airut.gateway.service.gateway.ServerConfig.from_source",
                 return_value=mock_config,
-            ) as mock_from_yaml,
+            ),
+            patch(
+                "airut.gateway.service.gateway.YamlConfigSource",
+            ) as mock_source,
+            patch(
+                "airut.gateway.service.gateway.get_config_path",
+                return_value=default_path,
+            ),
             patch(
                 "airut.gateway.service.gateway.GatewayService",
                 return_value=mock_svc,
@@ -1710,7 +1781,7 @@ class TestMain:
                 debug=False, resilient=False, config=None
             )
             assert main() == 0
-        mock_from_yaml.assert_called_once_with(config_path=None)
+        mock_source.assert_called_once_with(default_path)
 
 
 class TestUpstreamDnsResolution:

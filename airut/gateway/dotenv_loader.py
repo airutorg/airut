@@ -62,6 +62,10 @@ def load_dotenv_once() -> None:
 
 
 def reset_dotenv_state() -> None:
-    """Reset the dotenv loaded state. For testing only."""
+    """Reset the dotenv loaded state.
+
+    Called before config reload to allow ``.env`` files to be re-read.
+    Also used in tests to reset global state between test cases.
+    """
     global _dotenv_loaded
     _dotenv_loaded = False

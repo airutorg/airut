@@ -3747,3 +3747,38 @@ class TestBreadcrumbNavigation:
         assert "navbar" in html
         # No separator should appear (no breadcrumbs)
         assert "navbar-sep" not in html
+
+
+class TestApiStatusEndpoint:
+    """Tests for /api/status endpoint."""
+
+    def test_with_callback(self) -> None:
+        """Returns data from status_callback when provided."""
+        tracker = TaskTracker()
+
+        def status_cb() -> dict[str, object]:
+            return {
+                "config_generation": 5,
+                "server_reload_pending": True,
+                "last_reload_error": None,
+            }
+
+        server = DashboardServer(tracker, status_callback=status_cb)
+        client = Client(server._wsgi_app)
+        response = client.get("/api/status")
+        assert response.status_code == 200
+        data = json.loads(response.get_data(as_text=True))
+        assert data["config_generation"] == 5
+        assert data["server_reload_pending"] is True
+
+    def test_without_callback(self) -> None:
+        """Returns defaults when no status_callback is set."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+        response = client.get("/api/status")
+        assert response.status_code == 200
+        data = json.loads(response.get_data(as_text=True))
+        assert data["config_generation"] == 0
+        assert data["server_reload_pending"] is False
+        assert data["last_reload_error"] is None
