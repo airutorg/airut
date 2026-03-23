@@ -287,8 +287,10 @@ def cmd_init(argv: list[str]) -> int:
         print(f"Config already exists: {config_path}")
         return 0
 
+    from airut.config.generate import generate_stub_config
+
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(_STUB_CONFIG)
+    config_path.write_text(generate_stub_config())
     print(f"Created stub config: {config_path}")
     print()
     print("Next steps — complete your configuration:")
@@ -1010,39 +1012,3 @@ def cli() -> None:
 
     handler = getattr(_self, _DISPATCH[command])
     sys.exit(handler(rest))
-
-
-#: Stub configuration template written by ``airut init``.
-_STUB_CONFIG = """\
-# Airut Server Configuration
-#
-# For all available options, see the documented example:
-# https://github.com/airutorg/airut/blob/main/config/airut.example.yaml
-
-# execution:
-#   max_concurrent: 3
-#   shutdown_timeout: 60
-
-# dashboard:
-#   enabled: true
-#   host: 127.0.0.1
-#   port: 5200
-
-# container_command: podman
-
-repos:
-  my-project:
-    email:
-      imap_server: mail.example.com
-      smtp_server: mail.example.com
-      username: airut@example.com
-      password: changeme
-      from: "Airut <airut@example.com>"
-    authorized_senders:
-      - you@example.com
-    trusted_authserv_id: mail.example.com
-    git:
-      repo_url: https://github.com/you/my-project.git
-    secrets:
-      ANTHROPIC_API_KEY: changeme
-"""

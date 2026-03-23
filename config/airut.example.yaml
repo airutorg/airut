@@ -23,48 +23,48 @@
 #   anthropic_key: sk-ant-api03-...
 #   gh_token: !env GH_TOKEN           # vars can reference !env too
 
-execution:
-  # Maximum number of Claude containers running in parallel (global).
-  max_concurrent: 3
+# execution:
+#   # Maximum parallel Claude containers across all repos
+#   max_concurrent: 3
+#
+#   # Seconds to wait for running tasks during graceful shutdown
+#   shutdown_timeout: 60
+#
+#   # Max age in days before conversations are garbage-collected
+#   conversation_max_age_days: 7
+#
+#   # Prune dangling container images during garbage collection
+#   image_prune: true
 
-  # Seconds to wait for running containers to finish during graceful shutdown.
-  shutdown_timeout: 60
+# dashboard:
+#   # Enable the web dashboard for task monitoring
+#   enabled: true
+#
+#   # Dashboard HTTP server bind address
+#   host: 127.0.0.1
+#
+#   # Dashboard HTTP server port
+#   port: 5200
+#
+#   # Public URL for dashboard links in emails (None = omit links)
+#   base_url: dashboard.example.com
 
-  # Conversations with no activity for this many days are garbage-collected.
-  conversation_max_age_days: 7
+# Container runtime command (podman or docker)
+# container_command: podman
 
-  # Prune dangling and old container images during periodic garbage
-  # collection.  Runs after conversation cleanup every 24 hours.
-  image_prune: true
-
-dashboard:
-  # Enable the web dashboard for monitoring tasks and viewing actions.
-  enabled: true
-
-  # Bind address and port for the dashboard HTTP server.
-  host: 127.0.0.1
-  port: 5200
-
-  # Public URL used in acknowledgment messages to link to task progress.
-  # Leave empty to omit task links from messages.
-  base_url: dashboard.example.com
-
-# Container runtime executable (podman or docker).
-container_command: podman
-
-# Server-wide resource limit defaults (all optional).
-# These provide default values — per-repo values override them.
-# Omitted fields mean no default for that dimension.
+# Server-wide default resource limits for containers
 # resource_limits:
-#   timeout: 7200       # Default timeout (seconds)
-#   memory: "8g"        # Default memory limit
-#   cpus: 4             # Default CPU limit
-#   pids_limit: 1024    # Default process limit
+#   # Max container execution time in seconds
+#   timeout: 7200
+#   # Memory limit for container (e.g. '512m', '2g')
+#   memory: "8g"
+#   # CPU limit for container (supports fractional cores, e.g. 1.5)
+#   cpus: 4
+#   # Process limit for container
+#   pids_limit: 1024
 
-# Network settings.
 # network:
-#   # Upstream DNS server for proxy container resolution.
-#   # Auto-detected from /etc/resolv.conf when omitted.
+#   # Upstream DNS server for proxy resolution (None = auto-detect)
 #   upstream_dns: "1.1.1.1"
 
 # ---------------------------------------------------------------------------
@@ -72,8 +72,6 @@ container_command: podman
 # ---------------------------------------------------------------------------
 # Each entry under repos: defines a channel configuration + git repository.
 # A repo can have email, Slack, or both channels active simultaneously.
-# Every repo gets its own listeners, credentials, and secrets pool.
-# Repos share the global executor pool and dashboard.
 
 repos:
   # -------------------------------------------------------------------------
@@ -81,138 +79,80 @@ repos:
   # -------------------------------------------------------------------------
   my-project:
     email:
-      # IMAP server for receiving emails.
+      # IMAP server hostname
       imap_server: mail.example.com
+
+      # IMAP port
       imap_port: 993
 
-      # SMTP server for sending reply emails.
+      # SMTP server hostname
       smtp_server: mail.example.com
+
+      # SMTP port
       smtp_port: 587
 
-      # Email account credentials.  Use !env to keep passwords out of this
-      # file — the actual value comes from the environment / .env file.
+      # Email account username
       username: airut
+
+      # Email account password
       password: !env EMAIL_PASSWORD
 
-      # From address for outgoing emails (display name + address).
+      # From address for outgoing emails
       from: "Airut <airut@example.com>"
 
-      # Only emails from these addresses/patterns (with passing DMARC) are
-      # accepted. Supports wildcards for domain matching (e.g., *@company.com).
+      # Email patterns allowed to send commands (e.g. *@company.com)
       authorized_senders:
         - you@example.com
-        # - *@company.com  # Uncomment to allow any sender from company.com
+        # - *@company.com
 
-      # The authserv-id to trust in Authentication-Results headers.
-      # Typically the hostname of your MX server (e.g., mail.example.com).
-      # Set to empty string "" for Microsoft 365/EOP, which omits the
-      # authserv-id from Authentication-Results headers.
+      # Trusted authserv-id in Authentication-Results headers
       trusted_authserv_id: mail.example.com
 
-      # Accept X-MS-Exchange-Organization-AuthAs: Internal as authentication
-      # proof for intra-org email in Microsoft 365 (where EOP omits
-      # Authentication-Results entirely).  Only used when no
-      # Authentication-Results header is present.  Default: false.
-      # microsoft_internal_auth_fallback: true
+      # Whether SMTP requires authentication
+      # smtp_require_auth: true
 
-      imap:
-        # Seconds between IMAP polls (only used when use_idle is false).
-        poll_interval: 30
+      # Accept X-MS-Exchange AuthAs: Internal
+      # microsoft_internal_auth_fallback: false
 
-        # Use IMAP IDLE for efficient push-based notifications (recommended).
-        use_idle: true
-
-        # Reconnect interval for IDLE mode in seconds (keep below 29 min).
-        idle_reconnect_interval: 1740
-
-      # Microsoft OAuth2 Client Credentials (for M365 / Azure AD).
-      # When configured, XOAUTH2 is used instead of password auth for
-      # both IMAP and SMTP.  Requires Azure AD app registration with
-      # IMAP.AccessAsApp permission and Exchange Online service principal.
-      # When using OAuth2, the password field above can be omitted.
+      # imap:
+      #   # Seconds between IMAP polls
+      #   poll_interval: 60
       #
+      #   # Use IMAP IDLE instead of polling
+      #   use_idle: true
+      #
+      #   # Reconnect interval for IDLE mode (seconds)
+      #   idle_reconnect_interval: 1740
+
       # microsoft_oauth2:
-      #   tenant_id: !env AZURE_TENANT_ID
-      #   client_id: !env AZURE_CLIENT_ID
-      #   client_secret: !env AZURE_CLIENT_SECRET
+      #   # Azure AD tenant ID for OAuth2 client credentials flow
+      #   tenant_id:
+      #
+      #   # Azure AD application (client) ID
+      #   client_id:
+      #
+      #   # Azure AD client secret value
+      #   client_secret:
 
     git:
-      # Repository URL cloned into each conversation workspace.
+      # Git repository URL to clone from
       repo_url: https://github.com/you/my-project.git
 
-    # Claude model for new conversations (default: "opus").
-    # Channel hints (e.g. email subaddressing airut+sonnet@...) override
-    # this for new conversations.  Resumed conversations keep their
-    # stored model.
-    model: opus
+    # Per-repo secrets pool (keys become container env var names)
+    # secrets:
+    #   ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
 
-    # Effort level passed as --effort to Claude Code (optional).
-    # Common values: "medium", "high", "max".  Omit to use Claude Code's
-    # built-in default.
-    # effort: max
+    # Secrets with scope restrictions for proxy replacement
+    # masked_secrets:
+    #   GH_TOKEN:
+    #     value: !env GH_TOKEN
+    #     scopes:
+    #       - "api.github.com"
+    #       - "*.githubusercontent.com"
+    #     headers:
+    #       - "Authorization"
 
-    # Per-repo resource limits (all optional).
-    # Override server-wide defaults above.
-    # Omitted fields fall back to server defaults (if set).
-    # resource_limits:
-    #   timeout: 6000       # Max execution time in seconds (>= 10)
-    #   memory: "4g"        # Memory limit, e.g. "2g", "512m"
-    #   cpus: 2             # CPU limit (float, e.g. 1.5 for 1.5 cores)
-    #   pids_limit: 256     # Process limit (fork bomb protection)
-
-    # Network sandbox toggle (default: true).
-    # When enabled, containers are placed on an isolated network and all
-    # HTTP(S) traffic is routed through a proxy that enforces the network
-    # allowlist (see .airut/network-allowlist.yaml in the repository).
-    # Set to false for unrestricted network access (break-glass override).
-    # network:
-    #   sandbox_enabled: true
-
-    # Plain environment variables for containers (non-secret values).
-    # Use for configuration that doesn't need credential protection.
-    # container_env:
-    #   BUCKET_NAME: "my-bucket"
-    #   R2_ACCOUNT_ID: "7ef1d25e..."
-
-    # Named pool of secrets for this repo.  Keys become environment variable
-    # names in the container automatically.  Values are resolved from the
-    # environment via !env tags.
-    #
-    # Plain secrets are injected directly into the container environment.
-    # Use for credentials that don't support header-based auth or need to be
-    # used with arbitrary hosts.
-    secrets:
-      ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
-
-    # Masked secrets inject surrogate tokens into containers.  The proxy swaps
-    # surrogates for real values only when the request host matches scopes.
-    # This prevents credential exfiltration — even if the container is
-    # compromised, it only has useless surrogates.
-    #
-    # Required fields:
-    # - value: the secret value (supports !env)
-    # - scopes: fnmatch patterns for hosts where replacement is allowed
-    # - headers: fnmatch patterns for headers to scan (e.g., "*" for all)
-    #
-    # Basic Auth is automatically decoded/re-encoded for Authorization headers.
-    masked_secrets:
-      GH_TOKEN:
-        value: !env GH_TOKEN
-        scopes:
-          - "api.github.com"
-          - "*.githubusercontent.com"
-        headers:
-          - "Authorization"
-
-    # Signing credentials handle AWS-style request signing (SigV4/SigV4A).
-    # Unlike masked secrets (which replace tokens in headers), the proxy
-    # re-signs outbound requests with real AWS credentials.  Containers
-    # receive format-preserving surrogates that the AWS SDK uses normally.
-    #
-    # Each credential field has a name (the env var name injected into the
-    # container) and a value (the real credential).
-    #
-    # Works with any S3-compatible API (AWS, Cloudflare R2, MinIO, etc.).
+    # AWS SigV4/SigV4A signing credentials for proxy re-signing
     # signing_credentials:
     #   AWS_PROD:
     #     type: aws-sigv4
@@ -222,85 +162,62 @@ repos:
     #     secret_access_key:
     #       name: AWS_SECRET_ACCESS_KEY
     #       value: !env AWS_SECRET_ACCESS_KEY
-    #     session_token:                       # optional (STS temp credentials)
+    #     session_token:
     #       name: AWS_SESSION_TOKEN
     #       value: !env AWS_SESSION_TOKEN
     #     scopes:
     #       - "*.amazonaws.com"
 
-    # GitHub App credentials use proxy-managed token rotation for GitHub
-    # API access.  The proxy generates short-lived installation tokens
-    # from the App's private key and rotates them automatically.
-    # Containers receive a surrogate token (ghs_...) that the proxy
-    # replaces with a real token on matching requests.
-    #
-    # Recommended over masked_secrets for GitHub — real credentials
-    # never enter the container, and tokens auto-expire within 1 hour.
-    # See doc/github-app-setup.md for the full setup guide.
+    # GitHub App credentials for proxy-managed token rotation
     # github_app_credentials:
     #   GH_TOKEN:
-    #     app_id: !env GH_APP_ID                    # Client ID (Iv23li...)
-    #     private_key: !env GH_APP_PRIVATE_KEY       # PEM-encoded RSA key
+    #     app_id: !env GH_APP_ID
+    #     private_key: !env GH_APP_PRIVATE_KEY
     #     installation_id: !env GH_APP_INSTALLATION_ID
     #     scopes:
     #       - "github.com"
     #       - "api.github.com"
     #       - "*.githubusercontent.com"
-    #     # Optional: restrict token permissions (subset of app's grants)
-    #     # permissions:
-    #     #   contents: write
-    #     #   pull_requests: write
-    #     # Optional: restrict token to specific repos
-    #     # repositories:
-    #     #   - "my-repo"
 
-    # Slack channel (optional, can coexist with email).
+    # Claude model for new conversations
+    # model: opus
+
+    # Effort level for Claude Code (None = Claude default)
+    # effort: max
+
+    # Per-repo container resource limits (timeout, memory, cpus, pids)
+    # resource_limits:
+    #   # Max container execution time in seconds
+    #   timeout: 7200
+    #   # Memory limit for container (e.g. '512m', '2g')
+    #   memory: "8g"
+    #   # CPU limit for container (supports fractional cores, e.g. 1.5)
+    #   cpus: 4
+    #   # Process limit for container
+    #   pids_limit: 1024
+
+    # Plain environment variables passed to containers
+    # container_env:
+    #   BUCKET_NAME: "my-bucket"
+
+    # network:
+    #   # Enable the network sandbox (proxy toggle)
+    #   sandbox_enabled: true
+
+    # Slack channel (can coexist with email).
     # See config/slack-app-manifest.json for app setup.
-    #
     # slack:
-    #   # Bot token (xoxb-...) from OAuth & Permissions page.
-    #   bot_token: !env SLACK_BOT_TOKEN
-    #
-    #   # App-level token (xapp-...) for Socket Mode.
-    #   app_token: !env SLACK_APP_TOKEN
-    #
-    #   # Authorization rules (evaluated in order, first match wins).
-    #   authorized:
-    #     # Allow all full workspace members:
-    #     - workspace_members: true
-    #     # Or restrict to a user group (requires usergroups:read scope):
-    #     # - user_group: engineering
-    #     # Or restrict to specific users:
-    #     # - user_id: U12345678
+      # Bot User OAuth Token (xoxb-...) for Slack API calls
+      # bot_token: !env SLACK_BOT_TOKEN
 
-  # -------------------------------------------------------------------------
-  # Example: additional repository (uncomment to use)
-  # A repo can use email, Slack, or both channels.
-  # -------------------------------------------------------------------------
-  # another-repo:
-  #   # Email channel
-  #   email:
-  #     imap_server: mail.example.com
-  #     smtp_server: mail.example.com
-  #     username: airut-other
-  #     password: !env OTHER_EMAIL_PASSWORD
-  #     from: "Airut <airut-other@example.com>"
-  #     authorized_senders:
-  #       - you@example.com
-  #     trusted_authserv_id: mail.example.com
-  #
-  #   # Slack channel
-  #   slack:
-  #     bot_token: !env OTHER_SLACK_BOT_TOKEN
-  #     app_token: !env OTHER_SLACK_APP_TOKEN
-  #     authorized:
-  #       - workspace_members: true
-  #
-  #   git:
-  #     repo_url: https://github.com/you/another-repo.git
-  #
-  #   model: opus
-  #
-  #   secrets:
-  #     ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
-  #     GH_TOKEN: !env GH_TOKEN
+      # App-Level Token (xapp-...) for Socket Mode WebSocket
+      # app_token: !env SLACK_APP_TOKEN
+
+      # Authorization rules (first match grants access)
+      # authorized:
+      #   # Allow all full workspace members:
+      #   - workspace_members: true
+      #   # Or restrict to a user group (requires usergroups:read scope):
+      #   # - user_group: engineering
+      #   # Or restrict to specific users:
+      #   # - user_id: U12345678

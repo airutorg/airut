@@ -96,6 +96,12 @@ STEPS: list[Step] = [
         workflow="code",
     ),
     Step(
+        name="Example config check",
+        command="uv run python -m airut.config.generate --check",
+        workflow="code",
+        fix_command="uv run python -m airut.config.generate",
+    ),
+    Step(
         name="Worktree clean check",
         command="git status --porcelain",
         workflow="code",
