@@ -218,9 +218,8 @@ class ConfigEditor:
             self._resource_limits_schema,
         )
         if rl_errors:
-            prefixed = {f"rl_{k}": v for k, v in rl_errors.items()}
-            errors.update(prefixed)
-            return self._handle_global_get(request, errors=errors)
+            rl_prefixed = {f"rl_{k}": v for k, v in rl_errors.items()}
+            return self._handle_global_get(request, errors=rl_prefixed)
 
         # Parse variables
         new_vars = parse_vars_from_form(form)
@@ -361,7 +360,9 @@ class ConfigEditor:
         # Channels
         has_email = form.get("has_email") == "true"
         has_slack = form.get("has_slack") == "true"
-        channel_errors = self._merge_channels(form, raw_repo)
+        channel_errors = self._merge_channels(
+            form, raw_repo, has_email, has_slack
+        )
         if channel_errors:
             return self._handle_repo_get(
                 request,
@@ -406,11 +407,10 @@ class ConfigEditor:
         self,
         form: dict[str, str],
         raw_repo: dict[str, Any],
+        has_email: bool,
+        has_slack: bool,
     ) -> dict[str, str] | None:
         """Parse and merge email/slack channels. Returns errors or None."""
-        has_email = form.get("has_email") == "true"
-        has_slack = form.get("has_slack") == "true"
-
         if has_email:
             email_parsed, email_errors = parse_form_fields(
                 form, self._email_schema
@@ -589,6 +589,10 @@ class ConfigEditor:
         add_email = form.get("add_email") == "true"
         add_slack = form.get("add_slack") == "true"
 
+        # Default to email if no channel selected
+        if not add_email and not add_slack:
+            add_email = True
+
         if add_email:
             new_repo["email"] = {
                 "imap_server": "",
@@ -605,18 +609,6 @@ class ConfigEditor:
                 "bot_token": "",
                 "app_token": "",
                 "authorized": [{"workspace_members": True}],
-            }
-
-        # Ensure at least one channel placeholder
-        if not add_email and not add_slack:
-            new_repo["email"] = {
-                "imap_server": "",
-                "smtp_server": "",
-                "username": "",
-                "password": "",
-                "from": "",
-                "authorized_senders": [],
-                "trusted_authserv_id": "",
             }
 
         repos[repo_id] = new_repo

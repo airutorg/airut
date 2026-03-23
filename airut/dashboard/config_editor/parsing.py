@@ -14,6 +14,7 @@ import itertools
 import re
 from typing import Any
 
+from airut.config.schema import FieldSchema
 from airut.yaml_env import EnvVar, VarRef
 
 
@@ -92,7 +93,7 @@ def coerce_value(
 
 def parse_form_fields(
     form: dict[str, str],
-    schema: list[Any],
+    schema: list[FieldSchema],
 ) -> tuple[dict[str, Any], dict[str, str]]:
     """Parse form submission into raw config values.
 

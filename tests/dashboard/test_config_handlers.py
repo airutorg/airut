@@ -546,6 +546,8 @@ class TestConfigEditorInternal:
             ),
         )
         assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "required" in html.lower() or "error" in html.lower()
 
     def test_repo_post_with_git_url_var_mode(self, tmp_path: Path) -> None:
         config_path = _write_config(tmp_path)
