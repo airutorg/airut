@@ -44,7 +44,20 @@ the project-specific checklist below.
 - [ ] Look for duplicated logic across the changed files and the rest of the
   codebase. Flag candidates for extraction into shared utilities.
 
-### 5. Test quality
+### 5. Interface cleanliness — no legacy wrappers
+
+- [ ] No backwards-compatibility shims: type aliases to renamed types,
+  re-exports, wrapper functions that just forward to the new function, unused
+  parameters kept "for compatibility."
+- [ ] Callers are updated throughout — not just the declaration. Grep for all
+  references.
+- [ ] Interfaces and APIs are clean after the change. Watch for signs of lazy
+  updates designed to avoid breaking callers (e.g., optional parameters that
+  should be required, union types that paper over a migration, **kwargs
+  pass-through to avoid signature changes).
+- [ ] If a refactor made an interface awkward, clean it up in the same PR.
+
+### 6. Test quality
 
 - [ ] Tests validate externally visible behavior, not implementation details.
 - [ ] Assertions verify correct behavior — not just "no exception was raised."
@@ -52,7 +65,7 @@ the project-specific checklist below.
 - [ ] No `sleep()` in tests. Use polling, events, or mock time instead.
 - [ ] No `pytest.skip()` — write proper mocks.
 
-### 6. General
+### 7. General
 
 - [ ] No `print()` — use `logging`.
 - [ ] No secrets or credentials in committed files.
@@ -63,7 +76,7 @@ the project-specific checklist below.
 Organize findings by severity:
 
 - **Must fix** — correctness, security, spec violations, `Any` usage, missing
-  tests.
+  tests, legacy wrappers / unclean interfaces.
 - **Should fix** — duplication, overly large files/functions, unclear naming,
   missing doc updates.
 - **Nit** — style, minor improvements (keep these brief).
