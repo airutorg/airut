@@ -248,11 +248,6 @@ subagent** before creating the PR. The subagent must read
 4. Iterate until the review is clean (no "must fix" or "should fix" items).
 5. Proceed to step 3 (push and create PR).
 
-**All review findings about the current change must be resolved before the PR is
-created.** "I'll clean this up in a follow-up" is not acceptable. The review
-exists to catch issues before they land — deferring findings defeats its
-purpose.
-
 **Skip code review** only when the change is trivial (docs-only, typo fix,
 config-only) or the user explicitly opts out.
 
