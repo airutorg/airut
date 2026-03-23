@@ -264,3 +264,86 @@ class TestSchemaForUIWithRealConfigs:
         # All should be TASK scope
         for s in schema:
             assert s.scope == "task"
+
+    def test_masked_secret(self) -> None:
+        from airut.gateway.config import MaskedSecret
+
+        schema = schema_for_ui(MaskedSecret)
+        names = {s.name for s in schema}
+        assert names == {
+            "value",
+            "scopes",
+            "headers",
+            "allow_foreign_credentials",
+        }
+        # value is secret
+        value_field = next(s for s in schema if s.name == "value")
+        assert value_field.secret is True
+        assert value_field.scope == "repo"
+        # allow_foreign_credentials has a default
+        afc = next(s for s in schema if s.name == "allow_foreign_credentials")
+        assert afc.required is False
+        assert afc.default is False
+
+    def test_signing_credential_field(self) -> None:
+        from airut.gateway.config import SigningCredentialField
+
+        schema = schema_for_ui(SigningCredentialField)
+        names = {s.name for s in schema}
+        assert names == {"name", "value"}
+        value_field = next(s for s in schema if s.name == "value")
+        assert value_field.secret is True
+        name_field = next(s for s in schema if s.name == "name")
+        assert name_field.secret is False
+
+    def test_signing_credential(self) -> None:
+        from airut.gateway.config import SigningCredential
+
+        schema = schema_for_ui(SigningCredential)
+        names = {s.name for s in schema}
+        assert names == {
+            "access_key_id",
+            "secret_access_key",
+            "session_token",
+            "scopes",
+        }
+        # secret fields
+        for name in ("access_key_id", "secret_access_key", "session_token"):
+            f = next(s for s in schema if s.name == name)
+            assert f.secret is True, f"{name} should be secret"
+        # session_token is optional (has default None)
+        st = next(s for s in schema if s.name == "session_token")
+        assert st.required is False
+        # scopes is required
+        scopes = next(s for s in schema if s.name == "scopes")
+        assert scopes.required is True
+
+    def test_github_app_credential(self) -> None:
+        from airut.gateway.config import GitHubAppCredential
+
+        schema = schema_for_ui(GitHubAppCredential)
+        names = {s.name for s in schema}
+        assert names == {
+            "app_id",
+            "private_key",
+            "installation_id",
+            "scopes",
+            "allow_foreign_credentials",
+            "base_url",
+            "permissions",
+            "repositories",
+        }
+        # private_key is secret
+        pk = next(s for s in schema if s.name == "private_key")
+        assert pk.secret is True
+        assert pk.scope == "repo"
+        # app_id is required, not secret
+        app_id = next(s for s in schema if s.name == "app_id")
+        assert app_id.required is True
+        assert app_id.secret is False
+        # base_url has a default
+        base_url = next(s for s in schema if s.name == "base_url")
+        assert base_url.default == "https://api.github.com"
+        # All fields should be REPO scope
+        for s in schema:
+            assert s.scope == "repo"

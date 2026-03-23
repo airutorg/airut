@@ -130,10 +130,19 @@ class MaskedSecret:
             from reaching allowlisted hosts.
     """
 
-    value: str
-    scopes: frozenset[str]
-    headers: tuple[str, ...]
-    allow_foreign_credentials: bool = False
+    value: str = field(metadata=meta("Secret value", Scope.REPO, secret=True))
+    scopes: frozenset[str] = field(
+        metadata=meta("Fnmatch patterns for allowed hosts", Scope.REPO),
+    )
+    headers: tuple[str, ...] = field(
+        metadata=meta("Fnmatch patterns for headers to scan", Scope.REPO),
+    )
+    allow_foreign_credentials: bool = field(
+        default=False,
+        metadata=meta(
+            "Allow non-surrogate credentials on scoped hosts", Scope.REPO
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -174,8 +183,14 @@ class SigningCredentialField:
     and ``value`` is the real credential.
     """
 
-    name: str
-    value: str
+    name: str = field(
+        metadata=meta(
+            "Environment variable name for the container", Scope.REPO
+        ),
+    )
+    value: str = field(
+        metadata=meta("Real credential value", Scope.REPO, secret=True),
+    )
 
 
 @dataclass(frozen=True)
@@ -196,10 +211,19 @@ class SigningCredential:
         scopes: Fnmatch patterns for allowed hosts.
     """
 
-    access_key_id: SigningCredentialField
-    secret_access_key: SigningCredentialField
-    session_token: SigningCredentialField | None
-    scopes: frozenset[str]
+    access_key_id: SigningCredentialField = field(
+        metadata=meta("Access key ID", Scope.REPO, secret=True),
+    )
+    secret_access_key: SigningCredentialField = field(
+        metadata=meta("Secret access key", Scope.REPO, secret=True),
+    )
+    scopes: frozenset[str] = field(
+        metadata=meta("Fnmatch patterns for allowed hosts", Scope.REPO),
+    )
+    session_token: SigningCredentialField | None = field(
+        default=None,
+        metadata=meta("Optional STS session token", Scope.REPO, secret=True),
+    )
 
 
 @dataclass(frozen=True)
@@ -254,14 +278,39 @@ class GitHubAppCredential:
         repositories: Optional token repository restrictions.
     """
 
-    app_id: str
-    private_key: str
-    installation_id: str
-    scopes: frozenset[str]
-    allow_foreign_credentials: bool = False
-    base_url: str = "https://api.github.com"
-    permissions: dict[str, str] | None = None
-    repositories: tuple[str, ...] | None = None
+    app_id: str = field(
+        metadata=meta("GitHub App Client ID or numeric App ID", Scope.REPO),
+    )
+    private_key: str = field(
+        metadata=meta("PEM-encoded RSA private key", Scope.REPO, secret=True),
+    )
+    installation_id: str = field(
+        metadata=meta("Installation ID for the target org/user", Scope.REPO),
+    )
+    scopes: frozenset[str] = field(
+        metadata=meta(
+            "Fnmatch patterns for hosts where token replacement applies",
+            Scope.REPO,
+        ),
+    )
+    allow_foreign_credentials: bool = field(
+        default=False,
+        metadata=meta(
+            "Allow non-surrogate credentials on scoped hosts", Scope.REPO
+        ),
+    )
+    base_url: str = field(
+        default="https://api.github.com",
+        metadata=meta("GitHub API base URL", Scope.REPO),
+    )
+    permissions: dict[str, str] | None = field(
+        default=None,
+        metadata=meta("Optional token permission restrictions", Scope.REPO),
+    )
+    repositories: tuple[str, ...] | None = field(
+        default=None,
+        metadata=meta("Optional token repository restrictions", Scope.REPO),
+    )
 
 
 @dataclass(frozen=True)

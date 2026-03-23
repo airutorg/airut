@@ -69,14 +69,18 @@ All frozen config dataclasses that represent user-visible settings receive
 - `EmailChannelConfig` — email channel settings
 - `SlackChannelConfig` — Slack channel settings
 - `ResourceLimits` — container resource limits
+- `MaskedSecret` — masked secret credential entries
+- `SigningCredentialField` — name/value pair within signing credentials
+- `SigningCredential` — AWS SigV4 signing credential entries
+- `GitHubAppCredential` — GitHub App credential entries
+
+Credential types use `Scope.REPO` (they live under per-repo config). Secret
+values (`MaskedSecret.value`, `SigningCredentialField.value`,
+`SigningCredential.access_key_id/secret_access_key/session_token`,
+`GitHubAppCredential.private_key`) are marked with `secret=True`.
 
 **Excluded** from `FieldMeta` annotations:
 
-- `MaskedSecret`, `SigningCredential`, `SigningCredentialField`,
-  `GitHubAppCredential` — credential pool entries have dynamic keys (the user
-  chooses env var names) and variable structure. They cannot be represented as
-  fixed-schema UI forms. The UI will handle credential pools through a
-  specialized key-value editor, not through `schema_for_ui()`.
 - `ServerConfig` — a thin container for `GlobalConfig` + repos dict; not
   directly user-editable.
 - Internal types like `ReplacementEntry`, `SigningCredentialEntry`,
@@ -358,9 +362,11 @@ mask values before logging or UI display.
 annotated config class. Each record includes field name, type annotation as
 string, default value, required flag, documentation, scope, and secret flag.
 
-The UI calls `schema_for_ui(GlobalConfig)` and `schema_for_ui(RepoServerConfig)`
-to render settings forms. Credential pool entries are not covered — the UI
-handles these through specialized key-value editors.
+The UI calls `schema_for_ui()` on all annotated config classes — including
+credential types (`MaskedSecret`, `SigningCredential`, `SigningCredentialField`,
+`GitHubAppCredential`) — to render settings forms. Keyed credential collections
+use `schema_for_ui()` on the item type to generate sub-forms within expandable
+card widgets.
 
 ## Scope Assignments
 
