@@ -327,8 +327,8 @@ class TestConversationDataIntegration:
         response = client.get("/conversation/abc12345")
         html = response.get_data(as_text=True)
 
-        # Check error class is applied
-        assert 'class="reply error"' in html
+        # Check error class is applied to reply card
+        assert 'class="card reply-error"' in html
 
     def test_render_conversation_multiple_replies(self, tmp_path: Path) -> None:
         """Conversation section displays multiple replies correctly."""
@@ -687,7 +687,7 @@ class TestConversationDataIntegration:
         html = response.get_data(as_text=True)
 
         # Request/Response sections should not be present
-        assert 'class="text-section-header"' not in html
+        assert 'class="text-label"' not in html
 
     def test_api_task_includes_request_response(self, tmp_path: Path) -> None:
         """Test /api/conversation/<id> includes request/response text."""
@@ -3251,7 +3251,6 @@ class TestConversationOverviewPage:
         assert "Reply #1" in html
         assert "Please help" in html
         assert "Here is help" in html
-        assert "Conversation Replies" in html
 
     def test_conversation_overview_pending_request(
         self, tmp_path: Path
@@ -3377,7 +3376,6 @@ class TestSingleReplySection:
         html = response.get_data(as_text=True)
 
         # Falls back to showing all replies
-        assert "Conversation Replies" in html
         assert "Reply #1" in html
 
     def test_single_reply_index_beyond_replies(self, tmp_path: Path) -> None:

@@ -195,15 +195,21 @@
 .task-card.success { border-left-color: var(--status-success); }
 .task-card.failed { border-left-color: var(--status-error); }
 
-/* ---- Reply card ---- */
-.reply-card {
-  background: var(--bg-inset);
-  border-radius: 6px;
-  padding: 16px;
-  margin-bottom: 12px;
-  border-left: 3px solid var(--status-info);
+/* ---- Reply cards ---- */
+.card.reply-error {
+  border-color: var(--status-error);
 }
-.reply-card.error { border-left-color: var(--status-error); }
+.reply-divider {
+  border: none;
+  border-top: 1px solid var(--border-light);
+  margin: 14px 0 10px 0;
+}
+.reply-meta {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
 
 /* ---- Summary grid ---- */
 .conversation-summary {
@@ -381,16 +387,14 @@
 .todo-label { line-height: 1.3; }
 
 /* ---- Text content blocks ---- */
-.text-section-header {
+.text-label {
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
   color: var(--text-tertiary);
   margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-light);
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 .text-content {
   padding: 0 0 0 12px;

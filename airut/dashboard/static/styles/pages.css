@@ -277,32 +277,6 @@ h2 {
 }
 
 /* ---- Conversation detail ---- */
-.reply-list {
-  border-top: 1px solid var(--border-light);
-  padding-top: 16px;
-}
-.reply {
-  background: var(--bg-inset);
-  border-radius: 6px;
-  padding: 16px;
-  margin-bottom: 12px;
-  border-left: 3px solid var(--status-info);
-}
-.reply.error { border-left-color: var(--status-error); }
-.reply-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.reply-number { font-weight: 600; color: var(--text-primary); font-size: 14px; }
-.reply-timestamp {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  font-family: var(--font-mono);
-}
 .task-row {
   display: grid;
   grid-template-columns: 1fr 2fr 1fr;
