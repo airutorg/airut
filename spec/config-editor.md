@@ -613,10 +613,14 @@ preflight blocks cross-origin POST with custom headers.
 
 ### Secret Handling
 
-Fields marked `secret=True` in `FieldMeta` are rendered as password inputs
-(masked). The actual secret value is available in the form for editing but not
-visible by default. Resolved value hints for `!env` on secret fields show
-`••••••••` instead of the real value.
+Fields marked `secret=True` in `FieldMeta` are rendered as plain text inputs,
+identical to non-secret string fields. No password masking or special treatment
+in the editor UI. The dashboard is a single-user system behind a reverse proxy
+with authentication — masking values in the editor adds friction (can't verify
+what you typed, copy-paste issues) without meaningful security benefit.
+
+The `secret` flag remains in `FieldMeta` for other consumers (diff output
+masking, log filtering) but does not affect editor rendering.
 
 ### Access Control
 
