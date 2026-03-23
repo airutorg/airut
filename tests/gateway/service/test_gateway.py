@@ -1422,6 +1422,91 @@ class TestGarbageCollectorThread:
         # Should exit without running any GC
         handler.conversation_manager.list_all.assert_not_called()
 
+    def test_rereads_config_each_iteration(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """GC re-reads config each iteration so reloads take effect.
+
+        Verifies that conversation_max_age_days and image_prune are
+        re-read from self.global_config each GC iteration rather than
+        cached at thread start.
+        """
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, conversation_max_age_days=30, image_prune=False)
+
+        conv_path = tmp_path / "old_conv"
+        conv_path.mkdir()
+        # 10 days old: within 30d limit, outside 7d limit
+        old_time = time.time() - (10 * 24 * 60 * 60)
+        os.utime(conv_path, (old_time, old_time))
+
+        handler.conversation_manager.list_all.return_value = ["conv1"]
+        handler.conversation_manager.get_workspace_path.return_value = conv_path
+
+        iteration = 0
+
+        def wait_side_effect(timeout: float | None = None) -> bool:
+            nonlocal iteration
+            iteration += 1
+            if iteration == 1:
+                # Initial delay — continue
+                return False
+            if iteration == 2:
+                # First pass done with 30d config (conv kept).
+                # Simulate config reload: tighten max_age and enable
+                # image_prune before next iteration.
+                update_global(
+                    svc, conversation_max_age_days=7, image_prune=True
+                )
+                return False
+            # Third call — shutdown
+            return True
+
+        svc._shutdown_event.wait = MagicMock(side_effect=wait_side_effect)
+        svc.sandbox.prune_images.return_value = 0
+        svc._garbage_collector_thread()
+
+        # Second iteration should use the new config:
+        # conv1 is 10 days old > 7 days → deleted
+        handler.conversation_manager.delete.assert_called_with("conv1")
+        # image_prune was flipped to True → prune called
+        svc.sandbox.prune_images.assert_called_once()
+
+    def test_safe_with_concurrent_repo_handlers_modification(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """GC snapshots repo_handlers for safe concurrent iteration.
+
+        Verifies that list() snapshot prevents RuntimeError when config
+        reload modifies repo_handlers concurrently.
+        """
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, conversation_max_age_days=7)
+
+        handler.conversation_manager.list_all.return_value = []
+
+        # Simulate a config reload adding a repo while GC iterates.
+        # With list() snapshot, the loop body won't see the new entry
+        # and won't raise RuntimeError.
+        original_list_all = handler.conversation_manager.list_all
+
+        def mutate_during_gc(*args: object, **kwargs: object) -> list[str]:
+            # Add a new repo handler mid-iteration
+            mock_handler = MagicMock()
+            mock_handler.conversation_manager.list_all.return_value = []
+            mock_handler.adapters = {}
+            svc.repo_handlers["new_repo"] = mock_handler
+            return original_list_all(*args, **kwargs)
+
+        handler.conversation_manager.list_all.side_effect = mutate_during_gc
+
+        svc._shutdown_event.wait = MagicMock(side_effect=[False, True])
+        # Should not raise RuntimeError
+        svc._garbage_collector_thread()
+
+        # Clean up
+        del svc.repo_handlers["new_repo"]
+
 
 class TestMain:
     def test_config_error(self) -> None:

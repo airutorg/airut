@@ -1000,11 +1000,15 @@ class GatewayService:
             self.global_config = new_global
             self._start_dashboard_early()
 
-        # Note: container_command, upstream_dns, resource_limits,
-        # conversation_max_age_days, image_prune, and
-        # shutdown_timeout_seconds require a service restart to apply.
-        # These fields are detected as changed but take effect on next
+        # Note: container_command, upstream_dns, and resource_limits
+        # (global default) require a service restart to apply.  These
+        # fields are detected as changed but take effect on next
         # restart.  Sandbox recreation is deferred to a future release.
+        #
+        # conversation_max_age_days and image_prune are re-read by the
+        # GC thread each iteration, so they take effect on reload.
+        # shutdown_timeout_seconds is read at shutdown time from
+        # self.global_config, so it also takes effect on reload.
 
         logger.info("Server-scope reload applied")
 
@@ -1429,21 +1433,22 @@ class GatewayService:
         Prunes old conversations and (optionally) dangling container
         images.
 
+        Config values (``conversation_max_age_days``, ``image_prune``)
+        are re-read from ``self.global_config`` each iteration so that
+        config reloads take effect without restarting the service.
+
         The initial delay ensures GC runs even when the server restarts
         frequently (previously, the full 24h wait before the first pass
         meant frequent restarts would skip GC entirely).
         """
-        max_age_days = self.global_config.conversation_max_age_days
-        image_prune = self.global_config.image_prune
-
         logger.info(
             "Garbage collector started "
             "(initial_delay: %ds, interval: %ds, max_age: %d days, "
             "image_prune: %s)",
             self.GC_INITIAL_DELAY,
             self.GC_INTERVAL,
-            max_age_days,
-            image_prune,
+            self.global_config.conversation_max_age_days,
+            self.global_config.image_prune,
         )
 
         # Wait for boot to finish before first pass.
@@ -1451,6 +1456,11 @@ class GatewayService:
             return  # Shutdown signaled during initial delay
 
         while self._running:
+            # Re-read config each iteration so reloads take effect.
+            gc_config = self.global_config
+            max_age_days = gc_config.conversation_max_age_days
+            image_prune = gc_config.image_prune
+
             try:
                 self._gc_conversations(max_age_days)
             except Exception as e:
@@ -1468,11 +1478,16 @@ class GatewayService:
                 break  # Shutdown signaled
 
     def _gc_conversations(self, max_age_days: int) -> None:
-        """Remove conversations older than *max_age_days*."""
+        """Remove conversations older than *max_age_days*.
+
+        Snapshots ``repo_handlers`` and each handler's ``adapters``
+        before iterating to avoid ``RuntimeError`` from concurrent
+        dict modification during config reload.
+        """
         logger.info("Running conversation garbage collection...")
         total_removed = 0
 
-        for repo_id, handler in self.repo_handlers.items():
+        for repo_id, handler in list(self.repo_handlers.items()):
             conv_mgr = handler.conversation_manager
             conversations = conv_mgr.list_all()
 
@@ -1496,8 +1511,10 @@ class GatewayService:
 
             # Notify adapters so they can prune stale state
             # (e.g. Slack thread-to-conversation mappings).
+            # Snapshot adapters to avoid races with config reload
+            # replacing handler.adapters concurrently.
             remaining = set(conv_mgr.list_all())
-            for adapter in handler.adapters.values():
+            for adapter in list(handler.adapters.values()):
                 try:
                     adapter.cleanup_conversations(remaining)
                 except Exception as e:
