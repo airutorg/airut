@@ -82,6 +82,7 @@ class RequestHandlers:
         sse_manager: SSEConnectionManager | None = None,
         git_version_info: GitVersionInfo | None = None,
         status_callback: Callable[[], dict[str, object]] | None = None,
+        has_config: bool = False,
     ) -> None:
         """Initialize request handlers.
 
@@ -99,6 +100,7 @@ class RequestHandlers:
             status_callback: Optional callable returning config reload status
                 dict with keys: config_generation, server_reload_pending,
                 last_reload_error.
+            has_config: Whether config editor is available.
         """
         self.tracker = tracker
         self.version_info = version_info
@@ -110,6 +112,7 @@ class RequestHandlers:
         self._sse_manager = sse_manager or SSEConnectionManager()
         self._git_version_info = git_version_info
         self._status_callback = status_callback
+        self._has_config = has_config
 
     def _get_boot_state(self) -> BootState | None:
         """Read current boot state from versioned store."""
@@ -182,6 +185,7 @@ class RequestHandlers:
                 pending_count=pending_count,
                 executing_count=counts.get("executing", 0),
                 completed_count=counts.get("completed", 0),
+                has_config=self._has_config,
             ),
             content_type="text/html; charset=utf-8",
         )

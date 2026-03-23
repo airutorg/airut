@@ -52,6 +52,20 @@ h2 {
 .version-status.check-failed { background: var(--bg-code); color: var(--text-tertiary); }
 .version-started { color: var(--text-tertiary); }
 
+/* ---- Dashboard actions ---- */
+.dashboard-actions {
+  margin-bottom: 16px;
+}
+.dashboard-config-link {
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+.dashboard-config-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
 /* ---- Boot state ---- */
 .boot-banner {
   max-width: 1400px;

@@ -148,6 +148,7 @@ class DashboardServer:
             sse_manager=self._sse_manager,
             git_version_info=git_version_info,
             status_callback=status_callback,
+            has_config=config_source is not None,
         )
 
         self._url_map = Map(

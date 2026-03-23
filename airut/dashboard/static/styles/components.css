@@ -57,17 +57,6 @@
   color: var(--text-primary);
   font-weight: 500;
 }
-.navbar-config {
-  margin-left: auto;
-  font-size: 13px;
-  color: var(--text-secondary);
-  text-decoration: none;
-  flex-shrink: 0;
-}
-.navbar-config:hover {
-  color: var(--accent);
-}
-
 /* ---- Card ---- */
 .card {
   background: var(--bg-surface);

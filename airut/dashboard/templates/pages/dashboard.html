@@ -5,6 +5,11 @@
 {% block body %}
 <div class="page dashboard-page">
     {% include "components/version_info.html" %}
+    {% if has_config %}
+    <div class="dashboard-actions">
+        <a href="/config" class="dashboard-config-link">Configuration</a>
+    </div>
+    {% endif %}
     <div id="dashboard-live" hx-ext="sse"
          sse-connect="/api/events/stream?format=html">
         <div id="boot-container" sse-swap="boot-state" hx-swap="innerHTML">
