@@ -239,7 +239,10 @@ subagent** before creating the PR. The subagent must read
 
 1. Launch subagent: point it to `workflows/code-review.md` and the current
    branch diff against `origin/main`.
-2. Address all "must fix" and "should fix" findings from the review.
+2. Address **every** "must fix" and "should fix" finding from the review —
+   including refactoring, clean-up, duplication, and interface issues. Do not
+   defer, postpone, or leave findings as TODOs. If the review says it should be
+   fixed, fix it now, in this PR.
 3. If substantial changes were made, re-run local CI and launch a **new** code
    review subagent to verify the fixes.
 4. Iterate until the review is clean (no "must fix" or "should fix" items).

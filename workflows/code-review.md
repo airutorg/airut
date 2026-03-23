@@ -78,8 +78,12 @@ Organize findings by severity:
 - **Must fix** — correctness, security, spec violations, `Any` usage, missing
   tests, legacy wrappers / unclean interfaces.
 - **Should fix** — duplication, overly large files/functions, unclear naming,
-  missing doc updates.
+  missing doc updates, refactoring or clean-up stemming from the change.
 - **Nit** — style, minor improvements (keep these brief).
+
+All "must fix" and "should fix" findings are **mandatory** — they must be
+resolved before the PR is created. They are not suggestions to consider for a
+follow-up. Only "nit" items may be deferred at the implementer's discretion.
 
 For each finding, include the file path, line range, and a concrete suggestion.
 If the review is clean, say so explicitly.
