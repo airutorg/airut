@@ -69,6 +69,8 @@ context that cannot be summarized here.
   - Release notes, GitHub release creation (version derived from git tag)
 - **Maintaining sandbox-action** → `workflows/sandbox-action.md`
   - Setup, changes, releases for `airutorg/sandbox-action` GitHub Action
+- **Code review (automated)** → `workflows/code-review.md`
+  - Project-specific review checklist used by the code review subagent
 
 Read the entire workflow before starting. Workflows are living documents -
 update them if outdated.
@@ -217,14 +219,34 @@ git fetch origin && git checkout -b feature/descriptive-name origin/main
 **Standard workflow:**
 
 1. Make changes, run `uv run scripts/ci.py --fix` (local CI), commit
-2. Push and create PR: `git push -u origin HEAD && gh pr create --fill`
-3. **Wait for GitHub CI:** `uv run scripts/pr.py ci --wait -v`
-4. Address review: `uv run scripts/pr.py review -v`, fix issues, push
-5. Merge (repo uses fast-forward only): `gh pr merge --squash --delete-branch`
-6. Return to main: `git checkout main && git pull`
+2. **Code review subagent** (see below)
+3. Push and create PR: `git push -u origin HEAD && gh pr create --fill`
+4. **Wait for GitHub CI:** `uv run scripts/pr.py ci --wait -v`
+5. Address review: `uv run scripts/pr.py review -v`, fix issues, push
+6. Merge (repo uses fast-forward only): `gh pr merge --squash --delete-branch`
+7. Return to main: `git checkout main && git pull`
 
-**IMPORTANT: Do not stop after step 2.** The task is complete only when the PR
-is created AND GitHub CI passes (step 3).
+**IMPORTANT: Do not stop after step 3.** The task is complete only when the PR
+is created AND GitHub CI passes (step 4).
+
+### Code Review Subagent (Step 2)
+
+After implementation is complete and local CI passes, launch a **code review
+subagent** before creating the PR. The subagent must read
+`workflows/code-review.md` first, then review the changes.
+
+**Process:**
+
+1. Launch subagent: point it to `workflows/code-review.md` and the current
+   branch diff against `origin/main`.
+2. Address all "must fix" and "should fix" findings from the review.
+3. If substantial changes were made, re-run local CI and launch a **new** code
+   review subagent to verify the fixes.
+4. Iterate until the review is clean (no "must fix" or "should fix" items).
+5. Proceed to step 3 (push and create PR).
+
+**Skip code review** only when the change is trivial (docs-only, typo fix,
+config-only) or the user explicitly opts out.
 
 **Pre-commit checklist (before step 1):**
 
