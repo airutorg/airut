@@ -14,7 +14,6 @@ import pytest
 
 from airut.cli import (
     _RESTART_CMD,
-    _STUB_CONFIG,
     _SUBCOMMAND_HELP,
     _WAIT_POLL_SECONDS,
     _check_dependency,
@@ -188,7 +187,9 @@ class TestCmdInit:
 
         assert result == 0
         assert config_path.exists()
-        assert config_path.read_text() == _STUB_CONFIG
+        from airut.config.generate import generate_stub_config
+
+        assert config_path.read_text() == generate_stub_config()
 
     def test_creates_parent_dirs(self, tmp_path: Path) -> None:
         """Creates parent directories if they don't exist."""
