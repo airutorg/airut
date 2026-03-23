@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Config - Global - Airut{% endblock %}
+{% block head_extra %}
+<meta name="htmx-config" content='{"headers":{"X-Requested-With":"XMLHttpRequest"}}'>
+<link rel="stylesheet" href="{{ static_url('styles/config.css') }}">
+{% endblock %}
+
+{% block body %}
+<div class="config-page">
+  <aside class="config-sidebar">
+    {% include "config/components/nav.html" with context %}
+  </aside>
+  <main class="config-content">
+    {% if save_message %}
+    <div class="save-result success">{{ save_message }}</div>
+    {% endif %}
+
+    <h1>Global Settings</h1>
+
+    <form method="post" action="/config/global">
+
+      {# ── Variables section ── #}
+      <fieldset class="config-section">
+        <legend>Variables</legend>
+        <div id="variable-list">
+          {% for name, value in variables.items() %}
+          {% set idx = loop.index0 %}
+          {% set var_name = name %}
+          {% set var_mode = detect_mode(value) %}
+          {% set var_value = detect_mode_value(value) %}
+          {% include "config/components/variable_row.html" %}
+          {% endfor %}
+        </div>
+        <button type="button" class="config-btn-add"
+                hx-post="/config/vars/add"
+                hx-target="#variable-list"
+                hx-swap="beforeend">+ Add Variable</button>
+      </fieldset>
+
+      {# ── Global config fields grouped ── #}
+      {% for group_name, fields in global_groups %}
+      <fieldset class="config-section">
+        <legend>{{ group_name }}</legend>
+        {% for field in fields %}
+        {% set raw_value = lookup_global_raw(raw, field.name) %}
+        {% set mode = detect_mode(raw_value) %}
+        {% set current_value = detect_mode_value(raw_value) %}
+        <div class="config-field{% if errors.get(field.name) %} has-error{% endif %}"
+             id="field-row-{{ field.name }}">
+          <label class="config-field-label">
+            {{ field.name | replace('_', ' ') | title }}
+            <span class="scope-badge scope-{{ field.scope }}">{{ field.scope }}</span>
+          </label>
+          <div class="config-field-controls">
+            <select name="field.{{ field.name }}.mode" class="config-mode-select"
+                    hx-get="/config/field-input?name={{ field.name }}&amp;type={{ field.type_name | urlencode }}"
+                    hx-target="#input-{{ field.name }}"
+                    hx-swap="innerHTML"
+                    hx-include="this">
+              <option value="literal" {{ 'selected' if mode == 'literal' }}>Literal</option>
+              <option value="var" {{ 'selected' if mode == 'var' }}>!var</option>
+              <option value="env" {{ 'selected' if mode == 'env' }}>!env</option>
+            </select>
+            <span id="input-{{ field.name }}" class="config-field-input">
+              {% set field_name = field.name %}
+              {% set type_name = field.type_name %}
+              {% include "config/components/field_input.html" %}
+            </span>
+          </div>
+          <small class="config-field-doc">{{ field.doc }}</small>
+          {% if not field.required and field.default is not none %}
+          <small class="config-field-default">Default: {{ field.default }}</small>
+          {% endif %}
+          {% if errors.get(field.name) %}
+          <small class="config-field-error">{{ errors[field.name] }}</small>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </fieldset>
+      {% endfor %}
+
+      <div class="config-actions">
+        <button type="submit" class="action-btn primary">Save Global Settings</button>
+      </div>
+    </form>
+  </main>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ static_url('vendor/htmx.min.js') }}"></script>
+<script src="{{ static_url('js/config.js') }}"></script>
+{% endblock %}

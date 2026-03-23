@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Config Error - Airut{% endblock %}
+{% block head_extra %}
+<link rel="stylesheet" href="{{ static_url('styles/config.css') }}">
+{% endblock %}
+{% block body %}
+<div class="page">
+  <div class="card">
+    <h1>Error</h1>
+    <p class="config-error-text">{{ error }}</p>
+    <a href="/config/global" class="action-btn primary">Back to Config</a>
+  </div>
+</div>
+{% endblock %}

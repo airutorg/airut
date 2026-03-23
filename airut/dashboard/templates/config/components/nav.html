@@ -1,0 +1,9 @@
+{# Config sidebar navigation — expects: repo_ids (list of str) #}
+<nav class="config-nav">
+  <a href="/config/global" class="config-nav-item">Global</a>
+  <div class="config-nav-header">Repositories</div>
+  {% for rid in repo_ids %}
+  <a href="/config/repo/{{ rid }}" class="config-nav-item">{{ rid }}</a>
+  {% endfor %}
+  <a href="/config/repo/new" class="config-nav-item config-nav-add">+ New Repo</a>
+</nav>

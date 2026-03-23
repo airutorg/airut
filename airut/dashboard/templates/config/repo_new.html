@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}New Repo - Config - Airut{% endblock %}
+{% block head_extra %}
+<meta name="htmx-config" content='{"headers":{"X-Requested-With":"XMLHttpRequest"}}'>
+<link rel="stylesheet" href="{{ static_url('styles/config.css') }}">
+{% endblock %}
+
+{% block body %}
+<div class="config-page">
+  <aside class="config-sidebar">
+    {% include "config/components/nav.html" with context %}
+  </aside>
+  <main class="config-content">
+    <h1>New Repository</h1>
+
+    {% if error %}
+    <div class="save-result error">{{ error }}</div>
+    {% endif %}
+
+    <form method="post" action="/config/repo/new">
+
+      <fieldset class="config-section">
+        <legend>Repository Identity</legend>
+        <div class="config-field">
+          <label class="config-field-label">Repository ID</label>
+          <input type="text" name="repo_id" class="config-input"
+                 placeholder="my-project" required
+                 pattern="[a-zA-Z0-9][a-zA-Z0-9._-]*">
+          <small class="config-field-doc">Unique identifier (letters, numbers, .-_)</small>
+        </div>
+        <div class="config-field">
+          <label class="config-field-label">Git Repository URL</label>
+          <input type="text" name="git_repo_url" class="config-input"
+                 placeholder="https://github.com/org/repo.git" required>
+          <small class="config-field-doc">HTTPS or SSH URL for the git repository</small>
+        </div>
+      </fieldset>
+
+      <fieldset class="config-section">
+        <legend>Channels</legend>
+        <div class="config-field">
+          <label class="config-checkbox">
+            <input type="checkbox" name="add_email" value="true">
+            Add Email Channel
+          </label>
+        </div>
+        <div class="config-field">
+          <label class="config-checkbox">
+            <input type="checkbox" name="add_slack" value="true">
+            Add Slack Channel
+          </label>
+        </div>
+        <small class="config-field-doc">If neither is selected, an email channel is created by default.</small>
+      </fieldset>
+
+      <div class="config-actions">
+        <button type="submit" class="action-btn primary">Create Repository</button>
+        <a href="/config/global" class="action-btn">Cancel</a>
+      </div>
+    </form>
+  </main>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ static_url('vendor/htmx.min.js') }}"></script>
+<script src="{{ static_url('js/config.js') }}"></script>
+{% endblock %}

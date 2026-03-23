@@ -1,0 +1,12 @@
+{# Single variable editor row — expects: idx, var_name, var_value, var_mode #}
+<div class="variable-row">
+  <input type="text" name="var.{{ idx }}.name" value="{{ var_name }}"
+         placeholder="Variable name" class="config-input var-name">
+  <select name="var.{{ idx }}.mode" class="config-mode-select">
+    <option value="literal" {{ 'selected' if var_mode != 'env' }}>Literal</option>
+    <option value="env" {{ 'selected' if var_mode == 'env' }}>!env</option>
+  </select>
+  <input type="text" name="var.{{ idx }}.value" value="{{ var_value }}"
+         placeholder="Value" class="config-input var-value">
+  <button type="button" class="config-btn-icon" data-remove-row title="Remove variable">&times;</button>
+</div>

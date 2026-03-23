@@ -48,6 +48,8 @@ For high-level documentation, see [doc/](../doc/).
 ## Dashboard
 
 - [dashboard.md](dashboard.md) — Web dashboard for task monitoring
+- [config-editor.md](config-editor.md) — Web UI for editing server configuration
+  (schema-driven forms, HTMX, variable support)
 
 ## Infrastructure
 

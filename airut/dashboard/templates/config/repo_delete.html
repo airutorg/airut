@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Delete {{ repo_id }} - Config - Airut{% endblock %}
+{% block head_extra %}
+<meta name="htmx-config" content='{"headers":{"X-Requested-With":"XMLHttpRequest"}}'>
+<link rel="stylesheet" href="{{ static_url('styles/config.css') }}">
+{% endblock %}
+
+{% block body %}
+<div class="config-page">
+  <aside class="config-sidebar">
+    {% include "config/components/nav.html" with context %}
+  </aside>
+  <main class="config-content">
+    <h1>Delete Repository</h1>
+
+    <div class="card">
+      <p>Are you sure you want to delete repository <strong>{{ repo_id }}</strong>?</p>
+      <p class="config-warning">This will remove all configuration for this repository.
+         Active tasks will continue until completion but no new tasks will be accepted.</p>
+
+      <form method="post" action="/config/repo/{{ repo_id }}/delete">
+        <div class="config-actions">
+          <button type="submit" class="config-btn-danger">Delete Repository</button>
+          <a href="/config/repo/{{ repo_id }}" class="action-btn">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </main>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ static_url('vendor/htmx.min.js') }}"></script>
+<script src="{{ static_url('js/config.js') }}"></script>
+{% endblock %}

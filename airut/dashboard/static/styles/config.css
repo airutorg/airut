@@ -1,0 +1,380 @@
+/* config.css - Config editor page layout and components */
+
+/* ---- Page layout (sidebar + content) ---- */
+.config-page {
+  display: flex;
+  gap: 0;
+  min-height: calc(100vh - 48px);
+}
+
+/* ---- Sidebar navigation ---- */
+.config-sidebar {
+  width: 200px;
+  flex-shrink: 0;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-light);
+  padding: 16px 0;
+}
+.config-nav {
+  display: flex;
+  flex-direction: column;
+}
+.config-nav-item {
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  border-left: 3px solid transparent;
+}
+.config-nav-item:hover {
+  background: var(--bg-inset);
+  color: var(--text-primary);
+  text-decoration: none;
+}
+.config-nav-header {
+  padding: 12px 16px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+}
+.config-nav-add {
+  color: var(--accent);
+  font-weight: 500;
+}
+.config-nav-add:hover {
+  color: var(--accent-hover);
+}
+
+/* ---- Main content area ---- */
+.config-content {
+  flex: 1;
+  padding: 20px 32px;
+  max-width: 760px;
+}
+
+/* ---- Section (fieldset) ---- */
+.config-section {
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+  background: var(--bg-surface);
+}
+.config-section legend {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* ---- Subsection (within a section) ---- */
+.config-subsection {
+  margin-bottom: 12px;
+}
+.config-subsection-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin: 12px 0 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+/* ---- Config field ---- */
+.config-field {
+  margin-bottom: 14px;
+}
+.config-field.has-error .config-input {
+  border-color: var(--status-error);
+}
+.config-field-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+.config-field-controls {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.config-field-input {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.config-field-doc {
+  display: block;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+.config-field-default {
+  display: block;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+.config-field-error {
+  display: block;
+  font-size: 11px;
+  color: var(--status-error);
+  font-weight: 500;
+  margin-top: 2px;
+}
+.config-error-text {
+  color: var(--status-error);
+  font-family: var(--font-mono);
+  font-size: 14px;
+}
+
+/* ---- Scope badge ---- */
+.scope-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.scope-badge.scope-task {
+  background: var(--status-success-bg);
+  color: var(--status-success);
+}
+.scope-badge.scope-repo {
+  background: var(--status-info-bg);
+  color: var(--status-info);
+}
+.scope-badge.scope-server {
+  background: var(--status-warning-bg);
+  color: var(--status-warning);
+}
+
+/* ---- Inputs ---- */
+.config-input {
+  font-family: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  width: 100%;
+  box-sizing: border-box;
+}
+.config-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+.config-input:disabled {
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+}
+.config-textarea {
+  resize: vertical;
+  min-height: 60px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.config-mode-select {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-inset);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.config-mode-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ---- Resolved value hint ---- */
+.config-resolved {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+.config-resolved.unset {
+  color: var(--status-warning);
+}
+
+/* ---- Variable row ---- */
+.variable-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.variable-row .var-name {
+  width: 180px;
+  flex-shrink: 0;
+}
+.variable-row .var-value {
+  flex: 1;
+}
+
+/* ---- Credential card ---- */
+.credential-card {
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  background: var(--bg-inset);
+}
+.credential-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.credential-header .config-input {
+  flex: 1;
+  font-weight: 600;
+}
+.credential-field {
+  margin-bottom: 8px;
+}
+.credential-field label {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  margin-bottom: 3px;
+}
+.credential-field-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.credential-field-controls .config-input {
+  flex: 1;
+}
+
+/* ---- Buttons ---- */
+.config-btn-add {
+  display: inline-block;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--accent);
+  background: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  margin-top: 4px;
+}
+.config-btn-add:hover {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+}
+.config-btn-danger {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--status-error);
+  background: var(--status-error-bg);
+  border: 1px solid var(--status-error);
+  border-radius: 4px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.config-btn-danger:hover {
+  background: var(--status-error);
+  color: #ffffff;
+  text-decoration: none;
+}
+.config-btn-icon {
+  padding: 4px 8px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.config-btn-icon:hover {
+  color: var(--status-error);
+  background: var(--status-error-bg);
+}
+.config-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-light);
+}
+
+/* ---- Toggle (inline checkbox label) ---- */
+.config-toggle {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.config-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+/* ---- Save result banner ---- */
+.save-result {
+  padding: 10px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+.save-result.success {
+  background: var(--status-success-bg);
+  color: var(--status-success);
+  border: 1px solid var(--status-success);
+}
+.save-result.error {
+  background: var(--status-error-bg);
+  color: var(--status-error);
+  border: 1px solid var(--status-error);
+}
+
+/* ---- Warning text ---- */
+.config-warning {
+  font-size: 13px;
+  color: var(--status-warning);
+}
+
+/* ---- Reload status ---- */
+.reload-status {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.reload-status.pending {
+  color: var(--status-info);
+}

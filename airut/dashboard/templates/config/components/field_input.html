@@ -1,0 +1,47 @@
+{# Input widget for a config field — varies by mode and type.
+   Expects: field_name, type_name, mode, variables, resolve_env, current_value #}
+{% if mode == 'var' %}
+<input type="text" name="field.{{ field_name }}.value"
+       value="{{ current_value }}" placeholder="Variable name"
+       list="var-list-{{ field_name }}" class="config-input">
+<datalist id="var-list-{{ field_name }}">
+  {% for vname in variables %}
+  <option value="{{ vname }}">
+  {% endfor %}
+</datalist>
+{% if current_value and current_value in variables %}
+<small class="config-resolved">= {{ variables[current_value] }}</small>
+{% endif %}
+{% elif mode == 'env' %}
+<input type="text" name="field.{{ field_name }}.value"
+       value="{{ current_value }}" placeholder="ENV_VAR_NAME"
+       class="config-input">
+{% if current_value %}
+{% set resolved = resolve_env(current_value) %}
+{% if resolved is not none %}
+<small class="config-resolved">= {{ resolved }}</small>
+{% else %}
+<small class="config-resolved unset">(unset)</small>
+{% endif %}
+{% endif %}
+{% else %}
+{% if 'bool' in type_name %}
+<select name="field.{{ field_name }}.value" class="config-input">
+  <option value="" {{ 'selected' if not current_value }}>-- default --</option>
+  <option value="true" {{ 'selected' if current_value in ('true', 'True') }}>true</option>
+  <option value="false" {{ 'selected' if current_value in ('false', 'False') }}>false</option>
+</select>
+{% elif 'list' in type_name %}
+<textarea name="field.{{ field_name }}.value" class="config-input config-textarea"
+          rows="3" placeholder="One item per line">{{ current_value }}</textarea>
+{% elif 'int' in type_name and 'dict' not in type_name %}
+<input type="number" name="field.{{ field_name }}.value"
+       value="{{ current_value }}" class="config-input">
+{% elif 'float' in type_name %}
+<input type="number" step="0.1" name="field.{{ field_name }}.value"
+       value="{{ current_value }}" class="config-input">
+{% else %}
+<input type="text" name="field.{{ field_name }}.value"
+       value="{{ current_value }}" class="config-input">
+{% endif %}
+{% endif %}

@@ -1,0 +1,11 @@
+{# Reload status polling fragment — expects: expected_gen #}
+{% if expected_gen %}
+<div id="reload-status" class="reload-status pending"
+     hx-get="/config/reload-status?gen={{ expected_gen }}"
+     hx-trigger="load delay:500ms"
+     hx-swap="outerHTML">
+  Reloading configuration...
+</div>
+{% else %}
+<div id="reload-status" class="reload-status"></div>
+{% endif %}

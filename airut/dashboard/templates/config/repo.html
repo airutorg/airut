@@ -1,0 +1,305 @@
+{% extends "base.html" %}
+{% block title %}Config - {{ repo_id }} - Airut{% endblock %}
+{% block head_extra %}
+<meta name="htmx-config" content='{"headers":{"X-Requested-With":"XMLHttpRequest"}}'>
+<link rel="stylesheet" href="{{ static_url('styles/config.css') }}">
+{% endblock %}
+
+{% block body %}
+<div class="config-page">
+  <aside class="config-sidebar">
+    {% include "config/components/nav.html" with context %}
+  </aside>
+  <main class="config-content">
+    {% if save_message %}
+    <div class="save-result success">{{ save_message }}</div>
+    {% endif %}
+
+    <h1>{{ repo_id }}</h1>
+
+    <form method="post" action="/config/repo/{{ repo_id }}">
+
+      {# ── Repo Identity ── #}
+      <fieldset class="config-section">
+        <legend>Repository Identity</legend>
+        <div class="config-field">
+          <label class="config-field-label">Repo ID</label>
+          <input type="text" value="{{ repo_id }}" class="config-input" disabled>
+          <small class="config-field-doc">Cannot be changed after creation</small>
+        </div>
+        <div class="config-field">
+          <label class="config-field-label">Git Repo URL</label>
+          {% set git_raw = lookup_repo_raw(raw_repo, 'git_repo_url') %}
+          {% set git_mode = detect_mode(git_raw) %}
+          {% set git_value = detect_mode_value(git_raw) %}
+          <div class="config-field-controls">
+            <select name="git_repo_url.mode" class="config-mode-select">
+              <option value="literal" {{ 'selected' if git_mode == 'literal' }}>Literal</option>
+              <option value="var" {{ 'selected' if git_mode == 'var' }}>!var</option>
+              <option value="env" {{ 'selected' if git_mode == 'env' }}>!env</option>
+            </select>
+            <input type="text" name="git_repo_url.value" value="{{ git_value }}"
+                   class="config-input">
+          </div>
+        </div>
+      </fieldset>
+
+      {# ── Repo-level fields ── #}
+      <fieldset class="config-section">
+        <legend>Model &amp; Execution</legend>
+        {% for field in repo_schema %}
+        {% set raw_value = lookup_repo_raw(raw_repo, field.name) %}
+        {% set mode = detect_mode(raw_value) %}
+        {% set current_value = detect_mode_value(raw_value) %}
+        <div class="config-field{% if errors.get(field.name) %} has-error{% endif %}"
+             id="field-row-{{ field.name }}">
+          <label class="config-field-label">
+            {{ field.name | replace('_', ' ') | title }}
+            <span class="scope-badge scope-{{ field.scope }}">{{ field.scope }}</span>
+          </label>
+          <div class="config-field-controls">
+            <select name="field.{{ field.name }}.mode" class="config-mode-select"
+                    hx-get="/config/field-input?name={{ field.name }}&amp;type={{ field.type_name | urlencode }}"
+                    hx-target="#input-{{ field.name }}"
+                    hx-swap="innerHTML"
+                    hx-include="this">
+              <option value="literal" {{ 'selected' if mode == 'literal' }}>Literal</option>
+              <option value="var" {{ 'selected' if mode == 'var' }}>!var</option>
+              <option value="env" {{ 'selected' if mode == 'env' }}>!env</option>
+            </select>
+            <span id="input-{{ field.name }}" class="config-field-input">
+              {% set field_name = field.name %}
+              {% set type_name = field.type_name %}
+              {% include "config/components/field_input.html" %}
+            </span>
+          </div>
+          <small class="config-field-doc">{{ field.doc }}</small>
+          {% if not field.required and field.default is not none %}
+          <small class="config-field-default">Default: {{ field.default }}</small>
+          {% endif %}
+          {% if errors.get(field.name) %}
+          <small class="config-field-error">{{ errors[field.name] }}</small>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </fieldset>
+
+      {# ── Email Channel ── #}
+      <fieldset class="config-section">
+        <legend>
+          Email Channel
+          <label class="config-toggle">
+            <input type="hidden" name="has_email" value="false">
+            <input type="checkbox" name="has_email" value="true"
+                   {{ 'checked' if has_email }}>
+            Enabled
+          </label>
+        </legend>
+        {% if has_email %}
+        {% for group_name, fields in email_groups %}
+        <div class="config-subsection">
+          <h3 class="config-subsection-title">{{ group_name }}</h3>
+          {% for field in fields %}
+          {% set raw_value = lookup_email_raw(raw_email, field.name) %}
+          {% set mode = detect_mode(raw_value) %}
+          {% set current_value = detect_mode_value(raw_value) %}
+          <div class="config-field{% if errors.get(field.name) %} has-error{% endif %}"
+               id="field-row-{{ field.name }}">
+            <label class="config-field-label">
+              {{ field.name | replace('_', ' ') | title }}
+              <span class="scope-badge scope-{{ field.scope }}">{{ field.scope }}</span>
+            </label>
+            <div class="config-field-controls">
+              <select name="field.{{ field.name }}.mode" class="config-mode-select"
+                      hx-get="/config/field-input?name={{ field.name }}&amp;type={{ field.type_name | urlencode }}"
+                      hx-target="#input-{{ field.name }}"
+                      hx-swap="innerHTML"
+                      hx-include="this">
+                <option value="literal" {{ 'selected' if mode == 'literal' }}>Literal</option>
+                <option value="var" {{ 'selected' if mode == 'var' }}>!var</option>
+                <option value="env" {{ 'selected' if mode == 'env' }}>!env</option>
+              </select>
+              <span id="input-{{ field.name }}" class="config-field-input">
+                {% set field_name = field.name %}
+                {% set type_name = field.type_name %}
+                {% include "config/components/field_input.html" %}
+              </span>
+            </div>
+            <small class="config-field-doc">{{ field.doc }}</small>
+            {% if not field.required and field.default is not none %}
+            <small class="config-field-default">Default: {{ field.default }}</small>
+            {% endif %}
+            {% if errors.get(field.name) %}
+            <small class="config-field-error">{{ errors[field.name] }}</small>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+        {% endfor %}
+        {% endif %}
+      </fieldset>
+
+      {# ── Slack Channel ── #}
+      <fieldset class="config-section">
+        <legend>
+          Slack Channel
+          <label class="config-toggle">
+            <input type="hidden" name="has_slack" value="false">
+            <input type="checkbox" name="has_slack" value="true"
+                   {{ 'checked' if has_slack }}>
+            Enabled
+          </label>
+        </legend>
+        {% if has_slack %}
+        {% for field in slack_schema %}
+        {% if field.name != 'authorized' %}
+        {% set raw_value = raw_slack.get(field.name, '') %}
+        {% set mode = detect_mode(raw_value) %}
+        {% set current_value = detect_mode_value(raw_value) %}
+        <div class="config-field" id="field-row-{{ field.name }}">
+          <label class="config-field-label">
+            {{ field.name | replace('_', ' ') | title }}
+            <span class="scope-badge scope-{{ field.scope }}">{{ field.scope }}</span>
+          </label>
+          <div class="config-field-controls">
+            <select name="field.{{ field.name }}.mode" class="config-mode-select">
+              <option value="literal" {{ 'selected' if mode == 'literal' }}>Literal</option>
+              <option value="var" {{ 'selected' if mode == 'var' }}>!var</option>
+              <option value="env" {{ 'selected' if mode == 'env' }}>!env</option>
+            </select>
+            <span id="input-{{ field.name }}" class="config-field-input">
+              {% set field_name = field.name %}
+              {% set type_name = field.type_name %}
+              {% include "config/components/field_input.html" %}
+            </span>
+          </div>
+          <small class="config-field-doc">{{ field.doc }}</small>
+        </div>
+        {% endif %}
+        {% endfor %}
+        <div class="config-field">
+          <label class="config-field-label">Authorized Rules</label>
+          {% set auth_rules = raw_slack.get('authorized', []) %}
+          <textarea name="slack_authorized" class="config-input config-textarea"
+                    rows="4" placeholder="workspace_members: true&#10;user_id: U12345">{% for rule in auth_rules %}{% for rk, rv in rule.items() %}{{ rk }}: {{ rv }}{% endfor %}{% if not loop.last %}
+{% endif %}{% endfor %}</textarea>
+          <small class="config-field-doc">One rule per line (key: value). E.g. workspace_members: true</small>
+        </div>
+        {% endif %}
+      </fieldset>
+
+      {# ── Secrets ── #}
+      <fieldset class="config-section">
+        <legend>Secrets</legend>
+        <div id="secrets-list">
+          {% set secrets = raw_repo.get('secrets', {}) %}
+          {% for skey, sval in secrets.items() %}
+          <div class="variable-row">
+            <input type="text" name="secret.{{ loop.index0 }}.key" value="{{ skey }}"
+                   class="config-input" placeholder="Secret name">
+            {% set sv_mode = detect_mode(sval) %}
+            <select name="secret.{{ loop.index0 }}.value.mode" class="config-mode-select">
+              <option value="literal" {{ 'selected' if sv_mode == 'literal' }}>Literal</option>
+              <option value="var" {{ 'selected' if sv_mode == 'var' }}>!var</option>
+              <option value="env" {{ 'selected' if sv_mode == 'env' }}>!env</option>
+            </select>
+            <input type="text" name="secret.{{ loop.index0 }}.value.value"
+                   value="{{ detect_mode_value(sval) }}"
+                   class="config-input" placeholder="Value">
+            <button type="button" class="config-btn-icon" data-remove-row>&times;</button>
+          </div>
+          {% endfor %}
+        </div>
+      </fieldset>
+
+      {# ── Container Environment ── #}
+      <fieldset class="config-section">
+        <legend>Container Environment</legend>
+        <div id="container-env-list">
+          {% set container_env = raw_repo.get('container_env', {}) %}
+          {% for ekey, eval in container_env.items() %}
+          <div class="variable-row">
+            <input type="text" name="container_env.{{ loop.index0 }}.key" value="{{ ekey }}"
+                   class="config-input" placeholder="Variable name">
+            {% set ev_mode = detect_mode(eval) %}
+            <select name="container_env.{{ loop.index0 }}.value.mode" class="config-mode-select">
+              <option value="literal" {{ 'selected' if ev_mode == 'literal' }}>Literal</option>
+              <option value="var" {{ 'selected' if ev_mode == 'var' }}>!var</option>
+              <option value="env" {{ 'selected' if ev_mode == 'env' }}>!env</option>
+            </select>
+            <input type="text" name="container_env.{{ loop.index0 }}.value.value"
+                   value="{{ detect_mode_value(eval) }}"
+                   class="config-input" placeholder="Value">
+            <button type="button" class="config-btn-icon" data-remove-row>&times;</button>
+          </div>
+          {% endfor %}
+        </div>
+      </fieldset>
+
+      {# ── Masked Secrets ── #}
+      <fieldset class="config-section">
+        <legend>Masked Secrets</legend>
+        <div id="masked-secrets-list">
+          {% set masked = raw_repo.get('masked_secrets', {}) %}
+          {% for mkey, mentry in masked.items() %}
+          {% set idx = loop.index0 %}
+          {% set key = mkey %}
+          {% set entry = mentry %}
+          {% include "config/components/credential_masked_secret.html" %}
+          {% endfor %}
+        </div>
+        <button type="button" class="config-btn-add"
+                hx-post="/config/repo/{{ repo_id }}/credential/add?type=masked_secret"
+                hx-target="#masked-secrets-list"
+                hx-swap="beforeend">+ Add Masked Secret</button>
+      </fieldset>
+
+      {# ── Signing Credentials ── #}
+      <fieldset class="config-section">
+        <legend>Signing Credentials</legend>
+        <div id="signing-credentials-list">
+          {% set signing = raw_repo.get('signing_credentials', {}) %}
+          {% for skey, sentry in signing.items() %}
+          {% set idx = loop.index0 %}
+          {% set key = skey %}
+          {% set entry = sentry %}
+          {% include "config/components/credential_signing_credential.html" %}
+          {% endfor %}
+        </div>
+        <button type="button" class="config-btn-add"
+                hx-post="/config/repo/{{ repo_id }}/credential/add?type=signing_credential"
+                hx-target="#signing-credentials-list"
+                hx-swap="beforeend">+ Add Signing Credential</button>
+      </fieldset>
+
+      {# ── GitHub App Credentials ── #}
+      <fieldset class="config-section">
+        <legend>GitHub App Credentials</legend>
+        <div id="github-app-list">
+          {% set ghapps = raw_repo.get('github_app_credentials', {}) %}
+          {% for gkey, gentry in ghapps.items() %}
+          {% set idx = loop.index0 %}
+          {% set key = gkey %}
+          {% set entry = gentry %}
+          {% include "config/components/credential_github_app.html" %}
+          {% endfor %}
+        </div>
+        <button type="button" class="config-btn-add"
+                hx-post="/config/repo/{{ repo_id }}/credential/add?type=github_app"
+                hx-target="#github-app-list"
+                hx-swap="beforeend">+ Add GitHub App Credential</button>
+      </fieldset>
+
+      <div class="config-actions">
+        <button type="submit" class="action-btn primary">Save Repository Settings</button>
+        <a href="/config/repo/{{ repo_id }}/delete" class="config-btn-danger">Delete Repository</a>
+      </div>
+    </form>
+  </main>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ static_url('vendor/htmx.min.js') }}"></script>
+<script src="{{ static_url('js/config.js') }}"></script>
+{% endblock %}

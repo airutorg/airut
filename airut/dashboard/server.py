@@ -29,7 +29,9 @@ from werkzeug.serving import BaseWSGIServer, make_server
 from werkzeug.wrappers import Request, Response
 
 from airut.claude_output.types import StreamEvent
+from airut.config.source import YamlConfigSource
 from airut.conversation import ConversationMetadata
+from airut.dashboard.config_editor import ConfigEditor
 from airut.dashboard.formatters import VersionInfo
 from airut.dashboard.handlers import RequestHandlers
 from airut.dashboard.sse import SSEConnectionManager
@@ -97,6 +99,7 @@ class DashboardServer:
         clock: VersionClock | None = None,
         git_version_info: GitVersionInfo | None = None,
         status_callback: Callable[[], dict[str, object]] | None = None,
+        config_source: YamlConfigSource | None = None,
     ) -> None:
         """Initialize dashboard server.
 
@@ -115,6 +118,8 @@ class DashboardServer:
             git_version_info: Git version info for upstream update checks.
             status_callback: Optional callable returning config reload
                 status dict.
+            config_source: Optional YAML config source for the config
+                editor.  When provided, config editing routes are enabled.
         """
         self.tracker = tracker
         self.host = host
@@ -124,6 +129,12 @@ class DashboardServer:
         self._server: BaseWSGIServer | None = None
         self._thread: threading.Thread | None = None
         self._sse_manager = SSEConnectionManager()
+        self._config_editor: ConfigEditor | None = None
+        if config_source is not None:
+            self._config_editor = ConfigEditor(
+                config_source,
+                status_callback=status_callback,
+            )
 
         # Initialize request handlers
         self._handlers = RequestHandlers(
@@ -210,6 +221,44 @@ class DashboardServer:
                 Rule("/api/health", endpoint="health"),
                 Rule("/api/status", endpoint="api_status"),
                 Rule("/api/tracker", endpoint="api_tracker"),
+                # Config editor routes
+                Rule("/config", endpoint="config_index"),
+                Rule(
+                    "/config/global",
+                    endpoint="config_global",
+                    methods=["GET", "POST"],
+                ),
+                Rule(
+                    "/config/repo/new",
+                    endpoint="config_repo_new",
+                    methods=["GET", "POST"],
+                ),
+                Rule(
+                    "/config/repo/<repo_id>",
+                    endpoint="config_repo",
+                    methods=["GET", "POST"],
+                ),
+                Rule(
+                    "/config/repo/<repo_id>/delete",
+                    endpoint="config_repo_delete",
+                    methods=["GET", "POST"],
+                ),
+                Rule("/config/field-input", endpoint="config_field_input"),
+                Rule("/config/nav", endpoint="config_nav"),
+                Rule(
+                    "/config/reload-status",
+                    endpoint="config_reload_status",
+                ),
+                Rule(
+                    "/config/vars/add",
+                    endpoint="config_vars_add",
+                    methods=["POST"],
+                ),
+                Rule(
+                    "/config/repo/<repo_id>/credential/add",
+                    endpoint="config_credential_add",
+                    methods=["POST"],
+                ),
             ]
         )
 
@@ -242,6 +291,42 @@ class DashboardServer:
             "api_status": self._handlers.handle_api_status,
             "api_tracker": self._handlers.handle_api_tracker,
         }
+
+        # Config editor endpoints — register after dict literal
+        self._register_config_endpoints()
+
+    # ── Config editor dispatch ────────────────────────────────────────
+
+    _CONFIG_ENDPOINT_MAP: dict[str, str] = {
+        "config_index": "handle_config_index",
+        "config_global": "handle_global",
+        "config_repo_new": "handle_repo_new",
+        "config_repo": "handle_repo",
+        "config_repo_delete": "handle_repo_delete",
+        "config_field_input": "handle_field_input",
+        "config_nav": "handle_nav",
+        "config_reload_status": "handle_reload_status",
+        "config_vars_add": "handle_vars_add",
+        "config_credential_add": "handle_credential_add",
+    }
+
+    def _register_config_endpoints(self) -> None:
+        """Register config editor endpoint handlers."""
+        for endpoint, method_name in self._CONFIG_ENDPOINT_MAP.items():
+            self._endpoint_handlers[endpoint] = self._make_config_handler(
+                method_name
+            )
+
+    def _make_config_handler(self, method_name: str) -> Callable[..., Response]:
+        """Create a handler that delegates to ConfigEditor."""
+
+        def handler(request: Request, **values: str) -> Response:
+            if self._config_editor is None:
+                return Response("Config editor not available", status=404)
+            method = getattr(self._config_editor, method_name)
+            return method(request, **values)
+
+        return handler
 
     def start(self) -> None:
         """Start the dashboard server in a background thread."""
