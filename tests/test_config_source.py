@@ -14,11 +14,11 @@ import yaml
 
 from airut.config.source import (
     YamlConfigSource,
-    _set_nested,
     flat_to_nested_email,
     flat_to_nested_global,
     flat_to_nested_repo,
     make_tag_dumper,
+    set_nested,
 )
 from airut.yaml_env import EnvVar, VarRef
 
@@ -26,22 +26,22 @@ from airut.yaml_env import EnvVar, VarRef
 class TestSetNested:
     def test_single_level(self) -> None:
         d: dict[str, Any] = {}
-        _set_nested(d, ("key",), "value")
+        set_nested(d, ("key",), "value")
         assert d == {"key": "value"}
 
     def test_two_levels(self) -> None:
         d: dict[str, Any] = {}
-        _set_nested(d, ("a", "b"), 42)
+        set_nested(d, ("a", "b"), 42)
         assert d == {"a": {"b": 42}}
 
     def test_three_levels(self) -> None:
         d: dict[str, Any] = {}
-        _set_nested(d, ("a", "b", "c"), True)
+        set_nested(d, ("a", "b", "c"), True)
         assert d == {"a": {"b": {"c": True}}}
 
     def test_merges_into_existing(self) -> None:
         d: dict[str, Any] = {"a": {"x": 1}}
-        _set_nested(d, ("a", "y"), 2)
+        set_nested(d, ("a", "y"), 2)
         assert d == {"a": {"x": 1, "y": 2}}
 
 

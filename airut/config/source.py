@@ -75,7 +75,7 @@ YAML_REPO_STRUCTURE: dict[str, tuple[str, ...]] = {
 }
 
 
-def _set_nested(
+def set_nested(
     target: dict[str, Any],
     path: tuple[str, ...],
     value: object,
@@ -106,7 +106,7 @@ def _flat_to_nested(
     for key, value in flat.items():
         path = structure.get(key)
         if path is not None:
-            _set_nested(result, path, value)
+            set_nested(result, path, value)
         else:
             result[key] = value
     return result

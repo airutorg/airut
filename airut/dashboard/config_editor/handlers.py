@@ -3,7 +3,7 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Config editor request handlers.
+"""Config editor HTTP request handlers.
 
 Schema-driven web UI for editing the server configuration file.
 Forms are generated from ``schema_for_ui()`` metadata so new fields
@@ -13,19 +13,38 @@ appear automatically when added to config dataclasses.
 import logging
 import os
 import re
-import time
 from collections.abc import Callable
 from typing import Any
 
 from werkzeug.wrappers import Request, Response
 
-from airut.config.schema import FieldSchema, schema_for_ui
+from airut.config.schema import schema_for_ui
 from airut.config.source import (
-    YAML_EMAIL_STRUCTURE,
     YAML_GLOBAL_STRUCTURE,
-    YAML_REPO_STRUCTURE,
     YamlConfigSource,
-    _set_nested,
+)
+from airut.dashboard.config_editor.merge import (
+    group_email_fields,
+    group_fields,
+    lookup_email_raw,
+    lookup_global_raw,
+    lookup_repo_raw,
+    merge_email_fields,
+    merge_global_fields,
+    merge_repo_fields,
+)
+from airut.dashboard.config_editor.parsing import (
+    detect_mode,
+    detect_mode_value,
+    next_idx,
+    parse_form_fields,
+    parse_github_app_credentials,
+    parse_key_value_table,
+    parse_masked_secrets,
+    parse_mode_value,
+    parse_signing_credentials,
+    parse_vars_from_form,
+    remap_prefixed_fields,
 )
 from airut.dashboard.templating import render_template
 from airut.gateway.config import (
@@ -43,566 +62,6 @@ logger = logging.getLogger(__name__)
 _VALID_CRED_TYPES = frozenset(
     {"masked_secret", "signing_credential", "github_app"}
 )
-
-
-# ── Value mode detection ─────────────────────────────────────────────
-
-
-def detect_mode(raw_value: object) -> str:
-    """Return the value mode: ``literal``, ``var``, or ``env``."""
-    if isinstance(raw_value, VarRef):
-        return "var"
-    if isinstance(raw_value, EnvVar):
-        return "env"
-    return "literal"
-
-
-def detect_mode_value(raw_value: object) -> str:
-    """Return the display value for the current mode."""
-    if isinstance(raw_value, VarRef):
-        return raw_value.var_name
-    if isinstance(raw_value, EnvVar):
-        return raw_value.var_name
-    if raw_value is None:
-        return ""
-    if isinstance(raw_value, (list, tuple)):
-        return "\n".join(str(item) for item in raw_value)
-    return str(raw_value)
-
-
-# ── Raw dict lookup helpers ──────────────────────────────────────────
-
-
-def lookup_global_raw(
-    raw: dict[str, Any],
-    field_name: str,
-) -> object:
-    """Look up a GlobalConfig field value from the raw YAML dict.
-
-    Uses ``YAML_GLOBAL_STRUCTURE`` to navigate nested paths.
-    """
-    path = YAML_GLOBAL_STRUCTURE.get(field_name)
-    if path is not None:
-        d = raw
-        for key in path:
-            if not isinstance(d, dict):
-                return None
-            d = d.get(key)
-        return d
-
-    # Top-level (e.g. container_command)
-    return raw.get(field_name)
-
-
-def lookup_repo_raw(
-    raw_repo: dict[str, Any],
-    field_name: str,
-) -> object:
-    """Look up a RepoServerConfig field value from its raw YAML dict."""
-    path = YAML_REPO_STRUCTURE.get(field_name)
-    if path is not None:
-        d = raw_repo
-        for key in path:
-            if not isinstance(d, dict):
-                return None
-            d = d.get(key)
-        return d
-    return raw_repo.get(field_name)
-
-
-def lookup_email_raw(
-    raw_email: dict[str, Any],
-    field_name: str,
-) -> object:
-    """Look up an EmailChannelConfig field from the raw email YAML dict."""
-    path = YAML_EMAIL_STRUCTURE.get(field_name)
-    if path is not None:
-        d = raw_email
-        for key in path:
-            if not isinstance(d, dict):
-                return None
-            d = d.get(key)
-        return d
-    return raw_email.get(field_name)
-
-
-# ── Field grouping ───────────────────────────────────────────────────
-
-
-def group_fields(
-    schema: list[FieldSchema],
-    structure: dict[str, tuple[str, ...]],
-) -> list[tuple[str, list[FieldSchema]]]:
-    """Group schema fields by their YAML nesting structure.
-
-    Fields sharing the same first path element are grouped.  Fields
-    not in the structure mapping go into a "General" group.
-
-    Returns a list of ``(group_name, fields)`` tuples in order of
-    first appearance.
-    """
-    groups: dict[str, list[FieldSchema]] = {}
-    order: list[str] = []
-
-    for field in schema:
-        path = structure.get(field.name)
-        if path and len(path) > 1:
-            group = path[0].replace("_", " ").title()
-        else:
-            group = "General"
-        if group not in groups:
-            groups[group] = []
-            order.append(group)
-        groups[group].append(field)
-
-    return [(g, groups[g]) for g in order]
-
-
-#: Custom grouping for email channel fields (flat YAML, so
-#: YAML_EMAIL_STRUCTURE doesn't produce good groups).
-_EMAIL_FIELD_GROUPS: dict[str, str] = {
-    "imap_server": "Connection",
-    "imap_port": "Connection",
-    "smtp_server": "Connection",
-    "smtp_port": "Connection",
-    "username": "Authentication",
-    "password": "Authentication",
-    "authorized_senders": "Authentication",
-    "trusted_authserv_id": "Authentication",
-    "smtp_require_auth": "Authentication",
-    "microsoft_internal_auth_fallback": "Authentication",
-    "from_address": "Display",
-    "poll_interval_seconds": "Polling",
-    "use_imap_idle": "Polling",
-    "idle_reconnect_interval_seconds": "Polling",
-    "microsoft_oauth2_tenant_id": "Microsoft OAuth2",
-    "microsoft_oauth2_client_id": "Microsoft OAuth2",
-    "microsoft_oauth2_client_secret": "Microsoft OAuth2",
-}
-
-
-def group_email_fields(
-    schema: list[FieldSchema],
-) -> list[tuple[str, list[FieldSchema]]]:
-    """Group email config fields using custom grouping table."""
-    groups: dict[str, list[FieldSchema]] = {}
-    order: list[str] = []
-
-    for field in schema:
-        group = _EMAIL_FIELD_GROUPS.get(field.name, "Other")
-        if group not in groups:
-            groups[group] = []
-            order.append(group)
-        groups[group].append(field)
-
-    return [(g, groups[g]) for g in order]
-
-
-# ── Form parsing ─────────────────────────────────────────────────────
-
-
-def _coerce_value(
-    raw_str: str,
-    type_name: str,
-) -> tuple[Any, str | None]:
-    """Coerce a form string to the appropriate Python type.
-
-    Returns ``(value, error_message)``.
-    """
-    if "list" in type_name:
-        # Textarea: one item per line — check before int/float
-        # so that list[int] is not confused with int.
-        items = [line.strip() for line in raw_str.splitlines() if line.strip()]
-        return items, None
-    if "bool" in type_name:
-        if raw_str == "true":
-            return True, None
-        if raw_str == "false":
-            return False, None
-        return None, None  # unset / default
-    if "int" in type_name and "dict" not in type_name:
-        if not raw_str:
-            return None, None
-        try:
-            return int(raw_str), None
-        except ValueError:
-            return None, f"Expected integer, got: {raw_str}"
-    if "float" in type_name:
-        if not raw_str:
-            return None, None
-        try:
-            return float(raw_str), None
-        except ValueError:
-            return None, f"Expected number, got: {raw_str}"
-    return raw_str, None
-
-
-def parse_form_fields(
-    form: dict[str, str],
-    schema: list[FieldSchema],
-) -> tuple[dict[str, Any], dict[str, str]]:
-    """Parse form submission into raw config values.
-
-    Returns ``(parsed_values, errors)`` where errors maps field names
-    to error messages.
-    """
-    parsed: dict[str, Any] = {}
-    errors: dict[str, str] = {}
-
-    for field in schema:
-        mode_key = f"field.{field.name}.mode"
-        value_key = f"field.{field.name}.value"
-
-        mode = form.get(mode_key, "literal")
-        value_str = form.get(value_key, "")
-
-        if mode == "var":
-            if value_str:
-                parsed[field.name] = VarRef(value_str)
-            elif field.required:
-                errors[field.name] = "Variable name is required"
-        elif mode == "env":
-            if value_str:
-                parsed[field.name] = EnvVar(value_str)
-            elif field.required:
-                errors[field.name] = "Environment variable name is required"
-        else:
-            # literal
-            if not value_str and not field.required:
-                # Skip unset optional fields
-                continue
-            if not value_str and field.required:
-                errors[field.name] = "This field is required"
-                continue
-
-            coerced, err = _coerce_value(value_str, field.type_name)
-            if err:
-                errors[field.name] = err
-            elif coerced is not None:
-                parsed[field.name] = coerced
-
-    return parsed, errors
-
-
-def _remap_prefixed_fields(
-    form: dict[str, str],
-    prefix: str,
-) -> dict[str, str]:
-    """Remap form keys that start with ``field.<prefix>`` to ``field.``.
-
-    This allows sub-object fields (like resource_limits) to be parsed
-    by ``parse_form_fields`` which expects ``field.<name>.mode/value``.
-    """
-    result: dict[str, str] = {}
-    field_prefix = f"field.{prefix}"
-    for key, value in form.items():
-        if key.startswith(field_prefix):
-            result[f"field.{key[len(field_prefix) :]}"] = value
-    return result
-
-
-# ── Credential parsing ───────────────────────────────────────────────
-
-
-def _parse_mode_value(form: dict[str, str], prefix: str) -> object:
-    """Parse a mode/value pair from form data."""
-    mode = form.get(f"{prefix}.mode", "literal")
-    value = form.get(f"{prefix}.value", "")
-    if mode == "var" and value:
-        return VarRef(value)
-    if mode == "env" and value:
-        return EnvVar(value)
-    return value
-
-
-def parse_key_value_table(
-    form: dict[str, str],
-    prefix: str,
-) -> dict[str, Any]:
-    """Parse a dynamic key-value table from form data.
-
-    Expects keys like ``prefix.0.key``, ``prefix.0.value``, etc.
-    """
-    result: dict[str, Any] = {}
-    indices = set()
-    pat = re.compile(rf"^{re.escape(prefix)}\.(\d+)\.key$")
-    for key in form:
-        m = pat.match(key)
-        if m:
-            indices.add(int(m.group(1)))
-
-    for i in sorted(indices):
-        k = form.get(f"{prefix}.{i}.key", "").strip()
-        if not k:
-            continue
-        v = _parse_mode_value(form, f"{prefix}.{i}.value")
-        result[k] = v
-
-    return result
-
-
-def parse_masked_secrets(
-    form: dict[str, str],
-) -> dict[str, dict[str, Any]]:
-    """Parse masked secrets from indexed form data."""
-    result: dict[str, dict[str, Any]] = {}
-    indices = set()
-    pat = re.compile(r"^masked_secret\.(\d+)\.key$")
-    for key in form:
-        m = pat.match(key)
-        if m:
-            indices.add(int(m.group(1)))
-
-    for i in sorted(indices):
-        k = form.get(f"masked_secret.{i}.key", "").strip()
-        if not k:
-            continue
-        value = _parse_mode_value(form, f"masked_secret.{i}.value")
-        scopes_str = form.get(f"masked_secret.{i}.scopes", "")
-        scopes = [s.strip() for s in scopes_str.splitlines() if s.strip()]
-        headers_str = form.get(f"masked_secret.{i}.headers", "")
-        headers = [h.strip() for h in headers_str.splitlines() if h.strip()]
-        allow_foreign = form.get(f"masked_secret.{i}.allow_foreign") == "true"
-
-        entry: dict[str, Any] = {
-            "value": value,
-            "scopes": scopes,
-            "headers": headers,
-        }
-        if allow_foreign:
-            entry["allow_foreign_credentials"] = True
-        result[k] = entry
-
-    return result
-
-
-def parse_signing_credentials(
-    form: dict[str, str],
-) -> dict[str, dict[str, Any]]:
-    """Parse signing credentials from indexed form data."""
-    result: dict[str, dict[str, Any]] = {}
-    indices = set()
-    pat = re.compile(r"^signing_credential\.(\d+)\.key$")
-    for key in form:
-        m = pat.match(key)
-        if m:
-            indices.add(int(m.group(1)))
-
-    for i in sorted(indices):
-        k = form.get(f"signing_credential.{i}.key", "").strip()
-        if not k:
-            continue
-        entry: dict[str, Any] = {
-            "type": "aws-sigv4",
-            "access_key_id": {
-                "name": form.get(
-                    f"signing_credential.{i}.access_key_id.name", ""
-                ),
-                "value": _parse_mode_value(
-                    form, f"signing_credential.{i}.access_key_id.value"
-                ),
-            },
-            "secret_access_key": {
-                "name": form.get(
-                    f"signing_credential.{i}.secret_access_key.name", ""
-                ),
-                "value": _parse_mode_value(
-                    form, f"signing_credential.{i}.secret_access_key.value"
-                ),
-            },
-            "scopes": [
-                s.strip()
-                for s in form.get(
-                    f"signing_credential.{i}.scopes", ""
-                ).splitlines()
-                if s.strip()
-            ],
-        }
-        # Optional session_token
-        st_name = form.get(f"signing_credential.{i}.session_token.name", "")
-        if st_name:
-            entry["session_token"] = {
-                "name": st_name,
-                "value": _parse_mode_value(
-                    form, f"signing_credential.{i}.session_token.value"
-                ),
-            }
-        result[k] = entry
-
-    return result
-
-
-def parse_github_app_credentials(
-    form: dict[str, str],
-) -> dict[str, dict[str, Any]]:
-    """Parse GitHub App credentials from indexed form data."""
-    result: dict[str, dict[str, Any]] = {}
-    indices = set()
-    pat = re.compile(r"^github_app\.(\d+)\.key$")
-    for key in form:
-        m = pat.match(key)
-        if m:
-            indices.add(int(m.group(1)))
-
-    for i in sorted(indices):
-        k = form.get(f"github_app.{i}.key", "").strip()
-        if not k:
-            continue
-        entry: dict[str, Any] = {
-            "app_id": _parse_mode_value(form, f"github_app.{i}.app_id"),
-            "private_key": _parse_mode_value(
-                form, f"github_app.{i}.private_key"
-            ),
-            "installation_id": _parse_mode_value(
-                form, f"github_app.{i}.installation_id"
-            ),
-            "scopes": [
-                s.strip()
-                for s in form.get(f"github_app.{i}.scopes", "").splitlines()
-                if s.strip()
-            ],
-        }
-        allow_foreign = form.get(f"github_app.{i}.allow_foreign") == "true"
-        if allow_foreign:
-            entry["allow_foreign_credentials"] = True
-        base_url = form.get(f"github_app.{i}.base_url", "").strip()
-        if base_url:
-            entry["base_url"] = base_url
-        perms_str = form.get(f"github_app.{i}.permissions", "").strip()
-        if perms_str:
-            perms = {}
-            for line in perms_str.splitlines():
-                line = line.strip()
-                if ":" in line:
-                    pk, pv = line.split(":", 1)
-                    perms[pk.strip()] = pv.strip()
-            if perms:
-                entry["permissions"] = perms
-        repos_str = form.get(f"github_app.{i}.repositories", "").strip()
-        if repos_str:
-            entry["repositories"] = [
-                r.strip() for r in repos_str.splitlines() if r.strip()
-            ]
-        result[k] = entry
-
-    return result
-
-
-# ── Raw dict merging ─────────────────────────────────────────────────
-
-
-def _delete_nested(
-    target: dict[str, Any],
-    path: tuple[str, ...],
-) -> None:
-    """Delete a value from a nested dict (no-op if missing)."""
-    for key in path[:-1]:
-        if not isinstance(target, dict) or key not in target:
-            return
-        target = target[key]
-    if isinstance(target, dict):
-        target.pop(path[-1], None)
-
-
-def merge_global_fields(
-    raw: dict[str, Any],
-    parsed: dict[str, Any],
-    schema: list[FieldSchema],
-) -> None:
-    """Merge parsed global config fields into the raw YAML dict.
-
-    Fields present in ``parsed`` are set; fields in ``schema`` but
-    absent from ``parsed`` are removed (user cleared them).
-    """
-    for field in schema:
-        path = YAML_GLOBAL_STRUCTURE.get(field.name)
-        if field.name in parsed:
-            if path:
-                _set_nested(raw, path, parsed[field.name])
-            else:
-                raw[field.name] = parsed[field.name]
-        else:
-            # Remove field if user cleared it (optional field)
-            if not field.required:
-                if path:
-                    _delete_nested(raw, path)
-                else:
-                    raw.pop(field.name, None)
-
-
-def merge_repo_fields(
-    raw_repo: dict[str, Any],
-    parsed: dict[str, Any],
-    schema: list[FieldSchema],
-) -> None:
-    """Merge parsed repo config fields into the raw repo dict."""
-    for field in schema:
-        path = YAML_REPO_STRUCTURE.get(field.name)
-        if field.name in parsed:
-            if path:
-                _set_nested(raw_repo, path, parsed[field.name])
-            else:
-                raw_repo[field.name] = parsed[field.name]
-        elif not field.required:
-            if path:
-                _delete_nested(raw_repo, path)
-            else:
-                raw_repo.pop(field.name, None)
-
-
-def merge_email_fields(
-    raw_email: dict[str, Any],
-    parsed: dict[str, Any],
-    schema: list[FieldSchema],
-) -> None:
-    """Merge parsed email config fields into the raw email dict."""
-    for field in schema:
-        path = YAML_EMAIL_STRUCTURE.get(field.name)
-        if field.name in parsed:
-            if path:
-                _set_nested(raw_email, path, parsed[field.name])
-            else:
-                raw_email[field.name] = parsed[field.name]
-        elif not field.required:
-            if path:
-                _delete_nested(raw_email, path)
-            else:
-                raw_email.pop(field.name, None)
-
-
-# ── Variable helpers ─────────────────────────────────────────────────
-
-
-def parse_vars_from_form(
-    form: dict[str, str],
-) -> dict[str, Any]:
-    """Parse variables from form data.
-
-    Variables use a key-value table with mode support (literal or !env).
-    """
-    result: dict[str, Any] = {}
-    indices = set()
-    pat = re.compile(r"^var\.(\d+)\.name$")
-    for key in form:
-        m = pat.match(key)
-        if m:
-            indices.add(int(m.group(1)))
-
-    for i in sorted(indices):
-        name = form.get(f"var.{i}.name", "").strip()
-        if not name:
-            continue
-        mode = form.get(f"var.{i}.mode", "literal")
-        value_str = form.get(f"var.{i}.value", "")
-        if mode == "env" and value_str:
-            result[name] = EnvVar(value_str)
-        else:
-            result[name] = value_str
-
-    return result
-
-
-# ── ConfigEditor handler class ───────────────────────────────────────
 
 
 class ConfigEditor:
@@ -639,6 +98,7 @@ class ConfigEditor:
                 "signing_credentials",
                 "github_app_credentials",
                 "resource_limits",
+                "container_env",
             }
         ]
         self._resource_limits_schema = schema_for_ui(ResourceLimits)
@@ -754,7 +214,7 @@ class ConfigEditor:
 
         # Parse resource limits sub-fields
         rl_parsed, rl_errors = parse_form_fields(
-            _remap_prefixed_fields(form, "rl_"),
+            remap_prefixed_fields(form, "rl_"),
             self._resource_limits_schema,
         )
         if rl_errors:
@@ -800,6 +260,8 @@ class ConfigEditor:
         repo_id: str,
         save_message: str | None = None,
         errors: dict[str, str] | None = None,
+        form_has_email: bool | None = None,
+        form_has_slack: bool | None = None,
     ) -> Response:
         """Render the repo settings page."""
         raw = self._load_raw()
@@ -811,9 +273,17 @@ class ConfigEditor:
         repo_ids = self._get_repo_ids(raw)
         variables = self._get_vars(raw)
 
-        # Channel presence
-        has_email = "email" in raw_repo
-        has_slack = "slack" in raw_repo
+        # Channel presence — prefer form values on error re-render
+        has_email = (
+            form_has_email
+            if form_has_email is not None
+            else "email" in raw_repo
+        )
+        has_slack = (
+            form_has_slack
+            if form_has_slack is not None
+            else "slack" in raw_repo
+        )
         raw_email = raw_repo.get("email", {})
         raw_slack = raw_repo.get("slack", {})
 
@@ -863,7 +333,6 @@ class ConfigEditor:
             return csrf_err
 
         form = dict(request.form)
-
         raw = self._load_raw()
         repos = raw.get("repos", {})
         if repo_id not in repos:
@@ -876,29 +345,69 @@ class ConfigEditor:
         if errors:
             return self._handle_repo_get(request, repo_id, errors=errors)
 
-        # Git repo URL — uses mode/value pattern like other fields
-        git_parsed = _parse_mode_value(form, "git_repo_url")
+        # Git repo URL
+        git_parsed = parse_mode_value(form, "git_repo_url")
         if git_parsed:
             raw_repo["git"] = raw_repo.get("git", {})
             raw_repo["git"]["repo_url"] = git_parsed
 
         merge_repo_fields(raw_repo, parsed, self._repo_schema)
 
-        # Handle resource limits sub-fields
+        # Resource limits
+        rl_errors = self._merge_resource_limits(form, raw_repo)
+        if rl_errors:
+            return self._handle_repo_get(request, repo_id, errors=rl_errors)
+
+        # Channels
+        has_email = form.get("has_email") == "true"
+        has_slack = form.get("has_slack") == "true"
+        channel_errors = self._merge_channels(form, raw_repo)
+        if channel_errors:
+            return self._handle_repo_get(
+                request,
+                repo_id,
+                errors=channel_errors,
+                form_has_email=has_email,
+                form_has_slack=has_slack,
+            )
+
+        # Credential pools
+        self._merge_credentials(form, raw_repo)
+
+        self._save(raw)
+        return self._handle_repo_get(
+            request,
+            repo_id,
+            save_message="Repository configuration saved successfully.",
+        )
+
+    def _merge_resource_limits(
+        self,
+        form: dict[str, str],
+        raw_repo: dict[str, Any],
+    ) -> dict[str, str] | None:
+        """Parse and merge resource limits sub-fields.
+
+        Returns errors or None.
+        """
         rl_parsed, rl_errors = parse_form_fields(
-            _remap_prefixed_fields(form, "rl_"),
+            remap_prefixed_fields(form, "rl_"),
             self._resource_limits_schema,
         )
         if rl_errors:
-            prefixed = {f"rl_{k}": v for k, v in rl_errors.items()}
-            errors.update(prefixed)
-            return self._handle_repo_get(request, repo_id, errors=errors)
+            return {f"rl_{k}": v for k, v in rl_errors.items()}
         if rl_parsed:
             raw_repo["resource_limits"] = rl_parsed
         else:
             raw_repo.pop("resource_limits", None)
+        return None
 
-        # Handle channels
+    def _merge_channels(
+        self,
+        form: dict[str, str],
+        raw_repo: dict[str, Any],
+    ) -> dict[str, str] | None:
+        """Parse and merge email/slack channels. Returns errors or None."""
         has_email = form.get("has_email") == "true"
         has_slack = form.get("has_slack") == "true"
 
@@ -907,8 +416,7 @@ class ConfigEditor:
                 form, self._email_schema
             )
             if email_errors:
-                errors.update(email_errors)
-                return self._handle_repo_get(request, repo_id, errors=errors)
+                return email_errors
             raw_email = raw_repo.get("email", {})
             merge_email_fields(raw_email, email_parsed, self._email_schema)
             raw_repo["email"] = raw_email
@@ -916,49 +424,71 @@ class ConfigEditor:
             raw_repo.pop("email", None)
 
         if has_slack:
-            # Parse slack scalar fields
-            slack_parsed: dict[str, Any] = {}
-            for sf in self._slack_schema:
-                if sf.name == "authorized":
-                    continue  # handled separately
-                mode = form.get(f"field.{sf.name}.mode", "literal")
-                val = form.get(f"field.{sf.name}.value", "")
-                if mode == "var" and val:
-                    slack_parsed[sf.name] = VarRef(val)
-                elif mode == "env" and val:
-                    slack_parsed[sf.name] = EnvVar(val)
-                elif val:
-                    slack_parsed[sf.name] = val
-
-            raw_slack = raw_repo.get("slack", {})
-            for k, v in slack_parsed.items():
-                raw_slack[k] = v
-
-            # Parse Slack authorized rules
-            auth_text = form.get("slack_authorized", "").strip()
-            if auth_text:
-                auth_rules = []
-                for line in auth_text.splitlines():
-                    line = line.strip()
-                    if not line:
-                        continue
-                    if ":" in line:
-                        rk, rv = line.split(":", 1)
-                        rk = rk.strip()
-                        rv = rv.strip()
-                        if rv.lower() in ("true", "false"):
-                            auth_rules.append({rk: rv.lower() == "true"})
-                        else:
-                            auth_rules.append({rk: rv})
-                raw_slack["authorized"] = auth_rules
-            else:
-                raw_slack.pop("authorized", None)
-
-            raw_repo["slack"] = raw_slack
+            slack_errors = self._merge_slack(form, raw_repo)
+            if slack_errors:
+                return slack_errors
         else:
             raw_repo.pop("slack", None)
 
-        # Handle credential pools
+        return None
+
+    def _merge_slack(
+        self,
+        form: dict[str, str],
+        raw_repo: dict[str, Any],
+    ) -> dict[str, str] | None:
+        """Parse and merge Slack channel config. Returns errors or None."""
+        slack_parsed: dict[str, Any] = {}
+        for sf in self._slack_schema:
+            if sf.name == "authorized":
+                continue  # handled separately
+            mode = form.get(f"field.{sf.name}.mode", "literal")
+            val = form.get(f"field.{sf.name}.value", "")
+            if mode == "var" and val:
+                slack_parsed[sf.name] = VarRef(val)
+            elif mode == "env" and val:
+                slack_parsed[sf.name] = EnvVar(val)
+            elif val:
+                slack_parsed[sf.name] = val
+
+        raw_slack = raw_repo.get("slack", {})
+        for k, v in slack_parsed.items():
+            raw_slack[k] = v
+
+        # Parse Slack authorized rules
+        auth_text = form.get("slack_authorized", "").strip()
+        if auth_text:
+            auth_rules = []
+            for line in auth_text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if ":" not in line:
+                    return {
+                        "slack_authorized": (
+                            f"Invalid rule (missing ':'): {line}"
+                        )
+                    }
+                rk, rv = line.split(":", 1)
+                rk = rk.strip()
+                rv = rv.strip()
+                if rv.lower() in ("true", "false"):
+                    auth_rules.append({rk: rv.lower() == "true"})
+                else:
+                    auth_rules.append({rk: rv})
+            raw_slack["authorized"] = auth_rules
+        else:
+            raw_slack.pop("authorized", None)
+
+        raw_repo["slack"] = raw_slack
+        return None
+
+    def _merge_credentials(
+        self,
+        form: dict[str, str],
+        raw_repo: dict[str, Any],
+    ) -> None:
+        """Parse and merge all credential pools."""
         secrets = parse_key_value_table(form, "secret")
         if secrets:
             raw_repo["secrets"] = secrets
@@ -988,14 +518,6 @@ class ConfigEditor:
             raw_repo["github_app_credentials"] = github_app
         else:
             raw_repo.pop("github_app_credentials", None)
-
-        self._save(raw)
-
-        return self._handle_repo_get(
-            request,
-            repo_id,
-            save_message="Repository configuration saved successfully.",
-        )
 
     def handle_repo_new(self, request: Request) -> Response:
         """Handle GET/POST for new repo creation."""
@@ -1200,8 +722,7 @@ class ConfigEditor:
         if csrf_err:
             return csrf_err
 
-        # Use a high index to avoid collisions
-        idx = int(time.time() * 1000) % 100000
+        idx = next_idx()
 
         return Response(
             render_template(
@@ -1224,7 +745,7 @@ class ConfigEditor:
         if cred_type not in _VALID_CRED_TYPES:
             return Response("Invalid credential type", status=400)
 
-        idx = int(time.time() * 1000) % 100000
+        idx = next_idx()
 
         raw = self._load_raw()
         variables = self._get_vars(raw)

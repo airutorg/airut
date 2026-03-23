@@ -396,3 +396,17 @@
 .config-repo-link:hover {
   text-decoration: underline;
 }
+
+/* ---- List field (add/remove items) ---- */
+.list-field {
+  width: 100%;
+}
+.list-items {
+  margin-bottom: 4px;
+}
+.list-items .variable-row {
+  margin-bottom: 4px;
+}
+.list-items .variable-row .config-input {
+  flex: 1;
+}

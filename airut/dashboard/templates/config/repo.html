@@ -212,13 +212,16 @@
         </div>
         {% endif %}
         {% endfor %}
-        <div class="config-field">
+        <div class="config-field{{ ' has-error' if errors.get('slack_authorized') }}">
           <label class="config-field-label">Authorized Rules</label>
           {% set auth_rules = raw_slack.get('authorized', []) %}
           <textarea name="slack_authorized" class="config-input config-textarea"
                     rows="4" placeholder="workspace_members: true&#10;user_id: U12345">{% for rule in auth_rules %}{% for rk, rv in rule.items() %}{{ rk }}: {{ rv }}{% endfor %}{% if not loop.last %}
 {% endif %}{% endfor %}</textarea>
           <small class="config-field-doc">One rule per line (key: value). E.g. workspace_members: true</small>
+          {% if errors.get('slack_authorized') %}
+          <small class="config-field-error">{{ errors['slack_authorized'] }}</small>
+          {% endif %}
         </div>
         {% endif %}
       </fieldset>

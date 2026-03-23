@@ -28,13 +28,27 @@
 {% else %}
 {% if 'bool' in type_name %}
 <select name="field.{{ field_name }}.value" class="config-input">
-  <option value="" {{ 'selected' if not current_value }}></option>
+  <option value="" {{ 'selected' if not current_value }}>{% if field_default is defined and field_default is not none %}(default: {{ field_default }}){% endif %}</option>
   <option value="true" {{ 'selected' if current_value in ('true', 'True') }}>true</option>
   <option value="false" {{ 'selected' if current_value in ('false', 'False') }}>false</option>
 </select>
 {% elif 'list' in type_name %}
-<textarea name="field.{{ field_name }}.value" class="config-input config-textarea"
-          rows="3" placeholder="One item per line">{{ current_value }}</textarea>
+{% set items = current_value.split('\n') if current_value else [] %}
+<div class="list-field">
+  <div class="list-items">
+    {% for item in items %}
+    {% if item.strip() %}
+    <div class="variable-row">
+      <input type="text" name="field.{{ field_name }}.item.{{ loop.index0 }}" value="{{ item.strip() }}"
+             class="config-input" placeholder="Value">
+      <button type="button" class="config-btn-icon" data-remove-row title="Remove">&times;</button>
+    </div>
+    {% endif %}
+    {% endfor %}
+  </div>
+  <button type="button" class="config-btn-add" data-add-list-item="field.{{ field_name }}">+ Add</button>
+  <textarea name="field.{{ field_name }}.value" class="list-collector" data-list-name="field.{{ field_name }}" style="display:none">{{ current_value }}</textarea>
+</div>
 {% elif 'int' in type_name and 'dict' not in type_name %}
 <input type="number" name="field.{{ field_name }}.value"
        value="{{ current_value }}"
