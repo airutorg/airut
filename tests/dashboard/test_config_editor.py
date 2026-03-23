@@ -23,6 +23,7 @@ from airut.dashboard.config_editor import (
     _coerce_value,
     _delete_nested,
     _parse_mode_value,
+    _remap_prefixed_fields,
     detect_mode,
     detect_mode_value,
     group_email_fields,
@@ -400,6 +401,16 @@ class TestParseFormFields:
         assert parsed["test_field"] == 42
         assert not errors
 
+    def test_bool_empty_string(self) -> None:
+        schema = self._make_schema(type_name="bool")
+        form = {
+            "field.test_field.mode": "literal",
+            "field.test_field.value": "",
+        }
+        parsed, errors = parse_form_fields(form, schema)
+        assert "test_field" not in parsed
+        assert not errors
+
     def test_default_mode_is_literal(self) -> None:
         schema = self._make_schema()
         form = {"field.test_field.value": "hello"}
@@ -426,6 +437,43 @@ class TestParseFormFields:
         parsed, errors = parse_form_fields(form, schema)
         assert "test_field" not in parsed
         assert not errors
+
+
+# ── _remap_prefixed_fields ─────────────────────────────────────────
+
+
+class TestRemapPrefixedFields:
+    def test_remaps_matching_keys(self) -> None:
+        form = {
+            "field.rl_timeout.mode": "literal",
+            "field.rl_timeout.value": "300",
+            "field.rl_memory.mode": "literal",
+            "field.rl_memory.value": "1024",
+        }
+        result = _remap_prefixed_fields(form, "rl_")
+        assert result == {
+            "field.timeout.mode": "literal",
+            "field.timeout.value": "300",
+            "field.memory.mode": "literal",
+            "field.memory.value": "1024",
+        }
+
+    def test_ignores_non_matching_keys(self) -> None:
+        form = {
+            "field.model.mode": "literal",
+            "field.model.value": "opus",
+            "field.rl_timeout.mode": "literal",
+            "field.rl_timeout.value": "300",
+        }
+        result = _remap_prefixed_fields(form, "rl_")
+        assert "field.model.mode" not in result
+        assert result == {
+            "field.timeout.mode": "literal",
+            "field.timeout.value": "300",
+        }
+
+    def test_empty_form(self) -> None:
+        assert _remap_prefixed_fields({}, "rl_") == {}
 
 
 # ── Credential parsing ─────────────────────────────────────────────
@@ -1093,7 +1141,6 @@ class TestConfigEditorHandlers:
         response = client.get("/config/nav")
         assert response.status_code == 200
         html = response.get_data(as_text=True)
-        assert "Global" in html
         assert "test-repo" in html
 
     def test_field_input_fragment(self, client: Client) -> None:
@@ -1884,6 +1931,105 @@ class TestConfigEditorInternal:
         slack = raw["repos"]["test-repo"]["slack"]
         # Empty line should be skipped
         assert len(slack["authorized"]) == 2
+
+    def test_global_post_saves_resource_limits(self, tmp_path: Path) -> None:
+        config_path = _write_config(tmp_path)
+        source = YamlConfigSource(config_path)
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, config_source=source)
+        client = Client(server._wsgi_app)
+
+        response = client.post(
+            "/config/global",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+            content_type="application/x-www-form-urlencoded",
+            data=(
+                "field.rl_timeout.mode=literal"
+                "&field.rl_timeout.value=600"
+                "&field.rl_memory.mode=literal"
+                "&field.rl_memory.value=2048"
+            ),
+        )
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "saved successfully" in html
+        raw = yaml.safe_load(config_path.read_text())
+        assert raw["resource_limits"]["timeout"] == 600
+        assert raw["resource_limits"]["memory"] == "2048"
+
+    def test_global_post_resource_limits_validation_error(
+        self, tmp_path: Path
+    ) -> None:
+        config_path = _write_config(tmp_path)
+        source = YamlConfigSource(config_path)
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, config_source=source)
+        client = Client(server._wsgi_app)
+
+        response = client.post(
+            "/config/global",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+            content_type="application/x-www-form-urlencoded",
+            data=(
+                "field.rl_timeout.mode=literal"
+                "&field.rl_timeout.value=not_a_number"
+            ),
+        )
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Expected integer" in html
+
+    def test_repo_post_saves_resource_limits(self, tmp_path: Path) -> None:
+        config_path = _write_config(tmp_path)
+        source = YamlConfigSource(config_path)
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, config_source=source)
+        client = Client(server._wsgi_app)
+
+        response = client.post(
+            "/config/repo/test-repo",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+            content_type="application/x-www-form-urlencoded",
+            data=(
+                "git_repo_url.mode=literal"
+                "&git_repo_url.value=https://github.com/test/repo.git"
+                "&has_email=false"
+                "&has_slack=false"
+                "&field.rl_timeout.mode=literal"
+                "&field.rl_timeout.value=300"
+            ),
+        )
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "saved successfully" in html
+        raw = yaml.safe_load(config_path.read_text())
+        assert raw["repos"]["test-repo"]["resource_limits"]["timeout"] == 300
+
+    def test_repo_post_resource_limits_validation_error(
+        self, tmp_path: Path
+    ) -> None:
+        config_path = _write_config(tmp_path)
+        source = YamlConfigSource(config_path)
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, config_source=source)
+        client = Client(server._wsgi_app)
+
+        response = client.post(
+            "/config/repo/test-repo",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+            content_type="application/x-www-form-urlencoded",
+            data=(
+                "git_repo_url.mode=literal"
+                "&git_repo_url.value=https://github.com/test/repo.git"
+                "&has_email=false"
+                "&has_slack=false"
+                "&field.rl_timeout.mode=literal"
+                "&field.rl_timeout.value=bad"
+            ),
+        )
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Expected integer" in html
 
     def test_repo_post_slack_authorized_bool(self, tmp_path: Path) -> None:
         config_path = _write_config(tmp_path)

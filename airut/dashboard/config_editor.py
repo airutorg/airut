@@ -34,6 +34,7 @@ from airut.gateway.config import (
     RepoServerConfig,
 )
 from airut.gateway.slack.config import SlackChannelConfig
+from airut.sandbox.types import ResourceLimits
 from airut.yaml_env import EnvVar, VarRef
 
 
@@ -281,6 +282,23 @@ def parse_form_fields(
                 parsed[field.name] = coerced
 
     return parsed, errors
+
+
+def _remap_prefixed_fields(
+    form: dict[str, str],
+    prefix: str,
+) -> dict[str, str]:
+    """Remap form keys that start with ``field.<prefix>`` to ``field.``.
+
+    This allows sub-object fields (like resource_limits) to be parsed
+    by ``parse_form_fields`` which expects ``field.<name>.mode/value``.
+    """
+    result: dict[str, str] = {}
+    field_prefix = f"field.{prefix}"
+    for key, value in form.items():
+        if key.startswith(field_prefix):
+            result[f"field.{key[len(field_prefix) :]}"] = value
+    return result
 
 
 # ── Credential parsing ───────────────────────────────────────────────
@@ -601,7 +619,11 @@ class ConfigEditor:
     ) -> None:
         self.source = config_source
         self._status_callback = status_callback
-        self._global_schema = schema_for_ui(GlobalConfig)
+        self._global_schema = [
+            f
+            for f in schema_for_ui(GlobalConfig)
+            if f.name != "resource_limits"
+        ]
         self._email_schema = schema_for_ui(EmailChannelConfig)
         self._slack_schema = schema_for_ui(SlackChannelConfig)
         self._repo_schema = [
@@ -616,8 +638,10 @@ class ConfigEditor:
                 "masked_secrets",
                 "signing_credentials",
                 "github_app_credentials",
+                "resource_limits",
             }
         ]
+        self._resource_limits_schema = schema_for_ui(ResourceLimits)
 
     def _load_raw(self) -> dict[str, Any]:
         """Load the raw config dict from the YAML source."""
@@ -689,12 +713,19 @@ class ConfigEditor:
         repo_ids = self._get_repo_ids(raw)
         global_groups = group_fields(self._global_schema, YAML_GLOBAL_STRUCTURE)
 
+        # Resource limits raw dict
+        raw_resource_limits = raw.get("resource_limits")
+        if not isinstance(raw_resource_limits, dict):
+            raw_resource_limits = {}
+
         return Response(
             render_template(
                 "config/global.html",
                 breadcrumbs=[("Config", "/config/global")],
                 global_groups=global_groups,
                 global_schema=self._global_schema,
+                resource_limits_schema=self._resource_limits_schema,
+                raw_resource_limits=raw_resource_limits,
                 variables=variables,
                 repo_ids=repo_ids,
                 raw=raw,
@@ -721,12 +752,28 @@ class ConfigEditor:
         if errors:
             return self._handle_global_get(request, errors=errors)
 
+        # Parse resource limits sub-fields
+        rl_parsed, rl_errors = parse_form_fields(
+            _remap_prefixed_fields(form, "rl_"),
+            self._resource_limits_schema,
+        )
+        if rl_errors:
+            prefixed = {f"rl_{k}": v for k, v in rl_errors.items()}
+            errors.update(prefixed)
+            return self._handle_global_get(request, errors=errors)
+
         # Parse variables
         new_vars = parse_vars_from_form(form)
 
         # Load current raw, merge, save
         raw = self._load_raw()
         merge_global_fields(raw, parsed, self._global_schema)
+
+        # Merge resource limits
+        if rl_parsed:
+            raw["resource_limits"] = rl_parsed
+        else:
+            raw.pop("resource_limits", None)
 
         # Update vars
         if new_vars:
@@ -772,6 +819,11 @@ class ConfigEditor:
 
         email_groups = group_email_fields(self._email_schema)
 
+        # Resource limits raw dict
+        raw_resource_limits = raw_repo.get("resource_limits")
+        if not isinstance(raw_resource_limits, dict):
+            raw_resource_limits = {}
+
         return Response(
             render_template(
                 "config/repo.html",
@@ -790,6 +842,8 @@ class ConfigEditor:
                 email_schema=self._email_schema,
                 slack_schema=self._slack_schema,
                 repo_schema=self._repo_schema,
+                resource_limits_schema=self._resource_limits_schema,
+                raw_resource_limits=raw_resource_limits,
                 variables=variables,
                 lookup_repo_raw=lookup_repo_raw,
                 lookup_email_raw=lookup_email_raw,
@@ -829,6 +883,20 @@ class ConfigEditor:
             raw_repo["git"]["repo_url"] = git_parsed
 
         merge_repo_fields(raw_repo, parsed, self._repo_schema)
+
+        # Handle resource limits sub-fields
+        rl_parsed, rl_errors = parse_form_fields(
+            _remap_prefixed_fields(form, "rl_"),
+            self._resource_limits_schema,
+        )
+        if rl_errors:
+            prefixed = {f"rl_{k}": v for k, v in rl_errors.items()}
+            errors.update(prefixed)
+            return self._handle_repo_get(request, repo_id, errors=errors)
+        if rl_parsed:
+            raw_repo["resource_limits"] = rl_parsed
+        else:
+            raw_repo.pop("resource_limits", None)
 
         # Handle channels
         has_email = form.get("has_email") == "true"

@@ -7,9 +7,6 @@
 
 {% block body %}
 <div class="config-page">
-  <aside class="config-sidebar">
-    {% include "config/components/nav.html" with context %}
-  </aside>
   <main class="config-content">
     {% if save_message %}
     <div class="save-result success">{{ save_message }}</div>
@@ -45,7 +42,8 @@
         {% set raw_value = lookup_global_raw(raw, field.name) %}
         {% set mode = detect_mode(raw_value) %}
         {% set current_value = detect_mode_value(raw_value) %}
-        <div class="config-field{% if errors.get(field.name) %} has-error{% endif %}"
+        {% set is_default = (mode == 'literal' and not current_value and not field.required) %}
+        <div class="config-field{% if errors.get(field.name) %} has-error{% endif %}{% if is_default %} is-default{% endif %}"
              id="field-row-{{ field.name }}">
           <label class="config-field-label">
             {{ field.name | replace('_', ' ') | title }}
@@ -64,13 +62,11 @@
             <span id="input-{{ field.name }}" class="config-field-input">
               {% set field_name = field.name %}
               {% set type_name = field.type_name %}
+              {% set field_default = field.default %}
               {% include "config/components/field_input.html" %}
             </span>
           </div>
-          <small class="config-field-doc">{{ field.doc }}</small>
-          {% if not field.required and field.default is not none %}
-          <small class="config-field-default">Default: {{ field.default }}</small>
-          {% endif %}
+          <small class="config-field-doc">{{ field.doc }}{% if not field.required and field.default is not none %} (default: {{ field.default }}){% endif %}</small>
           {% if errors.get(field.name) %}
           <small class="config-field-error">{{ errors[field.name] }}</small>
           {% endif %}
@@ -79,10 +75,67 @@
       </fieldset>
       {% endfor %}
 
+      {# ── Resource Limits ── #}
+      <fieldset class="config-section">
+        <legend>Resource Limits</legend>
+        {% for field in resource_limits_schema %}
+        {% set raw_value = raw_resource_limits.get(field.name) if raw_resource_limits else None %}
+        {% set mode = detect_mode(raw_value) %}
+        {% set current_value = detect_mode_value(raw_value) %}
+        {% set is_default = (mode == 'literal' and not current_value and not field.required) %}
+        <div class="config-field{% if errors.get('rl_' + field.name) %} has-error{% endif %}{% if is_default %} is-default{% endif %}"
+             id="field-row-rl-{{ field.name }}">
+          <label class="config-field-label">
+            {{ field.name | replace('_', ' ') | title }}
+            <span class="scope-badge scope-{{ field.scope }}">{{ field.scope }}</span>
+          </label>
+          <div class="config-field-controls">
+            <select name="field.rl_{{ field.name }}.mode" class="config-mode-select"
+                    hx-get="/config/field-input?name=rl_{{ field.name }}&amp;type={{ field.type_name | urlencode }}"
+                    hx-target="#input-rl_{{ field.name }}"
+                    hx-swap="innerHTML"
+                    hx-include="this">
+              <option value="literal" {{ 'selected' if mode == 'literal' }}>Literal</option>
+              <option value="var" {{ 'selected' if mode == 'var' }}>!var</option>
+              <option value="env" {{ 'selected' if mode == 'env' }}>!env</option>
+            </select>
+            <span id="input-rl_{{ field.name }}" class="config-field-input">
+              {% set field_name = 'rl_' + field.name %}
+              {% set type_name = field.type_name %}
+              {% set field_default = field.default %}
+              {% include "config/components/field_input.html" %}
+            </span>
+          </div>
+          <small class="config-field-doc">{{ field.doc }}{% if not field.required and field.default is not none %} (default: {{ field.default }}){% endif %}</small>
+          {% if errors.get('rl_' + field.name) %}
+          <small class="config-field-error">{{ errors['rl_' + field.name] }}</small>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </fieldset>
+
       <div class="config-actions">
         <button type="submit" class="action-btn primary">Save Global Settings</button>
       </div>
     </form>
+
+    {# ── Repositories section ── #}
+    <fieldset class="config-section config-repos-section">
+      <legend>Repositories</legend>
+      {% if repo_ids %}
+      <div class="config-repo-table">
+        {% for rid in repo_ids %}
+        <div class="config-repo-row">
+          <a href="/config/repo/{{ rid }}" class="config-repo-name">{{ rid }}</a>
+          <a href="/config/repo/{{ rid }}/delete" class="config-btn-icon" title="Delete">&times;</a>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="config-empty">No repositories configured.</p>
+      {% endif %}
+      <a href="/config/repo/new" class="config-btn-add">+ New Repository</a>
+    </fieldset>
   </main>
 </div>
 {% endblock %}

@@ -1,5 +1,6 @@
 {# Input widget for a config field — varies by mode and type.
-   Expects: field_name, type_name, mode, variables, resolve_env, current_value #}
+   Expects: field_name, type_name, mode, variables, resolve_env, current_value,
+            field_default (optional - default value for placeholder) #}
 {% if mode == 'var' %}
 <input type="text" name="field.{{ field_name }}.value"
        value="{{ current_value }}" placeholder="Variable name"
@@ -27,7 +28,7 @@
 {% else %}
 {% if 'bool' in type_name %}
 <select name="field.{{ field_name }}.value" class="config-input">
-  <option value="" {{ 'selected' if not current_value }}>-- default --</option>
+  <option value="" {{ 'selected' if not current_value }}></option>
   <option value="true" {{ 'selected' if current_value in ('true', 'True') }}>true</option>
   <option value="false" {{ 'selected' if current_value in ('false', 'False') }}>false</option>
 </select>
@@ -36,12 +37,18 @@
           rows="3" placeholder="One item per line">{{ current_value }}</textarea>
 {% elif 'int' in type_name and 'dict' not in type_name %}
 <input type="number" name="field.{{ field_name }}.value"
-       value="{{ current_value }}" class="config-input">
+       value="{{ current_value }}"
+       placeholder="{{ field_default if field_default is defined and field_default is not none else '' }}"
+       class="config-input">
 {% elif 'float' in type_name %}
 <input type="number" step="0.1" name="field.{{ field_name }}.value"
-       value="{{ current_value }}" class="config-input">
+       value="{{ current_value }}"
+       placeholder="{{ field_default if field_default is defined and field_default is not none else '' }}"
+       class="config-input">
 {% else %}
 <input type="text" name="field.{{ field_name }}.value"
-       value="{{ current_value }}" class="config-input">
+       value="{{ current_value }}"
+       placeholder="{{ field_default if field_default is defined and field_default is not none else '' }}"
+       class="config-input">
 {% endif %}
 {% endif %}

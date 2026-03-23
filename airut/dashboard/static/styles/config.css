@@ -1,56 +1,17 @@
 /* config.css - Config editor page layout and components */
 
-/* ---- Page layout (sidebar + content) ---- */
+/* ---- Page layout (single column, no sidebar) ---- */
 .config-page {
   display: flex;
-  gap: 0;
+  justify-content: center;
   min-height: calc(100vh - 48px);
-}
-
-/* ---- Sidebar navigation ---- */
-.config-sidebar {
-  width: 200px;
-  flex-shrink: 0;
-  background: var(--bg-surface);
-  border-right: 1px solid var(--border-light);
-  padding: 16px 0;
-}
-.config-nav {
-  display: flex;
-  flex-direction: column;
-}
-.config-nav-item {
-  padding: 8px 16px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  text-decoration: none;
-  border-left: 3px solid transparent;
-}
-.config-nav-item:hover {
-  background: var(--bg-inset);
-  color: var(--text-primary);
-  text-decoration: none;
-}
-.config-nav-header {
-  padding: 12px 16px 4px;
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-tertiary);
-}
-.config-nav-add {
-  color: var(--accent);
-  font-weight: 500;
-}
-.config-nav-add:hover {
-  color: var(--accent-hover);
+  padding: 0 16px;
 }
 
 /* ---- Main content area ---- */
 .config-content {
   flex: 1;
-  padding: 20px 32px;
+  padding: 20px 0;
   max-width: 760px;
 }
 
@@ -138,6 +99,12 @@
   color: var(--status-error);
   font-family: var(--font-mono);
   font-size: 14px;
+}
+
+/* ---- Default value styling ---- */
+.config-field.is-default .config-input,
+.config-field.is-default .config-mode-select {
+  background: var(--bg-inset);
 }
 
 /* ---- Scope badge ---- */
@@ -282,10 +249,12 @@
   border-radius: 4px;
   cursor: pointer;
   margin-top: 4px;
+  text-decoration: none;
 }
 .config-btn-add:hover {
   background: var(--accent-subtle);
   border-color: var(--accent);
+  text-decoration: none;
 }
 .config-btn-danger {
   padding: 6px 14px;
@@ -313,10 +282,12 @@
   border: none;
   cursor: pointer;
   border-radius: 3px;
+  text-decoration: none;
 }
 .config-btn-icon:hover {
   color: var(--status-error);
   background: var(--status-error-bg);
+  text-decoration: none;
 }
 .config-actions {
   display: flex;
@@ -377,4 +348,51 @@
 }
 .reload-status.pending {
   color: var(--status-info);
+}
+
+/* ---- Repository list (on global page) ---- */
+.config-repos-section {
+  margin-top: 24px;
+}
+.config-repo-table {
+  margin-bottom: 12px;
+}
+.config-repo-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--border-light);
+}
+.config-repo-row:last-child {
+  border-bottom: none;
+}
+.config-repo-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+  text-decoration: none;
+}
+.config-repo-name:hover {
+  text-decoration: underline;
+}
+.config-empty {
+  font-size: 13px;
+  color: var(--text-tertiary);
+  margin: 8px 0;
+}
+
+/* ---- Repo list (inline nav fragment) ---- */
+.config-repo-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.config-repo-link {
+  font-size: 13px;
+  color: var(--accent);
+  text-decoration: none;
+}
+.config-repo-link:hover {
+  text-decoration: underline;
 }
