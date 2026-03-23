@@ -53,7 +53,7 @@ the project-specific checklist below.
   references.
 - [ ] Interfaces and APIs are clean after the change. Watch for signs of lazy
   updates designed to avoid breaking callers (e.g., optional parameters that
-  should be required, union types that paper over a migration, **kwargs
+  should be required, union types that paper over a migration, \*\*kwargs
   pass-through to avoid signature changes).
 - [ ] If a refactor made an interface awkward, clean it up in the same PR.
 
