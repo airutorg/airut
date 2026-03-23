@@ -53,6 +53,8 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
 - `spec/github-app-credential.md` — GitHub App credential support with
   proxy-managed token rotation
 - `spec/dashboard.md` — web dashboard for task monitoring
+- `spec/config-editor.md` — web config editor (schema-driven forms, diff
+  preview, inotify reload)
 - `spec/cli.md` — CLI subcommands, service management, self-update
 - `spec/pr-workflow-tool.md` — PR workflow automation (ci.py, pr.py)
 - `spec/local-ci-runner.md` — CI runner (single source of truth for all CI

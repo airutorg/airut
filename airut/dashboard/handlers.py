@@ -5,7 +5,8 @@
 
 """HTTP request handlers for dashboard server.
 
-Provides handler functions for all dashboard HTTP endpoints.
+Provides handler functions for all dashboard HTTP endpoints,
+including the config editor API.
 """
 
 import json
@@ -13,7 +14,7 @@ import logging
 from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 from urllib.parse import urlencode
 
 from werkzeug.wrappers import Request, Response
@@ -60,6 +61,12 @@ from airut.version import (
 )
 
 
+if TYPE_CHECKING:
+    from airut.config.snapshot import ConfigSnapshot
+    from airut.config.source import YamlConfigSource
+    from airut.gateway.config import ServerConfig
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -82,6 +89,14 @@ class RequestHandlers:
         sse_manager: SSEConnectionManager | None = None,
         git_version_info: GitVersionInfo | None = None,
         status_callback: Callable[[], dict[str, object]] | None = None,
+        config_callback: (
+            Callable[
+                [],
+                tuple["ConfigSnapshot[ServerConfig]", "YamlConfigSource", int]
+                | None,
+            ]
+            | None
+        ) = None,
     ) -> None:
         """Initialize request handlers.
 
@@ -99,6 +114,9 @@ class RequestHandlers:
             status_callback: Optional callable returning config reload status
                 dict with keys: config_generation, server_reload_pending,
                 last_reload_error.
+            config_callback: Optional callable returning current config
+                snapshot, YAML source, and generation for the editor.
+                Returns None when no editable config source is available.
         """
         self.tracker = tracker
         self.version_info = version_info
@@ -110,6 +128,7 @@ class RequestHandlers:
         self._sse_manager = sse_manager or SSEConnectionManager()
         self._git_version_info = git_version_info
         self._status_callback = status_callback
+        self._config_callback = config_callback
 
     def _get_boot_state(self) -> BootState | None:
         """Read current boot state from versioned store."""
@@ -1764,3 +1783,41 @@ class RequestHandlers:
                 result["conversation"] = None
 
         return result
+
+    # ------------------------------------------------------------------
+    # Config editor endpoints (delegated to config_handlers module)
+    # ------------------------------------------------------------------
+
+    def handle_config_editor(self, request: Request) -> Response:
+        """Serve the config editor page."""
+        from airut.dashboard.config_handlers import handle_config_editor
+
+        return handle_config_editor(
+            request, self._config_callback, self.version_info
+        )
+
+    def handle_api_config_schema(self, request: Request) -> Response:
+        """Return UI metadata for all config types."""
+        from airut.dashboard.config_handlers import handle_api_config_schema
+
+        return handle_api_config_schema(request)
+
+    def handle_api_config(self, request: Request) -> Response:
+        """Return the current raw config with tag markers."""
+        from airut.dashboard.config_handlers import handle_api_config
+
+        return handle_api_config(request, self._config_callback)
+
+    def handle_api_config_preview(self, request: Request) -> Response:
+        """Validate edited config and return scope-grouped diff."""
+        from airut.dashboard.config_handlers import handle_api_config_preview
+
+        return handle_api_config_preview(request, self._config_callback)
+
+    def handle_api_config_save(self, request: Request) -> Response:
+        """Validate, save config, and wait for reload."""
+        from airut.dashboard.config_handlers import handle_api_config_save
+
+        return handle_api_config_save(
+            request, self._config_callback, self._status_callback
+        )

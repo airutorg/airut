@@ -353,6 +353,7 @@ class GatewayService:
             clock=self._clock,
             git_version_info=self._git_version_info,
             status_callback=self._get_reload_status,
+            config_callback=self._get_config_for_editor,
         )
         self.dashboard.start()
 
@@ -604,6 +605,20 @@ class GatewayService:
             "server_reload_pending": self._pending_server_config is not None,
             "last_reload_error": self._last_reload_error,
         }
+
+    def _get_config_for_editor(
+        self,
+    ) -> tuple[ConfigSnapshot[ServerConfig], YamlConfigSource, int] | None:
+        """Return current config state for the editor, or None."""
+        if self._config_snapshot is None or self._config_source is None:
+            return None
+        if not isinstance(self._config_source, YamlConfigSource):
+            return None
+        return (
+            self._config_snapshot,
+            self._config_source,
+            self._config_generation,
+        )
 
     def _on_config_changed(self) -> None:
         """Handle config file change (inotify or SIGHUP).

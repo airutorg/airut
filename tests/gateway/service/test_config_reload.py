@@ -857,3 +857,42 @@ class TestTryImmediateServerReload:
 
         # Pending state cleared despite error
         assert svc._pending_server_config is None
+
+
+class TestGetConfigForEditor:
+    """Tests for _get_config_for_editor."""
+
+    def test_returns_none_without_source(self, tmp_path: Path) -> None:
+        svc = _make_service(tmp_path)
+        svc._config_source = None
+        assert svc._get_config_for_editor() is None
+
+    def test_returns_none_without_snapshot(self, tmp_path: Path) -> None:
+        svc = _make_service(tmp_path)
+        svc._config_snapshot = None
+        assert svc._get_config_for_editor() is None
+
+    def test_returns_none_for_non_yaml_source(self, tmp_path: Path) -> None:
+        from airut.config.snapshot import ConfigSnapshot
+
+        svc = _make_service(tmp_path)
+        svc._config_source = MagicMock(spec=[])  # Not a YamlConfigSource
+        svc._config_snapshot = ConfigSnapshot(svc.config, frozenset())
+        assert svc._get_config_for_editor() is None
+
+    def test_returns_tuple_with_yaml_source(self, tmp_path: Path) -> None:
+        svc = _make_service(tmp_path)
+        from airut.config.snapshot import ConfigSnapshot
+        from airut.config.source import YamlConfigSource
+
+        svc._config_source = YamlConfigSource(tmp_path / "airut.yaml")
+        svc._config_snapshot = ConfigSnapshot(
+            svc.config, frozenset({"global_config", "repos"})
+        )
+        svc._config_generation = 42
+        result = svc._get_config_for_editor()
+        assert result is not None
+        snapshot, source, generation = result
+        assert snapshot is svc._config_snapshot
+        assert source is svc._config_source
+        assert generation == 42

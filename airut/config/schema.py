@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from airut._json_types import JsonDict
+
 
 class Scope(Enum):
     """When does a change to this setting take effect?"""
@@ -170,3 +172,74 @@ def schema_for_ui(config_cls: type) -> list[FieldSchema]:
             )
         )
     return result
+
+
+def full_schema_for_api() -> dict[str, list[JsonDict]]:
+    """Complete schema for the config editor API.
+
+    Returns dicts (not ``FieldSchema``) with ``yaml_path`` added,
+    grouped by config type.  Includes ``resource_limits`` as a
+    separate section.
+
+    Uses lazy imports to avoid circular dependencies with
+    ``airut.gateway.config``.
+
+    Returns:
+        Dict keyed by config section with lists of field descriptors.
+    """
+    from airut._json_types import JsonValue
+    from airut.config.source import (
+        YAML_EMAIL_STRUCTURE,
+        YAML_GLOBAL_STRUCTURE,
+        YAML_REPO_STRUCTURE,
+    )
+    from airut.gateway.config import (
+        EmailChannelConfig,
+        GlobalConfig,
+        RepoServerConfig,
+    )
+    from airut.gateway.slack.config import SlackChannelConfig
+    from airut.sandbox.types import ResourceLimits
+
+    def _section(
+        cls: type,
+        structure: dict[str, tuple[str, ...]] | None = None,
+    ) -> list[JsonDict]:
+        fields = schema_for_ui(cls)
+        result: list[JsonDict] = []
+        for fs in fields:
+            default: JsonValue = fs.default
+            if default is dataclasses.MISSING:
+                default = None
+            elif dataclasses.is_dataclass(default) and not isinstance(
+                default, type
+            ):
+                default = {
+                    str(k): v for k, v in dataclasses.asdict(default).items()
+                }
+            yaml_path: tuple[str, ...]
+            if structure and fs.name in structure:
+                yaml_path = structure[fs.name]
+            else:
+                yaml_path = (fs.name,)
+            path_list: list[JsonValue] = list(yaml_path)
+            d: JsonDict = {
+                "name": fs.name,
+                "type_name": fs.type_name,
+                "default": default,
+                "required": fs.required,
+                "doc": fs.doc,
+                "scope": fs.scope,
+                "secret": fs.secret,
+                "yaml_path": path_list,
+            }
+            result.append(d)
+        return result
+
+    return {
+        "global": _section(GlobalConfig, YAML_GLOBAL_STRUCTURE),
+        "email_channel": _section(EmailChannelConfig, YAML_EMAIL_STRUCTURE),
+        "slack_channel": _section(SlackChannelConfig),
+        "repo": _section(RepoServerConfig, YAML_REPO_STRUCTURE),
+        "resource_limits": _section(ResourceLimits),
+    }

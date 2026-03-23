@@ -15,4 +15,5 @@ Submodules:
 - ``source`` — ``ConfigSource`` protocol, ``YamlConfigSource``
 - ``migration`` — Schema version migration (``apply_migrations``)
 - ``diff`` — Config diffing (``diff_configs``, ``diff_by_scope``)
+- ``editor`` — Config editor logic (tag encoding, validation, diff, save)
 """

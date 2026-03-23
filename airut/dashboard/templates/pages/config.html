@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}Config Editor - Airut Dashboard{% endblock %}
+
+{% block head_extra %}
+<link rel="stylesheet" href="{{ static_url('styles/config.css') }}">
+{% endblock %}
+
+{% block body %}
+<div class="page config-page">
+    {% if not config_available %}
+    <div class="config-unavailable">
+        <h2>Config editing not available</h2>
+        <p>The server was not started with a YAML config file, or no editable
+        config source is available.</p>
+    </div>
+    {% else %}
+    <div id="config-status" class="config-status">
+        <span id="status-text">Loading config...</span>
+    </div>
+
+    <div id="config-error" class="config-error" style="display: none;"></div>
+    <div id="config-success" class="config-success" style="display: none;"></div>
+
+    <div id="variables-section" class="config-section" style="display: none;">
+        <h2 class="section-header">Variables</h2>
+        <div id="variables-editor"></div>
+        <button type="button" class="btn btn-small" id="add-variable-btn">+ Add variable</button>
+    </div>
+
+    <div id="global-section" class="config-section" style="display: none;">
+        <h2 class="section-header">Global Settings</h2>
+        <div id="global-fields"></div>
+    </div>
+
+    <div id="repos-section" class="config-section" style="display: none;">
+        <h2 class="section-header">Repositories</h2>
+        <div id="repos-editor"></div>
+    </div>
+
+    <div id="review-panel" class="review-panel" style="display: none;">
+        <h2>Review Changes</h2>
+        <div id="review-content"></div>
+        <div class="review-actions">
+            <button type="button" class="btn" id="cancel-review-btn">Cancel</button>
+            <button type="button" class="btn btn-primary" id="save-btn">Save Changes</button>
+        </div>
+    </div>
+
+    <div class="config-actions" id="config-actions" style="display: none;">
+        <button type="button" class="btn btn-primary" id="review-btn">Review Changes</button>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if config_available %}
+<script src="{{ static_url('js/config-editor.js') }}"></script>
+{% endif %}
+{% endblock %}

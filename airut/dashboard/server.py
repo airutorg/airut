@@ -23,6 +23,10 @@ from airut._json_types import JsonDict
 if TYPE_CHECKING:
     from werkzeug.wrappers.response import StartResponse
 
+    from airut.config.snapshot import ConfigSnapshot
+    from airut.config.source import YamlConfigSource
+    from airut.gateway.config import ServerConfig
+
 from werkzeug.exceptions import NotFound
 from werkzeug.routing import Map, Rule
 from werkzeug.serving import BaseWSGIServer, make_server
@@ -97,6 +101,14 @@ class DashboardServer:
         clock: VersionClock | None = None,
         git_version_info: GitVersionInfo | None = None,
         status_callback: Callable[[], dict[str, object]] | None = None,
+        config_callback: (
+            Callable[
+                [],
+                tuple["ConfigSnapshot[ServerConfig]", "YamlConfigSource", int]
+                | None,
+            ]
+            | None
+        ) = None,
     ) -> None:
         """Initialize dashboard server.
 
@@ -115,6 +127,8 @@ class DashboardServer:
             git_version_info: Git version info for upstream update checks.
             status_callback: Optional callable returning config reload
                 status dict.
+            config_callback: Optional callable returning current config
+                snapshot, YAML source, and generation for the editor.
         """
         self.tracker = tracker
         self.host = host
@@ -137,6 +151,7 @@ class DashboardServer:
             sse_manager=self._sse_manager,
             git_version_info=git_version_info,
             status_callback=status_callback,
+            config_callback=config_callback,
         )
 
         self._url_map = Map(
@@ -210,6 +225,19 @@ class DashboardServer:
                 Rule("/api/health", endpoint="health"),
                 Rule("/api/status", endpoint="api_status"),
                 Rule("/api/tracker", endpoint="api_tracker"),
+                Rule("/config", endpoint="config_editor"),
+                Rule("/api/config/schema", endpoint="api_config_schema"),
+                Rule("/api/config", endpoint="api_config"),
+                Rule(
+                    "/api/config/preview",
+                    endpoint="api_config_preview",
+                    methods=["POST"],
+                ),
+                Rule(
+                    "/api/config/save",
+                    endpoint="api_config_save",
+                    methods=["POST"],
+                ),
             ]
         )
 
@@ -241,6 +269,11 @@ class DashboardServer:
             "health": self._handlers.handle_health,
             "api_status": self._handlers.handle_api_status,
             "api_tracker": self._handlers.handle_api_tracker,
+            "config_editor": self._handlers.handle_config_editor,
+            "api_config_schema": self._handlers.handle_api_config_schema,
+            "api_config": self._handlers.handle_api_config,
+            "api_config_preview": self._handlers.handle_api_config_preview,
+            "api_config_save": self._handlers.handle_api_config_save,
         }
 
     def start(self) -> None:

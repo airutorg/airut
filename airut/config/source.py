@@ -34,7 +34,7 @@ class ConfigSource(Protocol):
 
 #: Maps flat GlobalConfig field names to nested YAML paths.
 #: Fields not listed map to their own name at the top level.
-_YAML_GLOBAL_STRUCTURE: dict[str, tuple[str, ...]] = {
+YAML_GLOBAL_STRUCTURE: dict[str, tuple[str, ...]] = {
     "max_concurrent_executions": ("execution", "max_concurrent"),
     "shutdown_timeout_seconds": ("execution", "shutdown_timeout"),
     "conversation_max_age_days": ("execution", "conversation_max_age_days"),
@@ -48,7 +48,7 @@ _YAML_GLOBAL_STRUCTURE: dict[str, tuple[str, ...]] = {
 
 #: Maps flat EmailChannelConfig field names to nested YAML paths
 #: within the ``email:`` block.
-_YAML_EMAIL_STRUCTURE: dict[str, tuple[str, ...]] = {
+YAML_EMAIL_STRUCTURE: dict[str, tuple[str, ...]] = {
     "imap_server": ("imap_server",),
     "imap_port": ("imap_port",),
     "smtp_server": ("smtp_server",),
@@ -69,7 +69,7 @@ _YAML_EMAIL_STRUCTURE: dict[str, tuple[str, ...]] = {
 
 #: Maps flat RepoServerConfig field names to nested YAML paths
 #: within the repo block.
-_YAML_REPO_STRUCTURE: dict[str, tuple[str, ...]] = {
+YAML_REPO_STRUCTURE: dict[str, tuple[str, ...]] = {
     "git_repo_url": ("git", "repo_url"),
     "network_sandbox_enabled": ("network", "sandbox_enabled"),
 }
@@ -114,17 +114,17 @@ def _flat_to_nested(
 
 def flat_to_nested_global(flat: dict[str, Any]) -> dict[str, Any]:
     """Convert a flat GlobalConfig dict to nested YAML structure."""
-    return _flat_to_nested(flat, _YAML_GLOBAL_STRUCTURE)
+    return _flat_to_nested(flat, YAML_GLOBAL_STRUCTURE)
 
 
 def flat_to_nested_email(flat: dict[str, Any]) -> dict[str, Any]:
     """Convert a flat EmailChannelConfig dict to nested YAML structure."""
-    return _flat_to_nested(flat, _YAML_EMAIL_STRUCTURE)
+    return _flat_to_nested(flat, YAML_EMAIL_STRUCTURE)
 
 
 def flat_to_nested_repo(flat: dict[str, Any]) -> dict[str, Any]:
     """Convert a flat RepoServerConfig dict to nested YAML structure."""
-    return _flat_to_nested(flat, _YAML_REPO_STRUCTURE)
+    return _flat_to_nested(flat, YAML_REPO_STRUCTURE)
 
 
 def _env_representer(dumper: yaml.Dumper, data: EnvVar) -> yaml.Node:
