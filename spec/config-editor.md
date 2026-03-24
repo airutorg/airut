@@ -10,7 +10,8 @@ preview.
 
 1. **Schema-driven rendering** — form elements generated from `FieldMeta`
    annotations. Adding a field with `metadata=meta(...)` automatically surfaces
-   it in the editor.
+   it in the editor. Individual pages can customize layout (card grouping,
+   column arrangement) while field widgets are always schema-generated.
 2. **Edit buffer with granular mutations** — the server holds a mutable copy of
    the raw config dict. The client sends per-field set/clear operations and
    collection add/remove operations. No bulk form submission.
@@ -228,6 +229,29 @@ non-editor consumers (e.g., example config generation, CLI help).
 `schema_for_editor()` is a richer, recursive variant that adds YAML paths, type
 tags, and composite type structure needed by the editor UI.
 
+### Schema-Driven Rendering with Page Customization
+
+Field widgets (scalar inputs, source selectors, list/dict/collection widgets)
+are **always generated from the schema** — `EditorFieldSchema` determines the
+widget type, label, help text, source options, and default value. Adding a new
+`FieldMeta`-annotated field to a config dataclass automatically makes it appear
+in the editor with the correct widget and documentation.
+
+However, **page layout is template-controlled**: each page template decides how
+to group fields into cards, arrange cards into sections, and order sections on
+the page. This means:
+
+- The `config.html` template explicitly lists which cards appear and in what
+  order (Execution, Dashboard, Container & Network, Resource Limits).
+- The `config_repo.html` template controls per-repo card ordering.
+- Templates call a shared `render_field(schema, buffer)` macro for each field,
+  which dispatches to the appropriate widget template based on `type_tag`.
+- Adding a new field to (say) `GlobalConfig` makes it appear automatically in
+  the appropriate card. Adding an entirely new card grouping requires a template
+  change.
+
+This balances automatic schema discovery with deliberate page design.
+
 #### `InMemoryConfigSource`
 
 A read-only `ConfigSource` for pre-save validation. Only `load()` is meaningful
@@ -420,12 +444,20 @@ channel path.
 
 ### Page Routes
 
-| Route     | Method | Description             |
-| --------- | ------ | ----------------------- |
-| `/config` | GET    | Config editor full page |
+| Route                     | Method | Description                                 |
+| ------------------------- | ------ | ------------------------------------------- |
+| `/config`                 | GET    | Global settings (execution, dashboard, ...) |
+| `/config/repos/<repo_id>` | GET    | Per-repo settings for a single repository   |
 
-Single scrollable page. May be split into sub-pages in future phases, but the
-edit buffer design supports both patterns — state lives on the server.
+The editor is organized into **sub-pages**. `/config` shows global (server-wide)
+settings and a list of configured repos with links. Each repo has its own page
+at `/config/repos/<repo_id>` showing git, channels, model, credentials, etc.
+
+All pages share the same `EditBuffer` — navigating between pages does not lose
+unsaved changes.
+
+The top bar shows "Configuration" as a breadcrumb on all editor pages. Per-repo
+pages show "Configuration / \<repo_id>".
 
 ### API Routes
 
@@ -440,9 +472,21 @@ edit buffer design supports both patterns — state lives on the server.
 
 ### `GET /config`
 
-Server-side rendered from `EditorFieldSchema` tree + current `EditBuffer` state.
-If no buffer exists, creates one from current `ConfigSnapshot.raw`. Returns full
-HTML page extending `base.html`.
+Global settings page. Server-side rendered from `EditorFieldSchema` tree +
+current `EditBuffer` state. If no buffer exists, creates one from current
+`ConfigSnapshot.raw`. Returns full HTML page extending `base.html`.
+
+Includes a repo list at the bottom: each configured repo shown as a card with
+its ID, channel summary, and a link to `/config/repos/<repo_id>`. An \[+ Add
+Repository\] button is included for creating new repos.
+
+### `GET /config/repos/<repo_id>`
+
+Per-repo settings page for a single repository. Rendered from the same
+`EditBuffer`. Shows all repo-level fields: git, channels, model & execution,
+resource limits, credentials, container environment.
+
+Returns 404 if the repo_id does not exist in the current edit buffer.
 
 ### `PATCH /api/config/field`
 
@@ -509,8 +553,6 @@ The diff is computed by:
    `diff_by_scope()`.
 3. Rendering changes as structured data: path, old value, new value, scope,
    field doc.
-
-Secret values in the diff are masked.
 
 The response includes a scope summary: how many changes per scope, and whether a
 server restart is required.
@@ -644,13 +686,14 @@ When any API call returns a stale indicator, JavaScript shows a banner:
 
 ## Page Layout
 
-Single scrollable page at `/config`. Uses existing `.page` max-width (960px) and
-`.card` pattern. Sections appear incrementally as phases are implemented — Phase
-1 shows only Server Settings; subsequent phases add Variables, Repos, Channels,
-and Credentials sections.
+Two page types, both using existing `.page` max-width (960px) and `.card`
+pattern. Every editor page includes the save bar and stale banner — changes on
+any page are tracked in the shared edit buffer.
+
+### Global Settings Page (`/config`)
 
 ```
-/config page (complete layout after all phases)
+/config
 ├─ Navbar (existing, breadcrumb: "Configuration")
 ├─ .page
 │  ├─ Save bar: dirty count + [Review & Save] [Discard]
@@ -666,22 +709,41 @@ and Credentials sections.
 │  ├─ Section: Variables
 │  │  └─ Card: vars section (dict[str, str] widget, values support !env)
 │  │
-│  ├─ Section: Repository — {repo_id}  (repeated per repo)
-│  │  ├─ Card: Git (repo_url)
-│  │  ├─ Card: Email Channel (all EmailChannelConfig fields, or [+ Add])
-│  │  ├─ Card: Slack Channel (all SlackChannelConfig fields, or [+ Add])
-│  │  ├─ Card: Model & Execution (model, effort, network_sandbox_enabled)
-│  │  ├─ Card: Resource Limits — per repo (nested ResourceLimits)
-│  │  ├─ Card: Credentials
-│  │  │  ├─ Secrets (dict_str_str widget)
-│  │  │  ├─ Masked Secrets (keyed collection)
-│  │  │  ├─ Signing Credentials (keyed collection)
-│  │  │  └─ GitHub App Credentials (keyed collection)
-│  │  └─ Card: Container Environment (dict_str_str widget)
+│  ├─ Section: Repositories
+│  │  ├─ Repo card: {repo_id} — summary (channels, model) + link to detail page
+│  │  ├─ Repo card: {repo_id} — ...
+│  │  └─ [+ Add Repository] button
 │  │
-│  ├─ [+ Add Repository] button
+│  └─ Footer: Save bar (mirrors top bar)
+│
+└─ Scripts: htmx + config-editor.js
+```
+
+### Repository Settings Page (`/config/repos/<repo_id>`)
+
+```
+/config/repos/{repo_id}
+├─ Navbar (existing, breadcrumb: "Configuration / {repo_id}")
+├─ .page
+│  ├─ Save bar: dirty count + [Review & Save] [Discard]
+│  ├─ #save-result
+│  ├─ #stale-banner
 │  │
-│  └─ Footer: Save bar (mirrors top bar; both update via shared CSS class)
+│  ├─ Card: Git (repo_url)
+│  ├─ Card: Email Channel (all EmailChannelConfig fields, or [+ Add])
+│  ├─ Card: Slack Channel (all SlackChannelConfig fields, or [+ Add])
+│  ├─ Card: Model & Execution (model, effort, network_sandbox_enabled)
+│  ├─ Card: Resource Limits — per repo (nested ResourceLimits)
+│  ├─ Card: Credentials
+│  │  ├─ Secrets (dict_str_str widget)
+│  │  ├─ Masked Secrets (keyed collection)
+│  │  ├─ Signing Credentials (keyed collection)
+│  │  └─ GitHub App Credentials (keyed collection)
+│  ├─ Card: Container Environment (dict_str_str widget)
+│  │
+│  ├─ [Remove Repository] (with confirmation)
+│  │
+│  └─ Footer: Save bar
 │
 └─ Scripts: htmx + config-editor.js
 ```
@@ -779,12 +841,12 @@ preflight blocks cross-origin requests with custom headers.
 
 ### Secret Handling
 
-Fields marked `secret=True` are rendered as plain text inputs. The dashboard is
-single-user behind a reverse proxy — masking adds friction without security
-benefit.
+Fields marked `secret=True` are rendered as plain text inputs. Secret values are
+shown in full in the diff preview as well. The dashboard is single-user behind a
+reverse proxy — masking adds friction without security benefit.
 
-The `secret` flag affects diff output: secret values are masked in the diff
-preview.
+The `secret` flag in `FieldMeta` remains for other consumers (log redaction,
+`SecretFilter`) but does not affect editor rendering or diff output.
 
 ### Access Control
 
@@ -793,9 +855,10 @@ it), localhost binding by default, same security response headers.
 
 ## Dashboard Integration
 
-"Configure" button in the `version_info.html` component. The button is always
-present when the config editor route is registered (Phase 1+). No separate
-feature flag — if the editor code is deployed, it's available.
+"Configure" button on the **main dashboard page** (in the `version_info.html`
+component, not in the top navigation bar). The button is always present when the
+config editor route is registered (Phase 1+). No separate feature flag — if the
+editor code is deployed, it's available.
 
 ```html
 <a href="/config" class="action-btn primary"
@@ -804,11 +867,16 @@ feature flag — if the editor code is deployed, it's available.
 </a>
 ```
 
+The config editor is a separate section of the dashboard — navigating to
+`/config` leaves the task monitoring view. The top bar breadcrumb provides
+navigation context.
+
 ### Breadcrumbs
 
-| Page          | Breadcrumbs   |
-| ------------- | ------------- |
-| Config editor | Configuration |
+| Page            | Breadcrumbs                |
+| --------------- | -------------------------- |
+| Global settings | Configuration              |
+| Repo settings   | Configuration / \<repo_id> |
 
 ## Styling
 
@@ -836,7 +904,8 @@ Responsive breakpoint at 700px matches existing pages.
 | ------------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | `airut/config/editor.py`                                      | `EditorFieldSchema`, `schema_for_editor()`, `EditBuffer`, `InMemoryConfigSource` |
 | `airut/dashboard/handlers_config.py`                          | `ConfigEditorHandlers`: page, field, add, remove, diff, save, discard            |
-| `airut/dashboard/templates/pages/config.html`                 | Config editor page template                                                      |
+| `airut/dashboard/templates/pages/config.html`                 | Global settings page template                                                    |
+| `airut/dashboard/templates/pages/config_repo.html`            | Per-repo settings page template                                                  |
 | `airut/dashboard/templates/components/config/field.html`      | Recursive field dispatch macro                                                   |
 | `airut/dashboard/templates/components/config/scalar.html`     | Scalar input + source selector                                                   |
 | `airut/dashboard/templates/components/config/list.html`       | List widget                                                                      |
@@ -865,7 +934,7 @@ independently shippable and testable.
 
 ### Phase 1: Foundation + Global Settings
 
-**Scope:** EditBuffer, API endpoints, global config editing.
+**Scope:** EditBuffer, API endpoints, global config page.
 
 **Backend:**
 
@@ -880,7 +949,8 @@ independently shippable and testable.
 
 **Frontend:**
 
-- `/config` page template with save bar, stale banner, save-result target
+- `/config` global settings page with save bar, stale banner, save-result target
+- Repo list section (summary cards with links, no editing yet)
 - Scalar field widget with source selector
 - Nested dataclass widget (for `ResourceLimits`)
 - Diff modal with scope grouping
@@ -892,29 +962,31 @@ independently shippable and testable.
 - `pages/config.html`, `components/config/field.html`,
   `components/config/scalar.html`, `components/config/nested.html`
 
-**Not included:** repos, channels, credentials, list/dict/collection widgets.
-The page shows only the Server Settings section.
+**Not included:** repo editing, channels, credentials, list/dict/collection
+widgets. Repo cards on `/config` link to repo detail pages but those pages are
+not yet implemented.
 
 ### Phase 2: Repos + Simple Fields
 
-**Scope:** Repo management and scalar/nested repo fields.
+**Scope:** Per-repo settings page with scalar/nested fields.
 
 **Backend:**
 
 - `schema_for_editor()` extended for `RepoServerConfig`
 - Add/remove repo operations in `EditBuffer`
 - Repo skeleton generation for add
+- `GET /config/repos/<repo_id>` handler
 
 **Frontend:**
 
-- Repository sections on `/config` page
-- [+ Add Repository] button
-- Per-repo cards: Git, Model & Execution, Resource Limits
-- [Remove Repo] with confirmation
+- `/config/repos/<repo_id>` page with per-repo cards: Git, Model & Execution,
+  Resource Limits
+- [+ Add Repository] button on `/config` page
+- [Remove Repo] with confirmation on repo detail page
 
 **Templates:**
 
-- Repo section template
+- `pages/config_repo.html`
 
 ### Phase 3: Channels
 
@@ -1006,6 +1078,8 @@ for HTTP endpoints.
 | Test                              | Verifies                                         |
 | --------------------------------- | ------------------------------------------------ |
 | `test_config_page_loads`          | GET /config → 200, creates buffer                |
+| `test_repo_page_loads`            | GET /config/repos/{id} → 200                     |
+| `test_repo_page_404`              | GET /config/repos/nonexistent → 404              |
 | `test_patch_field_literal`        | PATCH returns updated HTML fragment              |
 | `test_patch_field_env`            | EnvVar in buffer after PATCH                     |
 | `test_patch_field_unset`          | Key removed from buffer after PATCH              |
@@ -1013,7 +1087,6 @@ for HTTP endpoints.
 | `test_add_list_item_returns_html` | POST add returns item fragment                   |
 | `test_remove_item`                | POST remove succeeds, buffer updated             |
 | `test_diff_shows_changes`         | GET diff returns structured change list          |
-| `test_diff_masks_secrets`         | Secret values masked in diff output              |
 | `test_diff_groups_by_scope`       | Changes grouped by server/repo/task              |
 | `test_save_valid_config`          | POST save → 200, YAML written, buffer discarded  |
 | `test_save_invalid_config`        | POST save → 422, YAML unchanged                  |
