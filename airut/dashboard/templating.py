@@ -10,6 +10,7 @@ fallback for editable installs), a shared Jinja2 environment with
 auto-escaping, and the ``render_template`` helper used by handlers.
 """
 
+import dataclasses
 import hashlib
 from collections.abc import Callable
 from importlib.resources import files
@@ -161,6 +162,15 @@ def create_jinja_env() -> Environment:
     globals_dict["format_timestamp"] = format_timestamp
     globals_dict["logo_svg"] = _LOGO_SVG
     globals_dict["static_url"] = static_url
+    globals_dict["MISSING"] = dataclasses.MISSING
+
+    # Config editor helper — lazy import to avoid circular deps
+    def _value_source(value: object) -> tuple[str, object]:
+        from airut.config.editor import value_source
+
+        return value_source(value)
+
+    globals_dict["value_source"] = _value_source
 
     return env
 

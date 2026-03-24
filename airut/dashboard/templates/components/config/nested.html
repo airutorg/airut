@@ -1,0 +1,11 @@
+{# Nested dataclass fieldset — expects: f (EditorFieldSchema), buffer (EditBuffer) #}
+{% if f.nested_fields %}
+<div class="cfg-nested">
+  <div class="cfg-nested-grid">
+    {% for sub in f.nested_fields %}
+    {% set f = sub %}
+    {% include "components/config/field.html" %}
+    {% endfor %}
+  </div>
+</div>
+{% endif %}

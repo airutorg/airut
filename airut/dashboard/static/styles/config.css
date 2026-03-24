@@ -1,0 +1,347 @@
+/* config.css - Config editor styles (extends base design system) */
+
+/* ---- Save bar ---- */
+.cfg-save-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border-light);
+}
+.cfg-save-bar .cfg-dirty {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--status-warning);
+  font-weight: 500;
+}
+.cfg-save-bar .hidden { display: none; }
+
+/* ---- Banners ---- */
+.cfg-banner {
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+.cfg-banner.success {
+  background: var(--status-success-bg);
+  color: var(--status-success);
+  border: 1px solid var(--status-success);
+}
+.cfg-banner.error {
+  background: var(--status-error-bg);
+  color: var(--status-error);
+  border: 1px solid var(--status-error);
+}
+.cfg-banner.warning {
+  background: var(--status-warning-bg);
+  color: var(--status-warning);
+  border: 1px solid var(--status-warning);
+}
+.cfg-banner.info {
+  background: var(--status-info-bg);
+  color: var(--status-info);
+  border: 1px solid var(--status-info);
+}
+
+/* ---- Section headers ---- */
+.cfg-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 12px;
+  margin-top: 24px;
+}
+.cfg-section-title:first-child { margin-top: 0; }
+
+/* ---- Card headers with scope badge ---- */
+.cfg-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.cfg-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* ---- Scope badges ---- */
+.cfg-scope {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+}
+.cfg-scope.server {
+  background: var(--status-info-bg);
+  color: var(--status-info);
+}
+.cfg-scope.repo {
+  background: var(--status-success-bg);
+  color: var(--status-success);
+}
+.cfg-scope.task {
+  background: var(--status-warning-bg);
+  color: var(--status-warning);
+}
+
+/* ---- Field row ---- */
+.cfg-field {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.cfg-field:last-child { border-bottom: none; }
+.cfg-field.unset {
+  background: var(--bg-inset);
+  border-radius: 4px;
+  padding: 10px;
+  margin: 4px 0;
+}
+.cfg-field-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+/* ---- Field labels ---- */
+.cfg-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+}
+
+/* ---- Source selector ---- */
+.cfg-source {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  font-size: 11px;
+}
+.cfg-source button {
+  background: var(--bg-surface);
+  border: none;
+  padding: 2px 8px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 11px;
+  border-right: 1px solid var(--border);
+}
+.cfg-source button:last-child { border-right: none; }
+.cfg-source button:hover {
+  background: var(--bg-inset);
+}
+.cfg-source button.active {
+  background: var(--accent);
+  color: white;
+}
+
+/* ---- Input ---- */
+.cfg-input {
+  width: 100%;
+  max-width: 400px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  box-sizing: border-box;
+  margin-top: 4px;
+}
+.cfg-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+.cfg-input::placeholder {
+  color: var(--text-tertiary);
+}
+select.cfg-input {
+  max-width: 120px;
+  cursor: pointer;
+}
+
+/* ---- Help text ---- */
+.cfg-help {
+  display: block;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 3px;
+}
+
+/* ---- Nested fieldset ---- */
+.cfg-nested {
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  padding: 12px;
+  margin-top: 8px;
+}
+@media (min-width: 701px) {
+  .cfg-nested-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 16px;
+  }
+}
+
+/* ---- Buttons ---- */
+.cfg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+}
+.cfg-btn:hover {
+  background: var(--bg-inset);
+  color: var(--text-primary);
+}
+.cfg-btn.primary {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+.cfg-btn.primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.cfg-btn.danger {
+  color: var(--status-error);
+  border-color: var(--status-error);
+}
+.cfg-btn.danger:hover {
+  background: var(--status-error-bg);
+}
+.cfg-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ---- Small action button (version bar) ---- */
+.action-btn.sm {
+  font-size: 12px;
+  padding: 3px 10px;
+}
+
+/* ---- Diff display ---- */
+.cfg-diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.cfg-diff-table th {
+  text-align: left;
+  font-weight: 600;
+  padding: 6px 8px;
+  border-bottom: 2px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.cfg-diff-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border-light);
+  vertical-align: top;
+}
+.cfg-diff-old {
+  color: var(--status-error);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.cfg-diff-new {
+  color: var(--status-success);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.cfg-diff-summary {
+  font-size: 13px;
+  margin-bottom: 12px;
+  color: var(--text-secondary);
+}
+
+/* ---- Repo list ---- */
+.cfg-repo-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  background: var(--bg-surface);
+}
+.cfg-repo-card:hover {
+  border-color: var(--accent);
+}
+.cfg-repo-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.cfg-repo-meta {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+/* ---- Dialog / modal ---- */
+.cfg-dialog {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  max-width: 700px;
+  width: 90vw;
+  margin: auto;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-md);
+}
+.cfg-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+.cfg-dialog-header {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.cfg-dialog-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+/* ---- Env hint ---- */
+.cfg-env-hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-style: italic;
+  margin-top: 2px;
+}
+
+/* ---- Responsive ---- */
+@media (max-width: 700px) {
+  .cfg-field-header {
+    flex-wrap: wrap;
+  }
+  .cfg-input {
+    max-width: 100%;
+  }
+}

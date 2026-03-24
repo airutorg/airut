@@ -29,9 +29,12 @@ from werkzeug.serving import BaseWSGIServer, make_server
 from werkzeug.wrappers import Request, Response
 
 from airut.claude_output.types import StreamEvent
+from airut.config.snapshot import ConfigSnapshot
+from airut.config.source import ConfigSource
 from airut.conversation import ConversationMetadata
 from airut.dashboard.formatters import VersionInfo
 from airut.dashboard.handlers import RequestHandlers
+from airut.dashboard.handlers_config import ConfigEditorHandlers
 from airut.dashboard.sse import SSEConnectionManager
 from airut.dashboard.tracker import BootState, RepoState, TaskState, TaskTracker
 from airut.dashboard.versioned import VersionClock, VersionedStore
@@ -97,6 +100,9 @@ class DashboardServer:
         clock: VersionClock | None = None,
         git_version_info: GitVersionInfo | None = None,
         status_callback: Callable[[], dict[str, object]] | None = None,
+        get_config_snapshot: Callable[[], ConfigSnapshot | None] | None = None,
+        get_config_generation: Callable[[], int] | None = None,
+        get_config_source: Callable[[], ConfigSource | None] | None = None,
     ) -> None:
         """Initialize dashboard server.
 
@@ -115,6 +121,9 @@ class DashboardServer:
             git_version_info: Git version info for upstream update checks.
             status_callback: Optional callable returning config reload
                 status dict.
+            get_config_snapshot: Returns the current live ConfigSnapshot.
+            get_config_generation: Returns the current config generation.
+            get_config_source: Returns the YamlConfigSource for saving.
         """
         self.tracker = tracker
         self.host = host
@@ -137,6 +146,13 @@ class DashboardServer:
             sse_manager=self._sse_manager,
             git_version_info=git_version_info,
             status_callback=status_callback,
+        )
+
+        # Config editor handlers
+        self._config_handlers = ConfigEditorHandlers(
+            get_snapshot=get_config_snapshot or (lambda: None),
+            get_generation=get_config_generation or (lambda: 0),
+            get_config_source=get_config_source or (lambda: None),
         )
 
         self._url_map = Map(
@@ -210,6 +226,34 @@ class DashboardServer:
                 Rule("/api/health", endpoint="health"),
                 Rule("/api/status", endpoint="api_status"),
                 Rule("/api/tracker", endpoint="api_tracker"),
+                # Config editor routes
+                Rule("/config", endpoint="config_page"),
+                Rule(
+                    "/api/config/field",
+                    endpoint="api_config_field",
+                    methods=["PATCH"],
+                ),
+                Rule(
+                    "/api/config/add",
+                    endpoint="api_config_add",
+                    methods=["POST"],
+                ),
+                Rule(
+                    "/api/config/remove",
+                    endpoint="api_config_remove",
+                    methods=["POST"],
+                ),
+                Rule("/api/config/diff", endpoint="api_config_diff"),
+                Rule(
+                    "/api/config/save",
+                    endpoint="api_config_save",
+                    methods=["POST"],
+                ),
+                Rule(
+                    "/api/config/discard",
+                    endpoint="api_config_discard",
+                    methods=["POST"],
+                ),
             ]
         )
 
@@ -241,6 +285,14 @@ class DashboardServer:
             "health": self._handlers.handle_health,
             "api_status": self._handlers.handle_api_status,
             "api_tracker": self._handlers.handle_api_tracker,
+            # Config editor endpoints
+            "config_page": self._config_handlers.handle_config_page,
+            "api_config_field": self._config_handlers.handle_field_patch,
+            "api_config_add": self._config_handlers.handle_add,
+            "api_config_remove": self._config_handlers.handle_remove,
+            "api_config_diff": self._config_handlers.handle_diff,
+            "api_config_save": self._config_handlers.handle_save,
+            "api_config_discard": self._config_handlers.handle_discard,
         }
 
     def start(self) -> None:
