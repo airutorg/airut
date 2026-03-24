@@ -898,6 +898,22 @@ class RequestHandlers:
             content_type="application/json",
         )
 
+    def _stop_result_html(self, message: str, css_class: str) -> str:
+        """Render the stop-result HTML fragment.
+
+        Args:
+            message: User-visible message text.
+            css_class: CSS modifier class (``"info"`` or ``"error"``).
+
+        Returns:
+            Rendered HTML string.
+        """
+        return render_template(
+            "components/stop_result.html",
+            message=message,
+            css_class=css_class,
+        )
+
     def handle_api_task_stop(
         self, request: Request, conversation_id: str
     ) -> Response:
@@ -908,12 +924,14 @@ class RequestHandlers:
         POST without a CORS preflight, and this server does not set any
         ``Access-Control-Allow-*`` headers, so the preflight is denied.
 
+        Returns an HTML fragment that htmx swaps into ``#stop-area``.
+
         Args:
             request: Incoming request.
             conversation_id: Conversation ID to stop.
 
         Returns:
-            JSON response with stop result.
+            HTML response with stop result fragment.
         """
         if not request.headers.get("X-Requested-With"):
             return Response(
@@ -924,18 +942,18 @@ class RequestHandlers:
 
         if self.stop_callback is None:
             return Response(
-                json.dumps({"error": "Stop functionality not available"}),
-                status=503,
-                content_type="application/json",
+                self._stop_result_html(
+                    "Stop functionality not available", "error"
+                ),
+                content_type="text/html; charset=utf-8",
             )
 
         # Find the executing task for this conversation
         tasks = self.tracker.get_tasks_for_conversation(conversation_id)
         if not tasks:
             return Response(
-                json.dumps({"error": "Task not found"}),
-                status=404,
-                content_type="application/json",
+                self._stop_result_html("Task not found", "error"),
+                content_type="text/html; charset=utf-8",
             )
 
         executing = [t for t in tasks if t.status == TaskStatus.EXECUTING]
@@ -943,11 +961,12 @@ class RequestHandlers:
             # Summarize the actual statuses present so the caller
             # understands why stop was rejected.
             statuses = sorted({t.status.value for t in tasks})
-            error_msg = f"Task is not running (statuses: {', '.join(statuses)})"
             return Response(
-                json.dumps({"error": error_msg}),
-                status=400,
-                content_type="application/json",
+                self._stop_result_html(
+                    f"Task is not running (statuses: {', '.join(statuses)})",
+                    "error",
+                ),
+                content_type="text/html; charset=utf-8",
             )
 
         # Call stop callback
@@ -955,25 +974,19 @@ class RequestHandlers:
             success = self.stop_callback(conversation_id)
             if success:
                 return Response(
-                    json.dumps(
-                        {"success": True, "message": "Stop signal sent"}
-                    ),
-                    content_type="application/json",
+                    self._stop_result_html("Stop signal sent", "info"),
+                    content_type="text/html; charset=utf-8",
                 )
             else:
                 return Response(
-                    json.dumps(
-                        {"success": False, "message": "Task not running"}
-                    ),
-                    status=404,
-                    content_type="application/json",
+                    self._stop_result_html("Task not running", "error"),
+                    content_type="text/html; charset=utf-8",
                 )
         except Exception as e:
             logger.exception("Failed to stop task %s: %s", conversation_id, e)
             return Response(
-                json.dumps({"error": f"Failed to stop task: {e}"}),
-                status=500,
-                content_type="application/json",
+                self._stop_result_html(f"Failed to stop task: {e}", "error"),
+                content_type="text/html; charset=utf-8",
             )
 
     def handle_task_events_stream(

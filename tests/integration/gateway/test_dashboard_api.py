@@ -216,9 +216,9 @@ events = [
                 method="POST",
                 headers={"X-Requested-With": "XMLHttpRequest"},
             )
-            assert r.status_code == 400
-            data = json.loads(r.get_data(as_text=True))
-            assert "not running" in data["error"].lower()
+            assert r.status_code == 200
+            html = r.get_data(as_text=True)
+            assert "not running" in html.lower()
 
             # ── POST /api/conversation/{id}/stop (not found) ─────
             r = client.open(
@@ -226,7 +226,7 @@ events = [
                 method="POST",
                 headers={"X-Requested-With": "XMLHttpRequest"},
             )
-            assert r.status_code == 404
+            assert r.status_code == 200
 
             # ── GET /api/repos ───────────────────────────────────
             r = client.get("/api/repos")

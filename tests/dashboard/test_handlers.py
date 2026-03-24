@@ -1634,9 +1634,10 @@ class TestStopEndpoint:
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
         assert response.status_code == 200
-        data = response.get_json()
-        assert data["success"] is True
-        assert data["message"] == "Stop signal sent"
+        html = response.get_data(as_text=True)
+        assert "Stop signal sent" in html
+        assert "info" in html
+        assert 'id="stop-area"' in html
 
     def test_stop_endpoint_not_found(self) -> None:
         """Test stop endpoint with non-existent task."""
@@ -1652,9 +1653,10 @@ class TestStopEndpoint:
             "/api/conversation/nonexistent/stop",
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
-        assert response.status_code == 404
-        data = response.get_json()
-        assert "error" in data
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Task not found" in html
+        assert "error" in html
 
     def test_stop_endpoint_not_running(self) -> None:
         """Test stop endpoint with task not in progress."""
@@ -1674,11 +1676,10 @@ class TestStopEndpoint:
             f"/api/conversation/{task_id}/stop",
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
-        assert response.status_code == 400
-        data = response.get_json()
-        assert "error" in data
-        assert "not running" in data["error"]
-        assert "queued" in data["error"]
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "not running" in html
+        assert "queued" in html
 
     def test_stop_endpoint_mixed_statuses(self) -> None:
         """Test stop error summarizes all statuses when none executing."""
@@ -1708,11 +1709,11 @@ class TestStopEndpoint:
             f"/api/conversation/{conv_id}/stop",
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
-        assert response.status_code == 400
-        data = response.get_json()
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
         # Error should mention both statuses present
-        assert "completed" in data["error"]
-        assert "pending" in data["error"]
+        assert "completed" in html
+        assert "pending" in html
 
     def test_stop_endpoint_no_callback(self) -> None:
         """Test stop endpoint when no stop callback configured."""
@@ -1730,9 +1731,10 @@ class TestStopEndpoint:
             f"/api/conversation/{task_id}/stop",
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
-        assert response.status_code == 503
-        data = response.get_json()
-        assert "error" in data
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Stop functionality not available" in html
+        assert "error" in html
 
     def test_stop_endpoint_callback_fails(self) -> None:
         """Test stop endpoint when callback returns False."""
@@ -1754,9 +1756,10 @@ class TestStopEndpoint:
             f"/api/conversation/{task_id}/stop",
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
-        assert response.status_code == 404
-        data = response.get_json()
-        assert data["success"] is False
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Task not running" in html
+        assert "error" in html
 
     def test_stop_endpoint_callback_raises_exception(self) -> None:
         """Test stop endpoint when callback raises exception."""
@@ -1778,9 +1781,10 @@ class TestStopEndpoint:
             f"/api/conversation/{task_id}/stop",
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
-        assert response.status_code == 500
-        data = response.get_json()
-        assert "error" in data
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Failed to stop task" in html
+        assert "error" in html
 
     def test_stop_endpoint_rejects_without_custom_header(self) -> None:
         """POST /stop without X-Requested-With returns 403."""
@@ -1875,7 +1879,7 @@ class TestStopEndpoint:
 
         html = response.get_data(as_text=True)
         # Check stop button is NOT present
-        assert "stopTask()" not in html
+        assert "stop-btn" not in html
 
 
 class TestEventsLogStreamEndpoint:
