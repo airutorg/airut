@@ -62,7 +62,9 @@ class EditBuffer:
 
 1. **Created** on first `GET /config` when no buffer exists (or existing buffer
    was discarded). Deep-copies `ConfigSnapshot.raw` and records current
-   `_config_generation`.
+   `_config_generation`. If `raw` is `None` (synthetic snapshot without YAML
+   backing), the editor returns an error — editing requires a file-backed
+   config.
 2. **Mutated** by PATCH and POST API calls. Each mutation modifies `_raw`
    in-place and sets `_dirty = True`.
 3. **Persists** across page navigations — state lives on the server, not in the
@@ -178,7 +180,7 @@ class EditorFieldSchema:
     doc: str  # from FieldMeta
     scope: str  # "server", "repo", "task"
     secret: bool
-    multiline: bool = False
+    multiline: bool = False  # use textarea (set via FIELD_OVERRIDES)
     nested_fields: list[EditorFieldSchema] | None = None
     item_class_name: str | None = None
     item_fields: list[EditorFieldSchema] | None = None
@@ -219,9 +221,26 @@ for each field.
 **Path computation:** Uses `YAML_GLOBAL_STRUCTURE`, `YAML_EMAIL_STRUCTURE`, and
 `YAML_REPO_STRUCTURE` to map flat dataclass field names to nested YAML paths.
 Fields not in any structure mapping use their dataclass field name directly as
-the path segment. Slack channel fields have no `YAML_SLACK_STRUCTURE` — they map
-1:1 to their dataclass field names within the `slack:` block (e.g.,
+the path segment (e.g., `container_command` maps to the top-level YAML key
+`container_command`, while `upstream_dns` maps to `network.upstream_dns` via the
+structure mapping). Slack channel fields have no `YAML_SLACK_STRUCTURE` — they
+map 1:1 to their dataclass field names within the `slack:` block (e.g.,
 `repos.{id}.slack.bot_token`).
+
+**Parser-level defaults:** Some fields have defaults applied during parsing
+rather than in the dataclass definition (e.g., `imap_port` defaults to `993`,
+`smtp_port` to `587` via `_resolve(..., default=993)`). These fields have no
+`dataclasses.MISSING` sentinel and no `field(default=...)`.
+`schema_for_editor()` must use a `PARSER_DEFAULTS` mapping to supply the correct
+default values and `required=False` for these fields. This mapping is the second
+hardcoded per-field mapping alongside `FIELD_OVERRIDES`:
+
+```python
+PARSER_DEFAULTS: dict[str, Any] = {
+    "EmailChannelConfig.imap_port": 993,
+    "EmailChannelConfig.smtp_port": 587,
+}
+```
 
 **Relationship to `schema_for_ui()`:** The existing `schema_for_ui()` returns
 flat `FieldSchema` records (name, type, default, doc). It continues to exist for
@@ -251,6 +270,21 @@ the page. This means:
   change.
 
 This balances automatic schema discovery with deliberate page design.
+
+#### `FIELD_OVERRIDES`
+
+A small mapping of `"ClassName.field_name"` → override dict for properties that
+cannot be inferred from `FieldMeta` or type annotations alone:
+
+```python
+FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
+    "GitHubAppCredential.private_key": {"multiline": True},
+}
+```
+
+`schema_for_editor()` checks this mapping after computing all inferred
+properties and applies any overrides. This is the only hardcoded per-field
+mapping besides `TAGGED_UNION_RULES`.
 
 #### `InMemoryConfigSource`
 
@@ -404,6 +438,13 @@ read-only in the card header.
 
 `private_key` (GitHubAppCredential) uses `<textarea>` for multiline PEM keys.
 
+**Nesting depth:** Signing credentials have 3-level nesting: keyed collection →
+`SigningCredential` → `SigningCredentialField` (with `name` and `value`
+sub-fields). The recursive schema walker handles this naturally — each
+`SigningCredentialField` renders as a `nested` fieldset within the
+`SigningCredential` card. The `field.html` dispatch macro recurses without depth
+limits.
+
 #### Tagged Union List (Slack `authorized`)
 
 Each item has a rule type dropdown and type-specific value input:
@@ -417,7 +458,8 @@ Authorization Rules                                  [+ Add]
 └────────────────────────────────────────────────────────────┘
 ```
 
-Rule type metadata is encoded in a `TAGGED_UNION_RULES` mapping:
+Rule type metadata is encoded in a `TAGGED_UNION_RULES` mapping, keyed by
+`"ClassName.field_name"`:
 
 ```python
 TAGGED_UNION_RULES = {
@@ -428,6 +470,12 @@ TAGGED_UNION_RULES = {
     ],
 }
 ```
+
+`schema_for_editor()` checks this mapping during field introspection. When a
+field's qualified name (`ClassName.field_name`) appears in `TAGGED_UNION_RULES`,
+the field gets `type_tag="tagged_union_list"` regardless of its Python type
+annotation. This is the third and final hardcoded per-field mapping (alongside
+`FIELD_OVERRIDES` and `PARSER_DEFAULTS`).
 
 #### Channel Config (Structural)
 
@@ -808,7 +856,8 @@ Uses `GatewayService._config_generation` as the concurrency token:
 
 ## Atomic Save
 
-`YamlConfigSource.save()` is enhanced to write atomically using temp+rename:
+`YamlConfigSource.save()` currently writes directly via `open(path, "w")`. This
+spec **enhances it** to write atomically using temp+rename:
 
 ```python
 def save(self, data: dict[str, Any]) -> None:
@@ -825,10 +874,13 @@ def save(self, data: dict[str, Any]) -> None:
     tmp.rename(self.path)  # atomic on same filesystem
 ```
 
-The config file watcher checks the event filename against the config filename
-exactly (`airut.yaml`). The `CLOSE_WRITE` on `.yaml.tmp` does not match, so it
-is ignored. The subsequent `MOVED_TO` on `airut.yaml` (from the rename) triggers
-the reload.
+The config file watcher monitors the config file's parent directory for inotify
+events. With atomic save, the event sequence changes: a `CLOSE_WRITE` fires on
+`.yaml.tmp` (ignored — filename doesn't match `airut.yaml`), then `MOVED_TO`
+fires on `airut.yaml` (from the `rename()`). The watcher must handle `MOVED_TO`
+events in addition to `CLOSE_WRITE`. This is a minor enhancement to
+`ConfigFileWatcher` — it already watches the parent directory, so adding the
+event mask is straightforward.
 
 ## Security
 
@@ -847,6 +899,10 @@ reverse proxy — masking adds friction without security benefit.
 
 The `secret` flag in `FieldMeta` remains for other consumers (log redaction,
 `SecretFilter`) but does not affect editor rendering or diff output.
+`spec/declarative-config.md` mentions "hiding values in diff output" as an
+example use of `secret` — the config editor deliberately overrides this for the
+interactive dashboard context. The audit log path (`diff_by_scope()` output
+logged on reload) continues to mask secrets.
 
 ### Access Control
 
@@ -1083,7 +1139,7 @@ for HTTP endpoints.
 | `test_patch_field_literal`        | PATCH returns updated HTML fragment              |
 | `test_patch_field_env`            | EnvVar in buffer after PATCH                     |
 | `test_patch_field_unset`          | Key removed from buffer after PATCH              |
-| `test_patch_stale_buffer`         | Returns stale warning when generation mismatches |
+| `test_patch_succeeds_on_stale`    | PATCH works even when buffer generation is stale |
 | `test_add_list_item_returns_html` | POST add returns item fragment                   |
 | `test_remove_item`                | POST remove succeeds, buffer updated             |
 | `test_diff_shows_changes`         | GET diff returns structured change list          |
