@@ -184,7 +184,11 @@ class YamlConfigSource:
         return raw
 
     def save(self, data: dict[str, Any]) -> None:
-        """Write config dict back to YAML.
+        """Write config dict back to YAML atomically.
+
+        Writes to a temporary ``.yaml.tmp`` file first, then renames
+        to the final path.  This prevents the inotify watcher from
+        seeing partial writes.
 
         The data dict uses the nested YAML structure (not flat field
         names).  Callers should use ``flat_to_nested_*`` helpers to
@@ -197,7 +201,8 @@ class YamlConfigSource:
             data: Config dict in nested YAML format.
         """
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.path, "w") as f:
+        tmp = self.path.with_suffix(".yaml.tmp")
+        with open(tmp, "w") as f:
             yaml.dump(
                 data,
                 f,
@@ -205,3 +210,4 @@ class YamlConfigSource:
                 default_flow_style=False,
                 sort_keys=False,
             )
+        tmp.rename(self.path)

@@ -1,0 +1,40 @@
+{# List widget — expects: field (EditorFieldSchema), path (str), items (list), is_set (bool) #}
+<div class="cfg-field{% if is_set %} set{% else %} unset{% endif %}" data-scope="{{ field.scope }}">
+    <div class="cfg-field-header">
+        <label class="cfg-label">{{ field.name | replace("_", " ") }}</label>
+        {% if field.scope %}
+        <span class="cfg-scope-badge cfg-scope-{{ field.scope }}">{{ field.scope }}</span>
+        {% endif %}
+    </div>
+    {% if field.doc %}
+    <div class="cfg-help">{{ field.doc }}</div>
+    {% endif %}
+    <div class="cfg-list" id="{{ path | replace('.', '-') }}-list">
+        {% if items %}
+        {% for item in items %}
+        {% set item_source = detect_source(item) %}
+        {% set item_ref = get_source_ref(item) %}
+        <div class="cfg-list-item">
+            <div class="cfg-source-group">
+                <div class="cfg-source" data-path="{{ path }}.{{ loop.index0 }}">
+                    <button type="button" class="cfg-source-btn{% if item_source == 'literal' %} active{% endif %}" data-source="literal">Literal</button>
+                    <button type="button" class="cfg-source-btn{% if item_source == 'env' %} active{% endif %}" data-source="env">!env</button>
+                    <button type="button" class="cfg-source-btn{% if item_source == 'var' %} active{% endif %}" data-source="var">!var</button>
+                </div>
+                <input type="hidden" name="{{ path }}.{{ loop.index0 }}._source" value="{{ item_source }}">
+                <input type="text" class="cfg-input" name="{{ path }}.{{ loop.index0 }}._value"
+                    value="{{ item_ref if item_source in ('env', 'var') else (item if item is string else item) }}">
+            </div>
+            <button type="button" class="cfg-remove-btn"
+                onclick="this.closest('.cfg-list-item').remove()">&times;</button>
+        </div>
+        {% endfor %}
+        {% endif %}
+    </div>
+    <button type="button" class="cfg-add-btn"
+        hx-post="/api/config/add"
+        hx-vals='{"type":"list_item","path":"{{ path }}","index":{{ (items | length) if items else 0 }}}'
+        hx-target="#{{ path | replace('.', '-') }}-list"
+        hx-swap="beforeend"
+        hx-headers='{"X-Requested-With": "XMLHttpRequest"}'>+ Add</button>
+</div>

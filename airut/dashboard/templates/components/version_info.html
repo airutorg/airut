@@ -1,4 +1,4 @@
-{# Version info bar — expects: version_info (VersionInfo), version_url (str) #}
+{# Version info bar — expects: version_info (VersionInfo), version_url (str), config_editor_enabled (bool) #}
 {% if version_info %}
 <div class="version-info">
     <a href="{{ version_url }}" class="version-sha"
@@ -10,5 +10,11 @@
         class="local-time"
         data-timestamp="{{ version_info.started_at }}"
     ></span></span>
+    {% if config_editor_enabled %}
+    <a href="/config" class="action-btn primary"
+       style="font-size:12px; padding:3px 10px;">
+      Configure
+    </a>
+    {% endif %}
 </div>
 {% endif %}

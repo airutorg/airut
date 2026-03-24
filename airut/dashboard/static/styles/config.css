@@ -1,0 +1,502 @@
+/* Config editor styles — extends the existing design system. */
+
+/* ── Page layout ─────────────────────────────────────────────── */
+
+.cfg-page-title {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0;
+    color: var(--text-primary);
+}
+
+.cfg-save-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 0;
+    margin-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--bg-surface);
+    z-index: 10;
+}
+
+.cfg-save-bar-bottom {
+    position: static;
+    border-bottom: none;
+    border-top: 1px solid var(--border);
+    margin-top: 24px;
+    padding-top: 16px;
+    justify-content: flex-end;
+}
+
+.cfg-save-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.cfg-generation {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    font-family: var(--font-mono);
+}
+
+/* ── Sections ────────────────────────────────────────────────── */
+
+.cfg-section {
+    margin-bottom: 24px;
+}
+
+.cfg-section-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0 0 12px 0;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+}
+
+.cfg-subsection-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin: 16px 0 8px 0;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.cfg-repo-section {
+    padding: 16px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+
+.cfg-channel-section {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-subtle, var(--border));
+}
+
+.cfg-channel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.cfg-channel-header .cfg-subsection-title {
+    margin: 0;
+}
+
+.cfg-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.cfg-toggle input[type="checkbox"] {
+    cursor: pointer;
+}
+
+.cfg-channel-fields {
+    border: none;
+    padding: 0;
+    margin: 0;
+}
+
+.cfg-channel-fields.cfg-channel-disabled {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+.cfg-placeholder {
+    color: var(--text-tertiary);
+    font-size: 13px;
+    font-style: italic;
+    margin: 4px 0;
+}
+
+/* ── Fields ──────────────────────────────────────────────────── */
+
+.cfg-field {
+    margin-bottom: 12px;
+    padding: 8px 10px;
+    border-radius: 4px;
+    background: var(--bg-surface);
+}
+
+.cfg-field.unset {
+    background: var(--bg-inset, var(--bg-surface));
+    opacity: 0.7;
+}
+
+.cfg-field.set {
+    opacity: 1;
+}
+
+.cfg-field-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.cfg-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-tertiary);
+}
+
+.cfg-help {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    margin-top: 2px;
+    margin-bottom: 4px;
+}
+
+/* ── Scope badges ────────────────────────────────────────────── */
+
+.cfg-scope-badge {
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 1px 5px;
+    border-radius: 3px;
+    white-space: nowrap;
+}
+
+.cfg-scope-server {
+    background: var(--status-info-bg, #e3f2fd);
+    color: var(--status-info-text, #1565c0);
+}
+
+.cfg-scope-repo {
+    background: var(--status-success-bg, #e8f5e9);
+    color: var(--status-success-text, #2e7d32);
+}
+
+.cfg-scope-task {
+    background: var(--status-warning-bg, #fff3e0);
+    color: var(--status-warning-text, #e65100);
+}
+
+/* ── Source selector ─────────────────────────────────────────── */
+
+.cfg-source {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 4px;
+}
+
+.cfg-source-btn {
+    font-size: 11px;
+    padding: 2px 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    white-space: nowrap;
+}
+
+.cfg-source-btn:hover {
+    background: var(--bg-hover, rgba(0, 0, 0, 0.05));
+}
+
+.cfg-source-btn.active {
+    background: var(--accent, #009688);
+    color: #fff;
+}
+
+.cfg-source-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+}
+
+/* ── Inputs ──────────────────────────────────────────────────── */
+
+.cfg-input {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.cfg-input:focus {
+    outline: none;
+    border-color: var(--accent, #009688);
+    box-shadow: 0 0 0 1px var(--accent, #009688);
+}
+
+.cfg-input:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.cfg-textarea {
+    min-height: 80px;
+    resize: vertical;
+}
+
+.cfg-resolved-hint {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    font-family: var(--font-mono);
+    margin-top: 2px;
+}
+
+.cfg-resolved-unset {
+    font-style: italic;
+}
+
+/* ── Lists ───────────────────────────────────────────────────── */
+
+.cfg-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.cfg-list-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.cfg-list-item .cfg-source-group {
+    flex: 1;
+}
+
+.cfg-list-item .cfg-input {
+    flex: 1;
+}
+
+/* ── Dicts ───────────────────────────────────────────────────── */
+
+.cfg-dict {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.cfg-dict-entry {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.cfg-dict-key {
+    max-width: 200px;
+    flex-shrink: 0;
+}
+
+.cfg-dict-entry .cfg-source-group {
+    flex: 1;
+}
+
+/* ── Nested ──────────────────────────────────────────────────── */
+
+.cfg-nested {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 8px;
+}
+
+/* ── Expandable (keyed collections) ──────────────────────────── */
+
+.cfg-collection {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.cfg-collection-entry {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.cfg-expandable-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    cursor: pointer;
+    background: var(--bg-inset, var(--bg-surface));
+    user-select: none;
+}
+
+.cfg-expandable-header:hover {
+    background: var(--bg-hover, rgba(0, 0, 0, 0.03));
+}
+
+.cfg-expand-icon::before {
+    content: "\25B6";
+    font-size: 10px;
+    color: var(--text-tertiary);
+    transition: transform 0.15s;
+    display: inline-block;
+}
+
+.cfg-expandable.open .cfg-expand-icon::before {
+    transform: rotate(90deg);
+}
+
+.cfg-expandable-body {
+    display: none;
+    padding: 10px;
+}
+
+.cfg-expandable.open .cfg-expandable-body {
+    display: block;
+}
+
+.cfg-collection-key-display {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text-primary);
+    flex: 1;
+}
+
+.cfg-collection-key {
+    max-width: 250px;
+}
+
+/* ── Union items ─────────────────────────────────────────────── */
+
+.cfg-union-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.cfg-union-select {
+    max-width: 180px;
+    flex-shrink: 0;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────── */
+
+.cfg-add-btn {
+    display: inline-block;
+    margin-top: 6px;
+    padding: 4px 12px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px dashed var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: var(--font-mono);
+}
+
+.cfg-add-btn:hover {
+    border-color: var(--accent, #009688);
+    color: var(--accent, #009688);
+}
+
+.cfg-remove-btn {
+    padding: 2px 6px;
+    font-size: 14px;
+    color: var(--text-tertiary);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    border-radius: 3px;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+.cfg-remove-btn:hover {
+    color: var(--status-error-text, #c62828);
+    background: var(--status-error-bg, #ffebee);
+}
+
+/* ── Banners ─────────────────────────────────────────────────── */
+
+.cfg-banner {
+    padding: 10px 14px;
+    border-radius: 4px;
+    margin-bottom: 12px;
+    font-size: 13px;
+}
+
+.cfg-banner.success {
+    background: var(--status-success-bg, #e8f5e9);
+    color: var(--status-success-text, #2e7d32);
+    border: 1px solid var(--status-success-text, #2e7d32);
+}
+
+.cfg-banner.error {
+    background: var(--status-error-bg, #ffebee);
+    color: var(--status-error-text, #c62828);
+    border: 1px solid var(--status-error-text, #c62828);
+}
+
+.cfg-banner.warning {
+    background: var(--status-warning-bg, #fff3e0);
+    color: var(--status-warning-text, #e65100);
+    border: 1px solid var(--status-warning-text, #e65100);
+}
+
+.cfg-banner.info {
+    background: var(--status-info-bg, #e3f2fd);
+    color: var(--status-info-text, #1565c0);
+    border: 1px solid var(--status-info-text, #1565c0);
+}
+
+.cfg-banner a {
+    color: inherit;
+    font-weight: 600;
+}
+
+/* ── Responsive ──────────────────────────────────────────────── */
+
+@media (max-width: 700px) {
+    .cfg-save-bar {
+        flex-direction: column;
+        gap: 8px;
+        align-items: stretch;
+    }
+
+    .cfg-save-actions {
+        justify-content: flex-end;
+    }
+
+    .cfg-nested {
+        grid-template-columns: 1fr;
+    }
+
+    .cfg-dict-entry {
+        flex-wrap: wrap;
+    }
+
+    .cfg-dict-key {
+        max-width: 100%;
+    }
+
+    .cfg-source {
+        flex-wrap: wrap;
+    }
+}

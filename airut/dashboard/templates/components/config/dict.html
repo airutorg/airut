@@ -1,0 +1,42 @@
+{# Dict widget — expects: field (EditorFieldSchema), path (str), entries (dict), is_set (bool) #}
+<div class="cfg-field{% if is_set %} set{% else %} unset{% endif %}" data-scope="{{ field.scope }}">
+    <div class="cfg-field-header">
+        <label class="cfg-label">{{ field.name | replace("_", " ") }}</label>
+        {% if field.scope %}
+        <span class="cfg-scope-badge cfg-scope-{{ field.scope }}">{{ field.scope }}</span>
+        {% endif %}
+    </div>
+    {% if field.doc %}
+    <div class="cfg-help">{{ field.doc }}</div>
+    {% endif %}
+    <div class="cfg-dict" id="{{ path | replace('.', '-') }}-dict">
+        {% if entries %}
+        {% for key, val in entries.items() %}
+        {% set val_source = detect_source(val) %}
+        {% set val_ref = get_source_ref(val) %}
+        <div class="cfg-dict-entry">
+            <input type="text" class="cfg-input cfg-dict-key" name="{{ path }}.{{ loop.index0 }}.key"
+                value="{{ key }}" placeholder="key">
+            <div class="cfg-source-group">
+                <div class="cfg-source" data-path="{{ path }}.{{ loop.index0 }}.value">
+                    <button type="button" class="cfg-source-btn{% if val_source == 'literal' %} active{% endif %}" data-source="literal">Literal</button>
+                    <button type="button" class="cfg-source-btn{% if val_source == 'env' %} active{% endif %}" data-source="env">!env</button>
+                    <button type="button" class="cfg-source-btn{% if val_source == 'var' %} active{% endif %}" data-source="var">!var</button>
+                </div>
+                <input type="hidden" name="{{ path }}.{{ loop.index0 }}.value._source" value="{{ val_source }}">
+                <input type="text" class="cfg-input" name="{{ path }}.{{ loop.index0 }}.value._value"
+                    value="{{ val_ref if val_source in ('env', 'var') else (val if val is string else val) }}">
+            </div>
+            <button type="button" class="cfg-remove-btn"
+                onclick="this.closest('.cfg-dict-entry').remove()">&times;</button>
+        </div>
+        {% endfor %}
+        {% endif %}
+    </div>
+    <button type="button" class="cfg-add-btn"
+        hx-post="/api/config/add"
+        hx-vals='{"type":"dict_entry","path":"{{ path }}","index":{{ (entries | length) if entries else 0 }}}'
+        hx-target="#{{ path | replace('.', '-') }}-dict"
+        hx-swap="beforeend"
+        hx-headers='{"X-Requested-With": "XMLHttpRequest"}'>+ Add</button>
+</div>

@@ -1,0 +1,63 @@
+{# Keyed collection widget — expects: field (EditorFieldSchema), path (str), entries (dict), is_set (bool) #}
+<div class="cfg-field{% if is_set %} set{% else %} unset{% endif %}" data-scope="{{ field.scope }}">
+    <div class="cfg-field-header">
+        <label class="cfg-label">{{ field.name | replace("_", " ") }}</label>
+        {% if field.scope %}
+        <span class="cfg-scope-badge cfg-scope-{{ field.scope }}">{{ field.scope }}</span>
+        {% endif %}
+    </div>
+    {% if field.doc %}
+    <div class="cfg-help">{{ field.doc }}</div>
+    {% endif %}
+    <div class="cfg-collection" id="{{ path | replace('.', '-') }}-collection">
+        {% if entries %}
+        {% for key, entry_raw in entries.items() %}
+        <div class="cfg-collection-entry cfg-expandable">
+            <div class="cfg-expandable-header" onclick="this.parentElement.classList.toggle('open')">
+                <span class="cfg-expand-icon"></span>
+                <span class="cfg-collection-key-display">{{ key }}</span>
+                <button type="button" class="cfg-remove-btn"
+                    onclick="event.stopPropagation(); this.closest('.cfg-collection-entry').remove()">&times;</button>
+            </div>
+            <div class="cfg-expandable-body">
+                <input type="hidden" name="{{ path }}.{{ key }}._key" value="{{ key }}">
+                {% if field.item_fields %}
+                {% for sub in field.item_fields %}
+                    {% set sub_path = path + "." + key + "." + sub.name %}
+                    {% set sub_raw = entry_raw.get(sub.name) if entry_raw is mapping else none %}
+                    {% set sub_resolved = sub_raw %}
+                    {% set sub_is_set = sub_raw is not none %}
+                    {% if sub.type_tag == "scalar" %}
+                        {% set field = sub %}
+                        {% set raw_value = sub_raw %}
+                        {% set resolved_value = sub_resolved %}
+                        {% set is_set = sub_is_set %}
+                        {% set path = sub_path %}
+                        {% include "components/config/scalar.html" %}
+                    {% elif sub.type_tag == "list_str" %}
+                        {% set field = sub %}
+                        {% set items = sub_raw if sub_raw is iterable and sub_raw is not string else [] %}
+                        {% set is_set = sub_is_set %}
+                        {% set path = sub_path %}
+                        {% include "components/config/list.html" %}
+                    {% elif sub.type_tag == "dict_str_str" %}
+                        {% set field = sub %}
+                        {% set entries = sub_raw if sub_raw is mapping else {} %}
+                        {% set is_set = sub_is_set %}
+                        {% set path = sub_path %}
+                        {% include "components/config/dict.html" %}
+                    {% endif %}
+                {% endfor %}
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+        {% endif %}
+    </div>
+    <button type="button" class="cfg-add-btn"
+        hx-post="/api/config/add"
+        hx-vals='{"type":"collection_entry","path":"{{ path }}","index":{{ (entries | length) if entries else 0 }}}'
+        hx-target="#{{ path | replace('.', '-') }}-collection"
+        hx-swap="beforeend"
+        hx-headers='{"X-Requested-With": "XMLHttpRequest"}'>+ Add</button>
+</div>

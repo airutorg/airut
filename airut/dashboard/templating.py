@@ -17,6 +17,11 @@ from pathlib import Path
 
 from jinja2 import BaseLoader, Environment, TemplateNotFound
 
+from airut.config.editor_form import (
+    detect_source,
+    get_raw_value,
+    get_source_ref,
+)
 from airut.dashboard.formatters import format_duration, format_timestamp
 
 
@@ -161,6 +166,9 @@ def create_jinja_env() -> Environment:
     globals_dict["format_timestamp"] = format_timestamp
     globals_dict["logo_svg"] = _LOGO_SVG
     globals_dict["static_url"] = static_url
+    globals_dict["detect_source"] = detect_source
+    globals_dict["get_raw_value"] = get_raw_value
+    globals_dict["get_source_ref"] = get_source_ref
 
     return env
 

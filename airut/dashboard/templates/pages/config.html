@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}Configuration - Airut{% endblock %}
+{% block head_extra %}
+<link rel="stylesheet" href="{{ static_url('styles/config.css') }}">
+{% endblock %}
+
+{% block body %}
+<div class="page">
+{% if error %}
+<div class="cfg-banner error">{{ error }}</div>
+{% else %}
+<form id="config-form"
+      hx-post="/api/config"
+      hx-target="#save-result"
+      hx-swap="innerHTML"
+      hx-headers='{"X-Requested-With": "XMLHttpRequest"}'>
+    <input type="hidden" name="_generation" value="{{ config_generation }}">
+    <input type="hidden" name="config_version._source" value="literal">
+    <input type="hidden" name="config_version._value" value="{{ config_version }}">
+
+    {# Header bar #}
+    <div class="cfg-save-bar">
+        <h1 class="cfg-page-title">Server Configuration</h1>
+        <div class="cfg-save-actions">
+            <span class="cfg-generation">Generation: {{ config_generation }}</span>
+            <a href="/config" class="action-btn">Discard</a>
+            <button type="submit" class="action-btn primary">Save</button>
+        </div>
+    </div>
+
+    <div id="save-result"></div>
+
+    {# ── Server Settings ────────────────────────────── #}
+    <section class="cfg-section">
+        <h2 class="cfg-section-title">Server Settings</h2>
+
+        {% for field in global_schema %}
+        {% set raw_value = get_raw_value(raw, field.yaml_path) %}
+        {% set resolved_value = config.global_config[field.name] if field.name in config.global_config.__dataclass_fields__ else none %}
+        {% set is_set = raw_value is not none %}
+        {% set path = ".".join(field.yaml_path) %}
+        {% include "components/config/field.html" %}
+        {% endfor %}
+    </section>
+
+    {# ── Variables ───────────────────────────────────── #}
+    {% if raw_vars %}
+    <section class="cfg-section">
+        <h2 class="cfg-section-title">Variables</h2>
+        <div class="cfg-field set">
+            <div class="cfg-field-header">
+                <label class="cfg-label">vars</label>
+            </div>
+            <div class="cfg-help">Shared config variables referenced with !var tags</div>
+            <div class="cfg-dict" id="vars-dict">
+                {% for key, val in raw_vars.items() %}
+                {% set val_source = detect_source(val) %}
+                {% set val_ref = get_source_ref(val) %}
+                <div class="cfg-dict-entry">
+                    <input type="text" class="cfg-input cfg-dict-key" name="vars.{{ loop.index0 }}.key"
+                        value="{{ key }}" placeholder="variable name">
+                    <div class="cfg-source-group">
+                        <div class="cfg-source" data-path="vars.{{ loop.index0 }}.value">
+                            <button type="button" class="cfg-source-btn{% if val_source == 'literal' %} active{% endif %}" data-source="literal">Literal</button>
+                            <button type="button" class="cfg-source-btn{% if val_source == 'env' %} active{% endif %}" data-source="env">!env</button>
+                        </div>
+                        <input type="hidden" name="vars.{{ loop.index0 }}.value._source" value="{{ val_source }}">
+                        <input type="text" class="cfg-input" name="vars.{{ loop.index0 }}.value._value"
+                            value="{{ val_ref if val_source == 'env' else val }}">
+                    </div>
+                    <button type="button" class="cfg-remove-btn"
+                        onclick="this.closest('.cfg-dict-entry').remove()">&times;</button>
+                </div>
+                {% endfor %}
+            </div>
+            <button type="button" class="cfg-add-btn"
+                hx-post="/api/config/add"
+                hx-vals='{"type":"dict_entry","path":"vars","index":{{ raw_vars | length }}}'
+                hx-target="#vars-dict"
+                hx-swap="beforeend"
+                hx-headers='{"X-Requested-With": "XMLHttpRequest"}'>+ Add Variable</button>
+        </div>
+    </section>
+    {% endif %}
+
+    {# ── Repositories ─────────────────────────────── #}
+    {% for repo in repos %}
+    <section class="cfg-section cfg-repo-section">
+        <h2 class="cfg-section-title">Repository: {{ repo.repo_id }}</h2>
+
+        {# Repo-level fields (git url, model, effort, etc.) #}
+        {% for field in repo.schema %}
+            {% if field.name not in ("channels", "repo_id") %}
+            {% set raw_value = get_raw_value(raw, field.yaml_path) %}
+            {% set resolved_value = repo.config[field.name] if field.name in repo.config.__dataclass_fields__ else none %}
+            {% set is_set = raw_value is not none %}
+            {% set path = ".".join(field.yaml_path) %}
+            {% include "components/config/field.html" %}
+            {% endif %}
+        {% endfor %}
+
+        {# ── Email Channel ──────────────────── #}
+        {% set channel_id = "repos-" + repo.repo_id + "-email" %}
+        <div class="cfg-channel-section">
+            <div class="cfg-channel-header">
+                <h3 class="cfg-subsection-title">Email Channel</h3>
+                <label class="cfg-toggle">
+                    <input type="checkbox" class="cfg-channel-toggle"
+                        data-channel="{{ channel_id }}"
+                        {% if repo.has_email %}checked{% endif %}
+                        onchange="toggleChannelSection(this)">
+                    <span class="cfg-toggle-label">{% if repo.has_email %}Enabled{% else %}Not enabled{% endif %}</span>
+                </label>
+            </div>
+            <fieldset id="{{ channel_id }}-fields" {% if not repo.has_email %}disabled{% endif %}
+                class="cfg-channel-fields{% if not repo.has_email %} cfg-channel-disabled{% endif %}">
+                {% if repo.email_schema %}
+                {% for field in repo.email_schema %}
+                {% set raw_value = get_raw_value(raw, field.yaml_path) %}
+                {% set resolved_value = none %}
+                {% set is_set = raw_value is not none %}
+                {% set path = ".".join(field.yaml_path) %}
+                {% include "components/config/field.html" %}
+                {% endfor %}
+                {% endif %}
+            </fieldset>
+        </div>
+
+        {# ── Slack Channel ──────────────────── #}
+        {% set channel_id = "repos-" + repo.repo_id + "-slack" %}
+        <div class="cfg-channel-section">
+            <div class="cfg-channel-header">
+                <h3 class="cfg-subsection-title">Slack Channel</h3>
+                <label class="cfg-toggle">
+                    <input type="checkbox" class="cfg-channel-toggle"
+                        data-channel="{{ channel_id }}"
+                        {% if repo.has_slack %}checked{% endif %}
+                        onchange="toggleChannelSection(this)">
+                    <span class="cfg-toggle-label">{% if repo.has_slack %}Enabled{% else %}Not enabled{% endif %}</span>
+                </label>
+            </div>
+            <fieldset id="{{ channel_id }}-fields" {% if not repo.has_slack %}disabled{% endif %}
+                class="cfg-channel-fields{% if not repo.has_slack %} cfg-channel-disabled{% endif %}">
+                {% if repo.slack_schema %}
+                {% for field in repo.slack_schema %}
+                {% set raw_value = get_raw_value(raw, field.yaml_path) %}
+                {% set resolved_value = none %}
+                {% set is_set = raw_value is not none %}
+                {% set path = ".".join(field.yaml_path) %}
+                {% include "components/config/field.html" %}
+                {% endfor %}
+                {% endif %}
+            </fieldset>
+        </div>
+    </section>
+    {% endfor %}
+
+    {# Footer bar #}
+    <div class="cfg-save-bar cfg-save-bar-bottom">
+        <div class="cfg-save-actions">
+            <a href="/config" class="action-btn">Discard</a>
+            <button type="submit" class="action-btn primary">Save</button>
+        </div>
+    </div>
+</form>
+{% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ static_url('vendor/htmx.min.js') }}"></script>
+<script src="{{ static_url('js/config-editor.js') }}"></script>
+{% endblock %}

@@ -18,6 +18,8 @@ from typing import TYPE_CHECKING
 from wsgiref.types import WSGIEnvironment
 
 from airut._json_types import JsonDict
+from airut.config.snapshot import ConfigSnapshot
+from airut.config.source import ConfigSource
 
 
 if TYPE_CHECKING:
@@ -32,6 +34,7 @@ from airut.claude_output.types import StreamEvent
 from airut.conversation import ConversationMetadata
 from airut.dashboard.formatters import VersionInfo
 from airut.dashboard.handlers import RequestHandlers
+from airut.dashboard.handlers_config import ConfigEditorHandlers
 from airut.dashboard.sse import SSEConnectionManager
 from airut.dashboard.tracker import BootState, RepoState, TaskState, TaskTracker
 from airut.dashboard.versioned import VersionClock, VersionedStore
@@ -97,6 +100,14 @@ class DashboardServer:
         clock: VersionClock | None = None,
         git_version_info: GitVersionInfo | None = None,
         status_callback: Callable[[], dict[str, object]] | None = None,
+        config_callback: (
+            Callable[[], ConfigSnapshot[object] | None] | None
+        ) = None,
+        config_generation_callback: Callable[[], int] | None = None,
+        config_source_callback: (
+            Callable[[], ConfigSource | None] | None
+        ) = None,
+        config_vars_callback: (Callable[[], dict[str, object]] | None) = None,
     ) -> None:
         """Initialize dashboard server.
 
@@ -115,6 +126,10 @@ class DashboardServer:
             git_version_info: Git version info for upstream update checks.
             status_callback: Optional callable returning config reload
                 status dict.
+            config_callback: Returns current ConfigSnapshot.
+            config_generation_callback: Returns current config_generation.
+            config_source_callback: Returns the ConfigSource.
+            config_vars_callback: Returns resolved vars table.
         """
         self.tracker = tracker
         self.host = host
@@ -124,6 +139,19 @@ class DashboardServer:
         self._server: BaseWSGIServer | None = None
         self._thread: threading.Thread | None = None
         self._sse_manager = SSEConnectionManager()
+
+        # Config editor is available when callbacks are provided
+        self._config_editor_enabled = config_callback is not None
+
+        # Initialize config editor handlers
+        self._config_handlers: ConfigEditorHandlers | None = None
+        if config_callback is not None:
+            self._config_handlers = ConfigEditorHandlers(
+                config_callback=config_callback,
+                generation_callback=config_generation_callback or (lambda: 0),
+                config_source_callback=config_source_callback or (lambda: None),
+                vars_callback=config_vars_callback or (lambda: {}),
+            )
 
         # Initialize request handlers
         self._handlers = RequestHandlers(
@@ -137,6 +165,7 @@ class DashboardServer:
             sse_manager=self._sse_manager,
             git_version_info=git_version_info,
             status_callback=status_callback,
+            config_editor_enabled=self._config_editor_enabled,
         )
 
         self._url_map = Map(
@@ -210,6 +239,17 @@ class DashboardServer:
                 Rule("/api/health", endpoint="health"),
                 Rule("/api/status", endpoint="api_status"),
                 Rule("/api/tracker", endpoint="api_tracker"),
+                Rule("/config", endpoint="config_page"),
+                Rule(
+                    "/api/config",
+                    endpoint="api_config_save",
+                    methods=["POST"],
+                ),
+                Rule(
+                    "/api/config/add",
+                    endpoint="api_config_add",
+                    methods=["POST"],
+                ),
             ]
         )
 
@@ -241,6 +281,9 @@ class DashboardServer:
             "health": self._handlers.handle_health,
             "api_status": self._handlers.handle_api_status,
             "api_tracker": self._handlers.handle_api_tracker,
+            "config_page": self._handle_config_page,
+            "api_config_save": self._handle_config_save,
+            "api_config_add": self._handle_config_add,
         }
 
     def start(self) -> None:
@@ -404,3 +447,23 @@ class DashboardServer:
             None if not found.
         """
         return self._handlers._load_task_with_conversation(conversation_id)
+
+    # ── Config editor delegates ──────────────────────────────────
+
+    def _handle_config_page(self, request: Request, **kw: object) -> Response:
+        """Delegate to config editor handler or return 404."""
+        if self._config_handlers is None:
+            return Response("Config editor not available", status=404)
+        return self._config_handlers.handle_config_page(request)
+
+    def _handle_config_save(self, request: Request, **kw: object) -> Response:
+        """Delegate to config editor save handler."""
+        if self._config_handlers is None:
+            return Response("Config editor not available", status=404)
+        return self._config_handlers.handle_config_save(request)
+
+    def _handle_config_add(self, request: Request, **kw: object) -> Response:
+        """Delegate to config editor add-fragment handler."""
+        if self._config_handlers is None:
+            return Response("Config editor not available", status=404)
+        return self._config_handlers.handle_config_add_fragment(request)

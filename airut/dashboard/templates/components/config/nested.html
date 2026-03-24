@@ -1,0 +1,61 @@
+{# Nested dataclass fieldset — expects: field (EditorFieldSchema), path (str), raw_section (dict), resolved_section, is_set (bool) #}
+<div class="cfg-field{% if is_set %} set{% else %} unset{% endif %}" data-scope="{{ field.scope }}">
+    <div class="cfg-field-header">
+        <label class="cfg-label">{{ field.name | replace("_", " ") }}</label>
+        {% if field.scope %}
+        <span class="cfg-scope-badge cfg-scope-{{ field.scope }}">{{ field.scope }}</span>
+        {% endif %}
+    </div>
+    {% if field.doc %}
+    <div class="cfg-help">{{ field.doc }}</div>
+    {% endif %}
+    <div class="cfg-nested">
+        {% if field.nested_fields %}
+        {% for sub in field.nested_fields %}
+            {% set sub_path = path + "." + sub.name %}
+            {% set sub_raw = raw_section.get(sub.name) if raw_section else none %}
+            {% set sub_resolved = resolved_section[sub.name] if resolved_section else none %}
+            {% set sub_is_set = sub_raw is not none %}
+            {% if sub.type_tag == "scalar" %}
+                {% set field = sub %}
+                {% set raw_value = sub_raw %}
+                {% set resolved_value = sub_resolved %}
+                {% set is_set = sub_is_set %}
+                {% set path = sub_path %}
+                {% include "components/config/scalar.html" %}
+            {% elif sub.type_tag == "list_str" %}
+                {% set field = sub %}
+                {% set items = sub_raw if sub_raw is iterable and sub_raw is not string else [] %}
+                {% set is_set = sub_is_set %}
+                {% set path = sub_path %}
+                {% include "components/config/list.html" %}
+            {% elif sub.type_tag == "dict_str_str" %}
+                {% set field = sub %}
+                {% set entries = sub_raw if sub_raw is mapping else {} %}
+                {% set is_set = sub_is_set %}
+                {% set path = sub_path %}
+                {% include "components/config/dict.html" %}
+            {% elif sub.type_tag == "nested" %}
+                {% set field = sub %}
+                {% set raw_section = sub_raw if sub_raw is mapping else {} %}
+                {% set resolved_section = sub_resolved %}
+                {% set is_set = sub_is_set %}
+                {% set path = sub_path %}
+                {% include "components/config/nested.html" %}
+            {% elif sub.type_tag == "keyed_collection" %}
+                {% set field = sub %}
+                {% set entries = sub_raw if sub_raw is mapping else {} %}
+                {% set is_set = sub_is_set %}
+                {% set path = sub_path %}
+                {% include "components/config/collection.html" %}
+            {% elif sub.type_tag == "tagged_union_list" %}
+                {% set field = sub %}
+                {% set items = sub_raw if sub_raw is iterable and sub_raw is not string and sub_raw is not none else [] %}
+                {% set is_set = sub_is_set %}
+                {% set path = sub_path %}
+                {% include "components/config/union_list.html" %}
+            {% endif %}
+        {% endfor %}
+        {% endif %}
+    </div>
+</div>

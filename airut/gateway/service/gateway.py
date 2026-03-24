@@ -353,6 +353,10 @@ class GatewayService:
             clock=self._clock,
             git_version_info=self._git_version_info,
             status_callback=self._get_reload_status,
+            config_callback=self._get_config_snapshot,
+            config_generation_callback=self._get_config_generation,
+            config_source_callback=self._get_config_source,
+            config_vars_callback=self._get_config_vars,
         )
         self.dashboard.start()
 
@@ -604,6 +608,26 @@ class GatewayService:
             "server_reload_pending": self._pending_server_config is not None,
             "last_reload_error": self._last_reload_error,
         }
+
+    def _get_config_snapshot(
+        self,
+    ) -> ConfigSnapshot[ServerConfig] | None:
+        """Return current ConfigSnapshot for the config editor."""
+        return self._config_snapshot
+
+    def _get_config_generation(self) -> int:
+        """Return current config generation counter."""
+        return self._config_generation
+
+    def _get_config_source(self) -> ConfigSource | None:
+        """Return the ConfigSource for config editor saves."""
+        return self._config_source
+
+    def _get_config_vars(self) -> dict[str, object]:
+        """Return resolved vars table for config editor display."""
+        if self._config_snapshot is None or self._config_snapshot.raw is None:
+            return {}
+        return self._config_snapshot.raw.get("vars", {}) or {}
 
     def _on_config_changed(self) -> None:
         """Handle config file change (inotify or SIGHUP).

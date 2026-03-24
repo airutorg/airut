@@ -1,0 +1,20 @@
+{# Recursive field dispatch — expects: field (EditorFieldSchema), path (str), raw_value, resolved_value, is_set (bool) #}
+{% if field.type_tag == "scalar" %}
+    {% include "components/config/scalar.html" %}
+{% elif field.type_tag == "list_str" %}
+    {% set items = raw_value if raw_value is iterable and raw_value is not string and raw_value is not none else [] %}
+    {% include "components/config/list.html" %}
+{% elif field.type_tag == "dict_str_str" %}
+    {% set entries = raw_value if raw_value is mapping else {} %}
+    {% include "components/config/dict.html" %}
+{% elif field.type_tag == "nested" %}
+    {% set raw_section = raw_value if raw_value is mapping else {} %}
+    {% set resolved_section = resolved_value if resolved_value else {} %}
+    {% include "components/config/nested.html" %}
+{% elif field.type_tag == "keyed_collection" %}
+    {% set entries = raw_value if raw_value is mapping else {} %}
+    {% include "components/config/collection.html" %}
+{% elif field.type_tag == "tagged_union_list" %}
+    {% set items = raw_value if raw_value is iterable and raw_value is not string and raw_value is not none else [] %}
+    {% include "components/config/union_list.html" %}
+{% endif %}

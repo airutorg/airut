@@ -1,0 +1,62 @@
+{# Scalar field widget — expects: field (EditorFieldSchema), path (str), raw_value, resolved_value, is_set (bool) #}
+{% set source = detect_source(raw_value) %}
+{% set ref = get_source_ref(raw_value) %}
+{% set display_value = resolved_value if resolved_value is not none else (raw_value if raw_value is not none and source == 'literal' else none) %}
+{% set field_class = "cfg-field set" if is_set else "cfg-field unset" %}
+<div class="{{ field_class }}" data-scope="{{ field.scope }}">
+    <div class="cfg-field-header">
+        <label class="cfg-label">{{ field.name | replace("_", " ") }}</label>
+        {% if field.scope %}
+        <span class="cfg-scope-badge cfg-scope-{{ field.scope }}">{{ field.scope }}</span>
+        {% endif %}
+    </div>
+    {% if not field.required %}
+    <div class="cfg-source" data-path="{{ path }}">
+        <button type="button" class="cfg-source-btn{% if not is_set %} active{% endif %}" data-source="unset">Not set</button>
+        {% if field.python_type == "bool" %}
+        <button type="button" class="cfg-source-btn{% if is_set and source == 'literal' %} active{% endif %}" data-source="literal">Literal</button>
+        {% else %}
+        <button type="button" class="cfg-source-btn{% if is_set and source == 'literal' %} active{% endif %}" data-source="literal">Literal</button>
+        {% if field.env_eligible %}
+        <button type="button" class="cfg-source-btn{% if source == 'env' %} active{% endif %}" data-source="env">!env</button>
+        {% endif %}
+        {% if field.var_eligible %}
+        <button type="button" class="cfg-source-btn{% if source == 'var' %} active{% endif %}" data-source="var">!var</button>
+        {% endif %}
+        {% endif %}
+    </div>
+    {% else %}
+    <div class="cfg-source" data-path="{{ path }}">
+        <button type="button" class="cfg-source-btn{% if source == 'literal' or (source != 'env' and source != 'var') %} active{% endif %}" data-source="literal">Literal</button>
+        {% if field.env_eligible %}
+        <button type="button" class="cfg-source-btn{% if source == 'env' %} active{% endif %}" data-source="env">!env</button>
+        {% endif %}
+        {% if field.var_eligible %}
+        <button type="button" class="cfg-source-btn{% if source == 'var' %} active{% endif %}" data-source="var">!var</button>
+        {% endif %}
+    </div>
+    {% endif %}
+    <input type="hidden" name="{{ path }}._source" value="{{ source if is_set else 'unset' }}">
+    {% if field.python_type == "bool" %}
+    <select class="cfg-input" name="{{ path }}._value"{% if not is_set %} disabled{% endif %}>
+        <option value="true"{% if display_value == true or display_value == "true" or display_value == True %} selected{% endif %}>true</option>
+        <option value="false"{% if display_value == false or display_value == "false" or display_value == False or (not is_set and (field.default == false or field.default == False)) %} selected{% endif %}>false</option>
+    </select>
+    {% elif field.multiline %}
+    <textarea class="cfg-input cfg-textarea" name="{{ path }}._value"
+        {% if not is_set %}disabled placeholder="{{ field.default if field.default is not none else '' }}"{% endif %}
+    >{% if is_set %}{{ ref if source in ('env', 'var') else (display_value if display_value is not none else '') }}{% endif %}</textarea>
+    {% else %}
+    <input type="text" class="cfg-input" name="{{ path }}._value"
+        value="{{ ref if source in ('env', 'var') else (display_value if display_value is not none and is_set else '') }}"
+        {% if not is_set %}disabled placeholder="{{ field.default if field.default is not none else '' }}"{% endif %}>
+    {% endif %}
+    {% if source in ('env', 'var') and resolved_value is not none %}
+    <div class="cfg-resolved-hint">Resolved: {{ resolved_value }}</div>
+    {% elif source in ('env', 'var') %}
+    <div class="cfg-resolved-hint cfg-resolved-unset">(not set)</div>
+    {% endif %}
+    {% if field.doc %}
+    <div class="cfg-help">{{ field.doc }}</div>
+    {% endif %}
+</div>

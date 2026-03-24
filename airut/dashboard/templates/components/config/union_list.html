@@ -1,0 +1,46 @@
+{# Tagged union list widget — expects: field (EditorFieldSchema), path (str), items (list), is_set (bool) #}
+<div class="cfg-field{% if is_set %} set{% else %} unset{% endif %}" data-scope="{{ field.scope }}">
+    <div class="cfg-field-header">
+        <label class="cfg-label">{{ field.name | replace("_", " ") }}</label>
+        {% if field.scope %}
+        <span class="cfg-scope-badge cfg-scope-{{ field.scope }}">{{ field.scope }}</span>
+        {% endif %}
+    </div>
+    {% if field.doc %}
+    <div class="cfg-help">{{ field.doc }}</div>
+    {% endif %}
+    <div class="cfg-list" id="{{ path | replace('.', '-') }}-list">
+        {% if items %}
+        {% for item in items %}
+        {% set tag = item.keys() | list | first if item is mapping else "" %}
+        {% set val = item[tag] if item is mapping and tag else "" %}
+        <div class="cfg-list-item cfg-union-item">
+            <select class="cfg-input cfg-union-select" name="{{ path }}.{{ loop.index0 }}._tag">
+                {% if field.tagged_union_rules %}
+                {% for rule_tag, rule_type, rule_label in field.tagged_union_rules %}
+                <option value="{{ rule_tag }}"{% if rule_tag == tag %} selected{% endif %}>{{ rule_tag }}</option>
+                {% endfor %}
+                {% endif %}
+            </select>
+            {% if tag == "workspace_members" %}
+            <select class="cfg-input" name="{{ path }}.{{ loop.index0 }}._value">
+                <option value="true"{% if val %} selected{% endif %}>true</option>
+                <option value="false"{% if not val %} selected{% endif %}>false</option>
+            </select>
+            {% else %}
+            <input type="text" class="cfg-input" name="{{ path }}.{{ loop.index0 }}._value" value="{{ val }}">
+            {% endif %}
+            <button type="button" class="cfg-remove-btn"
+                onclick="this.closest('.cfg-list-item').remove()">&times;</button>
+        </div>
+        {% endfor %}
+        {% endif %}
+    </div>
+    {% set rules_json = field.tagged_union_rules | tojson if field.tagged_union_rules else "[]" %}
+    <button type="button" class="cfg-add-btn"
+        hx-post="/api/config/add"
+        hx-vals='{"type":"tagged_union_item","path":"{{ path }}","index":{{ (items | length) if items else 0 }},"rules":"{{ rules_json | e }}"}'
+        hx-target="#{{ path | replace('.', '-') }}-list"
+        hx-swap="beforeend"
+        hx-headers='{"X-Requested-With": "XMLHttpRequest"}'>+ Add Rule</button>
+</div>

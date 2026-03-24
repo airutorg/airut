@@ -1961,3 +1961,40 @@ class TestUpstreamDnsResolution:
                 SystemResolverError, match="No nameserver entries"
             ):
                 GatewayService(server_config, repo_root=tmp_path)
+
+
+class TestConfigEditorCallbacks:
+    """Tests for config editor callback methods."""
+
+    def test_get_config_snapshot(self, email_config, tmp_path: Path) -> None:
+        """Returns the stored config snapshot."""
+        svc, _ = make_service(email_config, tmp_path)
+        result = svc._get_config_snapshot()
+        assert result is svc._config_snapshot
+
+    def test_get_config_generation(self, email_config, tmp_path: Path) -> None:
+        """Returns the config generation counter."""
+        svc, _ = make_service(email_config, tmp_path)
+        assert svc._get_config_generation() == svc._config_generation
+
+    def test_get_config_source(self, email_config, tmp_path: Path) -> None:
+        """Returns the config source."""
+        svc, _ = make_service(email_config, tmp_path)
+        assert svc._get_config_source() is svc._config_source
+
+    def test_get_config_vars_empty(self, email_config, tmp_path: Path) -> None:
+        """Returns empty dict when no snapshot."""
+        svc, _ = make_service(email_config, tmp_path)
+        svc._config_snapshot = None
+        assert svc._get_config_vars() == {}
+
+    def test_get_config_vars_with_raw(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """Returns vars section from snapshot raw."""
+        from airut.config.snapshot import ConfigSnapshot
+
+        svc, _ = make_service(email_config, tmp_path)
+        raw = {"vars": {"my_var": "val"}}
+        svc._config_snapshot = ConfigSnapshot(svc.config, frozenset(), raw=raw)
+        assert svc._get_config_vars() == {"my_var": "val"}
