@@ -3,7 +3,8 @@
 A web editor for the server configuration, integrated into the dashboard. The
 editor uses an **edit buffer** pattern: the server holds a mutable copy of the
 config in memory, the client sends granular field-level mutations via htmx, and
-a separate save operation writes the result to disk after showing a diff preview.
+a separate save operation writes the result to disk after showing a diff
+preview.
 
 ## Goals
 
@@ -18,8 +19,8 @@ a separate save operation writes the result to disk after showing a diff preview
 4. **Full type coverage** — nested dataclasses, `list[str]`, `dict[str, str]`,
    keyed collections (`dict[str, MaskedSecret]`), tagged union lists (Slack
    `authorized`).
-5. **Value source control** — every scalar field supports a source selector:
-   Not set, Literal, `!env`, `!var`.
+5. **Value source control** — every scalar field supports a source selector: Not
+   set, Literal, `!env`, `!var`.
 6. **Round-trip fidelity** — `!env` and `!var` tags survive load-edit-save
    cycles. Unset fields are excluded from the config file.
 7. **Incremental delivery** — the edit buffer pattern naturally supports
@@ -51,9 +52,9 @@ session at a time (single-user system).
 class EditBuffer:
     """Server-side mutable copy of config for editing."""
 
-    _raw: dict[str, Any]       # mutable deep copy of ConfigSnapshot.raw
-    _generation: int           # _config_generation at buffer creation
-    _dirty: bool               # any mutations applied since creation?
+    _raw: dict[str, Any]  # mutable deep copy of ConfigSnapshot.raw
+    _generation: int  # _config_generation at buffer creation
+    _dirty: bool  # any mutations applied since creation?
 ```
 
 #### Lifecycle
@@ -68,26 +69,26 @@ class EditBuffer:
 4. **Discarded** on:
    - Explicit discard (`POST /api/config/discard`)
    - Successful save (`POST /api/config/save`)
-   - External config change (inotify / SIGHUP bumps `_config_generation`,
-     making `_generation` stale)
+   - External config change (inotify / SIGHUP bumps `_config_generation`, making
+     `_generation` stale)
 5. **No idle timeout** while dirty. A clean (non-dirty) buffer may be discarded
    freely. A dirty buffer persists until explicitly discarded or invalidated by
    an external change.
 
 #### Staleness Detection
 
-The server compares `buffer._generation == current _config_generation` on
-**save only**. Mutations (PATCH, add, remove) do **not** check staleness — the
-user can continue editing even if the underlying config changed. This avoids
-interrupting a multi-field edit session due to an unrelated config touch.
+The server compares `buffer._generation == current _config_generation` on **save
+only**. Mutations (PATCH, add, remove) do **not** check staleness — the user can
+continue editing even if the underlying config changed. This avoids interrupting
+a multi-field edit session due to an unrelated config touch.
 
 Staleness is enforced at the point of commitment:
 
 - **On save:** if stale, return 409 with a banner: "Config changed externally
   since you started editing. Review changes and reload."
-- **On page load:** if a stale dirty buffer exists, show a warning banner at
-  the top of the page. The user can choose to continue editing (and will see
-  the 409 on save) or discard and reload.
+- **On page load:** if a stale dirty buffer exists, show a warning banner at the
+  top of the page. The user can choose to continue editing (and will see the 409
+  on save) or discard and reload.
 
 Unsaved changes in a stale buffer are lost on discard — this is the expected
 trade-off for a single-user system. Three-way merge adds complexity without
@@ -115,8 +116,8 @@ ConfigFileWatcher → GatewayService._on_config_changed()
                     → diff, apply by scope, increment _config_generation
 ```
 
-The editor writes the YAML file and relies on the existing
-`ConfigFileWatcher` + reload pipeline. No new reload codepath is introduced.
+The editor writes the YAML file and relies on the existing `ConfigFileWatcher` +
+reload pipeline. No new reload codepath is introduced.
 
 ### Existing Foundation
 
@@ -125,8 +126,8 @@ The editor builds on infrastructure from `spec/declarative-config.md` and
 
 - **`FieldMeta` + `meta()`** — per-field metadata (doc, scope, secret,
   since_version) on all config dataclasses.
-- **`ConfigSnapshot`** — wraps frozen config, tracks `provided_keys`,
-  preserves `raw` dict with `EnvVar`/`VarRef` objects for round-trip.
+- **`ConfigSnapshot`** — wraps frozen config, tracks `provided_keys`, preserves
+  `raw` dict with `EnvVar`/`VarRef` objects for round-trip.
 - **`ConfigSource` protocol** — `load()` / `save()` with `YamlConfigSource`
   implementation that handles `!env`/`!var` YAML tags.
 - **YAML structure mappings** — `YAML_GLOBAL_STRUCTURE`, `YAML_EMAIL_STRUCTURE`,
@@ -135,8 +136,8 @@ The editor builds on infrastructure from `spec/declarative-config.md` and
   reload, exposed via `/api/status`.
 - **`_last_reload_error`** — traceback string from the most recent failed
   reload.
-- **`diff_configs()` / `diff_by_scope()`** — compare two config snapshots,
-  group changes by reload scope.
+- **`diff_configs()` / `diff_by_scope()`** — compare two config snapshots, group
+  changes by reload scope.
 
 ### FieldMeta on Credential Types
 
@@ -166,15 +167,15 @@ Describes a single field or composite structure for UI rendering:
 ```python
 @dataclass(frozen=True)
 class EditorFieldSchema:
-    name: str                   # display name
-    path: str                   # dot-delimited path in raw dict (e.g. "dashboard.port")
-    type_tag: str               # widget type (see table below)
-    python_type: str            # "str", "int", "float", "bool", etc.
-    default: object             # MISSING sentinel if required; Any type is
-                                # justified since defaults span str/int/bool/None
+    name: str  # display name
+    path: str  # dot-delimited path in raw dict (e.g. "dashboard.port")
+    type_tag: str  # widget type (see table below)
+    python_type: str  # "str", "int", "float", "bool", etc.
+    default: object  # MISSING sentinel if required; Any type is
+    # justified since defaults span str/int/bool/None
     required: bool
-    doc: str                    # from FieldMeta
-    scope: str                  # "server", "repo", "task"
+    doc: str  # from FieldMeta
+    scope: str  # "server", "repo", "task"
     secret: bool
     multiline: bool = False
     nested_fields: list[EditorFieldSchema] | None = None
@@ -185,9 +186,9 @@ class EditorFieldSchema:
     var_eligible: bool = True
 ```
 
-For optional/union types (`T | None`), the `None` is stripped and the inner
-type determines the `type_tag`. The `required` flag and `default` reflect
-whether `None` means "field is optional" vs "field has no default."
+For optional/union types (`T | None`), the `None` is stripped and the inner type
+determines the `type_tag`. The `required` flag and `default` reflect whether
+`None` means "field is optional" vs "field has no default."
 
 **Type tags** classify each field for widget selection:
 
@@ -208,8 +209,8 @@ for each field.
 
 1. For each field with `FieldMeta`, produce an `EditorFieldSchema`.
 2. Map type annotation to `type_tag` using the table above.
-3. If field type is a `@dataclass` with `FieldMeta` fields, recurse →
-   populate `nested_fields`.
+3. If field type is a `@dataclass` with `FieldMeta` fields, recurse → populate
+   `nested_fields`.
 4. If field type is `dict[str, <dataclass>]`, introspect the item class →
    populate `item_fields` and `item_class_name`.
 5. For tagged union fields, populate `tagged_union_rules`.
@@ -217,20 +218,20 @@ for each field.
 **Path computation:** Uses `YAML_GLOBAL_STRUCTURE`, `YAML_EMAIL_STRUCTURE`, and
 `YAML_REPO_STRUCTURE` to map flat dataclass field names to nested YAML paths.
 Fields not in any structure mapping use their dataclass field name directly as
-the path segment. Slack channel fields have no `YAML_SLACK_STRUCTURE` — they
-map 1:1 to their dataclass field names within the `slack:` block (e.g.,
+the path segment. Slack channel fields have no `YAML_SLACK_STRUCTURE` — they map
+1:1 to their dataclass field names within the `slack:` block (e.g.,
 `repos.{id}.slack.bot_token`).
 
 **Relationship to `schema_for_ui()`:** The existing `schema_for_ui()` returns
-flat `FieldSchema` records (name, type, default, doc). It continues to exist
-for non-editor consumers (e.g., example config generation, CLI help).
-`schema_for_editor()` is a richer, recursive variant that adds YAML paths,
-type tags, and composite type structure needed by the editor UI.
+flat `FieldSchema` records (name, type, default, doc). It continues to exist for
+non-editor consumers (e.g., example config generation, CLI help).
+`schema_for_editor()` is a richer, recursive variant that adds YAML paths, type
+tags, and composite type structure needed by the editor UI.
 
 #### `InMemoryConfigSource`
 
-A read-only `ConfigSource` for pre-save validation. Only `load()` is
-meaningful — `save()` is not called during the validation path
+A read-only `ConfigSource` for pre-save validation. Only `load()` is meaningful
+— `save()` is not called during the validation path
 (`ServerConfig.from_source()` only calls `load()`).
 
 ```python
@@ -247,20 +248,21 @@ class InMemoryConfigSource:
         raise NotImplementedError("In-memory source is read-only")
 ```
 
-Used for pre-save validation: `ServerConfig.from_source(InMemoryConfigSource(d))`
-exercises the full pipeline without touching the file.
+Used for pre-save validation:
+`ServerConfig.from_source(InMemoryConfigSource(d))` exercises the full pipeline
+without touching the file.
 
 ### Edit Buffer Operations
 
 All operations work on the raw YAML dict using **dot-delimited paths** that
 mirror the YAML structure (e.g., `execution.max_concurrent`,
-`repos.my-project.email.imap.poll_interval`). These are the paths the user
-would see in the config file.
+`repos.my-project.email.imap.poll_interval`). These are the paths the user would
+see in the config file.
 
 #### Set Field
 
-Sets a single scalar field to a literal, `!env`, or `!var` value. Navigates
-the path in `_raw`, creating intermediate dicts as needed.
+Sets a single scalar field to a literal, `!env`, or `!var` value. Navigates the
+path in `_raw`, creating intermediate dicts as needed.
 
 - `source=literal` → store coerced Python value (`int`, `float`, `bool`, or
   `str`)
@@ -276,14 +278,14 @@ given key and default structure). The server returns an HTML fragment for the
 new item, which htmx appends to the DOM.
 
 For channel add (`repos.{id}.email`, `repos.{id}.slack`), creates the channel
-block with required-field placeholders. For repo add (`repos.{key}`), creates
-a minimal repo skeleton.
+block with required-field placeholders. For repo add (`repos.{key}`), creates a
+minimal repo skeleton.
 
 #### Remove Item
 
 Removes from a list (by index) or keyed collection (by key). Also handles
-channel removal and repo removal. The client removes the DOM element
-client-side on success.
+channel removal and repo removal. The client removes the DOM element client-side
+on success.
 
 ### Unified Source Selector
 
@@ -300,15 +302,15 @@ placeholder text (grayed out). Field row uses `--bg-inset` background.
 
 **Literal** — user types a value directly.
 
-**!env** — user types an environment variable name. A resolved-value hint
-below shows the current env var value (or "(not set)").
+**!env** — user types an environment variable name. A resolved-value hint below
+shows the current env var value (or "(not set)").
 
-**!var** — user types a config variable name. A resolved-value hint below
-shows the resolved value.
+**!var** — user types a config variable name. A resolved-value hint below shows
+the resolved value.
 
 Clicking a segment sends `PATCH /api/config/field` with the new source (and
-value if switching from unset). The server mutates the buffer and responds.
-htmx swaps the field fragment to reflect the new state.
+value if switching from unset). The server mutates the buffer and responds. htmx
+swaps the field fragment to reflect the new state.
 
 #### Which Fields Get Which Options
 
@@ -418,23 +420,23 @@ channel path.
 
 ### Page Routes
 
-| Route    | Method | Description              |
-| -------- | ------ | ------------------------ |
-| `/config`| GET    | Config editor full page  |
+| Route     | Method | Description             |
+| --------- | ------ | ----------------------- |
+| `/config` | GET    | Config editor full page |
 
 Single scrollable page. May be split into sub-pages in future phases, but the
 edit buffer design supports both patterns — state lives on the server.
 
 ### API Routes
 
-| Route                    | Method | Description                          |
-| ------------------------ | ------ | ------------------------------------ |
-| `/api/config/field`      | PATCH  | Set or clear a single field          |
-| `/api/config/add`        | POST   | Add item to list/dict/collection     |
-| `/api/config/remove`     | POST   | Remove item from list/dict/collection|
-| `/api/config/diff`       | GET    | Compare buffer vs live config        |
-| `/api/config/save`       | POST   | Validate + write YAML                |
-| `/api/config/discard`    | POST   | Reset edit buffer                    |
+| Route                 | Method | Description                           |
+| --------------------- | ------ | ------------------------------------- |
+| `/api/config/field`   | PATCH  | Set or clear a single field           |
+| `/api/config/add`     | POST   | Add item to list/dict/collection      |
+| `/api/config/remove`  | POST   | Remove item from list/dict/collection |
+| `/api/config/diff`    | GET    | Compare buffer vs live config         |
+| `/api/config/save`    | POST   | Validate + write YAML                 |
+| `/api/config/discard` | POST   | Reset edit buffer                     |
 
 ### `GET /config`
 
@@ -491,7 +493,8 @@ Accepts JSON body:
 ```
 
 Mutates the edit buffer. Returns `200 OK`. The client removes the DOM element
-client-side (no server-rendered response needed — the element is simply deleted).
+client-side (no server-rendered response needed — the element is simply
+deleted).
 
 ### `GET /api/config/diff`
 
@@ -500,7 +503,8 @@ fragment showing changes grouped by reload scope.
 
 The diff is computed by:
 
-1. Resolving the edit buffer through `ServerConfig.from_source(InMemoryConfigSource(buffer._raw))`.
+1. Resolving the edit buffer through
+   `ServerConfig.from_source(InMemoryConfigSource(buffer._raw))`.
 2. Comparing the resolved snapshot against the current live snapshot using
    `diff_by_scope()`.
 3. Rendering changes as structured data: path, old value, new value, scope,
@@ -508,8 +512,8 @@ The diff is computed by:
 
 Secret values in the diff are masked.
 
-The response includes a scope summary: how many changes per scope, and whether
-a server restart is required.
+The response includes a scope summary: how many changes per scope, and whether a
+server restart is required.
 
 ### `POST /api/config/save`
 
@@ -640,10 +644,10 @@ When any API call returns a stale indicator, JavaScript shows a banner:
 
 ## Page Layout
 
-Single scrollable page at `/config`. Uses existing `.page` max-width (960px)
-and `.card` pattern. Sections appear incrementally as phases are implemented —
-Phase 1 shows only Server Settings; subsequent phases add Variables, Repos,
-Channels, and Credentials sections.
+Single scrollable page at `/config`. Uses existing `.page` max-width (960px) and
+`.card` pattern. Sections appear incrementally as phases are implemented — Phase
+1 shows only Server Settings; subsequent phases add Variables, Repos, Channels,
+and Credentials sections.
 
 ```
 /config page (complete layout after all phases)
@@ -700,7 +704,7 @@ input as a help line (12px, `--text-tertiary`, normal case).
 
 - Desktop (>700px): field label + source selector on one line, input below.
   Resource limits use 2-column grid.
-- Mobile (<=700px): everything stacks vertically. Same breakpoint as existing
+- Mobile (\<=700px): everything stacks vertically. Same breakpoint as existing
   `.task-row`.
 
 ## Validation
@@ -713,8 +717,8 @@ only `tenant_id` is filled in).
 
 1. Pass `buffer._raw` through
    `ServerConfig.from_source(InMemoryConfigSource(raw))`.
-2. This exercises the full pipeline: migrations, variable resolution,
-   field parsing, `__post_init__()` validation.
+2. This exercises the full pipeline: migrations, variable resolution, field
+   parsing, `__post_init__()` validation.
 3. **Validation fails:** return 422 with error banner. YAML file untouched.
 4. **Validation passes:** write atomically, return success.
 
@@ -733,12 +737,12 @@ only `tenant_id` is filled in).
 Uses `GatewayService._config_generation` as the concurrency token:
 
 1. **Buffer creation:** records current `_config_generation`.
-2. **On page load:** if dirty buffer exists with stale generation, show
-   warning banner. User can continue editing or discard.
+2. **On page load:** if dirty buffer exists with stale generation, show warning
+   banner. User can continue editing or discard.
 3. **On save:** checks generation before writing. Stale → 409 with reload
    prompt. Mutations (PATCH, add, remove) do not check staleness.
-4. **External changes:** inotify/SIGHUP increments generation. The staleness
-   is detected on next page load or save attempt.
+4. **External changes:** inotify/SIGHUP increments generation. The staleness is
+   detected on next page load or save attempt.
 
 ## Atomic Save
 
@@ -749,29 +753,34 @@ def save(self, data: dict[str, Any]) -> None:
     self.path.parent.mkdir(parents=True, exist_ok=True)
     tmp = self.path.with_suffix(".yaml.tmp")
     with open(tmp, "w") as f:
-        yaml.dump(data, f, Dumper=make_tag_dumper(),
-                  default_flow_style=False, sort_keys=False)
+        yaml.dump(
+            data,
+            f,
+            Dumper=make_tag_dumper(),
+            default_flow_style=False,
+            sort_keys=False,
+        )
     tmp.rename(self.path)  # atomic on same filesystem
 ```
 
 The config file watcher checks the event filename against the config filename
-exactly (`airut.yaml`). The `CLOSE_WRITE` on `.yaml.tmp` does not match, so
-it is ignored. The subsequent `MOVED_TO` on `airut.yaml` (from the rename)
-triggers the reload.
+exactly (`airut.yaml`). The `CLOSE_WRITE` on `.yaml.tmp` does not match, so it
+is ignored. The subsequent `MOVED_TO` on `airut.yaml` (from the rename) triggers
+the reload.
 
 ## Security
 
 ### CSRF Protection
 
-All mutation endpoints (`PATCH /api/config/field`, `POST /api/config/*`)
-require an `X-Requested-With` header, matching the existing pattern on
+All mutation endpoints (`PATCH /api/config/field`, `POST /api/config/*`) require
+an `X-Requested-With` header, matching the existing pattern on
 `POST /api/conversation/{id}/stop`. htmx sends this automatically. CORS
 preflight blocks cross-origin requests with custom headers.
 
 ### Secret Handling
 
-Fields marked `secret=True` are rendered as plain text inputs. The dashboard
-is single-user behind a reverse proxy — masking adds friction without security
+Fields marked `secret=True` are rendered as plain text inputs. The dashboard is
+single-user behind a reverse proxy — masking adds friction without security
 benefit.
 
 The `secret` flag affects diff output: secret values are masked in the diff
@@ -823,26 +832,26 @@ Responsive breakpoint at 700px matches existing pages.
 
 ## New Files
 
-| File                                                      | Purpose                                                    |
-| --------------------------------------------------------- | ---------------------------------------------------------- |
-| `airut/config/editor.py`                                  | `EditorFieldSchema`, `schema_for_editor()`, `EditBuffer`, `InMemoryConfigSource` |
-| `airut/dashboard/handlers_config.py`                      | `ConfigEditorHandlers`: page, field, add, remove, diff, save, discard |
-| `airut/dashboard/templates/pages/config.html`             | Config editor page template                                |
-| `airut/dashboard/templates/components/config/field.html`  | Recursive field dispatch macro                             |
-| `airut/dashboard/templates/components/config/scalar.html` | Scalar input + source selector                             |
-| `airut/dashboard/templates/components/config/list.html`   | List widget                                                |
-| `airut/dashboard/templates/components/config/dict.html`   | Dict widget                                                |
-| `airut/dashboard/templates/components/config/nested.html` | Nested dataclass fieldset                                  |
-| `airut/dashboard/templates/components/config/collection.html` | Keyed collection (expandable cards)                    |
-| `airut/dashboard/templates/components/config/union_list.html` | Tagged union list widget                               |
-| `airut/dashboard/static/js/config-editor.js`              | Dirty counter, stale detection, dialog helpers             |
-| `airut/dashboard/static/styles/config.css`                | Config editor styles                                       |
+| File                                                          | Purpose                                                                          |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `airut/config/editor.py`                                      | `EditorFieldSchema`, `schema_for_editor()`, `EditBuffer`, `InMemoryConfigSource` |
+| `airut/dashboard/handlers_config.py`                          | `ConfigEditorHandlers`: page, field, add, remove, diff, save, discard            |
+| `airut/dashboard/templates/pages/config.html`                 | Config editor page template                                                      |
+| `airut/dashboard/templates/components/config/field.html`      | Recursive field dispatch macro                                                   |
+| `airut/dashboard/templates/components/config/scalar.html`     | Scalar input + source selector                                                   |
+| `airut/dashboard/templates/components/config/list.html`       | List widget                                                                      |
+| `airut/dashboard/templates/components/config/dict.html`       | Dict widget                                                                      |
+| `airut/dashboard/templates/components/config/nested.html`     | Nested dataclass fieldset                                                        |
+| `airut/dashboard/templates/components/config/collection.html` | Keyed collection (expandable cards)                                              |
+| `airut/dashboard/templates/components/config/union_list.html` | Tagged union list widget                                                         |
+| `airut/dashboard/static/js/config-editor.js`                  | Dirty counter, stale detection, dialog helpers                                   |
+| `airut/dashboard/static/styles/config.css`                    | Config editor styles                                                             |
 
 ## Relationship to Existing Specs
 
-- **`spec/declarative-config.md`** — this spec builds on `FieldMeta`
-  annotations (including credential types, already annotated) and adds
-  `schema_for_editor()` alongside `schema_for_ui()`.
+- **`spec/declarative-config.md`** — this spec builds on `FieldMeta` annotations
+  (including credential types, already annotated) and adds `schema_for_editor()`
+  alongside `schema_for_ui()`.
 - **`spec/config-reload.md`** — the editor writes YAML and relies on the
   existing inotify + reload pipeline.
 - **`spec/dashboard.md`** — the editor is a new page following the same
@@ -913,8 +922,7 @@ The page shows only the Server Settings section.
 
 **Backend:**
 
-- `schema_for_editor()` extended for `EmailChannelConfig`,
-  `SlackChannelConfig`
+- `schema_for_editor()` extended for `EmailChannelConfig`, `SlackChannelConfig`
 - Add/remove channel operations in `EditBuffer`
 
 **Frontend:**
@@ -936,8 +944,8 @@ The page shows only the Server Settings section.
 **Backend:**
 
 - `schema_for_editor()` extended for `MaskedSecret`, `SigningCredential`,
-  `SigningCredentialField`, `GitHubAppCredential` (FieldMeta annotations
-  already exist on these types)
+  `SigningCredentialField`, `GitHubAppCredential` (FieldMeta annotations already
+  exist on these types)
 
 **Frontend:**
 
@@ -967,81 +975,81 @@ The page shows only the Server Settings section.
 
 ## Test Plan
 
-Tests for each phase. Unit tests for `EditBuffer` and schema; integration
-tests for HTTP endpoints.
+Tests for each phase. Unit tests for `EditBuffer` and schema; integration tests
+for HTTP endpoints.
 
 ### EditBuffer Unit Tests
 
-| Test                                   | Verifies                                          |
-| -------------------------------------- | ------------------------------------------------- |
-| `test_create_from_snapshot`            | Buffer deep-copies raw, records generation        |
-| `test_set_literal_field`              | Scalar set updates raw dict                       |
-| `test_set_env_field`                  | EnvVar stored in raw dict                         |
-| `test_set_var_field`                  | VarRef stored in raw dict                         |
-| `test_unset_field`                    | Key removed, empty parents pruned                 |
-| `test_set_nested_path`               | Intermediate dicts created                        |
-| `test_add_list_item`                  | Item appended to list                             |
-| `test_add_keyed_collection_item`      | Entry created with key                            |
-| `test_remove_list_item`              | Item removed by index                             |
-| `test_remove_keyed_item`             | Entry removed by key                              |
-| `test_add_repo`                      | Repo skeleton created                             |
-| `test_remove_repo`                   | Repo removed, others intact                       |
-| `test_add_channel`                   | Channel block created with placeholders           |
-| `test_remove_channel`               | Channel block removed                             |
-| `test_dirty_tracking`               | Clean after create, dirty after mutation           |
-| `test_validate_success`             | Valid buffer passes full pipeline                  |
-| `test_validate_failure`             | Invalid buffer returns error                       |
-| `test_staleness_detection`          | Stale when generation mismatches                   |
+| Test                             | Verifies                                   |
+| -------------------------------- | ------------------------------------------ |
+| `test_create_from_snapshot`      | Buffer deep-copies raw, records generation |
+| `test_set_literal_field`         | Scalar set updates raw dict                |
+| `test_set_env_field`             | EnvVar stored in raw dict                  |
+| `test_set_var_field`             | VarRef stored in raw dict                  |
+| `test_unset_field`               | Key removed, empty parents pruned          |
+| `test_set_nested_path`           | Intermediate dicts created                 |
+| `test_add_list_item`             | Item appended to list                      |
+| `test_add_keyed_collection_item` | Entry created with key                     |
+| `test_remove_list_item`          | Item removed by index                      |
+| `test_remove_keyed_item`         | Entry removed by key                       |
+| `test_add_repo`                  | Repo skeleton created                      |
+| `test_remove_repo`               | Repo removed, others intact                |
+| `test_add_channel`               | Channel block created with placeholders    |
+| `test_remove_channel`            | Channel block removed                      |
+| `test_dirty_tracking`            | Clean after create, dirty after mutation   |
+| `test_validate_success`          | Valid buffer passes full pipeline          |
+| `test_validate_failure`          | Invalid buffer returns error               |
+| `test_staleness_detection`       | Stale when generation mismatches           |
 
 ### API Integration Tests
 
-| Test                                   | Verifies                                          |
-| -------------------------------------- | ------------------------------------------------- |
-| `test_config_page_loads`              | GET /config → 200, creates buffer                  |
-| `test_patch_field_literal`            | PATCH returns updated HTML fragment                |
-| `test_patch_field_env`               | EnvVar in buffer after PATCH                       |
-| `test_patch_field_unset`             | Key removed from buffer after PATCH                |
-| `test_patch_stale_buffer`            | Returns stale warning when generation mismatches   |
-| `test_add_list_item_returns_html`    | POST add returns item fragment                     |
-| `test_remove_item`                   | POST remove succeeds, buffer updated               |
-| `test_diff_shows_changes`           | GET diff returns structured change list             |
-| `test_diff_masks_secrets`           | Secret values masked in diff output                 |
-| `test_diff_groups_by_scope`         | Changes grouped by server/repo/task                 |
-| `test_save_valid_config`            | POST save → 200, YAML written, buffer discarded     |
-| `test_save_invalid_config`          | POST save → 422, YAML unchanged                     |
-| `test_save_stale_config`            | POST save → 409 when generation mismatches           |
-| `test_save_triggers_reload`         | Generation increments after save                     |
-| `test_discard_resets_buffer`        | POST discard → buffer cleared                        |
-| `test_csrf_required`               | Requests without X-Requested-With → 403              |
+| Test                              | Verifies                                         |
+| --------------------------------- | ------------------------------------------------ |
+| `test_config_page_loads`          | GET /config → 200, creates buffer                |
+| `test_patch_field_literal`        | PATCH returns updated HTML fragment              |
+| `test_patch_field_env`            | EnvVar in buffer after PATCH                     |
+| `test_patch_field_unset`          | Key removed from buffer after PATCH              |
+| `test_patch_stale_buffer`         | Returns stale warning when generation mismatches |
+| `test_add_list_item_returns_html` | POST add returns item fragment                   |
+| `test_remove_item`                | POST remove succeeds, buffer updated             |
+| `test_diff_shows_changes`         | GET diff returns structured change list          |
+| `test_diff_masks_secrets`         | Secret values masked in diff output              |
+| `test_diff_groups_by_scope`       | Changes grouped by server/repo/task              |
+| `test_save_valid_config`          | POST save → 200, YAML written, buffer discarded  |
+| `test_save_invalid_config`        | POST save → 422, YAML unchanged                  |
+| `test_save_stale_config`          | POST save → 409 when generation mismatches       |
+| `test_save_triggers_reload`       | Generation increments after save                 |
+| `test_discard_resets_buffer`      | POST discard → buffer cleared                    |
+| `test_csrf_required`              | Requests without X-Requested-With → 403          |
 
 ### Round-Trip Tests
 
-| Test                                   | Verifies                                          |
-| -------------------------------------- | ------------------------------------------------- |
-| `test_save_preserves_env_tags`        | `!env` references survive round-trip               |
-| `test_save_preserves_var_tags`        | `!var` references survive round-trip               |
-| `test_save_preserves_vars_section`    | `vars:` section preserved                          |
-| `test_save_only_set_fields`          | Unset fields absent from YAML                       |
-| `test_save_sets_config_version`      | Output has `config_version: 2`                      |
+| Test                               | Verifies                             |
+| ---------------------------------- | ------------------------------------ |
+| `test_save_preserves_env_tags`     | `!env` references survive round-trip |
+| `test_save_preserves_var_tags`     | `!var` references survive round-trip |
+| `test_save_preserves_vars_section` | `vars:` section preserved            |
+| `test_save_only_set_fields`        | Unset fields absent from YAML        |
+| `test_save_sets_config_version`    | Output has `config_version: 2`       |
 
 ### Composite Type Tests
 
-| Test                                   | Verifies                                          |
-| -------------------------------------- | ------------------------------------------------- |
-| `test_list_add_and_save`             | Multiple authorized_senders in YAML                 |
-| `test_list_remove_and_save`          | Item absent after removal                           |
-| `test_dict_save_secrets`             | Key-value pairs with !env preserved                 |
-| `test_masked_secret_round_trip`      | MaskedSecret with scopes → correct reload           |
-| `test_signing_credential_round_trip` | SigningCredential → correct reload                  |
-| `test_github_app_round_trip`         | GitHubAppCredential → correct reload                |
-| `test_slack_authorized_round_trip`   | Tagged union rules → correct reload                 |
+| Test                                 | Verifies                                  |
+| ------------------------------------ | ----------------------------------------- |
+| `test_list_add_and_save`             | Multiple authorized_senders in YAML       |
+| `test_list_remove_and_save`          | Item absent after removal                 |
+| `test_dict_save_secrets`             | Key-value pairs with !env preserved       |
+| `test_masked_secret_round_trip`      | MaskedSecret with scopes → correct reload |
+| `test_signing_credential_round_trip` | SigningCredential → correct reload        |
+| `test_github_app_round_trip`         | GitHubAppCredential → correct reload      |
+| `test_slack_authorized_round_trip`   | Tagged union rules → correct reload       |
 
 ### Safety Tests
 
-| Test                                   | Verifies                                          |
-| -------------------------------------- | ------------------------------------------------- |
-| `test_dashboard_disable_warning`      | `enabled: false` → warning in response             |
-| `test_atomic_write`                   | Save uses temp+rename                              |
-| `test_invalid_config_not_written`     | Validation fail → YAML unchanged                   |
-| `test_external_change_invalidates`    | Config change → buffer marked stale                |
-| `test_concurrent_tabs_share_buffer`   | Two requests see same buffer state                 |
+| Test                                | Verifies                               |
+| ----------------------------------- | -------------------------------------- |
+| `test_dashboard_disable_warning`    | `enabled: false` → warning in response |
+| `test_atomic_write`                 | Save uses temp+rename                  |
+| `test_invalid_config_not_written`   | Validation fail → YAML unchanged       |
+| `test_external_change_invalidates`  | Config change → buffer marked stale    |
+| `test_concurrent_tabs_share_buffer` | Two requests see same buffer state     |
