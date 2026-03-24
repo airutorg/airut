@@ -53,7 +53,9 @@
             </div>
         </div>
 
-        {% include "components/action_buttons.html" %}
+        <div id="task-actions" {% if is_active %}sse-swap="task-actions" hx-swap="innerHTML"{% endif %}>
+            {% include "components/action_buttons.html" %}
+        </div>
     </div>
     {% if task.todos and is_active %}
     <div {% if is_active %}sse-swap="task-progress" hx-swap="innerHTML"{% endif %}>

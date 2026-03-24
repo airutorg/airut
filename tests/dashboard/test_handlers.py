@@ -1858,6 +1858,28 @@ class TestStopEndpoint:
         assert "hx-post" in html
         assert "X-Requested-With" in html
 
+    def test_action_buttons_have_sse_swap(self) -> None:
+        """Action buttons area has SSE swap target for live updates."""
+        tracker = TaskTracker()
+        task_id = "abc12345"
+        tracker.add_task(task_id, "Test Task")
+        tracker.set_conversation_id(task_id, task_id)
+        tracker.set_authenticating(task_id)
+        tracker.set_executing(task_id)
+
+        def mock_stop(conv_id: str) -> bool:
+            return True
+
+        server = DashboardServer(tracker, stop_callback=mock_stop)
+        client = Client(server._wsgi_app)
+
+        response = client.get(f"/task/{task_id}")
+        html = response.get_data(as_text=True)
+
+        # Action buttons should be inside an SSE swap container
+        assert 'id="task-actions"' in html
+        assert 'sse-swap="task-actions"' in html
+
     def test_task_detail_without_stop_button(self) -> None:
         """Test task detail page excludes stop button for completed."""
         tracker = TaskTracker()

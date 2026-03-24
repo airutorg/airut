@@ -288,9 +288,9 @@ def _build_task_detail_events(
 ) -> str:
     """Build SSE events for the task detail page.
 
-    Emits ``task-status``, ``task-progress``, and ``task-details``
-    events matching the ``sse-swap`` attributes in the task detail
-    template.
+    Emits ``task-status``, ``task-actions``, ``task-progress``, and
+    ``task-details`` events matching the ``sse-swap`` attributes in
+    the task detail template.
 
     Args:
         tracker: Task tracker.
@@ -344,6 +344,10 @@ def _build_task_detail_events(
     parts.append(
         format_sse_event("task-status", status_html, event_id=eid, retry=retry)
     )
+
+    # task-actions: action buttons (stop, view actions/network)
+    actions_html = render_template("components/action_buttons.html", task=task)
+    parts.append(format_sse_event("task-actions", actions_html, event_id=eid))
 
     # task-progress: todo checklist
     progress_html = render_template(
