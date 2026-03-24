@@ -1098,11 +1098,15 @@ class TestBuildTaskDetailEvents:
         )
 
         assert "event: task-status\n" in result
+        assert "event: task-actions\n" in result
         assert "event: task-progress\n" in result
         assert "event: task-details\n" in result
         # Active task should have sse-swap for live updates
         assert "sse-swap" in result
         assert "EXECUTING" in result
+        # Executing task should have stop button in actions event
+        assert "stop-btn" in result
+        assert "hx-post" in result
         # Should NOT have done event for active task
         assert "event: done\n" not in result
 
@@ -1122,11 +1126,14 @@ class TestBuildTaskDetailEvents:
         )
 
         assert "event: task-status\n" in result
+        assert "event: task-actions\n" in result
         assert "event: task-progress\n" in result
         assert "event: task-details\n" in result
         assert "event: done\n" in result
         assert "COMPLETED" in result
         assert "Success" in result
+        # Completed task should NOT have stop button
+        assert "stop-btn" not in result
 
     def test_task_detail_events_for_failed_task(self) -> None:
         """Failed task detail events show failure reason."""
@@ -1197,6 +1204,40 @@ class TestBuildTaskDetailEvents:
         )
 
         assert "Failed" in result
+
+    def test_task_actions_event_shows_stop_for_executing(self) -> None:
+        """SSE task-actions event includes stop button for executing task."""
+        from airut.dashboard.sse import _build_html_state_events
+
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "c1")
+        tracker.set_authenticating("t1")
+        tracker.set_executing("t1")
+
+        result = _build_html_state_events(
+            tracker, None, None, version=1, task_id="t1"
+        )
+
+        assert "event: task-actions\n" in result
+        assert "stop-btn" in result
+        assert "/api/conversation/c1/stop" in result
+
+    def test_task_actions_event_no_stop_before_executing(self) -> None:
+        """SSE task-actions event omits stop button before execution."""
+        from airut.dashboard.sse import _build_html_state_events
+
+        tracker = TaskTracker()
+        tracker.add_task("t1", "Task 1")
+        tracker.set_conversation_id("t1", "c1")
+        tracker.set_authenticating("t1")
+
+        result = _build_html_state_events(
+            tracker, None, None, version=1, task_id="t1"
+        )
+
+        assert "event: task-actions\n" in result
+        assert "stop-btn" not in result
 
 
 class TestBuildRepoDetailEvents:

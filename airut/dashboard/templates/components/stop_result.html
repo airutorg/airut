@@ -1,0 +1,5 @@
+{# Stop-button result fragment — replaces #stop-area via hx-swap="outerHTML".
+   Expects: message (str), css_class ("info" | "error") #}
+<div id="stop-area">
+    <div id="stop-result" class="stop-result {{ css_class }}">{{ message }}</div>
+</div>

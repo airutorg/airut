@@ -303,7 +303,7 @@ Connection lifecycle:
 | Page           | SSE Source                                   | htmx Swap                | Behavior                                         |
 | -------------- | -------------------------------------------- | ------------------------ | ------------------------------------------------ |
 | Main dashboard | `/api/events/stream?format=html`             | Per-region `sse-swap`    | Updates task lists, boot, repos via named events |
-| Task detail    | `/api/task/{id}/events/stream`               | Per-field `sse-swap`     | Updates status, timing, todo progress            |
+| Task detail    | `/api/task/{id}/events/stream`               | Per-field `sse-swap`     | Updates status, actions, timing, todo progress   |
 | Actions viewer | `/api/conversation/{id}/events/stream`       | `sse-swap="html"` append | Appends events to timeline                       |
 | Network viewer | `/api/conversation/{id}/network/stream`      | `sse-swap="html"` append | Appends log lines                                |
 | Repo detail    | `/api/events/stream?format=html&repo_id=...` | Per-field `sse-swap`     | Updates status badge, error section              |
