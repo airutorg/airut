@@ -75,6 +75,7 @@ class TestImapConnectionFailures:
                     authorized_senders=["user@test.local"],
                     trusted_authserv_id="test.local",
                     use_imap_idle=False,
+                    imap_connect_retries=1,
                     poll_interval_seconds=0.1,
                 )
             },
@@ -140,6 +141,7 @@ class TestImapConnectionFailures:
                     authorized_senders=["user@test.local"],
                     trusted_authserv_id="test.local",
                     use_imap_idle=False,
+                    imap_connect_retries=1,
                     poll_interval_seconds=0.1,
                 )
             },
@@ -198,6 +200,7 @@ class TestGitCloneFailures:
                     authorized_senders=["user@test.local"],
                     trusted_authserv_id="test.local",
                     use_imap_idle=False,
+                    imap_connect_retries=1,
                     poll_interval_seconds=0.1,
                 )
             },

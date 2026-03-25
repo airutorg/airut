@@ -278,6 +278,7 @@ class EmailChannelConfig(ChannelConfig):
     trusted_authserv_id: str
     imap_port: int = 993
     smtp_port: int = 587
+    imap_connect_retries: int = 3
     poll_interval_seconds: float = 60
     use_imap_idle: bool = True
     idle_reconnect_interval_seconds: int = 29 * 60

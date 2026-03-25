@@ -21,7 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 
-from .conftest import get_message_text
+from .conftest import get_message_text, wait_for_conv_completion
 from .environment import IntegrationEnvironment
 
 
@@ -134,16 +134,18 @@ sys.exit(1)
             assert response is not None
 
             # Check tracker has the failed task
-            # The conversation ID should be in the subject
             conv_id = extract_conversation_id(response["Subject"])
-            if conv_id:
-                # Wait for task completion
-                task = service.tracker.wait_for_completion(conv_id, timeout=5.0)
+            assert conv_id is not None, (
+                f"No conversation ID in subject: {response['Subject']}"
+            )
 
-                if task:
-                    assert task.succeeded is False, (
-                        "Task should be marked as failed"
-                    )
+            task = wait_for_conv_completion(
+                service.tracker, conv_id, timeout=5.0
+            )
+            assert task is not None, (
+                f"Task for {conv_id} did not complete in tracker"
+            )
+            assert task.succeeded is False, "Task should be marked as failed"
 
         finally:
             service.stop()

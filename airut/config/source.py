@@ -59,6 +59,7 @@ YAML_EMAIL_STRUCTURE: dict[str, tuple[str, ...]] = {
     "from_address": ("from",),
     "authorized_senders": ("authorized_senders",),
     "trusted_authserv_id": ("trusted_authserv_id",),
+    "imap_connect_retries": ("imap", "connect_retries"),
     "poll_interval_seconds": ("imap", "poll_interval"),
     "use_imap_idle": ("imap", "use_idle"),
     "idle_reconnect_interval_seconds": ("imap", "idle_reconnect_interval"),
