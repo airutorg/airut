@@ -7,11 +7,29 @@ on:
     branches: [main]
 
 jobs:
-  ci:
+  code:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: airutorg/sandbox-action@main
         with:
-          command: 'uv sync && uv run scripts/ci.py --verbose --timeout 0'
+          command: 'uv sync && uv run scripts/ci.py --workflow code --verbose --timeout 0'
+          pr_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: airutorg/sandbox-action@main
+        with:
+          command: 'uv sync && uv run scripts/ci.py --workflow security --verbose --timeout 0'
+          pr_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: airutorg/sandbox-action@main
+        with:
+          command: 'uv sync && uv run scripts/ci.py --workflow integration --verbose --timeout 0'
           pr_sha: ${{ github.event.pull_request.head.sha || github.sha }}

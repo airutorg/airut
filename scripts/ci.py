@@ -58,8 +58,8 @@ class Step:
 
 
 # CI steps — the single source of truth for all checks.
-# The "workflow" field groups steps for selective runs (--workflow code, etc.)
-# but all steps run in a single GitHub Actions job via ci.yml.
+# The "workflow" field groups steps into parallel GitHub Actions jobs (ci.yml).
+# Each workflow runs as a separate job: code, security, integration.
 STEPS: list[Step] = [
     # Code quality steps
     Step(
