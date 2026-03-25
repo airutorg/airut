@@ -3,18 +3,6 @@
 {% block title %}Task {{ task.task_id }} - Dashboard{% endblock %}
 
 {% block body %}
-{% set success_class = 'success' if task.succeeded else ('failed' if task.status.value == 'completed' else '') %}
-{% set status_display = task.status.value.replace('_', ' ').upper() %}
-{% set success_text = '' %}
-{% if task.status.value == 'completed' %}
-    {% if task.succeeded %}
-        {% set success_text = ' - Success' %}
-    {% elif task.completion_reason %}
-        {% set success_text = ' - ' ~ task.completion_reason.value.replace('_', ' ').title() %}
-    {% else %}
-        {% set success_text = ' - Failed' %}
-    {% endif %}
-{% endif %}
 <div class="page" {% if is_active %}hx-ext="sse" sse-connect="/api/task/{{ task.task_id }}/events/stream?format=html"{% endif %}>
     <div class="card">
         <h1>Task: {{ task.task_id }}</h1>
@@ -46,10 +34,7 @@
         <div class="field">
             <div class="field-label">Status</div>
             <div class="field-value">
-                <span id="task-status" {% if is_active %}sse-swap="task-status" hx-swap="outerHTML"{% endif %}
-                    class="status {{ task.status.value }} {{ success_class }}">
-                    {{ status_display }}{{ success_text }}
-                </span>
+                {% include "components/task_status_badge.html" %}
             </div>
         </div>
 
@@ -65,38 +50,8 @@
     <div sse-swap="task-progress" hx-swap="innerHTML"></div>
     {% endif %}
     <div class="card" {% if is_active %}sse-swap="task-details" hx-swap="innerHTML"{% endif %}>
-        <h2>Task Details</h2>
-
-        <div class="field">
-            <div class="field-label">Model</div>
-            <div id="task-model" class="field-value mono">{{ model_display }}</div>
-        </div>
-
+        {% include "components/task_details_card.html" %}
         <div class="details-grid">
-            <div class="detail-item">
-                <div class="field-label">Queued At</div>
-                <div class="field-value mono">{{ format_timestamp(task.queued_at) }}</div>
-            </div>
-            <div class="detail-item">
-                <div class="field-label">Started At</div>
-                <div id="task-started-at" class="field-value mono">{{ format_timestamp(task.started_at) }}</div>
-            </div>
-            <div class="detail-item">
-                <div class="field-label">Completed At</div>
-                <div id="task-completed-at" class="field-value mono">{{ format_timestamp(task.completed_at) }}</div>
-            </div>
-            <div class="detail-item">
-                <div class="field-label">Queue Time</div>
-                <div id="task-queue-time" class="field-value mono">{{ format_duration(task.queue_duration()) }}</div>
-            </div>
-            <div class="detail-item">
-                <div class="field-label">Execution Time</div>
-                <div id="task-exec-time" class="field-value mono">{{ format_duration(task.execution_duration()) }}</div>
-            </div>
-            <div class="detail-item">
-                <div class="field-label">Total Time</div>
-                <div id="task-total-time" class="field-value mono">{{ format_duration(task.total_duration()) }}</div>
-            </div>
             <div class="detail-item">
                 <div class="field-label">Cost</div>
                 <div class="field-value mono">{{ cost_display }}</div>

@@ -777,22 +777,7 @@ class RequestHandlers:
         if request.headers.get("If-None-Match") == etag:
             return Response(status=304, headers={"ETag": etag})
 
-        repos = [
-            {
-                "repo_id": r.repo_id,
-                "status": r.status.value,
-                "error_message": r.error_message,
-                "error_type": r.error_type,
-                "git_repo_url": r.git_repo_url,
-                "channels": [
-                    {"type": ch.channel_type, "info": ch.info}
-                    for ch in r.channels
-                ],
-                "storage_dir": r.storage_dir,
-                "initialized_at": r.initialized_at,
-            }
-            for r in self._get_repo_states()
-        ]
+        repos = [r.to_api_dict() for r in self._get_repo_states()]
         return Response(
             json.dumps(repos),
             content_type="application/json",
@@ -1393,27 +1378,7 @@ class RequestHandlers:
             return Response(status=304, headers={"ETag": etag})
 
         snapshot = self.tracker.get_snapshot()
-        tasks_data = [
-            {
-                "task_id": t.task_id,
-                "conversation_id": t.conversation_id,
-                "display_title": t.display_title,
-                "repo_id": t.repo_id,
-                "sender": t.sender,
-                "authenticated_sender": t.authenticated_sender,
-                "status": t.status.value,
-                "completion_reason": (
-                    t.completion_reason.value if t.completion_reason else None
-                ),
-                "completion_detail": t.completion_detail,
-                "queued_at": t.queued_at,
-                "started_at": t.started_at,
-                "completed_at": t.completed_at,
-                "model": t.model,
-                "reply_index": t.reply_index,
-            }
-            for t in snapshot.value
-        ]
+        tasks_data = [t.to_api_dict() for t in snapshot.value]
 
         counts = self.tracker.get_counts()
 
@@ -1731,6 +1696,9 @@ class RequestHandlers:
     ) -> JsonDict:
         """Convert TaskState to JSON-serializable dict.
 
+        Delegates core fields to :meth:`TaskState.to_api_dict` and
+        optionally appends conversation metadata.
+
         Args:
             task: Task to convert.
             include_conversation: If True, include conversation metadata.
@@ -1740,29 +1708,7 @@ class RequestHandlers:
         Returns:
             Dict representation of task.
         """
-        result: JsonDict = {
-            "task_id": task.task_id,
-            "conversation_id": task.conversation_id,
-            "display_title": task.display_title,
-            "repo_id": task.repo_id,
-            "status": task.status.value,
-            "completion_reason": (
-                task.completion_reason.value if task.completion_reason else None
-            ),
-            "completion_detail": task.completion_detail,
-            "sender": task.sender,
-            "authenticated_sender": task.authenticated_sender,
-            "queued_at": task.queued_at,
-            "started_at": task.started_at,
-            "completed_at": task.completed_at,
-            "model": task.model,
-            "reply_index": task.reply_index,
-            "queue_duration": task.queue_duration(),
-            "execution_duration": task.execution_duration(),
-            "total_duration": task.total_duration(),
-        }
-        if task.todos is not None:
-            result["todos"] = [t.to_dict() for t in task.todos]
+        result = task.to_api_dict()
 
         if include_conversation:
             if conversation is None:

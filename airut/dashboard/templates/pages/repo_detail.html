@@ -10,8 +10,7 @@
         <div class="field">
             <div class="field-label">Status</div>
             <div class="field-value">
-                <span id="repo-status" sse-swap="repo-status" hx-swap="outerHTML"
-                    class="status-badge {{ repo.status.value }}">{{ repo.status.value.replace('_', ' ').upper() }}</span>
+                {% include "components/repo_status_badge.html" %}
             </div>
         </div>
 
@@ -40,14 +39,7 @@
             <div class="field-value mono">{{ repo.storage_dir }}</div>
         </div>
         <div id="error-section" sse-swap="repo-error" hx-swap="innerHTML">
-            {% if repo.status.value == 'failed' and repo.error_message %}
-            <div class="error-section">
-                <div class="field-label">Error Type</div>
-                <div class="field-value error-type">{{ repo.error_type or 'Unknown' }}</div>
-                <div class="field-label">Error Message</div>
-                <div class="field-value error-message">{{ repo.error_message }}</div>
-            </div>
-            {% endif %}
+            {% include "components/repo_error_section.html" %}
         </div>
     </div>
 </div>

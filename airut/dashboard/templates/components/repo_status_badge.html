@@ -1,0 +1,3 @@
+{# Repo status badge — expects: repo (RepoState) #}
+<span id="repo-status" sse-swap="repo-status" hx-swap="outerHTML"
+    class="status-badge {{ repo.status.value }}">{{ repo.status.value.replace('_', ' ').upper() }}</span>
