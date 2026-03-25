@@ -15,6 +15,8 @@ GatewayService with live dashboard, verifying:
 - Staleness detection after external config changes
 - Full edit-save-reload cycle: edit via API, save, observe reload
 - EnvVar round-trip through save
+- Add repo via editor, save, gateway brings it online and processes task
+- Remove repo via editor, save, gateway takes it offline
 
 Fast-path tests (field types, CSRF, diff rendering, add/remove,
 dirty count) are covered by unit tests in tests/dashboard/.
@@ -22,6 +24,7 @@ dirty count) are covered by unit tests in tests/dashboard/.
 
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -32,14 +35,17 @@ from werkzeug.test import Client, TestResponse
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from airut.config.source import make_env_loader
+from airut.gateway.config import GlobalConfig, ServerConfig
 from airut.gateway.service import GatewayService
 
-from .environment import IntegrationEnvironment
+from .conftest import MOCK_CONTAINER_COMMAND, get_message_text
+from .environment import IntegrationEnvironment, create_test_repo
 from .test_config_reload import (
     ConfigFile,
     _wait_for_service_ready,
     running_service,
     wait_for_reload,
+    wait_for_repo_status,
 )
 
 
@@ -89,10 +95,96 @@ def _post_form(
     return client.post(url, **kwargs)
 
 
+def _standard_mock() -> str:
+    """Return standard mock code that completes successfully."""
+    return """
+events = [
+    generate_system_event(session_id),
+    generate_assistant_event("Task completed"),
+    generate_result_event(session_id, "Done"),
+]
+"""
+
+
 def _get_client(service: GatewayService) -> Client:
     """Get a werkzeug test client from a service's dashboard."""
     assert service.dashboard is not None
     return Client(service.dashboard._wsgi_app)
+
+
+def _add_valid_repo(
+    client: Client,
+    service: GatewayService,
+    env: IntegrationEnvironment,
+    repo_id: str,
+    git_repo_path: Path,
+) -> None:
+    """Add a repo via the editor API and fill in all required fields.
+
+    Performs POST /api/config/add then patches every field needed for
+    a valid config (git URL, email channel, authorized senders, IMAP
+    polling).  Does NOT save — caller must POST /api/config/save.
+    """
+    r = _post_form(
+        client,
+        "/api/config/add",
+        {"path": "repos", "key": repo_id},
+    )
+    assert r.status_code == 200
+
+    _patch_field(
+        client, f"repos.{repo_id}.git.repo_url", "literal", str(git_repo_path)
+    )
+    _patch_field(
+        client, f"repos.{repo_id}.email.imap_server", "literal", "127.0.0.1"
+    )
+    _patch_field(
+        client,
+        f"repos.{repo_id}.email.imap_port",
+        "literal",
+        str(env.imap_port),
+    )
+    _patch_field(
+        client, f"repos.{repo_id}.email.smtp_server", "literal", "127.0.0.1"
+    )
+    _patch_field(
+        client,
+        f"repos.{repo_id}.email.smtp_port",
+        "literal",
+        str(env.smtp_port),
+    )
+    _patch_field(
+        client,
+        f"repos.{repo_id}.email.smtp_require_auth",
+        "literal",
+        "false",
+    )
+    _patch_field(client, f"repos.{repo_id}.email.username", "literal", repo_id)
+    _patch_field(client, f"repos.{repo_id}.email.password", "literal", "test")
+    _patch_field(
+        client,
+        f"repos.{repo_id}.email.from",
+        "literal",
+        f"{repo_id} <{repo_id}@test.local>",
+    )
+    _patch_field(
+        client,
+        f"repos.{repo_id}.email.trusted_authserv_id",
+        "literal",
+        "test.local",
+    )
+
+    # Set fields that require direct buffer manipulation
+    dashboard = service.dashboard
+    assert dashboard is not None
+    buf = dashboard._config_handlers._buffer
+    assert buf is not None
+    buf.raw["repos"][repo_id]["email"]["authorized_senders"] = [
+        "user@test.local"
+    ]
+    buf.raw["repos"][repo_id]["email"].setdefault("imap", {})
+    buf.raw["repos"][repo_id]["email"]["imap"]["use_idle"] = False
+    buf.raw["repos"][repo_id]["email"]["imap"]["poll_interval"] = 0.1
 
 
 # ------------------------------------------------------------------ #
@@ -679,3 +771,358 @@ class TestEnvVarRoundTrip:
 
             assert isinstance(loaded["dashboard"]["host"], EnvVar)
             assert loaded["dashboard"]["host"].var_name == "DASHBOARD_HOST"
+
+
+class TestEditorAddRepoLifecycle:
+    """Add repo via config editor → save → gateway brings it online."""
+
+    def test_add_repo_save_brings_repo_online(
+        self,
+        integration_env: IntegrationEnvironment,
+        create_email,
+    ) -> None:
+        """Adding a repo through the editor and saving makes it live.
+
+        Full flow: add repo via POST /api/config/add, edit fields via
+        PATCH /api/config/field, save via POST /api/config/save, wait
+        for config reload, verify repo is live and can process a task.
+        """
+        cf = _make_config_file(
+            integration_env,
+            integration_env.repo_root / "airut.yaml",
+        )
+
+        # Pre-register inbox for the new repo
+        integration_env.email_server.add_inbox("project-b")
+
+        # Create a second git repo for the new config entry
+        repo_b_path = create_test_repo(
+            integration_env.repo_root / "master_repo_b"
+        )
+
+        with running_service(cf, integration_env) as service:
+            client = _get_client(service)
+
+            # Verify initial state: only 'test' repo is live
+            assert "test" in service.repo_handlers
+            assert "project-b" not in service.repo_handlers
+
+            # --- Config editor flow: add repo ---
+            client.get("/config")
+            _add_valid_repo(
+                client, service, integration_env, "project-b", repo_b_path
+            )
+
+            # --- Save ---
+            gen_before = service._config_generation
+            r = _post_form(client, "/api/config/save")
+            assert r.status_code == 200, (
+                f"Save failed: {r.get_data(as_text=True)[:300]}"
+            )
+
+            # Wait for config reload
+            wait_for_reload(service, gen_before)
+
+            # Verify new repo is live
+            wait_for_repo_status(service, "project-b", "live")
+            assert "project-b" in service.repo_handlers
+
+            # --- Send a message to the new repo and verify processing ---
+            mock_body = _standard_mock()
+            msg = create_email(subject="Project B task", body=mock_body)
+            integration_env.email_server.inject_message_to("project-b", msg)
+
+            ack = integration_env.email_server.wait_for_sent(
+                lambda m: (
+                    "project b task" in m.get("Subject", "").lower()
+                    and "started working" in get_message_text(m).lower()
+                ),
+                timeout=15.0,
+            )
+            assert ack is not None, (
+                "New repo did not process the message — "
+                "repo was not brought online after save"
+            )
+
+    def test_add_repo_skeleton_save_rejects_unresolved_env(
+        self,
+        integration_env: IntegrationEnvironment,
+    ) -> None:
+        """Saving with skeleton !env values fails validation (422).
+
+        The repo skeleton includes ``!env EMAIL_PASSWORD``.  If the
+        env var is not set, validation must reject the save to prevent
+        a broken config from being written to disk.
+        """
+        cf = _make_config_file(
+            integration_env,
+            integration_env.repo_root / "airut.yaml",
+        )
+
+        with running_service(cf, integration_env) as service:
+            client = _get_client(service)
+            client.get("/config")
+
+            r = _post_form(
+                client,
+                "/api/config/add",
+                {"path": "repos", "key": "project-b"},
+            )
+            assert r.status_code == 200
+
+            # Only set git URL, leave email password as !env
+            repo_b_path = create_test_repo(
+                integration_env.repo_root / "master_repo_b"
+            )
+            _patch_field(
+                client,
+                "repos.project-b.git.repo_url",
+                "literal",
+                str(repo_b_path),
+            )
+
+            r = _post_form(client, "/api/config/save")
+            assert r.status_code == 422, (
+                "Save should fail with unresolved !env vars"
+            )
+
+    def test_add_repo_appears_in_config_after_save(
+        self,
+        integration_env: IntegrationEnvironment,
+    ) -> None:
+        """After add+save with valid fields, repo appears in config."""
+        cf = _make_config_file(
+            integration_env,
+            integration_env.repo_root / "airut.yaml",
+        )
+
+        integration_env.email_server.add_inbox("project-b")
+
+        repo_b_path = create_test_repo(
+            integration_env.repo_root / "master_repo_b"
+        )
+
+        with running_service(cf, integration_env) as service:
+            client = _get_client(service)
+            client.get("/config")
+
+            assert "project-b" not in service.config.repos
+
+            _add_valid_repo(
+                client, service, integration_env, "project-b", repo_b_path
+            )
+
+            gen_before = service._config_generation
+            r = _post_form(client, "/api/config/save")
+            assert r.status_code == 200, (
+                f"Save failed: {r.get_data(as_text=True)[:300]}"
+            )
+            wait_for_reload(service, gen_before)
+
+            assert "project-b" in service.config.repos
+            assert "project-b" in service.repo_handlers
+
+    def test_add_repo_fails_if_listener_start_fails(
+        self,
+        integration_env: IntegrationEnvironment,
+    ) -> None:
+        """Repo shows as FAILED when listener startup fails on reload.
+
+        If the IMAP connection fails during _add_repo, the repo ends
+        up in service.config but NOT in repo_handlers.  It should
+        still appear in the repos store with FAILED status so the
+        dashboard shows the error.
+        """
+        cf = _make_config_file(
+            integration_env,
+            integration_env.repo_root / "airut.yaml",
+        )
+
+        # Deliberately do NOT register inbox — IMAP LOGIN will fail
+        repo_b_path = create_test_repo(
+            integration_env.repo_root / "master_repo_b"
+        )
+
+        with running_service(cf, integration_env) as service:
+            client = _get_client(service)
+            client.get("/config")
+
+            _add_valid_repo(
+                client, service, integration_env, "project-b", repo_b_path
+            )
+
+            gen_before = service._config_generation
+            r = _post_form(client, "/api/config/save")
+            assert r.status_code == 200
+            wait_for_reload(service, gen_before)
+
+            # Config has the repo, but handlers does not (IMAP failed)
+            assert "project-b" in service.config.repos
+            assert "project-b" not in service.repo_handlers
+
+            # Repo should still appear in repos store with FAILED status
+            wait_for_repo_status(service, "project-b", "failed")
+
+    def test_add_repo_reconciled_on_subsequent_reload(
+        self,
+        integration_env: IntegrationEnvironment,
+    ) -> None:
+        """Failed add is retried when a subsequent config change reloads.
+
+        If _add_repo fails on the initial reload, the reconciliation
+        in _on_config_changed retries the add when the next reload
+        sees the repo in config but not in handlers.
+        """
+        cf = _make_config_file(
+            integration_env,
+            integration_env.repo_root / "airut.yaml",
+        )
+
+        repo_b_path = create_test_repo(
+            integration_env.repo_root / "master_repo_b"
+        )
+
+        with running_service(cf, integration_env) as service:
+            client = _get_client(service)
+            client.get("/config")
+
+            # First save: IMAP will fail (no inbox registered)
+            _add_valid_repo(
+                client, service, integration_env, "project-b", repo_b_path
+            )
+
+            gen_before = service._config_generation
+            r = _post_form(client, "/api/config/save")
+            assert r.status_code == 200
+            wait_for_reload(service, gen_before)
+
+            assert "project-b" in service.config.repos
+            assert "project-b" not in service.repo_handlers
+
+            # Now register the inbox so IMAP login will succeed
+            integration_env.email_server.add_inbox("project-b")
+
+            # Re-sync cf._data from disk — the editor save wrote
+            # project-b directly to the YAML, bypassing our ConfigFile.
+            cf.reload()
+
+            # Trigger a config reload (touch an unrelated field)
+            gen_before = service._config_generation
+            cf.set("execution.shutdown_timeout", 42)
+            wait_for_reload(service, gen_before)
+
+            # Reconciliation should have retried _add_repo
+            wait_for_repo_status(service, "project-b", "live", timeout=5.0)
+            assert "project-b" in service.repo_handlers
+
+    def test_add_repo_no_auto_retry_without_config_change(
+        self,
+        integration_env: IntegrationEnvironment,
+    ) -> None:
+        """Failed _add_repo is not retried without a config change.
+
+        After _add_repo fails, the repo remains missing from handlers.
+        Without a subsequent config file change, the watcher never
+        triggers and the repo is stuck.  This demonstrates that the
+        add-repo-via-editor flow has no self-healing path.
+        """
+        cf = _make_config_file(
+            integration_env,
+            integration_env.repo_root / "airut.yaml",
+        )
+
+        repo_b_path = create_test_repo(
+            integration_env.repo_root / "master_repo_b"
+        )
+
+        with running_service(cf, integration_env) as service:
+            client = _get_client(service)
+            client.get("/config")
+
+            _add_valid_repo(
+                client, service, integration_env, "project-b", repo_b_path
+            )
+
+            gen_before = service._config_generation
+            r = _post_form(client, "/api/config/save")
+            assert r.status_code == 200
+            wait_for_reload(service, gen_before)
+
+            # Repo failed to add (no IMAP inbox registered)
+            assert "project-b" in service.config.repos
+            assert "project-b" not in service.repo_handlers
+
+            # Register inbox — but no config change triggers retry
+            integration_env.email_server.add_inbox("project-b")
+
+            # Wait a bit — no reload should fire
+            time.sleep(0.5)
+            assert "project-b" not in service.repo_handlers, (
+                "Repo appeared in handlers without a config change"
+            )
+
+
+class TestEditorRemoveRepoLifecycle:
+    """Remove repo via config editor → save → gateway takes it offline."""
+
+    def test_remove_repo_save_takes_repo_offline(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Removing a repo through the editor and saving drops it.
+
+        Starts with two repos, removes one via the editor API, saves,
+        and verifies the removed repo is no longer in repo_handlers.
+        """
+        env = IntegrationEnvironment.create_multi_repo(
+            tmp_path,
+            repo_ids=["alpha", "beta"],
+            container_command=MOCK_CONTAINER_COMMAND,
+        )
+        try:
+            # Multi-repo env has dashboard disabled; we need it enabled
+            env.config = ServerConfig(
+                global_config=GlobalConfig(
+                    max_concurrent_executions=2,
+                    shutdown_timeout_seconds=5,
+                    dashboard_enabled=True,
+                    dashboard_host="127.0.0.1",
+                    dashboard_port=0,
+                    container_command=MOCK_CONTAINER_COMMAND,
+                ),
+                repos=env.config.repos,
+            )
+
+            cf = ConfigFile.from_env(env, tmp_path / "airut.yaml")
+
+            with running_service(cf, env) as service:
+                # Both repos should be live
+                wait_for_repo_status(service, "alpha", "live")
+                wait_for_repo_status(service, "beta", "live")
+                assert "alpha" in service.repo_handlers
+                assert "beta" in service.repo_handlers
+
+                client = _get_client(service)
+                client.get("/config")
+
+                # Remove beta via the editor
+                r = _post_form(
+                    client,
+                    "/api/config/remove",
+                    {"path": "repos", "key": "beta"},
+                )
+                assert r.status_code == 200
+
+                # Save
+                gen_before = service._config_generation
+                r = _post_form(client, "/api/config/save")
+                assert r.status_code == 200
+                wait_for_reload(service, gen_before)
+
+                # Beta should be gone
+                assert "beta" not in service.repo_handlers
+                assert "beta" not in service.config.repos
+                # Alpha should still be live
+                assert "alpha" in service.repo_handlers
+        finally:
+            env.cleanup()

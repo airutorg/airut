@@ -669,6 +669,78 @@ class TestReloadAddsNewRepo:
         # After second reload: repo should now be in handlers
         assert "new-repo" in svc.repo_handlers
 
+    def test_failed_add_not_retried_when_other_changes(
+        self, tmp_path: Path
+    ) -> None:
+        """Bug: reconciliation skipped when the changes branch runs.
+
+        If _add_repo fails and the next reload has OTHER changes (e.g.
+        global config changed), _on_config_changed takes the changes
+        branch which does not call _reconcile_repo_handlers.  The
+        failed repo is never retried.
+        """
+        svc = _make_service(tmp_path)
+        source = MagicMock()
+        svc._config_source = source
+
+        new_repo = _make_email_config(repo_id="new-repo")
+        new_config = dataclasses.replace(
+            svc.config,
+            repos={**svc.config.repos, "new-repo": new_repo},
+        )
+        from airut.config.snapshot import ConfigSnapshot
+
+        new_snapshot = ConfigSnapshot(
+            new_config, frozenset({"global_config", "repos"})
+        )
+
+        # First reload: new-repo added, but _add_repo fails
+        with (
+            patch.object(
+                ServerConfig,
+                "from_source",
+                return_value=new_snapshot,
+            ),
+            patch("airut.gateway.service.gateway.reset_dotenv_state"),
+            patch(
+                "airut.gateway.service.repo_handler.create_adapters",
+                side_effect=RuntimeError("listener fail"),
+            ),
+            patch("airut.gateway.service.repo_handler.ConversationManager"),
+        ):
+            svc._on_config_changed()
+
+        assert "new-repo" not in svc.repo_handlers
+
+        # Second reload: DIFFERENT config (global changed, repo same)
+        changed_global = dataclasses.replace(
+            new_config.global_config, shutdown_timeout_seconds=999
+        )
+        changed_config = dataclasses.replace(
+            new_config, global_config=changed_global
+        )
+        changed_snapshot = ConfigSnapshot(
+            changed_config, frozenset({"global_config", "repos"})
+        )
+
+        with (
+            patch.object(
+                ServerConfig,
+                "from_source",
+                return_value=changed_snapshot,
+            ),
+            patch("airut.gateway.service.gateway.reset_dotenv_state"),
+            patch(
+                "airut.gateway.service.repo_handler.create_adapters"
+            ) as mock_create,
+            patch("airut.gateway.service.repo_handler.ConversationManager"),
+        ):
+            mock_create.return_value = {"email": MagicMock()}
+            svc._on_config_changed()
+
+        # After second reload: reconciliation should have retried add
+        assert "new-repo" in svc.repo_handlers
+
 
 class TestConfigWatcherIntegration:
     """Tests for config watcher start/stop lifecycle."""
