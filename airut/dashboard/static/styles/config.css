@@ -55,15 +55,15 @@
   letter-spacing: 0.05em;
   font-weight: 500;
 }
-.cfg-scope.server {
+.cfg-scope.cfg-server {
   background: var(--status-info-bg);
   color: var(--status-info);
 }
-.cfg-scope.repo {
+.cfg-scope.cfg-repo {
   background: var(--status-success-bg);
   color: var(--status-success);
 }
-.cfg-scope.task {
+.cfg-scope.cfg-task {
   background: var(--status-warning-bg);
   color: var(--status-warning);
 }
