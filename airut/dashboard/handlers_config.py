@@ -364,6 +364,9 @@ class ConfigEditorHandlers:
             return 0
 
         buffer = self._buffer
+        if not buffer.dirty:
+            return 0
+
         snapshot = self._get_snapshot()
         if snapshot is None or snapshot.raw is None:
             return 0
