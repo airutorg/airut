@@ -147,6 +147,19 @@ class TestSchemaForEditor:
         schema = schema_for_editor(Cfg, path_prefix="repos.test")
         assert schema[0].path == "repos.test.timeout"
 
+    def test_exclude_fields(self) -> None:
+        """schema_for_editor with exclude omits matching field names."""
+
+        @dataclass(frozen=True)
+        class Cfg:
+            name: str = field(metadata=meta("Name", Scope.SERVER))
+            internal_id: str = field(metadata=meta("ID", Scope.SERVER))
+
+        schema = schema_for_editor(Cfg, exclude={"internal_id"})
+        names = {s.name for s in schema}
+        assert "name" in names
+        assert "internal_id" not in names
+
 
 class TestSchemaForEditorTypeTags:
     """Tests for _type_tag_for covering all type tag branches."""
@@ -293,6 +306,38 @@ class TestSchemaForEditorRealConfigs:
         # All task scope
         for s in schema:
             assert s.scope == "task"
+
+    def test_repo_server_config(self) -> None:
+        from airut.config.source import YAML_REPO_STRUCTURE
+        from airut.gateway.config import RepoServerConfig
+
+        schema = schema_for_editor(
+            RepoServerConfig,
+            path_prefix="repos.my-project",
+            structure=YAML_REPO_STRUCTURE,
+            exclude={"repo_id"},
+        )
+        names = {s.name for s in schema}
+        assert "repo_id" not in names
+        assert "git_repo_url" in names
+        assert "model" in names
+        assert "effort" in names
+        assert "network_sandbox_enabled" in names
+        assert "resource_limits" in names
+
+        # Check path mapping with prefix
+        by_name = {s.name: s for s in schema}
+        assert by_name["git_repo_url"].path == "repos.my-project.git.repo_url"
+        assert by_name["model"].path == "repos.my-project.model"
+        assert (
+            by_name["network_sandbox_enabled"].path
+            == "repos.my-project.network.sandbox_enabled"
+        )
+
+        # Resource limits is nested
+        rl = by_name["resource_limits"]
+        assert rl.type_tag == "nested"
+        assert rl.nested_fields is not None
 
 
 # ── InMemoryConfigSource tests ───────────────────────────────────────

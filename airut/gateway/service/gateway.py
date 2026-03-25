@@ -676,6 +676,10 @@ class GatewayService:
 
             if not global_changed and not repo_changes:
                 logger.debug("Config reload: no effective changes")
+                # Still update snapshot + generation so the editor sees
+                # raw-dict changes (e.g. explicitly setting a default value).
+                self._config_snapshot = new_snapshot
+                self._config_generation += 1
                 self._config_file_sha256 = self._get_source_file_sha256()
                 self._last_reload_error = None
                 self._notify_reload()

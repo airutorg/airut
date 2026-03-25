@@ -719,19 +719,19 @@ class TestDiff:
         html = response.get_data(as_text=True)
         assert "No changes" in html
 
-    def test_diff_with_no_global_changes(
+    def test_diff_detects_removed_repo(
         self, harness: ConfigEditorHarness
     ) -> None:
-        """Diff with only non-global changes shows no changes."""
+        """Diff detects removed repos."""
         harness.client.get("/config")
         buf = harness.server._config_handlers._buffer
         assert buf is not None
-        # Mutate repos (not global fields) — diff only covers global schema
         buf._raw["repos"] = {}
         response = harness.client.get("/api/config/diff")
         assert response.status_code == 200
         html = response.get_data(as_text=True)
-        assert "No changes" in html
+        assert "test-repo" in html
+        assert "(removed)" in html
 
 
 class TestSave:
@@ -743,7 +743,7 @@ class TestSave:
 
         response = harness.client.post(
             "/api/config/save",
-            headers=XHR,
+            headers={**XHR, "Referer": "http://localhost/config"},
         )
         assert response.status_code == 200
         assert response.headers.get("HX-Redirect") == "/config"
@@ -756,6 +756,22 @@ class TestSave:
 
         # File should exist
         assert harness.tmp_path.joinpath("airut.yaml").exists()
+
+    def test_save_from_repo_page_redirects_to_repo(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Save from a repo page redirects back to the repo page."""
+        harness.client.get("/config")
+
+        response = harness.client.post(
+            "/api/config/save",
+            headers={
+                **XHR,
+                "Referer": "http://localhost/config/repos/test-repo",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers.get("HX-Redirect") == "/config/repos/test-repo"
 
     def test_save_invalid_config(self, harness: ConfigEditorHarness) -> None:
         harness.client.get("/config")
@@ -823,12 +839,12 @@ class TestHandlerErrorPaths:
     def test_field_patch_unknown_path(
         self, harness: ConfigEditorHarness
     ) -> None:
-        """PATCH on a path not in schema returns plain 200."""
+        """PATCH on a path not in any schema returns plain 200."""
         harness.client.get("/config")
         response = harness.client.patch(
             "/api/config/field",
             data={
-                "path": "repos.test-repo.git.repo_url",
+                "path": "totally.nonexistent.path",
                 "source": "literal",
                 "value": "x",
             },
@@ -913,6 +929,14 @@ class TestHandlerErrorPaths:
         response = harness.client.get("/api/config/diff")
         assert response.status_code == 400
 
+    def test_diff_snapshot_raw_none(self, harness: ConfigEditorHarness) -> None:
+        """Diff when snapshot.raw is None returns 400."""
+        harness.client.get("/config")
+        snap = harness._snapshot
+        snap._raw = None
+        response = harness.client.get("/api/config/diff")
+        assert response.status_code == 400
+
     def test_save_no_buffer(self, tmp_path: Path) -> None:
         h = ConfigEditorHarness.no_snapshot(tmp_path)
         response = h.client.post(
@@ -963,6 +987,23 @@ class TestRepoSummariesDirect:
         assert result == []
 
 
+class TestCommonRepoIdsDirect:
+    def test_no_buffer_returns_empty(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        assert harness.server._config_handlers._buffer is None
+        result = harness.server._config_handlers._get_common_repo_ids()
+        assert result == set()
+
+    def test_no_snapshot_returns_empty(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        harness.server._config_handlers._get_snapshot = lambda: None
+        result = harness.server._config_handlers._get_common_repo_ids()
+        assert result == set()
+
+
 class TestTemplateValueSource:
     """Ensure template value_source handles VarRef."""
 
@@ -994,6 +1035,710 @@ class TestRepoSummaries:
         assert "test-repo" in html
 
 
+class TestRepoPageExcludesRepoId:
+    """Bug: repo_id is an internal property and must not appear in the UI."""
+
+    def test_repo_page_does_not_show_repo_id_field(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """The per-repo page must not display repos.X.repo_id as a field."""
+        harness.client.get("/config")
+        response = harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "repos.test-repo.repo_id" not in html
+
+    def test_repo_schema_excludes_repo_id(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """_get_repo_schema must not include the repo_id field."""
+        harness.client.get("/config")
+        schema = harness.server._config_handlers._get_repo_schema("test-repo")
+        names = {s.name for s in schema}
+        assert "repo_id" not in names
+
+
+class TestEnvVarDirtyCount:
+    """Bug: configs with EnvVar values produce false dirty counts.
+
+    When the edit buffer deep-copies the raw config, EnvVar instances
+    are duplicated.  Without __eq__, dict comparisons fail and every
+    field containing EnvVar appears dirty even with no actual changes.
+    """
+
+    def test_no_false_dirty_with_envvar_secrets(self, tmp_path: Path) -> None:
+        """Dirty count must be 0 when no changes made, even with EnvVar."""
+        raw = _make_sample_raw()
+        raw["repos"]["test-repo"]["secrets"] = {
+            "API_KEY": EnvVar("MY_API_KEY"),
+        }
+        h = ConfigEditorHarness(tmp_path, raw=raw)
+        h.client.get("/config")
+        count = h.server._config_handlers._compute_dirty_count()
+        assert count == 0
+
+    def test_no_false_diff_with_envvar_secrets(self, tmp_path: Path) -> None:
+        """Diff must show 'No changes' when raw dicts contain EnvVar values."""
+        raw = _make_sample_raw()
+        raw["repos"]["test-repo"]["secrets"] = {
+            "API_KEY": EnvVar("MY_API_KEY"),
+        }
+        h = ConfigEditorHarness(tmp_path, raw=raw)
+        h.client.get("/config")
+        response = h.client.get("/api/config/diff")
+        html = response.get_data(as_text=True)
+        assert "No changes" in html
+
+    def test_envvar_field_reverts_to_zero_dirty(self, tmp_path: Path) -> None:
+        """Revert gives dirty count 0 even with EnvVar config."""
+        raw = _make_sample_raw()
+        raw["repos"]["test-repo"]["secrets"] = {
+            "KEY": EnvVar("SECRET"),
+        }
+        h = ConfigEditorHarness(tmp_path, raw=raw)
+        h.client.get("/config")
+
+        # Change max_concurrent (original value is 3)
+        h.client.patch(
+            "/api/config/field",
+            data={
+                "path": "execution.max_concurrent",
+                "source": "literal",
+                "value": "5",
+            },
+            headers=XHR,
+        )
+        # Revert max_concurrent
+        response = h.client.patch(
+            "/api/config/field",
+            data={
+                "path": "execution.max_concurrent",
+                "source": "literal",
+                "value": "3",
+            },
+            headers=XHR,
+        )
+        assert response.headers["X-Dirty-Count"] == "0"
+
+
+class TestRepoFieldPersistence:
+    """Bug: repo field edits vanish on page reload.
+
+    Changing a repo field (e.g. model from Default to Literal) and then
+    navigating back to the repo page must show the edited value.
+    """
+
+    def test_repo_field_change_persists_on_reload(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """PATCH a repo field, then GET the repo page — change visible."""
+        harness.client.get("/config")
+
+        # Change model from default to literal "sonnet"
+        r = harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.model",
+                "source": "literal",
+                "value": "sonnet",
+            },
+            headers=XHR,
+        )
+        assert r.status_code == 200
+
+        # Navigate to repo page — the change must be visible
+        response = harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "sonnet" in html
+
+    def test_repo_field_change_persists_after_global_page(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """PATCH repo field, visit /config, return to repo page."""
+        harness.client.get("/config")
+
+        harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.model",
+                "source": "literal",
+                "value": "haiku",
+            },
+            headers=XHR,
+        )
+
+        # Visit global page, then return to repo page
+        harness.client.get("/config")
+        response = harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "haiku" in html
+
+    def test_default_to_literal_persists(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Switch from Default to Literal with same default value."""
+        harness.client.get("/config")
+
+        # model default is "opus"; switch to literal "opus"
+        harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.model",
+                "source": "literal",
+                "value": "opus",
+            },
+            headers=XHR,
+        )
+
+        response = harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        # The Literal button should be active, not Default
+        # Check that the field shows literal source active
+        assert 'class="active"' in html or "active" in html
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        assert buf.get_value("repos.test-repo.model") == "opus"
+
+
+class TestUnsetAfterSaveReload:
+    """Bug: unset after save+reload shows dirty count 0.
+
+    Sequence:
+    1. model NOT set in YAML
+    2. Set model to literal "opus" → dirty=1
+    3. Save → YAML now has model: opus
+    4. Config reloads (gen bumps, snapshot has model: opus)
+    5. Page reload (buffer recreated from new snapshot)
+    6. Click "Default" to unset model → SHOULD be dirty=1
+    7. BUG: dirty count is 0
+    """
+
+    def test_unset_after_save_and_reload_shows_dirty(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """After saving model=opus, unsetting it must show dirty=1."""
+        # model is NOT set in raw (make_sample_raw doesn't include it)
+        harness.client.get("/config")
+
+        # Set model to literal "opus"
+        r = harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.model",
+                "source": "literal",
+                "value": "opus",
+            },
+            headers=XHR,
+        )
+        assert r.status_code == 200
+        assert r.headers["X-Dirty-Count"] == "1"
+
+        # Save
+        r = harness.client.post(
+            "/api/config/save",
+            headers={
+                **XHR,
+                "Referer": "http://localhost/config/repos/test-repo",
+            },
+        )
+        assert r.status_code == 200
+
+        # Simulate config reload: load saved YAML, create snapshot, bump gen
+        import yaml
+
+        from airut.config.source import make_env_loader
+
+        with open(harness._config_path) as f:
+            saved_raw = yaml.load(f, Loader=make_env_loader())
+        harness._snapshot = _make_snapshot(saved_raw)
+        harness.bump_generation()
+
+        # Page reload (follows HX-Redirect)
+        harness.client.get("/config/repos/test-repo")
+
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        assert buf.get_value("repos.test-repo.model") == "opus"
+
+        # Click "Default" to unset model
+        r = harness.client.patch(
+            "/api/config/field",
+            data={"path": "repos.test-repo.model", "source": "unset"},
+            headers=XHR,
+        )
+        assert r.status_code == 200
+
+        # Dirty count must be 1: buffer has MISSING, live has "opus"
+        assert r.headers["X-Dirty-Count"] == "1", (
+            f"Expected dirty count 1 but got {r.headers['X-Dirty-Count']}"
+        )
+
+    def test_unset_after_save_gen_bump_before_page_load(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Gen bumps before page load — buffer replaced, then unset."""
+        harness.client.get("/config")
+
+        harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.model",
+                "source": "literal",
+                "value": "opus",
+            },
+            headers=XHR,
+        )
+
+        harness.client.post(
+            "/api/config/save",
+            headers={
+                **XHR,
+                "Referer": "http://localhost/config/repos/test-repo",
+            },
+        )
+
+        # File watcher fires BEFORE page load
+        import yaml
+
+        from airut.config.source import make_env_loader
+
+        with open(harness._config_path) as f:
+            saved_raw = yaml.load(f, Loader=make_env_loader())
+        harness._snapshot = _make_snapshot(saved_raw)
+        harness.bump_generation()
+
+        harness.client.get("/config/repos/test-repo")
+
+        r = harness.client.patch(
+            "/api/config/field",
+            data={"path": "repos.test-repo.model", "source": "unset"},
+            headers=XHR,
+        )
+        assert r.headers["X-Dirty-Count"] == "1"
+
+    def test_unset_after_save_gen_bump_after_page_load(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Gen bumps after page load but before PATCH.
+
+        Buffer replaced during PATCH, then unset applied to fresh buffer.
+        """
+        harness.client.get("/config")
+
+        harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.model",
+                "source": "literal",
+                "value": "opus",
+            },
+            headers=XHR,
+        )
+
+        harness.client.post(
+            "/api/config/save",
+            headers={
+                **XHR,
+                "Referer": "http://localhost/config/repos/test-repo",
+            },
+        )
+
+        # Page load BEFORE file watcher
+        harness.client.get("/config/repos/test-repo")
+
+        # File watcher fires AFTER page load but BEFORE PATCH
+        import yaml
+
+        from airut.config.source import make_env_loader
+
+        with open(harness._config_path) as f:
+            saved_raw = yaml.load(f, Loader=make_env_loader())
+        harness._snapshot = _make_snapshot(saved_raw)
+        harness.bump_generation()
+
+        r = harness.client.patch(
+            "/api/config/field",
+            data={"path": "repos.test-repo.model", "source": "unset"},
+            headers=XHR,
+        )
+        assert r.headers["X-Dirty-Count"] == "1"
+
+    def test_unset_after_save_default_value_reload(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Reload with default-value-only change updates snapshot/gen.
+
+        Before the fix, ``_on_config_changed()`` early-returned without
+        updating snapshot/generation when the parsed config was identical
+        (e.g. explicitly setting model to "opus" which is the default).
+        The fix ensures snapshot and generation always update, so the
+        editor sees the raw-dict change.
+        """
+        harness.client.get("/config")
+
+        harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.model",
+                "source": "literal",
+                "value": "opus",
+            },
+            headers=XHR,
+        )
+
+        harness.client.post(
+            "/api/config/save",
+            headers={
+                **XHR,
+                "Referer": "http://localhost/config/repos/test-repo",
+            },
+        )
+
+        # File watcher fires — with the fix, snapshot/gen are updated
+        # even though the parsed config is semantically identical.
+        import yaml
+
+        from airut.config.source import make_env_loader
+
+        with open(harness._config_path) as f:
+            saved_raw = yaml.load(f, Loader=make_env_loader())
+        harness._snapshot = _make_snapshot(saved_raw)
+        harness.bump_generation()
+
+        harness.client.get("/config/repos/test-repo")
+
+        r = harness.client.patch(
+            "/api/config/field",
+            data={"path": "repos.test-repo.model", "source": "unset"},
+            headers=XHR,
+        )
+        assert r.headers["X-Dirty-Count"] == "1", (
+            f"Expected dirty count 1 but got {r.headers['X-Dirty-Count']}"
+        )
+
+
+class TestRepoPage:
+    """Tests for the per-repo settings page (Phase 2)."""
+
+    def test_repo_page_returns_200(self, harness: ConfigEditorHarness) -> None:
+        harness.client.get("/config")
+        response = harness.client.get("/config/repos/test-repo")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "test-repo" in html
+
+    def test_repo_page_shows_fields(self, harness: ConfigEditorHarness) -> None:
+        harness.client.get("/config")
+        response = harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "Git" in html
+        assert "Model" in html
+        assert "Network" in html
+        assert "Resource Limits" in html
+
+    def test_repo_page_shows_field_paths(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Field labels display full YAML paths including repo prefix."""
+        harness.client.get("/config")
+        response = harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "repos.test-repo.git.repo_url" in html
+        assert "repos.test-repo.model" in html
+
+    def test_repo_page_not_found(self, harness: ConfigEditorHarness) -> None:
+        harness.client.get("/config")
+        response = harness.client.get("/config/repos/nonexistent")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "not found" in html
+
+    def test_repo_page_no_snapshot(self, tmp_path: Path) -> None:
+        h = ConfigEditorHarness.no_snapshot(tmp_path)
+        response = h.client.get("/config/repos/test-repo")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "No config available" in html
+
+    def test_repo_page_breadcrumbs(self, harness: ConfigEditorHarness) -> None:
+        harness.client.get("/config")
+        response = harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert 'href="/config"' in html
+        assert "Configuration" in html
+
+    def test_repo_page_save_bar(self, harness: ConfigEditorHarness) -> None:
+        harness.client.get("/config")
+        response = harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert 'id="review-save-btn"' in html
+        assert 'id="discard-btn"' in html
+
+    def test_repo_page_remove_button(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        response = harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "Remove" in html
+        assert "remove-repo-btn" in html
+
+    def test_repo_page_channel_placeholder(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Channel editing shows future-update placeholder."""
+        harness.client.get("/config")
+        response = harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "future update" in html
+
+
+class TestRepoFieldPatch:
+    """Tests for patching per-repo fields."""
+
+    def test_patch_repo_field_literal(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        response = harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.model",
+                "source": "literal",
+                "value": "sonnet",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        assert buf.raw["repos"]["test-repo"]["model"] == "sonnet"
+
+    def test_patch_repo_field_returns_html(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """PATCH on a repo field returns HTML fragment (not plain OK)."""
+        harness.client.get("/config")
+        response = harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.model",
+                "source": "literal",
+                "value": "sonnet",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "cfg-field" in html
+
+    def test_patch_repo_field_env(self, harness: ConfigEditorHarness) -> None:
+        harness.client.get("/config")
+        response = harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.git.repo_url",
+                "source": "env",
+                "value": "GIT_URL",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        assert isinstance(
+            buf.raw["repos"]["test-repo"]["git"]["repo_url"], EnvVar
+        )
+
+    def test_patch_repo_bool_field(self, harness: ConfigEditorHarness) -> None:
+        harness.client.get("/config")
+        response = harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.network.sandbox_enabled",
+                "source": "literal",
+                "value": "false",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        assert (
+            buf.raw["repos"]["test-repo"]["network"]["sandbox_enabled"] is False
+        )
+
+
+class TestAddRemoveRepo:
+    """Tests for add/remove repo operations."""
+
+    def test_add_repo(self, harness: ConfigEditorHarness) -> None:
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/add",
+            data={"path": "repos", "key": "new-project"},
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        assert "new-project" in buf.raw["repos"]
+        assert buf.dirty
+
+    def test_add_repo_creates_skeleton(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """New repo gets a minimal skeleton with git and email stubs."""
+        harness.client.get("/config")
+        harness.client.post(
+            "/api/config/add",
+            data={"path": "repos", "key": "new-project"},
+            headers=XHR,
+        )
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        repo = buf.raw["repos"]["new-project"]
+        assert "git" in repo
+        assert "repo_url" in repo["git"]
+        assert "email" in repo
+        # Sensitive fields use !env references
+        assert isinstance(repo["email"]["password"], EnvVar)
+
+    def test_add_repo_does_not_overwrite_existing(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        original_url = buf.raw["repos"]["test-repo"]["git"]["repo_url"]
+
+        harness.client.post(
+            "/api/config/add",
+            data={"path": "repos", "key": "test-repo"},
+            headers=XHR,
+        )
+        assert buf.raw["repos"]["test-repo"]["git"]["repo_url"] == original_url
+
+    def test_add_repo_dirty_count(self, harness: ConfigEditorHarness) -> None:
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/add",
+            data={"path": "repos", "key": "new-project"},
+            headers=XHR,
+        )
+        dirty = response.headers.get("X-Dirty-Count")
+        assert dirty is not None
+        assert int(dirty) > 0
+
+    def test_remove_repo(self, harness: ConfigEditorHarness) -> None:
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/remove",
+            data={"path": "repos", "key": "test-repo"},
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        assert "test-repo" not in buf.raw["repos"]
+
+    def test_remove_repo_dirty_count(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/remove",
+            data={"path": "repos", "key": "test-repo"},
+            headers=XHR,
+        )
+        dirty = response.headers.get("X-Dirty-Count")
+        assert dirty is not None
+        assert int(dirty) > 0
+
+
+class TestRepoDiff:
+    """Tests for diff including repo changes."""
+
+    def test_diff_detects_repo_field_change(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.model",
+                "source": "literal",
+                "value": "sonnet",
+            },
+            headers=XHR,
+        )
+        response = harness.client.get("/api/config/diff")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "repos.test-repo.model" in html
+
+    def test_diff_detects_added_repo(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        harness.client.post(
+            "/api/config/add",
+            data={"path": "repos", "key": "new-project"},
+            headers=XHR,
+        )
+        response = harness.client.get("/api/config/diff")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "new-project" in html
+        assert "(added)" in html
+
+
+class TestRepoDirtyCount:
+    """Tests for dirty count including repo changes."""
+
+    def test_repo_field_change_increments_dirty(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        response = harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.model",
+                "source": "literal",
+                "value": "sonnet",
+            },
+            headers=XHR,
+        )
+        dirty = response.headers.get("X-Dirty-Count")
+        assert dirty is not None
+        assert int(dirty) >= 1
+
+    def test_global_plus_repo_change_counts_both(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Dirty count covers both global and per-repo fields."""
+        harness.client.get("/config")
+        harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "execution.max_concurrent",
+                "source": "literal",
+                "value": "5",
+            },
+            headers=XHR,
+        )
+        response = harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.model",
+                "source": "literal",
+                "value": "sonnet",
+            },
+            headers=XHR,
+        )
+        dirty = int(response.headers.get("X-Dirty-Count", "0"))
+        assert dirty >= 2
+
+
 class TestDiscard:
     def test_discard_resets_buffer(self, harness: ConfigEditorHarness) -> None:
         harness.client.get("/config")
@@ -1005,6 +1750,21 @@ class TestDiscard:
         )
         assert response.status_code == 200
         assert harness.server._config_handlers._buffer is None
+
+    def test_discard_from_repo_page_redirects_to_repo(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Discard from a repo page redirects back to the repo page."""
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/discard",
+            headers={
+                **XHR,
+                "Referer": "http://localhost/config/repos/test-repo",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers.get("HX-Redirect") == "/config/repos/test-repo"
 
     def test_discard_csrf_required(self, harness: ConfigEditorHarness) -> None:
         harness.client.get("/config")

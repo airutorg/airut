@@ -192,6 +192,10 @@ class EditBuffer:
         """Reset the dirty flag after a successful save."""
         self._dirty = False
 
+    def mark_dirty(self) -> None:
+        """Set the dirty flag (e.g. after a direct raw mutation)."""
+        self._dirty = True
+
     # -- Path navigation helpers --
 
     @staticmethod

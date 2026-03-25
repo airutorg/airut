@@ -60,6 +60,29 @@
     }
   });
 
+  // After adding a repo, redirect to its edit page.
+  var addRepoForm = document.querySelector('.cfg-add-repo');
+  if (addRepoForm) {
+    addRepoForm.addEventListener('htmx:afterRequest', function(evt) {
+      if (evt.detail.successful) {
+        var input = document.getElementById('new-repo-id');
+        if (input && input.value) {
+          window.location = '/config/repos/' + encodeURIComponent(input.value);
+        }
+      }
+    });
+  }
+
+  // After removing a repo, redirect to config list page.
+  var removeRepoBtn = document.getElementById('remove-repo-btn');
+  if (removeRepoBtn) {
+    removeRepoBtn.addEventListener('htmx:afterRequest', function(evt) {
+      if (evt.detail.successful) {
+        window.location = '/config';
+      }
+    });
+  }
+
   // Dialog close — wired up via event listener (not inline onclick)
   // to avoid potential CSP issues with inline handlers.
   var cancelBtn = document.getElementById('diff-cancel-btn');

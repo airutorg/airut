@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Configuration — Airut{% endblock %}
+{% block title %}{{ repo_id }} — Configuration — Airut{% endblock %}
 {% block head_extra %}
 <link rel="stylesheet" href="{{ static_url('styles/config.css') }}">
 {% endblock %}
@@ -9,8 +9,6 @@
   {% if error %}
   <div class="cfg-banner error">{{ error }}</div>
   {% endif %}
-
-  <h1>Configuration</h1>
 
   {% if buffer %}
   {# Save bar #}
@@ -35,38 +33,44 @@
   {% if stale %}
   <div class="cfg-banner warning">
     Config changed externally since you started editing. Unsaved changes may be lost.
-    <a href="/config">Reload</a>
+    <a href="/config/repos/{{ repo_id }}">Reload</a>
   </div>
   {% endif %}
 
-  {# Server Settings #}
-  <h2 class="section-title">Server Settings</h2>
+  {# Repo Settings #}
+  <h2 class="cfg-section-title">Repository Settings</h2>
 
-  {# Execution card #}
+  {# Git & Identity card #}
   <div class="card">
-    <h2>Execution</h2>
+    <div class="cfg-card-header">
+      <span class="cfg-card-title">Git &amp; Identity</span>
+    </div>
     {% for f in schema %}
-    {% if f.path in ['execution.max_concurrent', 'execution.shutdown_timeout', 'execution.conversation_max_age_days', 'execution.image_prune'] %}
+    {% if f.name == 'git_repo_url' %}
     {% include "components/config/field.html" %}
     {% endif %}
     {% endfor %}
   </div>
 
-  {# Dashboard card #}
+  {# Model & Effort card #}
   <div class="card">
-    <h2>Dashboard</h2>
+    <div class="cfg-card-header">
+      <span class="cfg-card-title">Model &amp; Effort</span>
+    </div>
     {% for f in schema %}
-    {% if f.path in ['dashboard.enabled', 'dashboard.host', 'dashboard.port', 'dashboard.base_url'] %}
+    {% if f.name in ['model', 'effort'] %}
     {% include "components/config/field.html" %}
     {% endif %}
     {% endfor %}
   </div>
 
-  {# Container & Network card #}
+  {# Network card #}
   <div class="card">
-    <h2>Container &amp; Network</h2>
+    <div class="cfg-card-header">
+      <span class="cfg-card-title">Network</span>
+    </div>
     {% for f in schema %}
-    {% if f.path in ['container_command', 'network.upstream_dns'] %}
+    {% if f.name == 'network_sandbox_enabled' %}
     {% include "components/config/field.html" %}
     {% endif %}
     {% endfor %}
@@ -76,42 +80,45 @@
   {% for f in schema %}
   {% if f.type_tag == 'nested' and f.name == 'resource_limits' %}
   <div class="card">
-    <h2>Resource Limits</h2>
+    <div class="cfg-card-header">
+      <span class="cfg-card-title">Resource Limits</span>
+    </div>
     {% include "components/config/nested.html" %}
   </div>
   {% endif %}
   {% endfor %}
 
-  {# Repositories section #}
-  <h2 class="section-title">Repositories</h2>
-  {% if repos %}
-  {% for repo in repos %}
-  <div class="cfg-repo-card">
-    <div>
-      <span class="cfg-repo-name">{{ repo.id }}</span>
-      <span class="cfg-repo-meta">
-        {% for ch in repo.channels %}
-        <span class="cfg-scope cfg-repo">{{ ch }}</span>
-        {% endfor %}
-        · model: {{ repo.model }}
-      </span>
-    </div>
-    <a href="/config/repos/{{ repo.id }}" class="cfg-btn">Edit</a>
-  </div>
-  {% endfor %}
-  {% else %}
-  <div class="empty">No repositories configured.</div>
+  {# Channels section (Phase 3 placeholder) #}
+  <h2 class="cfg-section-title">Channels</h2>
+  {% for f in schema %}
+  {% if f.name == 'channels' %}
+  <div class="cfg-banner info">Channel editing will be available in a future update.</div>
   {% endif %}
-  <form class="cfg-add-repo"
-        hx-post="/api/config/add"
-        hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
-        hx-swap="none">
-    <input type="hidden" name="path" value="repos">
-    <input id="new-repo-id" class="cfg-input" type="text" name="key"
-           placeholder="new-repo-id" style="max-width:250px;display:inline-block;"
-           required pattern="[a-zA-Z0-9][a-zA-Z0-9._-]*">
-    <button class="cfg-btn primary" type="submit">Add Repository</button>
-  </form>
+  {% endfor %}
+
+  {# Credentials section (Phase 4 placeholder) #}
+  <h2 class="cfg-section-title">Credentials</h2>
+  <div class="cfg-banner info">Credential editing will be available in a future update.</div>
+
+  {# Remove repo #}
+  <h2 class="cfg-section-title">Danger Zone</h2>
+  <div class="card">
+    <div class="cfg-card-header">
+      <span class="cfg-card-title">Remove Repository</span>
+    </div>
+    <p style="font-size:13px;color:var(--text-secondary);margin:0 0 10px;">
+      Remove this repository from the configuration. This does not delete any
+      data on disk — only removes the config entry.
+    </p>
+    <button class="cfg-btn danger" id="remove-repo-btn"
+            hx-post="/api/config/remove"
+            hx-vals='{"path":"repos","key":"{{ repo_id }}"}'
+            hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+            hx-confirm="Remove repository '{{ repo_id }}' from config?"
+            hx-swap="none">
+      Remove {{ repo_id }}
+    </button>
+  </div>
 
   {# Diff dialog #}
   <dialog id="diff-modal" class="cfg-dialog">

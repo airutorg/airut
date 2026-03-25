@@ -24,6 +24,14 @@ class EnvVar:
     def __repr__(self) -> str:
         return f"EnvVar({self.var_name!r})"
 
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, EnvVar):
+            return self.var_name == other.var_name
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(("EnvVar", self.var_name))
+
 
 class VarRef:
     """Placeholder for an unresolved ``!var VAR_NAME`` tag."""
@@ -33,6 +41,14 @@ class VarRef:
 
     def __repr__(self) -> str:
         return f"VarRef({self.var_name!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, VarRef):
+            return self.var_name == other.var_name
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(("VarRef", self.var_name))
 
 
 #: Type alias for any value produced by YAML parsing with ``!env``/``!var``

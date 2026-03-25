@@ -173,6 +173,7 @@ def _walk_fields(
     path_prefix: str,
     structure: dict[str, tuple[str, ...]] | None,
     owner_cls_name: str | None = None,
+    exclude: frozenset[str] | None = None,
 ) -> list[EditorFieldSchema]:
     """Walk dataclass fields and produce EditorFieldSchema list."""
     result: list[EditorFieldSchema] = []
@@ -182,6 +183,8 @@ def _walk_fields(
     for f in dataclasses.fields(cls):
         fm = get_field_meta(f)
         if fm is None:
+            continue
+        if exclude and f.name in exclude:
             continue
 
         annotation = hints.get(f.name, f.type)
@@ -275,6 +278,7 @@ def schema_for_editor(
     config_cls: type,
     path_prefix: str = "",
     structure: dict[str, tuple[str, ...]] | None = None,
+    exclude: set[str] | None = None,
 ) -> list[EditorFieldSchema]:
     """Walk dataclass fields recursively to produce editor schema trees.
 
@@ -285,8 +289,15 @@ def schema_for_editor(
         config_cls: A dataclass class annotated with ``FieldMeta``.
         path_prefix: Dot-delimited prefix for paths.
         structure: YAML structure mapping for path computation.
+        exclude: Field names to omit from the schema (e.g. computed
+            fields like ``repo_id`` that are derived from the YAML key).
 
     Returns:
         List of ``EditorFieldSchema`` descriptions.
     """
-    return _walk_fields(config_cls, path_prefix, structure)
+    return _walk_fields(
+        config_cls,
+        path_prefix,
+        structure,
+        exclude=frozenset(exclude) if exclude else None,
+    )
