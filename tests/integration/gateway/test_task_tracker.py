@@ -555,24 +555,19 @@ events = [
         service_thread.start()
 
         try:
-            # Wait for both responses
-            seen_first = False
-            seen_second = False
-            deadline = time.monotonic() + 45.0
-
-            while time.monotonic() < deadline and not (
-                seen_first and seen_second
-            ):
-                for m in integration_env.email_server.get_sent_messages():
-                    text = get_message_text(m).lower()
-                    if "first concurrent" in text:
-                        seen_first = True
-                    if "second concurrent" in text:
-                        seen_second = True
-                time.sleep(0.5)
-
-            assert seen_first, "First concurrent task not completed"
-            assert seen_second, "Second concurrent task not completed"
+            # Wait for both responses using event-based waits
+            resp_first = integration_env.email_server.wait_for_sent(
+                lambda m: "first concurrent" in get_message_text(m).lower(),
+                timeout=45.0,
+            )
+            resp_second = integration_env.email_server.wait_for_sent(
+                lambda m: "second concurrent" in get_message_text(m).lower(),
+                timeout=45.0,
+            )
+            assert resp_first is not None, "First concurrent task not completed"
+            assert resp_second is not None, (
+                "Second concurrent task not completed"
+            )
 
             # Poll for at least 2 completed tasks
             completed_tasks = _poll_tracker(

@@ -30,7 +30,7 @@ from airut.gateway.config import (
     ServerConfig,
 )
 
-from .conftest import MOCK_CONTAINER_COMMAND
+from .conftest import MOCK_CONTAINER_COMMAND, wait_for_boot
 from .environment import IntegrationEnvironment, create_test_repo
 
 
@@ -252,10 +252,7 @@ class TestPartialFailures:
             service_thread = threading.Thread(target=service.start, daemon=True)
             service_thread.start()
 
-            # Give service time to initialize
-            import time
-
-            time.sleep(2)
+            wait_for_boot(service)
 
             try:
                 # Check repo states
@@ -337,9 +334,7 @@ class TestDashboardRepoStatus:
             service_thread = threading.Thread(target=service.start, daemon=True)
             service_thread.start()
 
-            import time
-
-            time.sleep(2)
+            wait_for_boot(service)
 
             try:
                 # Check dashboard is running and service has repo states
@@ -384,9 +379,7 @@ class TestDashboardRepoStatus:
             service_thread = threading.Thread(target=service.start, daemon=True)
             service_thread.start()
 
-            import time
-
-            time.sleep(2)
+            wait_for_boot(service)
 
             try:
                 assert service.dashboard is not None

@@ -220,10 +220,10 @@ events = [
                 )
                 assert processed, "Service did not process Bob's message"
 
-                # Bob should get no response (rejected at authorization)
-                import time
-
-                time.sleep(2)  # Brief wait to confirm no reply
+                # Bob should get no response (rejected at authorization).
+                # wait_until_inbox_empty already ensured the message was
+                # processed; since rejection happens before any task is
+                # submitted, no reply can arrive after this point.
                 sent = env.email_server.get_sent_messages()
                 bob_replies = [
                     m for m in sent if m["To"] and "bob@test.local" in m["To"]
