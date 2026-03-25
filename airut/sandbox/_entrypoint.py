@@ -29,6 +29,9 @@ set -euo pipefail
 # Allow Claude to run as root in sandbox environment
 export IS_SANDBOX=1
 
+# Disable output buffering so logs stream in real time
+export PYTHONUNBUFFERED=1
+
 # Trust mounted CA certificates (for network proxy)
 if [ -f /usr/local/share/ca-certificates/mitmproxy-ca.crt ]; then
     update-ca-certificates 2>/dev/null || true
@@ -51,6 +54,9 @@ set -euo pipefail
 
 # Allow commands to run as root in sandbox environment
 export IS_SANDBOX=1
+
+# Disable output buffering so logs stream in real time
+export PYTHONUNBUFFERED=1
 
 # Trust mounted CA certificates (for network proxy)
 if [ -f /usr/local/share/ca-certificates/mitmproxy-ca.crt ]; then

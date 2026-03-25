@@ -41,6 +41,11 @@ class TestGetEntrypointContent:
         content = get_entrypoint_content()
         assert b"IS_SANDBOX=1" in content
 
+    def test_contains_python_unbuffered(self) -> None:
+        """Content disables Python output buffering for real-time streaming."""
+        content = get_entrypoint_content()
+        assert b"PYTHONUNBUFFERED=1" in content
+
     def test_contains_ca_trust(self) -> None:
         """Content handles CA certificate trust."""
         content = get_entrypoint_content()
@@ -86,6 +91,11 @@ class TestPassthroughEntrypoint:
         """Passthrough content sets IS_SANDBOX."""
         content = get_entrypoint_content(passthrough=True)
         assert b"IS_SANDBOX=1" in content
+
+    def test_passthrough_contains_python_unbuffered(self) -> None:
+        """Passthrough content disables Python output buffering."""
+        content = get_entrypoint_content(passthrough=True)
+        assert b"PYTHONUNBUFFERED=1" in content
 
     def test_passthrough_contains_ca_trust(self) -> None:
         """Passthrough content handles CA certificate trust."""
