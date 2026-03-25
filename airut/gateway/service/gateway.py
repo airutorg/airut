@@ -393,7 +393,9 @@ class GatewayService:
         self.sandbox.startup()
 
         if self._shutdown_event.is_set():
-            logger.info("Shutdown requested during boot, aborting")
+            logger.info(
+                "Shutdown requested during boot (proxy phase), aborting"
+            )
             return
 
         # Initialize shared thread pool
@@ -442,7 +444,9 @@ class GatewayService:
         started_count = 0
         for repo_id, repo_handler in self.repo_handlers.items():
             if self._shutdown_event.is_set():
-                logger.info("Shutdown requested during boot, aborting")
+                logger.info(
+                    "Shutdown requested during boot (listener loop), aborting"
+                )
                 break
 
             config = repo_handler.config
