@@ -677,6 +677,9 @@ class GatewayService:
 
             if not global_changed and not repo_changes:
                 logger.debug("Config reload: no effective changes")
+                # Reconcile repos that failed to add on a previous
+                # reload before short-circuiting.
+                self._reconcile_repo_handlers(new_config)
                 # Still update snapshot + generation so the editor sees
                 # raw-dict changes (e.g. explicitly setting a default value).
                 self._config_snapshot = new_snapshot
@@ -860,6 +863,27 @@ class GatewayService:
         finally:
             self._pending_server_config = None
             self._pending_server_old_global = None
+
+    def _reconcile_repo_handlers(self, new_config: ServerConfig) -> None:
+        """Retry adds for repos that are in config but not running.
+
+        If ``_add_repo`` failed on a previous reload (e.g. git clone
+        failure, listener error), the repo ends up in ``self.config``
+        but not in ``repo_handlers``.  Subsequent reloads with the same
+        config see no diff, so the repo never gets another chance.
+
+        This reconciliation retries the add for any repo that should be
+        running but isn't.
+        """
+        for repo_id, repo_config in new_config.repos.items():
+            if (
+                repo_id not in self.repo_handlers
+                and repo_id not in self._pending_repo_reload
+            ):
+                logger.info(
+                    "Repo '%s': retrying add (not in handlers)", repo_id
+                )
+                self._add_repo(repo_id, repo_config)
 
     def _add_repo(self, repo_id: str, repo_config: RepoServerConfig) -> None:
         """Add a new repo handler and start its listeners."""

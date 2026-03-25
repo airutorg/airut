@@ -1,4 +1,8 @@
 {# Diff result fragment — loaded into diff modal body #}
+{% if validation_error %}
+<div class="cfg-banner error">{{ validation_error }}</div>
+<input type="hidden" id="diff-has-errors" value="1">
+{% endif %}
 {% if error %}
 <div class="cfg-banner error">{{ error }}</div>
 {% elif changes %}
@@ -29,6 +33,6 @@
     {% endfor %}
   </tbody>
 </table>
-{% else %}
+{% elif not validation_error %}
 <div class="cfg-banner info">No changes to save.</div>
 {% endif %}

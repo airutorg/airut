@@ -787,6 +787,29 @@ class TestSave:
         )
         assert response.status_code == 422
 
+    def test_diff_shows_validation_error(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Bug: diff dialog should surface validation errors.
+
+        The frontend should be signaled to disable the Confirm Save button.
+        """
+        harness.client.get("/config")
+
+        # Remove all repos to make config invalid
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        buf._raw["repos"] = {}
+        buf.mark_dirty()
+
+        response = harness.client.get("/api/config/diff")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        # Must show a validation error in the diff result
+        assert "error" in html.lower() or "invalid" in html.lower()
+        # Must include a signal for the frontend to disable save button
+        assert "diff-has-errors" in html
+
     def test_save_stale_config(self, harness: ConfigEditorHarness) -> None:
         """Dirty stale buffer returns 409 on save."""
         harness.client.get("/config")
@@ -1676,9 +1699,13 @@ class TestRepoDiff:
         html = response.get_data(as_text=True)
         assert "repos.test-repo.model" in html
 
-    def test_diff_detects_added_repo(
+    def test_diff_added_repo_shows_subfields(
         self, harness: ConfigEditorHarness
     ) -> None:
+        """Bug: adding a repo should show each subfield in the diff.
+
+        Previously showed only a single 'repos.new-project' entry.
+        """
         harness.client.get("/config")
         harness.client.post(
             "/api/config/add",
@@ -1688,8 +1715,42 @@ class TestRepoDiff:
         response = harness.client.get("/api/config/diff")
         assert response.status_code == 200
         html = response.get_data(as_text=True)
-        assert "new-project" in html
-        assert "(added)" in html
+        # Repo subfields like git.repo_url must appear individually
+        assert "repos.new-project.git.repo_url" in html
+        # Email channel subfields too
+        assert "repos.new-project.email.imap_server" in html
+
+    def test_diff_removed_repo_shows_subfields(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Removing a repo should show each subfield in the diff."""
+        harness.client.get("/config")
+        harness.client.post(
+            "/api/config/remove",
+            data={"path": "repos", "key": "test-repo"},
+            headers=XHR,
+        )
+        response = harness.client.get("/api/config/diff")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        # Must show individual subfields, not just "repos.test-repo"
+        assert "repos.test-repo.git.repo_url" in html
+        assert "repos.test-repo.email.imap_server" in html
+
+    def test_dirty_count_added_repo_counts_subfields(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Adding a repo should count all subfields, not just 1."""
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/add",
+            data={"path": "repos", "key": "new-project"},
+            headers=XHR,
+        )
+        dirty = int(response.headers.get("X-Dirty-Count", "0"))
+        # A new repo has many subfields (git.repo_url + email fields)
+        # so the dirty count must be greater than 1.
+        assert dirty > 1
 
 
 class TestRepoDirtyCount:
@@ -1768,7 +1829,7 @@ class TestInitialDirtyCount:
         assert self._DISCARD_BTN_DISABLED not in html
         # Dirty count span visible with text
         assert re.search(r'id="dirty-count"[^>]*\bhidden\b', html) is None
-        assert "1 unsaved change" in html
+        assert "unsaved change" in html
 
     def test_config_page_shows_dirty_after_add(
         self, harness: ConfigEditorHarness
@@ -1783,7 +1844,7 @@ class TestInitialDirtyCount:
         response = harness.client.get("/config")
         html = response.get_data(as_text=True)
         assert self._SAVE_BTN_DISABLED not in html
-        assert "1 unsaved change" in html
+        assert "unsaved change" in html
 
     def test_config_page_shows_dirty_after_remove(
         self, harness: ConfigEditorHarness
