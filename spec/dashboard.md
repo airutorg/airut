@@ -456,7 +456,7 @@ session ID, token usage, and request/response text.
 
 Per-repository view showing:
 
-- Repository ID and status (LIVE or FAILED)
+- Repository ID and status (LIVE, FAILED, RELOAD PENDING, or RELOADING)
 - Git repository URL
 - IMAP server hostname
 - Storage directory path

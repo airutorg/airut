@@ -476,6 +476,15 @@ class TestDashboardServer:
                 ),
                 storage_dir="/storage/repo2",
             ),
+            RepoState(
+                repo_id="repo3",
+                status=RepoStatus.RELOADING,
+                git_repo_url="https://github.com/test/repo3",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
+                storage_dir="/storage/repo3",
+            ),
         ]
 
         clock = VersionClock()
@@ -488,9 +497,10 @@ class TestDashboardServer:
 
         html = response.get_data(as_text=True)
         assert "1 live" in html
-        assert "1 reloading" in html
-        # Spinner indicator uses reload_pending CSS class
+        assert "2 reloading" in html
+        # Spinner indicators use reload_pending / reloading CSS classes
         assert "repo-status-indicator reload_pending" in html
+        assert "repo-status-indicator reloading" in html
 
     def test_index_endpoint(self) -> None:
         """Test / (dashboard) endpoint."""
