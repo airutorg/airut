@@ -6,7 +6,7 @@
   {{ total_changes }} change{{ 's' if total_changes != 1 else '' }}
   {% if requires_restart %} — <strong>server restart required</strong>{% endif %}
   {% for scope_name, count in scope_summary.items() %}
-  <span class="cfg-scope cfg-{{ scope_name }}" style="margin-left:6px;">{{ scope_name }}: {{ count }}</span>
+  <span class="cfg-scope cfg-{{ scope_name }}">{{ scope_name }}: {{ count }}</span>
   {% endfor %}
 </div>
 <table class="cfg-diff-table">
