@@ -924,7 +924,7 @@ class RequestHandlers:
                 ' class="version-badge config-status reload-pending"'
                 ' hx-get="/api/config-status"'
                 ' hx-trigger="every 30s" hx-swap="outerHTML"'
-                ">restart needed</span>"
+                ">restart pending</span>"
             )
         else:
             html_str = (
