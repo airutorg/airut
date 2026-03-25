@@ -390,8 +390,9 @@ Three-column layout showing queued, in-progress, and completed tasks.
 **Repository status section** (below server section):
 
 - Lists all configured repositories with status indicators
-- Green dot for live repos, red dot for failed repos
-- Summary count: "N live, M failed"
+- Green dot for live repos, red dot for failed repos, spinning dot for
+  reload-pending/reloading repos
+- Summary count: "N live, M reloading, M failed" (zero counts omitted)
 - Each repo links to its detail page
 - Failed repos show error type as a hint
 
@@ -455,7 +456,7 @@ session ID, token usage, and request/response text.
 
 Per-repository view showing:
 
-- Repository ID and status (LIVE or FAILED)
+- Repository ID and status (LIVE, FAILED, RELOAD PENDING, or RELOADING)
 - Git repository URL
 - IMAP server hostname
 - Storage directory path

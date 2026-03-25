@@ -454,6 +454,54 @@ class TestDashboardServer:
         assert "/repo/repo1" in html
         assert "/repo/repo2" in html
 
+    def test_index_shows_reload_pending_repos(self) -> None:
+        """Test dashboard shows reload-pending repos with spinner indicator."""
+        tracker = TaskTracker()
+        repo_states = [
+            RepoState(
+                repo_id="repo1",
+                status=RepoStatus.LIVE,
+                git_repo_url="https://github.com/test/repo1",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
+                storage_dir="/storage/repo1",
+            ),
+            RepoState(
+                repo_id="repo2",
+                status=RepoStatus.RELOAD_PENDING,
+                git_repo_url="https://github.com/test/repo2",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
+                storage_dir="/storage/repo2",
+            ),
+            RepoState(
+                repo_id="repo3",
+                status=RepoStatus.RELOADING,
+                git_repo_url="https://github.com/test/repo3",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
+                storage_dir="/storage/repo3",
+            ),
+        ]
+
+        clock = VersionClock()
+        repos_store = VersionedStore(tuple(repo_states), clock)
+        server = DashboardServer(tracker, repos_store=repos_store)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/")
+        assert response.status_code == 200
+
+        html = response.get_data(as_text=True)
+        assert "1 live" in html
+        assert "2 reloading" in html
+        # Spinner indicators use reload_pending / reloading CSS classes
+        assert "repo-status-indicator reload_pending" in html
+        assert "repo-status-indicator reloading" in html
+
     def test_index_endpoint(self) -> None:
         """Test / (dashboard) endpoint."""
         tracker = TaskTracker()

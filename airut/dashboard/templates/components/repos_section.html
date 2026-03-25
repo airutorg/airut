@@ -2,7 +2,8 @@
 {% if repo_states %}
     {% set live_count = repo_states|selectattr('status.value', 'equalto', 'live')|list|length %}
     {% set failed_count = repo_states|selectattr('status.value', 'equalto', 'failed')|list|length %}
-    {% set status_summary = live_count ~ ' live' ~ (', ' ~ failed_count ~ ' failed' if failed_count > 0 else '') %}
+    {% set pending_count = repo_states|selectattr('status.value', 'equalto', 'reload_pending')|list|length + repo_states|selectattr('status.value', 'equalto', 'reloading')|list|length %}
+    {% set status_summary = live_count ~ ' live' ~ (', ' ~ pending_count ~ ' reloading' if pending_count > 0 else '') ~ (', ' ~ failed_count ~ ' failed' if failed_count > 0 else '') %}
 <div id="repos-section" class="repos-section">
     <div class="section-title">Repositories ({{ status_summary }})</div>
     <div class="repos-grid">

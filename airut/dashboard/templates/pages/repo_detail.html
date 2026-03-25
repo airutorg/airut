@@ -7,7 +7,7 @@
     <div class="card">
         <h1>{{ repo.repo_id }}</h1>
         <span id="repo-status" sse-swap="repo-status" hx-swap="outerHTML"
-            class="status-badge {{ repo.status.value }}">{{ repo.status.value.upper() }}</span>
+            class="status-badge {{ repo.status.value }}">{{ repo.status.value.replace('_', ' ').upper() }}</span>
 
         <div class="field">
             <div class="field-label">Git Repository</div>

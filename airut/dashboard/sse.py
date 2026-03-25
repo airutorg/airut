@@ -428,10 +428,11 @@ def _build_repo_detail_events(
     parts: list[str] = []
 
     # repo-status: the status badge
+    status_label = repo.status.value.replace("_", " ").upper()
     status_html = (
         f'<span id="repo-status" sse-swap="repo-status" hx-swap="outerHTML"'
         f' class="status-badge {repo.status.value}">'
-        f"{repo.status.value.upper()}</span>"
+        f"{status_label}</span>"
     )
     parts.append(
         format_sse_event("repo-status", status_html, event_id=eid, retry=retry)

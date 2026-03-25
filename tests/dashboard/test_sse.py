@@ -1305,6 +1305,64 @@ class TestBuildRepoDetailEvents:
         assert "Connection refused" in result
         assert "IMAPConnectionError" in result
 
+    def test_repo_detail_events_reload_pending(self) -> None:
+        """Reload-pending repo detail events show RELOAD_PENDING status."""
+        from airut.dashboard.sse import _build_html_state_events
+
+        tracker = TaskTracker()
+        clock = VersionClock()
+        repo_states: tuple[RepoState, ...] = (
+            RepoState(
+                repo_id="pending-repo",
+                status=RepoStatus.RELOAD_PENDING,
+                git_repo_url="https://github.com/test/repo",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
+                storage_dir="/storage/pending",
+            ),
+        )
+        repos_store: VersionedStore[tuple[RepoState, ...]] = VersionedStore(
+            repo_states, clock
+        )
+
+        result = _build_html_state_events(
+            tracker, None, repos_store, version=1, repo_id="pending-repo"
+        )
+
+        assert "event: repo-status\n" in result
+        assert "RELOAD PENDING" in result
+        assert "status-badge reload_pending" in result
+
+    def test_repo_detail_events_reloading(self) -> None:
+        """Reloading repo detail events show RELOADING status."""
+        from airut.dashboard.sse import _build_html_state_events
+
+        tracker = TaskTracker()
+        clock = VersionClock()
+        repo_states: tuple[RepoState, ...] = (
+            RepoState(
+                repo_id="reloading-repo",
+                status=RepoStatus.RELOADING,
+                git_repo_url="https://github.com/test/repo",
+                channels=(
+                    ChannelInfo(channel_type="email", info="imap.example.com"),
+                ),
+                storage_dir="/storage/reloading",
+            ),
+        )
+        repos_store: VersionedStore[tuple[RepoState, ...]] = VersionedStore(
+            repo_states, clock
+        )
+
+        result = _build_html_state_events(
+            tracker, None, repos_store, version=1, repo_id="reloading-repo"
+        )
+
+        assert "event: repo-status\n" in result
+        assert "RELOADING" in result
+        assert "status-badge reloading" in result
+
     def test_repo_detail_events_missing_repo(self) -> None:
         """Missing repo returns done event."""
         from airut.dashboard.sse import _build_html_state_events
