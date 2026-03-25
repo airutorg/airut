@@ -98,7 +98,7 @@ class EmailChannelListener(ChannelListener):
             self._config.imap_server,
             self._config.imap_port,
         )
-        self._email_listener.connect(max_retries=3)
+        self._email_listener.connect(max_retries=3, stop_event=self._stop_event)
         self._status = ChannelStatus(health=ChannelHealth.CONNECTED)
 
         thread_name = (
@@ -206,7 +206,9 @@ class EmailChannelListener(ChannelListener):
 
         try:
             self._email_listener.disconnect()
-            self._email_listener.connect(max_retries=3)
+            self._email_listener.connect(
+                max_retries=3, stop_event=self._stop_event
+            )
             self._log.info("Reconnected to IMAP")
             self._status = ChannelStatus(health=ChannelHealth.CONNECTED)
         except IMAPConnectionError as reconnect_error:
@@ -282,7 +284,7 @@ class EmailChannelListener(ChannelListener):
                         reconnect_interval,
                     )
                     el.disconnect()
-                    el.connect(max_retries=3)
+                    el.connect(max_retries=3, stop_event=self._stop_event)
                     last_reconnect = time.time()
                     reconnect_attempts = 0
 

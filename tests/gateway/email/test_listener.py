@@ -1263,6 +1263,46 @@ def test_disconnect_closes_socket_even_when_socket_raises(email_config):
     assert listener.connection is None
 
 
+def test_connect_stop_event_aborts_retry(email_config):
+    """Test connect() aborts immediately when stop_event is set."""
+    stop_event = MagicMock()
+    stop_event.wait.return_value = True  # Already signaled
+
+    listener = EmailListener(email_config.channels["email"])
+
+    with patch("imaplib.IMAP4_SSL") as mock_imap:
+        mock_imap.side_effect = imaplib.IMAP4.error("Connection refused")
+
+        with pytest.raises(
+            IMAPConnectionError, match="Connection aborted: shutting down"
+        ):
+            listener.connect(max_retries=3, stop_event=stop_event)
+
+    # Should have failed on first attempt and aborted during retry delay
+    assert mock_imap.call_count == 1
+
+
+def test_connect_stop_event_not_set_retries_normally(email_config):
+    """Test connect() retries normally when stop_event is not set."""
+    listener = EmailListener(email_config.channels["email"])
+    stop_event = MagicMock()
+    stop_event.wait.return_value = False  # Not set, no real delay
+
+    with patch("imaplib.IMAP4_SSL") as mock_imap:
+        mock_conn = MagicMock()
+
+        # First call fails, second succeeds
+        mock_imap.side_effect = [
+            imaplib.IMAP4.error("Connection refused"),
+            mock_conn,
+        ]
+
+        listener.connect(max_retries=3, stop_event=stop_event)
+
+    assert listener.connection == mock_conn
+    stop_event.wait.assert_called_once_with(1)  # 2^(1-1) = 1s backoff
+
+
 def test_connect_oauth2_token_error_retries(microsoft_oauth2_email_config):
     """Test OAuth2 token errors are retried in connect()."""
     from airut.gateway.email.microsoft_oauth2 import MicrosoftOAuth2TokenError

@@ -836,6 +836,28 @@ class TestStartStop:
 
         svc.start()  # Should handle KeyboardInterrupt gracefully
 
+    def test_start_main_loop_wakes_on_shutdown_event(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """Main loop uses _shutdown_event.wait() for interruptible sleep.
+
+        Verifies that calling stop() wakes the main loop immediately
+        instead of blocking for the full sleep interval.
+        """
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, dashboard_enabled=False)
+
+        # Schedule stop() from a timer to unblock the main loop
+        timer = threading.Timer(0.05, svc.stop)
+        timer.start()
+
+        start_time = time.monotonic()
+        svc.start()
+        elapsed = time.monotonic() - start_time
+
+        # Should complete in well under 1 second (the old sleep interval)
+        assert elapsed < 0.5
+
 
 class TestRepoHandlerInitError:
     def test_repo_handler_init_error_recorded(
@@ -1059,6 +1081,7 @@ class TestBootState:
         )
 
         svc._shutdown_event = InterruptEvent()
+
         svc.start(resilient=True)
 
         boot = svc._boot_store.get().value

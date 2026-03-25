@@ -15,6 +15,7 @@ import logging
 import os
 import select
 import socket
+import threading
 import time
 from email.message import Message
 from email.parser import BytesParser
@@ -86,14 +87,22 @@ class EmailListener:
         os.set_blocking(self._interrupt_read, False)
         os.set_blocking(self._interrupt_write, False)
 
-    def connect(self, max_retries: int = 3) -> None:
+    def connect(
+        self,
+        max_retries: int = 3,
+        stop_event: threading.Event | None = None,
+    ) -> None:
         """Connect to IMAP server with retry logic.
 
         Args:
             max_retries: Maximum connection attempts.
+            stop_event: When set, aborts the retry loop immediately
+                so the caller can shut down without waiting for the
+                full backoff delay.
 
         Raises:
-            IMAPConnectionError: If connection fails after retries.
+            IMAPConnectionError: If connection fails after retries,
+                or if *stop_event* is set during a retry delay.
         """
         for attempt in range(1, max_retries + 1):
             try:
@@ -162,7 +171,13 @@ class EmailListener:
                 if attempt < max_retries:
                     sleep_time = 2 ** (attempt - 1)
                     logger.debug("Retrying in %ds...", sleep_time)
-                    time.sleep(sleep_time)
+                    if stop_event is not None:
+                        if stop_event.wait(sleep_time):
+                            raise IMAPConnectionError(
+                                "Connection aborted: shutting down"
+                            )
+                    else:
+                        time.sleep(sleep_time)
                 else:
                     raise IMAPConnectionError(
                         f"Failed to connect after {max_retries} attempts: {e}"
