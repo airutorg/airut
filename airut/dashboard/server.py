@@ -228,6 +228,7 @@ class DashboardServer:
                     endpoint="api_network_poll",
                 ),
                 Rule("/api/health", endpoint="health"),
+                Rule("/api/config-status", endpoint="api_config_status"),
                 Rule("/api/status", endpoint="api_status"),
                 Rule("/api/tracker", endpoint="api_tracker"),
                 # Config editor routes
@@ -287,6 +288,7 @@ class DashboardServer:
             "network_log_stream": (self._handlers.handle_network_log_stream),
             "api_network_poll": self._handlers.handle_api_network_poll,
             "health": self._handlers.handle_health,
+            "api_config_status": self._handlers.handle_config_status,
             "api_status": self._handlers.handle_api_status,
             "api_tracker": self._handlers.handle_api_tracker,
             # Config editor endpoints

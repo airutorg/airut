@@ -20,6 +20,16 @@ h2 {
   color: var(--text-secondary);
 }
 
+/* ---- Section headers ---- */
+.section-header {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 10px;
+  color: var(--text-tertiary);
+}
+
 /* ---- Version info ---- */
 .version-info {
   font-size: 12px;
@@ -29,28 +39,36 @@ h2 {
   gap: 10px;
   align-items: center;
 }
+.version-badges {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+.version-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  text-decoration: none;
+  cursor: default;
+}
 .version-sha {
   font-family: var(--font-mono);
   background: var(--bg-code);
-  padding: 2px 6px;
-  border-radius: 3px;
   color: var(--accent);
-  text-decoration: none;
-  border: 1px solid var(--border-light);
+  border-color: var(--border-light);
 }
-.version-sha:hover { text-decoration: underline; }
-.version-status {
-  padding: 2px 6px;
-  border-radius: 3px;
-  font-weight: 500;
-  font-size: 11px;
-  cursor: default;
-}
+.version-sha:hover { text-decoration: underline; cursor: pointer; }
 .version-status.up-to-date { background: var(--status-success-bg); color: var(--status-success); }
 .version-status.update-available { background: var(--status-warning-bg); color: var(--status-warning); }
 .version-status.checking { background: var(--bg-code); color: var(--text-tertiary); }
 .version-status.check-failed { background: var(--bg-code); color: var(--text-tertiary); }
-.version-started { color: var(--text-tertiary); }
+.config-status.reload-pending { background: var(--status-info-bg); color: var(--status-info); }
 
 /* ---- Boot state ---- */
 .boot-banner {
@@ -117,14 +135,6 @@ h2 {
 .repos-section {
   margin-bottom: 20px;
   max-width: 1400px;
-}
-.repos-header {
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 10px;
-  color: var(--text-tertiary);
 }
 .repos-grid {
   display: flex;
