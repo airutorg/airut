@@ -154,21 +154,6 @@ select.cfg-input {
   margin-top: 3px;
 }
 
-/* ---- Nested fieldset ---- */
-.cfg-nested {
-  border: 1px solid var(--border-light);
-  border-radius: 4px;
-  padding: 12px;
-  margin-top: 8px;
-}
-@media (min-width: 701px) {
-  .cfg-nested-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0 16px;
-  }
-}
-
 /* ---- Buttons ---- */
 .cfg-btn {
   display: inline-flex;
