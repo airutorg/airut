@@ -511,6 +511,7 @@ Extends the existing design system with no new colors, fonts, or spacing values:
 | `airut/config/editor_schema.py`                                | `EditorFieldSchema`, `schema_for_editor()`       |
 | `airut/dashboard/handlers_config.py`                           | `ConfigEditorHandlers`: all HTTP handlers        |
 | `airut/dashboard/templates/pages/config.html`                  | Global settings page template                    |
+| `airut/dashboard/templates/pages/config_repo.html`             | Per-repo settings page template                  |
 | `airut/dashboard/templates/components/config/field.html`       | Recursive field dispatch macro                   |
 | `airut/dashboard/templates/components/config/scalar.html`      | Scalar input + source selector                   |
 | `airut/dashboard/templates/components/config/nested.html`      | Nested dataclass fieldset                        |
@@ -536,7 +537,7 @@ button enable/disable). `config.css`.
 **Not included:** repo editing, channels, credentials, list/dict/collection
 widgets.
 
-### Phase 2: Repos + Simple Fields
+### Phase 2: Repos + Simple Fields (implemented)
 
 Per-repo settings page with scalar/nested fields. `GET /config/repos/<repo_id>`
 handler. Add/remove repo operations. Repo skeleton generation.

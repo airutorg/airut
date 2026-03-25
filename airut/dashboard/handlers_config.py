@@ -3,16 +3,17 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Config editor HTTP handlers (Phase 1: global settings).
+"""Config editor HTTP handlers.
 
-Provides page routes for ``/config`` and API routes for field mutation,
-diff, save, and discard.  All handlers operate on a shared
-``EditBuffer`` instance.
+Provides page routes for ``/config`` (global) and ``/config/repos/<repo_id>``
+(per-repo), plus API routes for field mutation, diff, save, and discard.
+All handlers operate on a shared ``EditBuffer`` instance.
 """
 
 import logging
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlparse
 
 from werkzeug.wrappers import Request, Response
 
@@ -26,11 +27,39 @@ from airut.config.editor import (
     schema_for_editor,
 )
 from airut.config.snapshot import ConfigSnapshot
-from airut.config.source import YAML_GLOBAL_STRUCTURE, ConfigSource
+from airut.config.source import (
+    YAML_GLOBAL_STRUCTURE,
+    YAML_REPO_STRUCTURE,
+    ConfigSource,
+)
 from airut.dashboard.templating import render_template
+from airut.yaml_env import EnvVar
 
 
 logger = logging.getLogger(__name__)
+
+
+def _make_repo_skeleton() -> dict[str, Any]:
+    """Create a minimal repo skeleton for add-repo.
+
+    Contains required ``git.repo_url`` placeholder and an email channel
+    stub so the repo passes validation.  Sensitive fields use ``!env``
+    references to avoid storing placeholder credentials.
+    """
+    return {
+        "git": {"repo_url": "https://github.com/org/repo.git"},
+        "email": {
+            "imap_server": "imap.example.com",
+            "imap_port": 993,
+            "smtp_server": "smtp.example.com",
+            "smtp_port": 587,
+            "username": "user@example.com",
+            "password": EnvVar("EMAIL_PASSWORD"),
+            "from": "bot@example.com",
+            "authorized_senders": [],
+            "trusted_authserv_id": "example.com",
+        },
+    }
 
 
 def _require_xhr(request: Request) -> Response | None:
@@ -144,6 +173,33 @@ class ConfigEditorHandlers:
 
         return schema_for_editor(GlobalConfig, structure=YAML_GLOBAL_STRUCTURE)
 
+    def _get_repo_schema(self, repo_id: str) -> list[EditorFieldSchema]:
+        """Get editor schema for a repo's RepoServerConfig fields."""
+        from airut.gateway.config import RepoServerConfig
+
+        prefix = f"repos.{repo_id}"
+        return schema_for_editor(
+            RepoServerConfig,
+            path_prefix=prefix,
+            structure=YAML_REPO_STRUCTURE,
+            exclude={"repo_id"},
+        )
+
+    def _get_common_repo_ids(self) -> set[str]:
+        """Get repo IDs that exist in both the buffer and live snapshot.
+
+        Used to skip per-field comparison for repos that are wholly
+        added or removed — those are tracked as repo-level entries.
+        """
+        if self._buffer is None:
+            return set()
+        snapshot = self._get_snapshot()
+        if snapshot is None or snapshot.raw is None:
+            return set()
+        buf_repos = set(self._buffer.raw.get("repos", {}))
+        live_repos = set(snapshot.raw.get("repos", {}))
+        return buf_repos & live_repos
+
     def _get_repo_summaries(self) -> list[dict[str, Any]]:
         """Get summary info for each repo in the edit buffer."""
         buffer = self._buffer
@@ -170,11 +226,25 @@ class ConfigEditorHandlers:
             )
         return summaries
 
+    def _find_field_in_all_schemas(self, path: str) -> EditorFieldSchema | None:
+        """Search for a field schema across global and all repo schemas."""
+        found = _find_field_schema(self._get_global_schema(), path)
+        if found:
+            return found
+
+        if self._buffer is not None:
+            for repo_id in self._buffer.raw.get("repos", {}):
+                found = _find_field_schema(self._get_repo_schema(repo_id), path)
+                if found:
+                    return found
+        return None
+
     def _compute_dirty_count(self) -> int:
         """Count leaf fields that differ between the buffer and live snapshot.
 
-        Used for the ``X-Dirty-Count`` response header so the client
-        can display an accurate "N unsaved changes" indicator.
+        Covers global settings and per-repo settings for repos that
+        exist in both the buffer and live snapshot.  Wholly added or
+        removed repos are counted once each (not per-field).
         """
         if self._buffer is None:
             return 0
@@ -183,20 +253,50 @@ class ConfigEditorHandlers:
         if snapshot is None or snapshot.raw is None:
             return 0
 
-        schema = self._get_global_schema()
-        leaf_fields = collect_leaf_fields(schema)
+        # Global fields
+        global_schema = self._get_global_schema()
         count = 0
-        for fs in leaf_fields:
+        for fs in collect_leaf_fields(global_schema):
             buf_val = get_raw_value(self._buffer.raw, fs.path)
             live_val = get_raw_value(snapshot.raw, fs.path)
             if not raw_values_equal(buf_val, live_val):
                 count += 1
+
+        # Per-field diff only for repos present on both sides
+        for repo_id in sorted(self._get_common_repo_ids()):
+            for fs in collect_leaf_fields(self._get_repo_schema(repo_id)):
+                buf_val = get_raw_value(self._buffer.raw, fs.path)
+                live_val = get_raw_value(snapshot.raw, fs.path)
+                if not raw_values_equal(buf_val, live_val):
+                    count += 1
+
+        # Added/removed repos count once each
+        buf_repos = set(self._buffer.raw.get("repos", {}))
+        live_repos = set((snapshot.raw or {}).get("repos", {}))
+        count += len(buf_repos - live_repos)
+        count += len(live_repos - buf_repos)
+
         return count
 
     def _add_dirty_count_header(self, response: Response) -> Response:
         """Add ``X-Dirty-Count`` header to a mutation response."""
         response.headers["X-Dirty-Count"] = str(self._compute_dirty_count())
         return response
+
+    @staticmethod
+    def _redirect_target(request: Request) -> str:
+        """Determine redirect target from the request's Referer header.
+
+        Returns the Referer path if it starts with ``/config``, otherwise
+        falls back to ``/config``.  This keeps save/discard on the repo
+        page when triggered from ``/config/repos/<id>``.
+        """
+        referer = request.headers.get("Referer", "")
+        # Extract path from full URL (Referer is an absolute URL).
+        path = urlparse(referer).path
+        if path.startswith("/config"):
+            return path
+        return "/config"
 
     # -- Page routes --
 
@@ -237,6 +337,64 @@ class ConfigEditorHandlers:
             content_type="text/html",
         )
 
+    def handle_repo_page(self, request: Request, repo_id: str) -> Response:
+        """Render per-repo settings page (GET /config/repos/<repo_id>)."""
+        buffer = self._ensure_buffer()
+        if buffer is None:
+            return Response(
+                render_template(
+                    "pages/config_repo.html",
+                    error="No config available for editing. "
+                    "Config must be file-backed.",
+                    breadcrumbs=[
+                        ("Configuration", "/config"),
+                        (repo_id, f"/config/repos/{repo_id}"),
+                    ],
+                    repo_id=repo_id,
+                    schema=[],
+                    buffer=None,
+                    stale=False,
+                ),
+                content_type="text/html",
+            )
+
+        repos = buffer.raw.get("repos", {})
+        if repo_id not in repos:
+            return Response(
+                render_template(
+                    "pages/config_repo.html",
+                    error=f"Repository '{repo_id}' not found in config.",
+                    breadcrumbs=[
+                        ("Configuration", "/config"),
+                        (repo_id, f"/config/repos/{repo_id}"),
+                    ],
+                    repo_id=repo_id,
+                    schema=[],
+                    buffer=None,
+                    stale=False,
+                ),
+                content_type="text/html",
+            )
+
+        schema = self._get_repo_schema(repo_id)
+        stale = buffer.is_stale(self._get_generation())
+
+        return Response(
+            render_template(
+                "pages/config_repo.html",
+                breadcrumbs=[
+                    ("Configuration", "/config"),
+                    (repo_id, f"/config/repos/{repo_id}"),
+                ],
+                repo_id=repo_id,
+                schema=schema,
+                buffer=buffer,
+                stale=stale and buffer.dirty,
+                error=None,
+            ),
+            content_type="text/html",
+        )
+
     # -- API routes --
 
     def handle_field_patch(self, request: Request) -> Response:
@@ -262,9 +420,9 @@ class ConfigEditorHandlers:
             return Response("Missing value for literal source", status=400)
 
         # Coerce literal values based on field schema
-        schema = self._get_global_schema()
+        # Search across global + all repo schemas
         if source == "literal":
-            fs = _find_field_schema(schema, path)
+            fs = self._find_field_in_all_schemas(path)
             if fs:
                 try:
                     value = _coerce_value(value, fs.python_type)
@@ -276,7 +434,7 @@ class ConfigEditorHandlers:
         buffer.set_field(path, source, value)
 
         # Return the updated field HTML fragment
-        fs = _find_field_schema(schema, path)
+        fs = self._find_field_in_all_schemas(path)
         if fs:
             return self._add_dirty_count_header(
                 Response(
@@ -307,6 +465,15 @@ class ConfigEditorHandlers:
 
         path = form["path"]
         key = form.get("key")
+
+        # Special handling for adding a repo
+        if path == "repos" and key:
+            repos = buffer.raw.setdefault("repos", {})
+            if key not in repos:
+                repos[key] = _make_repo_skeleton()
+                buffer.mark_dirty()
+            return self._add_dirty_count_header(Response("OK", status=200))
+
         buffer.add_item(path, key)
 
         return self._add_dirty_count_header(Response("OK", status=200))
@@ -340,43 +507,72 @@ class ConfigEditorHandlers:
     def handle_diff(self, request: Request) -> Response:
         """Handle GET /api/config/diff — compare buffer vs live config.
 
-        Compares each leaf field in the editor schema individually,
-        producing per-field diff entries (not one coarse entry per
-        top-level dataclass field).
+        Compares each leaf field individually.  Wholly added/removed
+        repos appear as single entries (not per-field).
         """
         buffer = self._ensure_buffer()
         if buffer is None:
             return Response("No edit buffer", status=400)
 
         snapshot = self._get_snapshot()
-        if snapshot is None:
+        if snapshot is None or snapshot.raw is None:
             return Response("No live config", status=400)
-
-        schema = self._get_global_schema()
-        leaf_fields = collect_leaf_fields(schema)
 
         scope_summary: dict[str, int] = {}
         requires_restart = False
         all_changes: list[dict[str, Any]] = []
 
-        for fs in leaf_fields:
-            buf_val = get_raw_value(buffer.raw, fs.path)
-            live_val = get_raw_value(snapshot.raw, fs.path)
+        def _diff_fields(schema: list[EditorFieldSchema]) -> None:
+            nonlocal requires_restart
+            for fs in collect_leaf_fields(schema):
+                buf_val = get_raw_value(buffer.raw, fs.path)
+                live_val = get_raw_value(snapshot.raw, fs.path)
 
-            if raw_values_equal(buf_val, live_val):
-                continue
+                if raw_values_equal(buf_val, live_val):
+                    continue
 
-            scope_str = fs.scope
-            scope_summary[scope_str] = scope_summary.get(scope_str, 0) + 1
-            if scope_str == "server":
-                requires_restart = True
+                scope_str = fs.scope
+                scope_summary[scope_str] = scope_summary.get(scope_str, 0) + 1
+                if scope_str == "server":
+                    requires_restart = True
 
+                all_changes.append(
+                    {
+                        "field": fs.path,
+                        "scope": scope_str,
+                        "old": format_raw_value(live_val),
+                        "new": format_raw_value(buf_val),
+                    }
+                )
+
+        # Global fields
+        _diff_fields(self._get_global_schema())
+
+        # Per-field diff only for repos present on both sides
+        for repo_id in sorted(self._get_common_repo_ids()):
+            _diff_fields(self._get_repo_schema(repo_id))
+
+        # Added/removed repos as single entries
+        buf_repos = set(buffer.raw.get("repos", {}))
+        live_repos = set((snapshot.raw or {}).get("repos", {}))
+        for repo_id in sorted(buf_repos - live_repos):
+            scope_summary["repo"] = scope_summary.get("repo", 0) + 1
             all_changes.append(
                 {
-                    "field": fs.path,
-                    "scope": scope_str,
-                    "old": format_raw_value(live_val),
-                    "new": format_raw_value(buf_val),
+                    "field": f"repos.{repo_id}",
+                    "scope": "repo",
+                    "old": "(not set)",
+                    "new": "(added)",
+                }
+            )
+        for repo_id in sorted(live_repos - buf_repos):
+            scope_summary["repo"] = scope_summary.get("repo", 0) + 1
+            all_changes.append(
+                {
+                    "field": f"repos.{repo_id}",
+                    "scope": "repo",
+                    "old": "(configured)",
+                    "new": "(removed)",
                 }
             )
 
@@ -465,7 +661,7 @@ class ConfigEditorHandlers:
 
         return Response(
             status=200,
-            headers={"HX-Redirect": "/config"},
+            headers={"HX-Redirect": self._redirect_target(request)},
         )
 
     def handle_discard(self, request: Request) -> Response:
@@ -478,5 +674,5 @@ class ConfigEditorHandlers:
 
         return Response(
             status=200,
-            headers={"HX-Redirect": "/config"},
+            headers={"HX-Redirect": self._redirect_target(request)},
         )

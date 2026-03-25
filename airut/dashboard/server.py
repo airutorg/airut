@@ -234,6 +234,10 @@ class DashboardServer:
                 # Config editor routes
                 Rule("/config", endpoint="config_page"),
                 Rule(
+                    "/config/repos/<repo_id>",
+                    endpoint="config_repo_page",
+                ),
+                Rule(
                     "/api/config/field",
                     endpoint="api_config_field",
                     methods=["PATCH"],
@@ -293,6 +297,7 @@ class DashboardServer:
             "api_tracker": self._handlers.handle_api_tracker,
             # Config editor endpoints
             "config_page": self._config_handlers.handle_config_page,
+            "config_repo_page": self._config_handlers.handle_repo_page,
             "api_config_field": self._config_handlers.handle_field_patch,
             "api_config_add": self._config_handlers.handle_add,
             "api_config_remove": self._config_handlers.handle_remove,

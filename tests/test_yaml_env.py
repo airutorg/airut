@@ -38,6 +38,33 @@ class TestEnvVar:
         ev = EnvVar("MY_VAR")
         assert repr(ev) == "EnvVar('MY_VAR')"
 
+    def test_equality_same_name(self) -> None:
+        """Two EnvVar with same var_name are equal."""
+        assert EnvVar("X") == EnvVar("X")
+
+    def test_equality_different_name(self) -> None:
+        """Two EnvVar with different var_name are not equal."""
+        assert EnvVar("X") != EnvVar("Y")
+
+    def test_equality_not_other_type(self) -> None:
+        """EnvVar is not equal to a plain string."""
+        assert EnvVar("X") != "X"
+
+    def test_hash_same_name(self) -> None:
+        """Two EnvVar with same var_name have the same hash."""
+        assert hash(EnvVar("X")) == hash(EnvVar("X"))
+
+    def test_usable_in_set(self) -> None:
+        """EnvVar can be used in sets and as dict keys."""
+        s = {EnvVar("A"), EnvVar("A"), EnvVar("B")}
+        assert len(s) == 2
+
+    def test_dict_equality_with_envvar_values(self) -> None:
+        """Dicts containing EnvVar values compare equal when content matches."""
+        d1 = {"password": EnvVar("SECRET"), "port": 993}
+        d2 = {"password": EnvVar("SECRET"), "port": 993}
+        assert d1 == d2
+
 
 class TestVarRef:
     """Tests for VarRef placeholder class."""
@@ -57,6 +84,22 @@ class TestVarRef:
         """VarRef has a readable repr."""
         vr = VarRef("my_var")
         assert repr(vr) == "VarRef('my_var')"
+
+    def test_equality_same_name(self) -> None:
+        """Two VarRef with same var_name are equal."""
+        assert VarRef("x") == VarRef("x")
+
+    def test_equality_different_name(self) -> None:
+        """Two VarRef with different var_name are not equal."""
+        assert VarRef("x") != VarRef("y")
+
+    def test_equality_not_other_type(self) -> None:
+        """VarRef is not equal to a plain string."""
+        assert VarRef("x") != "x"
+
+    def test_hash_same_name(self) -> None:
+        """Two VarRef with same var_name have the same hash."""
+        assert hash(VarRef("x")) == hash(VarRef("x"))
 
 
 class TestVarConstructor:

@@ -275,6 +275,14 @@ select.cfg-input {
   color: var(--text-tertiary);
 }
 
+/* ---- Add repo form ---- */
+.cfg-add-repo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 /* ---- Dialog / modal ---- */
 .cfg-dialog {
   border: 1px solid var(--border);

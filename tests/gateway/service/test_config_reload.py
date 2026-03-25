@@ -252,7 +252,15 @@ class TestOnConfigChanged:
         finally:
             svc._reload_lock.release()
 
-    def test_no_change_skips_apply(self, tmp_path: Path) -> None:
+    def test_no_change_skips_apply_but_bumps_generation(
+        self, tmp_path: Path
+    ) -> None:
+        """No effective changes still bumps generation and updates snapshot.
+
+        The editor needs the new snapshot (which may have raw-dict changes
+        like explicitly setting a default value) even when the parsed
+        dataclass is identical.
+        """
         svc = _make_service(tmp_path)
         source = MagicMock()
         svc._config_source = source
@@ -274,7 +282,10 @@ class TestOnConfigChanged:
         ):
             svc._on_config_changed()
 
-        assert svc._config_generation == 0
+        # Generation bumps even without effective changes so the
+        # dashboard editor sees the updated raw dict.
+        assert svc._config_generation == 1
+        assert svc._config_snapshot is same_snapshot
 
 
 class TestRepoScopeReload:

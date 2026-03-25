@@ -1431,7 +1431,7 @@ class TestErrorHandling:
         self,
         integration_env: IntegrationEnvironment,
     ) -> None:
-        """D5: Rewriting identical config causes no reload."""
+        """D5: Rewriting identical config bumps gen but skips apply."""
         cf = ConfigFile.from_env(
             integration_env,
             integration_env.repo_root / "airut.yaml",
@@ -1441,22 +1441,22 @@ class TestErrorHandling:
             gen = service._config_generation
 
             # Re-write identical content.  The watcher will fire,
-            # _on_config_changed will run, detect no diff, and
-            # notify the condition without bumping generation.
+            # _on_config_changed will run, detect no effective diff,
+            # but still bump generation so the editor sees raw changes.
             cf.write()
 
-            # Wait until the service has loaded this file version.
-            # Content is identical so the SHA-256 matches, but
-            # wait_for is idempotent to notification timing.
-            expected_sha = hashlib.sha256(cf.path.read_bytes()).hexdigest()
+            # Wait for the watcher to process the event and bump gen.
+            # Cannot wait on SHA since identical content means the SHA
+            # already matches from the initial load.
             with service._reload_condition:
                 service._reload_condition.wait_for(
-                    lambda: service._config_file_sha256 == expected_sha,
+                    lambda: service._config_generation > gen,
                     timeout=5.0,
                 )
 
-            # Generation unchanged — no effective change detected
-            assert service._config_generation == gen
+            # Generation bumps even without effective changes so the
+            # dashboard editor sees updated raw dicts.
+            assert service._config_generation == gen + 1
 
     def test_reload_mixed_scopes(
         self,
