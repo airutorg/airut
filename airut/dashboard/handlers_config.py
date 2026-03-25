@@ -35,7 +35,6 @@ from airut.config.source import (
     ConfigSource,
 )
 from airut.dashboard.templating import render_template
-from airut.yaml_env import EnvVar
 
 
 logger = logging.getLogger(__name__)
@@ -44,16 +43,15 @@ logger = logging.getLogger(__name__)
 def _make_email_skeleton() -> dict[str, Any]:
     """Create a minimal email channel skeleton.
 
-    Sensitive fields use ``!env`` references to avoid storing
-    placeholder credentials.
+    Fields with reasonable parser defaults (ports) are omitted so
+    the editor shows them as "Default (not set)".  Sensitive fields
+    use empty literals so the editor shows "Literal" source.
     """
     return {
         "imap_server": "imap.example.com",
-        "imap_port": 993,
         "smtp_server": "smtp.example.com",
-        "smtp_port": 587,
         "username": "user@example.com",
-        "password": EnvVar("EMAIL_PASSWORD"),
+        "password": "",
         "from": "bot@example.com",
         "authorized_senders": [],
         "trusted_authserv_id": "example.com",
@@ -61,13 +59,10 @@ def _make_email_skeleton() -> dict[str, Any]:
 
 
 def _make_slack_skeleton() -> dict[str, Any]:
-    """Create a minimal Slack channel skeleton.
-
-    Tokens use ``!env`` references.
-    """
+    """Create a minimal Slack channel skeleton."""
     return {
-        "bot_token": EnvVar("SLACK_BOT_TOKEN"),
-        "app_token": EnvVar("SLACK_APP_TOKEN"),
+        "bot_token": "",
+        "app_token": "",
         "authorized": [{"workspace_members": True}],
     }
 
@@ -76,8 +71,7 @@ def _make_repo_skeleton() -> dict[str, Any]:
     """Create a minimal repo skeleton for add-repo.
 
     Contains required ``git.repo_url`` placeholder and an email channel
-    stub so the repo passes validation.  Sensitive fields use ``!env``
-    references to avoid storing placeholder credentials.
+    stub so the repo passes validation.
     """
     return {
         "git": {"repo_url": "https://github.com/org/repo.git"},
