@@ -110,7 +110,9 @@ class TestStartStop:
         with patch.object(listener, "_listener_loop"):
             listener.start(submit)
 
-        mock_el.connect.assert_called_once_with(max_retries=3)
+        mock_el.connect.assert_called_once_with(
+            max_retries=3, stop_event=listener._stop_event
+        )
         assert listener._thread is not None
         assert listener._thread.daemon is True
         assert listener.status.health == ChannelHealth.CONNECTED
