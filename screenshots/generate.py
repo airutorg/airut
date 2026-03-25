@@ -46,8 +46,23 @@ PAGES: list[tuple[str, str]] = [
 
 SCHEMES = ("light", "dark")
 
-# Viewport dimensions matching typical documentation screenshots
+# Viewport dimensions matching typical documentation screenshots.
+# device_scale_factor=2 produces Retina-quality output.
 VIEWPORT = {"width": 1280, "height": 900}
+DEVICE_SCALE_FACTOR = 2
+
+# CSS injected into every page to override system font stacks with fonts
+# that are explicitly installed in CI (fonts-inter, fonts-jetbrains-mono).
+# This avoids modifying the dashboard source while ensuring consistent,
+# high-quality font rendering in screenshots.
+_FONT_CSS = """\
+:root {
+  --font-stack: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", "Fira Code", Consolas,
+    "Liberation Mono", Menlo, monospace;
+}
+"""
 
 
 def resolve_url(base: str, template: str, ids: dict[str, str]) -> str:
@@ -86,8 +101,13 @@ def capture_page(
     """
     page.goto(url)
     page.wait_for_load_state("load")
+
+    # Override fonts for consistent, high-quality rendering.
+    page.add_style_tag(content=_FONT_CSS)
+
     # Small delay to ensure CSS transitions and fonts are settled
     page.wait_for_timeout(200)
+
     page.screenshot(path=str(output_path), full_page=full_page)
 
 
@@ -123,6 +143,7 @@ def generate_screenshots(
             context = browser.new_context(
                 color_scheme=scheme,
                 viewport=VIEWPORT,
+                device_scale_factor=DEVICE_SCALE_FACTOR,
             )
             page = context.new_page()
 
