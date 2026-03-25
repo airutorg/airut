@@ -858,6 +858,69 @@ class TestStartStop:
         # Should complete in well under 1 second (the old sleep interval)
         assert elapsed < 0.5
 
+    def test_stop_during_boot_does_not_orphan_listeners(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """stop() during boot aborts without orphaning listener threads.
+
+        Regression test: if stop() ran before _boot() started listeners,
+        channel_listener.start() would reset _running=True and clear the
+        stop event, creating an orphaned polling thread that was never
+        stopped.  _boot() now checks _shutdown_event before starting
+        listeners, and start() re-stops any that slipped through the
+        race window.
+        """
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, dashboard_enabled=False)
+
+        # Call stop() during sandbox.startup() — before listeners start.
+        # This simulates the race: stop() runs, then boot continues.
+        def stop_during_startup():
+            svc.stop()
+
+        svc.sandbox.startup.side_effect = stop_during_startup
+
+        start_time = time.monotonic()
+        svc.start()
+        elapsed = time.monotonic() - start_time
+
+        # Should complete quickly (no orphan thread blocking teardown)
+        assert elapsed < 1.0
+
+        # Listener.start should NOT have been called — boot aborted
+        handler.adapters["email"].listener.start.assert_not_called()
+
+    def test_stop_during_boot_mid_listener_loop(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """stop() during the listener loop skips remaining repos."""
+        from airut.gateway.service.repo_handler import RepoHandler
+
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, dashboard_enabled=False)
+
+        # First handler triggers stop
+        def start_and_stop():
+            svc.stop()
+
+        handler.start_listener = start_and_stop
+
+        # Second handler should NOT be started
+        mock_handler2 = MagicMock(spec=RepoHandler)
+        mock_handler2.config = MagicMock()
+        mock_handler2.config.repo_id = "repo2"
+        mock_handler2.config.git_repo_url = "https://example.com/repo2"
+        mock_handler2.config.channels = {
+            "email": MagicMock(channel_info="imap2.example.com")
+        }
+        mock_handler2.config.storage_dir = tmp_path / "s2"
+        svc.repo_handlers["repo2"] = mock_handler2
+
+        svc.start()
+
+        # repo2 should not have been started
+        mock_handler2.start_listener.assert_not_called()
+
 
 class TestRepoHandlerInitError:
     def test_repo_handler_init_error_recorded(
@@ -990,6 +1053,11 @@ class TestStartRepoInitFailure:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_enabled=False)
 
+        # Use InterruptEvent so _boot() completes without seeing
+        # shutdown_event.is_set() (InterruptEvent only fires on bare
+        # .wait() calls, not on .is_set()).
+        svc._shutdown_event = InterruptEvent()
+
         # Add a second mock handler that will fail
         mock_handler2 = MagicMock(spec=RepoHandler)
         mock_handler2.config = MagicMock()
@@ -1001,13 +1069,6 @@ class TestStartRepoInitFailure:
         mock_handler2.config.storage_dir = tmp_path / "s2"
         mock_handler2.start_listener.side_effect = RuntimeError("Auth failed")
         svc.repo_handlers["repo2"] = mock_handler2
-
-        # Make the first handler succeed but stop immediately
-        def fake_start():
-            svc._running = False
-            svc._shutdown_event.set()
-
-        handler.start_listener = fake_start
 
         svc.start()
 
