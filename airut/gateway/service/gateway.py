@@ -325,6 +325,16 @@ class GatewayService:
                 "Resilient mode: staying alive with boot error on dashboard"
             )
 
+        # If stop() was called during boot, any listeners started after
+        # stop() iterated them would be orphaned.  Re-stop all listeners
+        # to clean up the race window.
+        if self._stopped:
+            for repo_handler in self.repo_handlers.values():
+                repo_handler.stop()
+            if self._executor_pool:
+                self._executor_pool.shutdown(wait=False)
+            return
+
         # Block main thread until shutdown
         try:
             self._shutdown_event.wait()
@@ -364,6 +374,10 @@ class GatewayService:
         Updates boot state via VersionedStore as each phase completes. On
         failure, the caller is responsible for recording the error.
 
+        Checks ``_shutdown_event`` between phases so that a concurrent
+        ``stop()`` call aborts the boot without starting new listeners
+        (which would be orphaned since ``stop()`` already ran).
+
         Raises:
             RuntimeError: If all repos fail to initialize.
         """
@@ -377,6 +391,12 @@ class GatewayService:
             )
         )
         self.sandbox.startup()
+
+        if self._shutdown_event.is_set():
+            logger.info(
+                "Shutdown requested during boot (proxy phase), aborting"
+            )
+            return
 
         # Initialize shared thread pool
         self._executor_pool = ThreadPoolExecutor(
@@ -423,6 +443,12 @@ class GatewayService:
         # Start all repo listeners, tracking success/failure
         started_count = 0
         for repo_id, repo_handler in self.repo_handlers.items():
+            if self._shutdown_event.is_set():
+                logger.info(
+                    "Shutdown requested during boot (listener loop), aborting"
+                )
+                break
+
             config = repo_handler.config
             boot = self._boot_store.get().value
             self._boot_store.update(
