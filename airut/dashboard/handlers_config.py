@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 from werkzeug.wrappers import Request, Response
 
 from airut.config.editor import (
+    MISSING,
     EditBuffer,
     EditorFieldSchema,
     collect_leaf_fields,
@@ -292,6 +293,33 @@ class ConfigEditorHandlers:
                             return found
         return None
 
+    def _iter_repo_set_fields(
+        self,
+        repo_id: str,
+        raw: dict[str, Any] | None,
+    ) -> list[tuple[EditorFieldSchema, object]]:
+        """Yield (field_schema, value) for all set fields of a repo.
+
+        Includes repo-level fields and channel subfields.  Skips fields
+        where the value is absent (``MISSING``) or ``None``.
+        """
+        result: list[tuple[EditorFieldSchema, object]] = []
+        for fs in collect_leaf_fields(self._get_repo_schema(repo_id)):
+            val = get_raw_value(raw, fs.path)
+            if val is not None and val is not MISSING:
+                result.append((fs, val))
+        repo_data = (raw or {}).get("repos", {}).get(repo_id, {})
+        for ch_type, get_schema in (
+            ("email", self._get_email_schema),
+            ("slack", self._get_slack_schema),
+        ):
+            if ch_type in repo_data:
+                for fs in collect_leaf_fields(get_schema(repo_id)):
+                    val = get_raw_value(raw, fs.path)
+                    if val is not None and val is not MISSING:
+                        result.append((fs, val))
+        return result
+
     def _walk_channel_diffs(
         self,
         repo_id: str,
@@ -334,9 +362,9 @@ class ConfigEditorHandlers:
     def _compute_dirty_count(self) -> int:
         """Count leaf fields that differ between the buffer and live snapshot.
 
-        Covers global settings and per-repo settings for repos that
-        exist in both the buffer and live snapshot.  Wholly added or
-        removed repos are counted once each (not per-field).
+        Covers global settings and per-repo settings.  For repos present
+        on both sides, individual fields are compared.  For wholly added
+        or removed repos, each set field is counted individually.
         """
         if self._buffer is None:
             return 0
@@ -385,11 +413,13 @@ class ConfigEditorHandlers:
                 on_removed=_count_change,
             )
 
-        # Added/removed repos count once each
+        # Added/removed repos — count per-field
         buf_repos = set(buffer.raw.get("repos", {}))
         live_repos = set((snapshot.raw or {}).get("repos", {}))
-        count += len(buf_repos - live_repos)
-        count += len(live_repos - buf_repos)
+        for repo_id in buf_repos - live_repos:
+            count += len(self._iter_repo_set_fields(repo_id, buffer.raw))
+        for repo_id in live_repos - buf_repos:
+            count += len(self._iter_repo_set_fields(repo_id, snapshot.raw))
 
         return count
 
@@ -791,7 +821,8 @@ class ConfigEditorHandlers:
         """Handle GET /api/config/diff — compare buffer vs live config.
 
         Compares each leaf field individually.  Wholly added/removed
-        repos appear as single entries (not per-field).
+        repos are expanded to per-field entries showing actual values.
+        Also runs validation and surfaces errors in the result.
         """
         buffer = self._ensure_buffer()
         if buffer is None:
@@ -857,29 +888,38 @@ class ConfigEditorHandlers:
                 ),
             )
 
-        # Added/removed repos as single entries
+        # Added/removed repos — enumerate per-field entries
         buf_repos = set(buffer.raw.get("repos", {}))
         live_repos = set((snapshot.raw or {}).get("repos", {}))
         for repo_id in sorted(buf_repos - live_repos):
-            scope_summary["repo"] = scope_summary.get("repo", 0) + 1
-            all_changes.append(
-                {
-                    "field": f"repos.{repo_id}",
-                    "scope": "repo",
-                    "old": "(not set)",
-                    "new": "(added)",
-                }
-            )
+            for fs, val in self._iter_repo_set_fields(repo_id, buffer.raw):
+                scope_summary["repo"] = scope_summary.get("repo", 0) + 1
+                all_changes.append(
+                    {
+                        "field": fs.path,
+                        "scope": "repo",
+                        "old": "(not set)",
+                        "new": format_raw_value(val),
+                    }
+                )
         for repo_id in sorted(live_repos - buf_repos):
-            scope_summary["repo"] = scope_summary.get("repo", 0) + 1
-            all_changes.append(
-                {
-                    "field": f"repos.{repo_id}",
-                    "scope": "repo",
-                    "old": "(configured)",
-                    "new": "(removed)",
-                }
-            )
+            for fs, val in self._iter_repo_set_fields(repo_id, snapshot.raw):
+                scope_summary["repo"] = scope_summary.get("repo", 0) + 1
+                all_changes.append(
+                    {
+                        "field": fs.path,
+                        "scope": "repo",
+                        "old": format_raw_value(val),
+                        "new": "(removed)",
+                    }
+                )
+
+        # Run validation so the diff dialog can disable save if invalid
+        validation_error: str | None = None
+        try:
+            buffer.validate()
+        except Exception as e:
+            validation_error = str(e)
 
         return Response(
             render_template(
@@ -889,6 +929,7 @@ class ConfigEditorHandlers:
                 scope_summary=scope_summary,
                 requires_restart=requires_restart,
                 total_changes=sum(scope_summary.values()),
+                validation_error=validation_error,
             ),
             content_type="text/html",
         )

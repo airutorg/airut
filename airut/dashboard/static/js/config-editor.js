@@ -53,10 +53,16 @@
 
   // Open diff dialog after diff content loads (not before — avoids
   // "Loading..." flash and onclick/htmx conflicts).
+  // Also disable the Confirm Save button if validation errors are present.
   document.body.addEventListener('htmx:afterSwap', function(evt) {
     if (evt.detail.target && evt.detail.target.id === 'diff-modal-body') {
       var dialog = document.getElementById('diff-modal');
       if (dialog && !dialog.open) dialog.showModal();
+
+      // Disable save button when diff reports validation errors
+      var hasErrors = document.getElementById('diff-has-errors');
+      var saveBtn = dialog && dialog.querySelector('[hx-post$="/save"]');
+      if (saveBtn) saveBtn.disabled = !!hasErrors;
     }
   });
 

@@ -537,6 +537,139 @@ class TestAddRemoveRepo:
         assert "bad-repo" not in svc.repo_handlers
 
 
+class TestReloadAddsNewRepo:
+    """Bug: adding a repo via config change should bring it online."""
+
+    def test_on_config_changed_adds_new_repo(self, tmp_path: Path) -> None:
+        """Full _on_config_changed flow with a new repo adds it to handlers."""
+        svc = _make_service(tmp_path)
+        source = MagicMock()
+        svc._config_source = source
+
+        new_repo = _make_email_config(repo_id="new-repo")
+        new_config = dataclasses.replace(
+            svc.config,
+            repos={**svc.config.repos, "new-repo": new_repo},
+        )
+        from airut.config.snapshot import ConfigSnapshot
+
+        new_snapshot = ConfigSnapshot(
+            new_config, frozenset({"global_config", "repos"})
+        )
+
+        with (
+            patch.object(
+                ServerConfig,
+                "from_source",
+                return_value=new_snapshot,
+            ),
+            patch("airut.gateway.service.gateway.reset_dotenv_state"),
+            patch(
+                "airut.gateway.service.repo_handler.create_adapters"
+            ) as mock_create,
+            patch("airut.gateway.service.repo_handler.ConversationManager"),
+        ):
+            mock_create.return_value = {"email": MagicMock()}
+            svc._on_config_changed()
+
+        assert "new-repo" in svc.repo_handlers
+        assert svc.config.repos["new-repo"].model == "opus"
+
+    def test_on_config_changed_removes_repo(self, tmp_path: Path) -> None:
+        """Full _on_config_changed flow removes a repo from handlers."""
+        repos = {
+            "a": _make_email_config(repo_id="a"),
+            "b": _make_email_config(repo_id="b"),
+        }
+        svc = _make_service(tmp_path, repos=repos)
+        source = MagicMock()
+        svc._config_source = source
+
+        # New config with only "a"
+        new_config = dataclasses.replace(svc.config, repos={"a": repos["a"]})
+        from airut.config.snapshot import ConfigSnapshot
+
+        new_snapshot = ConfigSnapshot(
+            new_config, frozenset({"global_config", "repos"})
+        )
+
+        with (
+            patch.object(
+                ServerConfig,
+                "from_source",
+                return_value=new_snapshot,
+            ),
+            patch("airut.gateway.service.gateway.reset_dotenv_state"),
+            patch.object(
+                TaskTracker,
+                "has_active_tasks_for_repo",
+                return_value=False,
+            ),
+        ):
+            svc._on_config_changed()
+
+        assert "a" in svc.repo_handlers
+        assert "b" not in svc.repo_handlers
+
+    def test_failed_add_retried_on_next_reload(self, tmp_path: Path) -> None:
+        """Bug: if _add_repo fails, retry on next config reload.
+
+        Previously the repo was stuck forever after a failed add.
+        """
+        svc = _make_service(tmp_path)
+        source = MagicMock()
+        svc._config_source = source
+
+        new_repo = _make_email_config(repo_id="new-repo")
+        new_config = dataclasses.replace(
+            svc.config,
+            repos={**svc.config.repos, "new-repo": new_repo},
+        )
+        from airut.config.snapshot import ConfigSnapshot
+
+        new_snapshot = ConfigSnapshot(
+            new_config, frozenset({"global_config", "repos"})
+        )
+
+        # First reload: _add_repo fails
+        with (
+            patch.object(
+                ServerConfig,
+                "from_source",
+                return_value=new_snapshot,
+            ),
+            patch("airut.gateway.service.gateway.reset_dotenv_state"),
+            patch(
+                "airut.gateway.service.repo_handler.create_adapters",
+                side_effect=RuntimeError("listener fail"),
+            ),
+            patch("airut.gateway.service.repo_handler.ConversationManager"),
+        ):
+            svc._on_config_changed()
+
+        # After first reload: repo not in handlers
+        assert "new-repo" not in svc.repo_handlers
+
+        # Second reload: same config, _add_repo succeeds
+        with (
+            patch.object(
+                ServerConfig,
+                "from_source",
+                return_value=new_snapshot,
+            ),
+            patch("airut.gateway.service.gateway.reset_dotenv_state"),
+            patch(
+                "airut.gateway.service.repo_handler.create_adapters"
+            ) as mock_create,
+            patch("airut.gateway.service.repo_handler.ConversationManager"),
+        ):
+            mock_create.return_value = {"email": MagicMock()}
+            svc._on_config_changed()
+
+        # After second reload: repo should now be in handlers
+        assert "new-repo" in svc.repo_handlers
+
+
 class TestConfigWatcherIntegration:
     """Tests for config watcher start/stop lifecycle."""
 
