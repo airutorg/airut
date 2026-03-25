@@ -164,9 +164,10 @@ class ChannelStatus:
 class ChannelConfig(Protocol):
     """Interface for channel-specific configuration.
 
-    Channel config implementations must provide ``channel_type`` and
-    ``channel_info`` properties so the gateway core and dashboard can
-    identify and display channels without protocol-specific knowledge.
+    Channel config implementations must provide ``channel_type``,
+    ``channel_info``, and ``channel_detail`` properties so the gateway
+    core and dashboard can identify and display channels without
+    protocol-specific knowledge.
     """
 
     @property
@@ -177,6 +178,11 @@ class ChannelConfig(Protocol):
     @property
     def channel_info(self) -> str:
         """Return a short description for dashboard display."""
+        ...
+
+    @property
+    def channel_detail(self) -> str:
+        """Return additional detail for dashboard display (e.g. address)."""
         ...
 
 

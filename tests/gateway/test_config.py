@@ -485,6 +485,22 @@ def test_email_channel_config_channel_type() -> None:
     assert config.channel_type == "email"
 
 
+def test_email_channel_config_channel_detail() -> None:
+    """EmailChannelConfig.channel_detail returns from_address."""
+    config = EmailChannelConfig(
+        imap_server="imap.example.com",
+        imap_port=993,
+        smtp_server="smtp.example.com",
+        smtp_port=587,
+        username="test@example.com",
+        password="secret123",
+        from_address="Test <test@example.com>",
+        authorized_senders=["a@example.com"],
+        trusted_authserv_id="mx.example.com",
+    )
+    assert config.channel_detail == "Test <test@example.com>"
+
+
 def test_repo_server_config_empty_channels() -> None:
     """RepoServerConfig rejects empty channels dict."""
     with pytest.raises(ValueError, match="at least one channel"):

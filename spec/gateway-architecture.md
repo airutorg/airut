@@ -51,9 +51,10 @@ protocol handling (email IMAP/SMTP, Slack Socket Mode, etc.) via types in
   `RawMessage[email.message.Message]`; the Slack channel uses
   `RawMessage[dict[str, Any]]`; the core uses `RawMessage[Any]`.
 - **`ChannelConfig`** — `typing.Protocol` defining the configuration interface
-  for channel implementations. Requires `channel_type` (e.g., `"email"`) and
-  `channel_info` (human-readable summary for dashboard display) properties. All
-  channel config dataclasses (e.g., `EmailChannelConfig`) implement this
+  for channel implementations. Requires `channel_type` (e.g., `"email"`),
+  `channel_info` (human-readable summary for dashboard display), and
+  `channel_detail` (additional detail such as agent email address) properties.
+  All channel config dataclasses (e.g., `EmailChannelConfig`) implement this
   protocol.
 - **`ChannelAdapter`** — `typing.Protocol` defining the interface between the
   core and channel implementations: `listener` property (a `ChannelListener`),

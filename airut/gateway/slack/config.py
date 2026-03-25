@@ -83,3 +83,8 @@ class SlackChannelConfig(ChannelConfig):
     def channel_info(self) -> str:
         """Return a short description for dashboard display."""
         return "Slack (Socket Mode)"
+
+    @property
+    def channel_detail(self) -> str:
+        """Return additional detail for dashboard display."""
+        return ""

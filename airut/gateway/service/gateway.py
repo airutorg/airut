@@ -91,6 +91,7 @@ def _build_channel_infos(
         ChannelInfo(
             channel_type=channel_type,
             info=channel_config.channel_info,
+            detail=channel_config.channel_detail,
         )
         for channel_type, channel_config in config.channels.items()
     )
