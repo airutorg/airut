@@ -51,7 +51,7 @@ _SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
     "Content-Security-Policy": (
         "default-src 'self'; "
-        "style-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
         "script-src 'self'; "
         "img-src 'self' data:; "
         "connect-src 'self'; "

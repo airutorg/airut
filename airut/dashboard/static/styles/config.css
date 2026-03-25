@@ -250,6 +250,18 @@ select.cfg-input {
   margin-bottom: 12px;
   color: var(--text-secondary);
 }
+.cfg-diff-summary .cfg-scope {
+  margin-left: 6px;
+}
+.cfg-remove-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0 0 10px;
+}
+.cfg-input-inline {
+  max-width: 250px;
+  display: inline-block;
+}
 
 /* ---- Repo list ---- */
 .cfg-repo-card {

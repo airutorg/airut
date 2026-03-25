@@ -523,8 +523,9 @@ JavaScript SSE handlers.
 - **Static JS** (`static/js/`): `local-time.js` (timestamp formatting),
   `auto-scroll.js` (terminal auto-scroll), `actions.js` (event toggle),
   `sse-fallback.js` (htmx SSE connection status).
-- **No inline styles or scripts**: CSP uses
-  `script-src 'self'; style-src 'self'` (no `'unsafe-inline'`).
+- **No inline scripts**: CSP uses `script-src 'self'` (no `'unsafe-inline'`).
+  `style-src` allows `'unsafe-inline'` because htmx applies inline styles
+  internally during swaps and transitions.
 
 ### Navigation
 
