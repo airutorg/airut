@@ -3,12 +3,16 @@
 {% include "components/config/scalar.html" %}
 {% elif f.type_tag == 'nested' %}
 {% include "components/config/nested.html" %}
+{% elif f.type_tag == 'list_str' %}
+{% include "components/config/list_str.html" %}
+{% elif f.type_tag == 'tagged_union_list' %}
+{% include "components/config/tagged_union_list.html" %}
 {% else %}
-{# Phase 2+ widgets: list_str, dict_str_str, keyed_collection, tagged_union_list #}
+{# Phase 4+ widgets: dict_str_str, keyed_collection #}
 <div class="cfg-field">
   <div class="cfg-field-header">
     <span class="cfg-label">{{ f.path }}</span>
   </div>
-  <span class="cfg-help">{{ f.doc }} (editing not available in Phase 1)</span>
+  <span class="cfg-help">{{ f.doc }} (editing not available yet)</span>
 </div>
 {% endif %}

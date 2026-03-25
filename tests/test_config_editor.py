@@ -340,6 +340,55 @@ class TestSchemaForEditorRealConfigs:
         assert rl.nested_fields is not None
 
 
+class TestSchemaForEditorChannels:
+    def test_email_channel_config(self) -> None:
+        from airut.config.source import YAML_EMAIL_STRUCTURE
+        from airut.gateway.config import EmailChannelConfig
+
+        schema = schema_for_editor(
+            EmailChannelConfig,
+            path_prefix="repos.my-project.email",
+            structure=YAML_EMAIL_STRUCTURE,
+        )
+        names = {s.name for s in schema}
+        assert "imap_server" in names
+        assert "smtp_server" in names
+        assert "password" in names
+        assert "authorized_senders" in names
+
+        by_name = {s.name: s for s in schema}
+        assert (
+            by_name["imap_server"].path == "repos.my-project.email.imap_server"
+        )
+        assert by_name["authorized_senders"].type_tag == "list_str"
+        assert by_name["password"].secret is True
+
+        # imap nested fields use YAML_EMAIL_STRUCTURE
+        assert (
+            by_name["imap_connect_retries"].path
+            == "repos.my-project.email.imap.connect_retries"
+        )
+
+    def test_slack_channel_config(self) -> None:
+        from airut.gateway.slack.config import SlackChannelConfig
+
+        schema = schema_for_editor(
+            SlackChannelConfig,
+            path_prefix="repos.my-project.slack",
+        )
+        names = {s.name for s in schema}
+        assert "bot_token" in names
+        assert "app_token" in names
+        assert "authorized" in names
+
+        by_name = {s.name: s for s in schema}
+        assert by_name["bot_token"].path == "repos.my-project.slack.bot_token"
+        assert by_name["bot_token"].secret is True
+        assert by_name["authorized"].type_tag == "tagged_union_list"
+        assert by_name["authorized"].tagged_union_rules is not None
+        assert len(by_name["authorized"].tagged_union_rules) == 3
+
+
 # ── InMemoryConfigSource tests ───────────────────────────────────────
 
 
@@ -519,6 +568,91 @@ class TestEditBufferGetValue:
     def test_get_nested(self) -> None:
         buf = EditBuffer(_make_sample_raw(), generation=0)
         assert buf.get_value("execution.max_concurrent") == 3
+
+
+class TestEditBufferSetListItem:
+    def test_set_list_item(self) -> None:
+        raw = _make_sample_raw()
+        buf = EditBuffer(raw, generation=0)
+        buf.set_list_item(
+            "repos.test-repo.email.authorized_senders", 0, "new@example.com"
+        )
+        assert buf.raw["repos"]["test-repo"]["email"]["authorized_senders"] == [
+            "new@example.com"
+        ]
+        assert buf.dirty
+
+    def test_set_list_item_out_of_range(self) -> None:
+        raw = _make_sample_raw()
+        buf = EditBuffer(raw, generation=0)
+        buf.set_list_item("repos.test-repo.email.authorized_senders", 99, "bad")
+        # Out-of-range should not modify
+        assert not buf.dirty
+
+    def test_set_list_item_non_list(self) -> None:
+        raw = _make_sample_raw()
+        buf = EditBuffer(raw, generation=0)
+        buf.set_list_item("dashboard.port", 0, "bad")
+        # Not a list, no modification
+        assert not buf.dirty
+
+    def test_set_list_item_missing_path(self) -> None:
+        raw = _make_sample_raw()
+        buf = EditBuffer(raw, generation=0)
+        buf.set_list_item("nonexistent.path", 0, "bad")
+        assert not buf.dirty
+
+
+class TestEditBufferSetTaggedUnionItem:
+    def test_set_tagged_union_item(self) -> None:
+        raw = _make_sample_raw()
+        raw["repos"]["test-repo"]["slack"] = {
+            "bot_token": "xoxb-test",
+            "app_token": "xapp-test",
+            "authorized": [{"workspace_members": True}],
+        }
+        buf = EditBuffer(raw, generation=0)
+        buf.set_tagged_union_item(
+            "repos.test-repo.slack.authorized", 0, "user_id", "U12345"
+        )
+        assert buf.raw["repos"]["test-repo"]["slack"]["authorized"] == [
+            {"user_id": "U12345"}
+        ]
+        assert buf.dirty
+
+    def test_set_tagged_union_item_bool(self) -> None:
+        raw = _make_sample_raw()
+        raw["repos"]["test-repo"]["slack"] = {
+            "bot_token": "xoxb-test",
+            "app_token": "xapp-test",
+            "authorized": [{"user_id": "U123"}],
+        }
+        buf = EditBuffer(raw, generation=0)
+        buf.set_tagged_union_item(
+            "repos.test-repo.slack.authorized", 0, "workspace_members", True
+        )
+        assert buf.raw["repos"]["test-repo"]["slack"]["authorized"] == [
+            {"workspace_members": True}
+        ]
+
+    def test_set_tagged_union_item_out_of_range(self) -> None:
+        raw = _make_sample_raw()
+        raw["repos"]["test-repo"]["slack"] = {
+            "bot_token": "xoxb-test",
+            "app_token": "xapp-test",
+            "authorized": [],
+        }
+        buf = EditBuffer(raw, generation=0)
+        buf.set_tagged_union_item(
+            "repos.test-repo.slack.authorized", 0, "user_id", "U123"
+        )
+        assert not buf.dirty
+
+    def test_set_tagged_union_item_missing_path(self) -> None:
+        raw = _make_sample_raw()
+        buf = EditBuffer(raw, generation=0)
+        buf.set_tagged_union_item("nonexistent.path", 0, "key", "val")
+        assert not buf.dirty
 
 
 class TestEditBufferValidate:

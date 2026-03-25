@@ -28,6 +28,7 @@ from airut.config.editor import (
 )
 from airut.config.snapshot import ConfigSnapshot
 from airut.config.source import (
+    YAML_EMAIL_STRUCTURE,
     YAML_GLOBAL_STRUCTURE,
     YAML_REPO_STRUCTURE,
     ConfigSource,
@@ -39,6 +40,37 @@ from airut.yaml_env import EnvVar
 logger = logging.getLogger(__name__)
 
 
+def _make_email_skeleton() -> dict[str, Any]:
+    """Create a minimal email channel skeleton.
+
+    Sensitive fields use ``!env`` references to avoid storing
+    placeholder credentials.
+    """
+    return {
+        "imap_server": "imap.example.com",
+        "imap_port": 993,
+        "smtp_server": "smtp.example.com",
+        "smtp_port": 587,
+        "username": "user@example.com",
+        "password": EnvVar("EMAIL_PASSWORD"),
+        "from": "bot@example.com",
+        "authorized_senders": [],
+        "trusted_authserv_id": "example.com",
+    }
+
+
+def _make_slack_skeleton() -> dict[str, Any]:
+    """Create a minimal Slack channel skeleton.
+
+    Tokens use ``!env`` references.
+    """
+    return {
+        "bot_token": EnvVar("SLACK_BOT_TOKEN"),
+        "app_token": EnvVar("SLACK_APP_TOKEN"),
+        "authorized": [{"workspace_members": True}],
+    }
+
+
 def _make_repo_skeleton() -> dict[str, Any]:
     """Create a minimal repo skeleton for add-repo.
 
@@ -48,17 +80,7 @@ def _make_repo_skeleton() -> dict[str, Any]:
     """
     return {
         "git": {"repo_url": "https://github.com/org/repo.git"},
-        "email": {
-            "imap_server": "imap.example.com",
-            "imap_port": 993,
-            "smtp_server": "smtp.example.com",
-            "smtp_port": 587,
-            "username": "user@example.com",
-            "password": EnvVar("EMAIL_PASSWORD"),
-            "from": "bot@example.com",
-            "authorized_senders": [],
-            "trusted_authserv_id": "example.com",
-        },
+        "email": _make_email_skeleton(),
     }
 
 
@@ -182,8 +204,26 @@ class ConfigEditorHandlers:
             RepoServerConfig,
             path_prefix=prefix,
             structure=YAML_REPO_STRUCTURE,
-            exclude={"repo_id"},
+            exclude={"repo_id", "channels"},
         )
+
+    def _get_email_schema(self, repo_id: str) -> list[EditorFieldSchema]:
+        """Get editor schema for an email channel within a repo."""
+        from airut.gateway.config import EmailChannelConfig
+
+        prefix = f"repos.{repo_id}.email"
+        return schema_for_editor(
+            EmailChannelConfig,
+            path_prefix=prefix,
+            structure=YAML_EMAIL_STRUCTURE,
+        )
+
+    def _get_slack_schema(self, repo_id: str) -> list[EditorFieldSchema]:
+        """Get editor schema for a Slack channel within a repo."""
+        from airut.gateway.slack.config import SlackChannelConfig
+
+        prefix = f"repos.{repo_id}.slack"
+        return schema_for_editor(SlackChannelConfig, path_prefix=prefix)
 
     def _get_common_repo_ids(self) -> set[str]:
         """Get repo IDs that exist in both the buffer and live snapshot.
@@ -227,17 +267,69 @@ class ConfigEditorHandlers:
         return summaries
 
     def _find_field_in_all_schemas(self, path: str) -> EditorFieldSchema | None:
-        """Search for a field schema across global and all repo schemas."""
+        """Search for a field schema across all schemas."""
         found = _find_field_schema(self._get_global_schema(), path)
         if found:
             return found
 
         if self._buffer is not None:
-            for repo_id in self._buffer.raw.get("repos", {}):
+            for repo_id, repo_data in self._buffer.raw.get("repos", {}).items():
                 found = _find_field_schema(self._get_repo_schema(repo_id), path)
                 if found:
                     return found
+                if isinstance(repo_data, dict):
+                    if "email" in repo_data:
+                        found = _find_field_schema(
+                            self._get_email_schema(repo_id), path
+                        )
+                        if found:
+                            return found
+                    if "slack" in repo_data:
+                        found = _find_field_schema(
+                            self._get_slack_schema(repo_id), path
+                        )
+                        if found:
+                            return found
         return None
+
+    def _walk_channel_diffs(
+        self,
+        repo_id: str,
+        buffer: EditBuffer,
+        snapshot: ConfigSnapshot,
+        *,
+        on_common: Callable[[list[EditorFieldSchema]], None],
+        on_added: Callable[[str, str], None],
+        on_removed: Callable[[str, str], None],
+    ) -> None:
+        """Walk channel diffs for a repo, dispatching to callbacks.
+
+        Args:
+            repo_id: Repository identifier.
+            buffer: Current edit buffer.
+            snapshot: Live config snapshot.
+            on_common: Called with channel schema when both sides
+                have the channel.
+            on_added: Called with (repo_id, ch_type) when channel
+                is in buffer but not live.
+            on_removed: Called with (repo_id, ch_type) when channel
+                is in live but not buffer.
+        """
+        buf_repo = buffer.raw.get("repos", {}).get(repo_id, {})
+        live_repo = (snapshot.raw or {}).get("repos", {}).get(repo_id, {})
+
+        for ch_type, get_schema in (
+            ("email", self._get_email_schema),
+            ("slack", self._get_slack_schema),
+        ):
+            buf_has = ch_type in buf_repo
+            live_has = ch_type in live_repo
+            if buf_has and live_has:
+                on_common(get_schema(repo_id))
+            elif buf_has:
+                on_added(repo_id, ch_type)
+            elif live_has:
+                on_removed(repo_id, ch_type)
 
     def _compute_dirty_count(self) -> int:
         """Count leaf fields that differ between the buffer and live snapshot.
@@ -249,6 +341,7 @@ class ConfigEditorHandlers:
         if self._buffer is None:
             return 0
 
+        buffer = self._buffer
         snapshot = self._get_snapshot()
         if snapshot is None or snapshot.raw is None:
             return 0
@@ -257,21 +350,43 @@ class ConfigEditorHandlers:
         global_schema = self._get_global_schema()
         count = 0
         for fs in collect_leaf_fields(global_schema):
-            buf_val = get_raw_value(self._buffer.raw, fs.path)
+            buf_val = get_raw_value(buffer.raw, fs.path)
             live_val = get_raw_value(snapshot.raw, fs.path)
             if not raw_values_equal(buf_val, live_val):
                 count += 1
 
         # Per-field diff only for repos present on both sides
-        for repo_id in sorted(self._get_common_repo_ids()):
-            for fs in collect_leaf_fields(self._get_repo_schema(repo_id)):
-                buf_val = get_raw_value(self._buffer.raw, fs.path)
+        def _count_common(schema: list[EditorFieldSchema]) -> None:
+            nonlocal count
+            for fs in collect_leaf_fields(schema):
+                buf_val = get_raw_value(buffer.raw, fs.path)
                 live_val = get_raw_value(snapshot.raw, fs.path)
                 if not raw_values_equal(buf_val, live_val):
                     count += 1
 
+        def _count_change(_rid: str, _ch: str) -> None:
+            nonlocal count
+            count += 1
+
+        for repo_id in sorted(self._get_common_repo_ids()):
+            for fs in collect_leaf_fields(self._get_repo_schema(repo_id)):
+                buf_val = get_raw_value(buffer.raw, fs.path)
+                live_val = get_raw_value(snapshot.raw, fs.path)
+                if not raw_values_equal(buf_val, live_val):
+                    count += 1
+
+            # Channel fields
+            self._walk_channel_diffs(
+                repo_id,
+                self._buffer,
+                snapshot,
+                on_common=_count_common,
+                on_added=_count_change,
+                on_removed=_count_change,
+            )
+
         # Added/removed repos count once each
-        buf_repos = set(self._buffer.raw.get("repos", {}))
+        buf_repos = set(buffer.raw.get("repos", {}))
         live_repos = set((snapshot.raw or {}).get("repos", {}))
         count += len(buf_repos - live_repos)
         count += len(live_repos - buf_repos)
@@ -339,6 +454,13 @@ class ConfigEditorHandlers:
 
     def handle_repo_page(self, request: Request, repo_id: str) -> Response:
         """Render per-repo settings page (GET /config/repos/<repo_id>)."""
+        no_channels_ctx: dict[str, Any] = {
+            "has_email": False,
+            "has_slack": False,
+            "email_schema": [],
+            "slack_schema": [],
+        }
+
         buffer = self._ensure_buffer()
         if buffer is None:
             return Response(
@@ -354,6 +476,7 @@ class ConfigEditorHandlers:
                     schema=[],
                     buffer=None,
                     stale=False,
+                    **no_channels_ctx,
                 ),
                 content_type="text/html",
             )
@@ -372,12 +495,17 @@ class ConfigEditorHandlers:
                     schema=[],
                     buffer=None,
                     stale=False,
+                    **no_channels_ctx,
                 ),
                 content_type="text/html",
             )
 
         schema = self._get_repo_schema(repo_id)
         stale = buffer.is_stale(self._get_generation())
+
+        repo_data = repos.get(repo_id, {})
+        has_email = isinstance(repo_data, dict) and "email" in repo_data
+        has_slack = isinstance(repo_data, dict) and "slack" in repo_data
 
         return Response(
             render_template(
@@ -391,6 +519,14 @@ class ConfigEditorHandlers:
                 buffer=buffer,
                 stale=stale and buffer.dirty,
                 error=None,
+                has_email=has_email,
+                has_slack=has_slack,
+                email_schema=self._get_email_schema(repo_id)
+                if has_email
+                else [],
+                slack_schema=self._get_slack_schema(repo_id)
+                if has_slack
+                else [],
             ),
             content_type="text/html",
         )
@@ -414,6 +550,36 @@ class ConfigEditorHandlers:
         path = form["path"]
         source = form["source"]
         value = form.get("value")
+        index_str = form.get("index")
+
+        # List/tagged-union item mutations (index present)
+        if index_str is not None:
+            try:
+                idx = int(index_str)
+            except (ValueError, TypeError):
+                return Response("Invalid index", status=400)
+            fs = self._find_field_in_all_schemas(path)
+            if fs and fs.type_tag == "tagged_union_list":
+                rule_type = form.get("rule_type", "workspace_members")
+                rule_value_str = form.get("rule_value", "")
+                rule_val: str | bool = (
+                    True if rule_type == "workspace_members" else rule_value_str
+                )
+                buffer.set_tagged_union_item(path, idx, rule_type, rule_val)
+            elif fs and fs.type_tag == "list_str":
+                buffer.set_list_item(path, idx, str(value or ""))
+            else:
+                return Response("Unknown list field", status=400)
+            return self._add_dirty_count_header(
+                Response(
+                    render_template(
+                        "components/config/field.html",
+                        f=fs,
+                        buffer=buffer,
+                    ),
+                    content_type="text/html",
+                )
+            )
 
         # Reject literal source without a value
         if source == "literal" and value is None:
@@ -474,9 +640,20 @@ class ConfigEditorHandlers:
                 buffer.mark_dirty()
             return self._add_dirty_count_header(Response("OK", status=200))
 
-        buffer.add_item(path, key)
+        # Special handling for adding a channel
+        channel_added = self._try_add_channel(buffer, path)
+        if channel_added is not None:
+            return channel_added
 
-        return self._add_dirty_count_header(Response("OK", status=200))
+        # Tagged union lists need a proper default item
+        fs = self._find_field_in_all_schemas(path)
+        if fs and fs.type_tag == "tagged_union_list":
+            self._add_tagged_union_default(buffer, path)
+        else:
+            buffer.add_item(path, key)
+
+        # Return rendered widget for list/tagged-union fields
+        return self._respond_with_field_fragment(buffer, path)
 
     def handle_remove(self, request: Request) -> Response:
         """Handle POST /api/config/remove — remove item from collection."""
@@ -500,8 +677,112 @@ class ConfigEditorHandlers:
                 index = int(index)
             except (ValueError, TypeError):
                 return Response("Invalid index", status=400)
+        # Channel removal — redirect to reload page
+        channel_removed = self._try_remove_channel(buffer, path, key, index)
+        if channel_removed is not None:
+            return channel_removed
+
         buffer.remove_item(path, key=key, index=index)
 
+        # Return rendered widget for list/tagged-union fields
+        return self._respond_with_field_fragment(buffer, path)
+
+    # -- Channel and list helpers --
+
+    @staticmethod
+    def _parse_channel_path(path: str) -> tuple[str, str] | None:
+        """Extract (repo_id, channel_type) if path is a channel root.
+
+        Returns None if the path doesn't match ``repos.<id>.(email|slack)``.
+        """
+        parts = path.split(".")
+        if (
+            len(parts) == 3
+            and parts[0] == "repos"
+            and parts[2] in ("email", "slack")
+        ):
+            return parts[1], parts[2]
+        return None
+
+    def _try_add_channel(
+        self, buffer: EditBuffer, path: str
+    ) -> Response | None:
+        """Handle adding a channel if path matches; returns None otherwise."""
+        parsed = self._parse_channel_path(path)
+        if parsed is None:
+            return None
+        repo_id, ch_type = parsed
+        repos = buffer.raw.get("repos", {})
+        repo = repos.get(repo_id)
+        if not isinstance(repo, dict):
+            return Response(f"Repo '{repo_id}' not found", status=400)
+        if ch_type not in repo:
+            if ch_type == "email":
+                repo["email"] = _make_email_skeleton()
+            else:
+                repo["slack"] = _make_slack_skeleton()
+            buffer.mark_dirty()
+        return self._add_dirty_count_header(
+            Response(
+                status=200,
+                headers={
+                    "HX-Redirect": f"/config/repos/{repo_id}",
+                },
+            )
+        )
+
+    def _try_remove_channel(
+        self,
+        buffer: EditBuffer,
+        path: str,
+        key: str | None,
+        index: int | None,
+    ) -> Response | None:
+        """Handle removing a channel if path matches; returns None otherwise."""
+        if key is not None or index is not None:
+            return None  # Not a channel removal
+        parsed = self._parse_channel_path(path)
+        if parsed is None:
+            return None
+        repo_id, _ = parsed
+        buffer.remove_item(path)
+        return self._add_dirty_count_header(
+            Response(
+                status=200,
+                headers={
+                    "HX-Redirect": f"/config/repos/{repo_id}",
+                },
+            )
+        )
+
+    @staticmethod
+    def _add_tagged_union_default(buffer: EditBuffer, path: str) -> None:
+        """Append a valid default tagged union item to a list."""
+        parts = path.split(".")
+        parent, final = EditBuffer._navigate(buffer.raw, parts, create=True)
+        target = parent.get(final)
+        if not isinstance(target, list):
+            parent[final] = []
+            target = parent[final]
+        target.append({"workspace_members": True})
+        buffer.mark_dirty()
+
+    def _respond_with_field_fragment(
+        self, buffer: EditBuffer, path: str
+    ) -> Response:
+        """Return rendered field fragment or plain OK."""
+        fs = self._find_field_in_all_schemas(path)
+        if fs and fs.type_tag in ("list_str", "tagged_union_list"):
+            return self._add_dirty_count_header(
+                Response(
+                    render_template(
+                        "components/config/field.html",
+                        f=fs,
+                        buffer=buffer,
+                    ),
+                    content_type="text/html",
+                )
+            )
         return self._add_dirty_count_header(Response("OK", status=200))
 
     def handle_diff(self, request: Request) -> Response:
@@ -549,8 +830,30 @@ class ConfigEditorHandlers:
         _diff_fields(self._get_global_schema())
 
         # Per-field diff only for repos present on both sides
+        def _ch_change(rid: str, ch: str, old: str, new: str) -> None:
+            scope_summary["repo"] = scope_summary.get("repo", 0) + 1
+            all_changes.append(
+                {
+                    "field": f"repos.{rid}.{ch}",
+                    "scope": "repo",
+                    "old": old,
+                    "new": new,
+                }
+            )
+
         for repo_id in sorted(self._get_common_repo_ids()):
             _diff_fields(self._get_repo_schema(repo_id))
+
+            self._walk_channel_diffs(
+                repo_id,
+                buffer,
+                snapshot,
+                on_common=_diff_fields,
+                on_added=lambda r, c: _ch_change(r, c, "(not set)", "(added)"),
+                on_removed=lambda r, c: _ch_change(
+                    r, c, "(configured)", "(removed)"
+                ),
+            )
 
         # Added/removed repos as single entries
         buf_repos = set(buffer.raw.get("repos", {}))

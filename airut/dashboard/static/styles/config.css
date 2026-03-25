@@ -315,6 +315,48 @@ select.cfg-input {
   margin-top: 2px;
 }
 
+/* ---- List widget ---- */
+.cfg-list-items { margin: 8px 0; }
+.cfg-list-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.cfg-list-input { flex: 1; }
+.cfg-list-remove {
+  padding: 3px 8px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.cfg-list-add { margin-top: 6px; }
+
+/* ---- Tagged union list ---- */
+.cfg-tagged-items { margin: 8px 0; }
+.cfg-tagged-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.cfg-tagged-type { max-width: 220px; flex-shrink: 0; }
+.cfg-tagged-value { flex: 1; }
+.cfg-tagged-placeholder { flex: 1; }
+
+/* ---- Add channel buttons ---- */
+.cfg-add-channel {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  margin-bottom: 16px;
+}
+
+/* ---- Small button variant ---- */
+.cfg-btn-sm {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
 /* ---- Responsive ---- */
 @media (max-width: 700px) {
   .cfg-field-header {

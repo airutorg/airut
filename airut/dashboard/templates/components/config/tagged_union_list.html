@@ -1,0 +1,72 @@
+{# Tagged union list widget — expects: f (EditorFieldSchema), buffer (EditBuffer) #}
+{% set items = buffer.get_value(f.path) %}
+<div class="cfg-field cfg-tagged-union-field"
+     id="field-{{ f.path | replace('.', '-') }}"
+     hx-target="this" hx-swap="outerHTML">
+
+  <div class="cfg-field-header">
+    <span class="cfg-label">{{ f.path }}</span>
+    <span class="cfg-scope cfg-{{ f.scope }}">{{ f.scope }}</span>
+  </div>
+  <span class="cfg-help">{{ f.doc }}</span>
+
+  <div class="cfg-tagged-items">
+    {% if items is sequence and items is not string and items is not mapping %}
+    {% for item in items %}
+    {% set rule_key = (item.keys() | list)[0] if item is mapping else '' %}
+    {% set rule_value = item[rule_key] if item is mapping else '' %}
+    <div class="cfg-tagged-item">
+      <select class="cfg-input cfg-tagged-type"
+              hx-patch="/api/config/field"
+              hx-trigger="change"
+              hx-vals='{"path":"{{ f.path }}","source":"literal","index":"{{ loop.index0 }}"}'
+              hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+              name="rule_type"
+              hx-include="closest .cfg-tagged-item"
+              hx-target="#field-{{ f.path | replace('.', '-') }}"
+              hx-swap="outerHTML">
+        {% for tag_name, tag_type, tag_doc in f.tagged_union_rules %}
+        <option value="{{ tag_name }}" {{ 'selected' if rule_key == tag_name else '' }}>
+          {{ tag_doc }}
+        </option>
+        {% endfor %}
+      </select>
+
+      {% if rule_key == 'workspace_members' %}
+      <span class="cfg-tagged-placeholder"></span>
+      {% else %}
+      <input class="cfg-input cfg-tagged-value" type="text"
+             value="{{ rule_value }}"
+             name="rule_value"
+             hx-patch="/api/config/field"
+             hx-trigger="change"
+             hx-vals='{"path":"{{ f.path }}","source":"literal","index":"{{ loop.index0 }}"}'
+             hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+             hx-include="closest .cfg-tagged-item"
+             hx-target="#field-{{ f.path | replace('.', '-') }}"
+             hx-swap="outerHTML">
+      {% endif %}
+
+      <button class="cfg-btn danger cfg-list-remove"
+              hx-post="/api/config/remove"
+              hx-vals='{"path":"{{ f.path }}","index":"{{ loop.index0 }}"}'
+              hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+              hx-target="#field-{{ f.path | replace('.', '-') }}"
+              hx-swap="outerHTML"
+              hx-confirm="Remove this rule?">
+        &times;
+      </button>
+    </div>
+    {% endfor %}
+    {% endif %}
+  </div>
+
+  <button class="cfg-btn cfg-list-add"
+          hx-post="/api/config/add"
+          hx-vals='{"path":"{{ f.path }}"}'
+          hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+          hx-target="#field-{{ f.path | replace('.', '-') }}"
+          hx-swap="outerHTML">
+    + Add Rule
+  </button>
+</div>

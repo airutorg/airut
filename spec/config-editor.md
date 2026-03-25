@@ -232,6 +232,15 @@ given key and default structure).
 
 Removes from a list (by index) or keyed collection (by key).
 
+#### Set List Item
+
+Updates a single item in a `list[str]` field by index.
+
+#### Set Tagged Union Item
+
+Updates a single item in a tagged union list by index, replacing it with a new
+`{key: value}` dict.
+
 ### Unified Source Selector
 
 Every scalar field gets a segmented control:
@@ -542,7 +551,7 @@ widgets.
 Per-repo settings page with scalar/nested fields. `GET /config/repos/<repo_id>`
 handler. Add/remove repo operations. Repo skeleton generation.
 
-### Phase 3: Channels
+### Phase 3: Channels (implemented)
 
 Email and Slack channel configuration. List widget for `authorized_senders`.
 Tagged union list widget for Slack `authorized`. Add/remove channel operations.

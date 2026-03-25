@@ -88,13 +88,69 @@
   {% endif %}
   {% endfor %}
 
-  {# Channels section (Phase 3 placeholder) #}
+  {# Channels section #}
   <h2 class="cfg-section-title">Channels</h2>
-  {% for f in schema %}
-  {% if f.name == 'channels' %}
-  <div class="cfg-banner info">Channel editing will be available in a future update.</div>
+
+  {% if has_email %}
+  <div class="card" id="channel-email">
+    <div class="cfg-card-header">
+      <span class="cfg-card-title">Email Channel</span>
+      <button class="cfg-btn danger cfg-btn-sm"
+              hx-post="/api/config/remove"
+              hx-vals='{"path":"repos.{{ repo_id }}.email"}'
+              hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+              hx-confirm="Remove email channel?"
+              hx-swap="none">
+        Remove
+      </button>
+    </div>
+    {% for f in email_schema %}
+    {% include "components/config/field.html" %}
+    {% endfor %}
+  </div>
   {% endif %}
-  {% endfor %}
+
+  {% if has_slack %}
+  <div class="card" id="channel-slack">
+    <div class="cfg-card-header">
+      <span class="cfg-card-title">Slack Channel</span>
+      <button class="cfg-btn danger cfg-btn-sm"
+              hx-post="/api/config/remove"
+              hx-vals='{"path":"repos.{{ repo_id }}.slack"}'
+              hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+              hx-confirm="Remove Slack channel?"
+              hx-swap="none">
+        Remove
+      </button>
+    </div>
+    {% for f in slack_schema %}
+    {% include "components/config/field.html" %}
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if not has_email or not has_slack %}
+  <div class="cfg-add-channel">
+    {% if not has_email %}
+    <button class="cfg-btn primary" id="add-email-btn"
+            hx-post="/api/config/add"
+            hx-vals='{"path":"repos.{{ repo_id }}.email"}'
+            hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+            hx-swap="none">
+      + Add Email Channel
+    </button>
+    {% endif %}
+    {% if not has_slack %}
+    <button class="cfg-btn primary" id="add-slack-btn"
+            hx-post="/api/config/add"
+            hx-vals='{"path":"repos.{{ repo_id }}.slack"}'
+            hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+            hx-swap="none">
+      + Add Slack Channel
+    </button>
+    {% endif %}
+  </div>
+  {% endif %}
 
   {# Credentials section (Phase 4 placeholder) #}
   <h2 class="cfg-section-title">Credentials</h2>

@@ -1,0 +1,49 @@
+{# List of strings widget — expects: f (EditorFieldSchema), buffer (EditBuffer) #}
+{% set items = buffer.get_value(f.path) %}
+<div class="cfg-field cfg-list-field"
+     id="field-{{ f.path | replace('.', '-') }}"
+     hx-target="this" hx-swap="outerHTML">
+
+  <div class="cfg-field-header">
+    <span class="cfg-label">{{ f.path }}</span>
+    <span class="cfg-scope cfg-{{ f.scope }}">{{ f.scope }}</span>
+  </div>
+  <span class="cfg-help">{{ f.doc }}</span>
+
+  <div class="cfg-list-items">
+    {% if items is sequence and items is not string and items is not mapping %}
+    {% for item in items %}
+    <div class="cfg-list-item">
+      <input class="cfg-input cfg-list-input" type="text"
+             value="{{ item }}"
+             hx-patch="/api/config/field"
+             hx-trigger="change"
+             hx-vals='{"path":"{{ f.path }}","source":"literal","index":"{{ loop.index0 }}"}'
+             hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+             hx-target="#field-{{ f.path | replace('.', '-') }}"
+             hx-swap="outerHTML"
+             name="value"
+             hx-include="this">
+      <button class="cfg-btn danger cfg-list-remove"
+              hx-post="/api/config/remove"
+              hx-vals='{"path":"{{ f.path }}","index":"{{ loop.index0 }}"}'
+              hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+              hx-target="#field-{{ f.path | replace('.', '-') }}"
+              hx-swap="outerHTML"
+              hx-confirm="Remove this item?">
+        &times;
+      </button>
+    </div>
+    {% endfor %}
+    {% endif %}
+  </div>
+
+  <button class="cfg-btn cfg-list-add"
+          hx-post="/api/config/add"
+          hx-vals='{"path":"{{ f.path }}"}'
+          hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+          hx-target="#field-{{ f.path | replace('.', '-') }}"
+          hx-swap="outerHTML">
+    + Add
+  </button>
+</div>
