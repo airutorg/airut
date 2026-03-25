@@ -10,6 +10,8 @@
   <div class="cfg-banner error">{{ error }}</div>
   {% endif %}
 
+  <h1>Configuration</h1>
+
   {% if buffer %}
   {# Save bar #}
   <div class="cfg-save-bar">
@@ -38,13 +40,11 @@
   {% endif %}
 
   {# Server Settings #}
-  <h2 class="cfg-section-title">Server Settings</h2>
+  <h2 class="section-title">Server Settings</h2>
 
   {# Execution card #}
   <div class="card">
-    <div class="cfg-card-header">
-      <span class="cfg-card-title">Execution</span>
-    </div>
+    <h2>Execution</h2>
     {% for f in schema %}
     {% if f.path in ['execution.max_concurrent', 'execution.shutdown_timeout', 'execution.conversation_max_age_days', 'execution.image_prune'] %}
     {% include "components/config/field.html" %}
@@ -54,9 +54,7 @@
 
   {# Dashboard card #}
   <div class="card">
-    <div class="cfg-card-header">
-      <span class="cfg-card-title">Dashboard</span>
-    </div>
+    <h2>Dashboard</h2>
     {% for f in schema %}
     {% if f.path in ['dashboard.enabled', 'dashboard.host', 'dashboard.port', 'dashboard.base_url'] %}
     {% include "components/config/field.html" %}
@@ -66,9 +64,7 @@
 
   {# Container & Network card #}
   <div class="card">
-    <div class="cfg-card-header">
-      <span class="cfg-card-title">Container &amp; Network</span>
-    </div>
+    <h2>Container &amp; Network</h2>
     {% for f in schema %}
     {% if f.path in ['container_command', 'network.upstream_dns'] %}
     {% include "components/config/field.html" %}
@@ -80,16 +76,14 @@
   {% for f in schema %}
   {% if f.type_tag == 'nested' and f.name == 'resource_limits' %}
   <div class="card">
-    <div class="cfg-card-header">
-      <span class="cfg-card-title">Resource Limits</span>
-    </div>
+    <h2>Resource Limits</h2>
     {% include "components/config/nested.html" %}
   </div>
   {% endif %}
   {% endfor %}
 
   {# Repositories section #}
-  <h2 class="cfg-section-title">Repositories</h2>
+  <h2 class="section-title">Repositories</h2>
   {% if repos %}
   {% for repo in repos %}
   <div class="cfg-repo-card">
@@ -106,7 +100,7 @@
   </div>
   {% endfor %}
   {% else %}
-  <p style="color:var(--text-tertiary);font-size:13px;">No repositories configured.</p>
+  <div class="empty">No repositories configured.</div>
   {% endif %}
 
   {# Diff dialog #}

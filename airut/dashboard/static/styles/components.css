@@ -211,8 +211,20 @@
   font-family: var(--font-mono);
 }
 
+/* ---- Section title (group separator above card groups) ---- */
+.section-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  margin-bottom: 12px;
+  margin-top: 24px;
+}
+.section-title:first-child { margin-top: 0; }
+
 /* ---- Summary grid ---- */
-.conversation-summary {
+.summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 12px;
@@ -232,7 +244,7 @@
   font-family: var(--font-mono);
 }
 .summary-label {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.05em;

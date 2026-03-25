@@ -4,7 +4,7 @@
 
 {% block body %}
 <div class="page dashboard-page">
-    <div class="section-header">Server</div>
+    <div class="section-title">Server</div>
     {% include "components/version_info.html" %}
     <div id="dashboard-live" hx-ext="sse"
          sse-connect="/api/events/stream?format=html">
@@ -14,7 +14,7 @@
         <div id="repos-container" sse-swap="repos" hx-swap="innerHTML">
             {% include "components/repos_section.html" %}
         </div>
-        <div class="section-header">Tasks</div>
+        <div class="section-title">Tasks</div>
         <div class="dashboard">
             <div class="column">
                 <div id="pending-header" class="column-header pending"
