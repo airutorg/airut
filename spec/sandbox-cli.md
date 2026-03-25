@@ -257,7 +257,6 @@ config to resolve values from host environment variables at startup.
 # or values that don't need exfiltration protection (e.g., CI flags).
 env:
   CI: "true"
-  PYTHONDONTWRITEBYTECODE: "1"
 
 # Host env vars passed through to the container as plain values. Use sparingly
 # -- most secrets should be masked (see below). Appropriate for values that
@@ -353,8 +352,8 @@ surrogates are available inside the container.
 
 **When `pass_env` is appropriate for non-secrets:**
 
-- Environment flags (`CI=true`, `PYTHONDONTWRITEBYTECODE=1`) -- use `env:` in
-  the config instead (static values don't need host resolution)
+- Environment flags (`CI=true`) -- use `env:` in the config instead (static
+  values don't need host resolution)
 - Locale/terminal settings (`TERM`, `LANG`)
 
 ## Workspace Mounting

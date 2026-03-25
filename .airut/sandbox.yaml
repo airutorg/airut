@@ -17,6 +17,5 @@
 
 env:
   CI: "true"
-  PYTHONDONTWRITEBYTECODE: "1"
 
 network_sandbox: true
