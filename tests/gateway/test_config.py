@@ -343,6 +343,7 @@ def _make_repo_server_config(
         "from_address",
         "authorized_senders",
         "trusted_authserv_id",
+        "imap_connect_retries",
         "poll_interval_seconds",
         "use_imap_idle",
         "idle_reconnect_interval_seconds",
@@ -549,6 +550,14 @@ def test_repo_server_config_invalid_smtp_port(
         _make_repo_server_config(master_repo, tmp_path, smtp_port=0)
     with pytest.raises(ValueError, match="Invalid SMTP port: 100000"):
         _make_repo_server_config(master_repo, tmp_path, smtp_port=100000)
+
+
+def test_repo_server_config_invalid_imap_connect_retries(
+    master_repo: Path, tmp_path: Path
+) -> None:
+    """Test repo server configuration with invalid imap_connect_retries."""
+    with pytest.raises(ValueError, match="imap_connect_retries must be >= 1"):
+        _make_repo_server_config(master_repo, tmp_path, imap_connect_retries=0)
 
 
 def test_repo_server_config_invalid_poll_interval(

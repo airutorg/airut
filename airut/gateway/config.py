@@ -783,6 +783,7 @@ class EmailChannelConfig(ChannelConfig):
         trusted_authserv_id: The authserv-id to trust in
             Authentication-Results headers.  Set to empty string for
             Microsoft 365 / EOP which omits the authserv-id.
+        imap_connect_retries: Max IMAP connection attempts before giving up.
         poll_interval_seconds: Seconds between IMAP polls.
         use_imap_idle: Whether to use IMAP IDLE instead of polling.
         idle_reconnect_interval_seconds: Reconnect interval for IDLE mode.
@@ -830,6 +831,13 @@ class EmailChannelConfig(ChannelConfig):
     trusted_authserv_id: str = field(
         metadata=meta(
             "Trusted authserv-id in Authentication-Results headers",
+            Scope.REPO,
+        ),
+    )
+    imap_connect_retries: int = field(
+        default=3,
+        metadata=meta(
+            "Max IMAP connection attempts before giving up",
             Scope.REPO,
         ),
     )
@@ -905,6 +913,11 @@ class EmailChannelConfig(ChannelConfig):
                 "fields (tenant_id, client_id, client_secret) to be set"
             )
 
+        if self.imap_connect_retries < 1:
+            raise ValueError(
+                f"imap_connect_retries must be >= 1: "
+                f"{self.imap_connect_retries}"
+            )
         if not (1 <= self.imap_port <= 65535):
             raise ValueError(f"Invalid IMAP port: {self.imap_port}")
         if not (1 <= self.smtp_port <= 65535):
@@ -1495,6 +1508,9 @@ def _parse_email_channel_config(email: dict, prefix: str) -> EmailChannelConfig:
             email.get("trusted_authserv_id"),
             str,
             required=f"{prefix}.email.trusted_authserv_id",
+        ),
+        imap_connect_retries=_resolve(
+            imap.get("connect_retries"), int, default=3
         ),
         poll_interval_seconds=_resolve(
             imap.get("poll_interval"), float, default=60

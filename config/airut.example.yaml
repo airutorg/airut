@@ -115,6 +115,9 @@ repos:
       # microsoft_internal_auth_fallback: false
 
       # imap:
+      #   # Max IMAP connection attempts before giving up
+      #   connect_retries: 3
+      #
       #   # Seconds between IMAP polls
       #   poll_interval: 60
       #
