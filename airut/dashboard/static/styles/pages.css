@@ -20,16 +20,6 @@ h2 {
   color: var(--text-secondary);
 }
 
-/* ---- Section headers ---- */
-.section-header {
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 10px;
-  color: var(--text-tertiary);
-}
-
 /* ---- Version info ---- */
 .version-info {
   font-size: 12px;

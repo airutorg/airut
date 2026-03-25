@@ -4,7 +4,7 @@
     {% set failed_count = repo_states|selectattr('status.value', 'equalto', 'failed')|list|length %}
     {% set status_summary = live_count ~ ' live' ~ (', ' ~ failed_count ~ ' failed' if failed_count > 0 else '') %}
 <div id="repos-section" class="repos-section">
-    <div class="section-header">Repositories ({{ status_summary }})</div>
+    <div class="section-title">Repositories ({{ status_summary }})</div>
     <div class="repos-grid">
         {% for repo in repo_states|sort(attribute='repo_id') %}
         <div class="repo-card">
