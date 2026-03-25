@@ -1,0 +1,6 @@
+{# Save result banner — expects: status (str), message (str) #}
+<div class="cfg-banner {{ 'warning' if status == 'stale' else status }}">{{ message }}
+  {% if status == 'stale' %}
+  <a href="/config">Reload</a>
+  {% endif %}
+</div>

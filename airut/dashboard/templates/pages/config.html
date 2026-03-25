@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}Configuration — Airut{% endblock %}
+{% block head_extra %}
+<link rel="stylesheet" href="{{ static_url('styles/config.css') }}">
+{% endblock %}
+
+{% block body %}
+<div class="page">
+  {% if error %}
+  <div class="cfg-banner error">{{ error }}</div>
+  {% endif %}
+
+  {% if buffer %}
+  {# Save bar #}
+  <div class="cfg-save-bar">
+    <button id="review-save-btn" class="cfg-btn primary" disabled
+            hx-get="/api/config/diff"
+            hx-target="#diff-modal-body"
+            hx-swap="innerHTML"
+            hx-headers='{"X-Requested-With":"XMLHttpRequest"}'>
+      Review &amp; Save
+    </button>
+    <button id="discard-btn" class="cfg-btn danger" disabled
+            hx-post="/api/config/discard"
+            hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+            hx-confirm="Discard all unsaved changes?">
+      Discard
+    </button>
+    <span id="dirty-count" class="cfg-dirty hidden"></span>
+  </div>
+
+  {# Stale banner #}
+  {% if stale %}
+  <div class="cfg-banner warning">
+    Config changed externally since you started editing. Unsaved changes may be lost.
+    <a href="/config">Reload</a>
+  </div>
+  {% endif %}
+
+  {# Server Settings #}
+  <h2 class="cfg-section-title">Server Settings</h2>
+
+  {# Execution card #}
+  <div class="card">
+    <div class="cfg-card-header">
+      <span class="cfg-card-title">Execution</span>
+      <span class="cfg-scope server">server</span>
+    </div>
+    {% for f in schema %}
+    {% if f.path in ['execution.max_concurrent', 'execution.shutdown_timeout', 'execution.conversation_max_age_days', 'execution.image_prune'] %}
+    {% include "components/config/field.html" %}
+    {% endif %}
+    {% endfor %}
+  </div>
+
+  {# Dashboard card #}
+  <div class="card">
+    <div class="cfg-card-header">
+      <span class="cfg-card-title">Dashboard</span>
+      <span class="cfg-scope server">server</span>
+    </div>
+    {% for f in schema %}
+    {% if f.path in ['dashboard.enabled', 'dashboard.host', 'dashboard.port', 'dashboard.base_url'] %}
+    {% include "components/config/field.html" %}
+    {% endif %}
+    {% endfor %}
+  </div>
+
+  {# Container & Network card #}
+  <div class="card">
+    <div class="cfg-card-header">
+      <span class="cfg-card-title">Container &amp; Network</span>
+      <span class="cfg-scope server">server</span>
+    </div>
+    {% for f in schema %}
+    {% if f.path in ['container_command', 'network.upstream_dns'] %}
+    {% include "components/config/field.html" %}
+    {% endif %}
+    {% endfor %}
+  </div>
+
+  {# Resource Limits card #}
+  {% for f in schema %}
+  {% if f.type_tag == 'nested' and f.name == 'resource_limits' %}
+  <div class="card">
+    <div class="cfg-card-header">
+      <span class="cfg-card-title">Resource Limits — server default</span>
+      <span class="cfg-scope server">server</span>
+    </div>
+    {% include "components/config/nested.html" %}
+  </div>
+  {% endif %}
+  {% endfor %}
+
+  {# Repositories section #}
+  <h2 class="cfg-section-title">Repositories</h2>
+  {% if repos %}
+  {% for repo in repos %}
+  <div class="cfg-repo-card">
+    <div>
+      <span class="cfg-repo-name">{{ repo.id }}</span>
+      <span class="cfg-repo-meta">
+        {% for ch in repo.channels %}
+        <span class="cfg-scope {{ 'repo' }}">{{ ch }}</span>
+        {% endfor %}
+        · model: {{ repo.model }}
+      </span>
+    </div>
+    <a href="/config/repos/{{ repo.id }}" class="cfg-btn">Edit</a>
+  </div>
+  {% endfor %}
+  {% else %}
+  <p style="color:var(--text-tertiary);font-size:13px;">No repositories configured.</p>
+  {% endif %}
+
+  {# Diff dialog #}
+  <dialog id="diff-modal" class="cfg-dialog">
+    <div class="cfg-dialog-header">Review Changes</div>
+    <div id="diff-modal-body">Loading...</div>
+    <div id="save-feedback"></div>
+    <div class="cfg-dialog-footer">
+      <button class="cfg-btn primary"
+              hx-post="/api/config/save"
+              hx-target="#save-feedback"
+              hx-swap="innerHTML"
+              hx-headers='{"X-Requested-With":"XMLHttpRequest"}'>
+        Confirm Save
+      </button>
+      <button type="button" class="cfg-btn" id="diff-cancel-btn">Cancel</button>
+    </div>
+  </dialog>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ static_url('vendor/htmx.min.js') }}"></script>
+<script src="{{ static_url('js/config-editor.js') }}"></script>
+{% endblock %}

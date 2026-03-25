@@ -164,6 +164,13 @@ credential problems) while others continue processing emails.
 | `/api/conversation/{id}/network/stream` | GET    | SSE network log stream (per-task)           |
 | `/api/conversation/{id}/network/poll`   | GET    | Network log polling fallback                |
 | `/api/health`                           | GET    | Health check endpoint (ETag)                |
+| `/config`                               | GET    | Config editor page (global settings)        |
+| `/api/config/field`                     | PATCH  | Set or clear a config field (form-encoded)  |
+| `/api/config/diff`                      | GET    | Compare edit buffer vs live config (HTML)   |
+| `/api/config/save`                      | POST   | Validate and write config YAML              |
+| `/api/config/discard`                   | POST   | Reset edit buffer                           |
+| `/api/config/add`                       | POST   | Add item to a collection field              |
+| `/api/config/remove`                    | POST   | Remove item from a collection field         |
 
 ### `GET /api/tracker`
 

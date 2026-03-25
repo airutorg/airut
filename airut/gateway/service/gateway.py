@@ -353,6 +353,9 @@ class GatewayService:
             clock=self._clock,
             git_version_info=self._git_version_info,
             status_callback=self._get_reload_status,
+            get_config_snapshot=lambda: self._config_snapshot,
+            get_config_generation=lambda: self._config_generation,
+            get_config_source=lambda: self._config_source,
         )
         self.dashboard.start()
 

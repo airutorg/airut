@@ -48,6 +48,8 @@ For high-level documentation, see [doc/](../doc/).
 ## Dashboard
 
 - [dashboard.md](dashboard.md) — Web dashboard for task monitoring
+- [config-editor.md](config-editor.md) — Web config editor (edit buffer pattern,
+  field-level mutations, diff-before-save)
 
 ## Infrastructure
 

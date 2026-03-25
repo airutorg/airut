@@ -13,9 +13,49 @@ import subprocess
 import warnings
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+
+
+def make_sample_raw() -> dict[str, Any]:
+    """Create a sample raw config dict for testing.
+
+    Used by config editor tests (both unit and dashboard integration).
+    """
+    return {
+        "config_version": 2,
+        "execution": {
+            "max_concurrent": 3,
+            "shutdown_timeout": 60,
+            "conversation_max_age_days": 7,
+            "image_prune": True,
+        },
+        "dashboard": {
+            "enabled": True,
+            "host": "127.0.0.1",
+            "port": 5200,
+        },
+        "repos": {
+            "test-repo": {
+                "git": {
+                    "repo_url": "https://github.com/test/repo.git",
+                },
+                "email": {
+                    "imap_server": "imap.example.com",
+                    "imap_port": 993,
+                    "smtp_server": "smtp.example.com",
+                    "smtp_port": 587,
+                    "username": "user@example.com",
+                    "password": "secret",
+                    "from": "bot@example.com",
+                    "authorized_senders": ["admin@example.com"],
+                    "trusted_authserv_id": "example.com",
+                },
+            },
+        },
+    }
 
 
 @pytest.fixture(autouse=True)
