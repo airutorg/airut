@@ -13,6 +13,8 @@ is written or atomically replaced.  Uses Linux inotify via
 from __future__ import annotations
 
 import logging
+import os
+import select
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -53,6 +55,9 @@ class ConfigFileWatcher:
         self._running = False
         self._ready = threading.Event()
         self._thread: threading.Thread | None = None
+        # Wakeup pipe: write end is signalled on stop() to break
+        # out of the select() call immediately.
+        self._wakeup_r, self._wakeup_w = os.pipe()
 
     def start(self) -> None:
         """Start background daemon thread."""
@@ -69,12 +74,29 @@ class ConfigFileWatcher:
         )
 
     def stop(self) -> None:
-        """Stop watching. Thread exits within ~1 second."""
+        """Stop watching. Thread exits immediately."""
         self._running = False
+        # Signal the wakeup pipe so the watch loop breaks out of select().
+        try:
+            os.write(self._wakeup_w, b"\x00")
+        except OSError:
+            pass  # Already closed
         if self._thread is not None:
             self._thread.join(timeout=3)
             self._thread = None
+        self._close_pipe()
         logger.info("Config file watcher stopped")
+
+    def _close_pipe(self) -> None:
+        """Close wakeup pipe fds (idempotent)."""
+        for fd in (self._wakeup_r, self._wakeup_w):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        # Prevent double-close by setting to -1
+        self._wakeup_r = -1
+        self._wakeup_w = -1
 
     @property
     def ready(self) -> threading.Event:
@@ -88,9 +110,25 @@ class ConfigFileWatcher:
         inotify.add_watch(str(self._config_dir), watch_flags)
         self._ready.set()
 
+        inotify_fd = inotify.fileno()
+
         try:
             while self._running:
-                events = inotify.read(timeout=1000, read_delay=100)
+                # Block until inotify has events or the wakeup pipe is
+                # signalled (on stop).  Timeout is a safety net only.
+                readable, _, _ = select.select(
+                    [inotify_fd, self._wakeup_r], [], [], 5.0
+                )
+                if self._wakeup_r in readable:
+                    # Drain wakeup pipe and exit.
+                    os.read(self._wakeup_r, 1)
+                    break
+
+                if inotify_fd not in readable:
+                    continue
+
+                # Non-blocking read: select guarantees data is ready.
+                events = inotify.read(timeout=0, read_delay=100)
 
                 if self._reload_requested.is_set():
                     # SIGHUP was received — clear and invoke callback.

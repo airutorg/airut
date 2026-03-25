@@ -297,14 +297,17 @@ class DashboardServer:
 
     def start(self) -> None:
         """Start the dashboard server in a background thread."""
-        self._server = make_server(
+        server = make_server(
             self.host,
             self.port,
             self._wsgi_app,
             threaded=True,
         )
+        self._server = server
         self._thread = threading.Thread(
-            target=self._server.serve_forever,
+            # Reduce poll_interval from the default 0.5s so shutdown()
+            # returns promptly instead of blocking for up to 500ms.
+            target=lambda: server.serve_forever(poll_interval=0.05),
             daemon=True,
             name="DashboardServer",
         )

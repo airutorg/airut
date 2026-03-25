@@ -80,15 +80,16 @@ class ConfigFileWatcher:
         self, config_path: Path, on_change: Callable[[], None]
     ) -> None: ...
     def start(self) -> None: ...  # background daemon thread
-    def stop(self) -> None: ...  # exits within ~1 second
+    def stop(self) -> None: ...  # exits immediately via wakeup pipe
     @property
     def ready(self) -> threading.Event: ...  # set once inotify watch is active
 ```
 
 Key design choices:
 
-- **`timeout=1000`** — the thread wakes every second to check `_running` for
-  clean shutdown.
+- **`select()` + wakeup pipe** — the thread blocks in `select.select()` on both
+  the inotify fd and a wakeup pipe. `stop()` writes to the pipe, breaking the
+  loop immediately instead of waiting for a timeout.
 - **`read_delay=100`** — 100ms native debounce. After the first event arrives,
   inotify waits 100ms for more events before returning. Replaces any need for a
   custom debounce timer.
