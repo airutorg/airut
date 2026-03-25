@@ -6,6 +6,7 @@
 """Tests for dashboard server module (WSGI application and routing)."""
 
 import json
+import os
 from typing import NoReturn
 from unittest.mock import MagicMock, patch
 
@@ -1476,28 +1477,40 @@ class TestDashboardServerStartStop:
         tracker = TaskTracker()
         server = DashboardServer(tracker, host="127.0.0.1", port=5200)
 
-        # Mock make_server to avoid actual socket usage
+        # Mock make_server — provide a real fd so the select-based
+        # serve loop can block on it without crashing.
         mock_wsgi_server = MagicMock()
-        with patch(
-            "airut.dashboard.server.make_server",
-            return_value=mock_wsgi_server,
-        ):
-            server.start()
+        test_r, test_w = os.pipe()
+        mock_wsgi_server.fileno.return_value = test_r
+        try:
+            with patch(
+                "airut.dashboard.server.make_server",
+                return_value=mock_wsgi_server,
+            ):
+                server.start()
 
-            # Server should be created
-            assert server._server is mock_wsgi_server
+                # Server should be created
+                assert server._server is mock_wsgi_server
 
-            # Thread should be created
-            assert server._thread is not None
-            assert server._thread.daemon is True
-            assert server._thread.name == "DashboardServer"
+                # Thread should be created
+                assert server._thread is not None
+                assert server._thread.daemon is True
+                assert server._thread.name == "DashboardServer"
 
-    def test_stop_calls_shutdown(self) -> None:
-        """Test that stop() calls server.shutdown() and server_close()."""
+                server.stop()
+        finally:
+            for fd in (test_r, test_w):
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+    def test_stop_calls_server_close(self) -> None:
+        """Test that stop() signals pipe, joins thread, and closes server."""
         tracker = TaskTracker()
         server = DashboardServer(tracker, host="127.0.0.1", port=5200)
 
-        # Set up mocked server and thread
+        # Set up mocked server and thread (no start(), so no pipe)
         mock_wsgi_server = MagicMock()
         server._server = mock_wsgi_server
         mock_thread = MagicMock()
@@ -1505,9 +1518,91 @@ class TestDashboardServerStartStop:
 
         server.stop()
 
-        mock_wsgi_server.shutdown.assert_called_once()
         mock_wsgi_server.server_close.assert_called_once()
         mock_thread.join.assert_called_once_with(timeout=5)
+
+    def test_stop_handles_closed_pipe(self) -> None:
+        """stop() handles OSError when wakeup pipe is already closed."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, host="127.0.0.1", port=5200)
+
+        # Simulate a pipe that's been closed externally
+        r, w = os.pipe()
+        server._wakeup_r = r
+        server._wakeup_w = w
+        os.close(w)  # Close write end so os.write raises
+
+        # Should not raise — _close_pipe() handles r
+        server.stop()
+
+    def test_serve_handles_request(self) -> None:
+        """_serve() dispatches to _handle_request_noblock on socket ready."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, host="127.0.0.1", port=5200)
+
+        # Create pipe to simulate the server socket becoming readable
+        sock_r, sock_w = os.pipe()
+        try:
+            mock_wsgi = MagicMock()
+            mock_wsgi.fileno.return_value = sock_r
+            server._server = mock_wsgi
+
+            wake_r, wake_w = os.pipe()
+            server._wakeup_r = wake_r
+            server._wakeup_w = wake_w
+
+            # When _handle_request_noblock is called, signal shutdown
+            def handle_and_stop() -> None:
+                os.write(wake_w, b"\x00")
+
+            mock_wsgi._handle_request_noblock.side_effect = handle_and_stop
+
+            # Trigger the server socket
+            os.write(sock_w, b"\x01")
+
+            server._serve()
+
+            mock_wsgi._handle_request_noblock.assert_called_once()
+        finally:
+            for fd in (sock_r, sock_w, wake_r, wake_w):
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+    def test_serve_handles_oserror(self) -> None:
+        """_serve() catches OSError (e.g. closed fd) gracefully."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, host="127.0.0.1", port=5200)
+
+        # Use a closed fd to trigger OSError in select
+        r, w = os.pipe()
+        os.close(r)
+        mock_wsgi = MagicMock()
+        mock_wsgi.fileno.return_value = r  # closed fd
+        server._server = mock_wsgi
+        server._wakeup_r = w  # doesn't matter, select will fail first
+
+        # Should not raise
+        server._serve()
+
+        os.close(w)
+
+    def test_close_pipe_handles_already_closed(self) -> None:
+        """_close_pipe() handles fds that are already closed."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, host="127.0.0.1", port=5200)
+
+        r, w = os.pipe()
+        server._wakeup_r = r
+        server._wakeup_w = w
+        os.close(r)
+        os.close(w)
+
+        # Should not raise
+        server._close_pipe()
+        assert server._wakeup_r == -1
+        assert server._wakeup_w == -1
 
     def test_stop_without_server(self) -> None:
         """Test that stop() handles case where server wasn't started."""
@@ -1861,11 +1956,17 @@ class TestStartupWarning:
         tracker = TaskTracker()
         server = DashboardServer(tracker, host="127.0.0.1", port=15200)
 
-        with patch("airut.dashboard.server.make_server") as mock_make:
-            mock_server = MagicMock()
-            mock_make.return_value = mock_server
-
-            with patch("airut.dashboard.server.logger") as mock_logger:
+        mock_wsgi = MagicMock()
+        test_r, test_w = os.pipe()
+        mock_wsgi.fileno.return_value = test_r
+        try:
+            with (
+                patch(
+                    "airut.dashboard.server.make_server",
+                    return_value=mock_wsgi,
+                ),
+                patch("airut.dashboard.server.logger") as mock_logger,
+            ):
                 server.start()
 
                 # No warning should be logged for loopback
@@ -1876,16 +1977,30 @@ class TestStartupWarning:
                 ]
                 assert len(warning_calls) == 0
 
+                server.stop()
+        finally:
+            for fd in (test_r, test_w):
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
     def test_warning_for_non_loopback(self) -> None:
         """Warning logged when bound to 0.0.0.0."""
         tracker = TaskTracker()
         server = DashboardServer(tracker, host="0.0.0.0", port=15201)
 
-        with patch("airut.dashboard.server.make_server") as mock_make:
-            mock_server = MagicMock()
-            mock_make.return_value = mock_server
-
-            with patch("airut.dashboard.server.logger") as mock_logger:
+        mock_wsgi = MagicMock()
+        test_r, test_w = os.pipe()
+        mock_wsgi.fileno.return_value = test_r
+        try:
+            with (
+                patch(
+                    "airut.dashboard.server.make_server",
+                    return_value=mock_wsgi,
+                ),
+                patch("airut.dashboard.server.logger") as mock_logger,
+            ):
                 server.start()
 
                 # Check warning was logged
@@ -1896,6 +2011,14 @@ class TestStartupWarning:
                 ]
                 assert len(warning_calls) == 1
                 assert "0.0.0.0" in str(warning_calls[0])
+
+                server.stop()
+        finally:
+            for fd in (test_r, test_w):
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
 
 
 class TestIsLoopback:
