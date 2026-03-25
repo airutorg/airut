@@ -1739,6 +1739,78 @@ class TestRepoDirtyCount:
         assert dirty >= 2
 
 
+class TestInitialDirtyCount:
+    """Page load should reflect server-side dirty state.
+
+    After mutations (e.g. adding/removing a repo), navigating to a
+    config page should render the save button enabled and the dirty
+    count visible — without requiring an additional AJAX mutation.
+    """
+
+    _SAVE_BTN_DISABLED = 'class="cfg-btn primary" disabled'
+    _DISCARD_BTN_DISABLED = 'class="cfg-btn danger" disabled'
+
+    def test_repo_page_shows_dirty_after_add(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """After adding a repo, its edit page shows dirty."""
+        harness.client.get("/config")
+        harness.client.post(
+            "/api/config/add",
+            data={"path": "repos", "key": "new-project"},
+            headers=XHR,
+        )
+        # Simulate JS redirect — full page load
+        response = harness.client.get("/config/repos/new-project")
+        html = response.get_data(as_text=True)
+        # Both buttons must be enabled
+        assert self._SAVE_BTN_DISABLED not in html
+        assert self._DISCARD_BTN_DISABLED not in html
+        # Dirty count span visible with text
+        assert re.search(r'id="dirty-count"[^>]*\bhidden\b', html) is None
+        assert "1 unsaved change" in html
+
+    def test_config_page_shows_dirty_after_add(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """After adding a repo, config list shows dirty."""
+        harness.client.get("/config")
+        harness.client.post(
+            "/api/config/add",
+            data={"path": "repos", "key": "new-project"},
+            headers=XHR,
+        )
+        response = harness.client.get("/config")
+        html = response.get_data(as_text=True)
+        assert self._SAVE_BTN_DISABLED not in html
+        assert "1 unsaved change" in html
+
+    def test_config_page_shows_dirty_after_remove(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """After removing a repo, config list shows dirty."""
+        harness.client.get("/config")
+        harness.client.post(
+            "/api/config/remove",
+            data={"path": "repos", "key": "test-repo"},
+            headers=XHR,
+        )
+        response = harness.client.get("/config")
+        html = response.get_data(as_text=True)
+        assert self._SAVE_BTN_DISABLED not in html
+        assert "unsaved change" in html
+
+    def test_config_page_buttons_disabled_when_clean(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """When buffer is clean, buttons are disabled."""
+        response = harness.client.get("/config")
+        html = response.get_data(as_text=True)
+        assert self._SAVE_BTN_DISABLED in html
+        assert self._DISCARD_BTN_DISABLED in html
+        assert re.search(r'id="dirty-count"[^>]*\bhidden\b', html)
+
+
 class TestDiscard:
     def test_discard_resets_buffer(self, harness: ConfigEditorHarness) -> None:
         harness.client.get("/config")

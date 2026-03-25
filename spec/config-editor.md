@@ -275,10 +275,18 @@ the edit buffer and the live config snapshot. It is computed **server-side** by
 comparing each leaf field in the editor schema, using the same per-field
 comparison logic as the diff endpoint.
 
-The count is returned in the `X-Dirty-Count` response header from all mutation
-endpoints (PATCH field, POST add, POST remove). The client reads this header and
-updates the display. This approach is accurate even when a field is edited then
-reverted to its original value (count correctly returns to 0).
+The count is communicated to the client in two ways:
+
+1. **Page load** — page routes pass `dirty_count` to the template, which renders
+   button `disabled` state and dirty-count span visibility server-side. This
+   ensures the UI is correct on first load (e.g. after a JS redirect following
+   an "Add Repository" action).
+2. **AJAX mutations** — the count is returned in the `X-Dirty-Count` response
+   header from all mutation endpoints (PATCH field, POST add, POST remove). The
+   client reads this header and updates the display.
+
+This approach is accurate even when a field is edited then reverted to its
+original value (count correctly returns to 0).
 
 The "Review & Save" and "Discard" buttons are **disabled** when the dirty count
 is 0, preventing no-op saves.
@@ -409,20 +417,26 @@ inline `onclick`) to comply with CSP `script-src 'self'`.
 
 ### Dirty Indicator and Button State
 
-The save bar shows an unsaved-changes count after the action buttons. The count
-is read from the `X-Dirty-Count` response header after each mutation. The
-"Review & Save" and "Discard" buttons start disabled and are enabled by
-JavaScript when the dirty count exceeds 0.
+The save bar shows an unsaved-changes count after the action buttons. On page
+load the server passes `dirty_count` to the template, which conditionally
+renders the button `disabled` attribute and span visibility. After AJAX
+mutations the count is read from the `X-Dirty-Count` response header and the
+display is updated by JavaScript.
 
 ```html
 <div class="cfg-save-bar">
-  <button id="review-save-btn" class="cfg-btn primary" disabled ...>
+  <button id="review-save-btn" class="cfg-btn primary"
+          {{ '' if dirty_count else 'disabled' }} ...>
     Review &amp; Save
   </button>
-  <button id="discard-btn" class="cfg-btn danger" disabled ...>
+  <button id="discard-btn" class="cfg-btn danger"
+          {{ '' if dirty_count else 'disabled' }} ...>
     Discard
   </button>
-  <span id="dirty-count" class="cfg-dirty hidden"></span>
+  <span id="dirty-count"
+        class="cfg-dirty {{ '' if dirty_count else 'hidden' }}">
+    ...
+  </span>
 </div>
 ```
 
