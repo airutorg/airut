@@ -45,30 +45,6 @@
   border: 1px solid var(--status-info);
 }
 
-/* ---- Section headers ---- */
-.cfg-section-title {
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-tertiary);
-  margin-bottom: 12px;
-  margin-top: 24px;
-}
-.cfg-section-title:first-child { margin-top: 0; }
-
-/* ---- Card headers ---- */
-.cfg-card-header {
-  margin-bottom: 16px;
-}
-.cfg-card-title {
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-tertiary);
-}
-
 /* ---- Scope badges ---- */
 .cfg-scope {
   display: inline-block;

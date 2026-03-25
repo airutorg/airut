@@ -247,45 +247,6 @@ h2 {
   margin-top: 12px;
 }
 
-/* ---- Repo detail ---- */
-.repo-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-.repo-header h1 { margin: 0; font-size: 20px; }
-.detail-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-light);
-  border-radius: 6px;
-  padding: 20px;
-  box-shadow: var(--shadow-sm);
-  max-width: 800px;
-}
-.detail-section { margin-bottom: 16px; }
-.detail-section:last-child { margin-bottom: 0; }
-.detail-label {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 3px;
-}
-.detail-value {
-  font-size: 14px;
-  word-break: break-all;
-  margin-bottom: 12px;
-  color: var(--text-primary);
-}
-.detail-value:last-child { margin-bottom: 0; }
-.detail-value.mono {
-  font-family: var(--font-mono);
-  background: var(--bg-code);
-  padding: 8px;
-  border-radius: 4px;
-}
-
 /* ---- Conversation detail ---- */
 .task-row {
   display: grid;

@@ -442,11 +442,11 @@ def _build_repo_detail_events(
         error_type = html_mod.escape(repo.error_type or "Unknown")
         error_msg = html_mod.escape(repo.error_message)
         error_html = (
-            f'<div class="detail-section error-section">'
-            f'<div class="detail-label">Error Type</div>'
-            f'<div class="detail-value error-type">{error_type}</div>'
-            f'<div class="detail-label">Error Message</div>'
-            f'<div class="detail-value error-message">{error_msg}</div>'
+            f'<div class="error-section">'
+            f'<div class="field-label">Error Type</div>'
+            f'<div class="field-value error-type">{error_type}</div>'
+            f'<div class="field-label">Error Message</div>'
+            f'<div class="field-value error-message">{error_msg}</div>'
             f"</div>"
         )
     else:
