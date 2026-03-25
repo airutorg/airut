@@ -4,13 +4,12 @@
 {% set current_source = source_info[0] %}
 {% set display_value = source_info[1] %}
 
-<div class="cfg-field {{ 'unset' if current_source == 'unset' else '' }}"
+<div class="cfg-field"
      id="field-{{ f.path | replace('.', '-') }}"
      hx-target="this" hx-swap="outerHTML">
 
   <div class="cfg-field-header">
-    <span class="cfg-label">{{ f.name }}</span>
-    <span class="cfg-scope {{ f.scope }}">{{ f.scope }}</span>
+    <span class="cfg-label">{{ f.path }}</span>
 
     {# Source selector #}
     <div class="cfg-source">
@@ -19,7 +18,7 @@
               hx-patch="/api/config/field"
               hx-vals='{"path":"{{ f.path }}","source":"unset"}'
               hx-headers='{"X-Requested-With":"XMLHttpRequest"}'>
-        Not set
+        Default
       </button>
       {% endif %}
       <button class="{{ 'active' if current_source == 'literal' else '' }}"
@@ -49,7 +48,16 @@
 
   {# Input #}
   {% if current_source == 'unset' %}
-  <span class="cfg-help">{{ f.doc }}{% if f.default is not none and f.default != MISSING %} (default: {{ f.default }}){% endif %}</span>
+  {% if f.python_type == 'bool' %}
+  <select class="cfg-input" disabled>
+    <option>{{ (f.default | string | lower) if f.default is not none and f.default != MISSING else 'true' }}</option>
+  </select>
+  {% else %}
+  <input class="cfg-input" type="text"
+         value="{{ f.default if f.default is not none and f.default != MISSING else '' }}"
+         disabled>
+  {% endif %}
+  <span class="cfg-help">{{ f.doc }}</span>
   {% elif f.python_type == 'bool' %}
   <select class="cfg-input"
           hx-patch="/api/config/field"

@@ -44,7 +44,6 @@
   <div class="card">
     <div class="cfg-card-header">
       <span class="cfg-card-title">Execution</span>
-      <span class="cfg-scope server">server</span>
     </div>
     {% for f in schema %}
     {% if f.path in ['execution.max_concurrent', 'execution.shutdown_timeout', 'execution.conversation_max_age_days', 'execution.image_prune'] %}
@@ -57,7 +56,6 @@
   <div class="card">
     <div class="cfg-card-header">
       <span class="cfg-card-title">Dashboard</span>
-      <span class="cfg-scope server">server</span>
     </div>
     {% for f in schema %}
     {% if f.path in ['dashboard.enabled', 'dashboard.host', 'dashboard.port', 'dashboard.base_url'] %}
@@ -70,7 +68,6 @@
   <div class="card">
     <div class="cfg-card-header">
       <span class="cfg-card-title">Container &amp; Network</span>
-      <span class="cfg-scope server">server</span>
     </div>
     {% for f in schema %}
     {% if f.path in ['container_command', 'network.upstream_dns'] %}
@@ -84,8 +81,7 @@
   {% if f.type_tag == 'nested' and f.name == 'resource_limits' %}
   <div class="card">
     <div class="cfg-card-header">
-      <span class="cfg-card-title">Resource Limits — server default</span>
-      <span class="cfg-scope server">server</span>
+      <span class="cfg-card-title">Resource Limits</span>
     </div>
     {% include "components/config/nested.html" %}
   </div>

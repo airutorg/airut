@@ -286,6 +286,24 @@ class TestConfigPageLoads:
         assert "Dashboard" in html
         assert "Container" in html
 
+    def test_config_page_shows_field_paths(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Field labels display full YAML paths, not bare field names."""
+        response = harness.client.get("/config")
+        html = response.get_data(as_text=True)
+        assert "dashboard.port" in html
+        assert "execution.max_concurrent" in html
+
+    def test_config_page_shows_default_button(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Source selector uses 'Default' label instead of 'Not set'."""
+        response = harness.client.get("/config")
+        html = response.get_data(as_text=True)
+        assert "Default" in html
+        assert "Not set" not in html
+
     def test_config_page_shows_repos(
         self, harness: ConfigEditorHarness
     ) -> None:
@@ -367,6 +385,37 @@ class TestFieldPatch:
             headers=XHR,
         )
         assert response.status_code == 200
+
+    def test_patch_unset_renders_disabled_input(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Unset (Default) state renders a disabled input with default value."""
+        harness.client.get("/config")
+        response = harness.client.patch(
+            "/api/config/field",
+            data={"path": "dashboard.port", "source": "unset"},
+            headers=XHR,
+        )
+        html = response.get_data(as_text=True)
+        assert "disabled" in html
+        assert "<input" in html
+        assert "Default" in html
+
+    def test_patch_unset_bool_renders_disabled_select(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Unset bool field renders a disabled select with lowercase default."""
+        harness.client.get("/config")
+        response = harness.client.patch(
+            "/api/config/field",
+            data={"path": "dashboard.enabled", "source": "unset"},
+            headers=XHR,
+        )
+        html = response.get_data(as_text=True)
+        assert "disabled" in html
+        assert "<select" in html
+        # Option text must use lowercase "true" (not Python's "True")
+        assert "<option>true</option>" in html
 
     def test_patch_succeeds_on_stale(
         self, harness: ConfigEditorHarness
