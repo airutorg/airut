@@ -13,20 +13,24 @@
   {% if buffer %}
   {# Save bar #}
   <div class="cfg-save-bar">
-    <button id="review-save-btn" class="cfg-btn primary" disabled
+    <button id="review-save-btn" class="cfg-btn primary" {{ '' if dirty_count else 'disabled' }}
             hx-get="/api/config/diff"
             hx-target="#diff-modal-body"
             hx-swap="innerHTML"
             hx-headers='{"X-Requested-With":"XMLHttpRequest"}'>
       Review &amp; Save
     </button>
-    <button id="discard-btn" class="cfg-btn danger" disabled
+    <button id="discard-btn" class="cfg-btn danger" {{ '' if dirty_count else 'disabled' }}
             hx-post="/api/config/discard"
             hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
             hx-confirm="Discard all unsaved changes?">
       Discard
     </button>
-    <span id="dirty-count" class="cfg-dirty hidden"></span>
+    <span id="dirty-count" class="cfg-dirty {{ '' if dirty_count else 'hidden' }}">
+      {%- if dirty_count -%}
+        {{ dirty_count }} unsaved change{{ 's' if dirty_count != 1 else '' }}
+      {%- endif -%}
+    </span>
   </div>
 
   {# Stale banner #}
