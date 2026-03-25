@@ -107,6 +107,10 @@ url_prefixes:
     methods: [GET, HEAD]
 
   # Playwright browser downloads — screenshot generator
+  # cdn.playwright.dev redirects to storage.googleapis.com for actual binaries
   - host: cdn.playwright.dev
     path: ""
+    methods: [GET, HEAD]
+  - host: storage.googleapis.com
+    path: /chrome-for-testing-public/*
     methods: [GET, HEAD]
