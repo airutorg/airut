@@ -2012,6 +2012,38 @@ class TestSaveReloadBugs:
         # buffer without checking staleness.
         assert buf.get_value("execution.max_concurrent") == 99
 
+    def test_dirty_count_zero_after_save_before_watcher(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """After save, dirty count must be 0 even if file watcher is slow.
+
+        Reproduces the bug where saving showed "N unsaved changes" on the
+        redirected page because _compute_dirty_count compared buffer vs
+        stale snapshot instead of checking buffer.dirty.
+        """
+        harness.client.get("/config")
+
+        # Edit a field
+        harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "execution.max_concurrent",
+                "source": "literal",
+                "value": "5",
+            },
+            headers=XHR,
+        )
+
+        # Save — writes file, marks buffer clean
+        r = harness.client.post("/api/config/save", headers=XHR)
+        assert r.status_code == 200
+
+        # Simulate browser following HX-Redirect.  The file watcher has NOT
+        # reloaded the snapshot yet, so snapshot.raw still has old value.
+        handlers = harness.server._config_handlers
+        count = handlers._compute_dirty_count()
+        assert count == 0, f"Expected 0 unsaved changes after save, got {count}"
+
 
 class TestDiffGranularity:
     """Reproduce diff granularity bug (Bug #2).
@@ -2245,6 +2277,9 @@ class TestDirtyCount:
         """_compute_dirty_count returns 0 when snapshot is None."""
         harness.client.get("/config")
         handlers = harness.server._config_handlers
+        # Buffer must be dirty to reach the snapshot check.
+        assert handlers._buffer is not None
+        handlers._buffer.mark_dirty()
         handlers._get_snapshot = lambda: None
         assert handlers._compute_dirty_count() == 0
 
