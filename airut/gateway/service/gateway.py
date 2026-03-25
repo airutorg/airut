@@ -845,8 +845,6 @@ class GatewayService:
 
         pending = self._pending_server_config
         old_global = self._pending_server_old_global
-        self._pending_server_config = None
-        self._pending_server_old_global = None
 
         try:
             self._apply_server_reload(pending, old_global)
@@ -854,6 +852,9 @@ class GatewayService:
             logger.exception(
                 "Immediate server-scope reload failed, keeping current config"
             )
+        finally:
+            self._pending_server_config = None
+            self._pending_server_old_global = None
 
     def _add_repo(self, repo_id: str, repo_config: RepoServerConfig) -> None:
         """Add a new repo handler and start its listeners."""
@@ -996,8 +997,6 @@ class GatewayService:
                     return
 
             old_global = self._pending_server_old_global
-            self._pending_server_config = None
-            self._pending_server_old_global = None
             applied = True
 
             try:
@@ -1006,6 +1005,9 @@ class GatewayService:
                 logger.exception(
                     "Server-scope reload failed, keeping current config"
                 )
+            finally:
+                self._pending_server_config = None
+                self._pending_server_old_global = None
 
         if applied:
             self._notify_reload()
