@@ -11,6 +11,8 @@ for viewing task queue status and history.
 
 import json
 import logging
+import os
+import select
 import threading
 from collections.abc import Callable, Iterable
 from pathlib import Path
@@ -133,6 +135,8 @@ class DashboardServer:
         self._server: BaseWSGIServer | None = None
         self._thread: threading.Thread | None = None
         self._sse_manager = SSEConnectionManager()
+        self._wakeup_r: int = -1
+        self._wakeup_w: int = -1
 
         # Initialize request handlers
         self._handlers = RequestHandlers(
@@ -304,10 +308,9 @@ class DashboardServer:
             threaded=True,
         )
         self._server = server
+        self._wakeup_r, self._wakeup_w = os.pipe()
         self._thread = threading.Thread(
-            # Reduce poll_interval from the default 0.5s so shutdown()
-            # returns promptly instead of blocking for up to 500ms.
-            target=lambda: server.serve_forever(poll_interval=0.05),
+            target=self._serve,
             daemon=True,
             name="DashboardServer",
         )
@@ -326,13 +329,52 @@ class DashboardServer:
 
     def stop(self) -> None:
         """Stop the dashboard server."""
-        if self._server:
-            self._server.shutdown()
-            self._server.server_close()
+        if self._wakeup_w >= 0:
+            try:
+                os.write(self._wakeup_w, b"\x00")
+            except OSError:
+                pass
         if self._thread:
             self._thread.join(timeout=5)
             self._thread = None
+        if self._server:
+            self._server.server_close()
+            self._server = None
+        self._close_pipe()
         logger.info("Dashboard server stopped")
+
+    def _serve(self) -> None:
+        """Select-based serve loop with instant wakeup on stop.
+
+        Blocks on ``select()`` waiting for either an incoming connection
+        on the server socket or a byte on the wakeup pipe (sent by
+        ``stop()``).  This eliminates the polling overhead of the stdlib
+        ``serve_forever(poll_interval=...)`` loop.
+        """
+        server = self._server
+        assert server is not None
+        server_fd = server.fileno()
+        wakeup_r = self._wakeup_r
+        try:
+            while True:
+                readable, _, _ = select.select([server_fd, wakeup_r], [], [])
+                if wakeup_r in readable:
+                    break
+                if server_fd in readable:
+                    server._handle_request_noblock()  # type: ignore[attr-defined]  # inherited from BaseServer
+        except OSError:
+            pass
+
+    def _close_pipe(self) -> None:
+        """Close wakeup pipe file descriptors (idempotent)."""
+        for fd in (self._wakeup_r, self._wakeup_w):
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        self._wakeup_r = -1
+        self._wakeup_w = -1
 
     def _wsgi_app(
         self,
