@@ -343,6 +343,48 @@ class EditBuffer:
 
         self._dirty = True
 
+    def set_list_item(self, path: str, index: int, value: str) -> None:
+        """Set a single item in a list at the given path.
+
+        Args:
+            path: Dot-delimited YAML path to the list.
+            index: Index of the item to set.
+            value: New value for the item.
+        """
+        parts = path.split(".")
+        try:
+            parent, final = self._navigate(self._raw, parts)
+        except KeyError:
+            return
+        target = parent.get(final)
+        if isinstance(target, list) and 0 <= index < len(target):
+            target[index] = value
+            self._dirty = True
+
+    def set_tagged_union_item(
+        self, path: str, index: int, key: str, value: str | bool
+    ) -> None:
+        """Set a tagged union list item at the given path.
+
+        Each item is a single-key dict like ``{"workspace_members": True}``
+        or ``{"user_id": "U12345"}``.
+
+        Args:
+            path: Dot-delimited YAML path to the list.
+            index: Index of the item to set.
+            key: The tag key (e.g. ``"workspace_members"``).
+            value: The tag value.
+        """
+        parts = path.split(".")
+        try:
+            parent, final = self._navigate(self._raw, parts)
+        except KeyError:
+            return
+        target = parent.get(final)
+        if isinstance(target, list) and 0 <= index < len(target):
+            target[index] = {key: value}
+            self._dirty = True
+
     def get_value(self, path: str) -> object:
         """Get a value at the given path, or MISSING if not set.
 

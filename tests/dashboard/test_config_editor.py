@@ -2114,3 +2114,584 @@ class TestDirtyCount:
         handlers = harness.server._config_handlers
         handlers._get_snapshot = lambda: None
         assert handlers._compute_dirty_count() == 0
+
+
+# ── Phase 3: Channels ──────────────────────────────────────────────
+
+
+def _make_sample_raw_with_slack() -> dict[str, Any]:
+    """Create a sample raw config with both email and Slack channels."""
+    raw = _make_sample_raw()
+    raw["repos"]["test-repo"]["slack"] = {
+        "bot_token": "xoxb-test-token",
+        "app_token": "xapp-test-token",
+        "authorized": [{"workspace_members": True}],
+    }
+    return raw
+
+
+@pytest.fixture
+def slack_harness(tmp_path: Path) -> ConfigEditorHarness:
+    return ConfigEditorHarness(tmp_path, raw=_make_sample_raw_with_slack())
+
+
+class TestRepoPageChannels:
+    def test_repo_page_shows_email_channel(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        response = harness.client.get("/config/repos/test-repo")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "Email Channel" in html
+        assert "imap_server" in html
+        assert "authorized_senders" in html
+
+    def test_repo_page_shows_add_slack_button(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Email-only repo shows add-slack button but not add-email."""
+        response = harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "Add Slack Channel" in html
+        assert "Add Email Channel" not in html
+
+    def test_repo_page_shows_both_channels(
+        self, slack_harness: ConfigEditorHarness
+    ) -> None:
+        response = slack_harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "Email Channel" in html
+        assert "Slack Channel" in html
+        assert "Add Email Channel" not in html
+        assert "Add Slack Channel" not in html
+
+    def test_repo_page_shows_slack_authorized_rules(
+        self, slack_harness: ConfigEditorHarness
+    ) -> None:
+        response = slack_harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "authorized" in html
+        assert "workspace_members" in html
+
+    def test_repo_page_no_channels_placeholder_gone(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Phase 3 placeholder text is replaced."""
+        response = harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "Channel editing will be available" not in html
+
+
+class TestAddChannel:
+    def test_add_email_channel(self, harness: ConfigEditorHarness) -> None:
+        """Adding email to a repo that only has email should be no-op."""
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/add",
+            data={"path": "repos.test-repo.email"},
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        # Already has email — should not change
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        assert "email" in buf.raw["repos"]["test-repo"]
+
+    def test_add_slack_channel(self, harness: ConfigEditorHarness) -> None:
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/add",
+            data={"path": "repos.test-repo.slack"},
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        assert "HX-Redirect" in response.headers
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        slack = buf.raw["repos"]["test-repo"]["slack"]
+        assert "bot_token" in slack
+        assert "app_token" in slack
+        assert "authorized" in slack
+
+    def test_add_email_to_slack_only_repo(self, tmp_path: Path) -> None:
+        """Adding email to a Slack-only repo creates email skeleton."""
+        raw = _make_sample_raw_with_slack()
+        del raw["repos"]["test-repo"]["email"]
+        h = ConfigEditorHarness(tmp_path, raw=raw)
+        h.client.get("/config")
+        response = h.client.post(
+            "/api/config/add",
+            data={"path": "repos.test-repo.email"},
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = h.server._config_handlers._buffer
+        assert buf is not None
+        email = buf.raw["repos"]["test-repo"]["email"]
+        assert "imap_server" in email
+
+    def test_add_channel_nonexistent_repo(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/add",
+            data={"path": "repos.nonexistent.slack"},
+            headers=XHR,
+        )
+        assert response.status_code == 400
+
+
+class TestRemoveChannel:
+    def test_remove_email_channel(self, harness: ConfigEditorHarness) -> None:
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/remove",
+            data={"path": "repos.test-repo.email"},
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        assert "HX-Redirect" in response.headers
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        assert "email" not in buf.raw["repos"]["test-repo"]
+
+    def test_remove_slack_channel(
+        self, slack_harness: ConfigEditorHarness
+    ) -> None:
+        slack_harness.client.get("/config")
+        response = slack_harness.client.post(
+            "/api/config/remove",
+            data={"path": "repos.test-repo.slack"},
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = slack_harness.server._config_handlers._buffer
+        assert buf is not None
+        assert "slack" not in buf.raw["repos"]["test-repo"]
+
+
+class TestListStrWidget:
+    def test_add_list_item_returns_widget(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/add",
+            data={"path": "repos.test-repo.email.authorized_senders"},
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "cfg-list-field" in html
+        assert "X-Dirty-Count" in response.headers
+
+    def test_remove_list_item_returns_widget(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/remove",
+            data={
+                "path": "repos.test-repo.email.authorized_senders",
+                "index": "0",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "cfg-list-field" in html
+
+    def test_edit_list_item(self, harness: ConfigEditorHarness) -> None:
+        harness.client.get("/config")
+        response = harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.email.authorized_senders",
+                "source": "literal",
+                "value": "new@example.com",
+                "index": "0",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        senders = buf.raw["repos"]["test-repo"]["email"]["authorized_senders"]
+        assert senders[0] == "new@example.com"
+
+    def test_edit_list_item_returns_widget(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        response = harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.email.authorized_senders",
+                "source": "literal",
+                "value": "new@example.com",
+                "index": "0",
+            },
+            headers=XHR,
+        )
+        html = response.get_data(as_text=True)
+        assert "cfg-list-field" in html
+
+
+class TestTaggedUnionListWidget:
+    def test_add_tagged_union_rule(
+        self, slack_harness: ConfigEditorHarness
+    ) -> None:
+        slack_harness.client.get("/config")
+        response = slack_harness.client.post(
+            "/api/config/add",
+            data={"path": "repos.test-repo.slack.authorized"},
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "cfg-tagged-union-field" in html
+        buf = slack_harness.server._config_handlers._buffer
+        assert buf is not None
+        rules = buf.raw["repos"]["test-repo"]["slack"]["authorized"]
+        assert len(rules) == 2  # Original + appended
+        assert rules[1] == {"workspace_members": True}
+
+    def test_add_tagged_union_rule_creates_list(
+        self, slack_harness: ConfigEditorHarness
+    ) -> None:
+        """Adding a tagged union item creates the list if missing."""
+        slack_harness.client.get("/config")
+        buf = slack_harness.server._config_handlers._buffer
+        assert buf is not None
+        # Remove the authorized list entirely
+        del buf.raw["repos"]["test-repo"]["slack"]["authorized"]
+        response = slack_harness.client.post(
+            "/api/config/add",
+            data={"path": "repos.test-repo.slack.authorized"},
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        rules = buf.raw["repos"]["test-repo"]["slack"]["authorized"]
+        assert rules == [{"workspace_members": True}]
+
+    def test_remove_tagged_union_rule(
+        self, slack_harness: ConfigEditorHarness
+    ) -> None:
+        slack_harness.client.get("/config")
+        response = slack_harness.client.post(
+            "/api/config/remove",
+            data={
+                "path": "repos.test-repo.slack.authorized",
+                "index": "0",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = slack_harness.server._config_handlers._buffer
+        assert buf is not None
+        rules = buf.raw["repos"]["test-repo"]["slack"]["authorized"]
+        assert len(rules) == 0
+
+    def test_edit_tagged_union_rule(
+        self, slack_harness: ConfigEditorHarness
+    ) -> None:
+        slack_harness.client.get("/config")
+        response = slack_harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.slack.authorized",
+                "source": "literal",
+                "index": "0",
+                "rule_type": "user_id",
+                "rule_value": "U12345",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = slack_harness.server._config_handlers._buffer
+        assert buf is not None
+        rule = buf.raw["repos"]["test-repo"]["slack"]["authorized"][0]
+        assert rule == {"user_id": "U12345"}
+
+    def test_edit_tagged_union_workspace_members(
+        self, slack_harness: ConfigEditorHarness
+    ) -> None:
+        """workspace_members rule type stores True, not the rule_value."""
+        slack_harness.client.get("/config")
+        # First change to user_id
+        slack_harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.slack.authorized",
+                "source": "literal",
+                "index": "0",
+                "rule_type": "user_id",
+                "rule_value": "U999",
+            },
+            headers=XHR,
+        )
+        # Now change back to workspace_members
+        response = slack_harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.slack.authorized",
+                "source": "literal",
+                "index": "0",
+                "rule_type": "workspace_members",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = slack_harness.server._config_handlers._buffer
+        assert buf is not None
+        rule = buf.raw["repos"]["test-repo"]["slack"]["authorized"][0]
+        assert rule == {"workspace_members": True}
+
+
+class TestChannelDirtyCount:
+    def test_dirty_count_includes_channel_changes(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Changing an email field should increase dirty count."""
+        harness.client.get("/config")
+        response = harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.email.imap_server",
+                "source": "literal",
+                "value": "new-imap.example.com",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        dirty = int(response.headers.get("X-Dirty-Count", "0"))
+        assert dirty >= 1
+
+    def test_dirty_count_channel_added(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Adding a Slack channel increases dirty count."""
+        harness.client.get("/config")
+        harness.client.post(
+            "/api/config/add",
+            data={"path": "repos.test-repo.slack"},
+            headers=XHR,
+        )
+        count = harness.server._config_handlers._compute_dirty_count()
+        assert count >= 1
+
+    def test_dirty_count_channel_removed(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Removing the email channel increases dirty count."""
+        harness.client.get("/config")
+        harness.client.post(
+            "/api/config/remove",
+            data={"path": "repos.test-repo.email"},
+            headers=XHR,
+        )
+        count = harness.server._config_handlers._compute_dirty_count()
+        assert count >= 1
+
+
+class TestChannelDiff:
+    def test_diff_shows_channel_field_change(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Diff includes email field changes."""
+        harness.client.get("/config")
+        harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.email.imap_server",
+                "source": "literal",
+                "value": "new-imap.example.com",
+            },
+            headers=XHR,
+        )
+        response = harness.client.get("/api/config/diff")
+        html = response.get_data(as_text=True)
+        assert "imap_server" in html
+        assert "new-imap.example.com" in html
+
+    def test_diff_shows_channel_added(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Diff shows added Slack channel."""
+        harness.client.get("/config")
+        harness.client.post(
+            "/api/config/add",
+            data={"path": "repos.test-repo.slack"},
+            headers=XHR,
+        )
+        response = harness.client.get("/api/config/diff")
+        html = response.get_data(as_text=True)
+        assert "slack" in html
+        assert "(added)" in html
+
+    def test_diff_shows_channel_removed(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Diff shows removed email channel."""
+        harness.client.get("/config")
+        harness.client.post(
+            "/api/config/remove",
+            data={"path": "repos.test-repo.email"},
+            headers=XHR,
+        )
+        response = harness.client.get("/api/config/diff")
+        html = response.get_data(as_text=True)
+        assert "email" in html
+        assert "(removed)" in html
+
+
+class TestChannelFieldPatch:
+    def test_patch_email_scalar_field(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        response = harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.email.imap_server",
+                "source": "literal",
+                "value": "mail.test.com",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        assert buf.raw["repos"]["test-repo"]["email"]["imap_server"] == (
+            "mail.test.com"
+        )
+
+    def test_patch_slack_scalar_field(
+        self, slack_harness: ConfigEditorHarness
+    ) -> None:
+        slack_harness.client.get("/config")
+        response = slack_harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.slack.bot_token",
+                "source": "env",
+                "value": "MY_BOT_TOKEN",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = slack_harness.server._config_handlers._buffer
+        assert buf is not None
+        from airut.yaml_env import EnvVar
+
+        assert isinstance(
+            buf.raw["repos"]["test-repo"]["slack"]["bot_token"], EnvVar
+        )
+
+    def test_patch_list_invalid_index(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        response = harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.email.authorized_senders",
+                "source": "literal",
+                "value": "test",
+                "index": "abc",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 400
+
+    def test_patch_index_on_non_list_field(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Index param on a scalar field returns 400."""
+        harness.client.get("/config")
+        response = harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.email.imap_server",
+                "source": "literal",
+                "value": "test",
+                "index": "0",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 400
+
+
+class TestRemoveNonChannel:
+    """Ensure remove on non-channel paths works normally."""
+
+    def test_remove_non_channel_path_with_index(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Remove on a list path (not channel root) works normally."""
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/remove",
+            data={
+                "path": "repos.test-repo.email.authorized_senders",
+                "index": "0",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        assert "HX-Redirect" not in response.headers
+
+    def test_remove_non_channel_path_no_key_no_index(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Remove with path-only (no key/index) on a non-channel path."""
+        harness.client.get("/config")
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        # Set a sub-block to remove
+        buf.raw.setdefault("repos", {}).setdefault("test-repo", {})["model"] = (
+            "opus"
+        )
+        response = harness.client.post(
+            "/api/config/remove",
+            data={"path": "repos.test-repo.model"},
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        assert "HX-Redirect" not in response.headers
+
+
+class TestParseChannelPath:
+    def test_email_path(self) -> None:
+        from airut.dashboard.handlers_config import ConfigEditorHandlers
+
+        result = ConfigEditorHandlers._parse_channel_path("repos.my-repo.email")
+        assert result == ("my-repo", "email")
+
+    def test_slack_path(self) -> None:
+        from airut.dashboard.handlers_config import ConfigEditorHandlers
+
+        result = ConfigEditorHandlers._parse_channel_path("repos.my-repo.slack")
+        assert result == ("my-repo", "slack")
+
+    def test_non_channel_path(self) -> None:
+        from airut.dashboard.handlers_config import ConfigEditorHandlers
+
+        assert (
+            ConfigEditorHandlers._parse_channel_path("repos.my-repo.model")
+            is None
+        )
+        assert (
+            ConfigEditorHandlers._parse_channel_path("dashboard.port") is None
+        )
+
+    def test_deep_path_not_channel(self) -> None:
+        from airut.dashboard.handlers_config import ConfigEditorHandlers
+
+        assert (
+            ConfigEditorHandlers._parse_channel_path(
+                "repos.my-repo.email.imap_server"
+            )
+            is None
+        )
