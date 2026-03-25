@@ -1,0 +1,12 @@
+[project]
+name = "airut-screenshots"
+version = "0.0.0"
+description = "Screenshot generator for Airut dashboard documentation"
+requires-python = ">=3.13"
+dependencies = [
+    "airut",
+    "playwright",
+]
+
+[tool.uv.sources]
+airut = { path = "..", editable = true }
