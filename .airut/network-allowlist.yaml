@@ -105,3 +105,8 @@ url_prefixes:
   - host: docs.slack.dev
     path: ""
     methods: [GET, HEAD]
+
+  # Playwright browser downloads — screenshot generator
+  - host: cdn.playwright.dev
+    path: ""
+    methods: [GET, HEAD]
