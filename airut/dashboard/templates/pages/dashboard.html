@@ -4,6 +4,7 @@
 
 {% block body %}
 <div class="page dashboard-page">
+    <div class="section-header">Server</div>
     {% include "components/version_info.html" %}
     <div id="dashboard-live" hx-ext="sse"
          sse-connect="/api/events/stream?format=html">
@@ -13,6 +14,7 @@
         <div id="repos-container" sse-swap="repos" hx-swap="innerHTML">
             {% include "components/repos_section.html" %}
         </div>
+        <div class="section-header">Tasks</div>
         <div class="dashboard">
             <div class="column">
                 <div id="pending-header" class="column-header pending"
@@ -74,6 +76,5 @@
 {% block scripts %}
 <script src="{{ static_url('vendor/htmx.min.js') }}"></script>
 <script src="{{ static_url('vendor/sse.min.js') }}"></script>
-<script src="{{ static_url('js/local-time.js') }}"></script>
 <script src="{{ static_url('js/sse-fallback.js') }}"></script>
 {% endblock %}

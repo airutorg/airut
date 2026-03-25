@@ -164,6 +164,7 @@ credential problems) while others continue processing emails.
 | `/api/conversation/{id}/network/stream` | GET    | SSE network log stream (per-task)           |
 | `/api/conversation/{id}/network/poll`   | GET    | Network log polling fallback                |
 | `/api/health`                           | GET    | Health check endpoint (ETag)                |
+| `/api/config-status`                    | GET    | Config reload status badge (HTML)           |
 | `/config`                               | GET    | Config editor page (global settings)        |
 | `/api/config/field`                     | PATCH  | Set or clear a config field (form-encoded)  |
 | `/api/config/diff`                      | GET    | Compare edit buffer vs live config (HTML)   |
@@ -375,15 +376,18 @@ task progress (e.g.,
 
 Three-column layout showing queued, in-progress, and completed tasks.
 
-**Header** displays version information:
+**Server section** displays version and status information:
 
 - Git commit SHA or version tag (monospace, links to GitHub release/commit page)
 - Update status badge: green "up to date" or yellow "update available" (fetched
   asynchronously from `/api/update` to avoid blocking page load). Hover shows
   current and latest version.
-- Service start timestamp
+- Config reload status badge: blue "restart needed" when a configuration change
+  requires a server restart (fetched from `/api/config-status`, polled every
+  30s)
+- "Configure" button (right-aligned, links to config editor)
 
-**Repository status section** (below header):
+**Repository status section** (below server section):
 
 - Lists all configured repositories with status indicators
 - Green dot for live repos, red dot for failed repos

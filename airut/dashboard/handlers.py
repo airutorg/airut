@@ -239,7 +239,8 @@ class RequestHandlers:
         if not self._git_version_info:
             if request.args.get("format") == "html":
                 return Response(
-                    '<span class="version-status check-failed"></span>',
+                    '<span class="version-badge version-status'
+                    ' check-failed"></span>',
                     content_type="text/html; charset=utf-8",
                 )
             return Response(
@@ -305,18 +306,19 @@ class RequestHandlers:
                 badge = (
                     f'<a href="{html_mod.escape(str(release_url))}"'
                     f' target="_blank" rel="noopener"'
-                    f' class="version-status update-available"'
+                    f' class="version-badge version-status update-available"'
                     f' title="{title}">update available</a>'
                 )
             else:
                 badge = (
-                    f'<span class="version-status update-available"'
-                    f' title="{title}">update available</span>'
+                    '<span class="version-badge version-status'
+                    f' update-available" title="{title}">'
+                    "update available</span>"
                 )
         else:
             current = html_mod.escape(str(data.get("current", "")))
             badge = (
-                f'<span class="version-status up-to-date"'
+                f'<span class="version-badge version-status up-to-date"'
                 f' title="{current}">up to date</span>'
             )
 
@@ -897,6 +899,45 @@ class RequestHandlers:
         return Response(
             json.dumps(data),
             content_type="application/json",
+        )
+
+    def handle_config_status(self, request: Request) -> Response:
+        """Handle config reload status HTML fragment endpoint.
+
+        Returns an HTML badge showing whether a config reload is pending.
+        Used by htmx polling on the dashboard main page.
+
+        Args:
+            request: Incoming request.
+
+        Returns:
+            HTML response with config status badge (or empty span).
+        """
+        pending = False
+        if self._status_callback:
+            data = self._status_callback()
+            pending = bool(data.get("server_reload_pending", False))
+
+        if pending:
+            html_str = (
+                '<span id="config-status"'
+                ' class="version-badge config-status reload-pending"'
+                ' hx-get="/api/config-status"'
+                ' hx-trigger="every 30s" hx-swap="outerHTML"'
+                ">restart needed</span>"
+            )
+        else:
+            html_str = (
+                '<span id="config-status"'
+                ' class="version-badge config-status"'
+                ' hx-get="/api/config-status"'
+                ' hx-trigger="every 30s" hx-swap="outerHTML"'
+                "></span>"
+            )
+
+        return Response(
+            html_str,
+            content_type="text/html; charset=utf-8",
         )
 
     def _stop_result_html(self, message: str, css_class: str) -> str:

@@ -533,16 +533,17 @@ class TestDashboardServer:
         sha_full = "abc1234567890abcdef1234567890abcdef123456"
         expected_url = f"https://github.com/airutorg/airut/commit/{sha_full}"
         assert f'href="{expected_url}"' in html
-        # Startup time uses JavaScript for local timezone formatting
-        assert 'data-timestamp="946684800.0"' in html
-        assert 'class="local-time"' in html
 
         # Check CSS classes
-        assert 'class="version-sha"' in html
+        assert 'class="version-badge version-sha"' in html
 
         # Check update check placeholder
         assert 'id="update-status"' in html
         assert "checking..." in html
+
+        # Check section headings
+        assert "Server" in html
+        assert "Tasks" in html
 
     def test_index_with_version_info_modified(self) -> None:
         """Test dashboard shows version info with update check placeholder."""
@@ -562,8 +563,6 @@ class TestDashboardServer:
 
         # Check version info is displayed
         assert "def5678" in html
-        # Startup time uses JavaScript for local timezone formatting
-        assert 'data-timestamp="1000000000.0"' in html
 
         # Check update check placeholder
         assert 'id="update-status"' in html
@@ -588,7 +587,7 @@ class TestDashboardServer:
         assert "v0.7.0" in html
         expected_url = "https://github.com/airutorg/airut/releases/tag/v0.7.0"
         assert f'href="{expected_url}"' in html
-        assert 'class="version-sha"' in html
+        assert 'class="version-badge version-sha"' in html
 
     def test_index_with_non_exact_version_tag(self) -> None:
         """Test version links to commit for git describe suffix."""
@@ -626,7 +625,7 @@ class TestDashboardServer:
 
         # Version info section should not be present
         assert 'class="version-info"' not in html
-        assert 'class="version-sha"' not in html
+        assert 'class="version-badge version-sha"' not in html
 
     def test_task_detail_endpoint(self) -> None:
         """Test /conversation/<id> endpoint."""
@@ -1870,6 +1869,60 @@ class TestUpdateEndpoint:
         assert "up-to-date" in html
         assert "up to date" in html
         assert "<a " not in html  # Should not be a link
+
+
+class TestConfigStatusEndpoint:
+    """Tests for /api/config-status endpoint."""
+
+    def test_config_status_no_callback(self) -> None:
+        """Config status returns empty span when no status callback."""
+        tracker = TaskTracker()
+        server = DashboardServer(tracker)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/config-status")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert 'id="config-status"' in html
+        assert "reload-pending" not in html
+        assert "restart needed" not in html
+
+    def test_config_status_not_pending(self) -> None:
+        """Config status returns empty span when reload is not pending."""
+        tracker = TaskTracker()
+        server = DashboardServer(
+            tracker,
+            status_callback=lambda: {
+                "config_generation": 1,
+                "server_reload_pending": False,
+                "last_reload_error": None,
+            },
+        )
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/config-status")
+        html = response.get_data(as_text=True)
+        assert 'id="config-status"' in html
+        assert "reload-pending" not in html
+
+    def test_config_status_pending(self) -> None:
+        """Config status shows reload-pending badge when pending."""
+        tracker = TaskTracker()
+        server = DashboardServer(
+            tracker,
+            status_callback=lambda: {
+                "config_generation": 2,
+                "server_reload_pending": True,
+                "last_reload_error": None,
+            },
+        )
+        client = Client(server._wsgi_app)
+
+        response = client.get("/api/config-status")
+        html = response.get_data(as_text=True)
+        assert 'id="config-status"' in html
+        assert "reload-pending" in html
+        assert "restart needed" in html
 
 
 class TestSecurityHeaders:
