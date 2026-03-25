@@ -47,25 +47,26 @@
 
 /* ---- Section headers ---- */
 .cfg-section-title {
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
-  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
   margin-bottom: 12px;
   margin-top: 24px;
 }
 .cfg-section-title:first-child { margin-top: 0; }
 
-/* ---- Card headers with scope badge ---- */
+/* ---- Card headers ---- */
 .cfg-card-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   margin-bottom: 16px;
 }
 .cfg-card-title {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
-  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
 }
 
 /* ---- Scope badges ---- */
@@ -97,12 +98,6 @@
   border-bottom: 1px solid var(--border-light);
 }
 .cfg-field:last-child { border-bottom: none; }
-.cfg-field.unset {
-  background: var(--bg-inset);
-  border-radius: 4px;
-  padding: 10px;
-  margin: 4px 0;
-}
 .cfg-field-header {
   display: flex;
   align-items: center;
@@ -112,11 +107,9 @@
 
 /* ---- Field labels ---- */
 .cfg-label {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-tertiary);
+  color: var(--text-primary);
 }
 
 /* ---- Source selector ---- */
@@ -170,6 +163,11 @@
 select.cfg-input {
   max-width: 120px;
   cursor: pointer;
+}
+.cfg-input:disabled {
+  background: var(--bg-inset);
+  color: var(--text-tertiary);
+  cursor: default;
 }
 
 /* ---- Help text ---- */
