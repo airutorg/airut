@@ -131,36 +131,6 @@ default-branch checkout, `airut-sandbox` installation, and PR SHA fetching. See
 `spec/sandbox-action.md` for the action design and `spec/sandbox-cli.md` for the
 full security model.
 
-```yaml
-jobs:
-  code:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: airutorg/sandbox-action@main
-        with:
-          command: 'uv sync && uv run scripts/ci.py --workflow code --verbose --timeout 0'
-          pr_sha: ${{ github.event.pull_request.head.sha || github.sha }}
-
-  security:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: airutorg/sandbox-action@main
-        with:
-          command: 'uv sync && uv run scripts/ci.py --workflow security --verbose --timeout 0'
-          pr_sha: ${{ github.event.pull_request.head.sha || github.sha }}
-
-  integration:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: airutorg/sandbox-action@main
-        with:
-          command: 'uv sync && uv run scripts/ci.py --workflow integration --verbose --timeout 0'
-          pr_sha: ${{ github.event.pull_request.head.sha || github.sha }}
-```
-
 `--timeout 0` disables `ci.py`'s overall timeout since GitHub Actions provides
 its own `timeout-minutes`. `--verbose` shows full output in CI logs.
 
