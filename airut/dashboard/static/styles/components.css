@@ -131,6 +131,8 @@
 }
 .status-badge.live { background: var(--status-success-bg); color: var(--status-success); }
 .status-badge.failed { background: var(--status-error-bg); color: var(--status-error); }
+.status-badge.reload_pending,
+.status-badge.reloading { background: var(--status-info-bg); color: var(--status-info); }
 
 /* ---- Status dot ---- */
 .status-dot {
@@ -180,6 +182,12 @@
 }
 .repo-status-indicator.live { background: var(--status-success); }
 .repo-status-indicator.failed { background: var(--status-error); }
+.repo-status-indicator.reload_pending,
+.repo-status-indicator.reloading {
+  border: 2px solid var(--status-info);
+  border-top-color: transparent;
+  animation: spin 1s linear infinite;
+}
 
 /* ---- Task card ---- */
 .task-card {
