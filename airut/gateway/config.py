@@ -942,6 +942,11 @@ class EmailChannelConfig(ChannelConfig):
         """Return a short description for dashboard display."""
         return self.imap_server
 
+    @property
+    def channel_detail(self) -> str:
+        """Return agent email address for dashboard display."""
+        return self.from_address
+
 
 #: Channel type keys recognized in server config.
 #: Extend as new channel types are added.

@@ -911,7 +911,9 @@ class TestStartStop:
         mock_handler2.config.repo_id = "repo2"
         mock_handler2.config.git_repo_url = "https://example.com/repo2"
         mock_handler2.config.channels = {
-            "email": MagicMock(channel_info="imap2.example.com")
+            "email": MagicMock(
+                channel_info="imap2.example.com", channel_detail=""
+            )
         }
         mock_handler2.config.storage_dir = tmp_path / "s2"
         svc.repo_handlers["repo2"] = mock_handler2
@@ -1064,7 +1066,9 @@ class TestStartRepoInitFailure:
         mock_handler2.config.repo_id = "repo2"
         mock_handler2.config.git_repo_url = "https://example.com/repo2"
         mock_handler2.config.channels = {
-            "email": MagicMock(channel_info="imap2.example.com")
+            "email": MagicMock(
+                channel_info="imap2.example.com", channel_detail=""
+            )
         }
         mock_handler2.config.storage_dir = tmp_path / "s2"
         mock_handler2.start_listener.side_effect = RuntimeError("Auth failed")

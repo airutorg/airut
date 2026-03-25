@@ -37,6 +37,14 @@ class TestSlackChannelConfig:
         )
         assert config.channel_info == "Slack (Socket Mode)"
 
+    def test_channel_detail(self) -> None:
+        config = SlackChannelConfig(
+            bot_token="xoxb-test",
+            app_token="xapp-test",
+            authorized=({"workspace_members": True},),
+        )
+        assert config.channel_detail == ""
+
     def test_empty_authorized_raises(self) -> None:
         with pytest.raises(ValueError, match="authorization rule"):
             SlackChannelConfig(

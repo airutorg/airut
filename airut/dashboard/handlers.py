@@ -749,13 +749,6 @@ class RequestHandlers:
         if repo_state is None:
             return Response("Repository not found", status=404)
 
-        channels_display = (
-            ", ".join(
-                f"{ch.channel_type}: {ch.info}" for ch in repo_state.channels
-            )
-            or "(none)"
-        )
-
         crumbs: list[tuple[str, str]] = [(repo_id, "")]
 
         return Response(
@@ -763,7 +756,6 @@ class RequestHandlers:
                 "pages/repo_detail.html",
                 breadcrumbs=crumbs,
                 repo=repo_state,
-                channels_display=channels_display,
             ),
             content_type="text/html; charset=utf-8",
         )

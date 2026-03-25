@@ -160,10 +160,12 @@ class ChannelInfo:
     Attributes:
         channel_type: Channel type identifier (e.g. ``"email"``, ``"slack"``).
         info: Short description (e.g. ``"imap.example.com"``).
+        detail: Additional detail (e.g. agent email address), empty if none.
     """
 
     channel_type: str
     info: str
+    detail: str = ""
 
 
 @dataclass(frozen=True)

@@ -398,6 +398,35 @@ class TestDashboardServer:
         assert "Connection refused" in html
         assert "IMAPConnectionError" in html
 
+    def test_repo_detail_channel_with_detail(self) -> None:
+        """Repo detail page shows channel detail and server info."""
+        tracker = TaskTracker()
+        repo_states = [
+            RepoState(
+                repo_id="detail-repo",
+                status=RepoStatus.LIVE,
+                git_repo_url="https://github.com/test/repo",
+                channels=(
+                    ChannelInfo(
+                        channel_type="email",
+                        info="imap.example.com",
+                        detail="bot@example.com",
+                    ),
+                ),
+                storage_dir="/storage/detail-repo",
+            ),
+        ]
+
+        clock = VersionClock()
+        repos_store = VersionedStore(tuple(repo_states), clock)
+        server = DashboardServer(tracker, repos_store=repos_store)
+        client = Client(server._wsgi_app)
+
+        response = client.get("/repo/detail-repo")
+        html = response.get_data(as_text=True)
+        assert "bot@example.com" in html
+        assert "(imap.example.com)" in html
+
     def test_repo_detail_not_found(self) -> None:
         """Test /repo/<id> returns 404 for unknown repo."""
         tracker = TaskTracker()

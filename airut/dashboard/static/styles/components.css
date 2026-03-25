@@ -172,6 +172,9 @@
 .field-value.mono {
   font-family: var(--font-mono);
 }
+.field-hint {
+  color: var(--text-tertiary);
+}
 
 /* ---- Repo status indicator ---- */
 .repo-status-indicator {

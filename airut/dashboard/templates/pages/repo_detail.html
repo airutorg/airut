@@ -6,17 +6,35 @@
 <div class="page" hx-ext="sse" sse-connect="/api/events/stream?format=html&repo_id={{ repo.repo_id }}">
     <div class="card">
         <h1>{{ repo.repo_id }}</h1>
-        <span id="repo-status" sse-swap="repo-status" hx-swap="outerHTML"
-            class="status-badge {{ repo.status.value }}">{{ repo.status.value.replace('_', ' ').upper() }}</span>
+
+        <div class="field">
+            <div class="field-label">Status</div>
+            <div class="field-value">
+                <span id="repo-status" sse-swap="repo-status" hx-swap="outerHTML"
+                    class="status-badge {{ repo.status.value }}">{{ repo.status.value.replace('_', ' ').upper() }}</span>
+            </div>
+        </div>
 
         <div class="field">
             <div class="field-label">Git Repository</div>
             <div class="field-value mono">{{ repo.git_repo_url }}</div>
         </div>
+        {% if repo.channels %}
+        {% for ch in repo.channels %}
+        <div class="field">
+            <div class="field-label">Channel: {{ ch.channel_type }}</div>
+            <div class="field-value mono">
+                {% if ch.detail %}{{ ch.detail }} <span class="field-hint">({{ ch.info }})</span>
+                {% else %}{{ ch.info }}{% endif %}
+            </div>
+        </div>
+        {% endfor %}
+        {% else %}
         <div class="field">
             <div class="field-label">Channels</div>
-            <div class="field-value mono">{{ channels_display }}</div>
+            <div class="field-value mono">(none)</div>
         </div>
+        {% endif %}
         <div class="field">
             <div class="field-label">Storage Directory</div>
             <div class="field-value mono">{{ repo.storage_dir }}</div>
