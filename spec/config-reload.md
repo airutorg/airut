@@ -285,13 +285,21 @@ enum.
 ```json
 {
   "config_generation": 3,
+  "config_file_sha256": "a1b2c3...",
   "server_reload_pending": false,
   "last_reload_error": null
 }
 ```
 
 `config_generation` is a monotonic integer starting at 0, incremented on each
-successful reload.
+successful reload. `config_file_sha256` is the SHA-256 hex digest of the raw
+file bytes from the last load attempt (successful or not). External tests can
+write a config file, compute its expected SHA-256, and poll `/api/status` until
+the hash matches — confirming the service loaded that exact file version.
+
+**Reload signaling:** The service signals after every reload attempt (success,
+failure, or no-op). In-process consumers can wait for reload completion without
+polling.
 
 ### Error Handling
 

@@ -17,6 +17,7 @@ Matches the test plan in ``spec/config-reload.md``:
   D1-D6: Error handling and edge cases
 """
 
+import hashlib
 import json
 import os
 import socket
@@ -200,46 +201,48 @@ def create_file_service(
 def wait_for_reload(
     service: GatewayService,
     generation: int,
-    timeout: float = 10.0,
+    timeout: float = 5.0,
 ) -> None:
-    """Wait until config_generation > generation."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if service._config_generation > generation:
-            return
-        time.sleep(0.1)
-    raise TimeoutError(
-        f"Config reload did not complete within {timeout}s "
-        f"(generation={service._config_generation}, expected>{generation})"
-    )
+    """Wait until config_generation > generation.
+
+    Uses the service's ``_reload_condition`` for instant wakeup
+    instead of polling.
+    """
+    with service._reload_condition:
+        if not service._reload_condition.wait_for(
+            lambda: service._config_generation > generation, timeout
+        ):
+            raise TimeoutError(
+                f"Config reload did not complete within {timeout}s "
+                f"(generation={service._config_generation}, "
+                f"expected>{generation})"
+            )
 
 
 def wait_for_reload_error(
     service: GatewayService,
-    timeout: float = 10.0,
+    timeout: float = 5.0,
 ) -> None:
     """Wait until _last_reload_error is set (watcher processed a bad config)."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if service._last_reload_error is not None:
-            return
-        time.sleep(0.1)
-    raise TimeoutError(f"Reload error did not appear within {timeout}s")
+    with service._reload_condition:
+        if not service._reload_condition.wait_for(
+            lambda: service._last_reload_error is not None, timeout
+        ):
+            raise TimeoutError(f"Reload error did not appear within {timeout}s")
 
 
 def wait_for_pending_server_clear(
     service: GatewayService,
-    timeout: float = 10.0,
+    timeout: float = 5.0,
 ) -> None:
     """Wait until _pending_server_config is cleared."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if service._pending_server_config is None:
-            return
-        time.sleep(0.1)
-    raise TimeoutError(
-        f"Pending server config was not cleared within {timeout}s"
-    )
+    with service._reload_condition:
+        if not service._reload_condition.wait_for(
+            lambda: service._pending_server_config is None, timeout
+        ):
+            raise TimeoutError(
+                f"Pending server config was not cleared within {timeout}s"
+            )
 
 
 def wait_for_repo_status(
@@ -248,14 +251,18 @@ def wait_for_repo_status(
     status: str,
     timeout: float = 10.0,
 ) -> None:
-    """Wait until a repo reaches the given status."""
+    """Wait until a repo reaches the given status.
+
+    Repo status is set outside the reload path (by listener restart),
+    so this still uses polling — but with a short interval.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         repos = service._repos_store.get().value
         for r in repos:
             if r.repo_id == repo_id and r.status.value == status:
                 return
-        time.sleep(0.1)
+        time.sleep(0.05)
     raise TimeoutError(
         f"Repo '{repo_id}' did not reach status '{status}' within {timeout}s"
     )
@@ -272,7 +279,7 @@ def _wait_for_service_ready(
             return
         if boot.phase == BootPhase.FAILED:
             raise RuntimeError(f"Service boot failed: {boot.error_message}")
-        time.sleep(0.1)
+        time.sleep(0.05)
     raise TimeoutError(f"Service did not boot within {timeout}s")
 
 
@@ -282,8 +289,11 @@ def _wait_for_watcher_ready(
     """Wait until the config file watcher is listening."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if service._watcher is not None and service._watcher.ready.is_set():
-            return
+        if service._watcher is not None:
+            remaining = deadline - time.monotonic()
+            if service._watcher.ready.wait(max(remaining, 0)):
+                return
+            break
         time.sleep(0.05)
     raise TimeoutError(f"Config watcher did not start within {timeout}s")
 
@@ -340,8 +350,14 @@ events = [
 """
 
 
-def _slow_mock(seconds: float = 3.0) -> str:
-    """Return mock code that takes a while to complete."""
+def _gate_mock(gate_dir: str) -> str:
+    """Return mock code that blocks until a gate file is written.
+
+    The mock writes ``<gate_dir>/ready`` when it starts blocking,
+    and polls for ``<gate_dir>/release`` to continue.  This lets
+    tests control task duration deterministically instead of using
+    ``time.sleep()``.
+    """
     return f"""
 events = [
     generate_system_event(session_id),
@@ -351,8 +367,29 @@ events = [
 
 def sync_between_events(event_num):
     if event_num == 1:
-        time.sleep({seconds})
+        gate = Path("{gate_dir}")
+        gate.mkdir(parents=True, exist_ok=True)
+        (gate / "ready").write_text("1")
+        while not (gate / "release").exists():
+            time.sleep(0.05)
 """
+
+
+def _wait_for_gate(gate_dir: Path, timeout: float = 15.0) -> None:
+    """Wait until the gate mock writes its ready file."""
+    ready = gate_dir / "ready"
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if ready.exists():
+            return
+        time.sleep(0.05)
+    raise TimeoutError(f"Gate ready file not created within {timeout}s")
+
+
+def _release_gate(gate_dir: Path) -> None:
+    """Signal the gate mock to continue and complete."""
+    gate_dir.mkdir(parents=True, exist_ok=True)
+    (gate_dir / "release").write_text("1")
 
 
 def _read_env_capture(conv_id: str, repo_id: str = "test") -> dict[str, str]:
@@ -855,6 +892,7 @@ class TestRepoScopeReload:
 
     def test_reload_repo_deferred_during_task(
         self,
+        tmp_path: Path,
         integration_env: IntegrationEnvironment,
         create_email,
         extract_conversation_id,
@@ -864,13 +902,13 @@ class TestRepoScopeReload:
             integration_env,
             integration_env.repo_root / "airut.yaml",
         )
+        gate_dir = tmp_path / "gate_b5"
 
         with running_service(cf, integration_env) as service:
-            # Start a slow task — 5s gives ample margin for CI to
-            # process the config change before the task completes.
+            # Start a gate-controlled task
             msg = create_email(
                 subject="Slow task",
-                body=_slow_mock(5.0),
+                body=_gate_mock(str(gate_dir)),
             )
             integration_env.email_server.inject_message(msg)
 
@@ -881,6 +919,7 @@ class TestRepoScopeReload:
                 timeout=15.0,
             )
             assert executing_task is not None
+            _wait_for_gate(gate_dir)
 
             # Modify repo-scope config while task runs
             gen = service._config_generation
@@ -891,9 +930,10 @@ class TestRepoScopeReload:
             wait_for_reload(service, gen)
 
             # Repo should be pending reload (task still active)
-            # The reload is deferred until the task completes
+            # Release the gate to let the task complete
+            _release_gate(gate_dir)
 
-            # Wait for slow task to complete — should succeed
+            # Wait for task to complete — should succeed
             ack = integration_env.email_server.wait_for_sent(
                 lambda m: "started working" in get_message_text(m).lower(),
                 timeout=15.0,
@@ -902,7 +942,7 @@ class TestRepoScopeReload:
             conv_id = extract_conversation_id(ack["Subject"])
             assert conv_id is not None
             task = wait_for_conv_completion(
-                service.tracker, conv_id, timeout=30.0
+                service.tracker, conv_id, timeout=15.0
             )
             assert task is not None
             assert task.succeeded
@@ -1123,6 +1163,7 @@ class TestServerScopeReload:
 
     def test_reload_server_deferred_until_idle(
         self,
+        tmp_path: Path,
         integration_env: IntegrationEnvironment,
         create_email,
         extract_conversation_id,
@@ -1130,6 +1171,7 @@ class TestServerScopeReload:
         """C3: Server reload deferred during active task."""
         port1 = _free_port()
         port2 = _free_port()
+        gate_dir = tmp_path / "gate_c3"
         cf = ConfigFile.from_env(
             integration_env,
             integration_env.repo_root / "airut.yaml",
@@ -1145,20 +1187,21 @@ class TestServerScopeReload:
             assert service.dashboard is not None
             assert service.dashboard.port == port1
 
-            # Start slow task
+            # Start gate-controlled task
             msg = create_email(
                 subject="Slow server test",
-                body=_slow_mock(5.0),
+                body=_gate_mock(str(gate_dir)),
             )
             integration_env.email_server.inject_message(msg)
 
-            # Wait for task to start executing
+            # Wait for task to start executing and reach the gate
             executing_task = wait_for_task(
                 service.tracker,
                 lambda t: t.status.value == "executing",
                 timeout=15.0,
             )
             assert executing_task is not None
+            _wait_for_gate(gate_dir)
 
             # Change dashboard port while task runs
             gen = service._config_generation
@@ -1170,7 +1213,10 @@ class TestServerScopeReload:
             assert service.dashboard is not None
             assert service.dashboard.port == port1
 
-            # Wait for slow task to complete
+            # Release the gate to let the task complete
+            _release_gate(gate_dir)
+
+            # Wait for task to complete
             ack = integration_env.email_server.wait_for_sent(
                 lambda m: "started working" in get_message_text(m).lower(),
                 timeout=15.0,
@@ -1178,10 +1224,10 @@ class TestServerScopeReload:
             assert ack is not None
             conv_id = extract_conversation_id(ack["Subject"])
             assert conv_id is not None
-            wait_for_conv_completion(service.tracker, conv_id, timeout=30.0)
+            wait_for_conv_completion(service.tracker, conv_id, timeout=15.0)
 
-            # Server reload should now be applied — poll instead of sleep
-            wait_for_pending_server_clear(service, timeout=10.0)
+            # Server reload should now be applied
+            wait_for_pending_server_clear(service)
             assert service.dashboard is not None
             assert service.dashboard.port == port2
 
@@ -1333,36 +1379,22 @@ class TestErrorHandling:
         )
 
         with running_service(cf, integration_env) as service:
-            gen = service._config_generation
-
             # Write three changes in rapid succession
             cf.set("repos.test.model", "haiku")
             cf.set("repos.test.model", "opus")
             cf.set("repos.test.model", "sonnet")
 
-            # Wait for at least one reload to process.
-            wait_for_reload(service, gen)
+            # Compute the expected hash of the final file on disk.
+            # Wait until the service has loaded this exact file content.
+            expected_sha = hashlib.sha256(cf.path.read_bytes()).hexdigest()
+            with service._reload_condition:
+                if not service._reload_condition.wait_for(
+                    lambda: service._config_file_sha256 == expected_sha,
+                    timeout=10.0,
+                ):
+                    raise TimeoutError("Service did not load final config file")
 
-            # If inotify events were coalesced the model is already
-            # "sonnet".  If an intermediate value was applied first,
-            # subsequent events will trigger more reloads — poll for
-            # the final value.  As a safety net, if the remaining
-            # events were lost (race between coalescing and lock),
-            # re-write the file to guarantee one more reload.
             handler = service.repo_handlers["test"]
-            if handler.config.model != "sonnet":
-                deadline = time.monotonic() + 5.0
-                while time.monotonic() < deadline:
-                    if handler.config.model == "sonnet":
-                        break
-                    time.sleep(0.1)
-
-            if handler.config.model != "sonnet":
-                # Events were lost — write once more to force re-read
-                gen2 = service._config_generation
-                cf.write()
-                wait_for_reload(service, gen2)
-
             assert handler.config.model == "sonnet"
 
     def test_reload_sighup(
@@ -1408,9 +1440,20 @@ class TestErrorHandling:
         with running_service(cf, integration_env) as service:
             gen = service._config_generation
 
-            # Re-write identical content
+            # Re-write identical content.  The watcher will fire,
+            # _on_config_changed will run, detect no diff, and
+            # notify the condition without bumping generation.
             cf.write()
-            time.sleep(1.5)  # wait for watcher + debounce
+
+            # Wait until the service has loaded this file version.
+            # Content is identical so the SHA-256 matches, but
+            # wait_for is idempotent to notification timing.
+            expected_sha = hashlib.sha256(cf.path.read_bytes()).hexdigest()
+            with service._reload_condition:
+                service._reload_condition.wait_for(
+                    lambda: service._config_file_sha256 == expected_sha,
+                    timeout=5.0,
+                )
 
             # Generation unchanged — no effective change detected
             assert service._config_generation == gen

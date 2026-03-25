@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import dataclasses
+import threading
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -405,6 +406,7 @@ class TestReloadStatus:
         status = svc._get_reload_status()
         assert status == {
             "config_generation": 0,
+            "config_file_sha256": svc._config_file_sha256,
             "server_reload_pending": False,
             "last_reload_error": None,
         }
@@ -412,13 +414,60 @@ class TestReloadStatus:
     def test_after_reload(self, tmp_path: Path) -> None:
         svc = _make_service(tmp_path)
         svc._config_generation = 3
+        svc._config_file_sha256 = "abc123"
         svc._pending_server_config = MagicMock()
         svc._last_reload_error = "some error"
 
         status = svc._get_reload_status()
         assert status["config_generation"] == 3
+        assert status["config_file_sha256"] == "abc123"
         assert status["server_reload_pending"] is True
         assert status["last_reload_error"] == "some error"
+
+
+class TestReloadCondition:
+    """Tests for _reload_condition signaling."""
+
+    def test_notify_wakes_waiter(self, tmp_path: Path) -> None:
+        """_notify_reload wakes threads waiting on _reload_condition."""
+        svc = _make_service(tmp_path)
+        entered = threading.Event()
+        notified = threading.Event()
+
+        def waiter() -> None:
+            with svc._reload_condition:
+                entered.set()
+                svc._reload_condition.wait(timeout=5.0)
+            notified.set()
+
+        t = threading.Thread(target=waiter, daemon=True)
+        t.start()
+        entered.wait(timeout=2.0)
+        svc._notify_reload()
+        t.join(timeout=2.0)
+        assert notified.is_set()
+
+    def test_get_source_file_sha256_no_source(self, tmp_path: Path) -> None:
+        """Returns None when no config source is set."""
+        svc = _make_service(tmp_path)
+        svc._config_source = None
+        assert svc._get_source_file_sha256() is None
+
+    def test_get_source_file_sha256_with_file(self, tmp_path: Path) -> None:
+        """Returns SHA-256 from last_file_sha256 on the source."""
+        from airut.config.source import YamlConfigSource
+
+        config_path = tmp_path / "test.yaml"
+        config_path.write_text("key: value\n")
+
+        source = YamlConfigSource(config_path)
+        source.load()
+
+        svc = _make_service(tmp_path)
+        svc._config_source = source
+
+        assert svc._get_source_file_sha256() == source.last_file_sha256
+        assert source.last_file_sha256 is not None
 
 
 class TestAddRemoveRepo:
