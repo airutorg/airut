@@ -555,7 +555,7 @@ def test_repo_server_config_invalid_poll_interval(
     master_repo: Path, tmp_path: Path
 ) -> None:
     """Test repo server configuration with invalid poll interval."""
-    with pytest.raises(ValueError, match="Poll interval must be >= 1s: 0"):
+    with pytest.raises(ValueError, match="Poll interval must be >= 0.1s: 0"):
         _make_repo_server_config(master_repo, tmp_path, poll_interval_seconds=0)
 
 

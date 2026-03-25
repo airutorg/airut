@@ -196,7 +196,7 @@ class IntegrationEnvironment:
                     authorized_senders=authorized_senders,
                     trusted_authserv_id="test.local",
                     use_imap_idle=False,  # Use polling for predictable testing
-                    poll_interval_seconds=1,  # Fast polling for tests
+                    poll_interval_seconds=0.1,  # Fast polling for tests
                     smtp_require_auth=False,  # Test server doesn't support AUTH
                 )
             },
@@ -314,7 +314,7 @@ class IntegrationEnvironment:
                         authorized_senders=senders,
                         trusted_authserv_id="test.local",
                         use_imap_idle=False,
-                        poll_interval_seconds=1,
+                        poll_interval_seconds=0.1,
                         smtp_require_auth=False,
                     )
                 },

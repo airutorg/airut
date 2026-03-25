@@ -833,7 +833,7 @@ class EmailChannelConfig(ChannelConfig):
             Scope.REPO,
         ),
     )
-    poll_interval_seconds: int = field(
+    poll_interval_seconds: float = field(
         default=60,
         metadata=meta("Seconds between IMAP polls", Scope.REPO),
     )
@@ -909,9 +909,9 @@ class EmailChannelConfig(ChannelConfig):
             raise ValueError(f"Invalid IMAP port: {self.imap_port}")
         if not (1 <= self.smtp_port <= 65535):
             raise ValueError(f"Invalid SMTP port: {self.smtp_port}")
-        if self.poll_interval_seconds < 1:
+        if self.poll_interval_seconds < 0.1:
             raise ValueError(
-                f"Poll interval must be >= 1s: {self.poll_interval_seconds}"
+                f"Poll interval must be >= 0.1s: {self.poll_interval_seconds}"
             )
         if self.idle_reconnect_interval_seconds < 60:
             raise ValueError(
@@ -1497,7 +1497,7 @@ def _parse_email_channel_config(email: dict, prefix: str) -> EmailChannelConfig:
             required=f"{prefix}.email.trusted_authserv_id",
         ),
         poll_interval_seconds=_resolve(
-            imap.get("poll_interval"), int, default=60
+            imap.get("poll_interval"), float, default=60
         ),
         use_imap_idle=_resolve(imap.get("use_idle"), bool, default=True),
         idle_reconnect_interval_seconds=_resolve(
