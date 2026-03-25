@@ -23,7 +23,7 @@
       {% endif %}
       <button class="{{ 'active' if current_source == 'literal' else '' }}"
               hx-patch="/api/config/field"
-              hx-vals='{"path":"{{ f.path }}","source":"literal","value":{% if display_value is not none %}"{{ display_value }}"{% elif f.default is not none and f.default != MISSING %}"{{ f.default }}"{% else %}""{% endif %}}'
+              hx-vals='{"path":"{{ f.path }}","source":"literal","value":{% if current_source == "literal" and display_value is not none %}"{{ display_value }}"{% elif f.default is not none and f.default != MISSING %}"{{ f.default }}"{% else %}""{% endif %}}'
               hx-headers='{"X-Requested-With":"XMLHttpRequest"}'>
         Literal
       </button>
