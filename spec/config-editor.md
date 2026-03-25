@@ -357,7 +357,7 @@ input value.
      hx-target="this" hx-swap="outerHTML">
   <div class="cfg-field-header">
     <span class="cfg-label">port</span>
-    <span class="cfg-scope server">server</span>
+    <span class="cfg-scope cfg-server">server</span>
     <div class="cfg-source">
       <button hx-patch="/api/config/field"
               hx-vals='{"path":"dashboard.port","source":"unset"}'
