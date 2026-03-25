@@ -699,6 +699,9 @@ class GatewayService:
             }
             self._apply_task_scope(new_config)
             self._apply_repo_scope(new_config, repo_changes, old_repo_configs)
+            self._reconcile_repo_handlers(
+                new_config, skip=frozenset(repo_changes)
+            )
             self._apply_server_scope(new_config, global_changed)
 
             # 4b. Try immediate server reload if service is idle
@@ -864,7 +867,11 @@ class GatewayService:
             self._pending_server_config = None
             self._pending_server_old_global = None
 
-    def _reconcile_repo_handlers(self, new_config: ServerConfig) -> None:
+    def _reconcile_repo_handlers(
+        self,
+        new_config: ServerConfig,
+        skip: frozenset[str] = frozenset(),
+    ) -> None:
         """Retry adds for repos that are in config but not running.
 
         If ``_add_repo`` failed on a previous reload (e.g. git clone
@@ -874,11 +881,16 @@ class GatewayService:
 
         This reconciliation retries the add for any repo that should be
         running but isn't.
+
+        Args:
+            new_config: The newly loaded server config.
+            skip: Repo IDs to skip (already handled this reload).
         """
         for repo_id, repo_config in new_config.repos.items():
             if (
                 repo_id not in self.repo_handlers
                 and repo_id not in self._pending_repo_reload
+                and repo_id not in skip
             ):
                 logger.info(
                     "Repo '%s': retrying add (not in handlers)", repo_id
@@ -886,7 +898,13 @@ class GatewayService:
                 self._add_repo(repo_id, repo_config)
 
     def _add_repo(self, repo_id: str, repo_config: RepoServerConfig) -> None:
-        """Add a new repo handler and start its listeners."""
+        """Add a new repo handler and start its listeners.
+
+        On success the repo is recorded as LIVE.  On failure it is
+        recorded as FAILED so the dashboard shows the error — matching
+        the behaviour during boot.  ``_reconcile_repo_handlers`` will
+        retry on subsequent reloads.
+        """
         try:
             handler = RepoHandler(repo_config, self)
             handler.start_listener()
@@ -901,8 +919,18 @@ class GatewayService:
             )
             self._update_repos_store_entry(repo_id, repo_state)
             logger.info("Repo '%s': added and started", repo_id)
-        except Exception:
+        except Exception as e:
             logger.exception("Repo '%s': failed to add on reload", repo_id)
+            repo_state = RepoState(
+                repo_id=repo_id,
+                status=RepoStatus.FAILED,
+                error_message=str(e),
+                error_type=type(e).__name__,
+                git_repo_url=repo_config.git_repo_url,
+                channels=_build_channel_infos(repo_config),
+                storage_dir=str(repo_config.storage_dir),
+            )
+            self._update_repos_store_entry(repo_id, repo_state)
 
     def _remove_repo(self, repo_id: str) -> None:
         """Remove a repo, deferring if it has active tasks.

@@ -122,6 +122,11 @@ class ConfigFile:
         del d[keys[-1]]
         self.write()
 
+    def reload(self) -> None:
+        """Re-read _data from disk (sync after external writes)."""
+        source = YamlConfigSource(self.path)
+        self._data = source.load()
+
     @property
     def data(self) -> dict[str, Any]:
         """Return the raw YAML dict."""

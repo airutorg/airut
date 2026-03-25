@@ -161,7 +161,10 @@ If listener restart fails, the handler reverts to old config and attempts to
 restart with old settings. If that also fails, the repo enters `FAILED` state.
 
 **Adding repos:** create new `RepoHandler` and start listeners. No deferral
-needed.
+needed. If listener startup fails, the repo enters `FAILED` state in the repos
+store (visible on the dashboard), matching boot-time behaviour. On subsequent
+reloads, `_reconcile_repo_handlers` retries the add for any repo that is in
+config but not in `repo_handlers`.
 
 **Removing repos:** stop listeners and remove handler. Deferred if active tasks
 exist.
