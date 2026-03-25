@@ -22,6 +22,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
 
+from airut._json_types import JsonDict
 from airut.dashboard.versioned import VersionClock, Versioned
 
 
@@ -152,6 +153,26 @@ class BootState:
     started_at: float = field(default_factory=time.time)
     completed_at: float | None = None
 
+    def to_api_dict(self) -> JsonDict:
+        """Convert to JSON-serializable dict.
+
+        Returns:
+            Dict representation suitable for API and SSE responses.
+        """
+        result: JsonDict = {
+            "phase": self.phase.value,
+            "message": self.message,
+        }
+        if self.error_message:
+            result["error_message"] = self.error_message
+        if self.error_type:
+            result["error_type"] = self.error_type
+        if self.error_traceback:
+            result["error_traceback"] = self.error_traceback
+        result["started_at"] = self.started_at
+        result["completed_at"] = self.completed_at
+        return result
+
 
 @dataclass(frozen=True)
 class ChannelInfo:
@@ -193,6 +214,26 @@ class RepoState:
     channels: tuple[ChannelInfo, ...] = ()
     storage_dir: str = ""
     initialized_at: float = field(default_factory=time.time)
+
+    def to_api_dict(self) -> JsonDict:
+        """Convert to JSON-serializable dict.
+
+        Returns:
+            Dict representation suitable for API and SSE responses.
+        """
+        return {
+            "repo_id": self.repo_id,
+            "status": self.status.value,
+            "error_message": self.error_message,
+            "error_type": self.error_type,
+            "git_repo_url": self.git_repo_url,
+            "channels": [
+                {"type": ch.channel_type, "info": ch.info}
+                for ch in self.channels
+            ],
+            "storage_dir": self.storage_dir,
+            "initialized_at": self.initialized_at,
+        }
 
 
 DISK_TASK_ID_PREFIX = "disk-"
@@ -327,6 +368,37 @@ class TaskState:
         """
         end_time = self.completed_at if self.completed_at else time.time()
         return end_time - self.queued_at
+
+    def to_api_dict(self) -> JsonDict:
+        """Convert to JSON-serializable dict.
+
+        Returns:
+            Dict representation suitable for API and SSE responses.
+        """
+        result: JsonDict = {
+            "task_id": self.task_id,
+            "conversation_id": self.conversation_id,
+            "display_title": self.display_title,
+            "repo_id": self.repo_id,
+            "sender": self.sender,
+            "authenticated_sender": self.authenticated_sender,
+            "status": self.status.value,
+            "completion_reason": (
+                self.completion_reason.value if self.completion_reason else None
+            ),
+            "completion_detail": self.completion_detail,
+            "queued_at": self.queued_at,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "model": self.model,
+            "reply_index": self.reply_index,
+            "queue_duration": self.queue_duration(),
+            "execution_duration": self.execution_duration(),
+            "total_duration": self.total_duration(),
+        }
+        if self.todos is not None:
+            result["todos"] = [t.to_dict() for t in self.todos]
+        return result
 
 
 class TaskTracker:

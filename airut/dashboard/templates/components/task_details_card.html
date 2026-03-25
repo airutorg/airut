@@ -1,0 +1,41 @@
+{# Task details card content — expects: task (TaskState), model_display (str) #}
+{# Optional: cost_display (str, default "-"), turns_display (str, default "-") #}
+<h2>Task Details</h2>
+<div class="field">
+    <div class="field-label">Model</div>
+    <div id="task-model" class="field-value mono">{{ model_display }}</div>
+</div>
+<div class="details-grid">
+    <div class="detail-item">
+        <div class="field-label">Queued At</div>
+        <div class="field-value mono">{{ format_timestamp(task.queued_at) }}</div>
+    </div>
+    <div class="detail-item">
+        <div class="field-label">Started At</div>
+        <div id="task-started-at" class="field-value mono">{{ format_timestamp(task.started_at) }}</div>
+    </div>
+    <div class="detail-item">
+        <div class="field-label">Completed At</div>
+        <div id="task-completed-at" class="field-value mono">{{ format_timestamp(task.completed_at) }}</div>
+    </div>
+    <div class="detail-item">
+        <div class="field-label">Queue Time</div>
+        <div id="task-queue-time" class="field-value mono">{{ format_duration(task.queue_duration()) }}</div>
+    </div>
+    <div class="detail-item">
+        <div class="field-label">Execution Time</div>
+        <div id="task-exec-time" class="field-value mono">{{ format_duration(task.execution_duration()) }}</div>
+    </div>
+    <div class="detail-item">
+        <div class="field-label">Total Time</div>
+        <div id="task-total-time" class="field-value mono">{{ format_duration(task.total_duration()) }}</div>
+    </div>
+    <div class="detail-item">
+        <div class="field-label">Cost</div>
+        <div class="field-value mono">{{ cost_display|default('-') }}</div>
+    </div>
+    <div class="detail-item">
+        <div class="field-label">Turns</div>
+        <div class="field-value mono">{{ turns_display|default('-') }}</div>
+    </div>
+</div>

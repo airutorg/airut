@@ -19,9 +19,9 @@ from collections.abc import Generator
 from airut._json_types import JsonDict
 from airut.claude_output.types import StreamEvent
 from airut.dashboard.tracker import (
+    ACTIVE_STATUSES,
     BootState,
     RepoState,
-    TaskState,
     TaskStatus,
     TaskTracker,
 )
@@ -113,91 +113,6 @@ class SSEConnectionManager:
             return self._active
 
 
-def _boot_state_to_dict(boot_state: BootState) -> JsonDict:
-    """Convert BootState to JSON-serializable dict.
-
-    Args:
-        boot_state: Boot state to convert.
-
-    Returns:
-        Dict representation suitable for SSE state event.
-    """
-    result: JsonDict = {
-        "phase": boot_state.phase.value,
-        "message": boot_state.message,
-    }
-    if boot_state.error_message:
-        result["error_message"] = boot_state.error_message
-    if boot_state.error_type:
-        result["error_type"] = boot_state.error_type
-    if boot_state.error_traceback:
-        result["error_traceback"] = boot_state.error_traceback
-    result["started_at"] = boot_state.started_at
-    result["completed_at"] = boot_state.completed_at
-    return result
-
-
-def _repo_state_to_dict(repo_state: RepoState) -> JsonDict:
-    """Convert RepoState to JSON-serializable dict.
-
-    Args:
-        repo_state: Repository state to convert.
-
-    Returns:
-        Dict representation suitable for SSE state event.
-    """
-    return {
-        "repo_id": repo_state.repo_id,
-        "status": repo_state.status.value,
-        "error_message": repo_state.error_message,
-        "error_type": repo_state.error_type,
-        "git_repo_url": repo_state.git_repo_url,
-        "channels": [
-            {"type": ch.channel_type, "info": ch.info}
-            for ch in repo_state.channels
-        ],
-        "storage_dir": repo_state.storage_dir,
-        "initialized_at": repo_state.initialized_at,
-    }
-
-
-def _task_state_to_dict(task: TaskState) -> JsonDict:
-    """Convert TaskState to JSON-serializable dict for SSE.
-
-    Matches the format used by ``/api/conversations`` for consistency.
-
-    Args:
-        task: Task state to convert.
-
-    Returns:
-        Dict representation suitable for SSE state event.
-    """
-    result: JsonDict = {
-        "task_id": task.task_id,
-        "conversation_id": task.conversation_id,
-        "display_title": task.display_title,
-        "repo_id": task.repo_id,
-        "sender": task.sender,
-        "authenticated_sender": task.authenticated_sender,
-        "status": task.status.value,
-        "completion_reason": (
-            task.completion_reason.value if task.completion_reason else None
-        ),
-        "completion_detail": task.completion_detail,
-        "queued_at": task.queued_at,
-        "started_at": task.started_at,
-        "completed_at": task.completed_at,
-        "model": task.model,
-        "reply_index": task.reply_index,
-        "queue_duration": task.queue_duration(),
-        "execution_duration": task.execution_duration(),
-        "total_duration": task.total_duration(),
-    }
-    if task.todos is not None:
-        result["todos"] = [t.to_dict() for t in task.todos]
-    return result
-
-
 def build_state_snapshot(
     tracker: TaskTracker,
     boot_store: VersionedStore[BootState] | None,
@@ -216,15 +131,15 @@ def build_state_snapshot(
         JSON string containing the full state snapshot.
     """
     tasks = tracker.get_all_tasks()
-    task_dicts = [_task_state_to_dict(t) for t in tasks]
+    task_dicts = [t.to_api_dict() for t in tasks]
 
     boot_dict: JsonDict | None = None
     if boot_store is not None:
-        boot_dict = _boot_state_to_dict(boot_store.get().value)
+        boot_dict = boot_store.get().value.to_api_dict()
 
     repo_dicts: list[JsonDict] = []
     if repos_store is not None:
-        repo_dicts = [_repo_state_to_dict(r) for r in repos_store.get().value]
+        repo_dicts = [r.to_api_dict() for r in repos_store.get().value]
 
     return json.dumps(
         {
@@ -301,7 +216,6 @@ def _build_task_detail_events(
     Returns:
         Concatenated SSE-formatted event strings.
     """
-    from airut.dashboard.formatters import format_duration, format_timestamp
     from airut.dashboard.templating import render_template
 
     task = tracker.get_task(task_id)
@@ -309,37 +223,11 @@ def _build_task_detail_events(
         return format_sse_event("done", "", event_id=eid, retry=retry)
 
     parts: list[str] = []
+    is_active = task.status in ACTIVE_STATUSES
 
     # task-status: the status badge
-    success_class = ""
-    success_text = ""
-    if task.status == TaskStatus.COMPLETED:
-        if task.succeeded:
-            success_class = "success"
-            success_text = " - Success"
-        elif task.completion_reason:
-            success_class = "failed"
-            success_text = (
-                " - " + task.completion_reason.value.replace("_", " ").title()
-            )
-        else:
-            success_class = "failed"
-            success_text = " - Failed"
-
-    status_display = task.status.value.replace("_", " ").upper()
-    is_active = task.status in (
-        TaskStatus.QUEUED,
-        TaskStatus.AUTHENTICATING,
-        TaskStatus.PENDING,
-        TaskStatus.EXECUTING,
-    )
-    swap_attr = (
-        ' sse-swap="task-status" hx-swap="outerHTML"' if is_active else ""
-    )
-    status_html = (
-        f'<span id="task-status"{swap_attr}'
-        f' class="status {task.status.value} {success_class}">'
-        f"{status_display}{success_text}</span>"
+    status_html = render_template(
+        "components/task_status_badge.html", task=task, is_active=is_active
     )
     parts.append(
         format_sse_event("task-status", status_html, event_id=eid, retry=retry)
@@ -356,38 +244,10 @@ def _build_task_detail_events(
     parts.append(format_sse_event("task-progress", progress_html, event_id=eid))
 
     # task-details: timing and stats card content
-    details_html = (
-        f"<h2>Task Details</h2>"
-        f'<div class="field">'
-        f'<div class="field-label">Model</div>'
-        f'<div id="task-model" class="field-value mono">'
-        f"{task.model or '-'}</div></div>"
-        f'<div class="details-grid">'
-        f'<div class="detail-item">'
-        f'<div class="field-label">Queued At</div>'
-        f'<div class="field-value mono">'
-        f"{format_timestamp(task.queued_at)}</div></div>"
-        f'<div class="detail-item">'
-        f'<div class="field-label">Started At</div>'
-        f'<div id="task-started-at" class="field-value mono">'
-        f"{format_timestamp(task.started_at)}</div></div>"
-        f'<div class="detail-item">'
-        f'<div class="field-label">Completed At</div>'
-        f'<div id="task-completed-at" class="field-value mono">'
-        f"{format_timestamp(task.completed_at)}</div></div>"
-        f'<div class="detail-item">'
-        f'<div class="field-label">Queue Time</div>'
-        f'<div id="task-queue-time" class="field-value mono">'
-        f"{format_duration(task.queue_duration())}</div></div>"
-        f'<div class="detail-item">'
-        f'<div class="field-label">Execution Time</div>'
-        f'<div id="task-exec-time" class="field-value mono">'
-        f"{format_duration(task.execution_duration())}</div></div>"
-        f'<div class="detail-item">'
-        f'<div class="field-label">Total Time</div>'
-        f'<div id="task-total-time" class="field-value mono">'
-        f"{format_duration(task.total_duration())}</div></div>"
-        f"</div>"
+    details_html = render_template(
+        "components/task_details_card.html",
+        task=task,
+        model_display=task.model or "-",
     )
     parts.append(format_sse_event("task-details", details_html, event_id=eid))
 
@@ -418,7 +278,7 @@ def _build_repo_detail_events(
     Returns:
         Concatenated SSE-formatted event strings.
     """
-    import html as html_mod
+    from airut.dashboard.templating import render_template
 
     repo_states = list(repos_store.get().value) if repos_store else []
     repo = next((r for r in repo_states if r.repo_id == repo_id), None)
@@ -428,30 +288,17 @@ def _build_repo_detail_events(
     parts: list[str] = []
 
     # repo-status: the status badge
-    status_label = repo.status.value.replace("_", " ").upper()
-    status_html = (
-        f'<span id="repo-status" sse-swap="repo-status" hx-swap="outerHTML"'
-        f' class="status-badge {repo.status.value}">'
-        f"{status_label}</span>"
+    status_html = render_template(
+        "components/repo_status_badge.html", repo=repo
     )
     parts.append(
         format_sse_event("repo-status", status_html, event_id=eid, retry=retry)
     )
 
     # repo-error: error details section
-    if repo.status.value == "failed" and repo.error_message:
-        error_type = html_mod.escape(repo.error_type or "Unknown")
-        error_msg = html_mod.escape(repo.error_message)
-        error_html = (
-            f'<div class="error-section">'
-            f'<div class="field-label">Error Type</div>'
-            f'<div class="field-value error-type">{error_type}</div>'
-            f'<div class="field-label">Error Message</div>'
-            f'<div class="field-value error-message">{error_msg}</div>'
-            f"</div>"
-        )
-    else:
-        error_html = ""
+    error_html = render_template(
+        "components/repo_error_section.html", repo=repo
+    )
     parts.append(format_sse_event("repo-error", error_html, event_id=eid))
 
     return "".join(parts)

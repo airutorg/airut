@@ -1,0 +1,17 @@
+{# Task status badge — expects: task (TaskState), is_active (bool) #}
+{% set success_class = 'success' if task.succeeded else ('failed' if task.status.value == 'completed' else '') %}
+{% set status_display = task.status.value.replace('_', ' ').upper() %}
+{% set success_text = '' %}
+{% if task.status.value == 'completed' %}
+    {% if task.succeeded %}
+        {% set success_text = ' - Success' %}
+    {% elif task.completion_reason %}
+        {% set success_text = ' - ' ~ task.completion_reason.value.replace('_', ' ').title() %}
+    {% else %}
+        {% set success_text = ' - Failed' %}
+    {% endif %}
+{% endif %}
+<span id="task-status" {% if is_active %}sse-swap="task-status" hx-swap="outerHTML"{% endif %}
+    class="status {{ task.status.value }} {{ success_class }}">
+    {{ status_display }}{{ success_text }}
+</span>
