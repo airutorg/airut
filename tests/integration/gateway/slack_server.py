@@ -431,7 +431,7 @@ class TestSlackServer:
 
             with self._lock:
                 self._new_message_event.clear()
-            self._new_message_event.wait(timeout=min(remaining, 1.0))
+            self._new_message_event.wait(timeout=min(remaining, 0.1))
 
     def clear_sent(self) -> None:
         """Clear all recorded sent messages."""

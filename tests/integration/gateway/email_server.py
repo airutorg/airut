@@ -327,6 +327,54 @@ class MinimalIMAPHandler:
         return [f"{tag} OK IDLE terminated"]
 
 
+_cached_ssl_context: ssl.SSLContext | None = None
+
+
+def _get_ssl_context() -> ssl.SSLContext:
+    """Return a cached self-signed SSL context for testing.
+
+    Generates the certificate once per process and reuses it across
+    all IMAP server instances.
+    """
+    global _cached_ssl_context  # noqa: PLW0603
+    if _cached_ssl_context is not None:
+        return _cached_ssl_context
+
+    import subprocess
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        key_file = f"{tmpdir}/key.pem"
+        cert_file = f"{tmpdir}/cert.pem"
+
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-keyout",
+                key_file,
+                "-out",
+                cert_file,
+                "-days",
+                "1",
+                "-nodes",
+                "-subj",
+                "/CN=localhost",
+            ],
+            check=True,
+            capture_output=True,
+        )
+
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert_file, key_file)
+
+    _cached_ssl_context = context
+    return context
+
+
 class MinimalIMAPServer:
     """Minimal IMAP4 server using asyncio.
 
@@ -348,42 +396,6 @@ class MinimalIMAPServer:
         self._port: int | None = None
         self._ssl_context: ssl.SSLContext | None = None
         self._client_tasks: set[asyncio.Task[None]] = set()
-
-    def _create_ssl_context(self) -> ssl.SSLContext:
-        """Create a self-signed SSL context for testing."""
-        # Generate self-signed certificate using openssl
-        import subprocess
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            key_file = f"{tmpdir}/key.pem"
-            cert_file = f"{tmpdir}/cert.pem"
-
-            # Generate key and self-signed cert
-            subprocess.run(
-                [
-                    "openssl",
-                    "req",
-                    "-x509",
-                    "-newkey",
-                    "rsa:2048",
-                    "-keyout",
-                    key_file,
-                    "-out",
-                    cert_file,
-                    "-days",
-                    "1",
-                    "-nodes",
-                    "-subj",
-                    "/CN=localhost",
-                ],
-                check=True,
-                capture_output=True,
-            )
-
-            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            context.load_cert_chain(cert_file, key_file)
-            return context
 
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -501,7 +513,7 @@ class MinimalIMAPServer:
 
     async def start(self) -> int:
         """Start the IMAP server and return the port number."""
-        self._ssl_context = self._create_ssl_context()
+        self._ssl_context = _get_ssl_context()
 
         # Find a free port
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

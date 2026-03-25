@@ -793,7 +793,7 @@ class TestRepoScopeReload:
                     "from": "project-b <project-b@test.local>",
                     "authorized_senders": ["user@test.local"],
                     "trusted_authserv_id": "test.local",
-                    "imap": {"use_idle": False, "poll_interval": 1},
+                    "imap": {"use_idle": False, "poll_interval": 0.1},
                 },
             }
             cf.write()
