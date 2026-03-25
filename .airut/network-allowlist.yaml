@@ -114,3 +114,11 @@ url_prefixes:
   - host: storage.googleapis.com
     path: /chrome-for-testing-public/*
     methods: [GET, HEAD]
+
+  # Ubuntu package repos — system libraries for Playwright Chromium
+  - host: archive.ubuntu.com
+    path: /ubuntu/*
+    methods: [GET, HEAD]
+  - host: security.ubuntu.com
+    path: /ubuntu/*
+    methods: [GET, HEAD]
