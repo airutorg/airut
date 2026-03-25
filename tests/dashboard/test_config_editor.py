@@ -6,6 +6,8 @@
 """Tests for config editor HTTP handlers."""
 
 import copy
+import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -173,6 +175,20 @@ class TestHelperFunctions:
 
         with pytest.raises(ValueError):
             _coerce_value("not_a_number", "float")
+
+    def test_coerce_value_empty_string_to_int(self) -> None:
+        """Empty string for int type returns 0 (mode-switch default)."""
+        from airut.dashboard.handlers_config import _coerce_value
+
+        assert _coerce_value("", "int") == 0
+        assert _coerce_value("  ", "int") == 0
+
+    def test_coerce_value_empty_string_to_float(self) -> None:
+        """Empty string for float type returns 0.0 (mode-switch default)."""
+        from airut.dashboard.handlers_config import _coerce_value
+
+        assert _coerce_value("", "float") == 0.0
+        assert _coerce_value("  ", "float") == 0.0
 
     def test_find_field_schema_not_found(self) -> None:
         from airut.dashboard.handlers_config import _find_field_schema
@@ -434,6 +450,83 @@ class TestFieldPatch:
             headers=XHR,
         )
         assert response.status_code == 200
+
+    def test_patch_env_to_literal_int_field(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Switching from !env to Literal on an int field must not 422.
+
+        Regression: the Literal button's hx-vals embedded the env var
+        name (e.g. "PORT_VAR") as the literal value.  For int fields,
+        _coerce_value("PORT_VAR", "int") raised ValueError → 422.
+        The template should send the field default (or empty string)
+        instead of the variable name.
+        """
+        harness.client.get("/config")
+
+        # Step 1: set an int field to !env
+        r1 = harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "dashboard.port",
+                "source": "env",
+                "value": "PORT_VAR",
+            },
+            headers=XHR,
+        )
+        assert r1.status_code == 200
+
+        # Step 2: the Literal button rendered from step 1 must NOT
+        # include "PORT_VAR" as the literal value.  Parse the HTML
+        # to verify the hx-vals on the Literal button.
+        html = r1.get_data(as_text=True)
+        # Find the Literal button's hx-vals
+        m = re.search(
+            r"""hx-vals='(\{[^']*"source"\s*:\s*"literal"[^']*})'""", html
+        )
+        assert m, "Literal button not found in response HTML"
+        vals = json.loads(m.group(1))
+        # dashboard.port has default 5200 — template should fall through
+        # to f.default instead of using the env var name.
+        assert vals["value"] == "5200"
+
+    def test_patch_var_to_literal_int_field(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Switching from !var to Literal on an int field must not 422.
+
+        Same regression as !env: the Literal button would embed the
+        var ref name as the literal value.
+        """
+        from airut.yaml_env import VarRef
+
+        harness.client.get("/config")
+
+        # Set an int field to !var directly in the buffer
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        buf.set_field("dashboard.port", "var", "my_port_ref")
+        assert isinstance(buf.raw["dashboard"]["port"], VarRef)
+
+        # Re-render the field to get the HTML with !var active
+        r1 = harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "dashboard.port",
+                "source": "var",
+                "value": "my_port_ref",
+            },
+            headers=XHR,
+        )
+        assert r1.status_code == 200
+
+        html = r1.get_data(as_text=True)
+        m = re.search(
+            r"""hx-vals='(\{[^']*"source"\s*:\s*"literal"[^']*})'""", html
+        )
+        assert m, "Literal button not found in response HTML"
+        vals = json.loads(m.group(1))
+        assert vals["value"] == "5200"
 
     def test_patch_field_string_coerced_to_int(
         self, harness: ConfigEditorHarness

@@ -46,6 +46,10 @@ def _require_xhr(request: Request) -> Response | None:
 def _coerce_value(value: object, python_type: str) -> object:
     """Coerce a form string value to the appropriate Python type.
 
+    Empty or whitespace-only strings return zero for numeric types
+    (``int`` → 0, ``float`` → 0.0) to support mode-switch transitions
+    where no previous literal value exists.
+
     Raises:
         ValueError: If the value cannot be converted to the target type.
     """
@@ -56,11 +60,13 @@ def _coerce_value(value: object, python_type: str) -> object:
         # str(True) == "True" which int() can't parse).
         if isinstance(value, bool):
             return int(value)
-        return int(str(value))
+        s = str(value).strip()
+        return int(s) if s else 0
     if python_type == "float":
         if isinstance(value, bool):
             return float(value)
-        return float(str(value))
+        s = str(value).strip()
+        return float(s) if s else 0.0
     if python_type == "bool":
         if isinstance(value, str):
             return value.lower() in ("true", "1", "yes")
