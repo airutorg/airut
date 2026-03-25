@@ -170,11 +170,13 @@ class GatewayService:
         self._config_source = config_source
         self._config_snapshot = config_snapshot
         self._reload_lock = threading.Lock()
+        self._reload_condition = threading.Condition()
         self._reload_requested = threading.Event()
         self._pending_repo_reload: dict[str, RepoServerConfig | None] = {}
         self._pending_server_config: ServerConfig | None = None
         self._pending_server_old_global: GlobalConfig | None = None
         self._config_generation = 0
+        self._config_file_sha256: str | None = self._get_source_file_sha256()
         self._last_reload_error: str | None = None
         self._watcher: ConfigFileWatcher | None = None
 
@@ -625,10 +627,24 @@ class GatewayService:
     # Config Reload
     # ------------------------------------------------------------------ #
 
+    def _get_source_file_sha256(self) -> str | None:
+        """SHA-256 from the last config file load, or None if unavailable."""
+        if self._config_source is None:
+            return None
+        if not isinstance(self._config_source, YamlConfigSource):
+            return None
+        return self._config_source.last_file_sha256
+
+    def _notify_reload(self) -> None:
+        """Wake all threads waiting on reload state changes."""
+        with self._reload_condition:
+            self._reload_condition.notify_all()
+
     def _get_reload_status(self) -> dict[str, object]:
         """Return config reload status for the dashboard API."""
         return {
             "config_generation": self._config_generation,
+            "config_file_sha256": self._config_file_sha256,
             "server_reload_pending": self._pending_server_config is not None,
             "last_reload_error": self._last_reload_error,
         }
@@ -660,7 +676,9 @@ class GatewayService:
 
             if not global_changed and not repo_changes:
                 logger.debug("Config reload: no effective changes")
+                self._config_file_sha256 = self._get_source_file_sha256()
                 self._last_reload_error = None
+                self._notify_reload()
                 return
 
             # 3. Log changes
@@ -683,6 +701,7 @@ class GatewayService:
             self.config = new_config
             self.global_config = new_config.global_config
             self._config_generation += 1
+            self._config_file_sha256 = self._get_source_file_sha256()
             self._last_reload_error = None
 
             logger.info(
@@ -692,9 +711,11 @@ class GatewayService:
 
         except Exception:
             logger.exception("Config reload failed, keeping current config")
+            self._config_file_sha256 = self._get_source_file_sha256()
             self._last_reload_error = traceback.format_exc()
         finally:
             self._reload_lock.release()
+            self._notify_reload()
 
     def _diff_global(self, new_config: ServerConfig) -> bool:
         """Return True if any GlobalConfig field changed."""
@@ -928,6 +949,7 @@ class GatewayService:
         TOCTOU race where a new task starts between the idle check and
         the reload application.
         """
+        applied = False
         with self._reload_lock:
             if repo_id not in self._pending_repo_reload:
                 return
@@ -944,6 +966,10 @@ class GatewayService:
                 logger.info("Repo '%s': deferred removal applied", repo_id)
             else:
                 self._apply_single_repo_reload(repo_id, old_cfg)
+            applied = True
+
+        if applied:
+            self._notify_reload()
 
     def _check_pending_server_reload(self) -> None:
         """Check and apply pending server reload when globally idle.
@@ -952,6 +978,7 @@ class GatewayService:
         TOCTOU race where a new task starts between the idle check and
         the reload application.
         """
+        applied = False
         with self._reload_lock:
             pending = self._pending_server_config
             if pending is None:
@@ -971,6 +998,7 @@ class GatewayService:
             old_global = self._pending_server_old_global
             self._pending_server_config = None
             self._pending_server_old_global = None
+            applied = True
 
             try:
                 self._apply_server_reload(pending, old_global)
@@ -978,6 +1006,9 @@ class GatewayService:
                 logger.exception(
                     "Server-scope reload failed, keeping current config"
                 )
+
+        if applied:
+            self._notify_reload()
 
     def _apply_server_reload(
         self,

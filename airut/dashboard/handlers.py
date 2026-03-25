@@ -97,8 +97,8 @@ class RequestHandlers:
             sse_manager: SSE connection manager for enforcing limits.
             git_version_info: Git version info for upstream update checks.
             status_callback: Optional callable returning config reload status
-                dict with keys: config_generation, server_reload_pending,
-                last_reload_error.
+                dict with keys: config_generation, config_file_sha256,
+                server_reload_pending, last_reload_error.
         """
         self.tracker = tracker
         self.version_info = version_info
@@ -889,6 +889,7 @@ class RequestHandlers:
                 JsonDict,
                 {
                     "config_generation": 0,
+                    "config_file_sha256": None,
                     "server_reload_pending": False,
                     "last_reload_error": None,
                 },

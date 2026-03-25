@@ -3783,6 +3783,7 @@ class TestApiStatusEndpoint:
         def status_cb() -> dict[str, object]:
             return {
                 "config_generation": 5,
+                "config_file_sha256": "abc123",
                 "server_reload_pending": True,
                 "last_reload_error": None,
             }
@@ -3793,6 +3794,7 @@ class TestApiStatusEndpoint:
         assert response.status_code == 200
         data = json.loads(response.get_data(as_text=True))
         assert data["config_generation"] == 5
+        assert data["config_file_sha256"] == "abc123"
         assert data["server_reload_pending"] is True
 
     def test_without_callback(self) -> None:
@@ -3804,5 +3806,6 @@ class TestApiStatusEndpoint:
         assert response.status_code == 200
         data = json.loads(response.get_data(as_text=True))
         assert data["config_generation"] == 0
+        assert data["config_file_sha256"] is None
         assert data["server_reload_pending"] is False
         assert data["last_reload_error"] is None

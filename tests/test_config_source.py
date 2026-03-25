@@ -155,10 +155,14 @@ class TestYamlConfigSource:
         config_file.write_text(yaml.dump(config))
 
         source = YamlConfigSource(config_file)
+        assert source.last_file_sha256 is None
+
         with patch("airut.config.source.load_dotenv_once"):
             loaded = source.load()
 
         assert loaded["execution"]["max_concurrent"] == 5
+        assert source.last_file_sha256 is not None
+        assert len(source.last_file_sha256) == 64  # SHA-256 hex
 
     def test_load_missing_file(self, tmp_path: Path) -> None:
         source = YamlConfigSource(tmp_path / "missing.yaml")

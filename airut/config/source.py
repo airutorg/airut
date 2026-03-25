@@ -11,6 +11,7 @@ format.  ``YamlConfigSource`` wraps the existing YAML file loading with
 reconstructing nested YAML structure on save.
 """
 
+import hashlib
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -157,12 +158,14 @@ class YamlConfigSource:
 
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.last_file_sha256: str | None = None
 
     def load(self) -> dict[str, Any]:
         """Load raw config dict from YAML, resolving ``!env`` tags.
 
         Calls ``load_dotenv_once()`` before parsing to ensure ``!env``
-        tags can resolve.
+        tags can resolve.  Updates ``last_file_sha256`` with the SHA-256
+        of the raw file bytes that were loaded.
 
         Returns:
             Raw config dict with EnvVar placeholders.
@@ -175,8 +178,10 @@ class YamlConfigSource:
         if not self.path.exists():
             raise FileNotFoundError(f"Config file not found: {self.path}")
 
-        with open(self.path) as f:
-            raw = yaml.load(f, Loader=make_env_loader())
+        raw_bytes = self.path.read_bytes()
+        self.last_file_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+
+        raw = yaml.load(raw_bytes, Loader=make_env_loader())
 
         if not isinstance(raw, dict):
             raise ValueError(f"Config file must be a YAML mapping: {self.path}")
