@@ -13,9 +13,6 @@ from typing import cast
 from airut._json_types import JsonDict
 from airut.dashboard.sse import (
     SSEConnectionManager,
-    _boot_state_to_dict,
-    _repo_state_to_dict,
-    _task_state_to_dict,
     build_state_snapshot,
     format_sse_comment,
     format_sse_event,
@@ -162,7 +159,7 @@ class TestBootStateToDictConversion:
     def test_starting_phase(self) -> None:
         """Test converting starting boot state."""
         state = BootState(phase=BootPhase.STARTING, message="Initializing...")
-        result = _boot_state_to_dict(state)
+        result = state.to_api_dict()
         assert result["phase"] == "starting"
         assert result["message"] == "Initializing..."
         assert "error_message" not in result
@@ -177,7 +174,7 @@ class TestBootStateToDictConversion:
             error_type="RuntimeError",
             error_traceback="Traceback...",
         )
-        result = _boot_state_to_dict(state)
+        result = state.to_api_dict()
         assert result["phase"] == "failed"
         assert result["error_message"] == "Connection refused"
         assert result["error_type"] == "RuntimeError"
@@ -186,7 +183,7 @@ class TestBootStateToDictConversion:
     def test_ready_phase(self) -> None:
         """Test converting ready boot state."""
         state = BootState(phase=BootPhase.READY, message="Service ready")
-        result = _boot_state_to_dict(state)
+        result = state.to_api_dict()
         assert result["phase"] == "ready"
 
 
@@ -205,7 +202,7 @@ class TestRepoStateToDictConversion:
             storage_dir="/storage/test",
             initialized_at=1000.0,
         )
-        result = _repo_state_to_dict(state)
+        result = state.to_api_dict()
         assert result["repo_id"] == "test-repo"
         assert result["status"] == "live"
         assert result["git_repo_url"] == "https://github.com/test/repo"
@@ -226,7 +223,7 @@ class TestRepoStateToDictConversion:
             ),
             storage_dir="/storage/broken",
         )
-        result = _repo_state_to_dict(state)
+        result = state.to_api_dict()
         assert result["status"] == "failed"
         assert result["error_message"] == "Auth failed"
         assert result["error_type"] == "IMAPConnectionError"
@@ -246,7 +243,7 @@ class TestTaskStateToDictConversion:
             status=TaskStatus.QUEUED,
             queued_at=1000.0,
         )
-        result = _task_state_to_dict(task)
+        result = task.to_api_dict()
         assert result["task_id"] == "task-abc12345"
         assert result["conversation_id"] == "abc12345"
         assert result["display_title"] == "Test Task"
@@ -271,7 +268,7 @@ class TestTaskStateToDictConversion:
             completion_reason=CompletionReason.SUCCESS,
             model="claude-3",
         )
-        result = _task_state_to_dict(task)
+        result = task.to_api_dict()
         assert result["task_id"] == "task-abc12345"
         assert result["status"] == "completed"
         assert result["completion_reason"] == "success"
@@ -305,7 +302,7 @@ class TestTaskStateToDictWithTodos:
                 ),
             ],
         )
-        result = _task_state_to_dict(task)
+        result = task.to_api_dict()
         assert "todos" in result
         todos = cast(list[JsonDict], result["todos"])
         assert len(todos) == 2
@@ -321,7 +318,7 @@ class TestTaskStateToDictWithTodos:
             status=TaskStatus.QUEUED,
             queued_at=1000.0,
         )
-        result = _task_state_to_dict(task)
+        result = task.to_api_dict()
         assert "todos" not in result
 
 

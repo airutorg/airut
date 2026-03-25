@@ -22,7 +22,6 @@ from airut.dashboard.tracker import (
     ACTIVE_STATUSES,
     BootState,
     RepoState,
-    TaskState,
     TaskStatus,
     TaskTracker,
 )
@@ -114,48 +113,6 @@ class SSEConnectionManager:
             return self._active
 
 
-def _boot_state_to_dict(boot_state: BootState) -> JsonDict:
-    """Convert BootState to JSON-serializable dict.
-
-    Delegates to :meth:`BootState.to_api_dict`.
-
-    Args:
-        boot_state: Boot state to convert.
-
-    Returns:
-        Dict representation suitable for SSE state event.
-    """
-    return boot_state.to_api_dict()
-
-
-def _repo_state_to_dict(repo_state: RepoState) -> JsonDict:
-    """Convert RepoState to JSON-serializable dict.
-
-    Delegates to :meth:`RepoState.to_api_dict`.
-
-    Args:
-        repo_state: Repository state to convert.
-
-    Returns:
-        Dict representation suitable for SSE state event.
-    """
-    return repo_state.to_api_dict()
-
-
-def _task_state_to_dict(task: TaskState) -> JsonDict:
-    """Convert TaskState to JSON-serializable dict for SSE.
-
-    Delegates to :meth:`TaskState.to_api_dict`.
-
-    Args:
-        task: Task state to convert.
-
-    Returns:
-        Dict representation suitable for SSE state event.
-    """
-    return task.to_api_dict()
-
-
 def build_state_snapshot(
     tracker: TaskTracker,
     boot_store: VersionedStore[BootState] | None,
@@ -174,15 +131,15 @@ def build_state_snapshot(
         JSON string containing the full state snapshot.
     """
     tasks = tracker.get_all_tasks()
-    task_dicts = [_task_state_to_dict(t) for t in tasks]
+    task_dicts = [t.to_api_dict() for t in tasks]
 
     boot_dict: JsonDict | None = None
     if boot_store is not None:
-        boot_dict = _boot_state_to_dict(boot_store.get().value)
+        boot_dict = boot_store.get().value.to_api_dict()
 
     repo_dicts: list[JsonDict] = []
     if repos_store is not None:
-        repo_dicts = [_repo_state_to_dict(r) for r in repos_store.get().value]
+        repo_dicts = [r.to_api_dict() for r in repos_store.get().value]
 
     return json.dumps(
         {

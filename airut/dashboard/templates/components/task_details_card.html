@@ -1,4 +1,5 @@
 {# Task details card content — expects: task (TaskState), model_display (str) #}
+{# Optional: cost_display (str, default "-"), turns_display (str, default "-") #}
 <h2>Task Details</h2>
 <div class="field">
     <div class="field-label">Model</div>
@@ -28,5 +29,13 @@
     <div class="detail-item">
         <div class="field-label">Total Time</div>
         <div id="task-total-time" class="field-value mono">{{ format_duration(task.total_duration()) }}</div>
+    </div>
+    <div class="detail-item">
+        <div class="field-label">Cost</div>
+        <div class="field-value mono">{{ cost_display|default('-') }}</div>
+    </div>
+    <div class="detail-item">
+        <div class="field-label">Turns</div>
+        <div class="field-value mono">{{ turns_display|default('-') }}</div>
     </div>
 </div>

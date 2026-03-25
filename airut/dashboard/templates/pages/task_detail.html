@@ -51,16 +51,6 @@
     {% endif %}
     <div class="card" {% if is_active %}sse-swap="task-details" hx-swap="innerHTML"{% endif %}>
         {% include "components/task_details_card.html" %}
-        <div class="details-grid">
-            <div class="detail-item">
-                <div class="field-label">Cost</div>
-                <div class="field-value mono">{{ cost_display }}</div>
-            </div>
-            <div class="detail-item">
-                <div class="field-label">Turns</div>
-                <div class="field-value mono">{{ turns_display }}</div>
-            </div>
-        </div>
     </div>
     {{ replies_section|safe }}
 </div>
