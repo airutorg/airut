@@ -382,7 +382,7 @@ Three-column layout showing queued, in-progress, and completed tasks.
 - Update status badge: green "up to date" or yellow "update available" (fetched
   asynchronously from `/api/update` to avoid blocking page load). Hover shows
   current and latest version.
-- Config reload status badge: blue "restart needed" when a configuration change
+- Config reload status badge: blue "restart pending" when a configuration change
   requires a server restart (fetched from `/api/config-status`, polled every
   30s)
 - "Configure" button (right-aligned, links to config editor)

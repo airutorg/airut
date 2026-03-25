@@ -1885,7 +1885,7 @@ class TestConfigStatusEndpoint:
         html = response.get_data(as_text=True)
         assert 'id="config-status"' in html
         assert "reload-pending" not in html
-        assert "restart needed" not in html
+        assert "restart pending" not in html
 
     def test_config_status_not_pending(self) -> None:
         """Config status returns empty span when reload is not pending."""
@@ -1922,7 +1922,7 @@ class TestConfigStatusEndpoint:
         html = response.get_data(as_text=True)
         assert 'id="config-status"' in html
         assert "reload-pending" in html
-        assert "restart needed" in html
+        assert "restart pending" in html
 
 
 class TestSecurityHeaders:
