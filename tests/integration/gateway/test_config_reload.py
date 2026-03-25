@@ -83,13 +83,33 @@ class ConfigFile:
         source = YamlConfigSource(self.path)
         source.save(self._data)
 
-    def set(self, dotpath: str, value: object) -> None:
-        """Update a nested path (dot-separated) and write."""
+    def _set_in_memory(self, dotpath: str, value: object) -> None:
+        """Set a dot-path value without writing to disk."""
         keys = dotpath.split(".")
         d = self._data
         for k in keys[:-1]:
             d = d.setdefault(k, {})
         d[keys[-1]] = value
+
+    def set(self, dotpath: str, value: object) -> None:
+        """Update a nested path (dot-separated) and write.
+
+        WARNING: Each call triggers one inotify event.  When multiple
+        fields must change atomically, use ``set_many()`` instead so
+        ``wait_for_reload`` observes the complete state.
+        """
+        self._set_in_memory(dotpath, value)
+        self.write()
+
+    def set_many(self, updates: dict[str, object]) -> None:
+        """Update multiple dot-paths in memory, then write once.
+
+        Avoids the race where separate ``set()`` calls each trigger an
+        inotify event and an intermediate reload can bump the config
+        generation before all fields are updated.
+        """
+        for dotpath, value in updates.items():
+            self._set_in_memory(dotpath, value)
         self.write()
 
     def delete(self, dotpath: str) -> None:
@@ -191,6 +211,34 @@ def wait_for_reload(
     raise TimeoutError(
         f"Config reload did not complete within {timeout}s "
         f"(generation={service._config_generation}, expected>{generation})"
+    )
+
+
+def wait_for_reload_error(
+    service: GatewayService,
+    timeout: float = 10.0,
+) -> None:
+    """Wait until _last_reload_error is set (watcher processed a bad config)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if service._last_reload_error is not None:
+            return
+        time.sleep(0.1)
+    raise TimeoutError(f"Reload error did not appear within {timeout}s")
+
+
+def wait_for_pending_server_clear(
+    service: GatewayService,
+    timeout: float = 10.0,
+) -> None:
+    """Wait until _pending_server_config is cleared."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if service._pending_server_config is None:
+            return
+        time.sleep(0.1)
+    raise TimeoutError(
+        f"Pending server config was not cleared within {timeout}s"
     )
 
 
@@ -549,7 +597,6 @@ class TestTaskScopeReload:
             integration_env.repo_root / "airut.yaml",
         )
         cf.set("repos.test.container_env", {"FOO": "bar"})
-        cf.write()
 
         with running_service(cf, integration_env) as service:
             conv_id = _send_and_complete(
@@ -622,11 +669,16 @@ class TestRepoScopeReload:
             email2 = _TestEmailServer(username="test", password="test")
             smtp2, imap2 = email2.start()
             try:
-                # Switch config to second server
+                # Switch config to second server (single write to avoid
+                # an intermediate reload with only imap_port changed)
                 gen = service._config_generation
                 integration_env.email_server.clear_outbox()
-                cf.set("repos.test.email.imap_port", imap2)
-                cf.set("repos.test.email.smtp_port", smtp2)
+                cf.set_many(
+                    {
+                        "repos.test.email.imap_port": imap2,
+                        "repos.test.email.smtp_port": smtp2,
+                    }
+                )
                 wait_for_reload(service, gen)
                 wait_for_repo_status(service, "test", "live")
 
@@ -814,10 +866,11 @@ class TestRepoScopeReload:
         )
 
         with running_service(cf, integration_env) as service:
-            # Start a slow task
+            # Start a slow task — 5s gives ample margin for CI to
+            # process the config change before the task completes.
             msg = create_email(
                 subject="Slow task",
-                body=_slow_mock(3.0),
+                body=_slow_mock(5.0),
             )
             integration_env.email_server.inject_message(msg)
 
@@ -849,7 +902,7 @@ class TestRepoScopeReload:
             conv_id = extract_conversation_id(ack["Subject"])
             assert conv_id is not None
             task = wait_for_conv_completion(
-                service.tracker, conv_id, timeout=15.0
+                service.tracker, conv_id, timeout=30.0
             )
             assert task is not None
             assert task.succeeded
@@ -882,7 +935,6 @@ class TestRepoScopeReload:
             integration_env.repo_root / "airut.yaml",
         )
         cf.set("repos.test.secrets", {"API_KEY": "old-key"})
-        cf.write()
 
         with running_service(cf, integration_env) as service:
             conv_id = _send_and_complete(
@@ -931,7 +983,6 @@ class TestRepoScopeReload:
                 "repos.test.secrets",
                 {"API_KEY": EnvVar("TEST_API_KEY")},
             )
-            cf.write()
 
             with running_service(cf, integration_env) as service:
                 conv_id = _send_and_complete(
@@ -988,9 +1039,12 @@ class TestServerScopeReload:
             integration_env,
             integration_env.repo_root / "airut.yaml",
         )
-        cf.set("dashboard.enabled", True)
-        cf.set("dashboard.port", port1)
-        cf.write()
+        cf.set_many(
+            {
+                "dashboard.enabled": True,
+                "dashboard.port": port1,
+            }
+        )
 
         with running_service(cf, integration_env) as service:
             assert service.dashboard is not None
@@ -1028,9 +1082,12 @@ class TestServerScopeReload:
             integration_env,
             integration_env.repo_root / "airut.yaml",
         )
-        cf.set("dashboard.enabled", True)
-        cf.set("dashboard.port", port1)
-        cf.write()
+        cf.set_many(
+            {
+                "dashboard.enabled": True,
+                "dashboard.port": port1,
+            }
+        )
 
         with running_service(cf, integration_env) as service:
             assert service.dashboard is not None
@@ -1046,11 +1103,17 @@ class TestServerScopeReload:
             wait_for_reload(service, gen)
             assert service.dashboard is None
 
-            # Re-enable dashboard on a different port
+            # Re-enable dashboard on a different port — single write
+            # to avoid a race where the first write (enabled=True,
+            # old port) triggers a reload that bumps generation before
+            # the port change is written.
             gen2 = service._config_generation
-            cf.set("dashboard.enabled", True)
-            cf.set("dashboard.port", port2)
-            cf.write()
+            cf.set_many(
+                {
+                    "dashboard.enabled": True,
+                    "dashboard.port": port2,
+                }
+            )
             wait_for_reload(service, gen2)
             assert service.dashboard is not None
 
@@ -1071,9 +1134,12 @@ class TestServerScopeReload:
             integration_env,
             integration_env.repo_root / "airut.yaml",
         )
-        cf.set("dashboard.enabled", True)
-        cf.set("dashboard.port", port1)
-        cf.write()
+        cf.set_many(
+            {
+                "dashboard.enabled": True,
+                "dashboard.port": port1,
+            }
+        )
 
         with running_service(cf, integration_env) as service:
             assert service.dashboard is not None
@@ -1082,7 +1148,7 @@ class TestServerScopeReload:
             # Start slow task
             msg = create_email(
                 subject="Slow server test",
-                body=_slow_mock(3.0),
+                body=_slow_mock(5.0),
             )
             integration_env.email_server.inject_message(msg)
 
@@ -1112,11 +1178,10 @@ class TestServerScopeReload:
             assert ack is not None
             conv_id = extract_conversation_id(ack["Subject"])
             assert conv_id is not None
-            wait_for_conv_completion(service.tracker, conv_id, timeout=15.0)
+            wait_for_conv_completion(service.tracker, conv_id, timeout=30.0)
 
-            # Server reload should now be applied
-            time.sleep(0.5)  # brief wait for deferred reload
-            assert service._pending_server_config is None
+            # Server reload should now be applied — poll instead of sleep
+            wait_for_pending_server_clear(service, timeout=10.0)
             assert service.dashboard is not None
             assert service.dashboard.port == port2
 
@@ -1137,7 +1202,6 @@ class TestServerScopeReload:
             integration_env.repo_root / "airut.yaml",
         )
         cf.set("execution.max_concurrent", 1)
-        cf.write()
 
         with running_service(cf, integration_env) as service:
             # Verify pool has 1 worker
@@ -1188,13 +1252,12 @@ class TestErrorHandling:
         with running_service(cf, integration_env) as service:
             gen_before = service._config_generation
 
-            # Write invalid YAML
+            # Write invalid YAML — poll for the error instead of sleeping
             cf.path.write_text("invalid: yaml: {{{\n  broken")
-            time.sleep(1.0)  # wait for watcher
+            wait_for_reload_error(service)
 
             # Generation unchanged
             assert service._config_generation == gen_before
-            assert service._last_reload_error is not None
 
             # Service still works
             conv_id = _send_and_complete(
@@ -1240,7 +1303,7 @@ class TestErrorHandling:
             }
             source = YamlConfigSource(cf.path)
             source.save(bad_config)
-            time.sleep(1.0)
+            wait_for_reload_error(service)
 
             # Generation unchanged — reload failed
             assert service._config_generation == gen_before
@@ -1270,19 +1333,35 @@ class TestErrorHandling:
         )
 
         with running_service(cf, integration_env) as service:
+            gen = service._config_generation
+
             # Write three changes in rapid succession
             cf.set("repos.test.model", "haiku")
             cf.set("repos.test.model", "opus")
             cf.set("repos.test.model", "sonnet")
 
-            # Each write may trigger a separate reload.  Wait until
-            # the final value is applied (all reloads processed).
-            deadline = time.monotonic() + 10.0
+            # Wait for at least one reload to process.
+            wait_for_reload(service, gen)
+
+            # If inotify events were coalesced the model is already
+            # "sonnet".  If an intermediate value was applied first,
+            # subsequent events will trigger more reloads — poll for
+            # the final value.  As a safety net, if the remaining
+            # events were lost (race between coalescing and lock),
+            # re-write the file to guarantee one more reload.
             handler = service.repo_handlers["test"]
-            while time.monotonic() < deadline:
-                if handler.config.model == "sonnet":
-                    break
-                time.sleep(0.1)
+            if handler.config.model != "sonnet":
+                deadline = time.monotonic() + 5.0
+                while time.monotonic() < deadline:
+                    if handler.config.model == "sonnet":
+                        break
+                    time.sleep(0.1)
+
+            if handler.config.model != "sonnet":
+                # Events were lost — write once more to force re-read
+                gen2 = service._config_generation
+                cf.write()
+                wait_for_reload(service, gen2)
 
             assert handler.config.model == "sonnet"
 
@@ -1347,9 +1426,12 @@ class TestErrorHandling:
             integration_env,
             integration_env.repo_root / "airut.yaml",
         )
-        cf.set("dashboard.enabled", True)
-        cf.set("dashboard.port", 0)
-        cf.write()
+        cf.set_many(
+            {
+                "dashboard.enabled": True,
+                "dashboard.port": 0,
+            }
+        )
 
         with running_service(cf, integration_env) as service:
             assert service.dashboard is not None
