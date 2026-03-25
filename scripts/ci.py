@@ -113,7 +113,7 @@ STEPS: list[Step] = [
     ),
     Step(
         name="Vulnerability scan",
-        command="uv run uv-secure uv.lock",
+        command="uv run uv-secure uv.lock --config pyproject.toml",
         workflow="security",
     ),
     Step(

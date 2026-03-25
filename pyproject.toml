@@ -125,3 +125,8 @@ MPL;
 Mozilla Public License
 """
 partial-match = true
+
+[tool.uv-secure.vulnerability_criteria]
+ignore_vulnerabilities = [
+    "GHSA-5239-wwwm-4pmq",  # Pygments — no fix version available (2025-03)
+]
