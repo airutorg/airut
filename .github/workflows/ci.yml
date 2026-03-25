@@ -13,8 +13,14 @@ jobs:
     steps:
       - uses: airutorg/sandbox-action@main
         with:
-          command: 'uv sync && uv run scripts/ci.py --workflow code --verbose --timeout 0'
+          command: >-
+            cp -a /workspace /dev/shm/build &&
+            cd /dev/shm/build &&
+            export TMPDIR=/dev/shm/tmp && mkdir -p "$TMPDIR" &&
+            uv sync &&
+            uv run scripts/ci.py --workflow code --verbose --timeout 0
           pr_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          sandbox_args: '--verbose --mount /dev/shm:/dev/shm'
 
   security:
     runs-on: ubuntu-latest
@@ -22,8 +28,14 @@ jobs:
     steps:
       - uses: airutorg/sandbox-action@main
         with:
-          command: 'uv sync && uv run scripts/ci.py --workflow security --verbose --timeout 0'
+          command: >-
+            cp -a /workspace /dev/shm/build &&
+            cd /dev/shm/build &&
+            export TMPDIR=/dev/shm/tmp && mkdir -p "$TMPDIR" &&
+            uv sync &&
+            uv run scripts/ci.py --workflow security --verbose --timeout 0
           pr_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          sandbox_args: '--verbose --mount /dev/shm:/dev/shm'
 
   integration:
     runs-on: ubuntu-latest
@@ -31,5 +43,11 @@ jobs:
     steps:
       - uses: airutorg/sandbox-action@main
         with:
-          command: 'uv sync && uv run scripts/ci.py --workflow integration --verbose --timeout 0'
+          command: >-
+            cp -a /workspace /dev/shm/build &&
+            cd /dev/shm/build &&
+            export TMPDIR=/dev/shm/tmp && mkdir -p "$TMPDIR" &&
+            uv sync &&
+            uv run scripts/ci.py --workflow integration --verbose --timeout 0
           pr_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+          sandbox_args: '--verbose --mount /dev/shm:/dev/shm'
