@@ -844,15 +844,15 @@ class TestEditorAddRepoLifecycle:
                 "repo was not brought online after save"
             )
 
-    def test_add_repo_skeleton_save_rejects_unresolved_env(
+    def test_add_repo_skeleton_save_rejects_incomplete(
         self,
         integration_env: IntegrationEnvironment,
     ) -> None:
-        """Saving with skeleton !env values fails validation (422).
+        """Saving with skeleton placeholder values fails validation (422).
 
-        The repo skeleton includes ``!env EMAIL_PASSWORD``.  If the
-        env var is not set, validation must reject the save to prevent
-        a broken config from being written to disk.
+        The repo skeleton uses empty placeholders.  Saving without
+        filling in required fields (e.g. authorized_senders) must
+        reject the save to prevent a broken config.
         """
         cf = _make_config_file(
             integration_env,
@@ -870,7 +870,7 @@ class TestEditorAddRepoLifecycle:
             )
             assert r.status_code == 200
 
-            # Only set git URL, leave email password as !env
+            # Only set git URL, leave rest as skeleton placeholders
             repo_b_path = create_test_repo(
                 integration_env.repo_root / "master_repo_b"
             )
@@ -883,7 +883,7 @@ class TestEditorAddRepoLifecycle:
 
             r = _post_form(client, "/api/config/save")
             assert r.status_code == 422, (
-                "Save should fail with unresolved !env vars"
+                "Save should fail with incomplete skeleton values"
             )
 
     def test_add_repo_appears_in_config_after_save(

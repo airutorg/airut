@@ -1623,8 +1623,8 @@ class TestAddRemoveRepo:
         assert "git" in repo
         assert "repo_url" in repo["git"]
         assert "email" in repo
-        # Sensitive fields use !env references
-        assert isinstance(repo["email"]["password"], EnvVar)
+        # Sensitive fields use empty literal placeholders
+        assert repo["email"]["password"] == ""
 
     def test_add_repo_does_not_overwrite_existing(
         self, harness: ConfigEditorHarness
