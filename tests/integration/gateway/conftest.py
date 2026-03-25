@@ -11,6 +11,7 @@ tests of the email gateway service with minimal mocking.
 
 import os
 import sys
+import time
 from collections.abc import Callable, Generator
 from email.message import EmailMessage, Message
 from email.mime.base import MIMEBase
@@ -160,8 +161,6 @@ def create_email() -> Callable[..., MIMEMultipart | MIMEText]:
         Returns:
             Email message ready for injection into test server.
         """
-        import time
-
         if attachments:
             msg: MIMEMultipart | MIMEText = MIMEMultipart("mixed")
             msg.attach(MIMEText(body, "plain"))
@@ -416,8 +415,6 @@ def wait_for_conv_completion(
     Returns:
         The completed TaskState, or None on timeout.
     """
-    import time
-
     deadline = time.monotonic() + timeout
     while True:
         tasks = tracker.get_tasks_for_conversation(conv_id)
@@ -448,8 +445,6 @@ def wait_for_task(
     Returns:
         The first matching TaskState, or None on timeout.
     """
-    import time
-
     deadline = time.monotonic() + timeout
     while True:
         for task in tracker.get_all_tasks():
@@ -459,6 +454,35 @@ def wait_for_task(
         if remaining <= 0:
             return None
         time.sleep(min(0.1, remaining))
+
+
+def wait_for_boot(
+    service,
+    timeout: float = 15.0,
+) -> None:
+    """Wait for the service to finish booting (READY or FAILED).
+
+    Polls ``_boot_store`` until the boot phase leaves STARTING.
+    Suitable for tests where partial failures are expected (some
+    repos live, others failed) so ``BootPhase.READY`` is still
+    reached.
+
+    Args:
+        service: GatewayService instance.
+        timeout: Maximum seconds to wait.
+
+    Raises:
+        TimeoutError: If boot does not complete within *timeout*.
+    """
+    from airut.dashboard.tracker import BootPhase
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        boot = service._boot_store.get().value
+        if boot.phase in (BootPhase.READY, BootPhase.FAILED):
+            return
+        time.sleep(0.05)
+    raise TimeoutError(f"Service did not finish booting within {timeout}s")
 
 
 def get_message_text(msg: Message) -> str:
