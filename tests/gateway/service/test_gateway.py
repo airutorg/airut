@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 from airut.gateway.service import GatewayService, main
 from airut.gateway.service.gateway import PendingMessage
 
-from .conftest import make_message, make_service, update_global
+from .conftest import InterruptEvent, make_message, make_service, update_global
 
 
 class TestGatewayServiceInit:
@@ -747,6 +747,7 @@ class TestStartStop:
         # Make listener.start stop the service immediately
         def fake_start(**kwargs):
             svc._running = False
+            svc._shutdown_event.set()
 
         handler.adapters["email"].listener.start.side_effect = fake_start
 
@@ -763,6 +764,7 @@ class TestStartStop:
 
         def fake_start(**kwargs):
             svc._running = False
+            svc._shutdown_event.set()
 
         handler.adapters["email"].listener.start.side_effect = fake_start
 
@@ -830,12 +832,9 @@ class TestStartStop:
         svc, handler = make_service(email_config, tmp_path)
         update_global(svc, dashboard_enabled=False)
 
-        with (
-            patch("time.sleep", side_effect=KeyboardInterrupt),
-        ):
-            svc.start()  # Should handle KeyboardInterrupt gracefully
-        # Signal GC daemon thread to stop cleanly
-        svc._shutdown_event.set()
+        svc._shutdown_event = InterruptEvent()
+
+        svc.start()  # Should handle KeyboardInterrupt gracefully
 
 
 class TestRepoHandlerInitError:
@@ -984,6 +983,7 @@ class TestStartRepoInitFailure:
         # Make the first handler succeed but stop immediately
         def fake_start():
             svc._running = False
+            svc._shutdown_event.set()
 
         handler.start_listener = fake_start
 
@@ -1010,6 +1010,7 @@ class TestBootState:
 
         def fake_start(**kwargs):
             svc._running = False
+            svc._shutdown_event.set()
 
         handler.adapters["email"].listener.start.side_effect = fake_start
 
@@ -1057,9 +1058,8 @@ class TestBootState:
             "Connection refused"
         )
 
-        # Make main loop exit immediately after boot failure
-        with patch("time.sleep", side_effect=KeyboardInterrupt):
-            svc.start(resilient=True)
+        svc._shutdown_event = InterruptEvent()
+        svc.start(resilient=True)
 
         boot = svc._boot_store.get().value
         assert boot.phase == BootPhase.FAILED
@@ -1104,6 +1104,7 @@ class TestBootState:
             # Dashboard should already be started when _boot runs
             dashboard_started_during_boot = svc.dashboard is not None
             svc._running = False
+            svc._shutdown_event.set()
             return original_boot()
 
         with (

@@ -36,7 +36,12 @@ from airut.dashboard.versioned import VersionClock
 from airut.gateway.channel import AuthenticationError, ParsedMessage, RawMessage
 from airut.gateway.config import RepoServerConfig
 
-from .service.conftest import make_message, make_service, update_global
+from .service.conftest import (
+    InterruptEvent,
+    make_message,
+    make_service,
+    update_global,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -711,6 +716,7 @@ class TestBootStateEdgeCases:
 
         def fake_start(**kwargs):
             svc._running = False
+            svc._shutdown_event.set()
 
         handler.adapters["email"].listener.start.side_effect = fake_start
         svc.start()
@@ -729,10 +735,9 @@ class TestBootStateEdgeCases:
             "fail"
         )
 
-        with (
-            patch("airut.gateway.service.gateway.DashboardServer") as mock_ds,
-            patch("time.sleep", side_effect=KeyboardInterrupt),
-        ):
+        svc._shutdown_event = InterruptEvent()
+
+        with patch("airut.gateway.service.gateway.DashboardServer") as mock_ds:
             svc.start(resilient=True)
 
         # Dashboard should NOT have been stopped in resilient mode

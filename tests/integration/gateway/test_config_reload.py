@@ -1270,18 +1270,20 @@ class TestErrorHandling:
         )
 
         with running_service(cf, integration_env) as service:
-            gen = service._config_generation
-
             # Write three changes in rapid succession
             cf.set("repos.test.model", "haiku")
             cf.set("repos.test.model", "opus")
             cf.set("repos.test.model", "sonnet")
 
-            # Wait for at least one reload
-            wait_for_reload(service, gen)
-
-            # Final model should be sonnet (the last write)
+            # Each write may trigger a separate reload.  Wait until
+            # the final value is applied (all reloads processed).
+            deadline = time.monotonic() + 10.0
             handler = service.repo_handlers["test"]
+            while time.monotonic() < deadline:
+                if handler.config.model == "sonnet":
+                    break
+                time.sleep(0.1)
+
             assert handler.config.model == "sonnet"
 
     def test_reload_sighup(
@@ -1297,10 +1299,10 @@ class TestErrorHandling:
         )
 
         with running_service(cf, integration_env) as service:
-            # Modify config without triggering inotify
-            # (write directly, not through ConfigFile)
-            cf.set("repos.test.model", "sonnet")
+            # Capture generation before writing to avoid race where
+            # inotify fires before we read the generation counter.
             gen = service._config_generation
+            cf.set("repos.test.model", "sonnet")
             wait_for_reload(service, gen)
 
             # Now test SIGHUP: change config, trigger via event

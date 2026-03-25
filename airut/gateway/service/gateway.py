@@ -327,8 +327,7 @@ class GatewayService:
 
         # Block main thread until shutdown
         try:
-            while self._running:
-                time.sleep(1)
+            self._shutdown_event.wait()
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
 
