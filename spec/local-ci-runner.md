@@ -70,9 +70,10 @@ that specific step.
 
 ### Step Groups
 
-Steps are organized into groups for selective runs via `--workflow <group>`. All
-steps run in a single GitHub Actions job; the grouping exists only for local
-convenience.
+Steps are organized into groups for selective runs via `--workflow <group>`.
+Each group runs as a separate parallel GitHub Actions job, reducing wall-clock
+time. Locally, all groups run sequentially by default (or selectively via
+`--workflow`).
 
 #### `code` group
 
@@ -123,18 +124,41 @@ After fixes, the script continues to run remaining checks.
 
 ### GitHub Actions Integration
 
-The consolidated workflow (`.github/workflows/ci.yml`) uses the
-`airutorg/sandbox-action` GitHub Action to run `ci.py` inside the Airut sandbox.
-The action handles default-branch checkout, `airut-sandbox` installation, and PR
-SHA fetching. See `spec/sandbox-action.md` for the action design and
-`spec/sandbox-cli.md` for the full security model.
+The CI workflow (`.github/workflows/ci.yml`) runs three parallel jobs — `code`,
+`security`, and `integration` — each using `airutorg/sandbox-action` to execute
+`ci.py --workflow <group>` inside the Airut sandbox. The action handles
+default-branch checkout, `airut-sandbox` installation, and PR SHA fetching. See
+`spec/sandbox-action.md` for the action design and `spec/sandbox-cli.md` for the
+full security model.
 
 ```yaml
-steps:
-  - uses: airutorg/sandbox-action@main
-    with:
-      command: 'uv sync && uv run scripts/ci.py --verbose --timeout 0'
-      pr_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+jobs:
+  code:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: airutorg/sandbox-action@main
+        with:
+          command: 'uv sync && uv run scripts/ci.py --workflow code --verbose --timeout 0'
+          pr_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: airutorg/sandbox-action@main
+        with:
+          command: 'uv sync && uv run scripts/ci.py --workflow security --verbose --timeout 0'
+          pr_sha: ${{ github.event.pull_request.head.sha || github.sha }}
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: airutorg/sandbox-action@main
+        with:
+          command: 'uv sync && uv run scripts/ci.py --workflow integration --verbose --timeout 0'
+          pr_sha: ${{ github.event.pull_request.head.sha || github.sha }}
 ```
 
 `--timeout 0` disables `ci.py`'s overall timeout since GitHub Actions provides
