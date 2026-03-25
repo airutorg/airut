@@ -44,7 +44,8 @@ def _make_email_skeleton() -> dict[str, Any]:
     """Create a minimal email channel skeleton.
 
     Fields with reasonable parser defaults (ports) are omitted so
-    the editor shows them as "Default (not set)".
+    the editor shows them as "Default (not set)".  Sensitive fields
+    use empty literals so the editor shows "Literal" source.
     """
     return {
         "imap_server": "imap.example.com",
