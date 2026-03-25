@@ -186,8 +186,9 @@ variants, selected via `ensure_image(passthrough_entrypoint=...)`:
 Used by `AgentTask`. Performs setup then runs Claude Code:
 
 1. Sets `IS_SANDBOX=1` so Claude Code runs in permissive mode
-2. Trusts the mitmproxy CA certificate (for network sandbox)
-3. Runs `exec claude "$@"`
+2. Sets `PYTHONUNBUFFERED=1` to disable output buffering for real-time streaming
+3. Trusts the mitmproxy CA certificate (for network sandbox)
+4. Runs `exec claude "$@"`
 
 All Claude Code CLI flags (`--dangerously-skip-permissions`, `--model`,
 `--resume`, `--output-format`, etc.) are passed through as arguments by the
@@ -198,8 +199,9 @@ executor -- the entrypoint does not add any flags.
 Used by `CommandTask`. Performs the same setup but runs any command:
 
 1. Sets `IS_SANDBOX=1` to mark the sandbox environment
-2. Trusts the mitmproxy CA certificate (for network sandbox)
-3. Runs `exec "$@"`
+2. Sets `PYTHONUNBUFFERED=1` to disable output buffering for real-time streaming
+3. Trusts the mitmproxy CA certificate (for network sandbox)
+4. Runs `exec "$@"`
 
 The command and arguments are passed through from
 `CommandTask.execute(command)`.
