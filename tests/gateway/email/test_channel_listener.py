@@ -51,6 +51,9 @@ def _make_message(subject: str = "Test") -> Message:
 def _make_polling_listener() -> tuple[EmailChannelListener, MagicMock]:
     """Create a listener configured for polling.
 
+    Pre-sets the stop event so that ``_stop_event.wait()`` returns
+    immediately (same effect as patching ``time.sleep`` to a no-op).
+
     Returns:
         Tuple of (listener, mock_email_listener).
     """
@@ -58,6 +61,7 @@ def _make_polling_listener() -> tuple[EmailChannelListener, MagicMock]:
     mock_el = MagicMock()
     cl = EmailChannelListener(config, email_listener=mock_el, repo_id="test")
     cl._running = True
+    cl._stop_event.set()
     return cl, mock_el
 
 
@@ -65,6 +69,9 @@ def _make_idle_listener(
     **overrides: Any,  # noqa: ANN401 - unpacked into mixed-type constructor
 ) -> tuple[EmailChannelListener, MagicMock]:
     """Create a listener configured for IDLE mode.
+
+    Pre-sets the stop event so that ``_stop_event.wait()`` returns
+    immediately during reconnection backoff.
 
     Returns:
         Tuple of (listener, mock_email_listener).
@@ -78,6 +85,7 @@ def _make_idle_listener(
     mock_el = MagicMock()
     cl = EmailChannelListener(config, email_listener=mock_el, repo_id="test")
     cl._running = True
+    cl._stop_event.set()
     cl._submit = MagicMock()
     return cl, mock_el
 
@@ -226,8 +234,8 @@ class TestPollingLoop:
 
         mock_el.fetch_unread.side_effect = fake_fetch
 
-        with patch("time.sleep"):
-            cl._polling_loop()
+        cl._polling_loop()
+
         mock_el.delete_message.assert_called_once_with("1")
         submit.assert_called_once()
         raw_msg = submit.call_args[0][0]
@@ -256,8 +264,7 @@ class TestPollingLoop:
 
         mock_el.fetch_unread.side_effect = fake_fetch
 
-        with patch("time.sleep"):
-            cl._polling_loop()
+        cl._polling_loop()
 
         # Should NOT have attempted reconnection
         mock_el.disconnect.assert_not_called()
@@ -279,8 +286,8 @@ class TestPollingLoop:
 
         mock_el.fetch_unread.side_effect = fake_fetch
 
-        with patch("time.sleep"):
-            cl._polling_loop()
+        cl._polling_loop()
+
         mock_el.disconnect.assert_called_once()
         assert mock_el.connect.call_count == 1
 
@@ -290,10 +297,38 @@ class TestPollingLoop:
         cl._submit = MagicMock()
         mock_el.fetch_unread.side_effect = IMAPConnectionError("fail")
 
-        with patch("time.sleep"):
-            cl._polling_loop()
+        cl._polling_loop()
 
         assert cl.status.health == ChannelHealth.FAILED
+
+    def test_backoff_skips_reconnect_during_shutdown(self) -> None:
+        """Backoff sleep interrupted by stop() skips reconnection."""
+        cl, mock_el = _make_polling_listener()
+        cl._submit = MagicMock()
+        # Clear the pre-set stop event so the backoff wait actually blocks
+        cl._stop_event.clear()
+
+        def fake_fetch():
+            raise IMAPConnectionError("lost")
+
+        mock_el.fetch_unread.side_effect = fake_fetch
+
+        # Simulate stop() interrupting the backoff wait: set the event
+        # and _running=False before the reconnect attempt.
+        original_wait = cl._stop_event.wait
+
+        def interrupt_on_backoff(timeout):
+            cl._running = False
+            cl._stop_event.set()
+            return original_wait(timeout)
+
+        cl._stop_event.wait = interrupt_on_backoff  # type: ignore[assignment]
+
+        cl._polling_loop()
+
+        # Should NOT have attempted reconnection
+        mock_el.disconnect.assert_not_called()
+        mock_el.connect.assert_not_called()
 
     def test_reconnect_failure(self) -> None:
         """Polling loop continues after a reconnection failure."""
@@ -315,8 +350,7 @@ class TestPollingLoop:
             None,
         ]
 
-        with patch("time.sleep"):
-            cl._polling_loop()
+        cl._polling_loop()
 
     def test_submit_exception_continues(self) -> None:
         """Polling loop continues after a submit exception."""
@@ -340,14 +374,13 @@ class TestPollingLoop:
             None,
         ]
 
-        with patch("time.sleep"):
-            cl._polling_loop()
+        cl._polling_loop()
 
     def test_status_degraded_during_reconnect(self) -> None:
         """Status changes to DEGRADED during reconnection."""
         cl, mock_el = _make_polling_listener()
         cl._submit = MagicMock()
-        statuses = []
+        statuses: list[ChannelHealth] = []
         call_count = 0
 
         def fake_fetch():
@@ -358,15 +391,16 @@ class TestPollingLoop:
             cl._running = False
             return []
 
-        def fake_sleep(_seconds):
-            statuses.append(cl.status)
-
         mock_el.fetch_unread.side_effect = fake_fetch
+        # Capture status when disconnect is called (during reconnect,
+        # after status has been set to DEGRADED).
+        mock_el.disconnect.side_effect = lambda: statuses.append(
+            cl.status.health
+        )
 
-        with patch("time.sleep", side_effect=fake_sleep):
-            cl._polling_loop()
+        cl._polling_loop()
 
-        assert any(s.health == ChannelHealth.DEGRADED for s in statuses)
+        assert ChannelHealth.DEGRADED in statuses
 
 
 class TestIdleLoop:
@@ -533,8 +567,7 @@ class TestIdleLoop:
 
         mock_el.fetch_unread.side_effect = fake_fetch
 
-        with patch("time.sleep"):
-            cl._idle_loop()
+        cl._idle_loop()
 
         mock_el.disconnect.assert_not_called()
         mock_el.connect.assert_not_called()
@@ -554,16 +587,14 @@ class TestIdleLoop:
 
         mock_el.fetch_unread.side_effect = fake_fetch
 
-        with patch("time.sleep"):
-            cl._idle_loop()
+        cl._idle_loop()
 
     def test_imap_max_reconnect_raises(self) -> None:
         """IDLE loop exits after max reconnect attempts."""
         cl, mock_el = _make_idle_listener()
         mock_el.fetch_unread.side_effect = IMAPConnectionError("fail")
 
-        with patch("time.sleep"):
-            cl._idle_loop()
+        cl._idle_loop()
 
         assert cl.status.health == ChannelHealth.FAILED
 
@@ -586,8 +617,7 @@ class TestIdleLoop:
             None,
         ]
 
-        with patch("time.sleep"):
-            cl._idle_loop()
+        cl._idle_loop()
 
     def test_shutdown_skips_idle_done(self) -> None:
         """When shutting down during IDLE, skip idle_done()."""
@@ -642,8 +672,7 @@ class TestChannelStatus:
 
         mock_el.fetch_unread.side_effect = fake_fetch
 
-        with patch("time.sleep"):
-            cl._idle_loop()
+        cl._idle_loop()
 
         assert cl.status.health == ChannelHealth.CONNECTED
 
@@ -653,8 +682,7 @@ class TestChannelStatus:
         cl._submit = MagicMock()
         mock_el.fetch_unread.side_effect = IMAPConnectionError("fail")
 
-        with patch("time.sleep"):
-            cl._polling_loop()
+        cl._polling_loop()
 
         assert cl.status.health == ChannelHealth.FAILED
         assert cl.status.error_type == "IMAPConnectionError"
@@ -682,14 +710,14 @@ class TestFullLifecycle:
             if call_count == 1:
                 return [("1", msg)]
             cl._running = False
+            cl._stop_event.set()
             return []
 
         mock_el.fetch_unread.side_effect = fake_fetch
 
-        with patch("time.sleep"):
-            cl.start(submit)
-            assert cl._thread is not None
-            cl._thread.join(timeout=5)
+        cl.start(submit)
+        assert cl._thread is not None
+        cl._thread.join(timeout=5)
 
         submit.assert_called_once()
         raw_msg = submit.call_args[0][0]
@@ -757,14 +785,14 @@ class TestFullLifecycle:
             if call_count == 1:
                 return [("1", msg)]
             cl._running = False
+            cl._stop_event.set()
             return []
 
         mock_el.fetch_unread.side_effect = fake_fetch
 
-        with patch("time.sleep"):
-            cl.start(track_submit)
-            assert cl._thread is not None
-            cl._thread.join(timeout=5)
+        cl.start(track_submit)
+        assert cl._thread is not None
+        cl._thread.join(timeout=5)
 
         assert len(received_messages) == 1
         assert received_messages[0].display_title == "Tracked"

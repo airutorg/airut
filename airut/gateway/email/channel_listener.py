@@ -73,6 +73,7 @@ class EmailChannelListener(ChannelListener):
         self._thread: threading.Thread | None = None
         self._submit: Callable[[RawMessage[Message]], bool] | None = None
         self._running = False
+        self._stop_event = threading.Event()
         self._status = ChannelStatus(health=ChannelHealth.STARTING)
 
     def start(self, submit: Callable[[RawMessage[Message]], bool]) -> None:
@@ -90,6 +91,7 @@ class EmailChannelListener(ChannelListener):
         """
         self._submit = submit
         self._running = True
+        self._stop_event.clear()
 
         self._log.info(
             "Connecting to IMAP %s:%d",
@@ -118,6 +120,7 @@ class EmailChannelListener(ChannelListener):
     def stop(self) -> None:
         """Stop the listener and close the IMAP connection."""
         self._running = False
+        self._stop_event.set()
         self._email_listener.interrupt()
         if self._thread is not None:
             self._thread.join(timeout=10)
@@ -196,7 +199,10 @@ class EmailChannelListener(ChannelListener):
 
         backoff = min(10 * (3 ** (reconnect_attempts - 1)), 300)
         self._log.info("Reconnecting in %ds...", backoff)
-        time.sleep(backoff)
+        self._stop_event.wait(backoff)
+
+        if not self._running:
+            return reconnect_attempts
 
         try:
             self._email_listener.disconnect()
@@ -247,7 +253,7 @@ class EmailChannelListener(ChannelListener):
                             e,
                         )
 
-                time.sleep(self._config.poll_interval_seconds)
+                self._stop_event.wait(self._config.poll_interval_seconds)
 
             except IMAPConnectionError as e:
                 if not self._running:
