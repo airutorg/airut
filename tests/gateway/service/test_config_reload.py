@@ -766,6 +766,43 @@ class TestCheckPendingServerReloadEdgeCases:
 
         assert svc._pending_server_config is None
 
+    def test_pending_not_cleared_during_apply(self, tmp_path: Path) -> None:
+        """_pending_server_config is not None while _apply_server_reload runs.
+
+        Regression test for a race where wait_for_pending_server_clear
+        could observe _pending_server_config as None before the
+        dashboard was recreated, causing ``service.dashboard is None``.
+        """
+        svc = _make_service(tmp_path)
+        new_config = dataclasses.replace(
+            svc.config,
+            global_config=dataclasses.replace(
+                svc.config.global_config, dashboard_port=9999
+            ),
+        )
+        svc._pending_server_config = new_config
+        svc._pending_server_old_global = svc.global_config
+
+        observed_pending: list[object] = []
+
+        def spy_apply(cfg: object, old: object = None) -> None:
+            observed_pending.append(svc._pending_server_config)
+
+        with (
+            patch.object(
+                TaskTracker,
+                "has_active_tasks_for_repo",
+                return_value=False,
+            ),
+            patch.object(svc, "_apply_server_reload", side_effect=spy_apply),
+        ):
+            svc._check_pending_server_reload()
+
+        # During _apply_server_reload, pending must still be set
+        assert observed_pending == [new_config]
+        # After completion, it is cleared
+        assert svc._pending_server_config is None
+
 
 class TestApplyServerReload:
     """Tests for _apply_server_reload."""
@@ -875,6 +912,43 @@ class TestTryImmediateServerReload:
             svc._try_immediate_server_reload()
 
         mock_apply.assert_not_called()
+
+    def test_pending_not_cleared_during_apply(self, tmp_path: Path) -> None:
+        """_pending_server_config is not None while _apply_server_reload runs.
+
+        Same invariant as the _check_pending_server_reload test:
+        observers must not see _pending_server_config cleared before
+        the reload is fully applied.
+        """
+        svc = _make_service(
+            tmp_path, dashboard_enabled=True, dashboard_port=5200
+        )
+        new_config = dataclasses.replace(
+            svc.config,
+            global_config=dataclasses.replace(
+                svc.config.global_config, dashboard_port=9999
+            ),
+        )
+        svc._pending_server_config = new_config
+        svc._pending_server_old_global = svc.global_config
+
+        observed_pending: list[object] = []
+
+        def spy_apply(cfg: object, old: object = None) -> None:
+            observed_pending.append(svc._pending_server_config)
+
+        with (
+            patch.object(svc, "_apply_server_reload", side_effect=spy_apply),
+            patch.object(
+                TaskTracker,
+                "has_active_tasks_for_repo",
+                return_value=False,
+            ),
+        ):
+            svc._try_immediate_server_reload()
+
+        assert observed_pending == [new_config]
+        assert svc._pending_server_config is None
 
     def test_exception_logged_and_swallowed(self, tmp_path: Path) -> None:
         """Exception in _apply_server_reload is caught."""
