@@ -1,24 +1,26 @@
 // Auto-scroll for append-only pages (actions, network).
 //
-// The htmx SSE extension fires htmx:sseMessage (not htmx:afterSwap)
-// after swapping content into the DOM.  We listen for that event on
-// the document and scroll to the bottom when the user hasn't scrolled
-// up manually.
+// Scrolls the .console-page container (not the window) so that the
+// navbar stays above the scroll area and iOS address-bar dynamics
+// don't interfere with scroll position or sticky positioning.
 //
-// We guard programmatic scrollTo calls so they don't re-trigger the
+// Content arrives via htmx SSE (htmx:sseMessage) or polling fallback
+// (direct DOM insertion).  We handle both: htmx:sseMessage fires for
+// SSE swaps, and a MutationObserver catches polling-appended content.
+//
+// We guard programmatic scroll calls so they don't re-trigger the
 // scroll listener with intermediate positions (which can falsely
 // disable auto-scroll on iOS, especially iPad).
 (function() {
+    var scrollEl = document.querySelector('.console-page');
+    if (!scrollEl) return;
+
     var autoScroll = true;
     var scrolling = false;
 
-    function docHeight() {
-        return document.documentElement.scrollHeight;
-    }
-
     function scrollToBottom() {
         scrolling = true;
-        window.scrollTo(0, docHeight());
+        scrollEl.scrollTop = scrollEl.scrollHeight;
         requestAnimationFrame(function() { scrolling = false; });
     }
 
@@ -26,12 +28,12 @@
     scrollToBottom();
 
     // Track if user has scrolled up (disable auto-scroll).
-    // Ignore scroll events caused by our own scrollTo calls.
-    window.addEventListener('scroll', function() {
+    // Ignore scroll events caused by our own scrollTop assignments.
+    scrollEl.addEventListener('scroll', function() {
         if (scrolling) return;
         autoScroll = (
-            window.innerHeight + window.scrollY
-            >= docHeight() - 100
+            scrollEl.scrollTop + scrollEl.clientHeight
+            >= scrollEl.scrollHeight - 100
         );
     });
 
@@ -44,4 +46,16 @@
             scrollToBottom();
         }
     });
+
+    // MutationObserver catches content appended by polling fallback
+    // (which doesn't fire htmx:sseMessage).
+    var container =
+        document.getElementById('events-container') ||
+        document.getElementById('logs-container');
+
+    if (container) {
+        new MutationObserver(function() {
+            if (autoScroll) scrollToBottom();
+        }).observe(container, { childList: true });
+    }
 })();
