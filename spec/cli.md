@@ -40,6 +40,10 @@ airut init
 
 Create a stub server config at `~/.config/airut/airut.yaml`.
 
+This step is **optional**. If no config file exists, `airut run-gateway` starts
+with built-in defaults (dashboard enabled, no repos). Users can configure repos
+later via the dashboard config editor.
+
 **Behavior:**
 
 - If the config already exists, prints its path and returns 0 (idempotent)
@@ -70,7 +74,7 @@ all critical checks pass, 1 otherwise.
 | Section       | What it checks                                           | Affects exit code |
 | ------------- | -------------------------------------------------------- | ----------------- |
 | Version       | Installed version, upstream update availability          | No                |
-| Configuration | Config file exists, parses without error, repo count     | Yes               |
+| Configuration | Config file parses without error (missing = defaults)    | Yes               |
 | Dependencies  | git (>= 2.25), podman (>= 4.0) installed and version met | Yes               |
 | Service       | Unit file exists, service running, version mismatch      | No                |
 

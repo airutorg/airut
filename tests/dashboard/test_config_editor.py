@@ -781,10 +781,10 @@ class TestSave:
     def test_save_invalid_config(self, harness: ConfigEditorHarness) -> None:
         harness.client.get("/config")
 
-        # Remove all repos to make config invalid
+        # Remove required git.repo_url to make config invalid
         buf = harness.server._config_handlers._buffer
         assert buf is not None
-        buf._raw["repos"] = {}
+        del buf._raw["repos"]["test-repo"]["git"]["repo_url"]
 
         response = harness.client.post(
             "/api/config/save",
@@ -801,10 +801,10 @@ class TestSave:
         """
         harness.client.get("/config")
 
-        # Remove all repos to make config invalid
+        # Remove required git.repo_url to make config invalid
         buf = harness.server._config_handlers._buffer
         assert buf is not None
-        buf._raw["repos"] = {}
+        del buf._raw["repos"]["test-repo"]["git"]["repo_url"]
         buf.mark_dirty()
 
         response = harness.client.get("/api/config/diff")

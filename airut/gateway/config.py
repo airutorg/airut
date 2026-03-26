@@ -1242,9 +1242,6 @@ class ServerConfig:
         Raises:
             ConfigError: If validation fails.
         """
-        if not self.repos:
-            raise ConfigError("At least one repo must be configured")
-
         # Validate no duplicate IMAP inboxes (for email-channel repos)
         seen_inboxes: dict[tuple[str, str], str] = {}
         for repo_id, repo in self.repos.items():
@@ -1271,6 +1268,22 @@ class ServerConfig:
             len(self.repos),
             self.global_config.max_concurrent_executions,
         )
+
+    @classmethod
+    def default(cls) -> "ConfigSnapshot[ServerConfig]":
+        """Create a default configuration with no repos.
+
+        Used when no config file exists.  Dashboard is enabled so the
+        user can configure repos via the web UI.
+
+        Returns:
+            ConfigSnapshot wrapping a default ServerConfig instance.
+        """
+        from airut.config.snapshot import ConfigSnapshot
+
+        instance = cls(global_config=GlobalConfig(), repos={})
+        provided = frozenset({"global_config", "repos"})
+        return ConfigSnapshot(instance, provided, raw={})
 
     @classmethod
     def from_source(

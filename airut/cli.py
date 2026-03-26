@@ -456,18 +456,23 @@ def cmd_check(argv: list[str]) -> int:
 
     config: ServerConfig | None = None
     if not config_path.exists():
-        print(f"  Status:      {s.red('not found')}")
-        print(f"  Run {s.cyan('airut init')} to create a stub config.")
-        all_ok = False
+        print(
+            f"  Status:      {s.yellow('not found')} — "
+            f"default values will be used"
+        )
+        config = ServerConfig.default().value
     else:
         try:
             snapshot = ServerConfig.from_yaml(config_path)
             config = snapshot.value
-            repo_ids = ", ".join(sorted(config.repos))
-            print(
-                f"  Status:      {s.green('ok')} — "
-                f"{len(config.repos)} repo(s) ({repo_ids})"
-            )
+            if config.repos:
+                repo_ids = ", ".join(sorted(config.repos))
+                print(
+                    f"  Status:      {s.green('ok')} — "
+                    f"{len(config.repos)} repo(s) ({repo_ids})"
+                )
+            else:
+                print(f"  Status:      {s.green('ok')} — no repos configured")
         except (ConfigError, ValueError, Exception) as e:
             print(f"  Status:      {s.red('error')} — {e}")
             all_ok = False
@@ -544,6 +549,23 @@ def cmd_check(argv: list[str]) -> int:
 # ── update subcommand ───────────────────────────────────────────────
 
 
+def _load_config_for_status() -> ServerConfig | None:
+    """Load server config for status queries (update, check).
+
+    Returns the config from the YAML file if it exists, or the built-in
+    defaults if no file is found.  Returns None on parse/load errors.
+    """
+    config_path = get_config_path()
+    if not config_path.exists():
+        return ServerConfig.default().value
+
+    try:
+        snapshot = ServerConfig.from_yaml(config_path)
+        return snapshot.value
+    except (ConfigError, ValueError, Exception):
+        return None
+
+
 def _get_active_task_counts() -> tuple[int, int] | None:
     """Query the running gateway for active task counts.
 
@@ -555,14 +577,8 @@ def _get_active_task_counts() -> tuple[int, int] | None:
         reachable or not configured.  ``running`` counts executing +
         authenticating tasks; ``waiting`` counts queued + pending.
     """
-    config_path = get_config_path()
-    if not config_path.exists():
-        return None
-
-    try:
-        snapshot = ServerConfig.from_yaml(config_path)
-        config = snapshot.value
-    except (ConfigError, ValueError, Exception):
+    config = _load_config_for_status()
+    if config is None:
         return None
 
     local_url = _local_dashboard_url(config)
@@ -605,14 +621,8 @@ def _has_version_mismatch() -> bool:
     """
     from airut.version import get_git_version_info
 
-    config_path = get_config_path()
-    if not config_path.exists():
-        return False
-
-    try:
-        snapshot = ServerConfig.from_yaml(config_path)
-        config = snapshot.value
-    except (ConfigError, ValueError, Exception):
+    config = _load_config_for_status()
+    if config is None:
         return False
 
     local_url = _local_dashboard_url(config)

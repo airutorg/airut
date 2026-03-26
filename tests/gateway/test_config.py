@@ -820,10 +820,10 @@ class TestServerConfigValidation:
             channels={"email": EmailChannelConfig(**email_defaults)},
         )
 
-    def test_empty_repos_rejected(self, tmp_path: Path) -> None:
-        """At least one repo must be configured."""
-        with pytest.raises(ConfigError, match="At least one repo"):
-            ServerConfig(global_config=GlobalConfig(), repos={})
+    def test_empty_repos_allowed(self, tmp_path: Path) -> None:
+        """Empty repos is allowed (no config file / dashboard-only mode)."""
+        config = ServerConfig(global_config=GlobalConfig(), repos={})
+        assert len(config.repos) == 0
 
     def test_non_email_channel_skipped_in_inbox_check(
         self, tmp_path: Path
