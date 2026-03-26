@@ -75,21 +75,21 @@ def capture_page(
     page: Page,
     url: str,
     output_path: Path,
-    *,
-    full_page: bool = True,
 ) -> None:
-    """Navigate to a URL and capture a screenshot.
+    """Navigate to a URL and capture a viewport-sized screenshot.
+
+    The screenshot dimensions are determined by the viewport set on the
+    browser context (see ``VIEWPORT`` and ``DEVICE_SCALE_FACTOR``).
 
     Args:
         page: Playwright page instance.
         url: URL to navigate to.
         output_path: Path to save the PNG screenshot.
-        full_page: Capture full scrollable area (True) or viewport only.
     """
     page.goto(url)
     page.wait_for_load_state("load")
 
-    page.screenshot(path=str(output_path), full_page=full_page)
+    page.screenshot(path=str(output_path))
 
 
 def generate_screenshots(
