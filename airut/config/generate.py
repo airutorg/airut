@@ -65,17 +65,15 @@ _DOCS_BASE = "https://github.com/airutorg/airut/blob/main"
 _EXAMPLE_VALUES: dict[str, str] = {
     # Required field placeholders
     "EmailChannelConfig.imap_server": "mail.example.com",
-    "EmailChannelConfig.imap_port": "993",
     "EmailChannelConfig.smtp_server": "mail.example.com",
-    "EmailChannelConfig.smtp_port": "587",
     "EmailChannelConfig.username": "airut",
-    "EmailChannelConfig.password": "!env EMAIL_PASSWORD",
     "EmailChannelConfig.from_address": '"Airut <airut@example.com>"',
     "EmailChannelConfig.trusted_authserv_id": "mail.example.com",
     "SlackChannelConfig.bot_token": "!env SLACK_BOT_TOKEN",
     "SlackChannelConfig.app_token": "!env SLACK_APP_TOKEN",
     "RepoServerConfig.git_repo_url": "https://github.com/you/my-project.git",
     # Optional None-default overrides (illustrative)
+    "EmailChannelConfig.password": "!env EMAIL_PASSWORD",
     "GlobalConfig.dashboard_base_url": "dashboard.example.com",
     "GlobalConfig.upstream_dns": '"1.1.1.1"',
     "ResourceLimits.timeout": "7200",
@@ -694,6 +692,7 @@ def generate_stub_config() -> str:
         )
         if has_default and key not in (
             "EmailChannelConfig.authorized_senders",
+            "EmailChannelConfig.password",
         ):
             continue
         if key in _COMPLEX_EXAMPLES:

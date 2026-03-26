@@ -31,11 +31,6 @@ FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
     "GitHubAppCredential.private_key": {"multiline": True},
 }
 
-PARSER_DEFAULTS: dict[str, Any] = {
-    "EmailChannelConfig.imap_port": 993,
-    "EmailChannelConfig.smtp_port": 587,
-}
-
 TAGGED_UNION_RULES: dict[str, list[tuple[str, str, str]]] = {
     "SlackChannelConfig.authorized": [
         ("workspace_members", "bool", "Allow all workspace members"),
@@ -209,10 +204,7 @@ def _walk_fields(
         )
         is_required = not has_default and not is_optional
 
-        if qualified in PARSER_DEFAULTS:
-            default_val = PARSER_DEFAULTS[qualified]
-            is_required = False
-        elif f.default is not MISSING:
+        if f.default is not MISSING:
             default_val = f.default
         elif f.default_factory is not MISSING:
             default_val = f.default_factory()

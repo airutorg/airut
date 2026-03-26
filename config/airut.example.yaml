@@ -82,20 +82,11 @@ repos:
       # IMAP server hostname
       imap_server: mail.example.com
 
-      # IMAP port
-      imap_port: 993
-
       # SMTP server hostname
       smtp_server: mail.example.com
 
-      # SMTP port
-      smtp_port: 587
-
       # Email account username
       username: airut
-
-      # Email account password
-      password: !env EMAIL_PASSWORD
 
       # From address for outgoing emails
       from: "Airut <airut@example.com>"
@@ -107,6 +98,15 @@ repos:
 
       # Trusted authserv-id in Authentication-Results headers
       trusted_authserv_id: mail.example.com
+
+      # IMAP port
+      # imap_port: 993
+
+      # SMTP port
+      # smtp_port: 587
+
+      # Email account password
+      # password: !env EMAIL_PASSWORD
 
       # Whether SMTP requires authentication
       # smtp_require_auth: true

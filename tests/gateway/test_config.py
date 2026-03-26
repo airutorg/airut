@@ -776,7 +776,9 @@ repos:
       authorized_senders:
         - auth@test.com
       trusted_authserv_id: mx.test.com
+      smtp_require_auth: false
       imap:
+        connect_retries: 5
         poll_interval: 45
         use_idle: false
         idle_reconnect_interval: 1800
@@ -920,6 +922,8 @@ class TestFromYaml:
         assert email_ch.imap_port == 143
         assert email_ch.smtp_port == 25
         assert email_ch.password == "env_pw"
+        assert email_ch.smtp_require_auth is False
+        assert email_ch.imap_connect_retries == 5
         assert email_ch.poll_interval_seconds == 45
         assert email_ch.use_imap_idle is False
         assert email_ch.idle_reconnect_interval_seconds == 1800
@@ -1051,17 +1055,30 @@ class TestFromYaml:
             ServerConfig.from_yaml(yaml_path)
 
     def test_missing_env_var(self, master_repo: Path, tmp_path: Path) -> None:
-        """Raise ConfigError when !env var is not set."""
+        """Raise ConfigError when !env var is not set on a required field."""
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(
             _MINIMAL_YAML.format(repo_url=master_repo).replace(
-                "plain_password", "!env MISSING_VAR"
+                "imap.test.com", "!env MISSING_VAR"
             )
         )
 
         with patch.dict("os.environ", {}, clear=True):
             with pytest.raises(ConfigError, match="MISSING_VAR"):
                 ServerConfig.from_yaml(yaml_path)
+
+    def test_password_required_without_oauth2(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Password is required when OAuth2 is not configured."""
+        yaml_content = _MINIMAL_YAML.format(repo_url=master_repo).replace(
+            "      password: plain_password\n", ""
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+
+        with pytest.raises(ConfigError, match="password is required"):
+            ServerConfig.from_yaml(yaml_path)
 
     def test_secrets_skip_empty(
         self, master_repo: Path, tmp_path: Path
@@ -1275,7 +1292,7 @@ class TestFromYaml:
 
         email_ch = repo.channels["email"]
         assert isinstance(email_ch, EmailChannelConfig)
-        assert email_ch.password == ""
+        assert email_ch.password is None
         assert email_ch.microsoft_oauth2_tenant_id == "my-tenant"
 
     def test_microsoft_oauth2_absent_defaults_none(

@@ -26,7 +26,7 @@ import logging
 import secrets as secrets_module
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast, overload
+from typing import TYPE_CHECKING, cast, overload
 
 from platformdirs import user_config_path, user_state_path
 
@@ -509,11 +509,11 @@ def _resolve[T](value: YamlValue, coerce: type[T]) -> T | None: ...
 
 def _resolve(
     value: YamlValue,
-    coerce: type[Any],
+    coerce: type,
     *,
     default: object = _MISSING,
     required: str = "",
-) -> Any:
+):
     """Resolve a YAML value, handling ``!env`` tags and type coercion.
 
     This is the single entry point for reading any config value.  It
@@ -777,6 +777,7 @@ class EmailChannelConfig(ChannelConfig):
         smtp_port: SMTP port.
         username: Email account username.
         password: Email account password (auto-redacted in logs).
+            Optional when Microsoft OAuth2 is configured.
         from_address: From address for outgoing emails.
         authorized_senders: List of email patterns allowed to send commands.
             Supports wildcards (e.g., ``*@company.com``).
@@ -801,23 +802,15 @@ class EmailChannelConfig(ChannelConfig):
             (auto-redacted in logs).
     """
 
+    # --- Required fields (no defaults) ---
     imap_server: str = field(
         metadata=meta("IMAP server hostname", Scope.REPO),
-    )
-    imap_port: int = field(
-        metadata=meta("IMAP port", Scope.REPO),
     )
     smtp_server: str = field(
         metadata=meta("SMTP server hostname", Scope.REPO),
     )
-    smtp_port: int = field(
-        metadata=meta("SMTP port", Scope.REPO),
-    )
     username: str = field(
         metadata=meta("Email account username", Scope.REPO),
-    )
-    password: str = field(
-        metadata=meta("Email account password", Scope.REPO, secret=True),
     )
     from_address: str = field(
         metadata=meta("From address for outgoing emails", Scope.REPO),
@@ -833,6 +826,19 @@ class EmailChannelConfig(ChannelConfig):
             "Trusted authserv-id in Authentication-Results headers",
             Scope.REPO,
         ),
+    )
+    # --- Fields with defaults ---
+    imap_port: int = field(
+        default=993,
+        metadata=meta("IMAP port", Scope.REPO),
+    )
+    smtp_port: int = field(
+        default=587,
+        metadata=meta("SMTP port", Scope.REPO),
+    )
+    password: str | None = field(
+        default=None,
+        metadata=meta("Email account password", Scope.REPO, secret=True),
     )
     imap_connect_retries: int = field(
         default=3,
@@ -894,7 +900,8 @@ class EmailChannelConfig(ChannelConfig):
         Raises:
             ValueError: If configuration is invalid.
         """
-        SecretFilter.register_secret(self.password)
+        if self.password:
+            SecretFilter.register_secret(self.password)
 
         # Register Microsoft OAuth2 client secret for log redaction
         if self.microsoft_oauth2_client_secret:
@@ -911,6 +918,14 @@ class EmailChannelConfig(ChannelConfig):
             raise ValueError(
                 "microsoft_oauth2 requires all three "
                 "fields (tenant_id, client_id, client_secret) to be set"
+            )
+
+        # Password is required when OAuth2 is not configured
+        has_oauth2 = len(oauth2_set) == 3
+        if not has_oauth2 and not self.password:
+            raise ValueError(
+                "email.password is required when microsoft_oauth2 "
+                "is not configured"
             )
 
         if self.imap_connect_retries < 1:
@@ -1070,6 +1085,12 @@ class RepoServerConfig:
         Raises:
             ValueError: If configuration is invalid.
         """
+        # Normalize empty strings to defaults (frozen → use object.__setattr__)
+        if not self.model:
+            object.__setattr__(self, "model", "opus")
+        if self.effort is not None and not self.effort:
+            object.__setattr__(self, "effort", None)
+
         for value in self.secrets.values():
             if value:
                 SecretFilter.register_secret(value)
@@ -1286,33 +1307,41 @@ class ServerConfig:
         """Build config from parsed (but unresolved) YAML dict."""
         execution = raw.get("execution", {})
         dashboard = raw.get("dashboard", {})
-
         network = raw.get("network", {})
 
+        # Build GlobalConfig kwargs.  Only fields present in YAML are
+        # passed; absent fields fall through to dataclass defaults.
+        gc_overrides = {}
+        max_concurrent = _resolve(execution.get("max_concurrent"), int)
+        if max_concurrent is not None:
+            gc_overrides["max_concurrent_executions"] = max_concurrent
+        shutdown_timeout = _resolve(execution.get("shutdown_timeout"), int)
+        if shutdown_timeout is not None:
+            gc_overrides["shutdown_timeout_seconds"] = shutdown_timeout
+        conversation_max_age = _resolve(
+            execution.get("conversation_max_age_days"), int
+        )
+        if conversation_max_age is not None:
+            gc_overrides["conversation_max_age_days"] = conversation_max_age
+        image_prune = _resolve(execution.get("image_prune"), bool)
+        if image_prune is not None:
+            gc_overrides["image_prune"] = image_prune
+        dashboard_enabled = _resolve(dashboard.get("enabled"), bool)
+        if dashboard_enabled is not None:
+            gc_overrides["dashboard_enabled"] = dashboard_enabled
+        dashboard_host = _resolve(dashboard.get("host"), str)
+        if dashboard_host is not None:
+            gc_overrides["dashboard_host"] = dashboard_host
+        dashboard_port = _resolve(dashboard.get("port"), int)
+        if dashboard_port is not None:
+            gc_overrides["dashboard_port"] = dashboard_port
+        container_command = _resolve(raw.get("container_command"), str)
+        if container_command is not None:
+            gc_overrides["container_command"] = container_command
+
         global_config = GlobalConfig(
-            max_concurrent_executions=_resolve(
-                execution.get("max_concurrent"), int, default=3
-            ),
-            shutdown_timeout_seconds=_resolve(
-                execution.get("shutdown_timeout"), int, default=60
-            ),
-            conversation_max_age_days=_resolve(
-                execution.get("conversation_max_age_days"), int, default=7
-            ),
-            image_prune=_resolve(
-                execution.get("image_prune"), bool, default=True
-            ),
-            dashboard_enabled=_resolve(
-                dashboard.get("enabled"), bool, default=True
-            ),
-            dashboard_host=_resolve(
-                dashboard.get("host"), str, default="127.0.0.1"
-            ),
-            dashboard_port=_resolve(dashboard.get("port"), int, default=5200),
+            **gc_overrides,
             dashboard_base_url=_resolve(dashboard.get("base_url"), str),
-            container_command=_resolve(
-                raw.get("container_command"), str, default="podman"
-            ),
             upstream_dns=_resolve(network.get("upstream_dns"), str),
             resource_limits=_parse_resource_limits(raw.get("resource_limits")),
         )
@@ -1420,6 +1449,21 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
             if resolved is not None:
                 container_env[str(key)] = resolved
 
+    # Build optional overrides
+    repo_overrides = {}
+    sandbox_enabled = _resolve(network.get("sandbox_enabled"), bool)
+    if sandbox_enabled is not None:
+        repo_overrides["network_sandbox_enabled"] = sandbox_enabled
+    model = _resolve(raw.get("model"), str)
+    if model is not None:
+        repo_overrides["model"] = model
+    effort = _resolve(raw.get("effort"), str)
+    if effort is not None:
+        repo_overrides["effort"] = effort
+    parsed_limits = _parse_resource_limits(raw.get("resource_limits"))
+    if parsed_limits is not None:
+        repo_overrides["resource_limits"] = parsed_limits
+
     return RepoServerConfig(
         repo_id=repo_id,
         git_repo_url=_resolve(
@@ -1432,16 +1476,8 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
         masked_secrets=masked_secrets,
         signing_credentials=signing_credentials,
         github_app_credentials=github_app_credentials,
-        network_sandbox_enabled=_resolve(
-            network.get("sandbox_enabled"), bool, default=True
-        ),
-        model=_resolve(raw.get("model"), str, default="opus") or "opus",
-        effort=_resolve(raw.get("effort"), str, default=None) or None,
-        resource_limits=(
-            _parse_resource_limits(raw.get("resource_limits"))
-            or ResourceLimits()
-        ),
         container_env=container_env,
+        **repo_overrides,
     )
 
 
@@ -1469,7 +1505,37 @@ def _parse_email_channel_config(email: dict, prefix: str) -> EmailChannelConfig:
         _resolve(ms_oauth2.get("client_secret"), str) if ms_oauth2 else None
     )
 
-    has_oauth2 = ms_tenant_id or ms_client_id or ms_client_secret
+    # Build optional overrides
+    ec_overrides = {}
+    imap_port = _resolve(email.get("imap_port"), int)
+    if imap_port is not None:
+        ec_overrides["imap_port"] = imap_port
+    smtp_port = _resolve(email.get("smtp_port"), int)
+    if smtp_port is not None:
+        ec_overrides["smtp_port"] = smtp_port
+    smtp_require_auth = _resolve(email.get("smtp_require_auth"), bool)
+    if smtp_require_auth is not None:
+        ec_overrides["smtp_require_auth"] = smtp_require_auth
+    password = _resolve(email.get("password"), str)
+    if password is not None:
+        ec_overrides["password"] = password
+    connect_retries = _resolve(imap.get("connect_retries"), int)
+    if connect_retries is not None:
+        ec_overrides["imap_connect_retries"] = connect_retries
+    poll_interval = _resolve(imap.get("poll_interval"), float)
+    if poll_interval is not None:
+        ec_overrides["poll_interval_seconds"] = poll_interval
+    use_idle = _resolve(imap.get("use_idle"), bool)
+    if use_idle is not None:
+        ec_overrides["use_imap_idle"] = use_idle
+    idle_reconnect = _resolve(imap.get("idle_reconnect_interval"), int)
+    if idle_reconnect is not None:
+        ec_overrides["idle_reconnect_interval_seconds"] = idle_reconnect
+    ms_internal_auth = _resolve(
+        email.get("microsoft_internal_auth_fallback"), bool
+    )
+    if ms_internal_auth is not None:
+        ec_overrides["microsoft_internal_auth_fallback"] = ms_internal_auth
 
     return EmailChannelConfig(
         imap_server=_resolve(
@@ -1477,30 +1543,15 @@ def _parse_email_channel_config(email: dict, prefix: str) -> EmailChannelConfig:
             str,
             required=f"{prefix}.email.imap_server",
         ),
-        imap_port=_resolve(email.get("imap_port"), int, default=993),
         smtp_server=_resolve(
             email.get("smtp_server"),
             str,
             required=f"{prefix}.email.smtp_server",
         ),
-        smtp_port=_resolve(email.get("smtp_port"), int, default=587),
-        smtp_require_auth=_resolve(
-            email.get("smtp_require_auth"), bool, default=True
-        ),
         username=_resolve(
             email.get("username"),
             str,
             required=f"{prefix}.email.username",
-        ),
-        # email.password is required only when OAuth2 is not configured
-        password=(
-            _resolve(email.get("password"), str, default="")
-            if has_oauth2
-            else _resolve(
-                email.get("password"),
-                str,
-                required=f"{prefix}.email.password",
-            )
         ),
         from_address=_resolve(
             email.get("from"), str, required=f"{prefix}.email.from"
@@ -1514,22 +1565,10 @@ def _parse_email_channel_config(email: dict, prefix: str) -> EmailChannelConfig:
             str,
             required=f"{prefix}.email.trusted_authserv_id",
         ),
-        imap_connect_retries=_resolve(
-            imap.get("connect_retries"), int, default=3
-        ),
-        poll_interval_seconds=_resolve(
-            imap.get("poll_interval"), float, default=60
-        ),
-        use_imap_idle=_resolve(imap.get("use_idle"), bool, default=True),
-        idle_reconnect_interval_seconds=_resolve(
-            imap.get("idle_reconnect_interval"), int, default=29 * 60
-        ),
-        microsoft_internal_auth_fallback=_resolve(
-            email.get("microsoft_internal_auth_fallback"), bool, default=False
-        ),
         microsoft_oauth2_tenant_id=ms_tenant_id,
         microsoft_oauth2_client_id=ms_client_id,
         microsoft_oauth2_client_secret=ms_client_secret,
+        **ec_overrides,
     )
 
 
@@ -1669,14 +1708,16 @@ def _resolve_masked_secrets(
 
         headers = tuple(str(h) for h in raw_headers)
 
-        # Parse allow_foreign_credentials (optional, default False)
-        allow_foreign = bool(config.get("allow_foreign_credentials", False))
+        ms_overrides = {}
+        raw_allow_foreign = config.get("allow_foreign_credentials")
+        if raw_allow_foreign is not None:
+            ms_overrides["allow_foreign_credentials"] = bool(raw_allow_foreign)
 
         result[name] = MaskedSecret(
             value=value,
             scopes=scopes,
             headers=headers,
-            allow_foreign_credentials=allow_foreign,
+            **ms_overrides,
         )
 
     return result
@@ -1855,44 +1896,46 @@ def _resolve_github_app_credentials(
 
         scopes = frozenset(str(s) for s in raw_scopes)
 
-        # Parse allow_foreign_credentials (optional, default False)
-        allow_foreign = bool(config.get("allow_foreign_credentials", False))
+        # Parse optional fields
+        raw_allow_foreign = config.get("allow_foreign_credentials")
 
-        # Parse base_url (optional, supports !env)
+        base_url: str | None = None
         raw_base_url = config.get("base_url")
-        base_url = (
-            raw_resolve(raw_base_url) if raw_base_url is not None else None
-        )
-        if not base_url:
-            base_url = "https://api.github.com"
-        if not base_url.startswith("https://"):
-            raise ConfigError(f"{key}.base_url must use HTTPS")
+        if raw_base_url is not None:
+            base_url = raw_resolve(raw_base_url)
+            if base_url and not base_url.startswith("https://"):
+                raise ConfigError(f"{key}.base_url must use HTTPS")
 
-        # Parse permissions (optional)
-        raw_permissions = config.get("permissions")
         permissions: dict[str, str] | None = None
+        raw_permissions = config.get("permissions")
         if raw_permissions is not None:
             if not isinstance(raw_permissions, dict):
                 raise ConfigError(f"{key}.permissions must be a mapping")
             permissions = {str(k): str(v) for k, v in raw_permissions.items()}
 
-        # Parse repositories (optional)
-        raw_repositories = config.get("repositories")
         repositories: tuple[str, ...] | None = None
+        raw_repositories = config.get("repositories")
         if raw_repositories is not None:
             if not isinstance(raw_repositories, list):
                 raise ConfigError(f"{key}.repositories must be a list")
             repositories = tuple(str(r) for r in raw_repositories)
+
+        ga_overrides = {}
+        if raw_allow_foreign is not None:
+            ga_overrides["allow_foreign_credentials"] = bool(raw_allow_foreign)
+        if base_url:
+            ga_overrides["base_url"] = base_url
+        if permissions is not None:
+            ga_overrides["permissions"] = permissions
+        if repositories is not None:
+            ga_overrides["repositories"] = repositories
 
         result[name] = GitHubAppCredential(
             app_id=app_id,
             private_key=private_key,
             installation_id=installation_id,
             scopes=scopes,
-            allow_foreign_credentials=allow_foreign,
-            base_url=base_url,
-            permissions=permissions,
-            repositories=repositories,
+            **ga_overrides,
         )
 
     return result

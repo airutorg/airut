@@ -53,7 +53,6 @@ class SlackChannelConfig(ChannelConfig):
         ),
     )
     authorized: tuple[dict[str, str | bool], ...] = field(
-        default=(),
         metadata=meta(
             "Authorization rules (first match grants access)",
             Scope.REPO,

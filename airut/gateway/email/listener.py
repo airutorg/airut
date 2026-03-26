@@ -134,6 +134,7 @@ class EmailListener:
 
                     self.connection.authenticate("XOAUTH2", _xoauth2_callback)
                 else:
+                    assert self.config.password is not None
                     self.connection.login(
                         self.config.username, self.config.password
                     )
