@@ -43,7 +43,8 @@ Airut and reviewing the resulting PRs.
   agents push PRs for human review.
 - **Email and Slack channels**: Authenticate via DMARC (email) or workspace
   membership (Slack), with sender authorization per repo.
-- **Web dashboard**: Monitor running tasks and view network activity logs.
+- **Web dashboard**: Monitor running tasks, view network activity logs, and
+  configure the server.
 
 ## Why Email and Slack?
 
@@ -101,6 +102,35 @@ Airut-managed repository that demonstrates the message-to-deploy workflow with
 Cloudflare Pages. Its `.airut/` directory and `CLAUDE.md` serve as a good
 starting point for onboarding your own projects.
 
+### Screenshots
+
+<p align="center">
+  <strong>Dashboard — task monitoring</strong><br>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://screenshots.airut.org/dashboard-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://screenshots.airut.org/dashboard-light.png">
+    <img src="https://screenshots.airut.org/dashboard-light.png" alt="Dashboard showing running and completed tasks" width="640">
+  </picture>
+</p>
+
+<p align="center">
+  <strong>Config editor — server settings</strong><br>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://screenshots.airut.org/config-global-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://screenshots.airut.org/config-global-light.png">
+    <img src="https://screenshots.airut.org/config-global-light.png" alt="Config editor showing global server settings" width="640">
+  </picture>
+</p>
+
+<p align="center">
+  <strong>Network log — live request tracking</strong><br>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://screenshots.airut.org/network-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://screenshots.airut.org/network-light.png">
+    <img src="https://screenshots.airut.org/network-light.png" alt="Network log showing allowed and blocked requests during task execution" width="640">
+  </picture>
+</p>
+
 ## Documentation
 
 ### High-Level Documentation
@@ -150,28 +180,30 @@ starting point for onboarding your own projects.
   - **Email**: Dedicated email account with IMAP/SMTP access
   - **Slack**: Slack workspace with app installation permissions
 
-### Install and Configure
+### Install
 
 ```bash
 uv tool install airut          # Install from PyPI
-airut init                     # Generate config at ~/.config/airut/airut.yaml
+airut check                    # Validate system dependencies
+airut install-service          # Install and start systemd service
 ```
 
-Edit `~/.config/airut/airut.yaml` with your channel credentials, repo, and
-secrets. See [deployment.md](doc/deployment.md) for the full guide including
-channel setup, secrets management, and git credentials.
+### Configure
+
+Open `http://localhost:5200` in your browser. Click **Configure** to open the
+config editor. From there you can add repositories, set up channels, configure
+credentials, and adjust resource limits.
+
+See [deployment.md](doc/deployment.md) for the full guide including channel
+setup, secrets management, and git credentials.
 
 [Onboard your repository](doc/repo-onboarding.md) by creating the `.airut/`
-directory with `airut.yaml`, container Dockerfile, and network allowlist. Create
-or update `CLAUDE.md` with instructions for the message-to-PR workflow.
+directory with container Dockerfile, network allowlist, and `CLAUDE.md`
+instructions.
 
-### Deploy
-
-```bash
-airut check                    # Validate config and system dependencies
-airut install-service          # Install and start systemd service
-airut check                    # Verify everything is running
-```
+> **Alternative:** You can also edit `~/.config/airut/airut.yaml` directly. See
+> [`airut.example.yaml`](config/airut.example.yaml) for the full schema. Changes
+> are picked up automatically via file watching.
 
 ### Send Your First Message
 

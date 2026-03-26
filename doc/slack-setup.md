@@ -97,7 +97,12 @@ UI.
 
 ## Step 3: Configure Airut
 
-Add the Slack channel to your server config (`~/.config/airut/airut.yaml`):
+You can configure the Slack channel using the config editor in the dashboard
+(`http://localhost:5200` → **Configure**), or by editing
+`~/.config/airut/airut.yaml` directly. The field paths below (e.g.,
+`repos.<repo>.slack.bot_token`) match the labels shown in the config editor.
+
+Add the Slack channel to your server config:
 
 ```yaml
 repos:

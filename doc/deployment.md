@@ -14,10 +14,10 @@ regular user (not root) using systemd user services and rootless Podman.
     - [GitHub App (Recommended)](#github-app-recommended)
     - [Alternative: Dedicated Machine User with Classic PAT](#alternative-dedicated-machine-user-with-classic-pat)
   - [5. Enable Linger](#5-enable-linger)
-  - [6. Configure Airut](#6-configure-airut)
+  - [6. Configure Airut (Optional Before Install)](#6-configure-airut-optional-before-install)
   - [7. Validate Configuration](#7-validate-configuration)
   - [8. Install Services](#8-install-services)
-  - [9. Verify Installation](#9-verify-installation)
+  - [9. Verify and Configure](#9-verify-and-configure)
 - [Configuration](#configuration)
   - [Server Config (`~/.config/airut/airut.yaml`)](#server-config-configairutairutyaml)
   - [Secrets](#secrets)
@@ -204,13 +204,15 @@ Systemd user services require linger to run without an active login session:
 sudo loginctl enable-linger $USER
 ```
 
-### 6. Configure Airut
+### 6. Configure Airut (Optional Before Install)
 
-Configuration is optional for getting started. If no config file exists, Airut
-starts with defaults (dashboard enabled, no repos). You can configure repos
-later via the dashboard config editor or by creating the config file manually.
+Configuration is optional at this stage. If no config file exists, Airut starts
+with defaults (dashboard enabled, no repos). After installing the service (step
+8), you can configure everything via the web config editor (step 9) — which is
+the recommended approach.
 
-To create an initial configuration template:
+If you prefer to configure before starting the service, you can edit
+`~/.config/airut/airut.yaml` directly. To create an initial template:
 
 ```bash
 airut init  # optional — creates a stub config at ~/.config/airut/airut.yaml
@@ -219,39 +221,21 @@ airut init  # optional — creates a stub config at ~/.config/airut/airut.yaml
 For all available options, see the
 [documented example](https://github.com/airutorg/airut/blob/main/config/airut.example.yaml).
 
-Edit `~/.config/airut/airut.yaml` with your settings. Secrets can be specified
-inline or loaded from environment variables. The inline approach keeps
-everything in one file:
+Secrets can be specified inline or loaded from environment variables using
+`!env` tags:
 
 ```yaml
 repos:
   my-project:
-    secrets:
-      ANTHROPIC_API_KEY: sk-ant-...  # Inline secret
-      GH_TOKEN: ghp_...
-    email:
-      password: your-email-password  # Inline secret
-    slack:
-      bot_token: xoxb-...
-      app_token: xapp-...
-```
-
-Alternatively, use `!env` tags to load secrets from environment variables:
-
-```yaml
-repos:
-  my-project:
+    git:
+      repo_url: https://github.com/your-org/repo.git
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
-      GH_TOKEN: !env GH_TOKEN
     email:
-      password: !env EMAIL_PASSWORD  # From environment
-    slack:
-      bot_token: !env SLACK_BOT_TOKEN
-      app_token: !env SLACK_APP_TOKEN
+      password: !env EMAIL_PASSWORD
 ```
 
-Environment variables can be set in `~/.config/airut/.env` (next to
+When using environment variables, set them in `~/.config/airut/.env` (next to
 `airut.yaml`), which is automatically loaded by the service:
 
 ```bash
@@ -269,7 +253,7 @@ When running `airut` interactively, a `.env` file in the current working
 directory is also loaded (after the XDG file). Variables already set by the XDG
 `.env` are not overwritten.
 
-See [Configuration](#configuration) for full details.
+See [Configuration](#configuration) for the full YAML schema reference.
 
 **Important:** The target repository must also be configured for Airut. See
 [repo-onboarding.md](repo-onboarding.md) for setting up the `.airut/` directory,
@@ -292,7 +276,7 @@ airut install-service
 
 This installs and starts `airut.service` — the gateway service.
 
-### 9. Verify Installation
+### 9. Verify and Configure
 
 ```bash
 # Check service status
@@ -302,7 +286,34 @@ systemctl --user status airut
 journalctl --user -u airut -f
 ```
 
+Open `http://localhost:5200` to access the dashboard. Click **Configure** in the
+top bar to open the config editor.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://screenshots.airut.org/config-global-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://screenshots.airut.org/config-global-light.png">
+    <img src="https://screenshots.airut.org/config-global-light.png" alt="Config editor — global settings" width="640">
+  </picture>
+</p>
+
+The config editor lets you add repositories, set up email and Slack channels,
+manage credentials, and adjust resource limits. Changes are saved to
+`~/.config/airut/airut.yaml` and reloaded automatically.
+
+Each field supports multiple source types — enter values directly (literal), or
+reference environment variables (`!env`) and shared variables (`!var`) using the
+source selector on each field. This is especially useful for secrets: set them
+in `~/.config/airut/.env` and reference them with the Environment source type.
+
+Click **Review & Save** to preview a diff of your changes before applying.
+
 ## Configuration
+
+All settings described below can be managed via the [config editor](#dashboard)
+in the web dashboard. The YAML field paths shown here (e.g.,
+`repos.<repo>.email.imap_server`) correspond to the field labels in the editor.
+This section serves as a reference for the full schema.
 
 ### Server Config (`~/.config/airut/airut.yaml`)
 
@@ -590,7 +601,12 @@ The update channel is determined by how the tool was originally installed:
 
 ## Dashboard
 
-The dashboard provides task monitoring at `http://localhost:5200`.
+The dashboard at `http://localhost:5200` provides:
+
+- **Task monitoring** — view running, queued, and completed tasks with live
+  status updates
+- **Config editor** — add repositories, configure channels and credentials, and
+  adjust server settings from the browser (click **Configure** in the top bar)
 
 ### Exposing Externally
 
@@ -721,6 +737,9 @@ rm -rf ~/.local/state/airut/my-project/conversations/
 
 **Token expired or credentials invalid:**
 
+Update credentials via the config editor at `http://localhost:5200` →
+**Configure**, or edit the files directly:
+
 ```bash
 # Update credentials in .env
 nano ~/.config/airut/.env
@@ -728,7 +747,7 @@ nano ~/.config/airut/.env
 # Or update config directly
 nano ~/.config/airut/airut.yaml
 
-# Restart service to pick up changes
+# Restart service to pick up changes (automatic if using config editor)
 systemctl --user restart airut
 ```
 
