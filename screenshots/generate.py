@@ -9,8 +9,8 @@
 Starts a dashboard server with rich mock data, then uses Playwright to
 capture screenshots of each page in both light and dark color schemes.
 
-Playwright renders at 3840x2160 (1920x1080 viewport at 2x device scale),
-then ImageMagick downscales to 1920x1080 (main) and 480x270 (thumbnail).
+Playwright renders at 2560x1800 (1280x900 viewport at 2x device scale),
+then ImageMagick downscales to 1280x900 (main) and 320x225 (thumbnail).
 
 Usage:
     uv run --project screenshots python screenshots/generate.py
@@ -53,13 +53,13 @@ PAGES: list[tuple[str, str]] = [
 SCHEMES = ("light", "dark")
 
 # Playwright renders at 2x the viewport for high-fidelity capture.
-# Raw output is 3840x2160, then downscaled via ImageMagick.
-VIEWPORT = {"width": 1920, "height": 1080}
+# Raw output is 2560x1800, then downscaled via ImageMagick.
+VIEWPORT = {"width": 1280, "height": 900}
 DEVICE_SCALE_FACTOR = 2
 
 # Final output sizes after ImageMagick downscaling.
-MAIN_SIZE = (1920, 1080)
-THUMB_SIZE = (480, 270)
+MAIN_SIZE = (1280, 900)
+THUMB_SIZE = (320, 225)
 
 
 def resolve_url(base: str, template: str, ids: dict[str, str]) -> str:
@@ -157,7 +157,7 @@ def generate_screenshots(
     """Generate all screenshots.
 
     Captures at full resolution via Playwright, then downscales with
-    ImageMagick to produce main (1920x1080) and thumbnail (480x270) variants.
+    ImageMagick to produce main (1280x900) and thumbnail (320x225) variants.
 
     Args:
         dashboard: Running mock dashboard server.
