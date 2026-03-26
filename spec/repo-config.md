@@ -3,8 +3,7 @@
 All per-repo configuration lives in the **server config**
 (`~/.config/airut/airut.yaml`). There is no repo-side `airut.yaml` for the
 gateway. The server config is the single source of truth for model, effort,
-resource limits, container environment, network sandbox toggle, and all
-credential pools.
+resource limits, network sandbox toggle, and credential pools.
 
 Repository-side files that remain in `.airut/`:
 

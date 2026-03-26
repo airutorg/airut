@@ -133,11 +133,10 @@ the dashboard config editor.
 
 ## Repo Configuration
 
-All per-repo configuration (model, effort, resource limits, container env,
-network, credential pools) lives in the server config under `repos.<name>`.
-There is no repo-side `airut.yaml` for the gateway. Only
-`.airut/network-allowlist.yaml` and `.airut/container/Dockerfile` remain in the
-repository.
+All per-repo configuration (model, effort, resource limits, network, credential
+pools) lives in the server config under `repos.<name>`. There is no repo-side
+`airut.yaml` for the gateway. Only `.airut/network-allowlist.yaml` and
+`.airut/container/Dockerfile` remain in the repository.
 
 ## Storage Layout
 

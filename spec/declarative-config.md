@@ -394,10 +394,6 @@ handler:
 - `repos.*.git.repo_url` — git mirror target
 - `repos.*.email.*` — email channel credentials and settings
 - `repos.*.slack.*` — slack channel tokens and authorization
-- `repos.*.secrets` — credential pools
-- `repos.*.masked_secrets` — scoped credentials
-- `repos.*.signing_credentials` — AWS re-signing
-- `repos.*.github_app_credentials` — GitHub App tokens
 - `repos.*.network.sandbox_enabled` — proxy toggle
 
 ### `Scope.TASK` — Applied Per-Task

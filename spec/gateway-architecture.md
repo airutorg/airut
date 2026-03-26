@@ -526,11 +526,10 @@ in the dashboard's actions viewer (`/conversation/{id}/actions`).
 
 All configuration lives in the **server config** (`~/.config/airut/airut.yaml`).
 This includes deployment infrastructure, channel credentials, operator controls,
-per-repo settings (model, effort, resource limits, network sandbox toggle,
-container environment), and all credential pools. Values use `!env` tags to
-resolve from environment variables. A `.env` file is automatically loaded from
-`~/.config/airut/.env` (and from the working directory, if present) before
-resolving tags.
+per-repo settings (model, effort, resource limits, network sandbox toggle), and
+credential pools. Values use `!env` tags to resolve from environment variables.
+A `.env` file is automatically loaded from `~/.config/airut/.env` (and from the
+working directory, if present) before resolving tags.
 
 Repository-side files that remain in `.airut/`:
 
