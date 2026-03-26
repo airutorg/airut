@@ -28,7 +28,8 @@ You → Email/Slack → Airut → Claude Code (container) → PR → Reply → Y
   workflows where agents push PRs for human review.
 - **Email and Slack channels** — authenticate via DMARC (email) or workspace
   membership (Slack), with sender authorization per repo.
-- **Web dashboard** — monitor running tasks and view network activity logs.
+- **Web dashboard** — monitor running tasks, view network activity logs, and
+  configure the server — all from the browser.
 
 ## Quick Start
 
@@ -56,25 +57,25 @@ Or install the latest development version from main:
 uv tool install airut --from git+https://github.com/airutorg/airut.git
 ```
 
-### Configure
-
-```bash
-# Generate initial config at ~/.config/airut/airut.yaml
-airut init
-
-# Validate config and system dependencies
-airut check
-```
-
 ### Deploy
 
 ```bash
+# Validate system dependencies
+airut check
+
 # Install and start the systemd service
 airut install-service
-
-# Verify it's running
-airut check
 ```
+
+### Configure
+
+Open `http://localhost:5200` in your browser. Click **Configure** to open the
+config editor. Add repositories, set up channels, configure credentials, and
+adjust resource limits — all from the web UI.
+
+> You can also edit `~/.config/airut/airut.yaml` directly. See the
+> [documented example](https://github.com/airutorg/airut/blob/main/config/airut.example.yaml)
+> for the full schema.
 
 ### Update
 

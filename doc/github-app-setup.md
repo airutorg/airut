@@ -142,7 +142,9 @@ After installation, note the **Installation ID** from the URL:
 
 ## Step 5: Configure Airut
 
-Add the GitHub App credentials to your server configuration.
+Add the GitHub App credentials to your server configuration. You can use the
+config editor in the dashboard (`http://localhost:5200` → **Configure** → repo →
+**GitHub App Credentials**), or edit the files directly as shown below.
 
 **Environment file** (`~/.config/airut/.env`):
 

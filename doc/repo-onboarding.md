@@ -13,6 +13,8 @@ Code interaction via email and/or Slack.
   - [3. Create Container Dockerfile](#3-create-container-dockerfile)
   - [4. Write CLAUDE.md](#4-write-claudemd)
   - [5. Configure Server](#5-configure-server)
+    - [Using the Config Editor (Recommended)](#using-the-config-editor-recommended)
+    - [Manual Configuration (Alternative)](#manual-configuration-alternative)
   - [6. Set Up Branch Protection](#6-set-up-branch-protection)
   - [7. Set Up CI Sandbox (Recommended)](#7-set-up-ci-sandbox-recommended)
   - [8. Test the Setup](#8-test-the-setup)
@@ -214,9 +216,53 @@ can be used as inspiration.
 
 ### 5. Configure Server
 
-Add the repository to your Airut server config (`~/.config/airut/airut.yaml`).
-Configure at least one channel (email, Slack, or both). All per-repo settings
-(model, effort, resource limits, secrets, network sandbox) are configured here.
+Add the repository to your Airut server configuration. Configure at least one
+channel (email, Slack, or both). All per-repo settings (model, effort, resource
+limits, secrets, network sandbox) are configured here.
+
+#### Using the Config Editor (Recommended)
+
+Open the dashboard at `http://localhost:5200` and click **Configure**. Under the
+**Repositories** section, click **Add Repository** and fill in:
+
+1. **`repos.<repo>.git.repo_url`** — your repository URL (e.g.,
+   `https://github.com/your-org/your-repo.git`)
+2. **Channel settings** — click **Add Email Channel** or **Add Slack Channel**
+   to configure at least one channel:
+   - **Email**: Set `repos.<repo>.email.imap_server`, `smtp_server`, `username`,
+     `password`, `from`, `authorized_senders`, and `trusted_authserv_id`. See
+     [email-setup.md](email-setup.md) for details on each field. The email
+     account must be dedicated to this repository — Airut permanently deletes
+     messages after processing.
+   - **Slack**: Set `repos.<repo>.slack.bot_token`, `app_token`, and
+     `authorized` rules. See [slack-setup.md](slack-setup.md) for details.
+3. **Credentials** — under the repo's **Credentials** section:
+   - Add `ANTHROPIC_API_KEY` as a plain secret
+     (`repos.<repo>.secrets.ANTHROPIC_API_KEY`)
+   - Add `GH_TOKEN` as a GitHub App credential (recommended) or masked secret.
+     See [github-app-setup.md](github-app-setup.md) for the GitHub App setup
+     guide.
+
+For secrets, use the **Environment** source type on each field to reference
+variables from `~/.config/airut/.env` (e.g., set the source to
+`!env ANTHROPIC_API_KEY`). This keeps sensitive values out of the config file.
+
+Click **Review & Save** to preview changes and apply. The config is saved to
+`~/.config/airut/airut.yaml` and reloaded automatically — no service restart
+needed.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://screenshots.airut.org/config-repo-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://screenshots.airut.org/config-repo-light.png">
+    <img src="https://screenshots.airut.org/config-repo-light.png" alt="Config editor — repository settings" width="640">
+  </picture>
+</p>
+
+#### Manual Configuration (Alternative)
+
+You can also edit `~/.config/airut/airut.yaml` directly. The YAML field paths
+match the labels shown in the config editor.
 
 **Email channel** (see [email-setup.md](email-setup.md) for full guide):
 
@@ -331,7 +377,8 @@ GH_APP_INSTALLATION_ID=12345678
 # GH_TOKEN_YOUR_REPO=ghp_...
 ```
 
-Restart the service:
+If editing YAML directly, restart the service to pick up changes (or rely on the
+file watcher for automatic reload):
 
 ```bash
 systemctl --user restart airut

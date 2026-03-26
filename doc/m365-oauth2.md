@@ -143,7 +143,9 @@ Set-TransportConfig -SmtpClientAuthenticationDisabled $false
 
 ## Step 7: Configure Airut
 
-Add the OAuth2 credentials to `~/.config/airut/airut.yaml`:
+Add the OAuth2 credentials to your server configuration. You can use the config
+editor in the dashboard (`http://localhost:5200` → **Configure** → repo → email
+channel), or edit `~/.config/airut/airut.yaml` directly:
 
 ```yaml
 repos:

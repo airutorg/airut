@@ -84,7 +84,12 @@ You need an email account that supports IMAP and SMTP with
 
 ## Step 2: Configure Airut
 
-Add the email channel to your server config (`~/.config/airut/airut.yaml`):
+You can configure the email channel using the config editor in the dashboard
+(`http://localhost:5200` → **Configure**), or by editing
+`~/.config/airut/airut.yaml` directly. The field paths below (e.g.,
+`repos.<repo>.email.imap_server`) match the labels shown in the config editor.
+
+Add the email channel to your server config:
 
 ```yaml
 repos:

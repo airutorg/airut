@@ -48,7 +48,9 @@ for the real password only when requests target the Gerrit host.
 
 The Gerrit HTTP password and other credentials are configured in the server
 config under the repo's credential pools. Model, effort, resource limits, and
-network sandbox are also configured here (not in the repository):
+network sandbox are also configured here (not in the repository). You can use
+the config editor in the dashboard (`http://localhost:5200` → **Configure**) or
+edit `~/.config/airut/airut.yaml` directly:
 
 ```yaml
 repos:
