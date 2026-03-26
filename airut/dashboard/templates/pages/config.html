@@ -86,6 +86,13 @@
   {% endif %}
   {% endfor %}
 
+  {# Variables section #}
+  <h2 class="section-title">Variables</h2>
+  <div class="card">
+    <span class="cfg-help">Shared values referenced as variables in field values.</span>
+    {% include "components/config/vars.html" %}
+  </div>
+
   {# Repositories section #}
   <h2 class="section-title">Repositories</h2>
   {% if repos %}

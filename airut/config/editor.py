@@ -17,6 +17,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
 from airut.config.editor_schema import EditorFieldSchema, schema_for_editor
@@ -37,9 +38,11 @@ __all__ = [
     "collect_leaf_fields",
     "count_dict_field_changes",
     "diff_dict_field",
+    "find_var_references",
     "format_raw_value",
     "get_raw_value",
     "raw_values_equal",
+    "rename_var_references",
     "schema_for_editor",
     "value_source",
 ]
@@ -178,6 +181,99 @@ def count_dict_field_changes(
 ) -> int:
     """Count per-key differences in a dict-typed field."""
     return len(_iter_dict_diffs(buf_val, live_val))
+
+
+# ---------------------------------------------------------------------------
+# Variable cross-reference utilities
+# ---------------------------------------------------------------------------
+
+
+def _walk_var_refs(
+    raw: dict[str, Any],
+    visitor: Callable[[VarRef, Callable[[VarRef], None], str], None],
+) -> None:
+    """Walk *raw* (excluding ``vars:``) and call *visitor* on each ``VarRef``.
+
+    Args:
+        raw: Root raw config dict.
+        visitor: Called with ``(ref, replace_fn, path)`` for each ``VarRef``.
+            ``replace_fn`` accepts a new ``VarRef`` to replace the current one
+            in-place.
+    """
+
+    def _walk(
+        obj: Any,  # noqa: ANN401
+        prefix: str,
+    ) -> None:
+        if isinstance(obj, dict):
+            for key in list(obj.keys()):
+                val = obj[key]
+                path = f"{prefix}.{key}" if prefix else str(key)
+                if isinstance(val, VarRef):
+                    visitor(
+                        val,
+                        lambda v, _o=obj, _k=key: _o.__setitem__(_k, v),
+                        path,
+                    )
+                elif isinstance(val, (dict, list)):
+                    _walk(val, path)
+        elif isinstance(obj, list):
+            for i, val in enumerate(obj):
+                path = f"{prefix}[{i}]"
+                if isinstance(val, VarRef):
+                    visitor(
+                        val, lambda v, _o=obj, _i=i: _o.__setitem__(_i, v), path
+                    )
+                elif isinstance(val, (dict, list)):
+                    _walk(val, path)
+
+    for key, val in raw.items():
+        if key == "vars":
+            continue
+        if isinstance(val, VarRef):
+            visitor(val, lambda v, _k=key: raw.__setitem__(_k, v), key)
+        elif isinstance(val, (dict, list)):
+            _walk(val, key)
+
+
+def find_var_references(raw: dict[str, Any]) -> dict[str, list[str]]:
+    """Walk the raw dict and find all ``VarRef`` objects.
+
+    Returns a mapping of ``{var_name: [dot-paths that reference it]}``.
+    The ``vars:`` section itself is excluded from the scan.
+    """
+    refs: dict[str, list[str]] = {}
+
+    def _collect(
+        ref: VarRef, _replace: Callable[[VarRef], None], path: str
+    ) -> None:
+        refs.setdefault(ref.var_name, []).append(path)
+
+    _walk_var_refs(raw, _collect)
+    return refs
+
+
+def rename_var_references(
+    raw: dict[str, Any], old_name: str, new_name: str
+) -> int:
+    """Rename all ``VarRef`` objects referencing *old_name* to *new_name*.
+
+    The ``vars:`` section itself is excluded.
+
+    Returns the number of references updated.
+    """
+    count = 0
+
+    def _rename(
+        ref: VarRef, replace: Callable[[VarRef], None], _path: str
+    ) -> None:
+        nonlocal count
+        if ref.var_name == old_name:
+            replace(VarRef(new_name))
+            count += 1
+
+    _walk_var_refs(raw, _rename)
+    return count
 
 
 # ---------------------------------------------------------------------------
