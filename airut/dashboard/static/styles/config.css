@@ -179,7 +179,7 @@
   border: 1px solid var(--border);
   border-radius: 4px;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-primary);
   background: var(--bg-surface);
   box-sizing: border-box;
@@ -396,7 +396,7 @@ select.cfg-input {
   gap: 6px;
   margin-bottom: 4px;
 }
-select.cfg-tagged-type { max-width: 400px; flex-shrink: 0; }
+select.cfg-tagged-type { max-width: 200px; flex-shrink: 0; }
 .cfg-tagged-value { flex: 1; }
 .cfg-tagged-placeholder { flex: 1; }
 .cfg-tagged-item .cfg-list-remove { margin-left: auto; }
