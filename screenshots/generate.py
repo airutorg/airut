@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import struct
 import sys
 import tempfile
 from pathlib import Path
@@ -133,15 +134,40 @@ def generate_screenshots(
                 output_path = output_dir / f"{name}-{scheme}.png"
                 logger.info("Capturing %s (%s)", name, scheme)
                 capture_page(page, url, output_path)
+                w, h = _png_dimensions(output_path)
                 generated.append(output_path)
-                logger.info("  -> %s", output_path)
+                logger.info("  -> %s (%dx%d)", output_path, w, h)
 
             context.close()
 
         browser.close()
 
+    # Verify all screenshots have identical dimensions.
+    expected_w = VIEWPORT["width"] * DEVICE_SCALE_FACTOR
+    expected_h = VIEWPORT["height"] * DEVICE_SCALE_FACTOR
+    for path in generated:
+        w, h = _png_dimensions(path)
+        if w != expected_w or h != expected_h:
+            logger.warning(
+                "DIMENSION MISMATCH: %s is %dx%d, expected %dx%d",
+                path.name,
+                w,
+                h,
+                expected_w,
+                expected_h,
+            )
+
     generate_index(generated, output_dir)
     return generated
+
+
+def _png_dimensions(path: Path) -> tuple[int, int]:
+    """Read width and height from a PNG file's IHDR chunk."""
+    with path.open("rb") as f:
+        # Skip 8-byte PNG signature, 4-byte chunk length, 4-byte chunk type
+        f.seek(16)
+        width, height = struct.unpack(">II", f.read(8))
+    return width, height
 
 
 def generate_index(files: list[Path], output_dir: Path) -> None:
