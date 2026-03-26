@@ -32,7 +32,7 @@
               hx-patch="/api/config/field"
               hx-vals='{"path":"{{ f.path }}","source":"env","value":"{{ display_value if current_source == 'env' else '' }}"}'
               hx-headers='{"X-Requested-With":"XMLHttpRequest"}'>
-        !env
+        Env
       </button>
       {% endif %}
       {% if f.var_eligible %}
@@ -40,7 +40,7 @@
               hx-patch="/api/config/field"
               hx-vals='{"path":"{{ f.path }}","source":"var","value":"{{ display_value if current_source == 'var' else '' }}"}'
               hx-headers='{"X-Requested-With":"XMLHttpRequest"}'>
-        !var
+        Var
       </button>
       {% endif %}
     </div>
