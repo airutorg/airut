@@ -238,6 +238,7 @@ class EmailResponder:
 
                         server.auth("XOAUTH2", _xoauth2_authobject)
                     else:
+                        assert self.config.password is not None
                         server.login(
                             self.config.username,
                             self.config.password,
