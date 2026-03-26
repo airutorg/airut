@@ -109,8 +109,24 @@
       </button>
     </div>
     {% for f in email_schema %}
+    {% if not f.name.startswith('microsoft_oauth2_') %}
     {% include "components/config/field.html" %}
+    {% endif %}
     {% endfor %}
+
+    <div class="cfg-subsection">
+      <div class="cfg-subsection-header">Microsoft 365 OAuth2</div>
+      <p class="cfg-subsection-hint">
+        OAuth2 client credentials for Microsoft 365 mailboxes (Exchange Online).
+        Required when Basic Authentication is disabled.
+        Refer to the Airut documentation for setup details.
+      </p>
+      {% for f in email_schema %}
+      {% if f.name.startswith('microsoft_oauth2_') %}
+      {% include "components/config/field.html" %}
+      {% endif %}
+      {% endfor %}
+    </div>
   </div>
   {% endif %}
 
