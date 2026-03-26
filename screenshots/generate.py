@@ -9,6 +9,9 @@
 Starts a dashboard server with rich mock data, then uses Playwright to
 capture screenshots of each page in both light and dark color schemes.
 
+Playwright renders at 3840x2160 (1920x1080 viewport at 2x device scale),
+then ImageMagick downscales to 1920x1080 (main) and 480x270 (thumbnail).
+
 Usage:
     uv run --project screenshots python screenshots/generate.py
     uv run --project screenshots python screenshots/generate.py \
@@ -20,6 +23,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import struct
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -46,10 +51,14 @@ PAGES: list[tuple[str, str]] = [
 
 SCHEMES = ("light", "dark")
 
-# Viewport dimensions matching typical documentation screenshots.
-# device_scale_factor=2 produces Retina-quality output.
-VIEWPORT = {"width": 1280, "height": 900}
+# Playwright renders at 2x the viewport for high-fidelity capture.
+# Raw output is 3840x2160, then downscaled via ImageMagick.
+VIEWPORT = {"width": 1920, "height": 1080}
 DEVICE_SCALE_FACTOR = 2
+
+# Final output sizes after ImageMagick downscaling.
+MAIN_SIZE = (1920, 1080)
+THUMB_SIZE = (480, 270)
 
 
 def resolve_url(base: str, template: str, ids: dict[str, str]) -> str:
@@ -92,6 +101,40 @@ def capture_page(
     page.screenshot(path=str(output_path))
 
 
+def _png_dimensions(path: Path) -> tuple[int, int]:
+    """Read width and height from a PNG file's IHDR chunk."""
+    with path.open("rb") as f:
+        # Skip 8-byte PNG signature, 4-byte chunk length, 4-byte chunk type
+        f.seek(16)
+        width, height = struct.unpack(">II", f.read(8))
+    return width, height
+
+
+def _downscale(src: Path, dst: Path, width: int, height: int) -> None:
+    """Downscale an image using ImageMagick with Lanczos filtering.
+
+    Args:
+        src: Source image path.
+        dst: Destination image path.
+        width: Target width in pixels.
+        height: Target height in pixels.
+    """
+    subprocess.run(
+        [
+            "magick",
+            str(src),
+            "-filter",
+            "Lanczos",
+            "-resize",
+            f"{width}x{height}!",
+            "-strip",
+            str(dst),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
 def generate_screenshots(
     dashboard: MockDashboard,
     output_dir: Path,
@@ -101,6 +144,9 @@ def generate_screenshots(
 ) -> list[Path]:
     """Generate all screenshots.
 
+    Captures at full resolution via Playwright, then downscales with
+    ImageMagick to produce main (1920x1080) and thumbnail (480x270) variants.
+
     Args:
         dashboard: Running mock dashboard server.
         output_dir: Directory to save screenshots.
@@ -108,14 +154,14 @@ def generate_screenshots(
         pages: Pages to capture (defaults to PAGES).
 
     Returns:
-        List of generated screenshot file paths.
+        List of generated screenshot file paths (main + thumbnails).
     """
     if pages is None:
         pages = PAGES
 
     output_dir.mkdir(parents=True, exist_ok=True)
     base_url = f"http://127.0.0.1:{dashboard.port}"
-    generated: list[Path] = []
+    raw_paths: list[tuple[str, str, Path]] = []
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
@@ -130,15 +176,50 @@ def generate_screenshots(
 
             for name, url_template in pages:
                 url = resolve_url(base_url, url_template, dashboard.ids)
-                output_path = output_dir / f"{name}-{scheme}.png"
+                raw_path = output_dir / f"{name}-{scheme}-raw.png"
                 logger.info("Capturing %s (%s)", name, scheme)
-                capture_page(page, url, output_path)
-                generated.append(output_path)
-                logger.info("  -> %s", output_path)
+                capture_page(page, url, raw_path)
+                w, h = _png_dimensions(raw_path)
+                logger.info("  -> raw %dx%d", w, h)
+                raw_paths.append((name, scheme, raw_path))
 
             context.close()
 
         browser.close()
+
+    # Downscale raw captures to main and thumbnail sizes.
+    generated: list[Path] = []
+    main_w, main_h = MAIN_SIZE
+    thumb_w, thumb_h = THUMB_SIZE
+
+    mismatches: list[str] = []
+
+    for name, scheme, raw_path in raw_paths:
+        main_path = output_dir / f"{name}-{scheme}.png"
+        thumb_path = output_dir / f"{name}-{scheme}-thumb.png"
+
+        logger.info("Downscaling %s (%s)", name, scheme)
+        _downscale(raw_path, main_path, main_w, main_h)
+        _downscale(raw_path, thumb_path, thumb_w, thumb_h)
+
+        raw_path.unlink()
+
+        for path, exp_w, exp_h in [
+            (main_path, main_w, main_h),
+            (thumb_path, thumb_w, thumb_h),
+        ]:
+            w, h = _png_dimensions(path)
+            logger.info("  -> %s (%dx%d)", path.name, w, h)
+            if w != exp_w or h != exp_h:
+                mismatches.append(
+                    f"{path.name}: {w}x{h} (expected {exp_w}x{exp_h})"
+                )
+            generated.append(path)
+
+    if mismatches:
+        for msg in mismatches:
+            logger.error("DIMENSION MISMATCH: %s", msg)
+        raise RuntimeError(f"Dimension mismatches in {len(mismatches)} file(s)")
 
     generate_index(generated, output_dir)
     return generated
