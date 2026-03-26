@@ -339,7 +339,7 @@ select.cfg-input {
   gap: 6px;
   margin-bottom: 4px;
 }
-.cfg-tagged-type { max-width: 220px; flex-shrink: 0; }
+select.cfg-tagged-type { max-width: 400px; flex-shrink: 0; }
 .cfg-tagged-value { flex: 1; }
 .cfg-tagged-placeholder { flex: 1; }
 
