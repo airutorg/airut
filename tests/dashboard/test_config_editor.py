@@ -3574,6 +3574,28 @@ class TestCredentialDiff:
         assert "secrets.TOKEN_A" in html
         assert "(1 entries)" not in html
 
+    def test_diff_shows_per_subfield_masked_secret_changes(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        """Masked secret diff shows per-sub-field changes, not '(N entries)'."""
+        cred_harness.client.get("/config")
+        # Modify the value sub-field of a masked secret
+        cred_harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.masked_secrets.GITHUB_TOKEN.value",
+                "source": "literal",
+                "value": "ghp_changed",
+            },
+            headers=XHR,
+        )
+        response = cred_harness.client.get("/api/config/diff")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        # Should show the sub-field path, not "(N entries)"
+        assert "masked_secrets.GITHUB_TOKEN.value" in html
+        assert "entries)" not in html
+
     def test_credential_repo_page_no_placeholder(
         self, cred_harness: ConfigEditorHarness
     ) -> None:
@@ -3686,6 +3708,198 @@ class TestDiffDictField:
             secret=True,
         )
         changes = diff_dict_field(fs, {"K": "v"}, {"K": "v"})
+        assert changes == []
+
+    def test_diff_keyed_collection_added_key(self) -> None:
+        """Keyed collection diff expands sub-fields, not '(N entries)'."""
+        from airut.config.editor import (
+            MISSING,
+            EditorFieldSchema,
+            diff_dict_field,
+        )
+
+        item_fields = [
+            EditorFieldSchema(
+                name="value",
+                path="value",
+                type_tag="scalar",
+                python_type="str",
+                default=MISSING,
+                required=True,
+                doc="Secret value",
+                scope="repo",
+                secret=True,
+            ),
+            EditorFieldSchema(
+                name="scopes",
+                path="scopes",
+                type_tag="list_str",
+                python_type="list[str]",
+                default=[],
+                required=False,
+                doc="Host patterns",
+                scope="repo",
+                secret=False,
+            ),
+        ]
+        fs = EditorFieldSchema(
+            name="masked_secrets",
+            path="repos.test.masked_secrets",
+            type_tag="keyed_collection",
+            python_type="dict",
+            default=None,
+            required=False,
+            doc="Masked secrets",
+            scope="repo",
+            secret=False,
+            item_fields=item_fields,
+        )
+        changes = diff_dict_field(
+            fs,
+            {"TOKEN": {"value": "ghp_abc", "scopes": ["github.com"]}},
+            MISSING,
+        )
+        fields = {c["field"] for c in changes}
+        assert "repos.test.masked_secrets.TOKEN.value" in fields
+        assert "repos.test.masked_secrets.TOKEN.scopes" in fields
+        # Should NOT contain the opaque summary
+        assert all("entries" not in c["new"] for c in changes)
+
+    def test_diff_keyed_collection_removed_key(self) -> None:
+        """Removing a keyed collection entry shows per-sub-field removal."""
+        from airut.config.editor import (
+            MISSING,
+            EditorFieldSchema,
+            diff_dict_field,
+        )
+
+        item_fields = [
+            EditorFieldSchema(
+                name="value",
+                path="value",
+                type_tag="scalar",
+                python_type="str",
+                default=MISSING,
+                required=True,
+                doc="Secret value",
+                scope="repo",
+                secret=True,
+            ),
+        ]
+        fs = EditorFieldSchema(
+            name="masked_secrets",
+            path="repos.test.masked_secrets",
+            type_tag="keyed_collection",
+            python_type="dict",
+            default=None,
+            required=False,
+            doc="Masked secrets",
+            scope="repo",
+            secret=False,
+            item_fields=item_fields,
+        )
+        changes = diff_dict_field(
+            fs,
+            {},
+            {"TOKEN": {"value": "ghp_old"}},
+        )
+        assert len(changes) == 1
+        assert changes[0]["field"] == "repos.test.masked_secrets.TOKEN.value"
+        assert changes[0]["old"] == "ghp_old"
+        assert changes[0]["new"] == "(not set)"
+
+    def test_diff_keyed_collection_changed_subfield(self) -> None:
+        """Changed sub-field shows only that field."""
+        from airut.config.editor import (
+            MISSING,
+            EditorFieldSchema,
+            diff_dict_field,
+        )
+
+        item_fields = [
+            EditorFieldSchema(
+                name="value",
+                path="value",
+                type_tag="scalar",
+                python_type="str",
+                default=MISSING,
+                required=True,
+                doc="Secret value",
+                scope="repo",
+                secret=True,
+            ),
+            EditorFieldSchema(
+                name="scopes",
+                path="scopes",
+                type_tag="list_str",
+                python_type="list[str]",
+                default=[],
+                required=False,
+                doc="Host patterns",
+                scope="repo",
+                secret=False,
+            ),
+        ]
+        fs = EditorFieldSchema(
+            name="masked_secrets",
+            path="repos.test.masked_secrets",
+            type_tag="keyed_collection",
+            python_type="dict",
+            default=None,
+            required=False,
+            doc="Masked secrets",
+            scope="repo",
+            secret=False,
+            item_fields=item_fields,
+        )
+        changes = diff_dict_field(
+            fs,
+            {"TOKEN": {"value": "ghp_new", "scopes": ["github.com"]}},
+            {"TOKEN": {"value": "ghp_old", "scopes": ["github.com"]}},
+        )
+        # Only value changed, scopes unchanged
+        assert len(changes) == 1
+        assert changes[0]["field"] == "repos.test.masked_secrets.TOKEN.value"
+        assert changes[0]["old"] == "ghp_old"
+        assert changes[0]["new"] == "ghp_new"
+
+    def test_diff_keyed_collection_no_changes(self) -> None:
+        """Identical keyed collection entries produce no diff rows."""
+        from airut.config.editor import (
+            EditorFieldSchema,
+            diff_dict_field,
+        )
+
+        item_fields = [
+            EditorFieldSchema(
+                name="value",
+                path="value",
+                type_tag="scalar",
+                python_type="str",
+                default=None,
+                required=True,
+                doc="Value",
+                scope="repo",
+                secret=True,
+            ),
+        ]
+        fs = EditorFieldSchema(
+            name="masked_secrets",
+            path="repos.test.masked_secrets",
+            type_tag="keyed_collection",
+            python_type="dict",
+            default=None,
+            required=False,
+            doc="Masked secrets",
+            scope="repo",
+            secret=False,
+            item_fields=item_fields,
+        )
+        changes = diff_dict_field(
+            fs,
+            {"TOKEN": {"value": "same"}},
+            {"TOKEN": {"value": "same"}},
+        )
         assert changes == []
 
     def test_count_dict_field_changes(self) -> None:

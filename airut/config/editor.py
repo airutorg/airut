@@ -163,16 +163,67 @@ def diff_dict_field(
 
     Returns a list of change dicts with ``field``, ``scope``, ``old``,
     ``new`` keys — one per changed key.
+
+    For keyed collections with ``item_fields``, each key is further
+    expanded into per-sub-field diffs so the review dialog shows
+    individual field changes instead of an opaque ``(N entries)``
+    summary.
     """
-    return [
-        {
-            "field": f"{fs.path}.{key}",
-            "scope": fs.scope,
-            "old": format_raw_value(old),
-            "new": format_raw_value(new),
-        }
-        for key, old, new in _iter_dict_diffs(buf_val, live_val)
-    ]
+    result: list[dict[str, Any]] = []
+    for key, old, new in _iter_dict_diffs(buf_val, live_val):
+        if fs.item_fields:
+            _expand_item_fields(
+                result, f"{fs.path}.{key}", fs.scope, fs.item_fields, old, new
+            )
+        else:
+            result.append(
+                {
+                    "field": f"{fs.path}.{key}",
+                    "scope": fs.scope,
+                    "old": format_raw_value(old),
+                    "new": format_raw_value(new),
+                }
+            )
+    return result
+
+
+def _expand_item_fields(
+    result: list[dict[str, Any]],
+    prefix: str,
+    scope: str,
+    item_fields: list[EditorFieldSchema],
+    old: object,
+    new: object,
+) -> None:
+    """Expand a keyed collection item into per-sub-field diff entries.
+
+    Compares each leaf field of the item and emits one change dict per
+    field that differs.  If both sides are ``MISSING`` (shouldn't
+    happen) or both are non-dict, falls back to a single summary row.
+    """
+    old_dict: dict[str, Any] = (
+        cast("dict[str, Any]", old) if isinstance(old, dict) else {}
+    )
+    new_dict: dict[str, Any] = (
+        cast("dict[str, Any]", new) if isinstance(new, dict) else {}
+    )
+
+    for leaf in collect_leaf_fields(item_fields):
+        old_v = (
+            old_dict.get(leaf.name, MISSING) if old is not MISSING else MISSING
+        )
+        new_v = (
+            new_dict.get(leaf.name, MISSING) if new is not MISSING else MISSING
+        )
+        if not raw_values_equal(old_v, new_v):
+            result.append(
+                {
+                    "field": f"{prefix}.{leaf.name}",
+                    "scope": scope,
+                    "old": format_raw_value(old_v),
+                    "new": format_raw_value(new_v),
+                }
+            )
 
 
 def count_dict_field_changes(
