@@ -12,6 +12,7 @@ auto-escaping, and the ``render_template`` helper used by handlers.
 
 import dataclasses
 import hashlib
+import re
 from collections.abc import Callable
 from importlib.resources import files
 from pathlib import Path
@@ -164,13 +165,53 @@ def create_jinja_env() -> Environment:
     globals_dict["static_url"] = static_url
     globals_dict["MISSING"] = dataclasses.MISSING
 
-    # Config editor helper — lazy import to avoid circular deps
+    # Config editor helpers — lazy import to avoid circular deps
     def _value_source(value: object) -> tuple[str, object]:
         from airut.config.editor import value_source
 
         return value_source(value)
 
+    def _prefixed_field(field: object, prefix: str) -> object:
+        from airut.config.editor_schema import EditorFieldSchema
+
+        if not isinstance(field, EditorFieldSchema):
+            raise TypeError(f"Expected EditorFieldSchema, got {type(field)}")
+        new_path = f"{prefix}.{field.path}" if field.path else prefix
+        new_nested = None
+        if field.nested_fields:
+            new_nested = [
+                _prefixed_field(f, prefix) for f in field.nested_fields
+            ]
+        new_item_fields = None
+        if field.item_fields:
+            new_item_fields = [
+                _prefixed_field(f, prefix) for f in field.item_fields
+            ]
+        return dataclasses.replace(
+            field,
+            path=new_path,
+            nested_fields=new_nested,
+            item_fields=new_item_fields,
+        )
+
     globals_dict["value_source"] = _value_source
+    globals_dict["prefixed_field"] = _prefixed_field
+
+    # Filters
+    type_display_names: dict[str, str] = {
+        "MaskedSecret": "Masked Secret",
+        "SigningCredential": "Signing Credential",
+        "GitHubAppCredential": "GitHub App Credential",
+    }
+
+    def _humanize_type(name: str) -> str:
+        """Convert CamelCase type name to 'Human Readable' form."""
+        if name in type_display_names:
+            return type_display_names[name]
+        # Fallback: insert space before uppercase following lowercase
+        return re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", name)
+
+    env.filters["humanize_type"] = _humanize_type
 
     return env
 

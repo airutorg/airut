@@ -86,6 +86,12 @@
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  min-width: 0;
 }
 
 /* ---- Source selector ---- */
@@ -343,6 +349,78 @@ select.cfg-tagged-type { max-width: 400px; flex-shrink: 0; }
 .cfg-tagged-value { flex: 1; }
 .cfg-tagged-placeholder { flex: 1; }
 
+/* ---- Dict key-value widget ---- */
+.cfg-dict-items { margin: 8px 0; }
+.cfg-dict-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.cfg-dict-key {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  min-width: 100px;
+  flex-shrink: 0;
+}
+.cfg-dict-value { flex: 1; min-width: 150px; }
+.cfg-dict-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.cfg-source-sm { font-size: 10px; flex-shrink: 0; }
+
+/* ---- Keyed collection widget ---- */
+.cfg-collection-card {
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  margin: 8px 0;
+  background: var(--bg-surface);
+}
+.cfg-collection-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.cfg-collection-header::-webkit-details-marker { display: none; }
+.cfg-collection-header::before {
+  content: '\25B6';
+  font-size: 10px;
+  color: var(--text-tertiary);
+  transition: transform 0.15s;
+}
+details.cfg-collection-card[open] > .cfg-collection-header::before {
+  transform: rotate(90deg);
+}
+.cfg-collection-key {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.cfg-collection-type {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-left: auto;
+  margin-right: 8px;
+}
+.cfg-collection-body {
+  padding: 4px 12px 12px;
+  border-top: 1px solid var(--border-light);
+}
+.cfg-collection-body .cfg-label {
+  font-size: 12px;
+  font-weight: 500;
+}
+
 /* ---- Add channel buttons ---- */
 .cfg-add-channel {
   display: flex;
@@ -362,7 +440,14 @@ select.cfg-tagged-type { max-width: 400px; flex-shrink: 0; }
   .cfg-field-header {
     flex-wrap: wrap;
   }
+  .cfg-label {
+    max-width: 60vw;
+  }
   .cfg-input {
     max-width: 100%;
+  }
+  /* Prevent iOS Safari auto-zoom on focused inputs */
+  .cfg-input, select.cfg-input {
+    font-size: 16px;
   }
 }

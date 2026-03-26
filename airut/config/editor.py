@@ -17,7 +17,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from airut.config.editor_schema import EditorFieldSchema, schema_for_editor
 from airut.yaml_env import EnvVar, VarRef
@@ -33,7 +33,10 @@ __all__ = [
     "EditBuffer",
     "EditorFieldSchema",
     "InMemoryConfigSource",
+    "DICT_FIELD_TYPES",
     "collect_leaf_fields",
+    "count_dict_field_changes",
+    "diff_dict_field",
     "format_raw_value",
     "get_raw_value",
     "raw_values_equal",
@@ -100,6 +103,14 @@ def format_raw_value(value: object) -> str:
         return f"!var {value.var_name}"
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, dict):
+        if not value:
+            return "(empty)"
+        return f"({len(value)} entries)"
+    if isinstance(value, list):
+        if not value:
+            return "(empty list)"
+        return f"({len(value)} items)"
     return str(value)
 
 
@@ -114,6 +125,59 @@ def collect_leaf_fields(
         else:
             result.append(fs)
     return result
+
+
+# Dict field types that need per-key diff expansion.
+DICT_FIELD_TYPES = frozenset({"dict_str_str", "keyed_collection"})
+
+
+def _iter_dict_diffs(
+    buf_val: object,
+    live_val: object,
+) -> list[tuple[str, object, object]]:
+    """Yield (key, old_val, new_val) for changed keys between two dicts."""
+    buf_dict: dict[str, Any] = (
+        cast("dict[str, Any]", buf_val) if isinstance(buf_val, dict) else {}
+    )
+    live_dict: dict[str, Any] = (
+        cast("dict[str, Any]", live_val) if isinstance(live_val, dict) else {}
+    )
+    result: list[tuple[str, object, object]] = []
+    for key in sorted(set(buf_dict) | set(live_dict)):
+        old = live_dict[key] if key in live_dict else MISSING
+        new = buf_dict[key] if key in buf_dict else MISSING
+        if not raw_values_equal(old, new):
+            result.append((key, old, new))
+    return result
+
+
+def diff_dict_field(
+    fs: EditorFieldSchema,
+    buf_val: object,
+    live_val: object,
+) -> list[dict[str, Any]]:
+    """Expand a dict-typed field into per-key diff entries.
+
+    Returns a list of change dicts with ``field``, ``scope``, ``old``,
+    ``new`` keys — one per changed key.
+    """
+    return [
+        {
+            "field": f"{fs.path}.{key}",
+            "scope": fs.scope,
+            "old": format_raw_value(old),
+            "new": format_raw_value(new),
+        }
+        for key, old, new in _iter_dict_diffs(buf_val, live_val)
+    ]
+
+
+def count_dict_field_changes(
+    buf_val: object,
+    live_val: object,
+) -> int:
+    """Count per-key differences in a dict-typed field."""
+    return len(_iter_dict_diffs(buf_val, live_val))
 
 
 # ---------------------------------------------------------------------------

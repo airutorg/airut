@@ -7,12 +7,15 @@
 {% include "components/config/list_str.html" %}
 {% elif f.type_tag == 'tagged_union_list' %}
 {% include "components/config/tagged_union_list.html" %}
+{% elif f.type_tag == 'dict_str_str' %}
+{% include "components/config/dict_str_str.html" %}
+{% elif f.type_tag == 'keyed_collection' %}
+{% include "components/config/keyed_collection.html" %}
 {% else %}
-{# Phase 4+ widgets: dict_str_str, keyed_collection #}
 <div class="cfg-field">
   <div class="cfg-field-header">
     <span class="cfg-label">{{ f.path }}</span>
   </div>
-  <span class="cfg-help">{{ f.doc }} (editing not available yet)</span>
+  <span class="cfg-help">{{ f.doc }} (unsupported type: {{ f.type_tag }})</span>
 </div>
 {% endif %}

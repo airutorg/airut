@@ -156,9 +156,56 @@
   </div>
   {% endif %}
 
-  {# Credentials section (Phase 4 placeholder) #}
+  {# Credentials section #}
   <h2 class="cfg-section-title">Credentials</h2>
-  <div class="cfg-banner info">Credential editing will be available in a future update.</div>
+
+  {# Plain secrets (dict[str, str]) #}
+  {% for f in schema %}
+  {% if f.name == 'secrets' %}
+  <div class="card">
+    <div class="cfg-card-header">
+      <span class="cfg-card-title">Plain Secrets</span>
+    </div>
+    {% include "components/config/field.html" %}
+  </div>
+  {% endif %}
+  {% endfor %}
+
+  {# Masked secrets (keyed collection) #}
+  {% for f in schema %}
+  {% if f.name == 'masked_secrets' %}
+  <div class="card">
+    <div class="cfg-card-header">
+      <span class="cfg-card-title">Masked Secrets</span>
+    </div>
+    {% include "components/config/field.html" %}
+  </div>
+  {% endif %}
+  {% endfor %}
+
+  {# Signing credentials (keyed collection) #}
+  {% for f in schema %}
+  {% if f.name == 'signing_credentials' %}
+  <div class="card">
+    <div class="cfg-card-header">
+      <span class="cfg-card-title">Signing Credentials</span>
+    </div>
+    {% include "components/config/field.html" %}
+  </div>
+  {% endif %}
+  {% endfor %}
+
+  {# GitHub App credentials (keyed collection) #}
+  {% for f in schema %}
+  {% if f.name == 'github_app_credentials' %}
+  <div class="card">
+    <div class="cfg-card-header">
+      <span class="cfg-card-title">GitHub App Credentials</span>
+    </div>
+    {% include "components/config/field.html" %}
+  </div>
+  {% endif %}
+  {% endfor %}
 
   {# Remove repo #}
   <h2 class="cfg-section-title">Danger Zone</h2>
