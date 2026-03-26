@@ -664,10 +664,10 @@ class TestEditBufferValidate:
 
     def test_validate_failure(self) -> None:
         raw = _make_sample_raw()
-        # Remove all repos to trigger validation error
-        raw["repos"] = {}
+        # Remove required git.repo_url to trigger validation error
+        del raw["repos"]["test-repo"]["git"]["repo_url"]
         buf = EditBuffer(raw, generation=0)
-        with pytest.raises(Exception, match="At least one repo"):
+        with pytest.raises(Exception, match="repo_url"):
             buf.validate()
 
 

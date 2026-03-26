@@ -501,7 +501,7 @@ class GatewayService:
             r for r in repo_states.values() if r.status == RepoStatus.FAILED
         ]
 
-        if not live_repos:
+        if not live_repos and failed_repos:
             raise RuntimeError(
                 f"All {len(failed_repos)} repo(s) failed to initialize. "
                 "Check credentials, network connectivity, and configuration."
@@ -1717,8 +1717,23 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         config_path = args.config or get_config_path()
-        source = YamlConfigSource(config_path)
-        snapshot = ServerConfig.from_source(source)
+
+        # Ensure config directory exists so inotify watcher can monitor it
+        # for config files created later (e.g. via dashboard config editor).
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if config_path.exists():
+            source = YamlConfigSource(config_path)
+            snapshot = ServerConfig.from_source(source)
+        else:
+            logger.info(
+                "Config file not found: %s — using defaults "
+                "(dashboard enabled, no repos)",
+                config_path,
+            )
+            source = YamlConfigSource(config_path)
+            snapshot = ServerConfig.default()
+
         config = snapshot.value
     except (ValueError, Exception) as e:
         logger.critical("Configuration error: %s", e)

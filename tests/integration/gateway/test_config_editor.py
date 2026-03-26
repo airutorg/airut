@@ -346,7 +346,9 @@ class TestSave:
             assert dashboard is not None
             buf = dashboard._config_handlers._buffer
             assert buf is not None
-            buf._raw["repos"] = {}
+            # Make config invalid by removing required git.repo_url
+            repo_key = next(iter(buf._raw["repos"]))
+            del buf._raw["repos"][repo_key]["git"]["repo_url"]
             buf._dirty = True
 
             r = _post_form(client, "/api/config/save")

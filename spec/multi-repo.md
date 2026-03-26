@@ -125,7 +125,11 @@ At config load time:
   constraint.
 - **At least one channel per repo:** Each repo must have at least one channel
   block (`email:`, `slack:`, or both). Channel keys must match recognized types.
-- **At least one repo:** The `repos` mapping must have at least one entry.
+
+The `repos` mapping may be empty. When empty, the gateway starts in
+dashboard-only mode (no channels, no task processing). This allows first-time
+users to start the service without running `airut init` and configure repos via
+the dashboard config editor.
 
 ## Repo Configuration
 

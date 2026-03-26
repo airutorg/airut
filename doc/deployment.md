@@ -206,14 +206,17 @@ sudo loginctl enable-linger $USER
 
 ### 6. Configure Airut
 
-Create an initial configuration using the `init` command:
+Configuration is optional for getting started. If no config file exists, Airut
+starts with defaults (dashboard enabled, no repos). You can configure repos
+later via the dashboard config editor or by creating the config file manually.
+
+To create an initial configuration template:
 
 ```bash
-airut init
+airut init  # optional — creates a stub config at ~/.config/airut/airut.yaml
 ```
 
-This creates a stub config at `~/.config/airut/airut.yaml`. For all available
-options, see the
+For all available options, see the
 [documented example](https://github.com/airutorg/airut/blob/main/config/airut.example.yaml).
 
 Edit `~/.config/airut/airut.yaml` with your settings. Secrets can be specified

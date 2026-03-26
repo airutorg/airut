@@ -537,11 +537,17 @@ class TestHasVersionMismatch:
             assert _has_version_mismatch() is False
 
     def test_no_config_file(self, tmp_path: Path) -> None:
-        """Returns False when config missing."""
+        """Returns False when config missing (uses defaults)."""
         cfg = tmp_path / "nonexistent.yaml"
-        with patch(
-            "airut.cli.get_config_path",
-            return_value=cfg,
+        with (
+            patch(
+                "airut.cli.get_config_path",
+                return_value=cfg,
+            ),
+            patch(
+                "airut.cli._fetch_running_version",
+                return_value=None,
+            ),
         ):
             assert _has_version_mismatch() is False
 
@@ -718,11 +724,15 @@ class TestGetActiveTaskCounts:
         # waiting = queued(1) + pending(3) = 4
         assert result == (6, 4)
 
+    @patch("airut.cli._fetch_health", return_value=None)
     @patch("airut.cli.get_config_path")
     def test_no_config_file(
-        self, mock_config_path: MagicMock, tmp_path: Path
+        self,
+        mock_config_path: MagicMock,
+        _mock_health: MagicMock,
+        tmp_path: Path,
     ) -> None:
-        """Returns None when config file does not exist."""
+        """Returns None when config file missing and service not running."""
         mock_config_path.return_value = tmp_path / "nonexistent.yaml"
         assert _get_active_task_counts() is None
 
@@ -1025,14 +1035,14 @@ class TestCmdCheck:
     def test_missing_config(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Returns 1 when config file is missing."""
+        """Returns 0 when config file is missing (defaults are used)."""
         _path, ctx = _check_patches(tmp_path, config_text=None)
         with ctx:
             result = cmd_check([])
-        assert result == 1
+        assert result == 0
         out = capsys.readouterr().out
         assert "not found" in out
-        assert "airut init" in out
+        assert "default values will be used" in out
 
     def test_invalid_yaml(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -1105,6 +1115,19 @@ repos:
         assert result == 0
         out = capsys.readouterr().out
         assert "2 repo(s)" in out
+
+    def test_empty_repos_config(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Shows 'no repos configured' for config with empty repos."""
+        _path, ctx = _check_patches(
+            tmp_path, config_text="dashboard:\n  enabled: true\n"
+        )
+        with ctx:
+            result = cmd_check([])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "no repos configured" in out
 
     def test_dependency_failure(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -1713,6 +1736,7 @@ class TestCmdUpdate:
     )
     @patch("airut.install_services.uninstall_services")
     @patch("airut.cli._has_version_mismatch", return_value=True)
+    @patch("airut.cli._get_active_task_counts", return_value=None)
     @patch("airut.cli._is_service_running", return_value=True)
     @patch("airut.cli._is_service_installed", return_value=True)
     @patch("airut.cli._use_color", return_value=False)
@@ -1721,6 +1745,7 @@ class TestCmdUpdate:
         _color: MagicMock,
         _installed: MagicMock,
         _running: MagicMock,
+        _counts: MagicMock,
         _mismatch: MagicMock,
         mock_uninstall: MagicMock,
         _airut_path: MagicMock,
@@ -1746,6 +1771,7 @@ class TestCmdUpdate:
         assert "Update complete." in out
 
     @patch("airut.cli.subprocess.run")
+    @patch("airut.cli._get_active_task_counts", return_value=None)
     @patch("airut.cli._has_version_mismatch", return_value=False)
     @patch("airut.cli._is_service_running", return_value=True)
     @patch("airut.cli._is_service_installed", return_value=True)
@@ -1756,6 +1782,7 @@ class TestCmdUpdate:
         _installed: MagicMock,
         _running: MagicMock,
         _mismatch: MagicMock,
+        _counts: MagicMock,
         mock_run: MagicMock,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
