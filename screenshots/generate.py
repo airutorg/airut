@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shutil
 import struct
 import subprocess
 import sys
@@ -110,6 +111,16 @@ def _png_dimensions(path: Path) -> tuple[int, int]:
     return width, height
 
 
+def _find_magick() -> str:
+    """Find the ImageMagick command (v7 ``magick`` or v6 ``convert``)."""
+    for cmd in ("magick", "convert"):
+        if shutil.which(cmd):
+            return cmd
+    raise FileNotFoundError(
+        "ImageMagick not found (tried 'magick' and 'convert')"
+    )
+
+
 def _downscale(src: Path, dst: Path, width: int, height: int) -> None:
     """Downscale an image using ImageMagick with Lanczos filtering.
 
@@ -119,9 +130,10 @@ def _downscale(src: Path, dst: Path, width: int, height: int) -> None:
         width: Target width in pixels.
         height: Target height in pixels.
     """
+    cmd = _find_magick()
     subprocess.run(
         [
-            "magick",
+            cmd,
             str(src),
             "-filter",
             "Lanczos",
