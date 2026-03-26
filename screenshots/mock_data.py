@@ -9,11 +9,15 @@ Creates a DashboardServer populated with realistic task, repo, and
 conversation data covering all visual states the dashboard supports.
 """
 
+import copy
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from airut.claude_output.types import StreamEvent, Usage
+from airut.config.editor import InMemoryConfigSource
+from airut.config.snapshot import ConfigSnapshot
 from airut.conversation import (
     ConversationMetadata,
     ConversationStore,
@@ -33,7 +37,9 @@ from airut.dashboard.tracker import (
     TodoStatus,
 )
 from airut.dashboard.versioned import VersionClock, VersionedStore
+from airut.gateway.config import ServerConfig
 from airut.sandbox import EventLog
+from airut.yaml_env import EnvVar, VarRef
 
 
 # Fixed timestamps so screenshots are deterministic
@@ -871,6 +877,140 @@ def _get_version_info() -> VersionInfo:
         )
 
 
+# ── Config editor mock data ──────────────────────────────────────────
+
+
+def _make_config_raw() -> dict[str, Any]:
+    """Create a realistic raw config dict for the config editor screenshots.
+
+    Includes global settings, variables, and two repos (backend with
+    email + slack, frontend with email only) to show a rich config editor.
+    """
+    return {
+        "config_version": 2,
+        "execution": {
+            "max_concurrent": 4,
+            "shutdown_timeout": EnvVar("SHUTDOWN_TIMEOUT"),
+            "conversation_max_age_days": VarRef("conv_max_age"),
+        },
+        "dashboard": {
+            "enabled": True,
+            "host": "0.0.0.0",
+            "port": 5200,
+            "base_url": "https://airut.acme.com",
+        },
+        "container_command": "podman",
+        "network": {
+            "upstream_dns": "1.1.1.1",
+        },
+        "resource_limits": {
+            "timeout": 3600,
+            "max_turns": 200,
+            "max_cost_usd": 5.0,
+            "memory_mb": 4096,
+        },
+        "vars": {
+            "imap_host": "imap.acme.com",
+            "smtp_host": "smtp.acme.com",
+            "anthropic_key": EnvVar("ANTHROPIC_API_KEY"),
+            "default_model": "opus",
+            "conv_max_age": 14,
+        },
+        "repos": {
+            "backend": {
+                "git": {
+                    "repo_url": "https://github.com/acme/backend.git",
+                },
+                "model": VarRef("default_model"),
+                "effort": EnvVar("CLAUDE_EFFORT"),
+                "secrets": {
+                    "ANTHROPIC_API_KEY": VarRef("anthropic_key"),
+                },
+                "email": {
+                    "imap_server": VarRef("imap_host"),
+                    "imap_port": 993,
+                    "smtp_server": VarRef("smtp_host"),
+                    "smtp_port": 587,
+                    "username": EnvVar("EMAIL_USER"),
+                    "password": EnvVar("EMAIL_PASS"),
+                    "from": "airut@acme.com",
+                    "authorized_senders": [
+                        "alice@acme.com",
+                        "bob@acme.com",
+                        "carol@acme.com",
+                        "*@eng.acme.com",
+                    ],
+                    "trusted_authserv_id": "acme.com",
+                },
+                "slack": {
+                    "bot_token": EnvVar("SLACK_BOT_TOKEN"),
+                    "app_token": EnvVar("SLACK_APP_TOKEN"),
+                    "authorized": [
+                        {"workspace_members": True},
+                    ],
+                },
+            },
+            "frontend": {
+                "git": {
+                    "repo_url": "https://github.com/acme/frontend.git",
+                },
+                "model": "sonnet",
+                "secrets": {
+                    "ANTHROPIC_API_KEY": VarRef("anthropic_key"),
+                },
+                "email": {
+                    "imap_server": VarRef("imap_host"),
+                    "smtp_server": VarRef("smtp_host"),
+                    "username": EnvVar("EMAIL_USER_FE"),
+                    "password": EnvVar("EMAIL_PASS"),
+                    "from": "airut+fe@acme.com",
+                    "authorized_senders": [
+                        "alice@acme.com",
+                        "bob@acme.com",
+                    ],
+                    "trusted_authserv_id": "acme.com",
+                },
+            },
+        },
+    }
+
+
+def _make_config_snapshot() -> ConfigSnapshot:
+    """Create a ConfigSnapshot from the mock raw config.
+
+    Sets dummy environment variables referenced by ``!env`` tags so
+    the config pipeline can resolve them during snapshot creation.
+    """
+    import os
+
+    env_defaults = {
+        "ANTHROPIC_API_KEY": "sk-ant-XXXX",
+        "SHUTDOWN_TIMEOUT": "120",
+        "CLAUDE_EFFORT": "high",
+        "EMAIL_USER": "airut@acme.com",
+        "EMAIL_USER_FE": "airut+fe@acme.com",
+        "EMAIL_PASS": "secret",
+        "SLACK_BOT_TOKEN": "xoxb-XXXX",
+        "SLACK_APP_TOKEN": "xapp-XXXX",
+    }
+    saved = {}
+    for key, val in env_defaults.items():
+        saved[key] = os.environ.get(key)
+        os.environ[key] = val
+
+    try:
+        raw = _make_config_raw()
+        return ServerConfig.from_source(
+            InMemoryConfigSource(copy.deepcopy(raw))
+        )
+    finally:
+        for key, old in saved.items():
+            if old is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old
+
+
 # ── Public API ───────────────────────────────────────────────────────
 
 
@@ -925,6 +1065,8 @@ def create_mock_dashboard(work_dir: Path, port: int = 0) -> MockDashboard:
     _write_conversation_data(work_dir)
 
     version_info = _get_version_info()
+    config_snapshot = _make_config_snapshot()
+    config_generation = 0
 
     server = DashboardServer(
         tracker=tracker,
@@ -935,6 +1077,8 @@ def create_mock_dashboard(work_dir: Path, port: int = 0) -> MockDashboard:
         boot_store=boot_store,
         repos_store=repos_store,
         clock=clock,
+        get_config_snapshot=lambda: config_snapshot,
+        get_config_generation=lambda: config_generation,
     )
     server.start()
 
@@ -947,6 +1091,7 @@ def create_mock_dashboard(work_dir: Path, port: int = 0) -> MockDashboard:
         "completed_conv": "c9d0e1f2",
         "live_repo": "backend",
         "failed_repo": "legacy-api",
+        "config_repo": "backend",
     }
 
     return MockDashboard(server, actual_port, work_dir, ids)
