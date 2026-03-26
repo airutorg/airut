@@ -198,8 +198,8 @@ def _expand_item_fields(
     """Expand a keyed collection item into per-sub-field diff entries.
 
     Compares each leaf field of the item and emits one change dict per
-    field that differs.  If both sides are ``MISSING`` (shouldn't
-    happen) or both are non-dict, falls back to a single summary row.
+    field that differs.  When a side is ``MISSING``, all its leaf
+    values are treated as ``MISSING``.
     """
     old_dict: dict[str, Any] = (
         cast("dict[str, Any]", old) if isinstance(old, dict) else {}
