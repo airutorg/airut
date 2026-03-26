@@ -1,0 +1,107 @@
+{# Variables widget — expects: buffer (EditBuffer), var_refs (dict[str, list[str]]) #}
+{% set vars_dict = buffer.raw.get('vars', {}) %}
+<div class="cfg-vars-section" id="vars-section"
+     hx-target="this" hx-swap="outerHTML">
+
+  {% if vars_dict is mapping and vars_dict %}
+  <div class="cfg-dict-items">
+    {% for name, val in vars_dict | dictsort %}
+    {% set source_info = value_source(val) %}
+    {% set current_source = source_info[0] %}
+    {% set display_value = source_info[1] %}
+    {% set refs = var_refs.get(name, []) %}
+    {% set ref_count = refs | length %}
+    <div class="cfg-var-item">
+      <div class="cfg-var-header">
+        <span class="cfg-dict-key">{{ name }}</span>
+        {% if ref_count > 0 %}
+        <span class="cfg-var-refs" title="Referenced by: {{ refs | join(', ') }}">
+          {{ ref_count }} ref{{ 's' if ref_count != 1 else '' }}
+        </span>
+        {% else %}
+        <span class="cfg-var-refs cfg-var-refs-none">unused</span>
+        {% endif %}
+      </div>
+
+      <div class="cfg-var-controls">
+        <div class="cfg-source cfg-source-sm">
+          <button class="{{ 'active' if current_source == 'literal' else '' }}"
+                  hx-patch="/api/config/field"
+                  hx-vals='{"path":"vars.{{ name }}","source":"literal","value":{{ (display_value if display_value is not none else '') | tojson }}}'
+                  hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+                  hx-target="#vars-section"
+                  hx-swap="outerHTML">
+            Literal
+          </button>
+          <button class="{{ 'active' if current_source == 'env' else '' }}"
+                  hx-patch="/api/config/field"
+                  hx-vals='{"path":"vars.{{ name }}","source":"env","value":{{ (display_value if display_value is not none and current_source == 'env' else '') | tojson }}}'
+                  hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+                  hx-target="#vars-section"
+                  hx-swap="outerHTML">
+            Env
+          </button>
+        </div>
+
+        {% if current_source == 'literal' %}
+        <input class="cfg-input cfg-var-value" type="text"
+               value="{{ display_value if display_value is not none else '' }}"
+               hx-patch="/api/config/field"
+               hx-trigger="change"
+               hx-vals='{"path":"vars.{{ name }}","source":"literal"}'
+               hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+               hx-target="#vars-section"
+               hx-swap="outerHTML"
+               name="value"
+               hx-include="this">
+        {% else %}
+        <input class="cfg-input cfg-var-value" type="text"
+               value="{{ display_value if display_value is not none else '' }}"
+               placeholder="ENV_VAR_NAME"
+               hx-patch="/api/config/field"
+               hx-trigger="change"
+               hx-vals='{"path":"vars.{{ name }}","source":"env"}'
+               hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+               hx-target="#vars-section"
+               hx-swap="outerHTML"
+               name="value"
+               hx-include="this">
+        {% endif %}
+
+        <button class="cfg-btn cfg-btn-sm cfg-var-rename-btn"
+                data-var-name="{{ name }}"
+                title="Rename variable">
+          Rename
+        </button>
+        <button class="cfg-btn danger cfg-list-remove"
+                hx-post="/api/config/remove"
+                hx-vals='{"path":"vars","key":{{ name | tojson }}}'
+                hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+                hx-confirm="Remove variable '{{ name }}'?{% if ref_count > 0 %} Warning: {{ ref_count }} field{{ 's' if ref_count != 1 else '' }} reference this variable ({{ refs | join(', ') }}).{% endif %}"
+                title="Remove variable">
+          &times;
+        </button>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty">No variables defined.</div>
+  {% endif %}
+
+  <div class="cfg-dict-add">
+    <input class="cfg-input cfg-input-inline" type="text"
+           id="new-var-name"
+           name="key"
+           required
+           placeholder="variable_name"
+           pattern="[a-zA-Z0-9_][a-zA-Z0-9_-]*">
+    <button class="cfg-btn primary cfg-list-add"
+            hx-post="/api/config/add"
+            hx-vals='{"path":"vars"}'
+            hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+            hx-include="#new-var-name">
+      + Add Variable
+    </button>
+  </div>
+</div>

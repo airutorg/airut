@@ -26,9 +26,11 @@ from airut.config.editor import (
     collect_leaf_fields,
     count_dict_field_changes,
     diff_dict_field,
+    find_var_references,
     format_raw_value,
     get_raw_value,
     raw_values_equal,
+    rename_var_references,
     schema_for_editor,
 )
 from airut.config.snapshot import ConfigSnapshot
@@ -392,9 +394,14 @@ class ConfigEditorHandlers:
         if snapshot is None or snapshot.raw is None:
             return 0
 
+        # Vars section
+        count = count_dict_field_changes(
+            buffer.raw.get("vars", {}),
+            (snapshot.raw or {}).get("vars", {}),
+        )
+
         # Global fields
         global_schema = self._get_global_schema()
-        count = 0
 
         def _count_leaf(fs: EditorFieldSchema) -> int:
             buf_val = get_raw_value(buffer.raw, fs.path)
@@ -496,6 +503,7 @@ class ConfigEditorHandlers:
 
         schema = self._get_global_schema()
         stale = buffer.is_stale(self._get_generation())
+        var_refs = find_var_references(buffer.raw)
 
         return Response(
             render_template(
@@ -507,6 +515,7 @@ class ConfigEditorHandlers:
                 stale=stale and buffer.dirty,
                 dirty_count=self._compute_dirty_count(),
                 error=None,
+                var_refs=var_refs,
             ),
             content_type="text/html",
         )
@@ -613,6 +622,12 @@ class ConfigEditorHandlers:
         index_str = form.get("index")
         key = form.get("key")
 
+        # Vars values: only literal and env are allowed (no var-to-var)
+        if path.startswith("vars.") and source == "var":
+            return Response(
+                "!var references inside vars: are not allowed", status=400
+            )
+
         # Dict entry mutations (key present, no index)
         if key is not None and index_str is None:
             full_path = f"{path}.{key}"
@@ -678,6 +693,19 @@ class ConfigEditorHandlers:
 
         buffer.set_field(path, source, value)
 
+        # Vars field: return updated vars section via fragment
+        if path.startswith("vars."):
+            return self._add_dirty_count_header(
+                Response(
+                    render_template(
+                        "components/config/vars.html",
+                        buffer=buffer,
+                        var_refs=find_var_references(buffer.raw),
+                    ),
+                    content_type="text/html",
+                )
+            )
+
         # Return the updated field HTML fragment
         fs = self._find_field_in_all_schemas(path)
         if fs:
@@ -716,6 +744,26 @@ class ConfigEditorHandlers:
         # Reject empty keys for dict/collection adds
         if key is not None and not key:
             return Response("Key name must not be empty", status=400)
+
+        # Special handling for adding/renaming a variable
+        if path == "vars" and key:
+            rename_from = form.get("rename_from")
+            vars_dict = buffer.raw.setdefault("vars", {})
+            if rename_from:
+                # Rename: copy value, update refs, remove old key
+                if rename_from in vars_dict:
+                    vars_dict[key] = vars_dict.pop(rename_from)
+                    rename_var_references(buffer.raw, rename_from, key)
+                    buffer.mark_dirty()
+            elif key not in vars_dict:
+                vars_dict[key] = ""
+                buffer.mark_dirty()
+            return self._add_dirty_count_header(
+                Response(
+                    status=200,
+                    headers={"HX-Redirect": "/config"},
+                )
+            )
 
         # Special handling for adding a repo
         if path == "repos" and key:
@@ -764,6 +812,17 @@ class ConfigEditorHandlers:
                 index = int(index)
             except (ValueError, TypeError):
                 return Response("Invalid index", status=400)
+
+        # Variable removal — redirect to refresh the vars section
+        if path == "vars" and key:
+            buffer.remove_item(path, key=key)
+            return self._add_dirty_count_header(
+                Response(
+                    status=200,
+                    headers={"HX-Redirect": "/config"},
+                )
+            )
+
         # Channel removal — redirect to reload page
         channel_removed = self._try_remove_channel(buffer, path, key, index)
         if channel_removed is not None:
@@ -937,6 +996,23 @@ class ConfigEditorHandlers:
                         "new": format_raw_value(buf_val),
                     }
                 )
+
+        # Vars section — diff per-key
+        buf_vars = buffer.raw.get("vars", {})
+        live_vars = (snapshot.raw or {}).get("vars", {})
+        if isinstance(buf_vars, dict) and isinstance(live_vars, dict):
+            for vk in sorted(set(buf_vars) | set(live_vars)):
+                old_v = live_vars.get(vk, MISSING)
+                new_v = buf_vars.get(vk, MISSING)
+                if not raw_values_equal(old_v, new_v):
+                    _add_change(
+                        {
+                            "field": f"vars.{vk}",
+                            "scope": "server",
+                            "old": format_raw_value(old_v),
+                            "new": format_raw_value(new_v),
+                        }
+                    )
 
         # Global fields
         _diff_fields(self._get_global_schema())

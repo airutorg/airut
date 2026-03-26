@@ -19,14 +19,11 @@ preview.
    grouped by reload scope, before writing to disk.
 4. **Full type coverage** — nested dataclasses, `list[str]`, `dict[str, str]`,
    keyed collections (`dict[str, MaskedSecret]`), tagged union lists (Slack
-   `authorized`).
+   `authorized`), and the `vars:` section.
 5. **Value source control** — every scalar field supports a source selector: Not
    set, Literal, `!env`, `!var`.
 6. **Round-trip fidelity** — `!env` and `!var` tags survive load-edit-save
    cycles. Unset fields are excluded from the config file.
-7. **Incremental delivery** — the edit buffer pattern naturally supports
-   building the UI in phases. Global settings, repos, channels, and credentials
-   can ship independently.
 
 ## Non-Goals
 
@@ -268,6 +265,50 @@ a checkbox. This avoids CSP issues with inline event handlers (the server sets
 `script-src 'self'`) and provides a consistent visual appearance matching other
 field types.
 
+### Variables Section
+
+The `vars:` top-level YAML section is edited as a dedicated widget on the global
+settings page. Unlike schema-driven fields, variables are not backed by
+dataclass definitions — they are a flat `dict[str, scalar]` in the raw config
+dict.
+
+#### Source restriction
+
+Variable values support **Literal** and **Env** sources only. `!var` is rejected
+(no var-to-var references), consistent with the single-pass resolution contract
+in `spec/declarative-config.md`.
+
+#### Cross-reference hints
+
+Each variable entry shows a reference count: how many fields in the config use
+`!var <name>` to reference it. The count is computed by walking the raw dict
+(excluding the `vars:` section itself) and collecting all `VarRef` objects.
+Referencing field paths are shown as a tooltip on hover.
+
+Unreferenced variables are marked "unused" to help identify stale entries.
+
+#### Rename
+
+Renaming a variable updates the key in the `vars:` dict and simultaneously
+rewrites all `VarRef` objects throughout the config that reference the old name.
+This is an atomic operation — the user does not need to manually update each
+reference.
+
+Rename is submitted as `POST /api/config/add` with
+`path=vars&key=<new>&rename_from=<old>`.
+
+#### Delete awareness
+
+Removing a variable that has active references shows a confirmation dialog
+listing the referencing field paths and the count. The variable is removed
+regardless — the user must manually update or unset the affected fields before
+saving (validation will catch undefined `!var` references).
+
+#### Dirty count and diff
+
+Variable changes are included in the dirty count and diff output, per-key.
+Variables use scope `server` since they require a config reload.
+
 ### Dirty Count
 
 The dirty count tracks the number of leaf fields that actually differ between
@@ -298,7 +339,7 @@ is 0, preventing no-op saves.
 | Route                     | Method | Description                                 |
 | ------------------------- | ------ | ------------------------------------------- |
 | `/config`                 | GET    | Global settings (execution, dashboard, ...) |
-| `/config/repos/<repo_id>` | GET    | Per-repo settings (Phase 2)                 |
+| `/config/repos/<repo_id>` | GET    | Per-repo settings                           |
 
 ### API Routes
 
@@ -329,21 +370,31 @@ current number of fields that differ from the live config.
 No validation is performed on individual field mutations — validation runs only
 on save. Staleness is not checked on mutations either — only on save.
 
+For `vars.*` paths, only `literal` and `env` sources are accepted (returns 400
+for `var` source). The response is the full vars section HTML fragment.
+
 ### `POST /api/config/add`
 
 Accepts form-encoded body: `path=repos.my-project.email.authorized_senders` or
 `path=repos&key=new-project`. Returns `200 OK` with `X-Dirty-Count` header.
+
+For variables: `path=vars&key=<name>` adds a new variable.
+`path=vars&key=<new>&rename_from=<old>` renames a variable and updates all
+references.
 
 ### `POST /api/config/remove`
 
 Accepts form-encoded body: `path=...&index=2` or `path=...&key=OLD_TOKEN`.
 Returns `200 OK` with `X-Dirty-Count` header.
 
+For variables: `path=vars&key=<name>` removes the variable.
+
 ### `GET /api/config/diff`
 
 Compares the edit buffer against the current live config per leaf field. Returns
 an HTML fragment showing changes grouped by reload scope, with per-field entries
-(field path, old value, new value, scope badge).
+(field path, old value, new value, scope badge). Includes per-key variable
+changes.
 
 ### `POST /api/config/save`
 
@@ -361,85 +412,6 @@ an HTML fragment showing changes grouped by reload scope, with per-field entries
 
 Discards the edit buffer. Returns 200 with `HX-Redirect: /config`.
 
-## htmx Interaction Patterns
-
-All mutation endpoints use form-encoded bodies (not JSON). Field widgets use
-`hx-vals` for path/source and `hx-include="this"` with `name="value"` for the
-input value.
-
-### Field Edit
-
-```html
-<div class="cfg-field" id="field-dashboard-port"
-     hx-target="this" hx-swap="outerHTML">
-  <div class="cfg-field-header">
-    <span class="cfg-label">port</span>
-    <span class="cfg-scope cfg-server">server</span>
-    <div class="cfg-source">
-      <button hx-patch="/api/config/field"
-              hx-vals='{"path":"dashboard.port","source":"unset"}'
-              hx-headers='{"X-Requested-With":"XMLHttpRequest"}'>
-        Not set
-      </button>
-      <button class="active" ...>Literal</button>
-    </div>
-  </div>
-  <input class="cfg-input" type="number" value="5200"
-         hx-patch="/api/config/field"
-         hx-trigger="change"
-         hx-vals='{"path":"dashboard.port","source":"literal"}'
-         hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
-         name="value" hx-include="this">
-  <span class="cfg-help">Dashboard HTTP server port</span>
-</div>
-```
-
-### Boolean Field
-
-```html
-<select class="cfg-input"
-        hx-patch="/api/config/field"
-        hx-trigger="change"
-        hx-vals='{"path":"dashboard.enabled","source":"literal"}'
-        hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
-        name="value" hx-include="this">
-  <option value="true" selected>true</option>
-  <option value="false">false</option>
-</select>
-```
-
-### Save Flow
-
-The "Review & Save" button fetches the diff via `hx-get="/api/config/diff"` and
-swaps it into `#diff-modal-body`. A `htmx:afterSwap` event listener opens the
-dialog via `dialog.showModal()`. The cancel button uses `addEventListener` (not
-inline `onclick`) to comply with CSP `script-src 'self'`.
-
-### Dirty Indicator and Button State
-
-The save bar shows an unsaved-changes count after the action buttons. On page
-load the server passes `dirty_count` to the template, which conditionally
-renders the button `disabled` attribute and span visibility. After AJAX
-mutations the count is read from the `X-Dirty-Count` response header and the
-display is updated by JavaScript.
-
-```html
-<div class="cfg-save-bar">
-  <button id="review-save-btn" class="cfg-btn primary"
-          {{ '' if dirty_count else 'disabled' }} ...>
-    Review &amp; Save
-  </button>
-  <button id="discard-btn" class="cfg-btn danger"
-          {{ '' if dirty_count else 'disabled' }} ...>
-    Discard
-  </button>
-  <span id="dirty-count"
-        class="cfg-dirty {{ '' if dirty_count else 'hidden' }}">
-    ...
-  </span>
-</div>
-```
-
 ## Page Layout
 
 ### Global Settings Page (`/config`)
@@ -456,6 +428,9 @@ display is updated by JavaScript.
 │  │  ├─ Card: Dashboard
 │  │  ├─ Card: Container & Network
 │  │  └─ Card: Resource Limits — server default (nested)
+│  │
+│  ├─ Section: Variables
+│  │  └─ Card: vars (add/edit/rename/remove with cross-ref hints)
 │  │
 │  ├─ Section: Repositories
 │  │  └─ Repo cards: summary + link to detail page
@@ -515,18 +490,9 @@ it), localhost binding by default.
 
 File: `airut/dashboard/static/styles/config.css`.
 
-Extends the existing design system with no new colors, fonts, or spacing values:
+Extends the existing design system with no new colors, fonts, or spacing values.
 
-- **`.cfg-save-bar`** — flex container with action buttons and dirty count.
-- **`.cfg-field`** — field row with `set`/`unset` background states.
-- **`.cfg-source`** — segmented control. Active segment uses `--accent`.
-- **`.cfg-input`** — text/number/select input (`--font-mono`, 13px).
-- **`.cfg-btn`** — action buttons with `:disabled` state (opacity 0.4).
-- **`.cfg-banner`** — feedback banners (success/error/warning/info).
-- **`.cfg-dialog`** — centered modal (`margin: auto` for `<dialog>`).
-- **`.cfg-diff-table`** — diff display: old/new values, scope badges.
-
-## New Files
+## Files
 
 | File                                                           | Purpose                                          |
 | -------------------------------------------------------------- | ------------------------------------------------ |
@@ -538,45 +504,8 @@ Extends the existing design system with no new colors, fonts, or spacing values:
 | `airut/dashboard/templates/components/config/field.html`       | Recursive field dispatch macro                   |
 | `airut/dashboard/templates/components/config/scalar.html`      | Scalar input + source selector                   |
 | `airut/dashboard/templates/components/config/nested.html`      | Nested dataclass fieldset                        |
+| `airut/dashboard/templates/components/config/vars.html`        | Variables widget with cross-ref hints            |
 | `airut/dashboard/templates/components/config/diff_result.html` | Diff result fragment                             |
 | `airut/dashboard/templates/components/config/save_result.html` | Save error fragment                              |
 | `airut/dashboard/static/js/config-editor.js`                   | Dirty counter, dialog helpers, button state      |
 | `airut/dashboard/static/styles/config.css`                     | Config editor styles                             |
-
-## Implementation Phases
-
-### Phase 1: Foundation + Global Settings (implemented)
-
-**Backend:** `EditBuffer`, `InMemoryConfigSource`, `EditorFieldSchema`,
-`schema_for_editor()`, all API endpoints, staleness detection, server-side dirty
-count computation, route registration in `DashboardServer`.
-
-**Frontend:** `/config` global settings page with save bar, stale banner, diff
-modal, scalar field widget with source selector (text/number/select dropdown for
-bools), nested dataclass widget (ResourceLimits), repo list (summary cards with
-links). `config-editor.js` (server-reported dirty counter, dialog helpers,
-button enable/disable). `config.css`.
-
-**Not included:** repo editing, channels, credentials, list/dict/collection
-widgets.
-
-### Phase 2: Repos + Simple Fields (implemented)
-
-Per-repo settings page with scalar/nested fields. `GET /config/repos/<repo_id>`
-handler. Add/remove repo operations. Repo skeleton generation.
-
-### Phase 3: Channels (implemented)
-
-Email and Slack channel configuration. List widget for `authorized_senders`.
-Tagged union list widget for Slack `authorized`. Add/remove channel operations.
-
-### Phase 4: Credentials + Dict Fields (implemented)
-
-All credential types (`MaskedSecret`, `SigningCredential`,
-`GitHubAppCredential`) and dict-based fields. Keyed collection widget with
-expandable cards.
-
-### Phase 5: Variables
-
-`vars:` section editing with cross-reference hints. Variable rename/delete
-awareness.

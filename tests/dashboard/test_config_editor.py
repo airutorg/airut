@@ -3813,3 +3813,451 @@ class TestHumanizeTypeFilter:
 
     def test_fallback_camel_case(self) -> None:
         assert self._get_filter()("SomeOtherType") == "Some Other Type"
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Variables
+# ---------------------------------------------------------------------------
+
+
+def _make_raw_with_vars() -> dict[str, Any]:
+    """Create a sample raw config with a vars: section and !var references."""
+    from airut.yaml_env import VarRef
+
+    raw = _make_sample_raw()
+    raw["vars"] = {
+        "mail_server": "imap.shared.com",
+        "smtp_host": EnvVar("SMTP_HOST"),
+    }
+    # Replace literal imap_server with a !var reference
+    raw["repos"]["test-repo"]["email"]["imap_server"] = VarRef("mail_server")
+    return raw
+
+
+class TestFindVarReferences:
+    """Tests for find_var_references utility."""
+
+    def test_no_vars(self) -> None:
+        from airut.config.editor import find_var_references
+
+        raw = _make_sample_raw()
+        refs = find_var_references(raw)
+        assert refs == {}
+
+    def test_finds_var_refs(self) -> None:
+        from airut.config.editor import find_var_references
+
+        raw = _make_raw_with_vars()
+        refs = find_var_references(raw)
+        assert "mail_server" in refs
+        assert any("imap_server" in p for p in refs["mail_server"])
+        # smtp_host is only used as a var *value* (!env), not referenced
+        assert "smtp_host" not in refs
+
+    def test_excludes_vars_section_itself(self) -> None:
+        from airut.config.editor import find_var_references
+        from airut.yaml_env import VarRef
+
+        raw = _make_sample_raw()
+        raw["vars"] = {"a": "hello"}
+        # Place a VarRef in repos section only
+        raw["repos"]["test-repo"]["email"]["imap_server"] = VarRef("a")
+        refs = find_var_references(raw)
+        assert "a" in refs
+        # Only one reference (in repos), not from vars section
+        assert len(refs["a"]) == 1
+
+    def test_finds_refs_in_lists(self) -> None:
+        from airut.config.editor import find_var_references
+        from airut.yaml_env import VarRef
+
+        raw = {"vars": {"x": "val"}, "items": [VarRef("x"), "plain"]}
+        refs = find_var_references(raw)
+        assert "x" in refs
+        assert "items[0]" in refs["x"]
+
+    def test_finds_top_level_var_ref(self) -> None:
+        from airut.config.editor import find_var_references
+        from airut.yaml_env import VarRef
+
+        raw = {"vars": {"x": "val"}, "top": VarRef("x")}
+        refs = find_var_references(raw)
+        assert "x" in refs
+        assert "top" in refs["x"]
+
+
+class TestRenameVarReferences:
+    """Tests for rename_var_references utility."""
+
+    def test_renames_refs(self) -> None:
+        from airut.config.editor import rename_var_references
+        from airut.yaml_env import VarRef
+
+        raw = _make_raw_with_vars()
+        count = rename_var_references(raw, "mail_server", "imap_host")
+        assert count == 1
+        # Reference updated
+        val = raw["repos"]["test-repo"]["email"]["imap_server"]
+        assert isinstance(val, VarRef)
+        assert val.var_name == "imap_host"
+
+    def test_rename_no_match(self) -> None:
+        from airut.config.editor import rename_var_references
+
+        raw = _make_sample_raw()
+        count = rename_var_references(raw, "nonexistent", "new_name")
+        assert count == 0
+
+    def test_rename_in_list(self) -> None:
+        from airut.config.editor import rename_var_references
+        from airut.yaml_env import VarRef
+
+        raw = {"vars": {"x": "v"}, "data": [VarRef("x")]}
+        count = rename_var_references(raw, "x", "y")
+        assert count == 1
+        assert raw["data"][0].var_name == "y"
+
+    def test_rename_in_nested_list(self) -> None:
+        from airut.config.editor import rename_var_references
+        from airut.yaml_env import VarRef
+
+        raw = {"vars": {"x": "v"}, "data": [{"inner": VarRef("x")}]}
+        count = rename_var_references(raw, "x", "y")
+        assert count == 1
+        assert raw["data"][0]["inner"].var_name == "y"
+
+    def test_rename_skips_vars_section(self) -> None:
+        from airut.config.editor import rename_var_references
+        from airut.yaml_env import VarRef
+
+        raw = {"vars": {"old": "val"}, "other": VarRef("old")}
+        rename_var_references(raw, "old", "new")
+        # vars section is NOT modified by rename_var_references
+        assert "old" in raw["vars"]
+
+
+class TestVarsPageLoad:
+    """Tests for vars section rendering on config page."""
+
+    def test_config_page_shows_vars_section(self, tmp_path: Path) -> None:
+        h = ConfigEditorHarness(tmp_path, raw=_make_raw_with_vars())
+        resp = h.client.get("/config")
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        assert "Variables" in html
+        assert "mail_server" in html
+        assert "smtp_host" in html
+
+    def test_config_page_shows_ref_count(self, tmp_path: Path) -> None:
+        h = ConfigEditorHarness(tmp_path, raw=_make_raw_with_vars())
+        resp = h.client.get("/config")
+        html = resp.get_data(as_text=True)
+        # mail_server is referenced once
+        assert "1 ref" in html
+        # smtp_host is unused
+        assert "unused" in html
+
+    def test_config_page_no_vars(self, harness: ConfigEditorHarness) -> None:
+        """Config page renders without errors when no vars: section exists."""
+        resp = harness.client.get("/config")
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        assert "Variables" in html
+        assert "No variables defined" in html
+
+
+class TestVarsAdd:
+    """Tests for adding variables."""
+
+    def test_add_variable(self, harness: ConfigEditorHarness) -> None:
+        harness.client.get("/config")
+        resp = harness.client.post(
+            "/api/config/add",
+            data={"path": "vars", "key": "new_var"},
+            headers=XHR,
+        )
+        assert resp.status_code == 200
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        assert buf.raw["vars"]["new_var"] == ""
+
+    def test_add_variable_no_duplicate(self, tmp_path: Path) -> None:
+        h = ConfigEditorHarness(tmp_path, raw=_make_raw_with_vars())
+        h.client.get("/config")
+        h.client.post(
+            "/api/config/add",
+            data={"path": "vars", "key": "mail_server"},
+            headers=XHR,
+        )
+        buf = h.server._config_handlers._buffer
+        assert buf is not None
+        # Value should be unchanged
+        assert buf.raw["vars"]["mail_server"] == "imap.shared.com"
+
+    def test_add_variable_redirects(self, harness: ConfigEditorHarness) -> None:
+        harness.client.get("/config")
+        resp = harness.client.post(
+            "/api/config/add",
+            data={"path": "vars", "key": "my_var"},
+            headers=XHR,
+        )
+        assert resp.headers.get("HX-Redirect") == "/config"
+
+
+class TestVarsRemove:
+    """Tests for removing variables."""
+
+    def test_remove_variable(self, tmp_path: Path) -> None:
+        h = ConfigEditorHarness(tmp_path, raw=_make_raw_with_vars())
+        h.client.get("/config")
+        resp = h.client.post(
+            "/api/config/remove",
+            data={"path": "vars", "key": "mail_server"},
+            headers=XHR,
+        )
+        assert resp.status_code == 200
+        buf = h.server._config_handlers._buffer
+        assert buf is not None
+        assert "mail_server" not in buf.raw["vars"]
+
+    def test_remove_variable_redirects(self, tmp_path: Path) -> None:
+        h = ConfigEditorHarness(tmp_path, raw=_make_raw_with_vars())
+        h.client.get("/config")
+        resp = h.client.post(
+            "/api/config/remove",
+            data={"path": "vars", "key": "smtp_host"},
+            headers=XHR,
+        )
+        assert resp.headers.get("HX-Redirect") == "/config"
+
+
+class TestVarsRename:
+    """Tests for renaming variables (updates all !var references)."""
+
+    def test_rename_variable(self, tmp_path: Path) -> None:
+        from airut.yaml_env import VarRef
+
+        h = ConfigEditorHarness(tmp_path, raw=_make_raw_with_vars())
+        h.client.get("/config")
+        resp = h.client.post(
+            "/api/config/add",
+            data={
+                "path": "vars",
+                "key": "imap_host",
+                "rename_from": "mail_server",
+            },
+            headers=XHR,
+        )
+        assert resp.status_code == 200
+        buf = h.server._config_handlers._buffer
+        assert buf is not None
+        # Old key removed, new key has old value
+        assert "mail_server" not in buf.raw["vars"]
+        assert buf.raw["vars"]["imap_host"] == "imap.shared.com"
+        # !var references updated
+        ref = buf.raw["repos"]["test-repo"]["email"]["imap_server"]
+        assert isinstance(ref, VarRef)
+        assert ref.var_name == "imap_host"
+
+    def test_rename_nonexistent_variable_noop(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        resp = harness.client.post(
+            "/api/config/add",
+            data={
+                "path": "vars",
+                "key": "new_name",
+                "rename_from": "nonexistent",
+            },
+            headers=XHR,
+        )
+        assert resp.status_code == 200
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        # No vars section created for nonexistent rename
+        assert "new_name" not in buf.raw.get("vars", {})
+
+
+class TestVarsFieldPatch:
+    """Tests for editing variable values."""
+
+    def test_set_var_literal(self, tmp_path: Path) -> None:
+        h = ConfigEditorHarness(tmp_path, raw=_make_raw_with_vars())
+        h.client.get("/config")
+        resp = h.client.patch(
+            "/api/config/field",
+            data={
+                "path": "vars.mail_server",
+                "source": "literal",
+                "value": "imap.new.com",
+            },
+            headers=XHR,
+        )
+        assert resp.status_code == 200
+        buf = h.server._config_handlers._buffer
+        assert buf is not None
+        assert buf.raw["vars"]["mail_server"] == "imap.new.com"
+
+    def test_set_var_env(self, tmp_path: Path) -> None:
+        h = ConfigEditorHarness(tmp_path, raw=_make_raw_with_vars())
+        h.client.get("/config")
+        resp = h.client.patch(
+            "/api/config/field",
+            data={
+                "path": "vars.mail_server",
+                "source": "env",
+                "value": "IMAP_HOST",
+            },
+            headers=XHR,
+        )
+        assert resp.status_code == 200
+        buf = h.server._config_handlers._buffer
+        assert buf is not None
+        val = buf.raw["vars"]["mail_server"]
+        assert isinstance(val, EnvVar)
+        assert val.var_name == "IMAP_HOST"
+
+    def test_set_var_var_rejected(self, tmp_path: Path) -> None:
+        """!var source is rejected for vars values (no var-to-var)."""
+        h = ConfigEditorHarness(tmp_path, raw=_make_raw_with_vars())
+        h.client.get("/config")
+        resp = h.client.patch(
+            "/api/config/field",
+            data={
+                "path": "vars.mail_server",
+                "source": "var",
+                "value": "other_var",
+            },
+            headers=XHR,
+        )
+        assert resp.status_code == 400
+
+    def test_patch_returns_vars_html_fragment(self, tmp_path: Path) -> None:
+        """PATCH on a vars field returns the vars section HTML fragment."""
+        h = ConfigEditorHarness(tmp_path, raw=_make_raw_with_vars())
+        h.client.get("/config")
+        resp = h.client.patch(
+            "/api/config/field",
+            data={
+                "path": "vars.mail_server",
+                "source": "literal",
+                "value": "new.host.com",
+            },
+            headers=XHR,
+        )
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        assert "vars-section" in html
+        assert "new.host.com" in html
+
+
+class TestVarsDirtyCount:
+    """Tests for vars changes in dirty count."""
+
+    def test_add_var_increments_dirty_count(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        resp = harness.client.post(
+            "/api/config/add",
+            data={"path": "vars", "key": "new_var"},
+            headers=XHR,
+        )
+        assert resp.headers["X-Dirty-Count"] == "1"
+
+    def test_remove_var_increments_dirty_count(self, tmp_path: Path) -> None:
+        h = ConfigEditorHarness(tmp_path, raw=_make_raw_with_vars())
+        h.client.get("/config")
+        resp = h.client.post(
+            "/api/config/remove",
+            data={"path": "vars", "key": "mail_server"},
+            headers=XHR,
+        )
+        assert int(resp.headers["X-Dirty-Count"]) >= 1
+
+    def test_edit_var_value_increments_dirty_count(
+        self, tmp_path: Path
+    ) -> None:
+        h = ConfigEditorHarness(tmp_path, raw=_make_raw_with_vars())
+        h.client.get("/config")
+        resp = h.client.patch(
+            "/api/config/field",
+            data={
+                "path": "vars.mail_server",
+                "source": "literal",
+                "value": "changed.host.com",
+            },
+            headers=XHR,
+        )
+        assert int(resp.headers["X-Dirty-Count"]) >= 1
+
+    def test_revert_var_gives_zero_dirty_count(self, tmp_path: Path) -> None:
+        h = ConfigEditorHarness(tmp_path, raw=_make_raw_with_vars())
+        h.client.get("/config")
+        # Change then revert
+        h.client.patch(
+            "/api/config/field",
+            data={
+                "path": "vars.mail_server",
+                "source": "literal",
+                "value": "changed.com",
+            },
+            headers=XHR,
+        )
+        resp = h.client.patch(
+            "/api/config/field",
+            data={
+                "path": "vars.mail_server",
+                "source": "literal",
+                "value": "imap.shared.com",
+            },
+            headers=XHR,
+        )
+        assert resp.headers["X-Dirty-Count"] == "0"
+
+
+class TestVarsDiff:
+    """Tests for vars changes in diff output."""
+
+    def test_diff_shows_added_var(self, harness: ConfigEditorHarness) -> None:
+        harness.client.get("/config")
+        harness.client.post(
+            "/api/config/add",
+            data={"path": "vars", "key": "new_var"},
+            headers=XHR,
+        )
+        resp = harness.client.get("/api/config/diff")
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        assert "vars.new_var" in html
+
+    def test_diff_shows_changed_var(self, tmp_path: Path) -> None:
+        h = ConfigEditorHarness(tmp_path, raw=_make_raw_with_vars())
+        h.client.get("/config")
+        h.client.patch(
+            "/api/config/field",
+            data={
+                "path": "vars.mail_server",
+                "source": "literal",
+                "value": "changed.host.com",
+            },
+            headers=XHR,
+        )
+        resp = h.client.get("/api/config/diff")
+        html = resp.get_data(as_text=True)
+        assert "vars.mail_server" in html
+        assert "changed.host.com" in html
+
+    def test_diff_shows_removed_var(self, tmp_path: Path) -> None:
+        h = ConfigEditorHarness(tmp_path, raw=_make_raw_with_vars())
+        h.client.get("/config")
+        h.client.post(
+            "/api/config/remove",
+            data={"path": "vars", "key": "mail_server"},
+            headers=XHR,
+        )
+        resp = h.client.get("/api/config/diff")
+        html = resp.get_data(as_text=True)
+        assert "vars.mail_server" in html
+        assert "(not set)" in html

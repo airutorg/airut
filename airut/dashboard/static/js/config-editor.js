@@ -103,6 +103,33 @@
     }
   });
 
+  // Variable rename — prompt for new name, submit via htmx-compatible fetch.
+  document.body.addEventListener('click', function(evt) {
+    var btn = evt.target.closest('.cfg-var-rename-btn');
+    if (!btn) return;
+    var oldName = btn.getAttribute('data-var-name');
+    if (!oldName) return;
+    var newName = prompt('Rename variable "' + oldName + '" to:', oldName);
+    if (!newName || newName === oldName) return;
+    newName = newName.trim();
+    if (!newName || !/^[a-zA-Z0-9_][a-zA-Z0-9_-]*$/.test(newName)) {
+      alert('Invalid variable name. Use letters, digits, dashes, and underscores.');
+      return;
+    }
+    var body = 'path=vars&key=' + encodeURIComponent(newName) +
+               '&rename_from=' + encodeURIComponent(oldName);
+    fetch('/api/config/add', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      body: body
+    }).then(function(resp) {
+      if (resp.ok) window.location.reload();
+    });
+  });
+
   // Dialog close — wired up via event listener (not inline onclick)
   // to avoid potential CSP issues with inline handlers.
   var cancelBtn = document.getElementById('diff-cancel-btn');

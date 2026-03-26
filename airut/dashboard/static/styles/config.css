@@ -395,6 +395,39 @@ select.cfg-tagged-type { max-width: 400px; flex-shrink: 0; }
 }
 .cfg-source-sm { font-size: 10px; flex-shrink: 0; }
 
+/* ---- Variables widget ---- */
+.cfg-var-item {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-light);
+}
+.cfg-var-item:last-child { border-bottom: none; }
+.cfg-var-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.cfg-var-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.cfg-var-value { flex: 1; min-width: 150px; }
+.cfg-var-refs {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: var(--bg-inset);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.cfg-var-refs-none {
+  color: var(--status-warning);
+}
+.cfg-var-rename-btn {
+  flex-shrink: 0;
+}
+
 /* ---- Keyed collection widget ---- */
 .cfg-collection-card {
   border: 1px solid var(--border-light);
