@@ -10,78 +10,83 @@
 
   <div class="cfg-field-header">
     <span class="cfg-label">{{ f.path }}</span>
+  </div>
 
-    {# Source selector #}
+  <div class="cfg-tabbed" data-source="{{ current_source }}">
+    {# Source tabs #}
     <div class="cfg-source">
       {% if not f.required or f.default is not none %}
-      <button class="{{ 'active' if current_source == 'unset' else '' }}"
+      <button data-source="unset"
+              class="{{ 'active' if current_source == 'unset' else '' }}"
               hx-patch="/api/config/field"
               hx-vals='{"path":"{{ f.path }}","source":"unset"}'
               hx-headers='{"X-Requested-With":"XMLHttpRequest"}'>
         Default
       </button>
       {% endif %}
-      <button class="{{ 'active' if current_source == 'literal' else '' }}"
+      <button data-source="literal"
+              class="{{ 'active' if current_source == 'literal' else '' }}"
               hx-patch="/api/config/field"
               hx-vals='{"path":"{{ f.path }}","source":"literal","value":{% if current_source == "literal" and display_value is not none %}"{{ display_value }}"{% elif f.default is not none and f.default != MISSING %}"{{ f.default }}"{% else %}""{% endif %}}'
               hx-headers='{"X-Requested-With":"XMLHttpRequest"}'>
         Literal
       </button>
       {% if f.env_eligible %}
-      <button class="{{ 'active' if current_source == 'env' else '' }}"
+      <button data-source="env"
+              class="{{ 'active' if current_source == 'env' else '' }}"
               hx-patch="/api/config/field"
               hx-vals='{"path":"{{ f.path }}","source":"env","value":"{{ display_value if current_source == 'env' else '' }}"}'
               hx-headers='{"X-Requested-With":"XMLHttpRequest"}'>
-        Env
+        Environment
       </button>
       {% endif %}
       {% if f.var_eligible %}
-      <button class="{{ 'active' if current_source == 'var' else '' }}"
+      <button data-source="var"
+              class="{{ 'active' if current_source == 'var' else '' }}"
               hx-patch="/api/config/field"
               hx-vals='{"path":"{{ f.path }}","source":"var","value":"{{ display_value if current_source == 'var' else '' }}"}'
               hx-headers='{"X-Requested-With":"XMLHttpRequest"}'>
-        Var
+        Variable
       </button>
       {% endif %}
     </div>
+
+    {# Input #}
+    {% if current_source == 'unset' %}
+    {% if f.python_type == 'bool' %}
+    <select class="cfg-input" disabled>
+      <option>{{ (f.default | string | lower) if f.default is not none and f.default != MISSING else 'true' }}</option>
+    </select>
+    {% else %}
+    <input class="cfg-input" type="text"
+           value="{{ f.default if f.default is not none and f.default != MISSING else '' }}"
+           disabled>
+    {% endif %}
+    {% elif f.python_type == 'bool' %}
+    <select class="cfg-input"
+            hx-patch="/api/config/field"
+            hx-trigger="change"
+            hx-vals='{"path":"{{ f.path }}","source":"literal"}'
+            hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+            name="value"
+            hx-include="this">
+      <option value="true" {{ 'selected' if display_value else '' }}>true</option>
+      <option value="false" {{ 'selected' if not display_value else '' }}>false</option>
+    </select>
+    {% else %}
+    <input class="cfg-input"
+           type="{{ 'number' if f.python_type in ['int', 'float'] else 'text' }}"
+           value="{{ display_value if display_value is not none else '' }}"
+           {% if current_source == 'env' %}placeholder="ENV_VAR_NAME"{% endif %}
+           {% if current_source == 'var' %}placeholder="VAR_NAME"{% endif %}
+           hx-patch="/api/config/field"
+           hx-trigger="change"
+           hx-vals='{"path":"{{ f.path }}","source":"{{ current_source }}"}'
+           hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+           name="value"
+           hx-include="this">
+    {% endif %}
   </div>
 
-  {# Input #}
-  {% if current_source == 'unset' %}
-  {% if f.python_type == 'bool' %}
-  <select class="cfg-input" disabled>
-    <option>{{ (f.default | string | lower) if f.default is not none and f.default != MISSING else 'true' }}</option>
-  </select>
-  {% else %}
-  <input class="cfg-input" type="text"
-         value="{{ f.default if f.default is not none and f.default != MISSING else '' }}"
-         disabled>
-  {% endif %}
   <span class="cfg-help">{{ f.doc }}</span>
-  {% elif f.python_type == 'bool' %}
-  <select class="cfg-input"
-          hx-patch="/api/config/field"
-          hx-trigger="change"
-          hx-vals='{"path":"{{ f.path }}","source":"literal"}'
-          hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
-          name="value"
-          hx-include="this">
-    <option value="true" {{ 'selected' if display_value else '' }}>true</option>
-    <option value="false" {{ 'selected' if not display_value else '' }}>false</option>
-  </select>
-  <span class="cfg-help">{{ f.doc }}</span>
-  {% else %}
-  <input class="cfg-input"
-         type="{{ 'number' if f.python_type in ['int', 'float'] else 'text' }}"
-         value="{{ display_value if display_value is not none else '' }}"
-         {% if current_source == 'env' %}placeholder="ENV_VAR_NAME"{% endif %}
-         {% if current_source == 'var' %}placeholder="VAR_NAME"{% endif %}
-         hx-patch="/api/config/field"
-         hx-trigger="change"
-         hx-vals='{"path":"{{ f.path }}","source":"{{ current_source }}"}'
-         hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
-         name="value"
-         hx-include="this">
-  <span class="cfg-help">{{ f.doc }}</span>
-  {% endif %}
 </div>

@@ -94,7 +94,7 @@
   min-width: 0;
 }
 
-/* ---- Source selector ---- */
+/* ---- Source selector (base) ---- */
 .cfg-source {
   display: inline-flex;
   border: 1px solid var(--border);
@@ -110,15 +110,66 @@
   color: var(--text-secondary);
   font-size: 11px;
   border-right: 1px solid var(--border);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 .cfg-source button:last-child { border-right: none; }
-.cfg-source button:hover {
+.cfg-source button:hover:not(.active) {
   background: var(--bg-inset);
 }
-.cfg-source button.active {
-  background: var(--accent);
-  color: white;
+.cfg-source button.active { color: white; }
+.cfg-source button.active[data-source="unset"] { background: var(--text-tertiary); }
+.cfg-source button.active[data-source="literal"] { background: var(--status-info); }
+.cfg-source button.active[data-source="env"] { background: var(--status-warning); }
+.cfg-source button.active[data-source="var"] { background: var(--status-success); }
+
+/* ---- Tabbed field wrapper (scalar fields) ---- */
+.cfg-tabbed {
+  max-width: 400px;
+  width: 100%;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  /* Background matches border color so any sub-pixel gap between
+     the tab bar and input shows border-color instead of white. */
+  background: var(--border);
 }
+.cfg-tabbed .cfg-source {
+  display: flex;
+  width: 100%;
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border);
+}
+.cfg-tabbed .cfg-source button {
+  flex: 1;
+  padding: 5px 4px;
+  text-align: center;
+}
+.cfg-tabbed .cfg-input {
+  border: none;
+  border-radius: 0;
+  margin-top: 0;
+  max-width: 100%;
+}
+/* Use outline for focus inside tabbed wrapper — box-shadow is
+   clipped by overflow:hidden on the container. */
+.cfg-tabbed .cfg-input:focus {
+  box-shadow: none;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.cfg-tabbed select.cfg-input {
+  max-width: 100%;
+}
+/* Source-specific field tinting */
+.cfg-tabbed[data-source="unset"] .cfg-input { background: var(--bg-inset); }
+.cfg-tabbed[data-source="literal"] .cfg-input { background: var(--status-info-bg); }
+.cfg-tabbed[data-source="env"] .cfg-input { background: var(--status-warning-bg); }
+.cfg-tabbed[data-source="var"] .cfg-input { background: var(--status-success-bg); }
 
 /* ---- Input ---- */
 .cfg-input {
@@ -373,7 +424,7 @@ select.cfg-tagged-type { max-width: 400px; flex-shrink: 0; }
 .cfg-dict-items { margin: 8px 0; }
 .cfg-dict-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   margin-bottom: 6px;
   flex-wrap: wrap;
@@ -386,14 +437,20 @@ select.cfg-tagged-type { max-width: 400px; flex-shrink: 0; }
   min-width: 100px;
   flex-shrink: 0;
 }
-.cfg-dict-value { flex: 1; min-width: 150px; }
 .cfg-dict-add {
   display: flex;
   align-items: center;
   gap: 6px;
   margin-top: 8px;
 }
-.cfg-source-sm { font-size: 10px; flex-shrink: 0; }
+/* Tabbed widget inside dict entries and variable controls */
+.cfg-dict-item .cfg-tabbed,
+.cfg-var-controls .cfg-tabbed {
+  flex: 1;
+  min-width: 150px;
+  margin-top: 0;
+  max-width: none;
+}
 
 /* ---- Variables widget ---- */
 .cfg-var-item {
@@ -409,11 +466,10 @@ select.cfg-tagged-type { max-width: 400px; flex-shrink: 0; }
 }
 .cfg-var-controls {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   flex-wrap: wrap;
 }
-.cfg-var-value { flex: 1; min-width: 150px; }
 .cfg-var-refs {
   font-size: 11px;
   color: var(--text-tertiary);
@@ -497,6 +553,9 @@ details.cfg-collection-card[open] > .cfg-collection-header::before {
     max-width: 60vw;
   }
   .cfg-input {
+    max-width: 100%;
+  }
+  .cfg-tabbed {
     max-width: 100%;
   }
   /* Prevent iOS Safari auto-zoom on focused inputs */

@@ -20,62 +20,67 @@
     <div class="cfg-dict-item">
       <span class="cfg-dict-key">{{ key }}</span>
 
-      <div class="cfg-source cfg-source-sm">
-        <button class="{{ 'active' if current_source == 'literal' else '' }}"
-                hx-patch="/api/config/field"
-                hx-vals='{"path":{{ f.path | tojson }},"key":{{ key_json }},"source":"literal","value":{{ val_json if current_source == 'literal' else '""' }}}'
-                hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
-                hx-target="#field-{{ f.path | replace('.', '-') }}"
-                hx-swap="outerHTML">
-          Literal
-        </button>
-        {% if f.env_eligible %}
-        <button class="{{ 'active' if current_source == 'env' else '' }}"
-                hx-patch="/api/config/field"
-                hx-vals='{"path":{{ f.path | tojson }},"key":{{ key_json }},"source":"env","value":{{ val_json if current_source == 'env' else '""' }}}'
-                hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
-                hx-target="#field-{{ f.path | replace('.', '-') }}"
-                hx-swap="outerHTML">
-          !env
-        </button>
-        {% endif %}
-        {% if f.var_eligible %}
-        <button class="{{ 'active' if current_source == 'var' else '' }}"
-                hx-patch="/api/config/field"
-                hx-vals='{"path":{{ f.path | tojson }},"key":{{ key_json }},"source":"var","value":{{ val_json if current_source == 'var' else '""' }}}'
-                hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
-                hx-target="#field-{{ f.path | replace('.', '-') }}"
-                hx-swap="outerHTML">
-          !var
-        </button>
+      <div class="cfg-tabbed" data-source="{{ current_source }}">
+        <div class="cfg-source">
+          <button data-source="literal"
+                  class="{{ 'active' if current_source == 'literal' else '' }}"
+                  hx-patch="/api/config/field"
+                  hx-vals='{"path":{{ f.path | tojson }},"key":{{ key_json }},"source":"literal","value":{{ val_json if current_source == 'literal' else '""' }}}'
+                  hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+                  hx-target="#field-{{ f.path | replace('.', '-') }}"
+                  hx-swap="outerHTML">
+            Literal
+          </button>
+          {% if f.env_eligible %}
+          <button data-source="env"
+                  class="{{ 'active' if current_source == 'env' else '' }}"
+                  hx-patch="/api/config/field"
+                  hx-vals='{"path":{{ f.path | tojson }},"key":{{ key_json }},"source":"env","value":{{ val_json if current_source == 'env' else '""' }}}'
+                  hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+                  hx-target="#field-{{ f.path | replace('.', '-') }}"
+                  hx-swap="outerHTML">
+            Environment
+          </button>
+          {% endif %}
+          {% if f.var_eligible %}
+          <button data-source="var"
+                  class="{{ 'active' if current_source == 'var' else '' }}"
+                  hx-patch="/api/config/field"
+                  hx-vals='{"path":{{ f.path | tojson }},"key":{{ key_json }},"source":"var","value":{{ val_json if current_source == 'var' else '""' }}}'
+                  hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+                  hx-target="#field-{{ f.path | replace('.', '-') }}"
+                  hx-swap="outerHTML">
+            Variable
+          </button>
+          {% endif %}
+        </div>
+
+        {% if current_source == 'literal' %}
+        <input class="cfg-input" type="text"
+               value="{{ display_value if display_value is not none else '' }}"
+               {% if f.secret %}placeholder="(secret)"{% endif %}
+               hx-patch="/api/config/field"
+               hx-trigger="change"
+               hx-vals='{"path":{{ f.path | tojson }},"key":{{ key_json }},"source":"literal"}'
+               hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+               hx-target="#field-{{ f.path | replace('.', '-') }}"
+               hx-swap="outerHTML"
+               name="value"
+               hx-include="this">
+        {% else %}
+        <input class="cfg-input" type="text"
+               value="{{ display_value if display_value is not none else '' }}"
+               placeholder="{{ 'ENV_VAR_NAME' if current_source == 'env' else 'VAR_NAME' }}"
+               hx-patch="/api/config/field"
+               hx-trigger="change"
+               hx-vals='{"path":{{ f.path | tojson }},"key":{{ key_json }},"source":"{{ current_source }}"}'
+               hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+               hx-target="#field-{{ f.path | replace('.', '-') }}"
+               hx-swap="outerHTML"
+               name="value"
+               hx-include="this">
         {% endif %}
       </div>
-
-      {% if current_source == 'literal' %}
-      <input class="cfg-input cfg-dict-value" type="text"
-             value="{{ display_value if display_value is not none else '' }}"
-             {% if f.secret %}placeholder="(secret)"{% endif %}
-             hx-patch="/api/config/field"
-             hx-trigger="change"
-             hx-vals='{"path":{{ f.path | tojson }},"key":{{ key_json }},"source":"literal"}'
-             hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
-             hx-target="#field-{{ f.path | replace('.', '-') }}"
-             hx-swap="outerHTML"
-             name="value"
-             hx-include="this">
-      {% else %}
-      <input class="cfg-input cfg-dict-value" type="text"
-             value="{{ display_value if display_value is not none else '' }}"
-             placeholder="{{ 'ENV_VAR_NAME' if current_source == 'env' else 'VAR_NAME' }}"
-             hx-patch="/api/config/field"
-             hx-trigger="change"
-             hx-vals='{"path":{{ f.path | tojson }},"key":{{ key_json }},"source":"{{ current_source }}"}'
-             hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
-             hx-target="#field-{{ f.path | replace('.', '-') }}"
-             hx-swap="outerHTML"
-             name="value"
-             hx-include="this">
-      {% endif %}
 
       <button class="cfg-btn danger cfg-list-remove"
               hx-post="/api/config/remove"

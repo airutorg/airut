@@ -243,20 +243,24 @@ Updates a single item in a tagged union list by index, replacing it with a new
 Every scalar field gets a segmented control:
 
 ```
-┌──────────┬─────────┬──────┬──────┐
-│ Not set  │ Literal │ !env │ !var │
-└──────────┴─────────┴──────┴──────┘
+┌─────────┬─────────┬─────────────┬──────────┐
+│ Default │ Literal │ Environment │ Variable │
+└─────────┴─────────┴─────────────┴──────────┘
 ```
 
-| Field type                  | Not set | Literal | !env | !var |
-| --------------------------- | ------- | ------- | ---- | ---- |
-| Required `str` (no default) | No      | Yes     | Yes  | Yes  |
-| Optional `str \| None`      | Yes     | Yes     | Yes  | Yes  |
-| `str` with default          | Yes     | Yes     | Yes  | Yes  |
-| `int` / `float`             | Yes\*   | Yes     | Yes  | Yes  |
-| `bool`                      | Yes\*   | Yes     | No   | No   |
+Tabs are color-coded: Default (gray), Literal (blue), Environment (yellow),
+Variable (green). The active tab is solid-colored and the input field below
+receives a light background tint matching the active tab color.
 
-\*"Not set" available only when the field has a default (is not required).
+| Field type                  | Default | Literal | Environment | Variable |
+| --------------------------- | ------- | ------- | ----------- | -------- |
+| Required `str` (no default) | No      | Yes     | Yes         | Yes      |
+| Optional `str \| None`      | Yes     | Yes     | Yes         | Yes      |
+| `str` with default          | Yes     | Yes     | Yes         | Yes      |
+| `int` / `float`             | Yes\*   | Yes     | Yes         | Yes      |
+| `bool`                      | Yes\*   | Yes     | No          | No       |
+
+\*"Default" available only when the field has a default (is not required).
 
 ### Boolean Fields
 
@@ -490,7 +494,23 @@ it), localhost binding by default.
 
 File: `airut/dashboard/static/styles/config.css`.
 
-Extends the existing design system with no new colors, fonts, or spacing values.
+Extends the existing design system with no new colors — source tabs reuse the
+standard status palette (`--text-tertiary` for gray, `--status-info` for blue,
+`--status-warning` for yellow, `--status-success` for green) and their `-bg`
+variants for field tinting:
+
+- **`.cfg-save-bar`** — flex container with action buttons and dirty count.
+- **`.cfg-field`** — field row with `set`/`unset` background states.
+- **`.cfg-tabbed`** — bordered wrapper connecting source tabs to the input below
+  (`overflow: hidden` eliminates sub-pixel gaps). Uses `data-source` attribute
+  for source-specific field tinting.
+- **`.cfg-source`** — tab bar inside `.cfg-tabbed`. Active tab color maps to
+  standard status variables per source type.
+- **`.cfg-input`** — text/number/select input (`--font-mono`, 13px).
+- **`.cfg-btn`** — action buttons with `:disabled` state (opacity 0.4).
+- **`.cfg-banner`** — feedback banners (success/error/warning/info).
+- **`.cfg-dialog`** — centered modal (`margin: auto` for `<dialog>`).
+- **`.cfg-diff-table`** — diff display: old/new values, scope badges.
 
 ## Files
 
