@@ -404,14 +404,7 @@ select.cfg-tagged-type { max-width: 200px; flex-shrink: 0; }
 /* ---- Subsection divider ---- */
 .cfg-subsection {
   margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border-light);
-}
-.cfg-subsection-header {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-bottom: 4px;
+  padding-top: 4px;
 }
 .cfg-subsection-hint {
   font-size: 12px;
