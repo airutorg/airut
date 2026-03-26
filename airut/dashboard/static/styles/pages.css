@@ -279,8 +279,24 @@ h2 {
 }
 
 /* ---- Console layout (actions/network) ---- */
+/* Contained scroll model: body fills the viewport as a flex column,
+   navbar sits above the scroll area (no sticky needed), and
+   .console-page is the internal scroll container.  This avoids the
+   iOS Safari/Chrome bug where position:sticky + window.scrollTo()
+   + dynamic address-bar height causes the navbar to scroll out of
+   view and leaves empty space at the bottom. */
 body.console-body {
   background: var(--bg-code);
+  padding-top: 0;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+body.console-body > .navbar {
+  position: relative;
+  flex-shrink: 0;
 }
 .console-page {
   background: var(--bg-code);
@@ -290,6 +306,10 @@ body.console-body {
   color: var(--text-primary);
   overflow-wrap: break-word;
   word-break: break-word;
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 .console-header {
   padding: 10px 20px;
