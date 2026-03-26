@@ -151,28 +151,28 @@ class ResourceLimits:
     timeout: int | None = field(
         default=None,
         metadata=meta(
-            "Max container execution time in seconds",
+            "Max execution time in seconds (minimum 10)",
             Scope.TASK,
         ),
     )
     memory: str | None = field(
         default=None,
         metadata=meta(
-            "Memory limit for container (e.g. '512m', '2g')",
+            "Memory limit (e.g. 512m, 2g)",
             Scope.TASK,
         ),
     )
     cpus: float | None = field(
         default=None,
         metadata=meta(
-            "CPU limit for container (supports fractional cores, e.g. 1.5)",
+            "CPU limit (e.g. 1.5 for one and a half cores)",
             Scope.TASK,
         ),
     )
     pids_limit: int | None = field(
         default=None,
         metadata=meta(
-            "Process limit for container",
+            "Max number of processes in the container",
             Scope.TASK,
         ),
     )

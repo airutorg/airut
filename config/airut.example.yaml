@@ -46,25 +46,25 @@
 #   # Dashboard HTTP server port
 #   port: 5200
 #
-#   # Public URL for dashboard links in emails (None = omit links)
+#   # Public URL for dashboard links in emails (omitted if empty)
 #   base_url: dashboard.example.com
 
 # Container runtime command (podman or docker)
 # container_command: podman
 
-# Server-wide default resource limits for containers
+# Default container resource limits (repos can override individually)
 # resource_limits:
-#   # Max container execution time in seconds
+#   # Max execution time in seconds (minimum 10)
 #   timeout: 7200
-#   # Memory limit for container (e.g. '512m', '2g')
+#   # Memory limit (e.g. 512m, 2g)
 #   memory: "8g"
-#   # CPU limit for container (supports fractional cores, e.g. 1.5)
+#   # CPU limit (e.g. 1.5 for one and a half cores)
 #   cpus: 4
-#   # Process limit for container
+#   # Max number of processes in the container
 #   pids_limit: 1024
 
 # network:
-#   # Upstream DNS server for proxy resolution (None = auto-detect)
+#   # Upstream DNS server for proxy resolution (auto-detected if empty)
 #   upstream_dns: "1.1.1.1"
 
 # ---------------------------------------------------------------------------
@@ -96,7 +96,7 @@ repos:
         - you@example.com
         # - *@company.com
 
-      # Trusted authserv-id in Authentication-Results headers
+      # Trusted authserv-id for DMARC verification (empty string for Microsoft 365)
       trusted_authserv_id: mail.example.com
 
       # IMAP port
@@ -105,13 +105,13 @@ repos:
       # SMTP port
       # smtp_port: 587
 
-      # Email account password
+      # Email account password (not required with OAuth2)
       # password: !env EMAIL_PASSWORD
 
       # Whether SMTP requires authentication
       # smtp_require_auth: true
 
-      # Accept X-MS-Exchange AuthAs: Internal
+      # Accept Microsoft 365 intra-org messages when DMARC headers are absent
       # microsoft_internal_auth_fallback: false
 
       # imap:
@@ -124,7 +124,7 @@ repos:
       #   # Use IMAP IDLE instead of polling
       #   use_idle: true
       #
-      #   # Reconnect interval for IDLE mode (seconds)
+      #   # IDLE reconnect interval in seconds (servers may close after 30 min)
       #   idle_reconnect_interval: 1740
 
       # microsoft_oauth2:
@@ -145,7 +145,7 @@ repos:
     # secrets:
     #   ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
 
-    # Secrets with scope restrictions for proxy replacement
+    # Scoped secrets replaced by proxy at request time (requires network sandbox)
     # masked_secrets:
     #   GH_TOKEN:
     #     value: !env GH_TOKEN
@@ -185,26 +185,26 @@ repos:
     # Claude model for new conversations
     # model: opus
 
-    # Effort level for Claude Code (None = Claude default)
+    # Effort level: low, medium, high, or max (empty = Claude default)
     # effort: max
 
-    # Per-repo container resource limits (timeout, memory, cpus, pids)
+    # Container resource limits (overrides server-wide defaults)
     # resource_limits:
-    #   # Max container execution time in seconds
+    #   # Max execution time in seconds (minimum 10)
     #   timeout: 7200
-    #   # Memory limit for container (e.g. '512m', '2g')
+    #   # Memory limit (e.g. 512m, 2g)
     #   memory: "8g"
-    #   # CPU limit for container (supports fractional cores, e.g. 1.5)
+    #   # CPU limit (e.g. 1.5 for one and a half cores)
     #   cpus: 4
-    #   # Process limit for container
+    #   # Max number of processes in the container
     #   pids_limit: 1024
 
-    # Plain environment variables passed to containers
+    # Non-secret environment variables for containers (overridden by credential pools)
     # container_env:
     #   BUCKET_NAME: "my-bucket"
 
     # network:
-    #   # Enable the network sandbox (proxy toggle)
+    #   # Route container traffic through the network proxy and enforce the allowlist (required for masked/signing/GitHub App credentials)
     #   sandbox_enabled: true
 
     # Slack channel (can coexist with email).
