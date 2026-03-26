@@ -8,8 +8,13 @@
 import copy
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+
+if TYPE_CHECKING:
+    from airut.config.editor_schema import EditorFieldSchema
 
 import pytest
 from werkzeug.test import Client
@@ -1505,14 +1510,15 @@ class TestRepoPage:
         assert "Remove" in html
         assert "remove-repo-btn" in html
 
-    def test_repo_page_channel_placeholder(
+    def test_repo_page_shows_credentials_section(
         self, harness: ConfigEditorHarness
     ) -> None:
-        """Channel editing shows future-update placeholder."""
+        """Credentials section is shown on repo page."""
         harness.client.get("/config")
         response = harness.client.get("/config/repos/test-repo")
         html = response.get_data(as_text=True)
-        assert "future update" in html
+        assert "Credentials" in html
+        assert "future update" not in html
 
 
 class TestRepoFieldPatch:
@@ -2863,3 +2869,947 @@ class TestParseChannelPath:
             )
             is None
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Credentials + Dict Fields
+# ---------------------------------------------------------------------------
+
+
+def _make_sample_raw_with_credentials() -> dict[str, Any]:
+    """Create a sample raw config with credential data."""
+    raw = _make_sample_raw()
+    raw["repos"]["test-repo"]["secrets"] = {
+        "TOKEN_A": "value_a",
+        "TOKEN_B": "value_b",
+    }
+    raw["repos"]["test-repo"]["masked_secrets"] = {
+        "GITHUB_TOKEN": {
+            "value": "ghp_test123",
+            "scopes": ["api.github.com"],
+            "headers": ["Authorization"],
+            "allow_foreign_credentials": False,
+        },
+    }
+    raw["repos"]["test-repo"]["signing_credentials"] = {
+        "AWS_CREDS": {
+            "type": "aws-sigv4",
+            "access_key_id": {
+                "name": "AWS_ACCESS_KEY_ID",
+                "value": "AKIATEST1234",
+            },
+            "secret_access_key": {
+                "name": "AWS_SECRET_ACCESS_KEY",
+                "value": "wJalrXUtnFEMI",
+            },
+            "scopes": ["*.amazonaws.com"],
+        },
+    }
+    raw["repos"]["test-repo"]["github_app_credentials"] = {
+        "MY_APP": {
+            "app_id": "123456",
+            "private_key": "test-key-data",
+            "installation_id": "789012",
+            "scopes": ["api.github.com"],
+        },
+    }
+    return raw
+
+
+@pytest.fixture
+def cred_harness(tmp_path: Path) -> ConfigEditorHarness:
+    return ConfigEditorHarness(
+        tmp_path, raw=_make_sample_raw_with_credentials()
+    )
+
+
+class TestDictStrStrWidget:
+    """Tests for dict[str, str] widget (secrets)."""
+
+    def test_repo_page_shows_secrets(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        response = cred_harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "Plain Secrets" in html
+        assert "TOKEN_A" in html
+        assert "TOKEN_B" in html
+        # container_env is not exposed in the UI
+        assert "Container Environment" not in html
+
+    def test_patch_dict_entry(self, cred_harness: ConfigEditorHarness) -> None:
+        cred_harness.client.get("/config")
+        response = cred_harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.secrets",
+                "key": "TOKEN_A",
+                "source": "literal",
+                "value": "new_value",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = cred_harness.server._config_handlers._buffer
+        assert buf is not None
+        assert (
+            buf.raw["repos"]["test-repo"]["secrets"]["TOKEN_A"] == "new_value"
+        )
+
+    def test_patch_dict_entry_env(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        cred_harness.client.get("/config")
+        response = cred_harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.secrets",
+                "key": "TOKEN_A",
+                "source": "env",
+                "value": "SECRET_VAR",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = cred_harness.server._config_handlers._buffer
+        assert buf is not None
+        assert isinstance(
+            buf.raw["repos"]["test-repo"]["secrets"]["TOKEN_A"], EnvVar
+        )
+
+    def test_patch_dict_entry_unset(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        cred_harness.client.get("/config")
+        response = cred_harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.secrets",
+                "key": "TOKEN_A",
+                "source": "unset",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = cred_harness.server._config_handlers._buffer
+        assert buf is not None
+        assert "TOKEN_A" not in buf.raw["repos"]["test-repo"]["secrets"]
+
+    def test_patch_dict_entry_returns_widget(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        cred_harness.client.get("/config")
+        response = cred_harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.secrets",
+                "key": "TOKEN_A",
+                "source": "literal",
+                "value": "new",
+            },
+            headers=XHR,
+        )
+        html = response.get_data(as_text=True)
+        assert "cfg-dict-field" in html
+        assert "X-Dirty-Count" in response.headers
+
+    def test_add_dict_entry(self, cred_harness: ConfigEditorHarness) -> None:
+        cred_harness.client.get("/config")
+        response = cred_harness.client.post(
+            "/api/config/add",
+            data={
+                "path": "repos.test-repo.secrets",
+                "key": "NEW_TOKEN",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = cred_harness.server._config_handlers._buffer
+        assert buf is not None
+        assert "NEW_TOKEN" in buf.raw["repos"]["test-repo"]["secrets"]
+        assert buf.raw["repos"]["test-repo"]["secrets"]["NEW_TOKEN"] == ""
+
+    def test_add_dict_entry_returns_widget(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        cred_harness.client.get("/config")
+        response = cred_harness.client.post(
+            "/api/config/add",
+            data={
+                "path": "repos.test-repo.secrets",
+                "key": "NEW_TOKEN",
+            },
+            headers=XHR,
+        )
+        html = response.get_data(as_text=True)
+        assert "cfg-dict-field" in html
+        assert "X-Dirty-Count" in response.headers
+
+    def test_remove_dict_entry(self, cred_harness: ConfigEditorHarness) -> None:
+        cred_harness.client.get("/config")
+        response = cred_harness.client.post(
+            "/api/config/remove",
+            data={
+                "path": "repos.test-repo.secrets",
+                "key": "TOKEN_A",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = cred_harness.server._config_handlers._buffer
+        assert buf is not None
+        assert "TOKEN_A" not in buf.raw["repos"]["test-repo"]["secrets"]
+
+    def test_remove_dict_entry_returns_widget(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        cred_harness.client.get("/config")
+        response = cred_harness.client.post(
+            "/api/config/remove",
+            data={
+                "path": "repos.test-repo.secrets",
+                "key": "TOKEN_A",
+            },
+            headers=XHR,
+        )
+        html = response.get_data(as_text=True)
+        assert "cfg-dict-field" in html
+
+    def test_patch_dict_unknown_path_returns_ok(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        """PATCH with key on unknown path returns plain OK."""
+        cred_harness.client.get("/config")
+        response = cred_harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.nonexistent",
+                "key": "K",
+                "source": "literal",
+                "value": "v",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        assert "X-Dirty-Count" in response.headers
+
+    def test_add_dict_entry_creates_dict(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        """Add to a path that doesn't exist yet creates the dict."""
+        cred_harness.client.get("/config")
+        buf = cred_harness.server._config_handlers._buffer
+        assert buf is not None
+        # Remove secrets entirely
+        del buf.raw["repos"]["test-repo"]["secrets"]
+        response = cred_harness.client.post(
+            "/api/config/add",
+            data={
+                "path": "repos.test-repo.secrets",
+                "key": "FRESH",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        assert buf.raw["repos"]["test-repo"]["secrets"]["FRESH"] == ""
+
+    def test_add_dict_entry_empty_key_rejected(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        """Adding a dict entry with empty key returns 400."""
+        cred_harness.client.get("/config")
+        response = cred_harness.client.post(
+            "/api/config/add",
+            data={
+                "path": "repos.test-repo.secrets",
+                "key": "",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 400
+
+    def test_add_dict_entry_whitespace_key_rejected(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        """Adding a dict entry with whitespace-only key returns 400."""
+        cred_harness.client.get("/config")
+        response = cred_harness.client.post(
+            "/api/config/add",
+            data={
+                "path": "repos.test-repo.secrets",
+                "key": "   ",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 400
+
+    def test_dict_dirty_count(self, cred_harness: ConfigEditorHarness) -> None:
+        """Adding a dict entry shows in dirty count."""
+        cred_harness.client.get("/config")
+        response = cred_harness.client.post(
+            "/api/config/add",
+            data={
+                "path": "repos.test-repo.secrets",
+                "key": "EXTRA",
+            },
+            headers=XHR,
+        )
+        count = int(response.headers["X-Dirty-Count"])
+        assert count >= 1
+
+
+class TestKeyedCollectionWidget:
+    """Tests for keyed collection widget (masked_secrets, etc.)."""
+
+    def test_repo_page_shows_masked_secrets(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        response = cred_harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "Masked Secrets" in html
+        assert "GITHUB_TOKEN" in html
+
+    def test_repo_page_shows_signing_credentials(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        response = cred_harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "Signing Credentials" in html
+        assert "AWS_CREDS" in html
+
+    def test_repo_page_shows_github_app_credentials(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        response = cred_harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "GitHub App Credentials" in html
+        assert "MY_APP" in html
+
+    def test_keyed_collection_shows_item_fields(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        response = cred_harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        # Masked secret sub-fields should be visible
+        assert "allow_foreign_credentials" in html
+
+    def test_patch_keyed_collection_item_field(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        cred_harness.client.get("/config")
+        response = cred_harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.masked_secrets.GITHUB_TOKEN.value",
+                "source": "literal",
+                "value": "ghp_new_token",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = cred_harness.server._config_handlers._buffer
+        assert buf is not None
+        ms = buf.raw["repos"]["test-repo"]["masked_secrets"]["GITHUB_TOKEN"]
+        assert ms["value"] == "ghp_new_token"
+
+    def test_patch_keyed_collection_item_env(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        cred_harness.client.get("/config")
+        response = cred_harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.masked_secrets.GITHUB_TOKEN.value",
+                "source": "env",
+                "value": "GH_TOKEN_VAR",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = cred_harness.server._config_handlers._buffer
+        assert buf is not None
+        ms = buf.raw["repos"]["test-repo"]["masked_secrets"]["GITHUB_TOKEN"]
+        assert isinstance(ms["value"], EnvVar)
+
+    def test_add_keyed_collection_item(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        cred_harness.client.get("/config")
+        response = cred_harness.client.post(
+            "/api/config/add",
+            data={
+                "path": "repos.test-repo.masked_secrets",
+                "key": "OTHER_TOKEN",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = cred_harness.server._config_handlers._buffer
+        assert buf is not None
+        ms = buf.raw["repos"]["test-repo"]["masked_secrets"]
+        assert "OTHER_TOKEN" in ms
+
+    def test_add_keyed_collection_empty_key_rejected(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        """Adding a keyed collection entry with empty key returns 400."""
+        cred_harness.client.get("/config")
+        response = cred_harness.client.post(
+            "/api/config/add",
+            data={
+                "path": "repos.test-repo.masked_secrets",
+                "key": "",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 400
+
+    def test_add_keyed_collection_whitespace_key_rejected(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        """Whitespace-only key is rejected for keyed collection."""
+        cred_harness.client.get("/config")
+        response = cred_harness.client.post(
+            "/api/config/add",
+            data={
+                "path": "repos.test-repo.masked_secrets",
+                "key": "  ",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 400
+
+    def test_add_keyed_collection_returns_widget(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        cred_harness.client.get("/config")
+        response = cred_harness.client.post(
+            "/api/config/add",
+            data={
+                "path": "repos.test-repo.masked_secrets",
+                "key": "OTHER_TOKEN",
+            },
+            headers=XHR,
+        )
+        html = response.get_data(as_text=True)
+        assert "cfg-keyed-collection" in html
+        assert "X-Dirty-Count" in response.headers
+
+    def test_remove_keyed_collection_item(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        cred_harness.client.get("/config")
+        response = cred_harness.client.post(
+            "/api/config/remove",
+            data={
+                "path": "repos.test-repo.masked_secrets",
+                "key": "GITHUB_TOKEN",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = cred_harness.server._config_handlers._buffer
+        assert buf is not None
+        assert "GITHUB_TOKEN" not in buf.raw["repos"]["test-repo"].get(
+            "masked_secrets", {}
+        )
+
+    def test_remove_keyed_collection_returns_widget(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        cred_harness.client.get("/config")
+        response = cred_harness.client.post(
+            "/api/config/remove",
+            data={
+                "path": "repos.test-repo.masked_secrets",
+                "key": "GITHUB_TOKEN",
+            },
+            headers=XHR,
+        )
+        html = response.get_data(as_text=True)
+        assert "cfg-keyed-collection" in html
+
+    def test_keyed_collection_dirty_count(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        """Adding a keyed collection entry shows in dirty count."""
+        cred_harness.client.get("/config")
+        response = cred_harness.client.post(
+            "/api/config/add",
+            data={
+                "path": "repos.test-repo.masked_secrets",
+                "key": "EXTRA",
+            },
+            headers=XHR,
+        )
+        count = int(response.headers["X-Dirty-Count"])
+        assert count >= 1
+
+
+class TestFindFieldSchemaKeyedCollection:
+    """Tests for _find_field_schema with keyed collection item paths."""
+
+    def test_find_keyed_collection_item_field(self) -> None:
+        from airut.config.editor import EditorFieldSchema
+        from airut.dashboard.handlers_config import _find_field_schema
+
+        inner = EditorFieldSchema(
+            name="value",
+            path="value",
+            type_tag="scalar",
+            python_type="str",
+            default="",
+            required=False,
+            doc="Value",
+            scope="repo",
+            secret=True,
+        )
+        coll = EditorFieldSchema(
+            name="masked_secrets",
+            path="repos.test.masked_secrets",
+            type_tag="keyed_collection",
+            python_type="dict",
+            default=None,
+            required=False,
+            doc="Masked secrets",
+            scope="repo",
+            secret=True,
+            item_class_name="MaskedSecret",
+            item_fields=[inner],
+        )
+        found = _find_field_schema(
+            [coll], "repos.test.masked_secrets.TOKEN.value"
+        )
+        assert found is not None
+        assert found.name == "value"
+        assert found.path == "repos.test.masked_secrets.TOKEN.value"
+
+    def test_keyed_collection_no_match(self) -> None:
+        from airut.config.editor import EditorFieldSchema
+        from airut.dashboard.handlers_config import _find_field_schema
+
+        inner = EditorFieldSchema(
+            name="value",
+            path="value",
+            type_tag="scalar",
+            python_type="str",
+            default="",
+            required=False,
+            doc="Value",
+            scope="repo",
+            secret=True,
+        )
+        coll = EditorFieldSchema(
+            name="masked_secrets",
+            path="repos.test.masked_secrets",
+            type_tag="keyed_collection",
+            python_type="dict",
+            default=None,
+            required=False,
+            doc="Masked secrets",
+            scope="repo",
+            secret=True,
+            item_class_name="MaskedSecret",
+            item_fields=[inner],
+        )
+        found = _find_field_schema(
+            [coll], "repos.test.masked_secrets.TOKEN.nonexistent"
+        )
+        assert found is None
+
+
+class TestFormatRawValueCollections:
+    """Tests for format_raw_value with dict and list values."""
+
+    def test_format_dict(self) -> None:
+        from airut.config.editor import format_raw_value
+
+        assert format_raw_value({"a": "1", "b": "2"}) == "(2 entries)"
+
+    def test_format_empty_dict(self) -> None:
+        from airut.config.editor import format_raw_value
+
+        assert format_raw_value({}) == "(empty)"
+
+    def test_format_list(self) -> None:
+        from airut.config.editor import format_raw_value
+
+        assert format_raw_value(["a", "b"]) == "(2 items)"
+
+    def test_format_empty_list(self) -> None:
+        from airut.config.editor import format_raw_value
+
+        assert format_raw_value([]) == "(empty list)"
+
+
+class TestPrefixedField:
+    """Tests for the prefixed_field Jinja2 helper."""
+
+    @staticmethod
+    def _get_pf() -> Callable[..., "EditorFieldSchema"]:
+        from airut.dashboard.templating import create_jinja_env
+
+        env = create_jinja_env()
+        return env.globals["prefixed_field"]  # type: ignore[return-value]
+
+    def test_prefixed_field_rejects_non_schema(self) -> None:
+        pf = self._get_pf()
+        with pytest.raises(TypeError, match="Expected EditorFieldSchema"):
+            pf("not a schema", "prefix")
+
+    def test_prefixed_field_basic(self) -> None:
+        from airut.config.editor import EditorFieldSchema
+
+        pf = self._get_pf()
+
+        f = EditorFieldSchema(
+            name="value",
+            path="value",
+            type_tag="scalar",
+            python_type="str",
+            default="",
+            required=False,
+            doc="Value",
+            scope="repo",
+            secret=True,
+        )
+        result = pf(f, "repos.test.masked_secrets.TOKEN")
+        assert isinstance(result, EditorFieldSchema)
+        assert result.path == ("repos.test.masked_secrets.TOKEN.value")
+        assert result.name == "value"
+
+    def test_prefixed_field_nested(self) -> None:
+        from airut.config.editor import EditorFieldSchema
+
+        pf = self._get_pf()
+
+        inner = EditorFieldSchema(
+            name="name",
+            path="access_key_id.name",
+            type_tag="scalar",
+            python_type="str",
+            default="",
+            required=False,
+            doc="Name",
+            scope="repo",
+            secret=False,
+        )
+        outer = EditorFieldSchema(
+            name="access_key_id",
+            path="access_key_id",
+            type_tag="nested",
+            python_type="SigningCredentialField",
+            default=None,
+            required=True,
+            doc="Access key",
+            scope="repo",
+            secret=True,
+            nested_fields=[inner],
+        )
+        result = pf(outer, "repos.test.signing_credentials.AWS")
+        assert isinstance(result, EditorFieldSchema)
+        pfx = "repos.test.signing_credentials.AWS"
+        assert result.path == f"{pfx}.access_key_id"
+        assert result.nested_fields is not None
+        assert result.nested_fields[0].path == f"{pfx}.access_key_id.name"
+
+    def test_prefixed_field_item_fields(self) -> None:
+        from airut.config.editor import EditorFieldSchema
+
+        pf = self._get_pf()
+
+        item_field = EditorFieldSchema(
+            name="value",
+            path="value",
+            type_tag="scalar",
+            python_type="str",
+            default="",
+            required=False,
+            doc="Value",
+            scope="repo",
+            secret=True,
+        )
+        collection = EditorFieldSchema(
+            name="inner_coll",
+            path="inner_coll",
+            type_tag="keyed_collection",
+            python_type="dict",
+            default=None,
+            required=False,
+            doc="Inner collection",
+            scope="repo",
+            secret=False,
+            item_fields=[item_field],
+            item_class_name="SomeType",
+        )
+        result = pf(collection, "repos.test.outer.KEY")
+        assert isinstance(result, EditorFieldSchema)
+        assert result.path == "repos.test.outer.KEY.inner_coll"
+        assert result.item_fields is not None
+        assert result.item_fields[0].path == "repos.test.outer.KEY.value"
+
+
+class TestCredentialDiff:
+    """Tests for diff with credential data."""
+
+    def test_diff_shows_per_key_credential_changes(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        cred_harness.client.get("/config")
+        # Modify a secret
+        cred_harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.secrets",
+                "key": "TOKEN_A",
+                "source": "literal",
+                "value": "changed_value",
+            },
+            headers=XHR,
+        )
+        response = cred_harness.client.get("/api/config/diff")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        # Per-key diff: should show the specific key, not "(N entries)"
+        assert "secrets.TOKEN_A" in html
+        assert "(1 entries)" not in html
+
+    def test_credential_repo_page_no_placeholder(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        """Phase 4 placeholder banner should be gone."""
+        response = cred_harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "will be available in a future update" not in html
+
+    def test_keyed_collection_cards_collapsed_by_default(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        response = cred_harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert '<details class="cfg-collection-card" open>' not in html
+        assert '<details class="cfg-collection-card">' in html
+
+    def test_no_scope_labels_in_field_widgets(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        response = cred_harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert 'class="cfg-scope cfg-repo"' not in html
+
+    def test_humanized_type_names_in_ui(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        response = cred_harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        # Should show "Masked Secret", not "MaskedSecret"
+        assert "Masked Secret" in html
+        assert "MaskedSecret" not in html
+
+
+class TestDiffDictField:
+    """Tests for diff_dict_field and count_dict_field_changes."""
+
+    def test_diff_dict_field_added_key(self) -> None:
+        from airut.config.editor import (
+            MISSING,
+            EditorFieldSchema,
+            diff_dict_field,
+        )
+
+        fs = EditorFieldSchema(
+            name="secrets",
+            path="repos.test.secrets",
+            type_tag="dict_str_str",
+            python_type="dict",
+            default=None,
+            required=False,
+            doc="Secrets",
+            scope="repo",
+            secret=True,
+        )
+        changes = diff_dict_field(fs, {"KEY": "val"}, MISSING)
+        assert len(changes) == 1
+        assert changes[0]["field"] == "repos.test.secrets.KEY"
+        assert changes[0]["old"] == "(not set)"
+        assert changes[0]["new"] == "val"
+
+    def test_diff_dict_field_removed_key(self) -> None:
+        from airut.config.editor import EditorFieldSchema, diff_dict_field
+
+        fs = EditorFieldSchema(
+            name="secrets",
+            path="repos.test.secrets",
+            type_tag="dict_str_str",
+            python_type="dict",
+            default=None,
+            required=False,
+            doc="Secrets",
+            scope="repo",
+            secret=True,
+        )
+        changes = diff_dict_field(fs, {}, {"KEY": "val"})
+        assert len(changes) == 1
+        assert changes[0]["new"] == "(not set)"
+
+    def test_diff_dict_field_changed_value(self) -> None:
+        from airut.config.editor import EditorFieldSchema, diff_dict_field
+
+        fs = EditorFieldSchema(
+            name="secrets",
+            path="repos.test.secrets",
+            type_tag="dict_str_str",
+            python_type="dict",
+            default=None,
+            required=False,
+            doc="Secrets",
+            scope="repo",
+            secret=True,
+        )
+        changes = diff_dict_field(fs, {"K": "new_val"}, {"K": "old_val"})
+        assert len(changes) == 1
+        assert changes[0]["old"] == "old_val"
+        assert changes[0]["new"] == "new_val"
+
+    def test_diff_dict_field_no_changes(self) -> None:
+        from airut.config.editor import EditorFieldSchema, diff_dict_field
+
+        fs = EditorFieldSchema(
+            name="secrets",
+            path="repos.test.secrets",
+            type_tag="dict_str_str",
+            python_type="dict",
+            default=None,
+            required=False,
+            doc="Secrets",
+            scope="repo",
+            secret=True,
+        )
+        changes = diff_dict_field(fs, {"K": "v"}, {"K": "v"})
+        assert changes == []
+
+    def test_count_dict_field_changes(self) -> None:
+        from airut.config.editor import count_dict_field_changes
+
+        assert count_dict_field_changes({"A": "1", "B": "2"}, {"A": "1"}) == 1
+        assert count_dict_field_changes({}, {"A": "1"}) == 1
+        assert count_dict_field_changes({"A": "1"}, {"A": "1"}) == 0
+
+    def test_dirty_count_per_key(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        """Dirty count should count per key, not per dict."""
+        cred_harness.client.get("/config")
+        # Change one secret key
+        resp = cred_harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.secrets",
+                "key": "TOKEN_A",
+                "source": "literal",
+                "value": "changed",
+            },
+            headers=XHR,
+        )
+        dirty = int(resp.headers["X-Dirty-Count"])
+        assert dirty == 1  # One key changed, not "1 dict field"
+
+    def test_diff_added_repo_with_dict_fields(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        """Diff for a newly added repo expands dict fields per-key."""
+        cred_harness.client.get("/config")
+        # Add a new repo
+        cred_harness.client.post(
+            "/api/config/add",
+            data={"path": "repos", "key": "new-repo"},
+            headers=XHR,
+        )
+        # Add a secret to it via API
+        cred_harness.client.post(
+            "/api/config/add",
+            data={"path": "repos.new-repo.secrets", "key": "S1"},
+            headers=XHR,
+        )
+        cred_harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.new-repo.secrets",
+                "key": "S1",
+                "source": "literal",
+                "value": "v1",
+            },
+            headers=XHR,
+        )
+        response = cred_harness.client.get("/api/config/diff")
+        html = response.get_data(as_text=True)
+        # Per-key: should show secrets.S1, not "(1 entries)"
+        assert "secrets.S1" in html
+
+    def test_diff_removed_repo_with_dict_fields(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        """Diff for removed repo expands dict fields per-key."""
+        cred_harness.client.get("/config")
+        # Remove the test-repo (which has secrets)
+        cred_harness.client.post(
+            "/api/config/remove",
+            data={"path": "repos", "key": "test-repo"},
+            headers=XHR,
+        )
+        response = cred_harness.client.get("/api/config/diff")
+        html = response.get_data(as_text=True)
+        # Per-key: should show individual secret keys
+        assert "secrets.TOKEN_A" in html
+
+    def test_dirty_count_added_repo_dict_fields(
+        self, cred_harness: ConfigEditorHarness
+    ) -> None:
+        """Dirty count for added repo counts dict keys."""
+        cred_harness.client.get("/config")
+        cred_harness.client.post(
+            "/api/config/add",
+            data={"path": "repos", "key": "new-repo"},
+            headers=XHR,
+        )
+        # Add two secret keys via API
+        cred_harness.client.post(
+            "/api/config/add",
+            data={"path": "repos.new-repo.secrets", "key": "A"},
+            headers=XHR,
+        )
+        resp = cred_harness.client.post(
+            "/api/config/add",
+            data={"path": "repos.new-repo.secrets", "key": "B"},
+            headers=XHR,
+        )
+        dirty = int(resp.headers["X-Dirty-Count"])
+        # Should count each dict key individually
+        assert dirty >= 2
+
+
+class TestHumanizeTypeFilter:
+    """Tests for humanize_type Jinja2 filter."""
+
+    @staticmethod
+    def _get_filter() -> Callable[..., str]:
+        from airut.dashboard.templating import create_jinja_env
+
+        env = create_jinja_env()
+        return env.filters["humanize_type"]  # type: ignore[return-value]
+
+    def test_basic_camel_case(self) -> None:
+        assert self._get_filter()("MaskedSecret") == "Masked Secret"
+
+    def test_github_app_credential(self) -> None:
+        fn = self._get_filter()
+        assert fn("GitHubAppCredential") == "GitHub App Credential"
+
+    def test_signing_credential(self) -> None:
+        assert self._get_filter()("SigningCredential") == "Signing Credential"
+
+    def test_single_word(self) -> None:
+        assert self._get_filter()("Entry") == "Entry"
+
+    def test_fallback_camel_case(self) -> None:
+        assert self._get_filter()("SomeOtherType") == "Some Other Type"

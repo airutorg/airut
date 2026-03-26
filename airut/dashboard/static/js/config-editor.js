@@ -89,6 +89,20 @@
     });
   }
 
+  // Block add requests when key input is empty.  htmx does not honour
+  // the HTML "required" attribute, so we validate in htmx:configRequest.
+  document.body.addEventListener('htmx:configRequest', function(evt) {
+    var elt = evt.detail.elt;
+    if (!elt || !elt.classList.contains('cfg-list-add')) return;
+    var includeId = elt.getAttribute('hx-include');
+    if (!includeId) return;
+    var input = document.querySelector(includeId);
+    if (input && !input.value.trim()) {
+      evt.preventDefault();
+      input.focus();
+    }
+  });
+
   // Dialog close — wired up via event listener (not inline onclick)
   // to avoid potential CSP issues with inline handlers.
   var cancelBtn = document.getElementById('diff-cancel-btn');

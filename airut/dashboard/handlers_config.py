@@ -10,6 +10,7 @@ Provides page routes for ``/config`` (global) and ``/config/repos/<repo_id>``
 All handlers operate on a shared ``EditBuffer`` instance.
 """
 
+import dataclasses
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -18,10 +19,13 @@ from urllib.parse import urlparse
 from werkzeug.wrappers import Request, Response
 
 from airut.config.editor import (
+    DICT_FIELD_TYPES,
     MISSING,
     EditBuffer,
     EditorFieldSchema,
     collect_leaf_fields,
+    count_dict_field_changes,
+    diff_dict_field,
     format_raw_value,
     get_raw_value,
     raw_values_equal,
@@ -123,7 +127,12 @@ def _coerce_value(value: object, python_type: str) -> object:
 def _find_field_schema(
     fields: list[EditorFieldSchema], path: str
 ) -> EditorFieldSchema | None:
-    """Find a field schema by its path, searching recursively."""
+    """Find a field schema by its path, searching recursively.
+
+    Handles keyed collection item paths: for a path like
+    ``collection.KEY.field``, matches the item field and returns
+    a copy with the full absolute path.
+    """
     for fs in fields:
         if fs.path == path:
             return fs
@@ -131,6 +140,18 @@ def _find_field_schema(
             found = _find_field_schema(fs.nested_fields, path)
             if found:
                 return found
+        # Keyed collection: check if path is inside an item
+        if fs.type_tag == "keyed_collection" and fs.item_fields:
+            prefix = fs.path + "."
+            if path.startswith(prefix):
+                remainder = path[len(prefix) :]
+                # remainder is "KEY.field_name" or "KEY.nested.field"
+                dot = remainder.find(".")
+                if dot != -1:
+                    item_path = remainder[dot + 1 :]
+                    found = _find_field_schema(fs.item_fields, item_path)
+                    if found:
+                        return dataclasses.replace(found, path=path)
     return None
 
 
@@ -199,7 +220,7 @@ class ConfigEditorHandlers:
             RepoServerConfig,
             path_prefix=prefix,
             structure=YAML_REPO_STRUCTURE,
-            exclude={"repo_id", "channels"},
+            exclude={"repo_id", "channels", "container_env"},
         )
 
     def _get_email_schema(self, repo_id: str) -> list[EditorFieldSchema]:
@@ -374,20 +395,24 @@ class ConfigEditorHandlers:
         # Global fields
         global_schema = self._get_global_schema()
         count = 0
-        for fs in collect_leaf_fields(global_schema):
+
+        def _count_leaf(fs: EditorFieldSchema) -> int:
             buf_val = get_raw_value(buffer.raw, fs.path)
             live_val = get_raw_value(snapshot.raw, fs.path)
+            if fs.type_tag in DICT_FIELD_TYPES:
+                return count_dict_field_changes(buf_val, live_val)
             if not raw_values_equal(buf_val, live_val):
-                count += 1
+                return 1
+            return 0
+
+        for fs in collect_leaf_fields(global_schema):
+            count += _count_leaf(fs)
 
         # Per-field diff only for repos present on both sides
         def _count_common(schema: list[EditorFieldSchema]) -> None:
             nonlocal count
             for fs in collect_leaf_fields(schema):
-                buf_val = get_raw_value(buffer.raw, fs.path)
-                live_val = get_raw_value(snapshot.raw, fs.path)
-                if not raw_values_equal(buf_val, live_val):
-                    count += 1
+                count += _count_leaf(fs)
 
         def _count_change(_rid: str, _ch: str) -> None:
             nonlocal count
@@ -395,10 +420,7 @@ class ConfigEditorHandlers:
 
         for repo_id in sorted(self._get_common_repo_ids()):
             for fs in collect_leaf_fields(self._get_repo_schema(repo_id)):
-                buf_val = get_raw_value(buffer.raw, fs.path)
-                live_val = get_raw_value(snapshot.raw, fs.path)
-                if not raw_values_equal(buf_val, live_val):
-                    count += 1
+                count += _count_leaf(fs)
 
             # Channel fields
             self._walk_channel_diffs(
@@ -411,12 +433,21 @@ class ConfigEditorHandlers:
             )
 
         # Added/removed repos — count per-field
+        def _count_repo_fields(repo_id: str, raw: dict[str, Any] | None) -> int:
+            n = 0
+            for fs, val in self._iter_repo_set_fields(repo_id, raw):
+                if fs.type_tag in DICT_FIELD_TYPES and isinstance(val, dict):
+                    n += len(val)
+                else:
+                    n += 1
+            return n
+
         buf_repos = set(buffer.raw.get("repos", {}))
         live_repos = set((snapshot.raw or {}).get("repos", {}))
         for repo_id in buf_repos - live_repos:
-            count += len(self._iter_repo_set_fields(repo_id, buffer.raw))
+            count += _count_repo_fields(repo_id, buffer.raw)
         for repo_id in live_repos - buf_repos:
-            count += len(self._iter_repo_set_fields(repo_id, snapshot.raw))
+            count += _count_repo_fields(repo_id, snapshot.raw)
 
         return count
 
@@ -580,6 +611,25 @@ class ConfigEditorHandlers:
         source = form["source"]
         value = form.get("value")
         index_str = form.get("index")
+        key = form.get("key")
+
+        # Dict entry mutations (key present, no index)
+        if key is not None and index_str is None:
+            full_path = f"{path}.{key}"
+            buffer.set_field(full_path, source, value)
+            fs = self._find_field_in_all_schemas(path)
+            if fs:
+                return self._add_dirty_count_header(
+                    Response(
+                        render_template(
+                            "components/config/field.html",
+                            f=fs,
+                            buffer=buffer,
+                        ),
+                        content_type="text/html",
+                    )
+                )
+            return self._add_dirty_count_header(Response("OK", status=200))
 
         # List/tagged-union item mutations (index present)
         if index_str is not None:
@@ -660,6 +710,12 @@ class ConfigEditorHandlers:
 
         path = form["path"]
         key = form.get("key")
+        if key is not None:
+            key = key.strip()
+
+        # Reject empty keys for dict/collection adds
+        if key is not None and not key:
+            return Response("Key name must not be empty", status=400)
 
         # Special handling for adding a repo
         if path == "repos" and key:
@@ -678,10 +734,12 @@ class ConfigEditorHandlers:
         fs = self._find_field_in_all_schemas(path)
         if fs and fs.type_tag == "tagged_union_list":
             self._add_tagged_union_default(buffer, path)
+        elif fs and fs.type_tag == "dict_str_str" and key:
+            self._add_dict_str_entry(buffer, path, key)
         else:
             buffer.add_item(path, key)
 
-        # Return rendered widget for list/tagged-union fields
+        # Return rendered widget for collection fields
         return self._respond_with_field_fragment(buffer, path)
 
     def handle_remove(self, request: Request) -> Response:
@@ -713,7 +771,7 @@ class ConfigEditorHandlers:
 
         buffer.remove_item(path, key=key, index=index)
 
-        # Return rendered widget for list/tagged-union fields
+        # Return rendered widget for collection fields
         return self._respond_with_field_fragment(buffer, path)
 
     # -- Channel and list helpers --
@@ -796,12 +854,28 @@ class ConfigEditorHandlers:
         target.append({"workspace_members": True})
         buffer.mark_dirty()
 
+    @staticmethod
+    def _add_dict_str_entry(buffer: EditBuffer, path: str, key: str) -> None:
+        """Add an empty-string entry to a dict[str, str] field."""
+        parts = path.split(".")
+        parent, final = EditBuffer._navigate(buffer.raw, parts, create=True)
+        target = parent.get(final)
+        if not isinstance(target, dict):
+            parent[final] = {}
+            target = parent[final]
+        target[key] = ""
+        buffer.mark_dirty()
+
+    _FRAGMENT_TYPES = frozenset(
+        {"list_str", "tagged_union_list", "dict_str_str", "keyed_collection"}
+    )
+
     def _respond_with_field_fragment(
         self, buffer: EditBuffer, path: str
     ) -> Response:
         """Return rendered field fragment or plain OK."""
         fs = self._find_field_in_all_schemas(path)
-        if fs and fs.type_tag in ("list_str", "tagged_union_list"):
+        if fs and fs.type_tag in self._FRAGMENT_TYPES:
             return self._add_dirty_count_header(
                 Response(
                     render_template(
@@ -833,24 +907,32 @@ class ConfigEditorHandlers:
         requires_restart = False
         all_changes: list[dict[str, Any]] = []
 
-        def _diff_fields(schema: list[EditorFieldSchema]) -> None:
+        def _add_change(change: dict[str, Any]) -> None:
             nonlocal requires_restart
+            scope_str = change["scope"]
+            scope_summary[scope_str] = scope_summary.get(scope_str, 0) + 1
+            if scope_str == "server":
+                requires_restart = True
+            all_changes.append(change)
+
+        def _diff_fields(schema: list[EditorFieldSchema]) -> None:
             for fs in collect_leaf_fields(schema):
                 buf_val = get_raw_value(buffer.raw, fs.path)
                 live_val = get_raw_value(snapshot.raw, fs.path)
 
+                # Dict fields: expand to per-key diffs
+                if fs.type_tag in DICT_FIELD_TYPES:
+                    for change in diff_dict_field(fs, buf_val, live_val):
+                        _add_change(change)
+                    continue
+
                 if raw_values_equal(buf_val, live_val):
                     continue
 
-                scope_str = fs.scope
-                scope_summary[scope_str] = scope_summary.get(scope_str, 0) + 1
-                if scope_str == "server":
-                    requires_restart = True
-
-                all_changes.append(
+                _add_change(
                     {
                         "field": fs.path,
-                        "scope": scope_str,
+                        "scope": fs.scope,
                         "old": format_raw_value(live_val),
                         "new": format_raw_value(buf_val),
                     }
@@ -890,26 +972,32 @@ class ConfigEditorHandlers:
         live_repos = set((snapshot.raw or {}).get("repos", {}))
         for repo_id in sorted(buf_repos - live_repos):
             for fs, val in self._iter_repo_set_fields(repo_id, buffer.raw):
-                scope_summary["repo"] = scope_summary.get("repo", 0) + 1
-                all_changes.append(
-                    {
-                        "field": fs.path,
-                        "scope": "repo",
-                        "old": "(not set)",
-                        "new": format_raw_value(val),
-                    }
-                )
+                if fs.type_tag in DICT_FIELD_TYPES:
+                    for change in diff_dict_field(fs, val, MISSING):
+                        _add_change(change)
+                else:
+                    _add_change(
+                        {
+                            "field": fs.path,
+                            "scope": "repo",
+                            "old": "(not set)",
+                            "new": format_raw_value(val),
+                        }
+                    )
         for repo_id in sorted(live_repos - buf_repos):
             for fs, val in self._iter_repo_set_fields(repo_id, snapshot.raw):
-                scope_summary["repo"] = scope_summary.get("repo", 0) + 1
-                all_changes.append(
-                    {
-                        "field": fs.path,
-                        "scope": "repo",
-                        "old": format_raw_value(val),
-                        "new": "(removed)",
-                    }
-                )
+                if fs.type_tag in DICT_FIELD_TYPES:
+                    for change in diff_dict_field(fs, MISSING, val):
+                        _add_change(change)
+                else:
+                    _add_change(
+                        {
+                            "field": fs.path,
+                            "scope": "repo",
+                            "old": format_raw_value(val),
+                            "new": "(removed)",
+                        }
+                    )
 
         # Run validation so the diff dialog can disable save if invalid
         validation_error: str | None = None

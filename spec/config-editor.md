@@ -570,7 +570,7 @@ handler. Add/remove repo operations. Repo skeleton generation.
 Email and Slack channel configuration. List widget for `authorized_senders`.
 Tagged union list widget for Slack `authorized`. Add/remove channel operations.
 
-### Phase 4: Credentials + Dict Fields
+### Phase 4: Credentials + Dict Fields (implemented)
 
 All credential types (`MaskedSecret`, `SigningCredential`,
 `GitHubAppCredential`) and dict-based fields. Keyed collection widget with

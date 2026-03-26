@@ -1,0 +1,58 @@
+{# Keyed collection widget — expects: f (EditorFieldSchema), buffer (EditBuffer) #}
+{% set entries = buffer.get_value(f.path) %}
+<div class="cfg-field cfg-keyed-collection"
+     id="field-{{ f.path | replace('.', '-') }}"
+     hx-target="this" hx-swap="outerHTML">
+
+  <div class="cfg-field-header">
+    <span class="cfg-label">{{ f.path }}</span>
+  </div>
+  <span class="cfg-help">{{ f.doc }}</span>
+
+  {% if entries is mapping and f.item_fields %}
+  {% for entry_key, entry_data in entries.items() %}
+  <details class="cfg-collection-card">
+    <summary class="cfg-collection-header">
+      <span class="cfg-collection-key">{{ entry_key }}</span>
+      {% if f.item_class_name %}
+      <span class="cfg-collection-type">{{ f.item_class_name | humanize_type }}</span>
+      {% endif %}
+      <button class="cfg-btn danger cfg-btn-sm"
+              hx-post="/api/config/remove"
+              hx-vals='{"path":{{ f.path | tojson }},"key":{{ entry_key | tojson }}}'
+              hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+              hx-target="#field-{{ f.path | replace('.', '-') }}"
+              hx-swap="outerHTML"
+              hx-confirm="Remove '{{ entry_key }}'?">
+        Remove
+      </button>
+    </summary>
+    <div class="cfg-collection-body">
+      {% for item_f in f.item_fields %}
+      {% set pf = prefixed_field(item_f, f.path ~ '.' ~ entry_key) %}
+      {% with f=pf %}
+      {% include "components/config/field.html" %}
+      {% endwith %}
+      {% endfor %}
+    </div>
+  </details>
+  {% endfor %}
+  {% endif %}
+
+  <div class="cfg-dict-add">
+    <input class="cfg-input cfg-input-inline" type="text"
+           id="new-key-{{ f.path | replace('.', '-') }}"
+           name="key"
+           required
+           placeholder="New {{ (f.item_class_name | humanize_type) if f.item_class_name else 'entry' }} key">
+    <button class="cfg-btn cfg-list-add"
+            hx-post="/api/config/add"
+            hx-vals='{"path":{{ f.path | tojson }}}'
+            hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+            hx-target="#field-{{ f.path | replace('.', '-') }}"
+            hx-swap="outerHTML"
+            hx-include="#new-key-{{ f.path | replace('.', '-') }}">
+      + Add {{ (f.item_class_name | humanize_type) if f.item_class_name else 'Entry' }}
+    </button>
+  </div>
+</div>

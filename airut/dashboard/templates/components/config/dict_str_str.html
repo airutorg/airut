@@ -1,0 +1,110 @@
+{# Dict[str, str] key-value widget — expects: f (EditorFieldSchema), buffer (EditBuffer) #}
+{% set entries = buffer.get_value(f.path) %}
+<div class="cfg-field cfg-dict-field"
+     id="field-{{ f.path | replace('.', '-') }}"
+     hx-target="this" hx-swap="outerHTML">
+
+  <div class="cfg-field-header">
+    <span class="cfg-label">{{ f.path }}</span>
+  </div>
+  <span class="cfg-help">{{ f.doc }}</span>
+
+  <div class="cfg-dict-items">
+    {% if entries is mapping %}
+    {% for key, val in entries.items() %}
+    {% set source_info = value_source(val) %}
+    {% set current_source = source_info[0] %}
+    {% set display_value = source_info[1] %}
+    {% set key_json = key | tojson %}
+    {% set val_json = (display_value if display_value is not none else '') | tojson %}
+    <div class="cfg-dict-item">
+      <span class="cfg-dict-key">{{ key }}</span>
+
+      <div class="cfg-source cfg-source-sm">
+        <button class="{{ 'active' if current_source == 'literal' else '' }}"
+                hx-patch="/api/config/field"
+                hx-vals='{"path":{{ f.path | tojson }},"key":{{ key_json }},"source":"literal","value":{{ val_json if current_source == 'literal' else '""' }}}'
+                hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+                hx-target="#field-{{ f.path | replace('.', '-') }}"
+                hx-swap="outerHTML">
+          Literal
+        </button>
+        {% if f.env_eligible %}
+        <button class="{{ 'active' if current_source == 'env' else '' }}"
+                hx-patch="/api/config/field"
+                hx-vals='{"path":{{ f.path | tojson }},"key":{{ key_json }},"source":"env","value":{{ val_json if current_source == 'env' else '""' }}}'
+                hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+                hx-target="#field-{{ f.path | replace('.', '-') }}"
+                hx-swap="outerHTML">
+          !env
+        </button>
+        {% endif %}
+        {% if f.var_eligible %}
+        <button class="{{ 'active' if current_source == 'var' else '' }}"
+                hx-patch="/api/config/field"
+                hx-vals='{"path":{{ f.path | tojson }},"key":{{ key_json }},"source":"var","value":{{ val_json if current_source == 'var' else '""' }}}'
+                hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+                hx-target="#field-{{ f.path | replace('.', '-') }}"
+                hx-swap="outerHTML">
+          !var
+        </button>
+        {% endif %}
+      </div>
+
+      {% if current_source == 'literal' %}
+      <input class="cfg-input cfg-dict-value" type="text"
+             value="{{ display_value if display_value is not none else '' }}"
+             {% if f.secret %}placeholder="(secret)"{% endif %}
+             hx-patch="/api/config/field"
+             hx-trigger="change"
+             hx-vals='{"path":{{ f.path | tojson }},"key":{{ key_json }},"source":"literal"}'
+             hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+             hx-target="#field-{{ f.path | replace('.', '-') }}"
+             hx-swap="outerHTML"
+             name="value"
+             hx-include="this">
+      {% else %}
+      <input class="cfg-input cfg-dict-value" type="text"
+             value="{{ display_value if display_value is not none else '' }}"
+             placeholder="{{ 'ENV_VAR_NAME' if current_source == 'env' else 'VAR_NAME' }}"
+             hx-patch="/api/config/field"
+             hx-trigger="change"
+             hx-vals='{"path":{{ f.path | tojson }},"key":{{ key_json }},"source":"{{ current_source }}"}'
+             hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+             hx-target="#field-{{ f.path | replace('.', '-') }}"
+             hx-swap="outerHTML"
+             name="value"
+             hx-include="this">
+      {% endif %}
+
+      <button class="cfg-btn danger cfg-list-remove"
+              hx-post="/api/config/remove"
+              hx-vals='{"path":{{ f.path | tojson }},"key":{{ key_json }}}'
+              hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+              hx-target="#field-{{ f.path | replace('.', '-') }}"
+              hx-swap="outerHTML"
+              hx-confirm="Remove '{{ key }}'?">
+        &times;
+      </button>
+    </div>
+    {% endfor %}
+    {% endif %}
+  </div>
+
+  <div class="cfg-dict-add">
+    <input class="cfg-input cfg-input-inline" type="text"
+           id="new-key-{{ f.path | replace('.', '-') }}"
+           name="key"
+           required
+           placeholder="New key name">
+    <button class="cfg-btn cfg-list-add"
+            hx-post="/api/config/add"
+            hx-vals='{"path":{{ f.path | tojson }}}'
+            hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+            hx-target="#field-{{ f.path | replace('.', '-') }}"
+            hx-swap="outerHTML"
+            hx-include="#new-key-{{ f.path | replace('.', '-') }}">
+      + Add
+    </button>
+  </div>
+</div>
