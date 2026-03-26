@@ -424,7 +424,7 @@ select.cfg-tagged-type { max-width: 200px; flex-shrink: 0; }
 .cfg-dict-items { margin: 8px 0; }
 .cfg-dict-item {
   display: flex;
-  align-items: flex-start;
+  align-items: flex-end;
   gap: 6px;
   margin-bottom: 6px;
   flex-wrap: wrap;
@@ -466,7 +466,7 @@ select.cfg-tagged-type { max-width: 200px; flex-shrink: 0; }
 }
 .cfg-var-controls {
   display: flex;
-  align-items: flex-start;
+  align-items: flex-end;
   gap: 6px;
   flex-wrap: wrap;
 }
