@@ -44,7 +44,7 @@ Airut and reviewing the resulting PRs.
 - **Email and Slack channels**: Authenticate via DMARC (email) or workspace
   membership (Slack), with sender authorization per repo.
 - **Web dashboard**: Monitor running tasks, view network activity logs, and
-  configure the server — all from the browser.
+  configure the server.
 
 ## Why Email and Slack?
 
@@ -123,11 +123,11 @@ starting point for onboarding your own projects.
 </p>
 
 <p align="center">
-  <strong>Config editor — repository settings</strong><br>
+  <strong>Network log — live request tracking</strong><br>
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://screenshots.airut.org/config-repo-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="https://screenshots.airut.org/config-repo-light.png">
-    <img src="https://screenshots.airut.org/config-repo-light.png" alt="Config editor showing per-repo channels and credentials" width="640">
+    <source media="(prefers-color-scheme: dark)" srcset="https://screenshots.airut.org/network-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="https://screenshots.airut.org/network-light.png">
+    <img src="https://screenshots.airut.org/network-light.png" alt="Network log showing allowed and blocked requests during task execution" width="640">
   </picture>
 </p>
 
@@ -192,7 +192,7 @@ airut install-service          # Install and start systemd service
 
 Open `http://localhost:5200` in your browser. Click **Configure** to open the
 config editor. From there you can add repositories, set up channels, configure
-credentials, and adjust resource limits — all from the web UI.
+credentials, and adjust resource limits.
 
 See [deployment.md](doc/deployment.md) for the full guide including channel
 setup, secrets management, and git credentials.

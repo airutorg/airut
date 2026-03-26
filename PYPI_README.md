@@ -29,7 +29,7 @@ You → Email/Slack → Airut → Claude Code (container) → PR → Reply → Y
 - **Email and Slack channels** — authenticate via DMARC (email) or workspace
   membership (Slack), with sender authorization per repo.
 - **Web dashboard** — monitor running tasks, view network activity logs, and
-  configure the server — all from the browser.
+  configure the server.
 
 ## Quick Start
 
@@ -71,7 +71,7 @@ airut install-service
 
 Open `http://localhost:5200` in your browser. Click **Configure** to open the
 config editor. Add repositories, set up channels, configure credentials, and
-adjust resource limits — all from the web UI.
+adjust resource limits.
 
 > You can also edit `~/.config/airut/airut.yaml` directly. See the
 > [documented example](https://github.com/airutorg/airut/blob/main/config/airut.example.yaml)

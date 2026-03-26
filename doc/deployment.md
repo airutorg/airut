@@ -298,8 +298,8 @@ top bar to open the config editor.
 </p>
 
 The config editor lets you add repositories, set up email and Slack channels,
-manage credentials, and adjust resource limits — all from the browser. Changes
-are saved to `~/.config/airut/airut.yaml` and reloaded automatically.
+manage credentials, and adjust resource limits. Changes are saved to
+`~/.config/airut/airut.yaml` and reloaded automatically.
 
 Each field supports multiple source types — enter values directly (literal), or
 reference environment variables (`!env`) and shared variables (`!var`) using the
