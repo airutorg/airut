@@ -48,6 +48,8 @@ PAGES: list[tuple[str, str]] = [
     ("repo-failed", "/repo/{failed_repo}"),
     ("actions", "/conversation/{executing_conv}/actions"),
     ("network", "/conversation/{executing_conv}/network"),
+    ("config-global", "/config"),
+    ("config-repo", "/config/repos/{config_repo}"),
 ]
 
 SCHEMES = ("light", "dark")
