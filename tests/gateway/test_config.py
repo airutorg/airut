@@ -1572,13 +1572,6 @@ class TestRepoServerConfig:
         config = _make_repo_server_config(master_repo, tmp_path)
         assert config.resource_limits == ResourceLimits()
 
-    def test_container_env_defaults_empty(
-        self, master_repo: Path, tmp_path: Path
-    ) -> None:
-        """container_env defaults to empty dict."""
-        config = _make_repo_server_config(master_repo, tmp_path)
-        assert config.container_env == {}
-
     def test_custom_model(self, master_repo: Path, tmp_path: Path) -> None:
         """Custom model is preserved."""
         config = _make_repo_server_config(master_repo, tmp_path, model="sonnet")
@@ -1600,24 +1593,12 @@ class TestRepoServerConfig:
         assert config.resource_limits.timeout == 600
         assert config.resource_limits.memory == "4g"
 
-    def test_custom_container_env(
+    def test_no_container_env_field(
         self, master_repo: Path, tmp_path: Path
     ) -> None:
-        """Custom container_env is preserved."""
-        config = _make_repo_server_config(
-            master_repo, tmp_path, container_env={"KEY": "val"}
-        )
-        assert config.container_env == {"KEY": "val"}
-
-    def test_container_env_redaction(
-        self, master_repo: Path, tmp_path: Path
-    ) -> None:
-        """Container env values are registered for log redaction."""
-        SecretFilter._secrets.clear()
-        _make_repo_server_config(
-            master_repo, tmp_path, container_env={"SECRET": "my-secret-val"}
-        )
-        assert "my-secret-val" in SecretFilter._secrets
+        """container_env field no longer exists on RepoServerConfig."""
+        config = _make_repo_server_config(master_repo, tmp_path)
+        assert not hasattr(config, "container_env")
 
 
 # ---------------------------------------------------------------------------
@@ -1631,7 +1612,7 @@ class TestBuildTaskEnv:
     def test_plain_secrets_inject_by_key(self) -> None:
         """Plain secrets are injected using their key as env var name."""
         secrets = {"API_KEY": "sk-test-123", "OTHER": "value"}
-        result, replacement_map = _build_task_env(secrets, {}, {}, {}, {})
+        result, replacement_map = _build_task_env(secrets, {}, {}, {})
         assert result == {"API_KEY": "sk-test-123", "OTHER": "value"}
         assert replacement_map == {}
 
@@ -1644,7 +1625,7 @@ class TestBuildTaskEnv:
                 headers=("Authorization",),
             )
         }
-        result, replacement_map = _build_task_env({}, masked, {}, {}, {})
+        result, replacement_map = _build_task_env({}, masked, {}, {})
 
         assert "GH_TOKEN" in result
         surrogate = result["GH_TOKEN"]
@@ -1671,7 +1652,7 @@ class TestBuildTaskEnv:
                 scopes=frozenset(["*.amazonaws.com"]),
             )
         }
-        result, replacement_map = _build_task_env({}, {}, signing_creds, {}, {})
+        result, replacement_map = _build_task_env({}, {}, signing_creds, {})
 
         # Env var names come from field .name, not credential key
         assert "AWS_ACCESS_KEY_ID" in result
@@ -1692,7 +1673,7 @@ class TestBuildTaskEnv:
                 scopes=frozenset(["api.github.com"]),
             )
         }
-        result, replacement_map = _build_task_env({}, {}, {}, gh_creds, {})
+        result, replacement_map = _build_task_env({}, {}, {}, gh_creds)
 
         assert "GH_TOKEN" in result
         surrogate = result["GH_TOKEN"]
@@ -1700,17 +1681,9 @@ class TestBuildTaskEnv:
         assert surrogate in replacement_map
         assert isinstance(replacement_map[surrogate], GitHubAppEntry)
 
-    def test_container_env_injects_at_lowest_priority(self) -> None:
-        """container_env plain values are injected at lowest priority."""
-        container_env = {"BUCKET": "my-bucket", "REGION": "us-east-1"}
-        result, replacement_map = _build_task_env({}, {}, {}, {}, container_env)
-        assert result == {"BUCKET": "my-bucket", "REGION": "us-east-1"}
-        assert replacement_map == {}
-
     def test_priority_ordering(self) -> None:
         """Higher-priority pools win over lower-priority for same key."""
         # All pools have a "TOKEN" key — signing > github_app > masked > plain
-        # > container_env
         signing_creds = {
             "AWS": SigningCredential(
                 access_key_id=SigningCredentialField(
@@ -1739,10 +1712,9 @@ class TestBuildTaskEnv:
             )
         }
         plain = {"TOKEN": "plain_val"}
-        container_env = {"TOKEN": "env_val"}
 
         result, replacement_map = _build_task_env(
-            plain, masked, signing_creds, gh_creds, container_env
+            plain, masked, signing_creds, gh_creds
         )
 
         # Signing credential wins — TOKEN comes from signing field .name
@@ -1752,14 +1724,7 @@ class TestBuildTaskEnv:
     def test_empty_values_skipped_in_plain_secrets(self) -> None:
         """Plain secrets with empty string values are skipped."""
         secrets = {"EMPTY": "", "PRESENT": "val"}
-        result, _ = _build_task_env(secrets, {}, {}, {}, {})
-        assert "EMPTY" not in result
-        assert result["PRESENT"] == "val"
-
-    def test_empty_values_skipped_in_container_env(self) -> None:
-        """container_env with empty string values are skipped."""
-        container_env = {"EMPTY": "", "PRESENT": "val"}
-        result, _ = _build_task_env({}, {}, {}, {}, container_env)
+        result, _ = _build_task_env(secrets, {}, {}, {})
         assert "EMPTY" not in result
         assert result["PRESENT"] == "val"
 
@@ -1772,7 +1737,7 @@ class TestBuildTaskEnv:
                 headers=("*",),
             )
         }
-        result, replacement_map = _build_task_env({}, masked, {}, {}, {})
+        result, replacement_map = _build_task_env({}, masked, {}, {})
         # Empty string is a valid configured value
         assert result["TOKEN"] == ""
         assert replacement_map == {}
@@ -1801,7 +1766,7 @@ class TestBuildTaskEnv:
                 scopes=frozenset(["*.amazonaws.com"]),
             ),
         }
-        result, _ = _build_task_env({}, {}, signing_creds, {}, {})
+        result, _ = _build_task_env({}, {}, signing_creds, {})
 
         # First credential's values win; second is skipped
         assert "AWS_ACCESS_KEY_ID" in result
@@ -1833,7 +1798,7 @@ class TestBuildTaskEnv:
                 scopes=frozenset(["*.amazonaws.com"]),
             ),
         }
-        result, _ = _build_task_env({}, {}, signing_creds, {}, {})
+        result, _ = _build_task_env({}, {}, signing_creds, {})
 
         # Both credentials' access_key_ids are present
         assert "AWS_KEY" in result
@@ -1843,7 +1808,7 @@ class TestBuildTaskEnv:
 
     def test_all_empty_returns_empty(self) -> None:
         """All-empty inputs return empty results."""
-        result, replacement_map = _build_task_env({}, {}, {}, {}, {})
+        result, replacement_map = _build_task_env({}, {}, {}, {})
         assert result == {}
         assert replacement_map == {}
 
@@ -1866,7 +1831,6 @@ class TestRepoServerConfigBuildTaskEnv:
                     headers=("Authorization",),
                 )
             },
-            container_env={"BUCKET": "my-bucket"},
         )
 
         env, replacement_map = config.build_task_env()
@@ -1877,8 +1841,6 @@ class TestRepoServerConfigBuildTaskEnv:
         assert env["GH_TOKEN"] != "ghp_realtoken"
         assert env["GH_TOKEN"].startswith("ghp_")
         assert env["GH_TOKEN"] in replacement_map
-        # container_env plain value
-        assert env["BUCKET"] == "my-bucket"
 
     def test_build_task_env_unique_surrogates(
         self, master_repo: Path, tmp_path: Path
@@ -1904,12 +1866,12 @@ class TestRepoServerConfigBuildTaskEnv:
 
 
 # ---------------------------------------------------------------------------
-# RepoServerConfig parsing from YAML (resource_limits, container_env, model)
+# RepoServerConfig parsing from YAML (resource_limits, model)
 # ---------------------------------------------------------------------------
 
 
 class TestRepoServerConfigFromYaml:
-    """Tests for resource_limits, container_env, and model in YAML parsing."""
+    """Tests for resource_limits and model in YAML parsing."""
 
     def test_resource_limits_parsed_from_repo(
         self, master_repo: Path, tmp_path: Path
@@ -1940,33 +1902,6 @@ class TestRepoServerConfigFromYaml:
         yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
         config = ServerConfig.from_yaml(yaml_path).value
         assert config.repos["test"].resource_limits == ResourceLimits()
-
-    def test_container_env_parsed_from_repo(
-        self, master_repo: Path, tmp_path: Path
-    ) -> None:
-        """container_env block is parsed from repo section."""
-        yaml_content = (
-            _MINIMAL_YAML.format(repo_url=master_repo)
-            + "    container_env:\n"
-            + "      BUCKET: my-bucket\n"
-            + "      REGION: us-east-1\n"
-        )
-        yaml_path = tmp_path / "config.yaml"
-        yaml_path.write_text(yaml_content)
-        config = ServerConfig.from_yaml(yaml_path).value
-        assert config.repos["test"].container_env == {
-            "BUCKET": "my-bucket",
-            "REGION": "us-east-1",
-        }
-
-    def test_container_env_defaults_empty(
-        self, master_repo: Path, tmp_path: Path
-    ) -> None:
-        """container_env defaults to empty dict when not specified."""
-        yaml_path = tmp_path / "config.yaml"
-        yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
-        config = ServerConfig.from_yaml(yaml_path).value
-        assert config.repos["test"].container_env == {}
 
     def test_model_defaults_to_opus(
         self, master_repo: Path, tmp_path: Path
@@ -2323,7 +2258,7 @@ class TestResolveMaskedSecrets:
 
 
 # ---------------------------------------------------------------------------
-# Masked secrets in container_env resolution
+# Masked secrets in task env resolution
 # ---------------------------------------------------------------------------
 
 
@@ -2339,9 +2274,7 @@ class TestMaskedSecretResolution:
                 headers=("Authorization",),
             )
         }
-        result, replacement_map = _build_task_env(
-            {}, masked_secrets, {}, {}, {}
-        )
+        result, replacement_map = _build_task_env({}, masked_secrets, {}, {})
 
         # task env should have a surrogate, not the real value
         assert "GH_TOKEN" in result
@@ -2366,9 +2299,7 @@ class TestMaskedSecretResolution:
                 headers=("X-Custom-Header",),
             )
         }
-        result, replacement_map = _build_task_env(
-            {}, masked_secrets, {}, {}, {}
-        )
+        result, replacement_map = _build_task_env({}, masked_secrets, {}, {})
 
         surrogate = result["API_KEY"]
         entry = replacement_map[surrogate]
@@ -2386,7 +2317,7 @@ class TestMaskedSecretResolution:
             )
         }
         result, replacement_map = _build_task_env(
-            plain_secrets, masked_secrets, {}, {}, {}
+            plain_secrets, masked_secrets, {}, {}
         )
 
         # Should use masked secret, not plain
@@ -2397,7 +2328,7 @@ class TestMaskedSecretResolution:
     def test_plain_secret_used_when_not_masked(self) -> None:
         """Plain secret is used when no masked secret exists."""
         plain_secrets = {"API_KEY": "plain_key"}
-        result, replacement_map = _build_task_env(plain_secrets, {}, {}, {}, {})
+        result, replacement_map = _build_task_env(plain_secrets, {}, {}, {})
 
         assert result == {"API_KEY": "plain_key"}
         assert replacement_map == {}
@@ -2413,7 +2344,7 @@ class TestMaskedSecretResolution:
             )
         }
         result, replacement_map = _build_task_env(
-            plain_secrets, masked_secrets, {}, {}, {}
+            plain_secrets, masked_secrets, {}, {}
         )
 
         # GH_TOKEN should be masked, API_KEY should be plain
@@ -2431,9 +2362,7 @@ class TestMaskedSecretResolution:
                 allow_foreign_credentials=True,
             )
         }
-        result, replacement_map = _build_task_env(
-            {}, masked_secrets, {}, {}, {}
-        )
+        result, replacement_map = _build_task_env({}, masked_secrets, {}, {})
 
         surrogate = result["TOKEN"]
         entry = replacement_map[surrogate]
@@ -2449,9 +2378,7 @@ class TestMaskedSecretResolution:
                 headers=("Authorization",),
             )
         }
-        result, replacement_map = _build_task_env(
-            {}, masked_secrets, {}, {}, {}
-        )
+        result, replacement_map = _build_task_env({}, masked_secrets, {}, {})
 
         surrogate = result["TOKEN"]
         entry = replacement_map[surrogate]
@@ -2926,7 +2853,7 @@ class TestSigningCredentialResolution:
         """Signing credential fields generate surrogates by field name."""
         signing_creds = {"AWS_PROD": self._make_signing_cred()}
 
-        result, replacement_map = _build_task_env({}, {}, signing_creds, {}, {})
+        result, replacement_map = _build_task_env({}, {}, signing_creds, {})
 
         # Container env should have surrogates
         assert result["AWS_ACCESS_KEY_ID"].startswith("AKIA")
@@ -2951,7 +2878,7 @@ class TestSigningCredentialResolution:
             "AWS": self._make_signing_cred(session_token="real-token-value")
         }
 
-        result, replacement_map = _build_task_env({}, {}, signing_creds, {}, {})
+        result, replacement_map = _build_task_env({}, {}, signing_creds, {})
 
         # Session token surrogate should be 512 chars
         assert len(result["AWS_SESSION_TOKEN"]) == 512
@@ -2967,7 +2894,7 @@ class TestSigningCredentialResolution:
         """Credential without session_token produces no session_token env."""
         signing_creds = {"AWS": self._make_signing_cred()}
 
-        result, replacement_map = _build_task_env({}, {}, signing_creds, {}, {})
+        result, replacement_map = _build_task_env({}, {}, signing_creds, {})
 
         # session_token is None, so no env var for it
         assert "AWS_SESSION_TOKEN" not in result
@@ -2988,9 +2915,7 @@ class TestSigningCredentialResolution:
             )
         }
 
-        result, replacement_map = _build_task_env(
-            {}, masked, signing_creds, {}, {}
-        )
+        result, replacement_map = _build_task_env({}, masked, signing_creds, {})
 
         # Both should be in replacement map
         assert len(replacement_map) == 2
@@ -3644,7 +3569,7 @@ class TestBuildTaskEnvGitHubApp:
         """GitHub App credential generates a ghs_ prefixed surrogate."""
         gh_creds = {"GH_TOKEN": self._make_github_app_cred()}
 
-        result, replacement_map = _build_task_env({}, {}, {}, gh_creds, {})
+        result, replacement_map = _build_task_env({}, {}, {}, gh_creds)
 
         surrogate = result["GH_TOKEN"]
         assert surrogate.startswith("ghs_")
@@ -3654,7 +3579,7 @@ class TestBuildTaskEnvGitHubApp:
         """GitHub App credential adds GitHubAppEntry to replacement map."""
         gh_creds = {"GH_TOKEN": self._make_github_app_cred()}
 
-        result, replacement_map = _build_task_env({}, {}, {}, gh_creds, {})
+        result, replacement_map = _build_task_env({}, {}, {}, gh_creds)
 
         surrogate = result["GH_TOKEN"]
         assert surrogate in replacement_map
@@ -3676,7 +3601,7 @@ class TestBuildTaskEnvGitHubApp:
             )
         }
 
-        result, replacement_map = _build_task_env({}, masked, {}, gh_creds, {})
+        result, replacement_map = _build_task_env({}, masked, {}, gh_creds)
 
         surrogate = result["GH_TOKEN"]
         assert surrogate.startswith("ghs_")
@@ -3694,7 +3619,7 @@ class TestBuildTaskEnvGitHubApp:
         )
 
         result, replacement_map = _build_task_env(
-            {}, {}, {}, {"GH_TOKEN": cred}, {}
+            {}, {}, {}, {"GH_TOKEN": cred}
         )
 
         surrogate = result["GH_TOKEN"]
@@ -3726,7 +3651,6 @@ class TestBuildTaskEnvGitHubApp:
             {},
             signing_creds,
             gh_creds,
-            {},
         )
 
         surrogate = result["AWS_ACCESS_KEY_ID"]

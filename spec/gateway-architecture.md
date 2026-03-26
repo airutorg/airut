@@ -447,11 +447,10 @@ for git user name and email, configured in the Dockerfile.
 
 ### Container Environment Variables
 
-The executor passes environment variables to the container from multiple sources
-in the server config: `container_env` (plain values), `secrets`,
-`masked_secrets`, `signing_credentials`, and `github_app_credentials`. All
-credential pool entries auto-inject by their key name. Only entries with
-non-empty resolved values are passed.
+The executor passes environment variables to the container from the credential
+pools in the server config: `secrets`, `masked_secrets`, `signing_credentials`,
+and `github_app_credentials`. All credential pool entries auto-inject by their
+key name. Only entries with non-empty resolved values are passed.
 
 See [repo-config.md](repo-config.md) for the full schema and priority ordering.
 

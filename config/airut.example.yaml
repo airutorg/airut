@@ -199,10 +199,6 @@ repos:
     #   # Max number of processes in the container
     #   pids_limit: 1024
 
-    # Non-secret environment variables for containers (overridden by credential pools)
-    # container_env:
-    #   BUCKET_NAME: "my-bucket"
-
     # network:
     #   # Route container traffic through the network proxy and enforce the allowlist (required for masked/signing/GitHub App credentials)
     #   sandbox_enabled: true

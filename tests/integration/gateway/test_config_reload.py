@@ -157,8 +157,6 @@ def _config_to_yaml(env: IntegrationEnvironment) -> dict[str, Any]:
         }
         if repo_cfg.effort is not None:
             repo_dict["effort"] = repo_cfg.effort
-        if repo_cfg.container_env:
-            repo_dict["container_env"] = dict(repo_cfg.container_env)
         if repo_cfg.secrets:
             repo_dict["secrets"] = dict(repo_cfg.secrets)
 
@@ -626,53 +624,6 @@ class TestTaskScopeReload:
                 subject="Resource limits test",
             )
             assert conv_id is not None
-
-    def test_reload_container_env(
-        self,
-        integration_env: IntegrationEnvironment,
-        create_email,
-        extract_conversation_id,
-    ) -> None:
-        """A5: Container env change applies to next task."""
-        cf = ConfigFile.from_env(
-            integration_env,
-            integration_env.repo_root / "airut.yaml",
-        )
-        cf.set("repos.test.container_env", {"FOO": "bar"})
-
-        with running_service(cf, integration_env) as service:
-            conv_id = _send_and_complete(
-                integration_env,
-                service,
-                create_email,
-                extract_conversation_id,
-                _env_capture_mock("FOO", "NEW_VAR"),
-                subject="Env test 1",
-            )
-            env1 = _read_env_capture(conv_id)
-            assert env1["FOO"] == "bar"
-            assert env1["NEW_VAR"] == ""
-
-            # Update container_env
-            gen = service._config_generation
-            integration_env.email_server.clear_outbox()
-            cf.set(
-                "repos.test.container_env",
-                {"FOO": "baz", "NEW_VAR": "hello"},
-            )
-            wait_for_reload(service, gen)
-
-            conv_id2 = _send_and_complete(
-                integration_env,
-                service,
-                create_email,
-                extract_conversation_id,
-                _env_capture_mock("FOO", "NEW_VAR"),
-                subject="Env test 2",
-            )
-            env2 = _read_env_capture(conv_id2)
-            assert env2["FOO"] == "baz"
-            assert env2["NEW_VAR"] == "hello"
 
 
 # ------------------------------------------------------------------ #

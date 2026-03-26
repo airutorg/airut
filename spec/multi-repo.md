@@ -314,8 +314,8 @@ class ServerConfig:
     repos: dict[str, RepoServerConfig]
 ```
 
-All per-repo settings (model, effort, resource limits, network, container_env,
-credential pools) are parsed from the server config at startup.
+All per-repo settings (model, effort, resource limits, network, credential
+pools) are parsed from the server config at startup.
 
 ## Dashboard Changes
 

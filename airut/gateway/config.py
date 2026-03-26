@@ -1041,9 +1041,6 @@ class RepoServerConfig:
             ``None`` omits the flag, letting Claude use its own default.
         resource_limits: Container resource limits (timeout, memory,
             cpus, pids_limit).  Overrides server-wide defaults.
-        container_env: Non-secret environment variables for containers.
-            For values like account IDs, bucket names.  Credential pools
-            take priority over these for same-name keys.
     """
 
     repo_id: str = field(
@@ -1059,7 +1056,7 @@ class RepoServerConfig:
         default_factory=dict,
         metadata=meta(
             "Per-repo secrets pool (keys become container env var names)",
-            Scope.REPO,
+            Scope.TASK,
             secret=True,
         ),
     )
@@ -1068,7 +1065,7 @@ class RepoServerConfig:
         metadata=meta(
             "Scoped secrets replaced by proxy at request time"
             " (requires network sandbox)",
-            Scope.REPO,
+            Scope.TASK,
             secret=True,
         ),
     )
@@ -1076,7 +1073,7 @@ class RepoServerConfig:
         default_factory=dict,
         metadata=meta(
             "AWS SigV4/SigV4A signing credentials for proxy re-signing",
-            Scope.REPO,
+            Scope.TASK,
             secret=True,
         ),
     )
@@ -1084,7 +1081,7 @@ class RepoServerConfig:
         default_factory=dict,
         metadata=meta(
             "GitHub App credentials for proxy-managed token rotation",
-            Scope.REPO,
+            Scope.TASK,
             secret=True,
         ),
     )
@@ -1112,14 +1109,6 @@ class RepoServerConfig:
         default_factory=ResourceLimits,
         metadata=meta(
             "Container resource limits (overrides server-wide defaults)",
-            Scope.TASK,
-        ),
-    )
-    container_env: dict[str, str] = field(
-        default_factory=dict,
-        metadata=meta(
-            "Non-secret environment variables for containers"
-            " (overridden by credential pools)",
             Scope.TASK,
         ),
     )
@@ -1155,11 +1144,6 @@ class RepoServerConfig:
         # Register GitHub App private keys for log redaction
         for gh_app in self.github_app_credentials.values():
             SecretFilter.register_secret(gh_app.private_key)
-
-        # Register plain container_env values for log redaction
-        for value in self.container_env.values():
-            if value:
-                SecretFilter.register_secret(value)
 
         if not self.git_repo_url:
             raise ValueError(
@@ -1208,7 +1192,6 @@ class RepoServerConfig:
         2. GitHub App credentials (by key)
         3. Masked secrets (by key)
         4. Plain secrets (by key)
-        5. ``container_env`` (by key) — plain values only
 
         Returns:
             Tuple of (container env vars, replacement map for proxy).
@@ -1218,7 +1201,6 @@ class RepoServerConfig:
             self.masked_secrets,
             self.signing_credentials,
             self.github_app_credentials,
-            self.container_env,
         )
 
 
@@ -1498,15 +1480,6 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
     if "slack" in raw:
         channels["slack"] = _parse_slack_channel_config(raw["slack"], prefix)
 
-    # Parse plain container_env (non-secret values)
-    raw_container_env = raw.get("container_env", {})
-    container_env: dict[str, str] = {}
-    if isinstance(raw_container_env, dict):
-        for key, value in raw_container_env.items():
-            resolved = raw_resolve(value)
-            if resolved is not None:
-                container_env[str(key)] = resolved
-
     # Build optional overrides
     repo_overrides = {}
     sandbox_enabled = _resolve(network.get("sandbox_enabled"), bool)
@@ -1534,7 +1507,6 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
         masked_secrets=masked_secrets,
         signing_credentials=signing_credentials,
         github_app_credentials=github_app_credentials,
-        container_env=container_env,
         **repo_overrides,
     )
 
@@ -2009,7 +1981,6 @@ def _build_task_env(
     masked_secrets: dict[str, MaskedSecret],
     signing_credentials: dict[str, SigningCredential],
     github_app_credentials: dict[str, GitHubAppCredential],
-    container_env: dict[str, str],
 ) -> tuple[dict[str, str], ReplacementMap]:
     """Build container environment and replacement map for a task.
 
@@ -2023,14 +1994,12 @@ def _build_task_env(
     2. GitHub App credentials (by key)
     3. Masked secrets (by key)
     4. Plain secrets (by key)
-    5. ``container_env`` (by key) — plain values only
 
     Args:
         secrets: Plain secrets pool (key = env var name).
         masked_secrets: Masked secrets with scope info.
         signing_credentials: Signing credentials for proxy re-signing.
         github_app_credentials: GitHub App credentials for token rotation.
-        container_env: Plain (non-secret) environment variables.
 
     Returns:
         Tuple of (container env vars, replacement map for proxy).
@@ -2122,13 +2091,6 @@ def _build_task_env(
 
     # 4. Plain secrets: key becomes env var name.
     for name, value in secrets.items():
-        if name in resolved:
-            continue
-        if value:
-            resolved[name] = value
-
-    # 5. Plain container_env values (lowest priority).
-    for name, value in container_env.items():
         if name in resolved:
             continue
         if value:

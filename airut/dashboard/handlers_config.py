@@ -222,7 +222,7 @@ class ConfigEditorHandlers:
             RepoServerConfig,
             path_prefix=prefix,
             structure=YAML_REPO_STRUCTURE,
-            exclude={"repo_id", "channels", "container_env"},
+            exclude={"repo_id", "channels"},
         )
 
     def _get_email_schema(self, repo_id: str) -> list[EditorFieldSchema]:

@@ -142,10 +142,6 @@ _COMPLEX_EXAMPLES: dict[str, list[str]] = {
         '      - "api.github.com"',
         '      - "*.githubusercontent.com"',
     ],
-    "RepoServerConfig.container_env": [
-        "container_env:",
-        '  BUCKET_NAME: "my-bucket"',
-    ],
 }
 
 #: Fields that are structural and should not appear in the example config.

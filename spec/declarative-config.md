@@ -144,8 +144,8 @@ the config file") rather than **resolved availability**.
 
 For `RepoServerConfig.channels` (`dict[str, ChannelConfig]`), each channel
 config is wrapped in a `ConfigSnapshot`. `to_dict()` recurses into nested
-`ConfigSnapshot` values. For dict-typed fields like `secrets`, `masked_secrets`,
-and `container_env`, the entire dict is the value — if the YAML key exists, the
+`ConfigSnapshot` values. For dict-typed fields like `secrets` and
+`masked_secrets`, the entire dict is the value — if the YAML key exists, the
 whole dict is "provided." There is no per-entry tracking within these dicts
 (credential pool entries use dynamic user-chosen keys).
 
@@ -408,7 +408,10 @@ Settings read at task creation time, effective immediately:
 - `repos.*.effort` — effort level for new conversations
 - `repos.*.resource_limits.*` — per-repo container limits (timeout, memory,
   cpus, pids)
-- `repos.*.container_env` — plain environment variables
+- `repos.*.secrets` — plain secrets injected as env vars
+- `repos.*.masked_secrets` — scoped secrets with proxy replacement
+- `repos.*.signing_credentials` — AWS SigV4 re-signing credentials
+- `repos.*.github_app_credentials` — proxy-managed GitHub App tokens
 
 ## Compatibility
 

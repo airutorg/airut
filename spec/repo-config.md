@@ -48,10 +48,6 @@ repos:
     # network:
     #   sandbox_enabled: true
 
-    # Plain environment variables for containers (non-secret values)
-    # container_env:
-    #   BUCKET_NAME: "my-bucket"
-
     # Credential pools (all entries auto-inject as container env vars)
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
@@ -77,7 +73,6 @@ repos:
 | `resource_limits.cpus`       | float   | *(none)* | CPU limit (>= 0.01, supports fractional cores)   |
 | `resource_limits.pids_limit` | int     | *(none)* | Process limit (>= 1)                             |
 | `network.sandbox_enabled`    | bool    | `true`   | Whether to enforce network allowlist             |
-| `container_env`              | mapping | `{}`     | Plain (non-secret) environment variables         |
 | `secrets`                    | mapping | `{}`     | Plain secrets injected as env vars               |
 | `masked_secrets`             | mapping | `{}`     | Surrogate-based scoped credentials               |
 | `signing_credentials`        | mapping | `{}`     | AWS SigV4 re-signing credentials                 |
@@ -86,8 +81,7 @@ repos:
 ## Credential Auto-Injection
 
 All credential pool entries auto-inject into the container as environment
-variables by their key name. There is no separate `container_env` mapping needed
-to reference credentials — declaring a secret in any credential pool
+variables by their key name. Declaring a secret in any credential pool
 automatically makes it available as an env var.
 
 **Priority ordering** for duplicate env var names (first match wins):
@@ -96,7 +90,6 @@ automatically makes it available as an env var.
 2. `github_app_credentials` (by key)
 3. `masked_secrets` (by key)
 4. `secrets` (by key)
-5. `container_env` (by key)
 
 When the same env var name appears in multiple pools, the highest-priority pool
 wins. This allows upgrading a credential from plain `secrets` to
@@ -186,7 +179,6 @@ top level.
 - `resource_limits.*` — Per-repo resource limits (timeout, memory, cpus,
   pids_limit), override server-wide defaults
 - `network.sandbox_enabled` — Network sandbox toggle (default: `true`)
-- `container_env` — Plain (non-secret) environment variables for containers
 - `secrets` — Plain secrets injected as container env vars
 - `masked_secrets` — Surrogate-based scoped credentials
 - `signing_credentials` — AWS SigV4 re-signing credentials
@@ -205,8 +197,8 @@ own listener and feeds messages through the shared processing pipeline.
 ## Loading Flow
 
 1. Service starts, loads server config (`ServerConfig.from_yaml()`)
-2. Per-repo settings (model, effort, resource limits, network, container_env,
-   all credential pools) are parsed from the server config
+2. Per-repo settings (model, effort, resource limits, network, all credential
+   pools) are parsed from the server config
 3. Mirror is updated (`mirror.update_mirror()`)
 4. Network allowlist and container Dockerfile are read from the mirror's default
    branch
