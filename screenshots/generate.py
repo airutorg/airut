@@ -140,7 +140,36 @@ def generate_screenshots(
 
         browser.close()
 
+    generate_index(generated, output_dir)
     return generated
+
+
+def generate_index(files: list[Path], output_dir: Path) -> None:
+    """Generate an index.html listing all screenshot files as links.
+
+    Args:
+        files: List of generated screenshot file paths.
+        output_dir: Directory containing the screenshots.
+    """
+    names = sorted(f.name for f in files)
+    links = "\n".join(f'<li><a href="{name}">{name}</a></li>' for name in names)
+    html = f"""\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Screenshots</title>
+</head>
+<body>
+<h1>Screenshots</h1>
+<ul>
+{links}
+</ul>
+</body>
+</html>
+"""
+    (output_dir / "index.html").write_text(html)
+    logger.info("Generated index.html")
 
 
 def main() -> None:
