@@ -348,6 +348,26 @@ select.cfg-input {
 select.cfg-tagged-type { max-width: 400px; flex-shrink: 0; }
 .cfg-tagged-value { flex: 1; }
 .cfg-tagged-placeholder { flex: 1; }
+.cfg-tagged-item .cfg-list-remove { margin-left: auto; }
+
+/* ---- Subsection divider ---- */
+.cfg-subsection {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-light);
+}
+.cfg-subsection-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+.cfg-subsection-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin: 0 0 8px;
+  line-height: 1.4;
+}
 
 /* ---- Dict key-value widget ---- */
 .cfg-dict-items { margin: 8px 0; }
