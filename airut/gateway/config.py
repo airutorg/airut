@@ -121,9 +121,10 @@ class MaskedSecret:
 
     Attributes:
         value: The real secret value.
-        scopes: Fnmatch patterns for allowed hosts (e.g., "api.github.com").
-        headers: Fnmatch patterns for headers to scan (e.g., "Authorization",
-            "*" for all headers).
+        scopes: Host patterns where replacement applies
+            (e.g., ``"api.github.com"``).
+        headers: Header patterns to scan for surrogates
+            (e.g., ``"Authorization"``, ``"*"`` for all headers).
         allow_foreign_credentials: If False (default), headers matching the
             scope+header patterns that do NOT contain the surrogate are
             stripped entirely. This prevents attacker-supplied credentials
@@ -132,15 +133,24 @@ class MaskedSecret:
 
     value: str = field(metadata=meta("Secret value", Scope.REPO, secret=True))
     scopes: frozenset[str] = field(
-        metadata=meta("Fnmatch patterns for allowed hosts", Scope.REPO),
+        metadata=meta(
+            "Host patterns where replacement applies (e.g. api.github.com)",
+            Scope.REPO,
+        ),
     )
     headers: tuple[str, ...] = field(
-        metadata=meta("Fnmatch patterns for headers to scan", Scope.REPO),
+        metadata=meta(
+            "Header patterns to scan for surrogates"
+            " (e.g. Authorization, or * for all)",
+            Scope.REPO,
+        ),
     )
     allow_foreign_credentials: bool = field(
         default=False,
         metadata=meta(
-            "Allow non-surrogate credentials on scoped hosts", Scope.REPO
+            "Allow non-surrogate credentials on scoped hosts"
+            " (off = strip unrecognized tokens)",
+            Scope.REPO,
         ),
     )
 
@@ -151,8 +161,8 @@ class ReplacementEntry:
 
     Attributes:
         real_value: The actual secret to substitute.
-        scopes: Fnmatch patterns for hosts where replacement is allowed.
-        headers: Fnmatch patterns for headers to scan.
+        scopes: Host patterns (fnmatch) where replacement is allowed.
+        headers: Header patterns (fnmatch) to scan.
         allow_foreign_credentials: If False (default), headers matching
             scope+header patterns that do NOT contain the surrogate are
             stripped. Prevents attacker-supplied credentials on scoped hosts.
@@ -189,7 +199,11 @@ class SigningCredentialField:
         ),
     )
     value: str = field(
-        metadata=meta("Real credential value", Scope.REPO, secret=True),
+        metadata=meta(
+            "Credential value (proxy uses this to re-sign)",
+            Scope.REPO,
+            secret=True,
+        ),
     )
 
 
@@ -208,21 +222,29 @@ class SigningCredential:
         access_key_id: Access key ID with name/value.
         secret_access_key: Secret access key with name/value.
         session_token: Optional STS session token with name/value.
-        scopes: Fnmatch patterns for allowed hosts.
+        scopes: Host patterns (fnmatch) for allowed hosts.
     """
 
     access_key_id: SigningCredentialField = field(
-        metadata=meta("Access key ID", Scope.REPO, secret=True),
+        metadata=meta("AWS access key ID", Scope.REPO, secret=True),
     )
     secret_access_key: SigningCredentialField = field(
-        metadata=meta("Secret access key", Scope.REPO, secret=True),
+        metadata=meta("AWS secret access key", Scope.REPO, secret=True),
     )
     scopes: frozenset[str] = field(
-        metadata=meta("Fnmatch patterns for allowed hosts", Scope.REPO),
+        metadata=meta(
+            "Host patterns where re-signing applies"
+            " (e.g. bedrock.us-east-1.amazonaws.com)",
+            Scope.REPO,
+        ),
     )
     session_token: SigningCredentialField | None = field(
         default=None,
-        metadata=meta("Optional STS session token", Scope.REPO, secret=True),
+        metadata=meta(
+            "STS session token (for temporary credentials)",
+            Scope.REPO,
+            secret=True,
+        ),
     )
 
 
@@ -238,7 +260,7 @@ class SigningCredentialEntry:
         secret_access_key: Real secret access key.
         session_token: Real session token (optional).
         surrogate_session_token: Surrogate session token (for swapping).
-        scopes: Fnmatch patterns for hosts where re-signing is allowed.
+        scopes: Host patterns (fnmatch) where re-signing is allowed.
     """
 
     access_key_id: str
@@ -289,27 +311,34 @@ class GitHubAppCredential:
     )
     scopes: frozenset[str] = field(
         metadata=meta(
-            "Fnmatch patterns for hosts where token replacement applies",
+            "Host patterns where token replacement applies"
+            " (e.g. api.github.com)",
             Scope.REPO,
         ),
     )
     allow_foreign_credentials: bool = field(
         default=False,
         metadata=meta(
-            "Allow non-surrogate credentials on scoped hosts", Scope.REPO
+            "Allow non-surrogate credentials on scoped hosts"
+            " (off = strip unrecognized tokens)",
+            Scope.REPO,
         ),
     )
     base_url: str = field(
         default="https://api.github.com",
-        metadata=meta("GitHub API base URL", Scope.REPO),
+        metadata=meta(
+            "GitHub API base URL (change for GitHub Enterprise)", Scope.REPO
+        ),
     )
     permissions: dict[str, str] | None = field(
         default=None,
-        metadata=meta("Optional token permission restrictions", Scope.REPO),
+        metadata=meta(
+            "Restrict token permissions (e.g. contents: read)", Scope.REPO
+        ),
     )
     repositories: tuple[str, ...] | None = field(
         default=None,
-        metadata=meta("Optional token repository restrictions", Scope.REPO),
+        metadata=meta("Restrict token to specific repositories", Scope.REPO),
     )
 
 
@@ -661,10 +690,11 @@ class GlobalConfig:
         dashboard_host: Dashboard bind address.
         dashboard_port: Dashboard server port.
         dashboard_base_url: Public URL for dashboard links in emails.
+            ``None`` means links are omitted.
         container_command: Container runtime command (podman or docker).
         upstream_dns: Upstream DNS server for proxy container resolution.
             ``None`` means auto-detect from ``/etc/resolv.conf``.
-        resource_limits: Server-wide default resource limits.  Repos can
+        resource_limits: Default container resource limits.  Repos can
             override individual fields.  ``None`` means no defaults.
     """
 
@@ -714,7 +744,7 @@ class GlobalConfig:
     dashboard_base_url: str | None = field(
         default=None,
         metadata=meta(
-            "Public URL for dashboard links in emails (None = omit links)",
+            "Public URL for dashboard links in emails (omitted if empty)",
             Scope.SERVER,
         ),
     )
@@ -728,14 +758,15 @@ class GlobalConfig:
     upstream_dns: str | None = field(
         default=None,
         metadata=meta(
-            "Upstream DNS server for proxy resolution (None = auto-detect)",
+            "Upstream DNS server for proxy resolution (auto-detected if empty)",
             Scope.SERVER,
         ),
     )
     resource_limits: ResourceLimits | None = field(
         default=None,
         metadata=meta(
-            "Server-wide default resource limits for containers",
+            "Default container resource limits"
+            " (repos can override individually)",
             Scope.SERVER,
         ),
     )
@@ -781,9 +812,9 @@ class EmailChannelConfig(ChannelConfig):
         from_address: From address for outgoing emails.
         authorized_senders: List of email patterns allowed to send commands.
             Supports wildcards (e.g., ``*@company.com``).
-        trusted_authserv_id: The authserv-id to trust in
-            Authentication-Results headers.  Set to empty string for
-            Microsoft 365 / EOP which omits the authserv-id.
+        trusted_authserv_id: Trusted authserv-id for DMARC verification.
+            Set to empty string for Microsoft 365 / EOP which omits the
+            authserv-id.
         imap_connect_retries: Max IMAP connection attempts before giving up.
         poll_interval_seconds: Seconds between IMAP polls.
         use_imap_idle: Whether to use IMAP IDLE instead of polling.
@@ -823,7 +854,8 @@ class EmailChannelConfig(ChannelConfig):
     )
     trusted_authserv_id: str = field(
         metadata=meta(
-            "Trusted authserv-id in Authentication-Results headers",
+            "Trusted authserv-id for DMARC verification"
+            " (empty string for Microsoft 365)",
             Scope.REPO,
         ),
     )
@@ -838,7 +870,11 @@ class EmailChannelConfig(ChannelConfig):
     )
     password: str | None = field(
         default=None,
-        metadata=meta("Email account password", Scope.REPO, secret=True),
+        metadata=meta(
+            "Email account password (not required with OAuth2)",
+            Scope.REPO,
+            secret=True,
+        ),
     )
     imap_connect_retries: int = field(
         default=3,
@@ -858,7 +894,8 @@ class EmailChannelConfig(ChannelConfig):
     idle_reconnect_interval_seconds: int = field(
         default=29 * 60,
         metadata=meta(
-            "Reconnect interval for IDLE mode (seconds)",
+            "IDLE reconnect interval in seconds"
+            " (servers may close after 30 min)",
             Scope.REPO,
         ),
     )
@@ -869,7 +906,8 @@ class EmailChannelConfig(ChannelConfig):
     microsoft_internal_auth_fallback: bool = field(
         default=False,
         metadata=meta(
-            "Accept X-MS-Exchange AuthAs: Internal",
+            "Accept Microsoft 365 intra-org messages"
+            " when DMARC headers are absent",
             Scope.REPO,
         ),
     )
@@ -986,23 +1024,26 @@ class RepoServerConfig:
         channels: Channel configurations keyed by channel type
             (e.g. ``{"email": EmailChannelConfig(...)}``)
         secrets: Per-repo secrets pool.  Keys become container env var names.
-        masked_secrets: Secrets with scope restrictions for proxy replacement.
+        masked_secrets: Scoped secrets replaced by proxy at request time.
             Keys become container env var names with surrogates injected.
+            Requires ``network_sandbox_enabled``.
         signing_credentials: Signing credentials for proxy re-signing.
             Field ``.name`` values become container env var names.
         github_app_credentials: GitHub App credentials for proxy-managed
             token rotation.  Keys become container env var names.
-        network_sandbox_enabled: Whether to enable the network sandbox.
-            Defaults to ``True``.
+        network_sandbox_enabled: Route container traffic through the
+            network proxy and enforce the allowlist.  Required for
+            masked, signing, and GitHub App credentials.  Defaults to
+            ``True``.
         model: Default Claude model for new conversations.  Channel
             ``model_hint`` overrides this.  Defaults to ``"opus"``.
-        effort: Default effort level for Claude Code.  ``None`` means
-            the flag is omitted and Claude Code uses its own default.
+        effort: Effort level for Claude Code (low, medium, high, max).
+            ``None`` omits the flag, letting Claude use its own default.
         resource_limits: Container resource limits (timeout, memory,
             cpus, pids_limit).  Overrides server-wide defaults.
-        container_env: Plain (non-secret) environment variables passed
-            to containers.  For values like account IDs, bucket names.
-            Credential pools take priority over these for same-name keys.
+        container_env: Non-secret environment variables for containers.
+            For values like account IDs, bucket names.  Credential pools
+            take priority over these for same-name keys.
     """
 
     repo_id: str = field(
@@ -1025,7 +1066,8 @@ class RepoServerConfig:
     masked_secrets: dict[str, MaskedSecret] = field(
         default_factory=dict,
         metadata=meta(
-            "Secrets with scope restrictions for proxy replacement",
+            "Scoped secrets replaced by proxy at request time"
+            " (requires network sandbox)",
             Scope.REPO,
             secret=True,
         ),
@@ -1049,7 +1091,9 @@ class RepoServerConfig:
     network_sandbox_enabled: bool = field(
         default=True,
         metadata=meta(
-            "Enable the network sandbox (proxy toggle)",
+            "Route container traffic through the network proxy"
+            " and enforce the allowlist"
+            " (required for masked/signing/GitHub App credentials)",
             Scope.REPO,
         ),
     )
@@ -1060,21 +1104,22 @@ class RepoServerConfig:
     effort: str | None = field(
         default=None,
         metadata=meta(
-            "Effort level for Claude Code (None = Claude default)",
+            "Effort level: low, medium, high, or max (empty = Claude default)",
             Scope.TASK,
         ),
     )
     resource_limits: ResourceLimits = field(
         default_factory=ResourceLimits,
         metadata=meta(
-            "Per-repo container resource limits (timeout, memory, cpus, pids)",
+            "Container resource limits (overrides server-wide defaults)",
             Scope.TASK,
         ),
     )
     container_env: dict[str, str] = field(
         default_factory=dict,
         metadata=meta(
-            "Plain environment variables passed to containers",
+            "Non-secret environment variables for containers"
+            " (overridden by credential pools)",
             Scope.TASK,
         ),
     )
