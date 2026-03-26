@@ -111,14 +111,13 @@ Resolution priority for duplicate env var names:
 2. Check `github_app_credentials`
 3. Check `masked_secrets`
 4. Fall back to `secrets`
-5. Fall back to `container_env`
 
 When a GitHub App credential is matched:
 
 1. Generate a surrogate with `ghs_` prefix and 36 random alphanumeric characters
    (mimics a real `ghs_` installation token format -- 40 chars total).
 2. Add a `GitHubAppEntry` to the replacement map, keyed by the surrogate.
-3. Inject the surrogate into `container_env`.
+3. Inject the surrogate into the container environment.
 
 ## Replacement Map Entry
 

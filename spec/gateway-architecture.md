@@ -447,11 +447,10 @@ for git user name and email, configured in the Dockerfile.
 
 ### Container Environment Variables
 
-The executor passes environment variables to the container from multiple sources
-in the server config: `container_env` (plain values), `secrets`,
-`masked_secrets`, `signing_credentials`, and `github_app_credentials`. All
-credential pool entries auto-inject by their key name. Only entries with
-non-empty resolved values are passed.
+The executor passes environment variables to the container from the credential
+pools in the server config: `secrets`, `masked_secrets`, `signing_credentials`,
+and `github_app_credentials`. All credential pool entries auto-inject by their
+key name. Only entries with non-empty resolved values are passed.
 
 See [repo-config.md](repo-config.md) for the full schema and priority ordering.
 
@@ -527,11 +526,10 @@ in the dashboard's actions viewer (`/conversation/{id}/actions`).
 
 All configuration lives in the **server config** (`~/.config/airut/airut.yaml`).
 This includes deployment infrastructure, channel credentials, operator controls,
-per-repo settings (model, effort, resource limits, network sandbox toggle,
-container environment), and all credential pools. Values use `!env` tags to
-resolve from environment variables. A `.env` file is automatically loaded from
-`~/.config/airut/.env` (and from the working directory, if present) before
-resolving tags.
+per-repo settings (model, effort, resource limits, network sandbox toggle), and
+credential pools. Values use `!env` tags to resolve from environment variables.
+A `.env` file is automatically loaded from `~/.config/airut/.env` (and from the
+working directory, if present) before resolving tags.
 
 Repository-side files that remain in `.airut/`:
 

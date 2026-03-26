@@ -129,7 +129,8 @@ current config.
 
 #### TASK Scope — Immediate Atomic Swap
 
-**Fields:** `model`, `effort`, `resource_limits` (per-repo), `container_env`.
+**Fields:** `model`, `effort`, `resource_limits` (per-repo), `secrets`,
+`masked_secrets`, `signing_credentials`, `github_app_credentials`.
 
 These are read from `repo_handler.config` at the start of each task. In-flight
 tasks already captured their config values into local variables and are
@@ -142,8 +143,7 @@ CPython's GIL makes this atomic with respect to any worker thread reading
 #### REPO Scope — Listener Restart, Deferred if Busy
 
 **Fields:** `git_repo_url`, `channels.*` (IMAP/SMTP/Slack credentials, polling
-intervals, authorized senders), `secrets`, `masked_secrets`,
-`signing_credentials`, `github_app_credentials`, `network_sandbox_enabled`.
+intervals, authorized senders), `network_sandbox_enabled`.
 
 These require restarting the affected repo's channel listeners.
 

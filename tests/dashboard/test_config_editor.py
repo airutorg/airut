@@ -2934,7 +2934,7 @@ class TestDictStrStrWidget:
         assert "Plain Secrets" in html
         assert "TOKEN_A" in html
         assert "TOKEN_B" in html
-        # container_env is not exposed in the UI
+        # container_env field was removed (use secrets instead)
         assert "Container Environment" not in html
 
     def test_patch_dict_entry(self, cred_harness: ConfigEditorHarness) -> None:

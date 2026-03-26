@@ -355,10 +355,10 @@ This is acceptable for a single-user system behind authentication.
 
 ### Server Config Protection
 
-All per-repo configuration (model, effort, resource limits, container env,
-network sandbox, credential pools) lives in the server config
-(`~/.config/airut/airut.yaml`), which is operator-controlled and not accessible
-to the container. The agent cannot modify these settings.
+All per-repo configuration (model, effort, resource limits, network sandbox,
+credential pools) lives in the server config (`~/.config/airut/airut.yaml`),
+which is operator-controlled and not accessible to the container. The agent
+cannot modify these settings.
 
 ### Network Allowlist Protection
 

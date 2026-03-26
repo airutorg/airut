@@ -331,7 +331,7 @@ credentials to allowed hosts:
 - Embed credentials in request parameters to an allowed API
 - Use an allowed webhook endpoint to leak secrets
 
-Plain secrets in `container_env` are fully exposed to the container — if the
+Plain secrets in the `secrets` pool are fully exposed to the container — if the
 agent is tricked via prompt injection, it can read and exfiltrate them.
 
 ### Solution

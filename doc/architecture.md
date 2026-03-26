@@ -415,7 +415,7 @@ All per-repo configuration lives in the server config
 - Channel credentials (email: IMAP/SMTP; Slack: bot and app tokens)
 - Authorization configuration (email: sender allowlist; Slack: rules)
 - Repository URL and storage paths
-- Model, effort, resource limits, container environment
+- Model, effort, resource limits
 - Credential pools (secrets, masked_secrets, signing_credentials,
   github_app_credentials) — all auto-injected into the container as environment
   variables by their key name
