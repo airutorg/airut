@@ -147,11 +147,9 @@ establishes an outbound WebSocket connection using an app-level token
 **Transport security (MITM protection):** The Slack SDK connects to Slack's API
 over HTTPS (`https://slack.com/api/`) to obtain a `wss://` WebSocket URL via
 `apps.connections.open`. Both the HTTPS API call and the WebSocket connection
-use TLS with server certificate validation enforced — the SDK uses Python's
-`ssl.create_default_context()`, which enables certificate verification
-(`CERT_REQUIRED`), hostname checking, and the system CA bundle. A MITM attacker
-cannot intercept or tamper with the connection without a valid certificate for
-Slack's domain.
+use TLS with server certificate validation enforced by the SDK's default HTTPS
+transport. A MITM attacker cannot intercept or tamper with the connection
+without a valid certificate for Slack's domain.
 
 **Application-level authentication:** The app-level token (`xapp-...`) is
 verified during the Socket Mode handshake. Once connected, all events arrive

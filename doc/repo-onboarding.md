@@ -247,14 +247,15 @@ Open the dashboard at `http://localhost:5200` and click **Configure**. Under the
    `https://github.com/your-org/your-repo.git`)
 2. **Channel settings** — click **Add Email Channel** or **Add Slack Channel**
    to configure at least one channel:
-   - **Email**: Set `repos.<repo>.email.imap.server`, `smtp.server`,
-     `account.username`, `account.password`, `account.from`,
-     `auth.authorized_senders`, and `auth.trusted_authserv_id`. See
-     [email-setup.md](email-setup.md) for details on each field. The email
+   - **Email**: Set the email channel fields under `repos.<repo>.email`:
+     `imap.server`, `smtp.server`, `account.username`, `account.password`,
+     `account.from`, `auth.authorized_senders`, and `auth.trusted_authserv_id`.
+     See [email-setup.md](email-setup.md) for details on each field. The email
      account must be dedicated to this repository — Airut permanently deletes
      messages after processing.
-   - **Slack**: Set `repos.<repo>.slack.bot_token`, `app_token`, and
-     `authorized` rules. See [slack-setup.md](slack-setup.md) for details.
+   - **Slack**: Set the Slack channel fields under `repos.<repo>.slack`:
+     `bot_token`, `app_token`, and `authorized` rules. See
+     [slack-setup.md](slack-setup.md) for details.
 3. **Credentials** — under the repo's **Credentials** section:
    - Add `ANTHROPIC_API_KEY` as a plain secret
      (`repos.<repo>.secrets.ANTHROPIC_API_KEY`)
