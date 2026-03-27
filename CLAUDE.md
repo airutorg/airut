@@ -25,6 +25,8 @@ High-level documentation in `doc/` (see `doc/README.md` for full list):
 - `doc/repo-onboarding.md` — onboarding new repositories
 - `doc/gerrit-onboarding.md` — Gerrit-specific onboarding
 - `doc/agentic-operation.md` — message-to-PR workflow patterns
+- `doc/testing.md` — test strategy, coverage enforcement, config migration
+  testing
 
 Implementation specs in `spec/` (see `spec/README.md` for full list):
 
