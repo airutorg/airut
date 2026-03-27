@@ -14,6 +14,7 @@ Subcommands:
 
 * ``init``              — create a stub server config file
 * ``check``             — verify config and system dependencies
+* ``migrate``           — apply pending config schema migrations
 * ``update``            — update airut to the latest version
 * ``install-service``   — install systemd user services
 * ``uninstall-service`` — uninstall systemd user services
@@ -50,6 +51,7 @@ _SUBCOMMANDS = frozenset(
         "run-gateway",
         "init",
         "check",
+        "migrate",
         "update",
         "install-service",
         "uninstall-service",
@@ -70,6 +72,7 @@ usage: airut <command> [args]
 commands:
   init              Create a stub server config file
   check             Verify config and system dependencies
+  migrate           Apply pending config schema migrations
   update            Update airut to the latest version
   install-service   Install systemd user services
   uninstall-service Uninstall systemd user services
@@ -299,6 +302,50 @@ def cmd_init(argv: list[str]) -> int:
     return 0
 
 
+# ── migrate subcommand ─────────────────────────────────────────────
+
+
+def cmd_migrate(argv: list[str]) -> int:
+    """Apply pending config schema migrations.
+
+    Reads the config file, applies any pending migrations, and writes
+    the result back.  The file is unchanged if already up to date.
+    Preserves ``!env`` and ``!var`` tags during round-trip.
+
+    Args:
+        argv: Extra arguments (currently unused).
+
+    Returns:
+        Exit code (0 on success, 1 on error).
+    """
+    s = _Style(_use_color())
+    config_path = get_config_path()
+
+    if not config_path.exists():
+        print(f"  {s.red('Error:')} Config file not found: {config_path}")
+        print(f"  Run {s.cyan('airut init')} to create a stub config.")
+        return 1
+
+    try:
+        from airut.config.migration import migrate_config_file
+
+        old_version, new_version = migrate_config_file(config_path)
+    except ConfigError as e:
+        print(f"  {s.red('Error:')} {e}")
+        return 1
+
+    if old_version == new_version:
+        print(f"  Config schema is already up to date (v{new_version}).")
+    else:
+        print(
+            f"  {s.green('Migrated')} config schema: "
+            f"v{old_version} → v{new_version}"
+        )
+        print(f"  File: {s.dim(str(config_path))}")
+
+    return 0
+
+
 # ── Service status helpers ──────────────────────────────────────────
 
 
@@ -476,6 +523,34 @@ def cmd_check(argv: list[str]) -> int:
         except (ConfigError, ValueError, Exception) as e:
             print(f"  Status:      {s.red('error')} — {e}")
             all_ok = False
+
+    # Config schema version
+    if config_path.exists():
+        try:
+            from airut.config.migration import (
+                CURRENT_CONFIG_VERSION,
+                get_file_config_version,
+            )
+
+            file_version = get_file_config_version(config_path)
+            if file_version == CURRENT_CONFIG_VERSION:
+                print(
+                    f"  Schema:      {s.green('up to date')} (v{file_version})"
+                )
+            else:
+                print(
+                    f"  Schema:      "
+                    f"{s.yellow('migration pending')} "
+                    f"(v{file_version} → v{CURRENT_CONFIG_VERSION})"
+                )
+                print(
+                    f"               Run {s.cyan('airut migrate')} "
+                    f"to update, or save from dashboard."
+                )
+        except ConfigError:
+            # Schema check is informational; config parse errors are
+            # already reported above.
+            pass
 
     dotenv_path = get_dotenv_path()
     if dotenv_path.exists():
@@ -934,6 +1009,7 @@ _DISPATCH: dict[str, str] = {
     "run-gateway": "cmd_run_gateway",
     "init": "cmd_init",
     "check": "cmd_check",
+    "migrate": "cmd_migrate",
     "update": "cmd_update",
     "install-service": "cmd_install_service",
     "uninstall-service": "cmd_uninstall_service",
@@ -948,7 +1024,13 @@ _SUBCOMMAND_HELP: dict[str, str] = {
     "check": (
         "usage: airut check\n\n"
         "Verify config, system dependencies, and service status.\n"
+        "Shows pending config schema migrations if any.\n"
         "Exit code 0 if all checks pass, 1 otherwise."
+    ),
+    "migrate": (
+        "usage: airut migrate\n\n"
+        "Apply pending config schema migrations to the config file.\n"
+        "Does nothing if the config is already up to date."
     ),
     "update": (
         "usage: airut update [--wait] [--force]\n\n"

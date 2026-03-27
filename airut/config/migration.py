@@ -16,9 +16,13 @@ of silently transforming.
 
 import logging
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
+import yaml
+
 from airut.gateway.config import ConfigError
+from airut.yaml_env import make_env_loader
 
 
 logger = logging.getLogger(__name__)
@@ -293,3 +297,82 @@ def apply_migrations(raw: dict[str, Any]) -> dict[str, Any]:
 
     raw["config_version"] = CURRENT_CONFIG_VERSION
     return raw
+
+
+def get_file_config_version(config_path: Path) -> int:
+    """Read ``config_version`` from a YAML file without full validation.
+
+    Parses the YAML just enough to extract the version integer.
+    ``!env``/``!var`` tags are parsed into placeholder objects but not
+    resolved to actual values.  Does not apply migrations or validate
+    the config structure.
+
+    Args:
+        config_path: Path to the YAML config file.
+
+    Returns:
+        The ``config_version`` value (defaults to ``1`` if absent).
+
+    Raises:
+        ConfigError: If the file cannot be read or parsed, or the
+            version value is invalid.
+    """
+    try:
+        raw_bytes = config_path.read_bytes()
+    except FileNotFoundError as e:
+        raise ConfigError(f"Config file not found: {config_path}") from e
+    except OSError as e:
+        raise ConfigError(f"Cannot read config file: {e}") from e
+
+    try:
+        raw = yaml.load(raw_bytes, Loader=make_env_loader())
+    except yaml.YAMLError as e:
+        raise ConfigError(f"Cannot parse config file: {e}") from e
+
+    if not isinstance(raw, dict):
+        raise ConfigError("Config file must be a YAML mapping")
+
+    version = raw.get("config_version", 1)
+
+    if not isinstance(version, int) or version < 1:
+        raise ConfigError(
+            f"Invalid config_version: {version!r} (must be a positive integer)"
+        )
+
+    return version
+
+
+def migrate_config_file(config_path: Path) -> tuple[int, int]:
+    """Apply pending migrations to a config file and save.
+
+    Loads the raw YAML, applies all pending migrations, then writes
+    the result back atomically.  Preserves ``!env`` and ``!var`` tags.
+
+    Args:
+        config_path: Path to the YAML config file.
+
+    Returns:
+        ``(old_version, new_version)`` tuple.
+
+    Raises:
+        ConfigError: If the file cannot be read, parsed, or migrated.
+    """
+    from airut.config.source import YamlConfigSource
+
+    source = YamlConfigSource(config_path)
+
+    try:
+        raw = source.load()
+    except FileNotFoundError as e:
+        raise ConfigError(f"Config file not found: {config_path}") from e
+    except ValueError as e:
+        raise ConfigError(str(e)) from e
+
+    old_version = raw.get("config_version", 1)
+    raw = apply_migrations(raw)
+    new_version = raw["config_version"]
+
+    if old_version != new_version:
+        source.save(raw)
+
+    return old_version, new_version

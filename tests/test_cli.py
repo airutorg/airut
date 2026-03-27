@@ -34,6 +34,7 @@ from airut.cli import (
     cmd_check,
     cmd_init,
     cmd_install_service,
+    cmd_migrate,
     cmd_run_gateway,
     cmd_uninstall_service,
     cmd_update,
@@ -2453,3 +2454,217 @@ class TestCmdUninstallService:
         """Returns 1 on RuntimeError."""
         result = cmd_uninstall_service([])
         assert result == 1
+
+
+# ── cmd_check config schema version ───────────────────────────────
+
+
+class TestCmdCheckSchema:
+    def test_schema_up_to_date(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Shows 'up to date' when config_version matches current."""
+        from airut.config.migration import CURRENT_CONFIG_VERSION
+
+        config_text = (
+            f"config_version: {CURRENT_CONFIG_VERSION}\n" + _VALID_CONFIG
+        )
+        _path, ctx = _check_patches(tmp_path, config_text=config_text)
+        with ctx:
+            result = cmd_check([])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "up to date" in out
+        assert f"v{CURRENT_CONFIG_VERSION}" in out
+
+    def test_schema_migration_pending(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Shows 'migration pending' when config_version is older."""
+        from airut.config.migration import CURRENT_CONFIG_VERSION
+
+        config_text = "config_version: 3\n" + _VALID_CONFIG
+        _path, ctx = _check_patches(tmp_path, config_text=config_text)
+        with ctx:
+            result = cmd_check([])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "migration pending" in out
+        assert "v3" in out
+        assert f"v{CURRENT_CONFIG_VERSION}" in out
+        assert "airut migrate" in out
+
+    def test_schema_no_version_defaults_to_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Shows migration pending when config_version is absent."""
+        from airut.config.migration import CURRENT_CONFIG_VERSION
+
+        # _VALID_CONFIG has no config_version, so defaults to 1
+        _path, ctx = _check_patches(tmp_path, config_text=_VALID_CONFIG)
+        with ctx:
+            result = cmd_check([])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "migration pending" in out
+        assert "v1" in out
+        assert f"v{CURRENT_CONFIG_VERSION}" in out
+
+    def test_schema_missing_config(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Does not show schema info when config file is missing."""
+        _path, ctx = _check_patches(tmp_path, config_text=None)
+        with ctx:
+            result = cmd_check([])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "Schema:" not in out
+
+    def test_schema_error_suppressed(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Schema check error is silently suppressed."""
+        from airut.config.migration import CURRENT_CONFIG_VERSION
+        from airut.gateway.config import ConfigError
+
+        config_text = (
+            f"config_version: {CURRENT_CONFIG_VERSION}\n" + _VALID_CONFIG
+        )
+        _path, ctx = _check_patches(tmp_path, config_text=config_text)
+        with (
+            ctx,
+            patch(
+                "airut.config.migration.get_file_config_version",
+                side_effect=ConfigError("bad version"),
+            ),
+        ):
+            result = cmd_check([])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "Schema:" not in out
+
+
+# ── cmd_migrate ────────────────────────────────────────────────────
+
+
+class TestCmdMigrate:
+    def test_migrate_up_to_date(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Reports already up to date when no migration needed."""
+        from airut.config.migration import CURRENT_CONFIG_VERSION
+
+        config_text = (
+            f"config_version: {CURRENT_CONFIG_VERSION}\n" + _VALID_CONFIG
+        )
+        config_path = tmp_path / "airut.yaml"
+        config_path.write_text(config_text)
+
+        with (
+            patch("airut.cli.get_config_path", return_value=config_path),
+            patch("airut.cli._use_color", return_value=False),
+        ):
+            result = cmd_migrate([])
+
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "already up to date" in out
+        assert f"v{CURRENT_CONFIG_VERSION}" in out
+
+    def test_migrate_applies_migration(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Migrates config file and reports version change."""
+        from airut.config.migration import CURRENT_CONFIG_VERSION
+
+        config_text = "config_version: 3\n" + _VALID_CONFIG
+        config_path = tmp_path / "airut.yaml"
+        config_path.write_text(config_text)
+
+        with (
+            patch("airut.cli.get_config_path", return_value=config_path),
+            patch("airut.cli._use_color", return_value=False),
+        ):
+            result = cmd_migrate([])
+
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "Migrated" in out
+        assert "v3" in out
+        assert f"v{CURRENT_CONFIG_VERSION}" in out
+
+        # Verify file was updated
+        import yaml
+
+        with open(config_path) as f:
+            data = yaml.safe_load(f)
+        assert data["config_version"] == CURRENT_CONFIG_VERSION
+
+    def test_migrate_missing_config(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Returns 1 when config file does not exist."""
+        config_path = tmp_path / "airut.yaml"
+        with (
+            patch("airut.cli.get_config_path", return_value=config_path),
+            patch("airut.cli._use_color", return_value=False),
+        ):
+            result = cmd_migrate([])
+
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "not found" in out
+        assert "airut init" in out
+
+    def test_migrate_invalid_config(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Returns 1 for unparseable config."""
+        config_path = tmp_path / "airut.yaml"
+        config_path.write_text("")
+
+        with (
+            patch("airut.cli.get_config_path", return_value=config_path),
+            patch("airut.cli._use_color", return_value=False),
+        ):
+            result = cmd_migrate([])
+
+        assert result == 1
+        out = capsys.readouterr().out
+        assert "Error" in out
+
+    def test_migrate_preserves_env_tags(self, tmp_path: Path) -> None:
+        """Migration preserves !env tags in the config file."""
+        config_text = (
+            "config_version: 3\n"
+            "repos:\n"
+            "  test:\n"
+            "    email:\n"
+            "      account:\n"
+            "        username: user@test.com\n"
+            "        password: !env EMAIL_PASSWORD\n"
+            "        from: test@example.com\n"
+            "      imap:\n"
+            "        server: imap.test.com\n"
+            "      smtp:\n"
+            "        server: smtp.test.com\n"
+            "      auth:\n"
+            "        authorized_senders:\n"
+            "          - auth@test.com\n"
+            "        trusted_authserv_id: mx.test.com\n"
+            "    git:\n"
+            "      repo_url: https://example.com/repo.git\n"
+        )
+        config_path = tmp_path / "airut.yaml"
+        config_path.write_text(config_text)
+
+        with (
+            patch("airut.cli.get_config_path", return_value=config_path),
+            patch("airut.cli._use_color", return_value=False),
+        ):
+            result = cmd_migrate([])
+
+        assert result == 0
+        content = config_path.read_text()
+        assert "!env" in content

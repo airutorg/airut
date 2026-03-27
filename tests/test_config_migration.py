@@ -5,6 +5,7 @@
 
 """Tests for config schema migration."""
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -16,6 +17,8 @@ from airut.config.migration import (
     _migrate_v2_to_v3,
     _migrate_v3_to_v4,
     apply_migrations,
+    get_file_config_version,
+    migrate_config_file,
     unique_var_name,
 )
 from airut.gateway.config import ConfigError
@@ -612,3 +615,146 @@ class TestMigrateV3ToV4:
         assert email["account"]["username"] == "user@example.com"
         assert email["imap"]["server"] == "imap.example.com"
         assert email["auth"]["authorized_senders"] == ["admin@example.com"]
+
+
+class TestGetFileConfigVersion:
+    def test_reads_explicit_version(self, tmp_path: Path) -> None:
+        """Returns the config_version from the file."""
+        config = tmp_path / "airut.yaml"
+        config.write_text("config_version: 3\nrepos: {}\n")
+        assert get_file_config_version(config) == 3
+
+    def test_defaults_to_1_when_absent(self, tmp_path: Path) -> None:
+        """Returns 1 when config_version is not set."""
+        config = tmp_path / "airut.yaml"
+        config.write_text("repos: {}\n")
+        assert get_file_config_version(config) == 1
+
+    def test_current_version(self, tmp_path: Path) -> None:
+        """Returns current version when set."""
+        config = tmp_path / "airut.yaml"
+        config.write_text(
+            f"config_version: {CURRENT_CONFIG_VERSION}\nrepos: {{}}\n"
+        )
+        assert get_file_config_version(config) == CURRENT_CONFIG_VERSION
+
+    def test_missing_file_raises(self, tmp_path: Path) -> None:
+        """Raises ConfigError for missing file."""
+        config = tmp_path / "nonexistent.yaml"
+        with pytest.raises(ConfigError, match="not found"):
+            get_file_config_version(config)
+
+    def test_invalid_yaml_raises(self, tmp_path: Path) -> None:
+        """Raises ConfigError for unparseable YAML."""
+        config = tmp_path / "bad.yaml"
+        config.write_text("not: [valid: yaml: {{")
+        with pytest.raises(ConfigError, match="Cannot parse"):
+            get_file_config_version(config)
+
+    def test_non_dict_raises(self, tmp_path: Path) -> None:
+        """Raises ConfigError when YAML is not a mapping."""
+        config = tmp_path / "list.yaml"
+        config.write_text("- item1\n- item2\n")
+        with pytest.raises(ConfigError, match="YAML mapping"):
+            get_file_config_version(config)
+
+    def test_invalid_version_type_raises(self, tmp_path: Path) -> None:
+        """Raises ConfigError for non-integer version."""
+        config = tmp_path / "bad_version.yaml"
+        config.write_text("config_version: abc\nrepos: {}\n")
+        with pytest.raises(ConfigError, match="positive integer"):
+            get_file_config_version(config)
+
+    def test_zero_version_raises(self, tmp_path: Path) -> None:
+        """Raises ConfigError for version 0."""
+        config = tmp_path / "zero.yaml"
+        config.write_text("config_version: 0\nrepos: {}\n")
+        with pytest.raises(ConfigError, match="positive integer"):
+            get_file_config_version(config)
+
+    def test_os_error_raises(self, tmp_path: Path) -> None:
+        """Raises ConfigError when file cannot be read (OSError)."""
+        from unittest.mock import patch
+
+        config = tmp_path / "airut.yaml"
+        config.write_text("repos: {}\n")
+        with patch.object(
+            Path, "read_bytes", side_effect=OSError("Permission denied")
+        ):
+            with pytest.raises(ConfigError, match="Cannot read"):
+                get_file_config_version(config)
+
+
+class TestMigrateConfigFile:
+    def test_noop_when_current(self, tmp_path: Path) -> None:
+        """Returns same version and doesn't modify file when current."""
+        config = tmp_path / "airut.yaml"
+        text = f"config_version: {CURRENT_CONFIG_VERSION}\nrepos: {{}}\n"
+        config.write_text(text)
+        old, new = migrate_config_file(config)
+        assert old == CURRENT_CONFIG_VERSION
+        assert new == CURRENT_CONFIG_VERSION
+        # File content unchanged
+        assert config.read_text() == text
+
+    def test_migrates_and_saves(self, tmp_path: Path) -> None:
+        """Applies migration and writes updated file."""
+        config = tmp_path / "airut.yaml"
+        config.write_text("config_version: 3\nrepos: {}\n")
+        old, new = migrate_config_file(config)
+        assert old == 3
+        assert new == CURRENT_CONFIG_VERSION
+        import yaml
+
+        with open(config) as f:
+            data = yaml.safe_load(f)
+        assert data["config_version"] == CURRENT_CONFIG_VERSION
+
+    def test_missing_file_raises(self, tmp_path: Path) -> None:
+        """Raises ConfigError for missing file."""
+        config = tmp_path / "nonexistent.yaml"
+        with pytest.raises(ConfigError, match="not found"):
+            migrate_config_file(config)
+
+    def test_empty_file_raises(self, tmp_path: Path) -> None:
+        """Raises ConfigError for empty file (non-dict)."""
+        config = tmp_path / "empty.yaml"
+        config.write_text("")
+        with pytest.raises(ConfigError):
+            migrate_config_file(config)
+
+    def test_invalid_version_raises(self, tmp_path: Path) -> None:
+        """Raises ConfigError for non-integer config_version."""
+        config = tmp_path / "airut.yaml"
+        config.write_text("config_version: bad\nrepos: {}\n")
+        with pytest.raises(ConfigError, match="positive integer"):
+            migrate_config_file(config)
+
+    def test_preserves_env_tags(self, tmp_path: Path) -> None:
+        """Preserves !env tags during migration round-trip."""
+        config = tmp_path / "airut.yaml"
+        config.write_text(
+            "config_version: 3\n"
+            "repos:\n"
+            "  test:\n"
+            "    email:\n"
+            "      account:\n"
+            "        username: user@test.com\n"
+            "        password: !env EMAIL_PASSWORD\n"
+            "        from: test@example.com\n"
+            "      imap:\n"
+            "        server: imap.test.com\n"
+            "      smtp:\n"
+            "        server: smtp.test.com\n"
+            "      auth:\n"
+            "        authorized_senders:\n"
+            "          - auth@test.com\n"
+            "        trusted_authserv_id: mx.test.com\n"
+            "    git:\n"
+            "      repo_url: https://example.com/repo.git\n"
+        )
+        old, new = migrate_config_file(config)
+        assert old == 3
+        assert new == CURRENT_CONFIG_VERSION
+        content = config.read_text()
+        assert "!env" in content
