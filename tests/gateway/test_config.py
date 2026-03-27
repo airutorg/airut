@@ -267,12 +267,10 @@ def test_global_config_defaults() -> None:
     assert config.dashboard_base_url is None
     assert config.container_command == "podman"
     assert config.upstream_dns is None
-    assert config.resource_limits is None
 
 
 def test_global_config_with_custom_values() -> None:
     """Test GlobalConfig with custom values."""
-    limits = ResourceLimits(timeout=3600, memory="8g", cpus=4, pids_limit=512)
     config = GlobalConfig(
         max_concurrent_executions=5,
         shutdown_timeout_seconds=120,
@@ -284,7 +282,6 @@ def test_global_config_with_custom_values() -> None:
         dashboard_base_url="https://dashboard.example.com",
         container_command="docker",
         upstream_dns="8.8.8.8",
-        resource_limits=limits,
     )
 
     assert config.max_concurrent_executions == 5
@@ -297,7 +294,6 @@ def test_global_config_with_custom_values() -> None:
     assert config.dashboard_base_url == "https://dashboard.example.com"
     assert config.container_command == "docker"
     assert config.upstream_dns == "8.8.8.8"
-    assert config.resource_limits == limits
 
 
 def test_global_config_invalid_max_concurrent() -> None:
@@ -921,7 +917,6 @@ class TestFromYaml:
         assert config.global_config.dashboard_port == 5200
         assert config.global_config.dashboard_base_url is None
         assert config.global_config.container_command == "podman"
-        assert config.global_config.resource_limits is None
 
         # Repo config
         email_ch = repo.channels["email"]
@@ -960,7 +955,6 @@ class TestFromYaml:
             == "https://dashboard.example.com"
         )
         assert config.global_config.container_command == "docker"
-        assert config.global_config.resource_limits is None
 
         # Repo config
         email_ch = repo.channels["email"]
@@ -978,10 +972,10 @@ class TestFromYaml:
             "R2_ACCOUNT_ID": "test-account",
         }
 
-    def test_server_resource_limits(
+    def test_global_resource_limits_migrated_to_vars(
         self, master_repo: Path, tmp_path: Path
     ) -> None:
-        """resource_limits block is parsed from server config."""
+        """Top-level resource_limits are migrated into vars."""
         yaml_content = (
             _MINIMAL_YAML.format(repo_url=master_repo)
             + "resource_limits:\n"
@@ -993,8 +987,8 @@ class TestFromYaml:
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
         config = ServerConfig.from_yaml(yaml_path).value
-        rl = config.global_config.resource_limits
-        assert rl is not None
+        # After migration, resource limits resolve into repo config
+        rl = config.repos["test"].resource_limits
         assert rl.timeout == 3600
         assert rl.memory == "8g"
         assert rl.cpus == 4
@@ -1535,60 +1529,6 @@ class TestResourceLimits:
         for mem in ("512m", "2g", "1024k", "100b", "4G", "256M"):
             rl = ResourceLimits(memory=mem)
             assert rl.memory == mem
-
-    def test_with_defaults_none(self) -> None:
-        """with_defaults with None returns self unchanged."""
-        rl = ResourceLimits(timeout=600, memory="4g", cpus=4, pids_limit=512)
-        result = rl.with_defaults(None)
-        assert result == rl
-
-    def test_with_defaults_repo_values_take_priority(self) -> None:
-        """Repo values override defaults."""
-        rl = ResourceLimits(timeout=300, memory="2g", cpus=2, pids_limit=128)
-        defaults = ResourceLimits(
-            timeout=600, memory="4g", cpus=4, pids_limit=256
-        )
-        result = rl.with_defaults(defaults)
-        assert result == rl
-
-    def test_with_defaults_fills_none_fields(self) -> None:
-        """None fields in repo are filled from defaults."""
-        rl = ResourceLimits()
-        defaults = ResourceLimits(
-            timeout=300, memory="4g", cpus=4, pids_limit=256
-        )
-        result = rl.with_defaults(defaults)
-        assert result.timeout == 300
-        assert result.memory == "4g"
-        assert result.cpus == 4
-        assert result.pids_limit == 256
-
-    def test_with_defaults_partial_repo(self) -> None:
-        """Repo sets some fields, defaults fill the rest."""
-        rl = ResourceLimits(timeout=600, memory="8g")
-        defaults = ResourceLimits(
-            timeout=300, memory="4g", cpus=4, pids_limit=256
-        )
-        result = rl.with_defaults(defaults)
-        assert result.timeout == 600  # repo override
-        assert result.memory == "8g"  # repo override
-        assert result.cpus == 4  # from defaults
-        assert result.pids_limit == 256  # from defaults
-
-    def test_with_defaults_partial_defaults(self) -> None:
-        """Defaults only fill fields they define."""
-        rl = ResourceLimits(timeout=600)
-        defaults = ResourceLimits(cpus=2)  # only cpus default
-        result = rl.with_defaults(defaults)
-        assert result.timeout == 600  # repo value
-        assert result.memory is None  # neither set
-        assert result.cpus == 2  # from defaults
-        assert result.pids_limit is None  # neither set
-
-    def test_with_defaults_both_empty(self) -> None:
-        """Both empty ResourceLimits results in all None."""
-        result = ResourceLimits().with_defaults(ResourceLimits())
-        assert result == ResourceLimits()
 
 
 class TestParseResourceLimits:

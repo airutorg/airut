@@ -135,10 +135,8 @@ class ResourceLimits:
     All fields are optional.  When ``None``, the corresponding
     podman flag is not passed and no limit is enforced.
 
-    Used in two contexts:
-
-    - **Server config** — defines defaults for all repos.
-    - **Repo config** — overrides server defaults per repo.
+    Configured per-repo in the server config.  Use ``!var`` references
+    in the ``vars:`` section to share defaults across repos.
 
     Attributes:
         timeout: Max container execution time in seconds.
@@ -191,35 +189,6 @@ class ResourceLimits:
             raise ValueError(f"PIDs limit must be >= 1: {self.pids_limit}")
         if self.memory is not None:
             _validate_memory(self.memory)
-
-    def with_defaults(self, defaults: ResourceLimits | None) -> ResourceLimits:
-        """Return a copy with ``None`` fields filled from *defaults*.
-
-        For each field, uses ``self``'s value if set, otherwise falls
-        back to the corresponding value in *defaults*.
-
-        Args:
-            defaults: Server-wide default limits.  ``None`` means no
-                defaults (return ``self`` unchanged).
-
-        Returns:
-            New ResourceLimits with defaults applied.
-        """
-        if defaults is None:
-            return self
-
-        return ResourceLimits(
-            timeout=self.timeout
-            if self.timeout is not None
-            else defaults.timeout,
-            memory=self.memory if self.memory is not None else defaults.memory,
-            cpus=self.cpus if self.cpus is not None else defaults.cpus,
-            pids_limit=(
-                self.pids_limit
-                if self.pids_limit is not None
-                else defaults.pids_limit
-            ),
-        )
 
 
 @dataclass(frozen=True)

@@ -208,15 +208,15 @@ class TestIsNestedDataclass:
     """Tests for _is_nested_dataclass."""
 
     def test_resource_limits_field(self) -> None:
-        from airut.gateway.config import GlobalConfig
+        from airut.gateway.config import RepoServerConfig
         from airut.sandbox.types import ResourceLimits
 
         f = next(
             f
-            for f in dataclasses.fields(GlobalConfig)
+            for f in dataclasses.fields(RepoServerConfig)
             if f.name == "resource_limits"
         )
-        assert _is_nested_dataclass(GlobalConfig, f) is ResourceLimits
+        assert _is_nested_dataclass(RepoServerConfig, f) is ResourceLimits
 
     def test_non_nested_field(self) -> None:
         from airut.gateway.config import GlobalConfig
@@ -286,7 +286,6 @@ class TestGroupFieldsBySection:
         assert "execution" in section_names
         assert "dashboard" in section_names
         assert "network" in section_names
-        assert None in section_names  # top-level fields
 
     def test_email_sections(self) -> None:
         from airut.gateway.config import EmailChannelConfig
@@ -424,16 +423,17 @@ class TestRenderField:
         assert any("ANTHROPIC_API_KEY" in x for x in lines)
 
     def test_nested_dataclass(self) -> None:
-        from airut.gateway.config import GlobalConfig
+        from airut.config.source import YAML_REPO_STRUCTURE
+        from airut.gateway.config import RepoServerConfig
 
         f = next(
             f
-            for f in dataclasses.fields(GlobalConfig)
+            for f in dataclasses.fields(RepoServerConfig)
             if f.name == "resource_limits"
         )
-        lines = _render_field(GlobalConfig, f, YAML_GLOBAL_STRUCTURE, "")
+        lines = _render_field(RepoServerConfig, f, YAML_REPO_STRUCTURE, "    ")
         assert any("resource_limits:" in x for x in lines)
-        assert any("timeout: 7200" in x for x in lines)
+        assert any("!var default_resource_timeout" in x for x in lines)
         assert any("memory:" in x for x in lines)
 
     def test_doc_always_present(self) -> None:
@@ -458,7 +458,6 @@ class TestRenderClass:
         assert "execution:" in text
         assert "dashboard:" in text
         assert "container_command" not in text  # hidden field
-        assert "resource_limits:" in text
         assert "network:" in text
 
     def test_email_config(self) -> None:
@@ -514,7 +513,6 @@ class TestGenerateExampleConfig:
         assert "execution:" in content
         assert "dashboard:" in content
         assert "container_command" not in content  # hidden field
-        assert "resource_limits:" in content
         assert "network:" in content
 
     def test_contains_repo_section(self) -> None:
