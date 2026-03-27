@@ -115,6 +115,14 @@ url_prefixes:
     path: /chrome-for-testing-public/*
     methods: [GET, HEAD]
 
+  # Claude Code install script — integration test validates upstream compatibility
+  - host: claude.ai
+    path: /install.sh
+    methods: [GET]
+  - host: storage.googleapis.com
+    path: /claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/*
+    methods: [GET, HEAD]
+
   # Ubuntu package repos — system libraries for Playwright Chromium
   - host: archive.ubuntu.com
     path: /ubuntu/*
