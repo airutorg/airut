@@ -71,53 +71,56 @@ repos:
   # -------------------------------------------------------------------------
   my-project:
     email:
-      # IMAP server hostname
-      imap_server: mail.example.com
+      account:
+        # Email account username
+        username: airut
 
-      # SMTP server hostname
-      smtp_server: mail.example.com
+        # From address for outgoing emails
+        from: "Airut <airut@example.com>"
 
-      # Email account username
-      username: airut
+        # Email account password (not required with OAuth2)
+        # password: !env EMAIL_PASSWORD
 
-      # From address for outgoing emails
-      from: "Airut <airut@example.com>"
+      imap:
+        # IMAP server hostname
+        server: mail.example.com
 
-      # Email patterns allowed to send commands (e.g. *@company.com)
-      authorized_senders:
-        - you@example.com
-        # - *@company.com
+        # IMAP port
+        # port: 993
 
-      # Trusted authserv-id for DMARC verification (empty string for Microsoft 365)
-      trusted_authserv_id: mail.example.com
+        # Max IMAP connection attempts before giving up
+        # connect_retries: 3
 
-      # IMAP port
-      # imap_port: 993
+        # Seconds between IMAP polls
+        # poll_interval: 60
 
-      # SMTP port
-      # smtp_port: 587
+        # Use IMAP IDLE instead of polling
+        # use_idle: true
 
-      # Email account password (not required with OAuth2)
-      # password: !env EMAIL_PASSWORD
+        # IDLE reconnect interval in seconds (servers may close after 30 min)
+        # idle_reconnect_interval: 1740
 
-      # Whether SMTP requires authentication
-      # smtp_require_auth: true
+      smtp:
+        # SMTP server hostname
+        server: mail.example.com
 
-      # Accept Microsoft 365 intra-org messages when DMARC headers are absent
-      # microsoft_internal_auth_fallback: false
+        # SMTP port
+        # port: 587
 
-      # imap:
-      #   # Max IMAP connection attempts before giving up
-      #   connect_retries: 3
-      #
-      #   # Seconds between IMAP polls
-      #   poll_interval: 60
-      #
-      #   # Use IMAP IDLE instead of polling
-      #   use_idle: true
-      #
-      #   # IDLE reconnect interval in seconds (servers may close after 30 min)
-      #   idle_reconnect_interval: 1740
+        # Whether SMTP requires authentication
+        # require_auth: true
+
+      auth:
+        # Email patterns allowed to send commands (e.g. *@company.com)
+        authorized_senders:
+          - you@example.com
+          # - *@company.com
+
+        # Trusted authserv-id for DMARC verification (empty string for Microsoft 365)
+        trusted_authserv_id: mail.example.com
+
+        # Accept Microsoft 365 intra-org messages when DMARC headers are absent
+        # microsoft_internal_fallback: false
 
       # microsoft_oauth2:
       #   # Azure AD tenant ID for OAuth2 client credentials flow

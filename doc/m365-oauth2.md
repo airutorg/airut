@@ -151,29 +151,35 @@ channel), or edit `~/.config/airut/airut.yaml` directly:
 repos:
   my-project:
     email:
-      imap_server: outlook.office365.com
-      imap_port: 993
-      smtp_server: smtp.office365.com
-      smtp_port: 587
-      username: airut@company.com
-      from: "Airut <airut@company.com>"
-      # password is not needed when using OAuth2
+      account:
+        username: airut@company.com
+        from: "Airut <airut@company.com>"
+        # password is not needed when using OAuth2
+
+      imap:
+        server: outlook.office365.com
+        port: 993
+
+      smtp:
+        server: smtp.office365.com
+        port: 587
+
+      auth:
+        # Microsoft 365 omits authserv-id from Authentication-Results
+        # headers — set to empty string to skip the authserv-id check
+        trusted_authserv_id: ""
+
+        # Accept X-MS-Exchange-Organization-AuthAs: Internal for intra-org
+        # email where Microsoft 365 omits Authentication-Results entirely
+        microsoft_internal_fallback: true
+
+        authorized_senders:
+          - you@company.com
 
       microsoft_oauth2:
         tenant_id: !env AZURE_TENANT_ID
         client_id: !env AZURE_CLIENT_ID
         client_secret: !env AZURE_CLIENT_SECRET
-
-      # Microsoft 365 omits authserv-id from Authentication-Results
-      # headers — set to empty string to skip the authserv-id check
-      trusted_authserv_id: ""
-
-      # Accept X-MS-Exchange-Organization-AuthAs: Internal for intra-org
-      # email where Microsoft 365 omits Authentication-Results entirely
-      microsoft_internal_auth_fallback: true
-
-      authorized_senders:
-        - you@company.com
 ```
 
 Add the corresponding values to `~/.config/airut/.env`:
@@ -187,11 +193,11 @@ AZURE_CLIENT_SECRET=your-client-secret-value
 When `microsoft_oauth2` is configured, Airut uses XOAUTH2 for both IMAP and SMTP
 instead of password authentication. The `password` field can be omitted.
 
-> **Important: `trusted_authserv_id` must be empty string for Microsoft 365.**
-> Microsoft's Exchange Online Protection (EOP) omits the RFC 8601 `authserv-id`
-> from `Authentication-Results` headers. Setting `trusted_authserv_id: ""` tells
-> Airut to skip the authserv-id check and rely solely on the first-header-only
-> policy for DMARC verification. See
+> **Important: `auth.trusted_authserv_id` must be empty string for Microsoft
+> 365.** Microsoft's Exchange Online Protection (EOP) omits the RFC 8601
+> `authserv-id` from `Authentication-Results` headers. Setting
+> `auth.trusted_authserv_id: ""` tells Airut to skip the authserv-id check and
+> rely solely on the first-header-only policy for DMARC verification. See
 > [Anti-spam message headers (Microsoft Learn)](https://learn.microsoft.com/en-us/defender-office-365/message-headers-eop-mdo)
 > for details on Microsoft's header format.
 
@@ -199,7 +205,7 @@ instead of password authentication. The `password` field can be omitted.
 > `Authentication-Results` headers at all for email sent within the same tenant.
 > Instead, it stamps the message with
 > `X-MS-Exchange-Organization-AuthAs: Internal`. Set
-> `microsoft_internal_auth_fallback: true` to accept this header as
+> `auth.microsoft_internal_fallback: true` to accept this header as
 > authentication proof when no `Authentication-Results` header is present.
 > Authorization (sender allowlist) still applies. See
 > [Demystifying Hybrid Mail Flow (Microsoft Tech Community)](https://techcommunity.microsoft.com/blog/exchange/demystifying-and-troubleshooting-hybrid-mail-flow-when-is-a-message-internal/1420838)

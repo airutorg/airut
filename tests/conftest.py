@@ -43,15 +43,23 @@ def make_sample_raw() -> dict[str, Any]:
                     "repo_url": "https://github.com/test/repo.git",
                 },
                 "email": {
-                    "imap_server": "imap.example.com",
-                    "imap_port": 993,
-                    "smtp_server": "smtp.example.com",
-                    "smtp_port": 587,
-                    "username": "user@example.com",
-                    "password": "secret",
-                    "from": "bot@example.com",
-                    "authorized_senders": ["admin@example.com"],
-                    "trusted_authserv_id": "example.com",
+                    "account": {
+                        "username": "user@example.com",
+                        "password": "secret",
+                        "from": "bot@example.com",
+                    },
+                    "imap": {
+                        "server": "imap.example.com",
+                        "port": 993,
+                    },
+                    "smtp": {
+                        "server": "smtp.example.com",
+                        "port": 587,
+                    },
+                    "auth": {
+                        "authorized_senders": ["admin@example.com"],
+                        "trusted_authserv_id": "example.com",
+                    },
                 },
             },
         },

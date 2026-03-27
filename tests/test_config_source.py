@@ -90,9 +90,9 @@ class TestFlatToNestedGlobal:
 class TestFlatToNestedEmail:
     def test_maps_imap_fields(self) -> None:
         flat = {
-            "poll_interval_seconds": 30,
-            "use_imap_idle": False,
-            "idle_reconnect_interval_seconds": 600,
+            "imap_poll_interval_seconds": 30,
+            "imap_use_idle": False,
+            "imap_idle_reconnect_interval_seconds": 600,
         }
         nested = flat_to_nested_email(flat)
         assert nested == {
@@ -118,10 +118,56 @@ class TestFlatToNestedEmail:
             }
         }
 
-    def test_maps_from_address(self) -> None:
-        flat = {"from_address": "bot@example.com"}
+    def test_maps_account_fields(self) -> None:
+        flat = {
+            "account_username": "user@example.com",
+            "account_password": "secret",
+            "account_from_address": "bot@example.com",
+        }
         nested = flat_to_nested_email(flat)
-        assert nested == {"from": "bot@example.com"}
+        assert nested == {
+            "account": {
+                "username": "user@example.com",
+                "password": "secret",
+                "from": "bot@example.com",
+            }
+        }
+
+    def test_maps_auth_fields(self) -> None:
+        flat = {
+            "auth_authorized_senders": ["user@example.com"],
+            "auth_trusted_authserv_id": "mx.example.com",
+            "auth_microsoft_internal_fallback": True,
+        }
+        nested = flat_to_nested_email(flat)
+        assert nested == {
+            "auth": {
+                "authorized_senders": ["user@example.com"],
+                "trusted_authserv_id": "mx.example.com",
+                "microsoft_internal_fallback": True,
+            }
+        }
+
+    def test_maps_server_fields(self) -> None:
+        flat = {
+            "imap_server": "imap.example.com",
+            "imap_port": 993,
+            "smtp_server": "smtp.example.com",
+            "smtp_port": 587,
+            "smtp_require_auth": True,
+        }
+        nested = flat_to_nested_email(flat)
+        assert nested == {
+            "imap": {
+                "server": "imap.example.com",
+                "port": 993,
+            },
+            "smtp": {
+                "server": "smtp.example.com",
+                "port": 587,
+                "require_auth": True,
+            },
+        }
 
     def test_unmapped_email_field_stays_flat(self) -> None:
         flat = {"custom_field": "custom_value"}

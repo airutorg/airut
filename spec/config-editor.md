@@ -209,7 +209,8 @@ without touching the file.
 
 All operations work on the raw YAML dict using **dot-delimited paths** that
 mirror the YAML structure (e.g., `execution.max_concurrent`,
-`repos.my-project.email.imap.poll_interval`).
+`repos.my-project.email.imap.poll_interval`). Email settings are organized under
+subsections: `account`, `imap`, `smtp`, `auth`, and `microsoft_oauth2`.
 
 #### Set Field
 
@@ -379,8 +380,8 @@ for `var` source). The response is the full vars section HTML fragment.
 
 ### `POST /api/config/add`
 
-Accepts form-encoded body: `path=repos.my-project.email.authorized_senders` or
-`path=repos&key=new-project`. Returns `200 OK` with `X-Dirty-Count` header.
+Accepts form-encoded body: `path=repos.my-project.email.auth.authorized_senders`
+or `path=repos&key=new-project`. Returns `200 OK` with `X-Dirty-Count` header.
 
 For variables: `path=vars&key=<name>` adds a new variable.
 `path=vars&key=<new>&rename_from=<old>` renames a variable and updates all

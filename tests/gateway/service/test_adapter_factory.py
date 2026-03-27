@@ -22,11 +22,11 @@ class TestCreateAdapters:
             imap_port=993,
             smtp_server="smtp.example.com",
             smtp_port=587,
-            username="test@example.com",
-            password="pass",
-            from_address="Bot <bot@example.com>",
-            authorized_senders=["user@example.com"],
-            trusted_authserv_id="mx.example.com",
+            account_username="test@example.com",
+            account_password="pass",
+            account_from_address="Bot <bot@example.com>",
+            auth_authorized_senders=["user@example.com"],
+            auth_trusted_authserv_id="mx.example.com",
         )
 
         config = MagicMock(spec=RepoServerConfig)

@@ -66,14 +66,14 @@ _EXAMPLE_VALUES: dict[str, str] = {
     # Required field placeholders
     "EmailChannelConfig.imap_server": "mail.example.com",
     "EmailChannelConfig.smtp_server": "mail.example.com",
-    "EmailChannelConfig.username": "airut",
-    "EmailChannelConfig.from_address": '"Airut <airut@example.com>"',
-    "EmailChannelConfig.trusted_authserv_id": "mail.example.com",
+    "EmailChannelConfig.account_username": "airut",
+    "EmailChannelConfig.account_from_address": '"Airut <airut@example.com>"',
+    "EmailChannelConfig.auth_trusted_authserv_id": "mail.example.com",
     "SlackChannelConfig.bot_token": "!env SLACK_BOT_TOKEN",
     "SlackChannelConfig.app_token": "!env SLACK_APP_TOKEN",
     "RepoServerConfig.git_repo_url": "https://github.com/you/my-project.git",
     # Optional None-default overrides (illustrative)
-    "EmailChannelConfig.password": "!env EMAIL_PASSWORD",
+    "EmailChannelConfig.account_password": "!env EMAIL_PASSWORD",
     "GlobalConfig.dashboard_base_url": "dashboard.example.com",
     "GlobalConfig.upstream_dns": '"1.1.1.1"',
     "ResourceLimits.timeout": "!var default_resource_timeout",
@@ -87,7 +87,7 @@ _EXAMPLE_VALUES: dict[str, str] = {
 #: Each entry is a list of YAML lines rendered verbatim at the field's
 #: indentation level.  Keys are validated against the actual schema.
 _COMPLEX_EXAMPLES: dict[str, list[str]] = {
-    "EmailChannelConfig.authorized_senders": [
+    "EmailChannelConfig.auth_authorized_senders": [
         "authorized_senders:",
         "  - you@example.com",
         "  # - *@company.com",
@@ -683,32 +683,56 @@ def generate_stub_config() -> str:
         ]
     )
 
-    # Only required email fields
+    # Only required email fields, grouped by YAML section
+    stub_fields: list[dataclasses.Field[Any]] = []
     for f in dc_fields(EmailChannelConfig):
         fm = get_field_meta(f)
         if fm is None:
             continue
         key = f"EmailChannelConfig.{f.name}"
-        # Skip optional fields and complex fields not needed in stub
         has_default = (
             f.default is not dataclasses.MISSING
             or f.default_factory is not dataclasses.MISSING
         )
         if has_default and key not in (
-            "EmailChannelConfig.authorized_senders",
-            "EmailChannelConfig.password",
+            "EmailChannelConfig.auth_authorized_senders",
+            "EmailChannelConfig.account_password",
         ):
             continue
+        stub_fields.append(f)
+
+    # Sort by section so fields in the same section are adjacent
+    # (dataclass ordering puts required fields before optional,
+    # which can split a section like account across auth fields).
+    section_order = ["account", "imap", "smtp", "auth"]
+    stub_fields.sort(
+        key=lambda f: (
+            section_order.index(
+                _yaml_section(f.name, YAML_EMAIL_STRUCTURE) or ""
+            )
+            if _yaml_section(f.name, YAML_EMAIL_STRUCTURE) in section_order
+            else len(section_order)
+        )
+    )
+
+    current_section: str | None = None
+    for f in stub_fields:
+        key = f"EmailChannelConfig.{f.name}"
+        section = _yaml_section(f.name, YAML_EMAIL_STRUCTURE)
+        if section != current_section:
+            current_section = section
+            if section is not None:
+                out.append(f"      {section}:")
+        indent = "        " if section else "      "
         if key in _COMPLEX_EXAMPLES:
-            snippet = _COMPLEX_EXAMPLES[key]
-            for line in snippet:
-                out.append(f"      {line}")
+            for line in _COMPLEX_EXAMPLES[key]:
+                out.append(f"{indent}{line}")
             continue
         value = _EXAMPLE_VALUES.get(key)
         if value is None:
             continue
         yaml_name = _yaml_key(f.name, YAML_EMAIL_STRUCTURE)
-        out.append(f"      {yaml_name}: {value}")
+        out.append(f"{indent}{yaml_name}: {value}")
 
     # git section
     git_url = _EXAMPLE_VALUES["RepoServerConfig.git_repo_url"]

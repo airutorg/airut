@@ -120,12 +120,56 @@
         Remove
       </button>
     </div>
-    {% for f in email_schema %}
-    {% if not f.name.startswith('microsoft_oauth2_') %}
-    {% include "components/config/field.html" %}
-    {% endif %}
-    {% endfor %}
 
+    {# Account subsection #}
+    <div class="cfg-subsection">
+      <div class="cfg-card-header">
+        <span class="cfg-card-title">Account</span>
+      </div>
+      {% for f in email_schema %}
+      {% if f.name.startswith('account_') %}
+      {% include "components/config/field.html" %}
+      {% endif %}
+      {% endfor %}
+    </div>
+
+    {# IMAP subsection #}
+    <div class="cfg-subsection">
+      <div class="cfg-card-header">
+        <span class="cfg-card-title">IMAP</span>
+      </div>
+      {% for f in email_schema %}
+      {% if f.name.startswith('imap_') %}
+      {% include "components/config/field.html" %}
+      {% endif %}
+      {% endfor %}
+    </div>
+
+    {# SMTP subsection #}
+    <div class="cfg-subsection">
+      <div class="cfg-card-header">
+        <span class="cfg-card-title">SMTP</span>
+      </div>
+      {% for f in email_schema %}
+      {% if f.name.startswith('smtp_') %}
+      {% include "components/config/field.html" %}
+      {% endif %}
+      {% endfor %}
+    </div>
+
+    {# Sender Authorization subsection #}
+    <div class="cfg-subsection">
+      <div class="cfg-card-header">
+        <span class="cfg-card-title">Sender Authorization</span>
+      </div>
+      {% for f in email_schema %}
+      {% if f.name.startswith('auth_') %}
+      {% include "components/config/field.html" %}
+      {% endif %}
+      {% endfor %}
+    </div>
+
+    {# Microsoft 365 OAuth2 subsection #}
     <div class="cfg-subsection">
       <div class="cfg-card-header">
         <span class="cfg-card-title">Microsoft 365 OAuth2</span>

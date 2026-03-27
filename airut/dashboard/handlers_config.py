@@ -54,13 +54,17 @@ def _make_email_skeleton() -> dict[str, Any]:
     use empty literals so the editor shows "Literal" source.
     """
     return {
-        "imap_server": "imap.example.com",
-        "smtp_server": "smtp.example.com",
-        "username": "user@example.com",
-        "password": "",
-        "from": "bot@example.com",
-        "authorized_senders": [],
-        "trusted_authserv_id": "example.com",
+        "account": {
+            "username": "user@example.com",
+            "password": "",
+            "from": "bot@example.com",
+        },
+        "imap": {"server": "imap.example.com"},
+        "smtp": {"server": "smtp.example.com"},
+        "auth": {
+            "authorized_senders": [],
+            "trusted_authserv_id": "example.com",
+        },
     }
 
 

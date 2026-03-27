@@ -794,25 +794,26 @@ class EmailChannelConfig(ChannelConfig):
     connectivity, credentials, sender authorization, and polling behaviour.
 
     Attributes:
+        account_username: Email account username.
+        account_password: Email account password (auto-redacted in logs).
+            Optional when Microsoft OAuth2 is configured.
+        account_from_address: From address for outgoing emails.
         imap_server: IMAP server hostname.
         imap_port: IMAP port.
+        imap_connect_retries: Max IMAP connection attempts before giving up.
+        imap_poll_interval_seconds: Seconds between IMAP polls.
+        imap_use_idle: Whether to use IMAP IDLE instead of polling.
+        imap_idle_reconnect_interval_seconds: Reconnect interval for IDLE
+            mode.
         smtp_server: SMTP server hostname.
         smtp_port: SMTP port.
-        username: Email account username.
-        password: Email account password (auto-redacted in logs).
-            Optional when Microsoft OAuth2 is configured.
-        from_address: From address for outgoing emails.
-        authorized_senders: List of email patterns allowed to send commands.
-            Supports wildcards (e.g., ``*@company.com``).
-        trusted_authserv_id: Trusted authserv-id for DMARC verification.
-            Set to empty string for Microsoft 365 / EOP which omits the
-            authserv-id.
-        imap_connect_retries: Max IMAP connection attempts before giving up.
-        poll_interval_seconds: Seconds between IMAP polls.
-        use_imap_idle: Whether to use IMAP IDLE instead of polling.
-        idle_reconnect_interval_seconds: Reconnect interval for IDLE mode.
         smtp_require_auth: Whether SMTP requires authentication.
-        microsoft_internal_auth_fallback: When True and no
+        auth_authorized_senders: List of email patterns allowed to send
+            commands.  Supports wildcards (e.g., ``*@company.com``).
+        auth_trusted_authserv_id: Trusted authserv-id for DMARC
+            verification.  Set to empty string for Microsoft 365 / EOP
+            which omits the authserv-id.
+        auth_microsoft_internal_fallback: When True and no
             ``Authentication-Results`` header is present, accept
             messages with ``X-MS-Exchange-Organization-AuthAs: Internal``
             as authenticated.  Covers intra-org email in Microsoft 365
@@ -826,25 +827,25 @@ class EmailChannelConfig(ChannelConfig):
     """
 
     # --- Required fields (no defaults) ---
+    account_username: str = field(
+        metadata=meta("Email account username", Scope.REPO),
+    )
+    account_from_address: str = field(
+        metadata=meta("From address for outgoing emails", Scope.REPO),
+    )
     imap_server: str = field(
         metadata=meta("IMAP server hostname", Scope.REPO),
     )
     smtp_server: str = field(
         metadata=meta("SMTP server hostname", Scope.REPO),
     )
-    username: str = field(
-        metadata=meta("Email account username", Scope.REPO),
-    )
-    from_address: str = field(
-        metadata=meta("From address for outgoing emails", Scope.REPO),
-    )
-    authorized_senders: list[str] = field(
+    auth_authorized_senders: list[str] = field(
         metadata=meta(
             "Email patterns allowed to send commands (e.g. *@company.com)",
             Scope.REPO,
         ),
     )
-    trusted_authserv_id: str = field(
+    auth_trusted_authserv_id: str = field(
         metadata=meta(
             "Trusted authserv-id for DMARC verification"
             " (empty string for Microsoft 365)",
@@ -852,21 +853,17 @@ class EmailChannelConfig(ChannelConfig):
         ),
     )
     # --- Fields with defaults ---
-    imap_port: int = field(
-        default=993,
-        metadata=meta("IMAP port", Scope.REPO),
-    )
-    smtp_port: int = field(
-        default=587,
-        metadata=meta("SMTP port", Scope.REPO),
-    )
-    password: str | None = field(
+    account_password: str | None = field(
         default=None,
         metadata=meta(
             "Email account password (not required with OAuth2)",
             Scope.REPO,
             secret=True,
         ),
+    )
+    imap_port: int = field(
+        default=993,
+        metadata=meta("IMAP port", Scope.REPO),
     )
     imap_connect_retries: int = field(
         default=3,
@@ -875,15 +872,15 @@ class EmailChannelConfig(ChannelConfig):
             Scope.REPO,
         ),
     )
-    poll_interval_seconds: float = field(
+    imap_poll_interval_seconds: float = field(
         default=60,
         metadata=meta("Seconds between IMAP polls", Scope.REPO),
     )
-    use_imap_idle: bool = field(
+    imap_use_idle: bool = field(
         default=True,
         metadata=meta("Use IMAP IDLE instead of polling", Scope.REPO),
     )
-    idle_reconnect_interval_seconds: int = field(
+    imap_idle_reconnect_interval_seconds: int = field(
         default=29 * 60,
         metadata=meta(
             "IDLE reconnect interval in seconds"
@@ -891,11 +888,15 @@ class EmailChannelConfig(ChannelConfig):
             Scope.REPO,
         ),
     )
+    smtp_port: int = field(
+        default=587,
+        metadata=meta("SMTP port", Scope.REPO),
+    )
     smtp_require_auth: bool = field(
         default=True,
         metadata=meta("Whether SMTP requires authentication", Scope.REPO),
     )
-    microsoft_internal_auth_fallback: bool = field(
+    auth_microsoft_internal_fallback: bool = field(
         default=False,
         metadata=meta(
             "Accept Microsoft 365 intra-org messages"
@@ -930,8 +931,8 @@ class EmailChannelConfig(ChannelConfig):
         Raises:
             ValueError: If configuration is invalid.
         """
-        if self.password:
-            SecretFilter.register_secret(self.password)
+        if self.account_password:
+            SecretFilter.register_secret(self.account_password)
 
         # Register Microsoft OAuth2 client secret for log redaction
         if self.microsoft_oauth2_client_secret:
@@ -952,9 +953,9 @@ class EmailChannelConfig(ChannelConfig):
 
         # Password is required when OAuth2 is not configured
         has_oauth2 = len(oauth2_set) == 3
-        if not has_oauth2 and not self.password:
+        if not has_oauth2 and not self.account_password:
             raise ValueError(
-                "email.password is required when microsoft_oauth2 "
+                "email.account.password is required when microsoft_oauth2 "
                 "is not configured"
             )
 
@@ -967,14 +968,15 @@ class EmailChannelConfig(ChannelConfig):
             raise ValueError(f"Invalid IMAP port: {self.imap_port}")
         if not (1 <= self.smtp_port <= 65535):
             raise ValueError(f"Invalid SMTP port: {self.smtp_port}")
-        if self.poll_interval_seconds < 0.1:
+        if self.imap_poll_interval_seconds < 0.1:
             raise ValueError(
-                f"Poll interval must be >= 0.1s: {self.poll_interval_seconds}"
+                f"Poll interval must be >= 0.1s: "
+                f"{self.imap_poll_interval_seconds}"
             )
-        if self.idle_reconnect_interval_seconds < 60:
+        if self.imap_idle_reconnect_interval_seconds < 60:
             raise ValueError(
                 f"IDLE reconnect interval must be >= 60s: "
-                f"{self.idle_reconnect_interval_seconds}"
+                f"{self.imap_idle_reconnect_interval_seconds}"
             )
 
     @property
@@ -990,7 +992,7 @@ class EmailChannelConfig(ChannelConfig):
     @property
     def channel_detail(self) -> str:
         """Return agent email address for dashboard display."""
-        return self.from_address
+        return self.account_from_address
 
 
 #: Channel type keys recognized in server config.
@@ -1260,13 +1262,14 @@ class ServerConfig:
                 continue
             inbox_key = (
                 email_config.imap_server.lower(),
-                email_config.username.lower(),
+                email_config.account_username.lower(),
             )
             if inbox_key in seen_inboxes:
                 raise ConfigError(
                     f"Repo '{repo_id}' and repo '{seen_inboxes[inbox_key]}' "
                     f"share the same IMAP inbox "
-                    f"({email_config.imap_server}/{email_config.username}). "
+                    f"({email_config.imap_server}/"
+                    f"{email_config.account_username}). "
                     f"Each repo must have its own inbox."
                 )
             seen_inboxes[inbox_key] = repo_id
@@ -1553,7 +1556,10 @@ def _parse_email_channel_config(email: dict, prefix: str) -> EmailChannelConfig:
     Returns:
         EmailChannelConfig instance.
     """
+    account = email.get("account", {})
     imap = email.get("imap", {})
+    smtp = email.get("smtp", {})
+    auth = email.get("auth", {})
 
     # Resolve Microsoft OAuth2 config (optional block)
     ms_oauth2 = email.get("microsoft_oauth2", {})
@@ -1569,63 +1575,63 @@ def _parse_email_channel_config(email: dict, prefix: str) -> EmailChannelConfig:
 
     # Build optional overrides
     ec_overrides = {}
-    imap_port = _resolve(email.get("imap_port"), int)
+    password = _resolve(account.get("password"), str)
+    if password is not None:
+        ec_overrides["account_password"] = password
+    imap_port = _resolve(imap.get("port"), int)
     if imap_port is not None:
         ec_overrides["imap_port"] = imap_port
-    smtp_port = _resolve(email.get("smtp_port"), int)
-    if smtp_port is not None:
-        ec_overrides["smtp_port"] = smtp_port
-    smtp_require_auth = _resolve(email.get("smtp_require_auth"), bool)
-    if smtp_require_auth is not None:
-        ec_overrides["smtp_require_auth"] = smtp_require_auth
-    password = _resolve(email.get("password"), str)
-    if password is not None:
-        ec_overrides["password"] = password
     connect_retries = _resolve(imap.get("connect_retries"), int)
     if connect_retries is not None:
         ec_overrides["imap_connect_retries"] = connect_retries
     poll_interval = _resolve(imap.get("poll_interval"), float)
     if poll_interval is not None:
-        ec_overrides["poll_interval_seconds"] = poll_interval
+        ec_overrides["imap_poll_interval_seconds"] = poll_interval
     use_idle = _resolve(imap.get("use_idle"), bool)
     if use_idle is not None:
-        ec_overrides["use_imap_idle"] = use_idle
+        ec_overrides["imap_use_idle"] = use_idle
     idle_reconnect = _resolve(imap.get("idle_reconnect_interval"), int)
     if idle_reconnect is not None:
-        ec_overrides["idle_reconnect_interval_seconds"] = idle_reconnect
-    ms_internal_auth = _resolve(
-        email.get("microsoft_internal_auth_fallback"), bool
-    )
+        ec_overrides["imap_idle_reconnect_interval_seconds"] = idle_reconnect
+    smtp_port = _resolve(smtp.get("port"), int)
+    if smtp_port is not None:
+        ec_overrides["smtp_port"] = smtp_port
+    smtp_require_auth = _resolve(smtp.get("require_auth"), bool)
+    if smtp_require_auth is not None:
+        ec_overrides["smtp_require_auth"] = smtp_require_auth
+    ms_internal_auth = _resolve(auth.get("microsoft_internal_fallback"), bool)
     if ms_internal_auth is not None:
-        ec_overrides["microsoft_internal_auth_fallback"] = ms_internal_auth
+        ec_overrides["auth_microsoft_internal_fallback"] = ms_internal_auth
 
     return EmailChannelConfig(
-        imap_server=_resolve(
-            email.get("imap_server"),
+        account_username=_resolve(
+            account.get("username"),
             str,
-            required=f"{prefix}.email.imap_server",
+            required=f"{prefix}.email.account.username",
+        ),
+        account_from_address=_resolve(
+            account.get("from"),
+            str,
+            required=f"{prefix}.email.account.from",
+        ),
+        imap_server=_resolve(
+            imap.get("server"),
+            str,
+            required=f"{prefix}.email.imap.server",
         ),
         smtp_server=_resolve(
-            email.get("smtp_server"),
+            smtp.get("server"),
             str,
-            required=f"{prefix}.email.smtp_server",
+            required=f"{prefix}.email.smtp.server",
         ),
-        username=_resolve(
-            email.get("username"),
+        auth_authorized_senders=_resolve_string_list(
+            auth.get("authorized_senders"),
+            required=f"{prefix}.email.auth.authorized_senders",
+        ),
+        auth_trusted_authserv_id=_resolve(
+            auth.get("trusted_authserv_id"),
             str,
-            required=f"{prefix}.email.username",
-        ),
-        from_address=_resolve(
-            email.get("from"), str, required=f"{prefix}.email.from"
-        ),
-        authorized_senders=_resolve_string_list(
-            email.get("authorized_senders"),
-            required=f"{prefix}.email.authorized_senders",
-        ),
-        trusted_authserv_id=_resolve(
-            email.get("trusted_authserv_id"),
-            str,
-            required=f"{prefix}.email.trusted_authserv_id",
+            required=f"{prefix}.email.auth.trusted_authserv_id",
         ),
         microsoft_oauth2_tenant_id=ms_tenant_id,
         microsoft_oauth2_client_id=ms_client_id,

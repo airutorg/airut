@@ -190,13 +190,13 @@ class IntegrationEnvironment:
                     imap_port=imap_port,
                     smtp_server="127.0.0.1",
                     smtp_port=smtp_port,
-                    username="test",
-                    password="test",
-                    from_address="Claude Test <claude@test.local>",
-                    authorized_senders=authorized_senders,
-                    trusted_authserv_id="test.local",
-                    use_imap_idle=False,  # Use polling for predictable testing
-                    poll_interval_seconds=0.1,  # Fast polling for tests
+                    account_username="test",
+                    account_password="test",
+                    account_from_address="Claude Test <claude@test.local>",
+                    auth_authorized_senders=authorized_senders,
+                    auth_trusted_authserv_id="test.local",
+                    imap_use_idle=False,  # Use polling for predictable testing
+                    imap_poll_interval_seconds=0.1,  # Fast polling for tests
                     smtp_require_auth=False,  # Test server doesn't support AUTH
                 )
             },
@@ -308,13 +308,15 @@ class IntegrationEnvironment:
                         imap_port=imap_port,
                         smtp_server="127.0.0.1",
                         smtp_port=smtp_port,
-                        username=repo_id,
-                        password="test",
-                        from_address=f"{repo_id} <{repo_id}@test.local>",
-                        authorized_senders=senders,
-                        trusted_authserv_id="test.local",
-                        use_imap_idle=False,
-                        poll_interval_seconds=0.1,
+                        account_username=repo_id,
+                        account_password="test",
+                        account_from_address=(
+                            f"{repo_id} <{repo_id}@test.local>"
+                        ),
+                        auth_authorized_senders=senders,
+                        auth_trusted_authserv_id="test.local",
+                        imap_use_idle=False,
+                        imap_poll_interval_seconds=0.1,
                         smtp_require_auth=False,
                     )
                 },

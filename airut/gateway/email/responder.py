@@ -153,7 +153,7 @@ class EmailResponder:
             else:
                 msg = MIMEMultipart("alternative")
 
-            msg["From"] = self.config.from_address
+            msg["From"] = self.config.account_from_address
             msg["To"] = to
             msg["Subject"] = subject
 
@@ -227,7 +227,7 @@ class EmailResponder:
                         # Microsoft OAuth2: XOAUTH2 SASL mechanism
                         auth_string = (
                             self._token_provider.generate_xoauth2_string(
-                                self.config.username
+                                self.config.account_username
                             )
                         )
 
@@ -238,10 +238,10 @@ class EmailResponder:
 
                         server.auth("XOAUTH2", _xoauth2_authobject)
                     else:
-                        assert self.config.password is not None
+                        assert self.config.account_password is not None
                         server.login(
-                            self.config.username,
-                            self.config.password,
+                            self.config.account_username,
+                            self.config.account_password,
                         )
                 server.send_message(msg)
 

@@ -62,14 +62,14 @@ You need an email account that supports IMAP and SMTP with
 
 - Use a Gmail account for IMAP/SMTP
 - Generate an App Password (requires 2FA enabled)
-- Set `trusted_authserv_id: mx.google.com`
+- Set `auth.trusted_authserv_id: mx.google.com`
 - Limitation: Only works if senders use domains with DMARC (most corporate
   domains and major providers have this)
 
 **Option 2: Fastmail or similar**
 
 - Fastmail and similar providers include DMARC verification
-- Check their documentation for the correct `trusted_authserv_id`
+- Check their documentation for the correct `auth.trusted_authserv_id`
 
 **Option 3: Microsoft 365**
 
@@ -87,7 +87,8 @@ You need an email account that supports IMAP and SMTP with
 You can configure the email channel using the config editor in the dashboard
 (`http://localhost:5200` → **Configure**), or by editing
 `~/.config/airut/airut.yaml` directly. The field paths below (e.g.,
-`repos.<repo>.email.imap_server`) match the labels shown in the config editor.
+`repos.<repo>.email.account.username`) match the labels shown in the config
+editor.
 
 Add the email channel to your server config:
 
@@ -95,22 +96,25 @@ Add the email channel to your server config:
 repos:
   my-project:
     email:
-      imap_server: mail.example.com
-      imap_port: 993
-      smtp_server: mail.example.com
-      smtp_port: 587
-      username: airut
-      password: !env EMAIL_PASSWORD
-      from: "Airut <airut@example.com>"
-
-      authorized_senders:
-        - you@example.com
-        # - *@your-company.com  # Wildcard for domain
-
-      trusted_authserv_id: mail.example.com
+      account:
+        username: airut
+        password: !env EMAIL_PASSWORD
+        from: "Airut <airut@example.com>"
 
       imap:
+        server: mail.example.com
+        port: 993
         use_idle: true  # Recommended for real-time delivery
+
+      smtp:
+        server: mail.example.com
+        port: 587
+
+      auth:
+        authorized_senders:
+          - you@example.com
+          # - *@your-company.com  # Wildcard for domain
+        trusted_authserv_id: mail.example.com
 
     git:
       repo_url: https://github.com/your-org/your-repo.git
@@ -176,9 +180,9 @@ requires:
 1. **Your mail server must add `Authentication-Results` headers** — Most mail
    providers (Gmail, Microsoft 365, Fastmail, etc.) do this automatically.
 
-2. **Configure `trusted_authserv_id`** — This must match the server identifier
-   in your mail provider's `Authentication-Results` header. Check an email's raw
-   headers to find this value.
+2. **Configure `auth.trusted_authserv_id`** — This must match the server
+   identifier in your mail provider's `Authentication-Results` header. Check an
+   email's raw headers to find this value.
 
 3. **Sender domains must have DMARC configured** — Emails from domains without
    DMARC records will be rejected.
@@ -196,13 +200,14 @@ that domain cannot be authenticated.
 
 ## Authorization
 
-The `authorized_senders` list controls which email addresses can interact with
-Airut. Both DMARC verification and authorization must pass.
+The `auth.authorized_senders` list controls which email addresses can interact
+with Airut. Both DMARC verification and authorization must pass.
 
 ```yaml
-authorized_senders:
-  - alice@example.com        # Exact address
-  - *@your-company.com       # All addresses from domain
+auth:
+  authorized_senders:
+    - alice@example.com        # Exact address
+    - *@your-company.com       # All addresses from domain
 ```
 
 Wildcards use `*@domain` syntax for domain-level matching.
@@ -214,6 +219,9 @@ verification flow, From header parsing, and Microsoft 365 quirks.
 
 ```yaml
 imap:
+  server: mail.example.com
+  port: 993
+
   # Seconds between IMAP polls (only used when use_idle is false)
   poll_interval: 30
 
@@ -253,9 +261,9 @@ openssl s_client -connect mail.example.com:993
 # Symptom: Emails rejected with "DMARC verification failed"
 
 # Check:
-# 1. trusted_authserv_id matches your mail server's Authentication-Results header
+# 1. auth.trusted_authserv_id matches your mail server's Authentication-Results header
 # 2. Sender's domain has a DMARC record (dig +short TXT _dmarc.sender.com)
-# 3. If using M365, set trusted_authserv_id to "" (empty string)
+# 3. If using M365, set auth.trusted_authserv_id to "" (empty string)
 ```
 
 ### Emails Not Being Processed

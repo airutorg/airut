@@ -225,9 +225,9 @@ class TestSchemaForUIWithRealConfigs:
         schema = schema_for_ui(EmailChannelConfig)
         names = {s.name for s in schema}
         assert "imap_server" in names
-        assert "password" in names
+        assert "account_password" in names
         # password should be marked secret
-        password = next(s for s in schema if s.name == "password")
+        password = next(s for s in schema if s.name == "account_password")
         assert password.secret is True
 
     def test_slack_channel_config(self) -> None:

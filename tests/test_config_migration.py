@@ -14,6 +14,7 @@ from airut.config.migration import (
     MIGRATIONS,
     _migrate_v1_to_v2,
     _migrate_v2_to_v3,
+    _migrate_v3_to_v4,
     apply_migrations,
     unique_var_name,
 )
@@ -401,3 +402,213 @@ class TestMigrateV2ToV3:
         assert result["config_version"] == CURRENT_CONFIG_VERSION
         assert "resource_limits" not in result
         assert result["vars"]["default_resource_timeout"] == 600
+
+
+class TestMigrateV3ToV4:
+    def test_no_email_block(self) -> None:
+        """No email block → no-op."""
+        raw: dict[str, Any] = {"repos": {"r": {"git": {"repo_url": "x"}}}}
+        result = _migrate_v3_to_v4(raw)
+        assert result == raw
+
+    def test_non_dict_email(self) -> None:
+        """Non-dict email value is left alone."""
+        raw: dict[str, Any] = {"repos": {"r": {"email": "not-a-dict"}}}
+        result = _migrate_v3_to_v4(raw)
+        assert result["repos"]["r"]["email"] == "not-a-dict"
+
+    def test_moves_flat_keys_into_subsections(self) -> None:
+        """Flat email keys are moved into account/imap/smtp/auth."""
+        raw: dict[str, Any] = {
+            "repos": {
+                "r": {
+                    "email": {
+                        "username": "user@example.com",
+                        "password": "secret",
+                        "from": "bot@example.com",
+                        "imap_server": "imap.example.com",
+                        "imap_port": 993,
+                        "smtp_server": "smtp.example.com",
+                        "smtp_port": 587,
+                        "smtp_require_auth": True,
+                        "authorized_senders": ["admin@example.com"],
+                        "trusted_authserv_id": "mx.example.com",
+                        "microsoft_internal_auth_fallback": True,
+                    }
+                }
+            }
+        }
+        result = _migrate_v3_to_v4(raw)
+        email = result["repos"]["r"]["email"]
+
+        assert email["account"] == {
+            "username": "user@example.com",
+            "password": "secret",
+            "from": "bot@example.com",
+        }
+        assert email["imap"]["server"] == "imap.example.com"
+        assert email["imap"]["port"] == 993
+        assert email["smtp"] == {
+            "server": "smtp.example.com",
+            "port": 587,
+            "require_auth": True,
+        }
+        assert email["auth"] == {
+            "authorized_senders": ["admin@example.com"],
+            "trusted_authserv_id": "mx.example.com",
+            "microsoft_internal_fallback": True,
+        }
+
+        # Flat keys removed
+        for key in (
+            "username",
+            "password",
+            "from",
+            "imap_server",
+            "imap_port",
+            "smtp_server",
+            "smtp_port",
+            "smtp_require_auth",
+            "authorized_senders",
+            "trusted_authserv_id",
+            "microsoft_internal_auth_fallback",
+        ):
+            assert key not in email
+
+    def test_preserves_existing_imap_nested_keys(self) -> None:
+        """Existing imap: sub-keys (connect_retries, etc.) stay."""
+        raw: dict[str, Any] = {
+            "repos": {
+                "r": {
+                    "email": {
+                        "imap_server": "imap.example.com",
+                        "imap": {
+                            "connect_retries": 5,
+                            "poll_interval": 30,
+                            "use_idle": True,
+                            "idle_reconnect_interval": 600,
+                        },
+                    }
+                }
+            }
+        }
+        result = _migrate_v3_to_v4(raw)
+        imap = result["repos"]["r"]["email"]["imap"]
+        assert imap["server"] == "imap.example.com"
+        assert imap["connect_retries"] == 5
+        assert imap["poll_interval"] == 30
+        assert imap["use_idle"] is True
+        assert imap["idle_reconnect_interval"] == 600
+
+    def test_preserves_microsoft_oauth2(self) -> None:
+        """microsoft_oauth2: section is already nested and unchanged."""
+        raw: dict[str, Any] = {
+            "repos": {
+                "r": {
+                    "email": {
+                        "microsoft_oauth2": {
+                            "tenant_id": "t",
+                            "client_id": "c",
+                            "client_secret": "s",
+                        },
+                    }
+                }
+            }
+        }
+        result = _migrate_v3_to_v4(raw)
+        assert result["repos"]["r"]["email"]["microsoft_oauth2"] == {
+            "tenant_id": "t",
+            "client_id": "c",
+            "client_secret": "s",
+        }
+
+    def test_no_repos_key(self) -> None:
+        """Missing repos: key doesn't crash."""
+        raw: dict[str, Any] = {"execution": {"max_concurrent": 5}}
+        result = _migrate_v3_to_v4(raw)
+        assert result == raw
+
+    def test_non_dict_repos(self) -> None:
+        """Non-dict repos: is left alone."""
+        raw: dict[str, Any] = {"repos": "not-a-dict"}
+        result = _migrate_v3_to_v4(raw)
+        assert result["repos"] == "not-a-dict"
+
+    def test_skips_non_dict_repo(self) -> None:
+        """Non-dict repo entries are skipped."""
+        raw: dict[str, Any] = {"repos": {"bad": "not-a-dict"}}
+        result = _migrate_v3_to_v4(raw)
+        assert result["repos"]["bad"] == "not-a-dict"
+
+    def test_partial_keys(self) -> None:
+        """Only present flat keys are moved; missing keys are ignored."""
+        raw: dict[str, Any] = {
+            "repos": {
+                "r": {
+                    "email": {
+                        "username": "user@example.com",
+                        "imap_server": "imap.example.com",
+                    }
+                }
+            }
+        }
+        result = _migrate_v3_to_v4(raw)
+        email = result["repos"]["r"]["email"]
+        assert email["account"] == {"username": "user@example.com"}
+        assert email["imap"]["server"] == "imap.example.com"
+        assert "smtp" not in email
+        assert "auth" not in email
+
+    def test_idempotent(self) -> None:
+        """Running the migration twice produces the same result."""
+        raw: dict[str, Any] = {
+            "repos": {
+                "r": {
+                    "email": {
+                        "username": "user@example.com",
+                        "imap_server": "imap.example.com",
+                        "authorized_senders": ["admin@example.com"],
+                    }
+                }
+            }
+        }
+        result1 = _migrate_v3_to_v4(raw)
+        result2 = _migrate_v3_to_v4(result1)
+        assert result1 == result2
+
+    def test_multiple_repos(self) -> None:
+        """All repos are migrated."""
+        raw: dict[str, Any] = {
+            "repos": {
+                "a": {"email": {"username": "a@example.com"}},
+                "b": {"email": {"username": "b@example.com"}},
+            }
+        }
+        result = _migrate_v3_to_v4(raw)
+        assert result["repos"]["a"]["email"]["account"]["username"] == (
+            "a@example.com"
+        )
+        assert result["repos"]["b"]["email"]["account"]["username"] == (
+            "b@example.com"
+        )
+
+    def test_full_chain_v3_to_v4(self) -> None:
+        """apply_migrations runs v3→v4 for config_version: 3."""
+        raw: dict[str, Any] = {
+            "config_version": 3,
+            "repos": {
+                "r": {
+                    "email": {
+                        "username": "user@example.com",
+                        "imap_server": "imap.example.com",
+                        "authorized_senders": ["admin@example.com"],
+                    }
+                }
+            },
+        }
+        result = apply_migrations(raw)
+        assert result["config_version"] == CURRENT_CONFIG_VERSION
+        email = result["repos"]["r"]["email"]
+        assert email["account"]["username"] == "user@example.com"
+        assert email["imap"]["server"] == "imap.example.com"
+        assert email["auth"]["authorized_senders"] == ["admin@example.com"]

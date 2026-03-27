@@ -232,7 +232,8 @@ repos:
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
     email:
-      password: !env EMAIL_PASSWORD
+      account:
+        password: !env EMAIL_PASSWORD
 ```
 
 When using environment variables, set them in `~/.config/airut/.env` (next to
@@ -312,7 +313,7 @@ Click **Review & Save** to preview a diff of your changes before applying.
 
 All settings described below can be managed via the [config editor](#dashboard)
 in the web dashboard. The YAML field paths shown here (e.g.,
-`repos.<repo>.email.imap_server`) correspond to the field labels in the editor.
+`repos.<repo>.email.imap.server`) correspond to the field labels in the editor.
 This section serves as a reference for the full schema.
 
 ### Server Config (`~/.config/airut/airut.yaml`)
@@ -345,20 +346,23 @@ repos:
   my-project:
     # Channel configuration (at least one required)
     email:
-      imap_server: mail.example.com
-      imap_port: 993
-      smtp_server: mail.example.com
-      smtp_port: 587
-      username: airut
-      password: !env EMAIL_PASSWORD
-      from: "Airut <airut@example.com>"
-      authorized_senders:
-        - you@example.com
-      trusted_authserv_id: mail.example.com
+      account:
+        username: airut
+        password: !env EMAIL_PASSWORD
+        from: "Airut <airut@example.com>"
       imap:
+        server: mail.example.com
+        port: 993
         poll_interval: 30
         use_idle: true
         idle_reconnect_interval: 1740
+      smtp:
+        server: mail.example.com
+        port: 587
+      auth:
+        authorized_senders:
+          - you@example.com
+        trusted_authserv_id: mail.example.com
 
     slack:
       bot_token: !env SLACK_BOT_TOKEN
@@ -510,14 +514,18 @@ provider selection, DMARC configuration, authorization, and troubleshooting.
 repos:
   my-project:
     email:
-      imap_server: mail.example.com
-      smtp_server: mail.example.com
-      username: airut
-      password: !env EMAIL_PASSWORD
-      from: "Airut <airut@example.com>"
-      authorized_senders:
-        - you@example.com
-      trusted_authserv_id: mail.example.com
+      account:
+        username: airut
+        password: !env EMAIL_PASSWORD
+        from: "Airut <airut@example.com>"
+      imap:
+        server: mail.example.com
+      smtp:
+        server: mail.example.com
+      auth:
+        authorized_senders:
+          - you@example.com
+        trusted_authserv_id: mail.example.com
 
     git:
       repo_url: https://github.com/your-org/repo.git

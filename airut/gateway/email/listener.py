@@ -120,7 +120,7 @@ class EmailListener:
                 if self._token_provider:
                     # Microsoft OAuth2: XOAUTH2 SASL mechanism
                     auth_string = self._token_provider.generate_xoauth2_string(
-                        self.config.username
+                        self.config.account_username
                     ).encode("utf-8")
 
                     def _xoauth2_callback(challenge: bytes) -> bytes:
@@ -134,9 +134,10 @@ class EmailListener:
 
                     self.connection.authenticate("XOAUTH2", _xoauth2_callback)
                 else:
-                    assert self.config.password is not None
+                    assert self.config.account_password is not None
                     self.connection.login(
-                        self.config.username, self.config.password
+                        self.config.account_username,
+                        self.config.account_password,
                     )
 
                 logger.info(

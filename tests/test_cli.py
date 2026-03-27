@@ -844,14 +844,18 @@ _VALID_CONFIG = """\
 repos:
   test:
     email:
-      imap_server: imap.test.com
-      smtp_server: smtp.test.com
-      username: user@test.com
-      password: secret
-      from: "Test <test@example.com>"
-      authorized_senders:
-        - auth@test.com
-      trusted_authserv_id: mx.test.com
+      account:
+        username: user@test.com
+        password: secret
+        from: "Test <test@example.com>"
+      imap:
+        server: imap.test.com
+      smtp:
+        server: smtp.test.com
+      auth:
+        authorized_senders:
+          - auth@test.com
+        trusted_authserv_id: mx.test.com
     git:
       repo_url: https://example.com/repo.git
 """
@@ -1063,7 +1067,9 @@ class TestCmdCheck:
         """Returns 1 when a required field is missing."""
         _path, ctx = _check_patches(
             tmp_path,
-            config_text="repos:\n  test:\n    email:\n      imap_server: x\n",
+            config_text=(
+                "repos:\n  test:\n    email:\n      imap:\n        server: x\n"
+            ),
         )
         with ctx:
             result = cmd_check([])
@@ -1086,26 +1092,34 @@ class TestCmdCheck:
 repos:
   alpha:
     email:
-      imap_server: imap.test.com
-      smtp_server: smtp.test.com
-      username: alpha@test.com
-      password: secret
-      from: "Alpha <alpha@example.com>"
-      authorized_senders:
-        - auth@test.com
-      trusted_authserv_id: mx.test.com
+      account:
+        username: alpha@test.com
+        password: secret
+        from: "Alpha <alpha@example.com>"
+      imap:
+        server: imap.test.com
+      smtp:
+        server: smtp.test.com
+      auth:
+        authorized_senders:
+          - auth@test.com
+        trusted_authserv_id: mx.test.com
     git:
       repo_url: https://example.com/alpha.git
   beta:
     email:
-      imap_server: imap2.test.com
-      smtp_server: smtp2.test.com
-      username: beta@test.com
-      password: secret
-      from: "Beta <beta@example.com>"
-      authorized_senders:
-        - auth@test.com
-      trusted_authserv_id: mx.test.com
+      account:
+        username: beta@test.com
+        password: secret
+        from: "Beta <beta@example.com>"
+      imap:
+        server: imap2.test.com
+      smtp:
+        server: smtp2.test.com
+      auth:
+        authorized_senders:
+          - auth@test.com
+        trusted_authserv_id: mx.test.com
     git:
       repo_url: https://example.com/beta.git
 """

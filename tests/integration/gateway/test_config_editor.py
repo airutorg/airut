@@ -136,40 +136,50 @@ def _add_valid_repo(
         client, f"repos.{repo_id}.git.repo_url", "literal", str(git_repo_path)
     )
     _patch_field(
-        client, f"repos.{repo_id}.email.imap_server", "literal", "127.0.0.1"
+        client, f"repos.{repo_id}.email.imap.server", "literal", "127.0.0.1"
     )
     _patch_field(
         client,
-        f"repos.{repo_id}.email.imap_port",
+        f"repos.{repo_id}.email.imap.port",
         "literal",
         str(env.imap_port),
     )
     _patch_field(
-        client, f"repos.{repo_id}.email.smtp_server", "literal", "127.0.0.1"
+        client, f"repos.{repo_id}.email.smtp.server", "literal", "127.0.0.1"
     )
     _patch_field(
         client,
-        f"repos.{repo_id}.email.smtp_port",
+        f"repos.{repo_id}.email.smtp.port",
         "literal",
         str(env.smtp_port),
     )
     _patch_field(
         client,
-        f"repos.{repo_id}.email.smtp_require_auth",
+        f"repos.{repo_id}.email.smtp.require_auth",
         "literal",
         "false",
     )
-    _patch_field(client, f"repos.{repo_id}.email.username", "literal", repo_id)
-    _patch_field(client, f"repos.{repo_id}.email.password", "literal", "test")
     _patch_field(
         client,
-        f"repos.{repo_id}.email.from",
+        f"repos.{repo_id}.email.account.username",
+        "literal",
+        repo_id,
+    )
+    _patch_field(
+        client,
+        f"repos.{repo_id}.email.account.password",
+        "literal",
+        "test",
+    )
+    _patch_field(
+        client,
+        f"repos.{repo_id}.email.account.from",
         "literal",
         f"{repo_id} <{repo_id}@test.local>",
     )
     _patch_field(
         client,
-        f"repos.{repo_id}.email.trusted_authserv_id",
+        f"repos.{repo_id}.email.auth.trusted_authserv_id",
         "literal",
         "test.local",
     )
@@ -179,7 +189,7 @@ def _add_valid_repo(
     assert dashboard is not None
     buf = dashboard._config_handlers._buffer
     assert buf is not None
-    buf.raw["repos"][repo_id]["email"]["authorized_senders"] = [
+    buf.raw["repos"][repo_id]["email"]["auth"]["authorized_senders"] = [
         "user@test.local"
     ]
     buf.raw["repos"][repo_id]["email"].setdefault("imap", {})

@@ -677,7 +677,7 @@ class TestAddRemove:
         harness.client.get("/config")
         response = harness.client.post(
             "/api/config/add",
-            data={"path": "repos.test-repo.email.authorized_senders"},
+            data={"path": "repos.test-repo.email.auth.authorized_senders"},
             headers=XHR,
         )
         assert response.status_code == 200
@@ -687,7 +687,7 @@ class TestAddRemove:
         response = harness.client.post(
             "/api/config/remove",
             data={
-                "path": "repos.test-repo.email.authorized_senders",
+                "path": "repos.test-repo.email.auth.authorized_senders",
                 "index": "0",
             },
             headers=XHR,
@@ -949,7 +949,7 @@ class TestHandlerErrorPaths:
         response = harness.client.post(
             "/api/config/remove",
             data={
-                "path": "repos.test-repo.email.authorized_senders",
+                "path": "repos.test-repo.email.auth.authorized_senders",
                 "index": "abc",
             },
             headers=XHR,
@@ -1756,7 +1756,7 @@ class TestAddRemoveRepo:
         assert "repo_url" in repo["git"]
         assert "email" in repo
         # Sensitive fields use empty literal placeholders
-        assert repo["email"]["password"] == ""
+        assert repo["email"]["account"]["password"] == ""
 
     def test_add_repo_does_not_overwrite_existing(
         self, harness: ConfigEditorHarness
@@ -1850,7 +1850,7 @@ class TestRepoDiff:
         # Repo subfields like git.repo_url must appear individually
         assert "repos.new-project.git.repo_url" in html
         # Email channel subfields too
-        assert "repos.new-project.email.imap_server" in html
+        assert "repos.new-project.email.imap.server" in html
 
     def test_diff_removed_repo_shows_subfields(
         self, harness: ConfigEditorHarness
@@ -1867,7 +1867,7 @@ class TestRepoDiff:
         html = response.get_data(as_text=True)
         # Must show individual subfields, not just "repos.test-repo"
         assert "repos.test-repo.git.repo_url" in html
-        assert "repos.test-repo.email.imap_server" in html
+        assert "repos.test-repo.email.imap.server" in html
 
     def test_dirty_count_added_repo_counts_subfields(
         self, harness: ConfigEditorHarness
@@ -2374,7 +2374,7 @@ class TestDirtyCount:
         harness.client.get("/config")
         response = harness.client.post(
             "/api/config/add",
-            data={"path": "repos.test-repo.email.authorized_senders"},
+            data={"path": "repos.test-repo.email.auth.authorized_senders"},
             headers=XHR,
         )
         assert response.status_code == 200
@@ -2388,7 +2388,7 @@ class TestDirtyCount:
         response = harness.client.post(
             "/api/config/remove",
             data={
-                "path": "repos.test-repo.email.authorized_senders",
+                "path": "repos.test-repo.email.auth.authorized_senders",
                 "index": "0",
             },
             headers=XHR,
@@ -2443,7 +2443,7 @@ class TestRepoPageChannels:
         assert response.status_code == 200
         html = response.get_data(as_text=True)
         assert "Email Channel" in html
-        assert "imap_server" in html
+        assert "imap.server" in html
         assert "authorized_senders" in html
 
     def test_repo_page_shows_add_slack_button(
@@ -2528,7 +2528,8 @@ class TestAddChannel:
         buf = h.server._config_handlers._buffer
         assert buf is not None
         email = buf.raw["repos"]["test-repo"]["email"]
-        assert "imap_server" in email
+        assert "imap" in email
+        assert "server" in email["imap"]
 
     def test_add_channel_nonexistent_repo(
         self, harness: ConfigEditorHarness
@@ -2578,7 +2579,7 @@ class TestListStrWidget:
         harness.client.get("/config")
         response = harness.client.post(
             "/api/config/add",
-            data={"path": "repos.test-repo.email.authorized_senders"},
+            data={"path": "repos.test-repo.email.auth.authorized_senders"},
             headers=XHR,
         )
         assert response.status_code == 200
@@ -2593,7 +2594,7 @@ class TestListStrWidget:
         response = harness.client.post(
             "/api/config/remove",
             data={
-                "path": "repos.test-repo.email.authorized_senders",
+                "path": "repos.test-repo.email.auth.authorized_senders",
                 "index": "0",
             },
             headers=XHR,
@@ -2607,7 +2608,7 @@ class TestListStrWidget:
         response = harness.client.patch(
             "/api/config/field",
             data={
-                "path": "repos.test-repo.email.authorized_senders",
+                "path": "repos.test-repo.email.auth.authorized_senders",
                 "source": "literal",
                 "value": "new@example.com",
                 "index": "0",
@@ -2617,7 +2618,9 @@ class TestListStrWidget:
         assert response.status_code == 200
         buf = harness.server._config_handlers._buffer
         assert buf is not None
-        senders = buf.raw["repos"]["test-repo"]["email"]["authorized_senders"]
+        senders = buf.raw["repos"]["test-repo"]["email"]["auth"][
+            "authorized_senders"
+        ]
         assert senders[0] == "new@example.com"
 
     def test_edit_list_item_returns_widget(
@@ -2627,7 +2630,7 @@ class TestListStrWidget:
         response = harness.client.patch(
             "/api/config/field",
             data={
-                "path": "repos.test-repo.email.authorized_senders",
+                "path": "repos.test-repo.email.auth.authorized_senders",
                 "source": "literal",
                 "value": "new@example.com",
                 "index": "0",
@@ -2758,7 +2761,7 @@ class TestChannelDirtyCount:
         response = harness.client.patch(
             "/api/config/field",
             data={
-                "path": "repos.test-repo.email.imap_server",
+                "path": "repos.test-repo.email.imap.server",
                 "source": "literal",
                 "value": "new-imap.example.com",
             },
@@ -2804,7 +2807,7 @@ class TestChannelDiff:
         harness.client.patch(
             "/api/config/field",
             data={
-                "path": "repos.test-repo.email.imap_server",
+                "path": "repos.test-repo.email.imap.server",
                 "source": "literal",
                 "value": "new-imap.example.com",
             },
@@ -2812,7 +2815,7 @@ class TestChannelDiff:
         )
         response = harness.client.get("/api/config/diff")
         html = response.get_data(as_text=True)
-        assert "imap_server" in html
+        assert "imap.server" in html
         assert "new-imap.example.com" in html
 
     def test_diff_shows_channel_added(
@@ -2854,7 +2857,7 @@ class TestChannelFieldPatch:
         response = harness.client.patch(
             "/api/config/field",
             data={
-                "path": "repos.test-repo.email.imap_server",
+                "path": "repos.test-repo.email.imap.server",
                 "source": "literal",
                 "value": "mail.test.com",
             },
@@ -2863,7 +2866,7 @@ class TestChannelFieldPatch:
         assert response.status_code == 200
         buf = harness.server._config_handlers._buffer
         assert buf is not None
-        assert buf.raw["repos"]["test-repo"]["email"]["imap_server"] == (
+        assert buf.raw["repos"]["test-repo"]["email"]["imap"]["server"] == (
             "mail.test.com"
         )
 
@@ -2896,7 +2899,7 @@ class TestChannelFieldPatch:
         response = harness.client.patch(
             "/api/config/field",
             data={
-                "path": "repos.test-repo.email.authorized_senders",
+                "path": "repos.test-repo.email.auth.authorized_senders",
                 "source": "literal",
                 "value": "test",
                 "index": "abc",
@@ -2913,7 +2916,7 @@ class TestChannelFieldPatch:
         response = harness.client.patch(
             "/api/config/field",
             data={
-                "path": "repos.test-repo.email.imap_server",
+                "path": "repos.test-repo.email.imap.server",
                 "source": "literal",
                 "value": "test",
                 "index": "0",
@@ -2934,7 +2937,7 @@ class TestRemoveNonChannel:
         response = harness.client.post(
             "/api/config/remove",
             data={
-                "path": "repos.test-repo.email.authorized_senders",
+                "path": "repos.test-repo.email.auth.authorized_senders",
                 "index": "0",
             },
             headers=XHR,
@@ -2991,7 +2994,7 @@ class TestParseChannelPath:
 
         assert (
             ConfigEditorHandlers._parse_channel_path(
-                "repos.my-repo.email.imap_server"
+                "repos.my-repo.email.imap.server"
             )
             is None
         )
@@ -4169,8 +4172,8 @@ def _make_raw_with_vars() -> dict[str, Any]:
         "mail_server": "imap.shared.com",
         "smtp_host": EnvVar("SMTP_HOST"),
     }
-    # Replace literal imap_server with a !var reference
-    raw["repos"]["test-repo"]["email"]["imap_server"] = VarRef("mail_server")
+    # Replace literal imap server with a !var reference
+    raw["repos"]["test-repo"]["email"]["imap"]["server"] = VarRef("mail_server")
     return raw
 
 
@@ -4190,7 +4193,7 @@ class TestFindVarReferences:
         raw = _make_raw_with_vars()
         refs = find_var_references(raw)
         assert "mail_server" in refs
-        assert any("imap_server" in p for p in refs["mail_server"])
+        assert any("imap.server" in p for p in refs["mail_server"])
         # smtp_host is only used as a var *value* (!env), not referenced
         assert "smtp_host" not in refs
 
@@ -4201,7 +4204,7 @@ class TestFindVarReferences:
         raw = _make_sample_raw()
         raw["vars"] = {"a": "hello"}
         # Place a VarRef in repos section only
-        raw["repos"]["test-repo"]["email"]["imap_server"] = VarRef("a")
+        raw["repos"]["test-repo"]["email"]["imap"]["server"] = VarRef("a")
         refs = find_var_references(raw)
         assert "a" in refs
         # Only one reference (in repos), not from vars section
@@ -4237,7 +4240,7 @@ class TestRenameVarReferences:
         count = rename_var_references(raw, "mail_server", "imap_host")
         assert count == 1
         # Reference updated
-        val = raw["repos"]["test-repo"]["email"]["imap_server"]
+        val = raw["repos"]["test-repo"]["email"]["imap"]["server"]
         assert isinstance(val, VarRef)
         assert val.var_name == "imap_host"
 
@@ -4395,7 +4398,7 @@ class TestVarsRename:
         assert "mail_server" not in buf.raw["vars"]
         assert buf.raw["vars"]["imap_host"] == "imap.shared.com"
         # !var references updated
-        ref = buf.raw["repos"]["test-repo"]["email"]["imap_server"]
+        ref = buf.raw["repos"]["test-repo"]["email"]["imap"]["server"]
         assert isinstance(ref, VarRef)
         assert ref.var_name == "imap_host"
 
