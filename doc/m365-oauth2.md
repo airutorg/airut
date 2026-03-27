@@ -213,10 +213,11 @@ instead of password authentication. The `password` field can be omitted.
 
 ## Step 8: Verify
 
-Restart the service and check the logs:
+If using the config editor, changes are saved and reloaded automatically — no
+restart needed. If editing the YAML file directly, changes are picked up via
+live config reload. Check the logs to verify:
 
 ```bash
-systemctl --user restart airut
 journalctl --user -u airut -f
 ```
 

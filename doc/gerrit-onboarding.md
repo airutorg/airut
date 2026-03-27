@@ -206,8 +206,7 @@ repos:
           - you@example.com
         trusted_authserv_id: mail.example.com
 
-    git:
-      repo_url: https://gerrit.example.com/a/my-project
+    repo_url: https://gerrit.example.com/a/my-project
 
     model: opus
 
