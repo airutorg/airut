@@ -103,7 +103,7 @@
     }
   });
 
-  // Variable rename — prompt for new name, submit via htmx-compatible fetch.
+  // Variable rename — prompt for new name, swap vars section in place.
   document.body.addEventListener('click', function(evt) {
     var btn = evt.target.closest('.cfg-var-rename-btn');
     if (!btn) return;
@@ -116,18 +116,19 @@
       alert('Invalid variable name. Use letters, digits, dashes, and underscores.');
       return;
     }
-    var body = 'path=vars&key=' + encodeURIComponent(newName) +
-               '&rename_from=' + encodeURIComponent(oldName);
-    fetch('/api/config/add', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'X-Requested-With': 'XMLHttpRequest'
-      },
-      body: body
-    }).then(function(resp) {
-      if (resp.ok) window.location.reload();
-    });
+    var varsSection = document.getElementById('vars-section');
+    if (varsSection && typeof htmx !== 'undefined') {
+      htmx.ajax('POST', '/api/config/add', {
+        target: varsSection,
+        swap: 'outerHTML',
+        values: {
+          path: 'vars',
+          key: newName,
+          rename_from: oldName
+        },
+        headers: {'X-Requested-With': 'XMLHttpRequest'}
+      });
+    }
   });
 
   // Dialog close — wired up via event listener (not inline onclick)

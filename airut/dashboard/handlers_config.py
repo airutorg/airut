@@ -699,16 +699,7 @@ class ConfigEditorHandlers:
 
         # Vars field: return updated vars section via fragment
         if path.startswith("vars."):
-            return self._add_dirty_count_header(
-                Response(
-                    render_template(
-                        "components/config/vars.html",
-                        buffer=buffer,
-                        var_refs=find_var_references(buffer.raw),
-                    ),
-                    content_type="text/html",
-                )
-            )
+            return self._respond_with_vars_fragment(buffer)
 
         # Return the updated field HTML fragment
         fs = self._find_field_in_all_schemas(path)
@@ -762,12 +753,7 @@ class ConfigEditorHandlers:
             elif key not in vars_dict:
                 vars_dict[key] = ""
                 buffer.mark_dirty()
-            return self._add_dirty_count_header(
-                Response(
-                    status=200,
-                    headers={"HX-Redirect": "/config"},
-                )
-            )
+            return self._respond_with_vars_fragment(buffer)
 
         # Special handling for adding a repo
         if path == "repos" and key:
@@ -817,15 +803,10 @@ class ConfigEditorHandlers:
             except (ValueError, TypeError):
                 return Response("Invalid index", status=400)
 
-        # Variable removal — redirect to refresh the vars section
+        # Variable removal — return updated vars fragment
         if path == "vars" and key:
             buffer.remove_item(path, key=key)
-            return self._add_dirty_count_header(
-                Response(
-                    status=200,
-                    headers={"HX-Redirect": "/config"},
-                )
-            )
+            return self._respond_with_vars_fragment(buffer)
 
         # Channel removal — redirect to reload page
         channel_removed = self._try_remove_channel(buffer, path, key, index)
@@ -872,14 +853,7 @@ class ConfigEditorHandlers:
             else:
                 repo["slack"] = _make_slack_skeleton()
             buffer.mark_dirty()
-        return self._add_dirty_count_header(
-            Response(
-                status=200,
-                headers={
-                    "HX-Redirect": f"/config/repos/{repo_id}",
-                },
-            )
-        )
+        return self._respond_with_channels_fragment(buffer, repo_id)
 
     def _try_remove_channel(
         self,
@@ -896,14 +870,7 @@ class ConfigEditorHandlers:
             return None
         repo_id, _ = parsed
         buffer.remove_item(path)
-        return self._add_dirty_count_header(
-            Response(
-                status=200,
-                headers={
-                    "HX-Redirect": f"/config/repos/{repo_id}",
-                },
-            )
-        )
+        return self._respond_with_channels_fragment(buffer, repo_id)
 
     @staticmethod
     def _add_tagged_union_default(buffer: EditBuffer, path: str) -> None:
@@ -950,6 +917,45 @@ class ConfigEditorHandlers:
                 )
             )
         return self._add_dirty_count_header(Response("OK", status=200))
+
+    def _respond_with_vars_fragment(self, buffer: EditBuffer) -> Response:
+        """Return rendered vars section fragment for in-place HTMX swap."""
+        return self._add_dirty_count_header(
+            Response(
+                render_template(
+                    "components/config/vars.html",
+                    buffer=buffer,
+                    var_refs=find_var_references(buffer.raw),
+                ),
+                content_type="text/html",
+            )
+        )
+
+    def _respond_with_channels_fragment(
+        self, buffer: EditBuffer, repo_id: str
+    ) -> Response:
+        """Return rendered channels section fragment for in-place HTMX swap."""
+        repo_data = buffer.raw.get("repos", {}).get(repo_id, {})
+        has_email = isinstance(repo_data, dict) and "email" in repo_data
+        has_slack = isinstance(repo_data, dict) and "slack" in repo_data
+        return self._add_dirty_count_header(
+            Response(
+                render_template(
+                    "components/config/channels.html",
+                    repo_id=repo_id,
+                    buffer=buffer,
+                    has_email=has_email,
+                    has_slack=has_slack,
+                    email_schema=self._get_email_schema(repo_id)
+                    if has_email
+                    else [],
+                    slack_schema=self._get_slack_schema(repo_id)
+                    if has_slack
+                    else [],
+                ),
+                content_type="text/html",
+            )
+        )
 
     def handle_diff(self, request: Request) -> Response:
         """Handle GET /api/config/diff — compare buffer vs live config.

@@ -1,0 +1,123 @@
+{# Channels widget — expects: repo_id, buffer, has_email, has_slack, email_schema, slack_schema #}
+<div id="channels-section" hx-target="this" hx-swap="outerHTML">
+
+  {% if has_email %}
+  <div class="card" id="channel-email">
+    <div class="cfg-card-header">
+      <span class="cfg-card-title">Email Channel</span>
+      <button class="cfg-btn danger cfg-btn-sm"
+              hx-post="/api/config/remove"
+              hx-vals='{"path":"repos.{{ repo_id }}.email"}'
+              hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+              hx-confirm="Remove email channel?">
+        Remove
+      </button>
+    </div>
+
+    {# Account subsection #}
+    <div class="cfg-subsection">
+      <div class="cfg-card-header">
+        <span class="cfg-card-title">Account</span>
+      </div>
+      {% for f in email_schema %}
+      {% if f.name.startswith('account_') %}
+      {% include "components/config/field.html" %}
+      {% endif %}
+      {% endfor %}
+    </div>
+
+    {# IMAP subsection #}
+    <div class="cfg-subsection">
+      <div class="cfg-card-header">
+        <span class="cfg-card-title">IMAP</span>
+      </div>
+      {% for f in email_schema %}
+      {% if f.name.startswith('imap_') %}
+      {% include "components/config/field.html" %}
+      {% endif %}
+      {% endfor %}
+    </div>
+
+    {# SMTP subsection #}
+    <div class="cfg-subsection">
+      <div class="cfg-card-header">
+        <span class="cfg-card-title">SMTP</span>
+      </div>
+      {% for f in email_schema %}
+      {% if f.name.startswith('smtp_') %}
+      {% include "components/config/field.html" %}
+      {% endif %}
+      {% endfor %}
+    </div>
+
+    {# Sender Authorization subsection #}
+    <div class="cfg-subsection">
+      <div class="cfg-card-header">
+        <span class="cfg-card-title">Sender Authorization</span>
+      </div>
+      {% for f in email_schema %}
+      {% if f.name.startswith('auth_') %}
+      {% include "components/config/field.html" %}
+      {% endif %}
+      {% endfor %}
+    </div>
+
+    {# Microsoft 365 OAuth2 subsection #}
+    <div class="cfg-subsection">
+      <div class="cfg-card-header">
+        <span class="cfg-card-title">Microsoft 365 OAuth2</span>
+      </div>
+      <p class="cfg-subsection-hint">
+        OAuth2 client credentials for Microsoft 365 mailboxes (Exchange Online).
+        Required when Basic Authentication is disabled.
+        Refer to the Airut documentation for setup details.
+      </p>
+      {% for f in email_schema %}
+      {% if f.name.startswith('microsoft_oauth2_') %}
+      {% include "components/config/field.html" %}
+      {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if has_slack %}
+  <div class="card" id="channel-slack">
+    <div class="cfg-card-header">
+      <span class="cfg-card-title">Slack Channel</span>
+      <button class="cfg-btn danger cfg-btn-sm"
+              hx-post="/api/config/remove"
+              hx-vals='{"path":"repos.{{ repo_id }}.slack"}'
+              hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+              hx-confirm="Remove Slack channel?">
+        Remove
+      </button>
+    </div>
+    {% for f in slack_schema %}
+    {% include "components/config/field.html" %}
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if not has_email or not has_slack %}
+  <div class="cfg-add-channel">
+    {% if not has_email %}
+    <button class="cfg-btn primary" id="add-email-btn"
+            hx-post="/api/config/add"
+            hx-vals='{"path":"repos.{{ repo_id }}.email"}'
+            hx-headers='{"X-Requested-With":"XMLHttpRequest"}'>
+      + Add Email Channel
+    </button>
+    {% endif %}
+    {% if not has_slack %}
+    <button class="cfg-btn primary" id="add-slack-btn"
+            hx-post="/api/config/add"
+            hx-vals='{"path":"repos.{{ repo_id }}.slack"}'
+            hx-headers='{"X-Requested-With":"XMLHttpRequest"}'>
+      + Add Slack Channel
+    </button>
+    {% endif %}
+  </div>
+  {% endif %}
+
+</div>

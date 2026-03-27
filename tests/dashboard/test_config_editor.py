@@ -2505,7 +2505,9 @@ class TestAddChannel:
             headers=XHR,
         )
         assert response.status_code == 200
-        assert "HX-Redirect" in response.headers
+        assert "HX-Redirect" not in response.headers
+        assert response.content_type.startswith("text/html")
+        assert "channels-section" in response.text
         buf = harness.server._config_handlers._buffer
         assert buf is not None
         slack = buf.raw["repos"]["test-repo"]["slack"]
@@ -2552,7 +2554,9 @@ class TestRemoveChannel:
             headers=XHR,
         )
         assert response.status_code == 200
-        assert "HX-Redirect" in response.headers
+        assert "HX-Redirect" not in response.headers
+        assert response.content_type.startswith("text/html")
+        assert "channels-section" in response.text
         buf = harness.server._config_handlers._buffer
         assert buf is not None
         assert "email" not in buf.raw["repos"]["test-repo"]
@@ -4337,14 +4341,18 @@ class TestVarsAdd:
         # Value should be unchanged
         assert buf.raw["vars"]["mail_server"] == "imap.shared.com"
 
-    def test_add_variable_redirects(self, harness: ConfigEditorHarness) -> None:
+    def test_add_variable_returns_fragment(
+        self, harness: ConfigEditorHarness
+    ) -> None:
         harness.client.get("/config")
         resp = harness.client.post(
             "/api/config/add",
             data={"path": "vars", "key": "my_var"},
             headers=XHR,
         )
-        assert resp.headers.get("HX-Redirect") == "/config"
+        assert "HX-Redirect" not in resp.headers
+        assert resp.content_type.startswith("text/html")
+        assert "vars-section" in resp.text
 
 
 class TestVarsRemove:
@@ -4363,7 +4371,7 @@ class TestVarsRemove:
         assert buf is not None
         assert "mail_server" not in buf.raw["vars"]
 
-    def test_remove_variable_redirects(self, tmp_path: Path) -> None:
+    def test_remove_variable_returns_fragment(self, tmp_path: Path) -> None:
         h = ConfigEditorHarness(tmp_path, raw=_make_raw_with_vars())
         h.client.get("/config")
         resp = h.client.post(
@@ -4371,7 +4379,11 @@ class TestVarsRemove:
             data={"path": "vars", "key": "smtp_host"},
             headers=XHR,
         )
-        assert resp.headers.get("HX-Redirect") == "/config"
+        assert "HX-Redirect" not in resp.headers
+        assert resp.content_type.startswith("text/html")
+        assert "vars-section" in resp.text
+        # Removed variable should not appear in fragment
+        assert "smtp_host" not in resp.text
 
 
 class TestVarsRename:
