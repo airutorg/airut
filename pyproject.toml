@@ -25,7 +25,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "aiosmtpd>=1.4.6",
-    "cryptography>=46.0.5",
+    "cryptography>=46.0.6",
     "mdformat>=1.0",
     "mdformat-frontmatter>=2",
     "mdformat-gfm>=1.0",
