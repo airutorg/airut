@@ -217,6 +217,7 @@ class Sandbox:
         network_log_path: Path | None = None,
         network_sandbox: NetworkSandboxConfig | None = None,
         resource_limits: ResourceLimits | None = None,
+        claude_binary_path: Path | None = None,
     ) -> AgentTask:
         """Create a task for sandboxed Claude Code execution.
 
@@ -244,6 +245,9 @@ class Sandbox:
             network_sandbox: Network sandbox configuration.
             resource_limits: Container resource limits (timeout, memory,
                 cpus, pids_limit).
+            claude_binary_path: Host path to cached Claude binary.
+                When provided, the binary is bind-mounted read-only at
+                ``/opt/claude/claude`` in the container.
 
         Returns:
             AgentTask instance ready for execution.
@@ -261,6 +265,7 @@ class Sandbox:
             proxy_manager=(
                 self._proxy_manager if network_sandbox is not None else None
             ),
+            claude_binary_path=claude_binary_path,
         )
 
     def create_command_task(

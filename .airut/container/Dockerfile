@@ -18,7 +18,7 @@ RUN apt-get update \
     && apt-get install -y gh \
     && rm -rf /var/lib/apt/lists/*
 
-# Add ~/.local/bin to PATH — Airut requires `claude` and `uv` to be in PATH.
+# Add ~/.local/bin to PATH — uv installs here.
 ENV PATH="/root/.local/bin:$PATH"
 
 # /workspace is a host mount (ext4) while the uv cache lives on the container
@@ -35,13 +35,5 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
 # NOTE: Using COPY instead of heredoc because Podman's image builder
 # incorrectly interprets lines starting with '[' as Dockerfile instructions.
 COPY gitconfig /root/.gitconfig
-
-# Install Claude Code last — this is the most volatile layer (fetches latest
-# version from the internet) so it should invalidate the fewest cached layers.
-# NOTE: Run from a temp directory to work around OOM bug in installer when run
-# as root during container build (https://github.com/anthropics/claude-code/issues/22536)
-RUN mkdir /tmp/claude-install && cd /tmp/claude-install \
-    && curl -fsSL https://claude.ai/install.sh | bash \
-    && rm -rf /tmp/claude-install
 
 WORKDIR /workspace

@@ -1014,6 +1014,19 @@ class TestFromYaml:
         config = ServerConfig.from_yaml(yaml_path).value
         assert config.repos["test"].effort == "medium"
 
+    def test_claude_version_parsed(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """claude_version is parsed from server config."""
+        yaml_content = (
+            _MINIMAL_YAML.format(repo_url=master_repo)
+            + "    claude_version: 1.2.3\n"
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        config = ServerConfig.from_yaml(yaml_path).value
+        assert config.repos["test"].claude_version == "1.2.3"
+
     def test_model_empty_string_falls_back_to_default(
         self, master_repo: Path, tmp_path: Path
     ) -> None:
@@ -1571,6 +1584,31 @@ class TestRepoServerConfig:
         """Resource limits default to ResourceLimits()."""
         config = _make_repo_server_config(master_repo, tmp_path)
         assert config.resource_limits == ResourceLimits()
+
+    def test_claude_version_defaults_to_latest(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """claude_version defaults to 'latest'."""
+        config = _make_repo_server_config(master_repo, tmp_path)
+        assert config.claude_version == "latest"
+
+    def test_claude_version_valid(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Valid claude_version is accepted."""
+        config = _make_repo_server_config(
+            master_repo, tmp_path, claude_version="1.0.0"
+        )
+        assert config.claude_version == "1.0.0"
+
+    def test_claude_version_invalid_raises(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Invalid claude_version raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid claude_version"):
+            _make_repo_server_config(
+                master_repo, tmp_path, claude_version="bad"
+            )
 
     def test_custom_model(self, master_repo: Path, tmp_path: Path) -> None:
         """Custom model is preserved."""

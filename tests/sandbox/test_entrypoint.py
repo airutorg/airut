@@ -48,9 +48,9 @@ class TestGetEntrypointContent:
         assert b"mitmproxy-ca.crt" in content
 
     def test_contains_exec_claude(self) -> None:
-        """Content execs claude with arguments."""
+        """Content execs the host-mounted claude binary."""
         content = get_entrypoint_content()
-        assert b'exec claude "$@"' in content
+        assert b'exec /opt/claude/claude "$@"' in content
 
     def test_contains_set_euo_pipefail(self) -> None:
         """Content uses strict bash error handling."""
@@ -94,9 +94,9 @@ class TestPassthroughEntrypoint:
         assert b"mitmproxy-ca.crt" in content
 
     def test_passthrough_does_not_exec_claude(self) -> None:
-        """Passthrough does NOT exec claude."""
+        """Passthrough does NOT exec the claude binary."""
         content = get_entrypoint_content(passthrough=True)
-        assert b'exec claude "$@"' not in content
+        assert b'exec /opt/claude/claude "$@"' not in content
 
     def test_passthrough_execs_args(self) -> None:
         """Passthrough execs the command directly."""

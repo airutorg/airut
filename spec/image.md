@@ -28,7 +28,7 @@ Airut entrypoint).
 Layer 1: Repo Image (from git mirror)
   Source: .airut/container/Dockerfile (read from mirror's main branch)
   Tag:    airut-repo:<sha256-of-dockerfile>
-  Contains: Ubuntu, system deps, Python, Claude Code, uv, etc.
+  Contains: Ubuntu, system deps, Python, uv, etc.
 
 Layer 2: Server Overlay (generated in code)
   Source: airut/sandbox/_entrypoint.py (generated entrypoint script)
@@ -183,11 +183,16 @@ variants, selected via `ensure_image(passthrough_entrypoint=...)`:
 
 ### Agent Entrypoint (default)
 
-Used by `AgentTask`. Performs setup then runs Claude Code:
+Used by `AgentTask`. Performs setup then runs the bind-mounted Claude Code
+binary:
 
 1. Sets `IS_SANDBOX=1` so Claude Code runs in permissive mode
 2. Trusts the mitmproxy CA certificate (for network sandbox)
-3. Runs `exec claude "$@"`
+3. Runs `exec /opt/claude/claude "$@"` (bind-mounted from host cache)
+
+The Claude Code binary is not installed inside the container image. Instead,
+`AgentTask` bind-mounts the host-cached binary at `/opt/claude/claude`
+(read-only). The version is controlled by the `claude_version` config field.
 
 All Claude Code CLI flags (`--dangerously-skip-permissions`, `--model`,
 `--resume`, `--output-format`, etc.) are passed through as arguments by the

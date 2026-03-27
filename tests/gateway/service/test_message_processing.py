@@ -18,6 +18,7 @@ from airut.gateway.config import RepoServerConfig
 from airut.gateway.service import build_recovery_prompt
 from airut.gateway.service.message_processing import process_message
 from airut.sandbox import ExecutionResult, Outcome
+from airut.sandbox.claude_binary import ClaudeBinaryError
 from airut.sandbox.types import ResourceLimits
 
 from .conftest import make_service, update_global, update_repo
@@ -1316,6 +1317,94 @@ class TestProcessMessage:
         assert reason != CompletionReason.SUCCESS
         # Should only create one task (no retry)
         assert svc.sandbox.create_task.call_count == 1
+
+
+class TestClaudeBinaryError:
+    """Tests for ClaudeBinaryError handling in process_message."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_build_task_env(self):
+        """Patch build_task_env for all tests."""
+        with patch.object(
+            RepoServerConfig,
+            "build_task_env",
+            return_value=({}, {}),
+        ) as mock_bte:
+            self._mock_build_task_env = mock_bte
+            yield
+
+    def _setup_svc(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> tuple[Any, Any, MagicMock, MagicMock]:
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, dashboard_base_url=None)
+        update_repo(handler, resource_limits=ResourceLimits(timeout=300))
+
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+        (repo_path / "inbox").mkdir()
+        (repo_path / "outbox").mkdir()
+
+        handler.conversation_manager.exists.return_value = False
+        handler.conversation_manager.initialize_new.return_value = (
+            "conv1",
+            repo_path,
+        )
+        handler.conversation_manager.get_conversation_dir.return_value = (
+            tmp_path / "conversations"
+        )
+        handler.conversation_manager.get_workspace_path.return_value = repo_path
+        mock_mirror = MagicMock()
+        mock_mirror.list_directory.return_value = ["Dockerfile"]
+
+        def _read_file(path: str) -> bytes:
+            if "Dockerfile" in path:
+                return b"FROM python:3.13-slim\n"
+            if "network-allowlist" in path:
+                return b"domains: []\nurl_prefixes: []\n"
+            return b""
+
+        mock_mirror.read_file.side_effect = _read_file
+        handler.conversation_manager.mirror = mock_mirror
+
+        mock_conv_store = MagicMock()
+        mock_conv_store.get_session_id_for_resume.return_value = None
+        mock_conv_store.get_model.return_value = None
+        mock_conv_store.get_effort.return_value = None
+
+        mock_task = MagicMock()
+        mock_task.execute = AsyncMock(return_value=_make_success_result())
+        mock_task.event_log = MagicMock()
+        svc.sandbox.ensure_image.return_value = "airut:test"
+        svc.sandbox.create_task.return_value = mock_task
+
+        adapter = MagicMock()
+        adapter.save_attachments.return_value = []
+
+        return svc, handler, mock_conv_store, adapter
+
+    def test_binary_fetch_error_sends_error_reply(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """ClaudeBinaryError during binary fetch sends error to user."""
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+
+        svc.claude_binary_cache.ensure.side_effect = ClaudeBinaryError(
+            "download failed"
+        )
+
+        parsed = _make_parsed_message(body="Do something")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            reason, conv_id = process_message(
+                svc, parsed, "task1", handler, adapter
+            )
+
+        assert reason == CompletionReason.EXECUTION_FAILED
+        adapter.send_error.assert_called_once()
 
 
 class TestSandboxDisabledWarning:

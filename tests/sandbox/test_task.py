@@ -37,6 +37,7 @@ def _make_task(
     resource_limits: ResourceLimits | None = None,
     container_command: str = "podman",
     proxy_manager: ProxyManager | None = None,
+    claude_binary_path: Path | None = None,
 ) -> AgentTask:
     """Create an AgentTask with standard test params."""
     context_dir = tmp_path / "context"
@@ -53,6 +54,7 @@ def _make_task(
         resource_limits=resource_limits or ResourceLimits(),
         container_command=container_command,
         proxy_manager=proxy_manager,
+        claude_binary_path=claude_binary_path,
     )
 
 
@@ -403,6 +405,36 @@ class TestAgentTaskExecute:
         ]
         assert len(claude_mount) == 1
         assert not claude_mount[0].read_only
+
+    async def test_execute_mounts_claude_binary(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """execute() mounts claude binary when path provided."""
+        binary = tmp_path / "claude"
+        binary.write_bytes(b"binary")
+        task = _make_task(tmp_path, claude_binary_path=binary)
+
+        calls: list[dict] = []
+
+        async def capture_rc(**kwargs):
+            calls.append(kwargs)
+            return await create_mock_run_container(
+                stdout='{"type": "result", "result": "test"}\n'
+            )(**kwargs)
+
+        monkeypatch.setattr("airut.sandbox.task.run_container", capture_rc)
+
+        await task.execute("Test prompt")
+
+        mounts = calls[0]["mounts"]
+        binary_mount = [
+            m for m in mounts if m.container_path == "/opt/claude/claude"
+        ]
+        assert len(binary_mount) == 1
+        assert binary_mount[0].host_path == binary
+        assert binary_mount[0].read_only
 
     async def test_execute_unexpected_error(
         self,

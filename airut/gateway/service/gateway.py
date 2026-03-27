@@ -30,6 +30,8 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
+from platformdirs import user_state_path
+
 from airut.config.schema import Scope, get_field_meta
 from airut.config.snapshot import ConfigSnapshot
 from airut.config.source import ConfigSource, YamlConfigSource
@@ -69,7 +71,7 @@ from airut.gateway.service.message_processing import (
 )
 from airut.gateway.service.repo_handler import RepoHandler
 from airut.logging import configure_logging
-from airut.sandbox import AgentTask, Sandbox, SandboxConfig
+from airut.sandbox import AgentTask, ClaudeBinaryCache, Sandbox, SandboxConfig
 from airut.version import GitVersionInfo, get_git_version_info
 
 
@@ -251,6 +253,13 @@ class GatewayService:
         self.sandbox = Sandbox(
             sandbox_config,
             egress_network=self._egress_network,
+        )
+
+        # Claude binary cache (host-managed binary download/verification).
+        # Typed as Optional for testability (tests replace with Mock/None).
+        binary_cache_dir = user_state_path("airut") / "claude-binaries"
+        self.claude_binary_cache: ClaudeBinaryCache | None = ClaudeBinaryCache(
+            binary_cache_dir,
         )
 
         # Initialize per-repo handlers (failures are recorded, not raised)
@@ -1592,6 +1601,11 @@ class GatewayService:
                 except Exception as e:
                     logger.exception("Error in image pruning: %s", e)
 
+            try:
+                self._gc_claude_binaries()
+            except Exception as e:
+                logger.exception("Error in Claude binary pruning: %s", e)
+
             if self._shutdown_event.wait(timeout=self.GC_INTERVAL):
                 break  # Shutdown signaled
 
@@ -1666,6 +1680,44 @@ class GatewayService:
             logger.info("Image pruning complete. Removed %d images", removed)
         else:
             logger.debug("Image pruning complete. No images removed")
+
+    def _gc_claude_binaries(self) -> None:
+        """Prune cached Claude binaries not referenced by any repo config.
+
+        Collects the set of active versions from all repo configs,
+        then removes any cached versions not in that set.
+        """
+        if self.claude_binary_cache is None:
+            return
+
+        # Collect active versions (resolved channel names)
+        active: set[str] = set()
+        for repo_id, handler in list(self.repo_handlers.items()):
+            repo_version = handler.config.claude_version
+            try:
+                active.add(
+                    self.claude_binary_cache.resolve_version(repo_version)
+                )
+            except Exception as e:
+                logger.warning(
+                    "Repo '%s': failed to resolve claude_version "
+                    "'%s' for GC: %s",
+                    repo_id,
+                    repo_version,
+                    e,
+                )
+
+        logger.info(
+            "Claude binary GC: active versions: %s",
+            ", ".join(sorted(active)) or "(none)",
+        )
+        removed = self.claude_binary_cache.prune(active)
+        if removed > 0:
+            logger.info(
+                "Claude binary GC complete. Removed %d versions", removed
+            )
+        else:
+            logger.debug("Claude binary GC complete. No versions removed")
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -44,6 +44,7 @@ from airut.gateway.conversation import GitCloneError
 from airut.gateway.service.usage_stats import UsageStats
 from airut.sandbox import (
     NETWORK_LOG_FILENAME,
+    ClaudeBinaryError,
     ContainerEnv,
     Mount,
     NetworkSandboxConfig,
@@ -452,6 +453,33 @@ def process_message(
                 replacements=replacements,
             )
 
+        # Resolve Claude binary version and ensure it's cached
+        claude_binary_path = None
+        if service.claude_binary_cache is not None:
+            claude_version = repo_cfg.claude_version
+            try:
+                binary_path, resolved_version = (
+                    service.claude_binary_cache.ensure(claude_version)
+                )
+                claude_binary_path = binary_path
+                logger.info(
+                    "Repo '%s': using Claude binary %s",
+                    repo_id,
+                    resolved_version,
+                )
+            except ClaudeBinaryError as e:
+                logger.error(
+                    "Repo '%s': failed to fetch Claude binary: %s",
+                    repo_id,
+                    e,
+                )
+                adapter.send_error(
+                    parsed,
+                    conv_id,
+                    "Failed to fetch Claude binary. Please try again later.",
+                )
+                return CompletionReason.EXECUTION_FAILED, conv_id
+
         # Create sandbox task
         task = service.sandbox.create_task(
             execution_context_id=conv_id,
@@ -466,6 +494,7 @@ def process_message(
             ),
             network_sandbox=network_sandbox,
             resource_limits=resource_limits,
+            claude_binary_path=claude_binary_path,
         )
 
         # Register task for stop functionality
