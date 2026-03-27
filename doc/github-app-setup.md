@@ -209,7 +209,8 @@ To find the bot user ID for the email address: visit
 
 ## Step 7: Verify
 
-1. Restart the Airut service: `systemctl --user restart airut`
+1. If using the config editor, changes are saved and reloaded automatically. If
+   editing the YAML file directly, changes are picked up via live config reload.
 2. Send a test task that pushes a branch and creates a PR
 3. Verify the PR is created by `your-app-name[bot]`
 4. Check service logs for successful token refresh:

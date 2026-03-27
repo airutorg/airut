@@ -227,8 +227,7 @@ Secrets can be specified inline or loaded from environment variables using
 ```yaml
 repos:
   my-project:
-    git:
-      repo_url: https://github.com/your-org/repo.git
+    repo_url: https://github.com/your-org/repo.git
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
     email:
@@ -266,8 +265,10 @@ See [Configuration](#configuration) for the full YAML schema reference.
 airut check
 ```
 
-This verifies the config file can be parsed and that required system
-dependencies (git, podman) are installed and meet minimum version requirements.
+This verifies the config file can be parsed, that required system dependencies
+(git, podman) are installed and meet minimum version requirements, and reports
+the config schema version status (e.g., "up to date (v5)" or "migration pending
+(v4 → v5)").
 
 ### 8. Install Services
 
@@ -370,8 +371,7 @@ repos:
       authorized:
         - workspace_members: true
 
-    git:
-      repo_url: https://github.com/your-org/repo.git
+    repo_url: https://github.com/your-org/repo.git
 
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
@@ -530,8 +530,7 @@ repos:
           - you@example.com
         trusted_authserv_id: mail.example.com
 
-    git:
-      repo_url: https://github.com/your-org/repo.git
+    repo_url: https://github.com/your-org/repo.git
 ```
 
 For Microsoft 365 with OAuth2, see [m365-oauth2.md](m365-oauth2.md).
@@ -555,8 +554,7 @@ repos:
       authorized:
         - workspace_members: true
 
-    git:
-      repo_url: https://github.com/your-org/repo.git
+    repo_url: https://github.com/your-org/repo.git
 ```
 
 ## Service Management
@@ -756,7 +754,8 @@ nano ~/.config/airut/.env
 # Or update config directly
 nano ~/.config/airut/airut.yaml
 
-# Restart service to pick up changes (automatic if using config editor)
+# Changes to airut.yaml are picked up via live config reload.
+# For .env changes, restart the service:
 systemctl --user restart airut
 ```
 
@@ -788,6 +787,18 @@ podman image prune -a
 ```bash
 airut update
 ```
+
+After upgrading, if `airut check` reports a pending config schema migration,
+run:
+
+```bash
+airut migrate
+```
+
+This applies pending schema migrations to `~/.config/airut/airut.yaml`
+atomically, preserving `!env` and `!var` tags. Migrations are also auto-applied
+when the config is loaded, so running `airut migrate` explicitly is optional but
+recommended to keep the file in sync with the current schema.
 
 To switch channels, reinstall the tool with `--force`:
 

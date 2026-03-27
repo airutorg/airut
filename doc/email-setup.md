@@ -116,8 +116,7 @@ repos:
           # - *@your-company.com  # Wildcard for domain
         trusted_authserv_id: mail.example.com
 
-    git:
-      repo_url: https://github.com/your-org/your-repo.git
+    repo_url: https://github.com/your-org/your-repo.git
 
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY

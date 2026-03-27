@@ -309,8 +309,7 @@ repos:
           - *@your-company.com
         trusted_authserv_id: mail.example.com
 
-    git:
-      repo_url: https://github.com/your-org/your-repo.git
+    repo_url: https://github.com/your-org/your-repo.git
 
     # Plain secrets (injected directly into container)
     secrets:
@@ -354,8 +353,7 @@ repos:
       authorized:
         - workspace_members: true
 
-    git:
-      repo_url: https://github.com/your-org/your-repo.git
+    repo_url: https://github.com/your-org/your-repo.git
 
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
@@ -399,8 +397,8 @@ GH_APP_INSTALLATION_ID=12345678
 # GH_TOKEN_YOUR_REPO=ghp_...
 ```
 
-If editing YAML directly, restart the service to pick up changes (or rely on the
-file watcher for automatic reload):
+Changes to `airut.yaml` are picked up via live config reload — no restart
+needed. For `.env` changes, restart the service:
 
 ```bash
 systemctl --user restart airut

@@ -116,8 +116,7 @@ repos:
       authorized:
         - workspace_members: true
 
-    git:
-      repo_url: https://github.com/your-org/your-repo.git
+    repo_url: https://github.com/your-org/your-repo.git
 
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
