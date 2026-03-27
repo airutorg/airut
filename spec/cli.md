@@ -55,8 +55,8 @@ later via the dashboard config editor.
 which returns `~/.config/airut/airut.yaml`.
 
 **Stub template:** Contains commented-out `execution`, `dashboard`, and
-`container_command` sections, plus a minimal `repos:` block with placeholder
-email, git, and secrets values. The template header links to the
+`network` sections, plus a minimal `repos:` block with placeholder email, git,
+and secrets values. The template header links to the
 [documented example](https://github.com/airutorg/airut/blob/main/config/airut.example.yaml)
 for all available options.
 

@@ -66,11 +66,11 @@
     {% endfor %}
   </div>
 
-  {# Container & Network card #}
+  {# Network card #}
   <div class="card">
-    <h2>Container &amp; Network</h2>
+    <h2>Network</h2>
     {% for f in schema %}
-    {% if f.path in ['container_command', 'network.upstream_dns'] %}
+    {% if f.path in ['network.upstream_dns'] %}
     {% include "components/config/field.html" %}
     {% endif %}
     {% endfor %}

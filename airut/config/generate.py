@@ -323,6 +323,8 @@ def _group_fields_by_section(
         fm = get_field_meta(f)
         if fm is None:
             continue
+        if fm.hidden:
+            continue
         if (cls.__name__, f.name) in _SKIP_FIELDS:
             continue
 
@@ -741,6 +743,8 @@ def check_field_coverage() -> list[str]:
         for f in dc_fields(cls):
             fm = get_field_meta(f)
             if fm is None:
+                continue
+            if fm.hidden:
                 continue
             if (cls.__name__, f.name) in _SKIP_FIELDS:
                 continue

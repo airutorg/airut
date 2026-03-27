@@ -691,7 +691,8 @@ class GlobalConfig:
         dashboard_port: Dashboard server port.
         dashboard_base_url: Public URL for dashboard links in emails.
             ``None`` means links are omitted.
-        container_command: Container runtime command (podman or docker).
+        container_command: Container runtime command (test-only; production
+            requires podman).
         upstream_dns: Upstream DNS server for proxy container resolution.
             ``None`` means auto-detect from ``/etc/resolv.conf``.
         resource_limits: Default container resource limits.  Repos can
@@ -751,8 +752,9 @@ class GlobalConfig:
     container_command: str = field(
         default="podman",
         metadata=meta(
-            "Container runtime command (podman or docker)",
+            "Container runtime command (test-only; production requires podman)",
             Scope.SERVER,
+            hidden=True,
         ),
     )
     upstream_dns: str | None = field(

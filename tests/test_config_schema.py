@@ -217,7 +217,7 @@ class TestSchemaForUIWithRealConfigs:
         names = {s.name for s in schema}
         assert "max_concurrent_executions" in names
         assert "dashboard_enabled" in names
-        assert "container_command" in names
+        assert "container_command" not in names  # hidden from UI
 
     def test_email_channel_config(self) -> None:
         from airut.gateway.config import EmailChannelConfig

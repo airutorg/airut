@@ -383,7 +383,7 @@ Settings that affect server-wide infrastructure or shared resources:
 - `execution.conversation_max_age_days` — GC policy
 - `execution.image_prune` — GC policy
 - `dashboard.*` — HTTP server lifecycle
-- `container_command` — container runtime binary
+- `container_command` — container runtime binary (test-only, hidden from editor)
 - `upstream_dns` — proxy DNS configuration
 
 ### `Scope.REPO` — Reloadable Per-Repo

@@ -199,7 +199,8 @@ top level.
 - `execution.*` — `max_concurrent`, `shutdown_timeout`,
   `conversation_max_age_days`, `image_prune`
 - `dashboard.*` — Web UI configuration
-- `container_command` — Container runtime (podman/docker)
+- `container_command` — Container runtime (test-only; production requires
+  podman). Hidden from config editor.
 - `resource_limits.*` (top-level) — Server-wide resource limit defaults
 
 **Important:** All channel-specific fields must be nested under their channel

@@ -179,6 +179,8 @@ def _walk_fields(
         fm = get_field_meta(f)
         if fm is None:
             continue
+        if fm.hidden:
+            continue
         if exclude and f.name in exclude:
             continue
 

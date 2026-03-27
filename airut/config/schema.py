@@ -42,12 +42,14 @@ class FieldMeta:
         doc: Human-readable description.
         scope: Reload scope (when changes take effect).
         secret: Informational flag for UI (masking inputs, hiding diffs).
+        hidden: Hide from config editor UI (for internal/test-only fields).
         since_version: Schema version that introduced this field.
     """
 
     doc: str
     scope: Scope
     secret: bool = False
+    hidden: bool = False
     since_version: int = 1
 
 
@@ -60,6 +62,7 @@ def meta(
     scope: Scope,
     *,
     secret: bool = False,
+    hidden: bool = False,
     since_version: int = 1,
 ) -> dict[str, FieldMeta]:
     """Attach ``FieldMeta`` via ``dataclass field(metadata=meta(...))``.
@@ -68,6 +71,7 @@ def meta(
         doc: Human-readable field description.
         scope: Reload scope.
         secret: Whether this field holds a secret value.
+        hidden: Hide from config editor UI.
         since_version: Schema version that introduced this field.
 
     Returns:
@@ -78,6 +82,7 @@ def meta(
             doc=doc,
             scope=scope,
             secret=secret,
+            hidden=hidden,
             since_version=since_version,
         )
     }
@@ -135,6 +140,8 @@ def schema_for_ui(config_cls: type) -> list[FieldSchema]:
     for f in dataclasses.fields(config_cls):
         fm = get_field_meta(f)
         if fm is None:
+            continue
+        if fm.hidden:
             continue
 
         has_default = (
