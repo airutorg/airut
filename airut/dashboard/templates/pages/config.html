@@ -76,16 +76,6 @@
     {% endfor %}
   </div>
 
-  {# Resource Limits card #}
-  {% for f in schema %}
-  {% if f.type_tag == 'nested' and f.name == 'resource_limits' %}
-  <div class="card">
-    <h2>Resource Limits</h2>
-    {% include "components/config/nested.html" %}
-  </div>
-  {% endif %}
-  {% endfor %}
-
   {# Variables section #}
   <h2 class="section-title">Variables</h2>
   <div class="card">

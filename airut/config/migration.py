@@ -24,7 +24,7 @@ from airut.gateway.config import ConfigError
 logger = logging.getLogger(__name__)
 
 #: Current schema version.  Bump when adding a migration.
-CURRENT_CONFIG_VERSION: int = 2
+CURRENT_CONFIG_VERSION: int = 3
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -67,10 +67,125 @@ def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def unique_var_name(
+    desired: str,
+    existing: set[str],
+) -> str:
+    """Return *desired* if not in *existing*, else append a numeric suffix.
+
+    Tries ``desired``, then ``desired_2``, ``desired_3``, etc. until a
+    name not in *existing* is found.  Useful for migrations that
+    auto-create variables without colliding with user-defined ones.
+
+    Args:
+        desired: Preferred variable name.
+        existing: Set of variable names already in use.
+
+    Returns:
+        A name guaranteed not to be in *existing*.
+    """
+    if desired not in existing:
+        return desired
+    n = 2
+    while f"{desired}_{n}" in existing:
+        n += 1
+    return f"{desired}_{n}"
+
+
+#: Resource limit sub-fields eligible for variable extraction.
+_RESOURCE_LIMIT_FIELDS = ("timeout", "memory", "cpus", "pids_limit")
+
+
+def _migrate_v2_to_v3(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v2 -> v3: extract global resource_limits into variables.
+
+    Moves top-level ``resource_limits`` values into the ``vars:`` section
+    and injects ``!var`` references into repos that did not explicitly set
+    the corresponding sub-field.  After migration the top-level
+    ``resource_limits`` key is removed.
+
+    This is a non-security structural migration — safe to auto-transform.
+
+    Args:
+        raw: Raw config dict.
+
+    Returns:
+        The transformed config dict.
+    """
+    from airut.yaml_env import VarRef
+
+    global_limits = raw.get("resource_limits")
+    if not isinstance(global_limits, dict) or not global_limits:
+        # Nothing to migrate: no top-level resource_limits set.
+        # Remove the key if present (could be None or empty dict).
+        raw.pop("resource_limits", None)
+        return raw
+
+    # Collect fields that have values set in the global block.
+    fields_to_extract: dict[str, Any] = {}
+    for field_name in _RESOURCE_LIMIT_FIELDS:
+        if (
+            field_name in global_limits
+            and global_limits[field_name] is not None
+        ):
+            fields_to_extract[field_name] = global_limits[field_name]
+
+    if not fields_to_extract:
+        raw.pop("resource_limits", None)
+        return raw
+
+    # Build or extend the vars: section.
+    vars_section = raw.get("vars")
+    if vars_section is None:
+        vars_section = {}
+        raw["vars"] = vars_section
+    elif not isinstance(vars_section, dict):
+        # Malformed vars: section — leave untouched, validation will catch.
+        # Still remove the old key so it doesn't linger.
+        raw.pop("resource_limits", None)
+        return raw
+
+    existing_vars = set(vars_section.keys())
+
+    # Create a variable for each global resource limit field.
+    # var_map: field_name -> variable_name
+    var_map: dict[str, str] = {}
+    for field_name, value in fields_to_extract.items():
+        desired = f"default_resource_{field_name}"
+        var_name = unique_var_name(desired, existing_vars)
+        vars_section[var_name] = value
+        existing_vars.add(var_name)
+        var_map[field_name] = var_name
+
+    # Inject !var references into repos that don't explicitly set
+    # the corresponding sub-field.
+    repos = raw.get("repos", {})
+    if isinstance(repos, dict):
+        for repo in repos.values():
+            if not isinstance(repo, dict):
+                continue
+            repo_limits = repo.get("resource_limits")
+            if repo_limits is None:
+                repo_limits = {}
+                repo["resource_limits"] = repo_limits
+            elif not isinstance(repo_limits, dict):
+                continue
+
+            for field_name, var_name in var_map.items():
+                if field_name not in repo_limits:
+                    repo_limits[field_name] = VarRef(var_name)
+
+    # Remove the top-level resource_limits block.
+    raw.pop("resource_limits", None)
+
+    return raw
+
+
 #: Migration functions keyed by the version they migrate FROM.
 #: Each takes a raw dict and returns the transformed raw dict.
 MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {
     1: _migrate_v1_to_v2,
+    2: _migrate_v2_to_v3,
 }
 
 

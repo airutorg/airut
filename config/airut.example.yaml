@@ -17,12 +17,17 @@
 #
 # Use the vars: section to define shared values.  Reference them anywhere
 # with !var.  This avoids repeating the same server address, API key, or
-# token across multiple repos.
+# token across multiple repos.  Resource limits are a common use case:
+# define defaults as variables and reference them from each repo.
 #
 # vars:
 #   mail_server: mail.example.com
 #   anthropic_key: sk-ant-api03-...
 #   gh_token: !env GH_TOKEN           # vars can reference !env too
+#   default_resource_timeout: 7200    # shared resource limit defaults
+#   default_resource_memory: "8g"
+#   default_resource_cpus: 4
+#   default_resource_pids_limit: 1024
 
 # execution:
 #   # Maximum parallel Claude containers across all repos
@@ -53,17 +58,6 @@
 # network:
 #   # Upstream DNS server for proxy resolution (auto-detected if empty)
 #   upstream_dns: "1.1.1.1"
-
-# Default container resource limits (repos can override individually)
-# resource_limits:
-#   # Max execution time in seconds (minimum 10)
-#   timeout: 7200
-#   # Memory limit (e.g. 512m, 2g)
-#   memory: "8g"
-#   # CPU limit (e.g. 1.5 for one and a half cores)
-#   cpus: 4
-#   # Max number of processes in the container
-#   pids_limit: 1024
 
 # ---------------------------------------------------------------------------
 # Repositories
@@ -186,16 +180,16 @@ repos:
     # Effort level: low, medium, high, or max (empty = Claude default)
     # effort: max
 
-    # Container resource limits (overrides server-wide defaults)
+    # Container resource limits (use !var for shared defaults)
     # resource_limits:
     #   # Max execution time in seconds (minimum 10)
-    #   timeout: 7200
+    #   timeout: !var default_resource_timeout
     #   # Memory limit (e.g. 512m, 2g)
-    #   memory: "8g"
+    #   memory: !var default_resource_memory
     #   # CPU limit (e.g. 1.5 for one and a half cores)
-    #   cpus: 4
+    #   cpus: !var default_resource_cpus
     #   # Max number of processes in the container
-    #   pids_limit: 1024
+    #   pids_limit: !var default_resource_pids_limit
 
     # Claude Code version (semver, 'latest', or 'stable')
     # claude_version: latest

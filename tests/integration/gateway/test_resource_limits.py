@@ -7,15 +7,13 @@
 
 Tests the resource limits configuration flow end-to-end:
 1. Server config specifies per-repo resource_limits
-2. Server config specifies global resource_limits defaults
-3. Effective limits (repo overrides + server defaults) are threaded to
-   sandbox.create_task()
-4. Task applies limits as podman flags
+2. Resource limits are threaded to sandbox.create_task()
+3. Task applies limits as podman flags
 
 Since integration tests use mock_podman (which wraps `uv run`), we cannot
 verify actual cgroup enforcement.  Instead, we verify that:
 - Resource limits from server config are threaded through to create_task
-- Server-wide defaults are applied, and repos can override them
+- Per-repo limits (including those resolved from !var) are applied
 """
 
 import sys
@@ -25,7 +23,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
-from airut.gateway.config import GlobalConfig
 from airut.sandbox.types import ResourceLimits
 
 from .conftest import (
@@ -109,49 +106,31 @@ class TestResourceLimits:
             service.stop()
             service_thread.join(timeout=10.0)
 
-    def test_repo_overrides_server_defaults(
+    def test_partial_resource_limits(
         self,
         integration_env: IntegrationEnvironment,
         create_email,
         extract_conversation_id,
     ) -> None:
-        """Repo resource_limits override server defaults.
+        """Partial resource_limits are threaded through correctly.
 
-        Sets server defaults timeout=300, memory="4g", cpus=2.
-        Sets per-repo timeout=7200, memory="16g" (no cpus).
-        Verifies repo values win for timeout/memory, server default
-        fills in cpus.
+        Sets per-repo timeout=7200 and memory="16g" only (no cpus or
+        pids_limit).  Verifies the set values are passed and unset
+        fields remain None.
         """
         msg = create_email(
-            subject="Server defaults test",
+            subject="Partial limits test",
             body="Hello, world!",
         )
         integration_env.email_server.inject_message(msg)
 
         service = integration_env.create_service()
 
-        # Set per-repo resource limits (overrides)
         repo_handler = service.repo_handlers["test"]
         object.__setattr__(
             repo_handler.config,
             "resource_limits",
             ResourceLimits(timeout=7200, memory="16g"),
-        )
-
-        # Set server-wide defaults
-        server_limits = ResourceLimits(timeout=300, memory="4g", cpus=2)
-        original_global = service.global_config
-        service.global_config = GlobalConfig(
-            max_concurrent_executions=original_global.max_concurrent_executions,
-            shutdown_timeout_seconds=original_global.shutdown_timeout_seconds,
-            conversation_max_age_days=original_global.conversation_max_age_days,
-            dashboard_enabled=original_global.dashboard_enabled,
-            dashboard_host=original_global.dashboard_host,
-            dashboard_port=original_global.dashboard_port,
-            dashboard_base_url=original_global.dashboard_base_url,
-            container_command=original_global.container_command,
-            upstream_dns=original_global.upstream_dns,
-            resource_limits=server_limits,
         )
 
         original_create_task = service.sandbox.create_task
@@ -183,9 +162,10 @@ class TestResourceLimits:
             assert task is not None
             assert len(captured_limits) >= 1
             rl = captured_limits[0]
-            assert rl.timeout == 7200  # Repo override wins
-            assert rl.memory == "16g"  # Repo override wins
-            assert rl.cpus == 2  # Filled from server defaults
+            assert rl.timeout == 7200
+            assert rl.memory == "16g"
+            assert rl.cpus is None
+            assert rl.pids_limit is None
 
         finally:
             service.stop()

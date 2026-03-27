@@ -695,8 +695,6 @@ class GlobalConfig:
             requires podman).
         upstream_dns: Upstream DNS server for proxy container resolution.
             ``None`` means auto-detect from ``/etc/resolv.conf``.
-        resource_limits: Default container resource limits.  Repos can
-            override individual fields.  ``None`` means no defaults.
     """
 
     max_concurrent_executions: int = field(
@@ -761,14 +759,6 @@ class GlobalConfig:
         default=None,
         metadata=meta(
             "Upstream DNS server for proxy resolution (auto-detected if empty)",
-            Scope.SERVER,
-        ),
-    )
-    resource_limits: ResourceLimits | None = field(
-        default=None,
-        metadata=meta(
-            "Default container resource limits"
-            " (repos can override individually)",
             Scope.SERVER,
         ),
     )
@@ -1042,7 +1032,7 @@ class RepoServerConfig:
         effort: Effort level for Claude Code (low, medium, high, max).
             ``None`` omits the flag, letting Claude use its own default.
         resource_limits: Container resource limits (timeout, memory,
-            cpus, pids_limit).  Overrides server-wide defaults.
+            cpus, pids_limit).  Use ``!var`` references for shared defaults.
     """
 
     repo_id: str = field(
@@ -1110,7 +1100,7 @@ class RepoServerConfig:
     resource_limits: ResourceLimits = field(
         default_factory=ResourceLimits,
         metadata=meta(
-            "Container resource limits (overrides server-wide defaults)",
+            "Container resource limits (use !var for shared defaults)",
             Scope.TASK,
         ),
     )
@@ -1419,7 +1409,6 @@ class ServerConfig:
             **gc_overrides,
             dashboard_base_url=_resolve(dashboard.get("base_url"), str),
             upstream_dns=_resolve(network.get("upstream_dns"), str),
-            resource_limits=_parse_resource_limits(raw.get("resource_limits")),
         )
 
         # Parse repos

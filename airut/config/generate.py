@@ -76,10 +76,10 @@ _EXAMPLE_VALUES: dict[str, str] = {
     "EmailChannelConfig.password": "!env EMAIL_PASSWORD",
     "GlobalConfig.dashboard_base_url": "dashboard.example.com",
     "GlobalConfig.upstream_dns": '"1.1.1.1"',
-    "ResourceLimits.timeout": "7200",
-    "ResourceLimits.memory": '"8g"',
-    "ResourceLimits.cpus": "4",
-    "ResourceLimits.pids_limit": "1024",
+    "ResourceLimits.timeout": "!var default_resource_timeout",
+    "ResourceLimits.memory": "!var default_resource_memory",
+    "ResourceLimits.cpus": "!var default_resource_cpus",
+    "ResourceLimits.pids_limit": "!var default_resource_pids_limit",
     "RepoServerConfig.effort": "max",
 }
 
@@ -398,7 +398,7 @@ def _render_field(
             if nval is not None:
                 nested_lines.append(f"  # {nfm.doc}")
                 nested_lines.append(f"  {_yaml_key(nf.name, None)}: {nval}")
-        # Always commented (resource_limits defaults to None or empty)
+        # Always commented (nested dataclasses default to None or empty)
         out.extend(_comment_lines(nested_lines, indent))
         return out
 
@@ -545,12 +545,17 @@ _HEADER = """\
 #
 # Use the vars: section to define shared values.  Reference them anywhere
 # with !var.  This avoids repeating the same server address, API key, or
-# token across multiple repos.
+# token across multiple repos.  Resource limits are a common use case:
+# define defaults as variables and reference them from each repo.
 #
 # vars:
 #   mail_server: mail.example.com
 #   anthropic_key: sk-ant-api03-...
-#   gh_token: !env GH_TOKEN           # vars can reference !env too"""
+#   gh_token: !env GH_TOKEN           # vars can reference !env too
+#   default_resource_timeout: 7200    # shared resource limit defaults
+#   default_resource_memory: "8g"
+#   default_resource_cpus: 4
+#   default_resource_pids_limit: 1024"""
 
 
 def generate_example_config() -> str:

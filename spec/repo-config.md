@@ -36,12 +36,12 @@ repos:
     # Effort level passed as --effort to Claude Code (optional)
     # effort: max
 
-    # Per-repo resource limits (all optional, override server defaults)
+    # Per-repo resource limits (use !var for shared defaults across repos)
     # resource_limits:
-    #   timeout: 6000
-    #   memory: "4g"
-    #   cpus: 2
-    #   pids_limit: 256
+    #   timeout: !var default_resource_timeout
+    #   memory: !var default_resource_memory
+    #   cpus: !var default_resource_cpus
+    #   pids_limit: !var default_resource_pids_limit
 
     # Network sandbox toggle (default: true)
     # network:
@@ -115,30 +115,34 @@ The `model` field defaults to `"opus"`. For new conversations, the priority is:
 Resumed conversations always use the model and effort stored at conversation
 creation time, regardless of current server config.
 
-## Resource Limit Defaults
+## Resource Limits via Variables
 
-Server-wide resource limits serve as defaults. Per-repo values override them.
-For each field independently:
-
-```
-effective = repo_value     if repo sets the field
-          = server_default if only server sets the field
-          = None (no limit) if neither sets the field
-```
-
-### Server-Wide Defaults
+Shared resource limit defaults are defined as variables in the `vars:` section
+and referenced with `!var` in each repo. This replaces the former top-level
+`resource_limits` block (migrated automatically in config version 3).
 
 ```yaml
-# ~/.config/airut/airut.yaml (server config, top level)
-resource_limits:
-  timeout: 7200       # Default timeout (seconds)
-  memory: "8g"        # Default memory limit
-  cpus: 4             # Default CPU limit
-  pids_limit: 1024    # Default process limit
+vars:
+  default_resource_timeout: 7200
+  default_resource_memory: "8g"
+  default_resource_cpus: 4
+  default_resource_pids_limit: 1024
+
+repos:
+  my-repo:
+    resource_limits:
+      timeout: !var default_resource_timeout
+      memory: !var default_resource_memory
+      cpus: !var default_resource_cpus
+      pids_limit: !var default_resource_pids_limit
+  other-repo:
+    resource_limits:
+      timeout: 3600                             # override for this repo
+      memory: !var default_resource_memory      # shared default
 ```
 
-All fields are optional. Omitted fields mean no default for that dimension.
-Repos can override any field to a higher or lower value.
+All fields are optional. Omitted fields mean no limit for that dimension. Repos
+can override any field to a literal value or reference a different variable.
 
 ## What Stays in the Repository
 
@@ -187,7 +191,7 @@ top level.
 - `effort` — Effort level for Claude Code (optional)
 - `claude_version` — Claude Code version (default: `"latest"`)
 - `resource_limits.*` — Per-repo resource limits (timeout, memory, cpus,
-  pids_limit), override server-wide defaults
+  pids_limit); use `!var` for shared defaults across repos
 - `network.sandbox_enabled` — Network sandbox toggle (default: `true`)
 - `container.path` — Path to container directory in the repo (default:
   `.airut/container`). Override to use an existing Dockerfile (e.g.,
@@ -201,7 +205,8 @@ top level.
 - `dashboard.*` — Web UI configuration
 - `container_command` — Container runtime (test-only; production requires
   podman). Hidden from config editor.
-- `resource_limits.*` (top-level) — Server-wide resource limit defaults
+- `vars.*` — Shared variables referenced with `!var` (e.g. resource limit
+  defaults)
 
 **Important:** All channel-specific fields must be nested under their channel
 block (`email:` or `slack:`). A repo must have at least one channel block

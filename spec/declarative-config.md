@@ -334,6 +334,20 @@ renames and restructuring, but must raise `ConfigError` for changes that could
 affect authentication or authorization if the automatic transformation has a
 bug.
 
+#### Migration History
+
+| Version | Migration           | Type            | Description                                                                                               |
+| ------- | ------------------- | --------------- | --------------------------------------------------------------------------------------------------------- |
+| 1 → 2   | `_migrate_v1_to_v2` | Security reject | Detects legacy email fields at repo level; raises `ConfigError`                                           |
+| 2 → 3   | `_migrate_v2_to_v3` | Auto-transform  | Extracts top-level `resource_limits` into `vars:` section and injects `!var` references into repo configs |
+
+#### Variable Name Collision Avoidance
+
+Migrations that auto-create variables use `unique_var_name(desired, existing)`
+to avoid colliding with user-defined variable names. If the desired name (e.g.
+`default_resource_timeout`) is already taken, a numeric suffix is appended
+(`default_resource_timeout_2`, `_3`, etc.).
+
 ### Config Diffing
 
 Two functions support comparing config states:
@@ -404,7 +418,7 @@ Settings read at task creation time, effective immediately:
 - `repos.*.model` — Claude model for new conversations
 - `repos.*.effort` — effort level for new conversations
 - `repos.*.resource_limits.*` — per-repo container limits (timeout, memory,
-  cpus, pids)
+  cpus, pids); use `!var` for shared defaults
 - `repos.*.secrets` — plain secrets injected as env vars
 - `repos.*.masked_secrets` — scoped secrets with proxy replacement
 - `repos.*.signing_credentials` — AWS SigV4 re-signing credentials

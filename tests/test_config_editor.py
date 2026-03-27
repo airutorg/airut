@@ -275,7 +275,6 @@ class TestSchemaForEditorRealConfigs:
         names = {s.name for s in schema}
         assert "max_concurrent_executions" in names
         assert "dashboard_enabled" in names
-        assert "resource_limits" in names
 
         # Check path mapping
         by_name = {s.name: s for s in schema}
@@ -287,11 +286,8 @@ class TestSchemaForEditorRealConfigs:
         assert by_name["upstream_dns"].path == "network.upstream_dns"
         assert "container_command" not in by_name  # hidden from editor
 
-        # Resource limits is nested
-        rl = by_name["resource_limits"]
-        assert rl.type_tag == "nested"
-        assert rl.nested_fields is not None
-        assert len(rl.nested_fields) == 4
+        # resource_limits no longer in GlobalConfig (moved to vars)
+        assert "resource_limits" not in names
 
     def test_resource_limits(self) -> None:
         from airut.sandbox.types import ResourceLimits

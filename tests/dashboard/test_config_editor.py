@@ -762,6 +762,26 @@ class TestSave:
         # File should exist
         assert harness.tmp_path.joinpath("airut.yaml").exists()
 
+    def test_save_persists_config_version(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Saved YAML contains config_version set to latest."""
+        import yaml
+
+        from airut.config.migration import CURRENT_CONFIG_VERSION
+        from airut.config.source import make_env_loader
+
+        harness.client.get("/config")
+        harness.client.post(
+            "/api/config/save",
+            headers={**XHR, "Referer": "http://localhost/config"},
+        )
+
+        with open(harness.tmp_path / "airut.yaml") as f:
+            saved = yaml.load(f, Loader=make_env_loader())
+
+        assert saved["config_version"] == CURRENT_CONFIG_VERSION
+
     def test_save_from_repo_page_redirects_to_repo(
         self, harness: ConfigEditorHarness
     ) -> None:
