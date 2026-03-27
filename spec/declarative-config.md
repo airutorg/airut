@@ -390,11 +390,10 @@ card widgets.
 
 ## Scope Assignments
 
-All config fields are assigned one of three scopes. Scopes describe the
-**intended** granularity of reload. Currently all changes require a full server
-restart. The scope metadata enables future partial-reload support.
+All config fields are assigned one of three scopes. Scopes drive live config
+reload — see [spec/config-reload.md](config-reload.md) for the reload mechanism.
 
-### `Scope.SERVER` — Requires Full Server Restart
+### `Scope.SERVER` — Deferred Until Service Idle
 
 Settings that affect server-wide infrastructure or shared resources:
 
