@@ -1666,6 +1666,26 @@ class TestBuildImageErrors:
         assert "ImageBuildError" in error_msg
         assert "No Dockerfile" in error_msg
 
+    def test_custom_container_path_used(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """container_path from repo config is passed to mirror."""
+        svc, handler, mock_ss, adapter = self._setup_svc(email_config, tmp_path)
+        update_repo(handler, container_path=".devcontainer")
+
+        parsed = _make_parsed_message(body="Do something")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_ss,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+
+        # Verify the mirror was queried with the custom path
+        handler.conversation_manager.mirror.list_directory.assert_called_with(
+            ".devcontainer"
+        )
+
 
 class TestAllowlistParseError:
     """Tests for network allowlist read/parse failure path."""

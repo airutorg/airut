@@ -596,6 +596,52 @@ def test_repo_server_config_invalid_idle_reconnect_interval(
         )
 
 
+def test_repo_server_config_container_path_default(
+    master_repo: Path, tmp_path: Path
+) -> None:
+    """container_path defaults to .airut/container."""
+    config = _make_repo_server_config(master_repo, tmp_path)
+    assert config.container_path == ".airut/container"
+
+
+def test_repo_server_config_container_path_custom(
+    master_repo: Path, tmp_path: Path
+) -> None:
+    """container_path accepts a custom relative path."""
+    config = _make_repo_server_config(
+        master_repo, tmp_path, container_path=".devcontainer"
+    )
+    assert config.container_path == ".devcontainer"
+
+
+def test_repo_server_config_container_path_empty(
+    master_repo: Path, tmp_path: Path
+) -> None:
+    """container_path rejects empty string."""
+    with pytest.raises(ValueError, match="container.path cannot be empty"):
+        _make_repo_server_config(master_repo, tmp_path, container_path="")
+
+
+def test_repo_server_config_container_path_absolute(
+    master_repo: Path, tmp_path: Path
+) -> None:
+    """container_path rejects absolute paths."""
+    with pytest.raises(ValueError, match="must be a relative path"):
+        _make_repo_server_config(
+            master_repo, tmp_path, container_path="/etc/container"
+        )
+
+
+def test_repo_server_config_container_path_traversal(
+    master_repo: Path, tmp_path: Path
+) -> None:
+    """container_path rejects paths with '..' traversal."""
+    with pytest.raises(ValueError, match="must not contain"):
+        _make_repo_server_config(
+            master_repo, tmp_path, container_path="../escape/container"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Microsoft OAuth2 config
 # ---------------------------------------------------------------------------
@@ -1051,6 +1097,28 @@ class TestFromYaml:
         yaml_path.write_text(yaml_content)
         config = ServerConfig.from_yaml(yaml_path).value
         assert config.repos["test"].effort is None
+
+    def test_container_path_default(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """container_path defaults to .airut/container when not specified."""
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(_MINIMAL_YAML.format(repo_url=master_repo))
+        config = ServerConfig.from_yaml(yaml_path).value
+        assert config.repos["test"].container_path == ".airut/container"
+
+    def test_container_path_parsed(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """container.path is parsed from server config."""
+        yaml_content = (
+            _MINIMAL_YAML.format(repo_url=master_repo)
+            + "    container:\n      path: .devcontainer\n"
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        config = ServerConfig.from_yaml(yaml_path).value
+        assert config.repos["test"].container_path == ".devcontainer"
 
     def test_missing_file(self, tmp_path: Path) -> None:
         """Raise ConfigError when file does not exist."""

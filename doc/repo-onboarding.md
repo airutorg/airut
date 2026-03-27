@@ -128,6 +128,23 @@ encounters blocked requests.
 Create `.airut/container/Dockerfile`. This can be based on an existing
 development Dockerfile for your project.
 
+**Using an existing Dockerfile:** If your repository already has a Dockerfile
+(e.g., in `.devcontainer/`), you can point Airut at it instead of creating a new
+one. Set `container.path` in the server config to the directory containing the
+Dockerfile:
+
+```yaml
+repos:
+  my-project:
+    container:
+      path: .devcontainer   # use existing devcontainer Dockerfile
+```
+
+This works with any directory that contains a `Dockerfile` and optional context
+files. Note that Airut reads only the `Dockerfile` and sibling files — it does
+not parse `devcontainer.json` features, lifecycle scripts, or pre-built image
+references.
+
 **Key requirements:**
 
 - `git` should be installed for version control operations

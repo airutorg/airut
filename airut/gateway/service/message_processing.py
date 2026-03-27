@@ -64,8 +64,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-_REPO_DOCKERFILE_PATH = ".airut/container/Dockerfile"
-_REPO_CONTAINER_DIR = ".airut/container"
+_DEFAULT_CONTAINER_DIR = ".airut/container"
 
 
 def _make_todo_callback(
@@ -170,31 +169,34 @@ def build_recovery_prompt(
 def _build_image(
     service: GatewayService,
     mirror: GitMirrorCache,
+    container_dir: str = _DEFAULT_CONTAINER_DIR,
 ) -> str:
     """Build or reuse container image from git mirror.
 
     Args:
         service: Parent service with sandbox.
         mirror: Git mirror cache.
+        container_dir: Path to container directory in the repo
+            (default: ``.airut/container``).
 
     Returns:
         Image tag for container execution.
     """
-    # Read all files from .airut/container/ directory
+    # Read all files from the container directory
     try:
-        filenames = mirror.list_directory(_REPO_CONTAINER_DIR)
+        filenames = mirror.list_directory(container_dir)
     except Exception as e:
         from airut.sandbox import ImageBuildError
 
         raise ImageBuildError(
-            f"Failed to list {_REPO_CONTAINER_DIR} from mirror: {e}"
+            f"Failed to list {container_dir} from mirror: {e}"
         )
 
     dockerfile_content: bytes | None = None
     context_files: dict[str, bytes] = {}
 
     for filename in filenames:
-        file_path = f"{_REPO_CONTAINER_DIR}/{filename}"
+        file_path = f"{container_dir}/{filename}"
         try:
             content = mirror.read_file(file_path)
         except Exception as e:
@@ -212,7 +214,7 @@ def _build_image(
     if dockerfile_content is None:
         from airut.sandbox import ImageBuildError
 
-        raise ImageBuildError(f"No Dockerfile found in {_REPO_CONTAINER_DIR}")
+        raise ImageBuildError(f"No Dockerfile found in {container_dir}")
 
     return service.sandbox.ensure_image(dockerfile_content, context_files)
 
@@ -411,7 +413,9 @@ def process_message(
         prompt = f"{channel_context}\n\n{parsed.body}"
 
         # Build or reuse container image
-        image_tag = _build_image(service, conv_mgr.mirror)
+        image_tag = _build_image(
+            service, conv_mgr.mirror, repo_cfg.container_path
+        )
 
         # Build mounts (sandbox manages claude/ internally)
         mounts = [

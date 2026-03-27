@@ -142,6 +142,11 @@ class TestFlatToNestedRepo:
         nested = flat_to_nested_repo(flat)
         assert nested == {"network": {"sandbox_enabled": False}}
 
+    def test_maps_container_path(self) -> None:
+        flat = {"container_path": ".devcontainer"}
+        nested = flat_to_nested_repo(flat)
+        assert nested == {"container": {"path": ".devcontainer"}}
+
     def test_unmapped_stays_flat(self) -> None:
         flat = {"model": "sonnet"}
         nested = flat_to_nested_repo(flat)
