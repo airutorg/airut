@@ -152,6 +152,9 @@ def _handle_interactive_run(args: list[str]) -> int:
         elif arg.startswith("--cap-drop="):
             i += 1
 
+        elif arg.startswith("--cap-add="):
+            i += 1
+
         elif arg.startswith("--security-opt="):
             i += 1
 

@@ -11,10 +11,11 @@ configuration), see [doc/ci-sandbox.md](../doc/ci-sandbox.md).
 ## Motivation
 
 The Airut gateway runs Claude Code inside a production-quality sandbox:
-container isolation with `--cap-drop=ALL`, network allowlisting via transparent
-proxy, credential masking with format-preserving surrogates, and resource limits
-via cgroup v2. `airut-sandbox` exposes this as a standalone CLI tool so that
-**any** command can run inside the same sandbox — not just Claude Code sessions.
+container isolation with `--cap-drop=ALL` (plus minimal `--cap-add`), network
+allowlisting via transparent proxy, credential masking with format-preserving
+surrogates, and resource limits via cgroup v2. `airut-sandbox` exposes this as a
+standalone CLI tool so that **any** command can run inside the same sandbox —
+not just Claude Code sessions.
 
 The primary use case is sandboxing agent-steerable code in CI pipelines, but the
 tool is generic: it sandboxes whatever command it is given, regardless of who or

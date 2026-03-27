@@ -378,7 +378,7 @@ Before relying on the sandbox for CI security, verify:
 
 | Risk                                          | Mitigation                                                                                          |
 | --------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Sandbox escape via container vulnerability    | Same as gateway: `--cap-drop=ALL`, `no-new-privileges`                                              |
+| Sandbox escape via container vulnerability    | Same as gateway: `--cap-drop=ALL` with minimal `--cap-add`, `no-new-privileges`                     |
 | Misconfigured workflow checks out PR branch   | Follow this guide; use sandbox-action which handles checkout                                        |
 | Expression injection in workflow `run:`       | See below                                                                                           |
 | Tainted workspace after sandbox               | Make sandbox step terminal; no post-sandbox steps                                                   |

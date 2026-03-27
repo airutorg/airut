@@ -179,7 +179,8 @@ await task.execute(prompt, session_id=..., model=..., effort=...,
   |
   +- Run Claude Code container (async subprocess)
   |    +- Bind-mount claude binary from host cache (read-only)
-  |    +- --cap-drop=ALL, --security-opt=no-new-privileges:true
+  |    +- --cap-drop=ALL --cap-add=CHOWN,DAC_OVERRIDE,FOWNER,SETGID,SETUID
+  |    +- --security-opt=no-new-privileges:true
   |    +- Apply resource limits (--memory, --cpus, --pids-limit)
   |    +- Prompt on stdin, read stdout/stderr concurrently as async streams
   |    +- Parse each stdout line as StreamEvent, invoke on_event callback
@@ -227,7 +228,8 @@ await task.execute(["make", "test"], on_output=..., on_stderr=...,
   +- Start network log tail task (if on_network_line provided)
   |
   +- Run container with command (async subprocess)
-  |    +- --cap-drop=ALL, --security-opt=no-new-privileges:true
+  |    +- --cap-drop=ALL --cap-add=CHOWN,DAC_OVERRIDE,FOWNER,SETGID,SETUID
+  |    +- --security-opt=no-new-privileges:true
   |    +- Apply resource limits (--memory, --cpus, --pids-limit)
   |    +- Read stdout/stderr concurrently as async streams
   |    +- Invoke on_output callback for each stdout line
