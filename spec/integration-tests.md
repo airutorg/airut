@@ -1,7 +1,6 @@
 # Integration Tests
 
-Integration tests for the Airut Gateway Service covering email and Slack
-channels.
+Integration tests for the Airut gateway, sandbox, and channel implementations.
 
 ## Architecture
 
@@ -33,12 +32,14 @@ Tests run as part of the CI workflow (`.github/workflows/ci.yml`) via
 uv run scripts/ci.py --workflow integration
 
 # Run directly
-uv run pytest tests/integration/ -v --allow-hosts=127.0.0.1,localhost
+uv run pytest tests/integration/ -v --allow-hosts=127.0.0.1,localhost,claude.ai,storage.googleapis.com
 ```
 
 ## Test Coverage
 
-Tests live in `tests/integration/gateway/` and cover:
+### Gateway (`tests/integration/gateway/`)
+
+Gateway tests cover:
 
 - **Conversation flow**: Creation, threading headers, dashboard tracking
 - **Resumption**: Session persistence, --resume flag passing
@@ -50,3 +51,10 @@ Tests live in `tests/integration/gateway/` and cover:
   each new conversation, ensuring conversations get latest code
 - **Outbox**: Reply file attachments from outbox/ directory
 - **Streaming and stop**: Streaming output handling and task cancellation
+
+### Sandbox (`tests/integration/sandbox/`)
+
+- **Install script compatibility**: Validates that the upstream
+  `claude.ai/install.sh` structure matches `ClaudeBinaryCache` assumptions (GCS
+  bucket URL, manifest format, platform strings, binary URL pattern). Requires
+  external network access to `claude.ai` and `storage.googleapis.com`.
