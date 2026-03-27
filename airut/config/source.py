@@ -74,6 +74,7 @@ YAML_EMAIL_STRUCTURE: dict[str, tuple[str, ...]] = {
 YAML_REPO_STRUCTURE: dict[str, tuple[str, ...]] = {
     "git_repo_url": ("git", "repo_url"),
     "network_sandbox_enabled": ("network", "sandbox_enabled"),
+    "container_path": ("container", "path"),
 }
 
 

@@ -395,6 +395,7 @@ handler:
 - `repos.*.email.*` — email channel credentials and settings
 - `repos.*.slack.*` — slack channel tokens and authorization
 - `repos.*.network.sandbox_enabled` — proxy toggle
+- `repos.*.container.path` — container directory path
 
 ### `Scope.TASK` — Applied Per-Task
 

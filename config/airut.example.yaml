@@ -3,8 +3,9 @@
 # Server-side settings: infrastructure, credentials, and per-repo controls.
 # All per-repo configuration (model, effort, resource limits, container env,
 # network, secrets) is managed here.  There is no repo-side airut.yaml —
-# only .airut/network-allowlist.yaml and .airut/container/Dockerfile live
-# in the repository.
+# only .airut/network-allowlist.yaml and the container Dockerfile (default
+# .airut/container/Dockerfile, configurable via container.path) live in the
+# repository.
 #
 # Run `airut init` to create a stub at ~/.config/airut/airut.yaml,
 # then use this file as a reference for all available options.
@@ -205,6 +206,10 @@ repos:
     # network:
     #   # Route container traffic through the network proxy and enforce the allowlist (required for masked/signing/GitHub App credentials)
     #   sandbox_enabled: true
+
+    # container:
+    #   # Path to container directory within the repo (must contain a Dockerfile)
+    #   path: .airut/container
 
     # Slack channel (can coexist with email).
     # See config/slack-app-manifest.json for app setup.

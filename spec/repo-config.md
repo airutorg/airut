@@ -47,6 +47,11 @@ repos:
     # network:
     #   sandbox_enabled: true
 
+    # Container directory path (default: .airut/container)
+    # Override to use an existing Dockerfile, e.g. a devcontainer:
+    # container:
+    #   path: .devcontainer
+
     # Credential pools (all entries auto-inject as container env vars)
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
@@ -63,20 +68,21 @@ repos:
 
 ### Fields
 
-| Field                        | Type    | Default    | Description                                             |
-| ---------------------------- | ------- | ---------- | ------------------------------------------------------- |
-| `model`                      | string  | `"opus"`   | Claude model for new conversations                      |
-| `effort`                     | string  | *(none)*   | Effort level passed as `--effort` to Claude Code        |
-| `claude_version`             | string  | `"latest"` | Claude Code version (semver, `"latest"`, or `"stable"`) |
-| `resource_limits.timeout`    | int     | *(none)*   | Max container execution time in seconds (>= 10)         |
-| `resource_limits.memory`     | string  | *(none)*   | Memory limit, e.g. `"2g"`, `"512m"`                     |
-| `resource_limits.cpus`       | float   | *(none)*   | CPU limit (>= 0.01, supports fractional cores)          |
-| `resource_limits.pids_limit` | int     | *(none)*   | Process limit (>= 1)                                    |
-| `network.sandbox_enabled`    | bool    | `true`     | Whether to enforce network allowlist                    |
-| `secrets`                    | mapping | `{}`       | Plain secrets injected as env vars                      |
-| `masked_secrets`             | mapping | `{}`       | Surrogate-based scoped credentials                      |
-| `signing_credentials`        | mapping | `{}`       | AWS SigV4 re-signing credentials                        |
-| `github_app_credentials`     | mapping | `{}`       | Proxy-managed GitHub App token rotation                 |
+| Field                        | Type    | Default              | Description                                             |
+| ---------------------------- | ------- | -------------------- | ------------------------------------------------------- |
+| `model`                      | string  | `"opus"`             | Claude model for new conversations                      |
+| `effort`                     | string  | *(none)*             | Effort level passed as `--effort` to Claude Code        |
+| `claude_version`             | string  | `"latest"`           | Claude Code version (semver, `"latest"`, or `"stable"`) |
+| `resource_limits.timeout`    | int     | *(none)*             | Max container execution time in seconds (>= 10)         |
+| `resource_limits.memory`     | string  | *(none)*             | Memory limit, e.g. `"2g"`, `"512m"`                     |
+| `resource_limits.cpus`       | float   | *(none)*             | CPU limit (>= 0.01, supports fractional cores)          |
+| `resource_limits.pids_limit` | int     | *(none)*             | Process limit (>= 1)                                    |
+| `network.sandbox_enabled`    | bool    | `true`               | Whether to enforce network allowlist                    |
+| `container.path`             | string  | `".airut/container"` | Path to container directory in the repo                 |
+| `secrets`                    | mapping | `{}`                 | Plain secrets injected as env vars                      |
+| `masked_secrets`             | mapping | `{}`                 | Surrogate-based scoped credentials                      |
+| `signing_credentials`        | mapping | `{}`                 | AWS SigV4 re-signing credentials                        |
+| `github_app_credentials`     | mapping | `{}`                 | Proxy-managed GitHub App token rotation                 |
 
 ## Credential Auto-Injection
 
@@ -144,8 +150,11 @@ but a human must review and merge before the change takes effect.
 
 ### Container Dockerfile
 
-`.airut/container/Dockerfile` remains in the repository. The container image is
-rebuilt from the repository's default branch at every task start.
+The container Dockerfile remains in the repository. By default it is read from
+`.airut/container/Dockerfile`, but the directory can be overridden per-repo via
+`container.path` in the server config (e.g., `.devcontainer` to reuse an
+existing devcontainer Dockerfile). The container image is rebuilt from the
+repository's default branch at every task start.
 
 ### Sandbox CLI Config
 
@@ -180,6 +189,9 @@ top level.
 - `resource_limits.*` — Per-repo resource limits (timeout, memory, cpus,
   pids_limit), override server-wide defaults
 - `network.sandbox_enabled` — Network sandbox toggle (default: `true`)
+- `container.path` — Path to container directory in the repo (default:
+  `.airut/container`). Override to use an existing Dockerfile (e.g.,
+  `.devcontainer`)
 - `secrets` — Plain secrets injected as container env vars
 - `masked_secrets` — Surrogate-based scoped credentials
 - `signing_credentials` — AWS SigV4 re-signing credentials

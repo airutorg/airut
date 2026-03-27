@@ -80,6 +80,18 @@
     {% endfor %}
   </div>
 
+  {# Container card #}
+  <div class="card">
+    <div class="cfg-card-header">
+      <span class="cfg-card-title">Container</span>
+    </div>
+    {% for f in schema %}
+    {% if f.name == 'container_path' %}
+    {% include "components/config/field.html" %}
+    {% endif %}
+    {% endfor %}
+  </div>
+
   {# Resource Limits card #}
   {% for f in schema %}
   {% if f.type_tag == 'nested' and f.name == 'resource_limits' %}

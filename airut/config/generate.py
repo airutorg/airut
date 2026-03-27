@@ -529,8 +529,9 @@ _HEADER = """\
 # Server-side settings: infrastructure, credentials, and per-repo controls.
 # All per-repo configuration (model, effort, resource limits, container env,
 # network, secrets) is managed here.  There is no repo-side airut.yaml —
-# only .airut/network-allowlist.yaml and .airut/container/Dockerfile live
-# in the repository.
+# only .airut/network-allowlist.yaml and the container Dockerfile (default
+# .airut/container/Dockerfile, configurable via container.path) live in the
+# repository.
 #
 # Run `airut init` to create a stub at ~/.config/airut/airut.yaml,
 # then use this file as a reference for all available options.

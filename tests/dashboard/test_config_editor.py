@@ -1461,6 +1461,7 @@ class TestRepoPage:
         assert "Git" in html
         assert "Model" in html
         assert "Network" in html
+        assert "Container" in html
         assert "Resource Limits" in html
 
     def test_repo_page_shows_field_paths(
@@ -1473,6 +1474,7 @@ class TestRepoPage:
         assert "repos.test-repo.git.repo_url" in html
         assert "repos.test-repo.model" in html
         assert "repos.test-repo.claude_version" in html
+        assert "repos.test-repo.container.path" in html
 
     def test_repo_page_not_found(self, harness: ConfigEditorHarness) -> None:
         harness.client.get("/config")

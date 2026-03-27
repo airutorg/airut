@@ -1119,6 +1119,14 @@ class RepoServerConfig:
             Scope.TASK,
         ),
     )
+    container_path: str = field(
+        default=".airut/container",
+        metadata=meta(
+            "Path to container directory within the repo"
+            " (must contain a Dockerfile)",
+            Scope.REPO,
+        ),
+    )
 
     def __post_init__(self) -> None:
         """Validate configuration and register secrets.
@@ -1151,6 +1159,21 @@ class RepoServerConfig:
         # Register GitHub App private keys for log redaction
         for gh_app in self.github_app_credentials.values():
             SecretFilter.register_secret(gh_app.private_key)
+
+        if not self.container_path:
+            raise ValueError(
+                f"Repo '{self.repo_id}': container.path cannot be empty"
+            )
+        if self.container_path.startswith("/"):
+            raise ValueError(
+                f"Repo '{self.repo_id}': container.path must be a relative "
+                f"path, got '{self.container_path}'"
+            )
+        if ".." in self.container_path.split("/"):
+            raise ValueError(
+                f"Repo '{self.repo_id}': container.path must not contain "
+                f"'..', got '{self.container_path}'"
+            )
 
         if not self.git_repo_url:
             raise ValueError(
@@ -1508,6 +1531,10 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
     claude_version = _resolve(raw.get("claude_version"), str)
     if claude_version is not None:
         repo_overrides["claude_version"] = claude_version
+    container = raw.get("container", {})
+    container_path = _resolve(container.get("path"), str)
+    if container_path is not None:
+        repo_overrides["container_path"] = container_path
 
     return RepoServerConfig(
         repo_id=repo_id,
