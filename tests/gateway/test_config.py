@@ -15,11 +15,15 @@ from airut.gateway.config import (
     CREDENTIAL_TYPE_GITHUB_APP,
     SIGNING_TYPE_AWS_SIGV4,
     ConfigError,
+    EmailAccountConfig,
+    EmailAuthConfig,
     EmailChannelConfig,
     GitHubAppCredential,
     GitHubAppEntry,
     GlobalConfig,
+    ImapConfig,
     MaskedSecret,
+    MicrosoftOAuth2Config,
     ReplacementEntry,
     RepoServerConfig,
     ResourceLimits,
@@ -27,6 +31,7 @@ from airut.gateway.config import (
     SigningCredential,
     SigningCredentialEntry,
     SigningCredentialField,
+    SmtpConfig,
     _build_task_env,
     _coerce_bool,
     _parse_resource_limits,
@@ -371,7 +376,65 @@ def _make_repo_server_config(
         else:
             repo_defaults[key] = value
 
-    email_config = EmailChannelConfig(**email_defaults)
+    # Build sub-dataclass instances from flat email_defaults
+    imap_kwargs: dict[str, Any] = {"server": email_defaults["imap_server"]}
+    if "imap_port" in email_defaults:
+        imap_kwargs["port"] = email_defaults["imap_port"]
+    if "imap_connect_retries" in email_defaults:
+        imap_kwargs["connect_retries"] = email_defaults["imap_connect_retries"]
+    if "imap_poll_interval_seconds" in email_defaults:
+        imap_kwargs["poll_interval"] = email_defaults[
+            "imap_poll_interval_seconds"
+        ]
+    if "imap_use_idle" in email_defaults:
+        imap_kwargs["use_idle"] = email_defaults["imap_use_idle"]
+    if "imap_idle_reconnect_interval_seconds" in email_defaults:
+        imap_kwargs["idle_reconnect_interval"] = email_defaults[
+            "imap_idle_reconnect_interval_seconds"
+        ]
+
+    smtp_kwargs: dict[str, Any] = {"server": email_defaults["smtp_server"]}
+    if "smtp_port" in email_defaults:
+        smtp_kwargs["port"] = email_defaults["smtp_port"]
+    if "smtp_require_auth" in email_defaults:
+        smtp_kwargs["require_auth"] = email_defaults["smtp_require_auth"]
+
+    account_kwargs: dict[str, Any] = {
+        "username": email_defaults["account_username"],
+        "from_address": email_defaults["account_from_address"],
+    }
+    if email_defaults.get("account_password") is not None:
+        account_kwargs["password"] = email_defaults["account_password"]
+
+    auth_kwargs: dict[str, Any] = {
+        "authorized_senders": email_defaults["auth_authorized_senders"],
+        "trusted_authserv_id": email_defaults["auth_trusted_authserv_id"],
+    }
+    if "auth_microsoft_internal_fallback" in email_defaults:
+        auth_kwargs["microsoft_internal_fallback"] = email_defaults[
+            "auth_microsoft_internal_fallback"
+        ]
+
+    microsoft_oauth2: MicrosoftOAuth2Config | None = None
+    tenant_id = email_defaults.get("microsoft_oauth2_tenant_id")
+    client_id = email_defaults.get("microsoft_oauth2_client_id")
+    client_secret = email_defaults.get("microsoft_oauth2_client_secret")
+    if tenant_id and client_id and client_secret:
+        microsoft_oauth2 = MicrosoftOAuth2Config(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+    elif tenant_id or client_id or client_secret:
+        raise ValueError("microsoft_oauth2 requires all three fields")
+
+    email_config = EmailChannelConfig(
+        account=EmailAccountConfig(**account_kwargs),
+        imap=ImapConfig(**imap_kwargs),
+        smtp=SmtpConfig(**smtp_kwargs),
+        auth=EmailAuthConfig(**auth_kwargs),
+        microsoft_oauth2=microsoft_oauth2,
+    )
     return RepoServerConfig(channels={"email": email_config}, **repo_defaults)
 
 
@@ -382,18 +445,18 @@ def test_repo_server_config_defaults(master_repo: Path, tmp_path: Path) -> None:
     assert config.repo_id == "test"
     email_ch = config.channels["email"]
     assert isinstance(email_ch, EmailChannelConfig)
-    assert email_ch.imap_server == "imap.example.com"
-    assert email_ch.imap_port == 993
-    assert email_ch.smtp_server == "smtp.example.com"
-    assert email_ch.smtp_port == 587
-    assert email_ch.account_username == "test@example.com"
-    assert email_ch.account_password == "secret123"
-    assert email_ch.auth_authorized_senders == ["authorized@example.com"]
+    assert email_ch.imap.server == "imap.example.com"
+    assert email_ch.imap.port == 993
+    assert email_ch.smtp.server == "smtp.example.com"
+    assert email_ch.smtp.port == 587
+    assert email_ch.account.username == "test@example.com"
+    assert email_ch.account.password == "secret123"
+    assert email_ch.auth.authorized_senders == ["authorized@example.com"]
     assert config.git_repo_url == str(master_repo)
     assert config.storage_dir == get_storage_dir("test")
-    assert email_ch.imap_poll_interval_seconds == 60
-    assert email_ch.imap_use_idle is True
-    assert email_ch.imap_idle_reconnect_interval_seconds == 29 * 60
+    assert email_ch.imap.poll_interval == 60
+    assert email_ch.imap.use_idle is True
+    assert email_ch.imap.idle_reconnect_interval == 29 * 60
     assert config.secrets == {}
 
 
@@ -411,9 +474,9 @@ def test_repo_server_config_with_custom_defaults(
 
     email_ch = config.channels["email"]
     assert isinstance(email_ch, EmailChannelConfig)
-    assert email_ch.imap_poll_interval_seconds == 30
-    assert email_ch.imap_use_idle is False
-    assert email_ch.imap_idle_reconnect_interval_seconds == 1800
+    assert email_ch.imap.poll_interval == 30
+    assert email_ch.imap.use_idle is False
+    assert email_ch.imap.idle_reconnect_interval == 1800
 
 
 def test_repo_server_config_secret_redaction(
@@ -468,31 +531,35 @@ def test_repo_server_config_masked_secret_redaction(
 def test_email_channel_config_channel_type() -> None:
     """EmailChannelConfig.channel_type returns 'email'."""
     config = EmailChannelConfig(
-        imap_server="imap.example.com",
-        imap_port=993,
-        smtp_server="smtp.example.com",
-        smtp_port=587,
-        account_username="test@example.com",
-        account_password="secret123",
-        account_from_address="Test <test@example.com>",
-        auth_authorized_senders=["a@example.com"],
-        auth_trusted_authserv_id="mx.example.com",
+        account=EmailAccountConfig(
+            username="test@example.com",
+            from_address="Test <test@example.com>",
+            password="secret123",
+        ),
+        imap=ImapConfig(server="imap.example.com", port=993),
+        smtp=SmtpConfig(server="smtp.example.com", port=587),
+        auth=EmailAuthConfig(
+            authorized_senders=["a@example.com"],
+            trusted_authserv_id="mx.example.com",
+        ),
     )
     assert config.channel_type == "email"
 
 
 def test_email_channel_config_channel_detail() -> None:
-    """EmailChannelConfig.channel_detail returns account_from_address."""
+    """EmailChannelConfig.channel_detail returns account.from_address."""
     config = EmailChannelConfig(
-        imap_server="imap.example.com",
-        imap_port=993,
-        smtp_server="smtp.example.com",
-        smtp_port=587,
-        account_username="test@example.com",
-        account_password="secret123",
-        account_from_address="Test <test@example.com>",
-        auth_authorized_senders=["a@example.com"],
-        auth_trusted_authserv_id="mx.example.com",
+        account=EmailAccountConfig(
+            username="test@example.com",
+            from_address="Test <test@example.com>",
+            password="secret123",
+        ),
+        imap=ImapConfig(server="imap.example.com", port=993),
+        smtp=SmtpConfig(server="smtp.example.com", port=587),
+        auth=EmailAuthConfig(
+            authorized_senders=["a@example.com"],
+            trusted_authserv_id="mx.example.com",
+        ),
     )
     assert config.channel_detail == "Test <test@example.com>"
 
@@ -524,21 +591,23 @@ def test_repo_server_config_empty_repo_url(tmp_path: Path) -> None:
     work_dir = tmp_path / "work"
     work_dir.mkdir()
 
-    with pytest.raises(ValueError, match="git.repo_url cannot be empty"):
+    with pytest.raises(ValueError, match="repo_url cannot be empty"):
         RepoServerConfig(
             repo_id="test",
             git_repo_url="",
             channels={
                 "email": EmailChannelConfig(
-                    imap_server="imap.example.com",
-                    imap_port=993,
-                    smtp_server="smtp.example.com",
-                    smtp_port=587,
-                    account_username="test@example.com",
-                    account_password="secret123",
-                    account_from_address="Test <test@example.com>",
-                    auth_authorized_senders=["authorized@example.com"],
-                    auth_trusted_authserv_id="mx.example.com",
+                    account=EmailAccountConfig(
+                        username="test@example.com",
+                        from_address="Test <test@example.com>",
+                        password="secret123",
+                    ),
+                    imap=ImapConfig(server="imap.example.com", port=993),
+                    smtp=SmtpConfig(server="smtp.example.com", port=587),
+                    auth=EmailAuthConfig(
+                        authorized_senders=["authorized@example.com"],
+                        trusted_authserv_id="mx.example.com",
+                    ),
                 )
             },
         )
@@ -568,7 +637,7 @@ def test_repo_server_config_invalid_imap_connect_retries(
     master_repo: Path, tmp_path: Path
 ) -> None:
     """Test repo server configuration with invalid imap_connect_retries."""
-    with pytest.raises(ValueError, match="imap_connect_retries must be >= 1"):
+    with pytest.raises(ValueError, match="connect_retries must be >= 1"):
         _make_repo_server_config(master_repo, tmp_path, imap_connect_retries=0)
 
 
@@ -616,7 +685,7 @@ def test_repo_server_config_container_path_empty(
     master_repo: Path, tmp_path: Path
 ) -> None:
     """container_path rejects empty string."""
-    with pytest.raises(ValueError, match="container.path cannot be empty"):
+    with pytest.raises(ValueError, match="container_path cannot be empty"):
         _make_repo_server_config(master_repo, tmp_path, container_path="")
 
 
@@ -648,13 +717,11 @@ def test_repo_server_config_container_path_traversal(
 def test_repo_server_config_oauth2_defaults(
     master_repo: Path, tmp_path: Path
 ) -> None:
-    """Microsoft OAuth2 fields default to None."""
+    """Microsoft OAuth2 defaults to None."""
     config = _make_repo_server_config(master_repo, tmp_path)
     email_ch = config.channels["email"]
     assert isinstance(email_ch, EmailChannelConfig)
-    assert email_ch.microsoft_oauth2_tenant_id is None
-    assert email_ch.microsoft_oauth2_client_id is None
-    assert email_ch.microsoft_oauth2_client_secret is None
+    assert email_ch.microsoft_oauth2 is None
 
 
 def test_repo_server_config_oauth2_all_set(
@@ -670,9 +737,10 @@ def test_repo_server_config_oauth2_all_set(
     )
     email_ch = config.channels["email"]
     assert isinstance(email_ch, EmailChannelConfig)
-    assert email_ch.microsoft_oauth2_tenant_id == "tenant-123"
-    assert email_ch.microsoft_oauth2_client_id == "client-456"
-    assert email_ch.microsoft_oauth2_client_secret == "secret-789"
+    assert email_ch.microsoft_oauth2 is not None
+    assert email_ch.microsoft_oauth2.tenant_id == "tenant-123"
+    assert email_ch.microsoft_oauth2.client_id == "client-456"
+    assert email_ch.microsoft_oauth2.client_secret == "secret-789"
 
 
 def test_repo_server_config_oauth2_partial_raises(
@@ -723,17 +791,17 @@ def test_repo_server_config_oauth2_secret_redaction(
 def test_repo_server_config_internal_auth_fallback_default(
     master_repo: Path, tmp_path: Path
 ) -> None:
-    """microsoft_internal_auth_fallback defaults to False."""
+    """microsoft_internal_fallback defaults to False."""
     config = _make_repo_server_config(master_repo, tmp_path)
     email_ch = config.channels["email"]
     assert isinstance(email_ch, EmailChannelConfig)
-    assert email_ch.auth_microsoft_internal_fallback is False
+    assert email_ch.auth.microsoft_internal_fallback is False
 
 
 def test_repo_server_config_internal_auth_fallback_enabled(
     master_repo: Path, tmp_path: Path
 ) -> None:
-    """microsoft_internal_auth_fallback can be set to True."""
+    """microsoft_internal_fallback can be set to True."""
     config = _make_repo_server_config(
         master_repo,
         tmp_path,
@@ -741,7 +809,7 @@ def test_repo_server_config_internal_auth_fallback_enabled(
     )
     email_ch = config.channels["email"]
     assert isinstance(email_ch, EmailChannelConfig)
-    assert email_ch.auth_microsoft_internal_fallback is True
+    assert email_ch.auth.microsoft_internal_fallback is True
 
 
 # ---------------------------------------------------------------------------
@@ -795,8 +863,7 @@ repos:
         authorized_senders:
           - auth@test.com
         trusted_authserv_id: mx.test.com
-    git:
-      repo_url: {repo_url}
+    repo_url: {repo_url}
 """
 
 _FULL_YAML = """\
@@ -833,8 +900,7 @@ repos:
         authorized_senders:
           - auth@test.com
         trusted_authserv_id: mx.test.com
-    git:
-      repo_url: {repo_url}
+    repo_url: {repo_url}
     secrets:
       GH_TOKEN: !env GH_TOKEN
       R2_ACCOUNT_ID: test-account
@@ -850,7 +916,7 @@ class TestServerConfigValidation:
         tmp_path: Path,
         **overrides: Any,  # noqa: ANN401 - unpacked into mixed-type constructor
     ) -> RepoServerConfig:
-        email_defaults: dict[str, Any] = {
+        flat_defaults: dict[str, Any] = {
             "imap_server": "imap.example.com",
             "imap_port": 993,
             "smtp_server": "smtp.example.com",
@@ -861,14 +927,37 @@ class TestServerConfigValidation:
             "auth_authorized_senders": ["auth@example.com"],
             "auth_trusted_authserv_id": "mx.example.com",
         }
-        email_overrides = {
-            k: v for k, v in overrides.items() if k in email_defaults
-        }
-        email_defaults.update(email_overrides)
+        for k, v in overrides.items():
+            if k in flat_defaults:
+                flat_defaults[k] = v
         return RepoServerConfig(
             repo_id=repo_id,
             git_repo_url="https://example.com/repo.git",
-            channels={"email": EmailChannelConfig(**email_defaults)},
+            channels={
+                "email": EmailChannelConfig(
+                    account=EmailAccountConfig(
+                        username=flat_defaults["account_username"],
+                        from_address=flat_defaults["account_from_address"],
+                        password=flat_defaults["account_password"],
+                    ),
+                    imap=ImapConfig(
+                        server=flat_defaults["imap_server"],
+                        port=flat_defaults["imap_port"],
+                    ),
+                    smtp=SmtpConfig(
+                        server=flat_defaults["smtp_server"],
+                        port=flat_defaults["smtp_port"],
+                    ),
+                    auth=EmailAuthConfig(
+                        authorized_senders=flat_defaults[
+                            "auth_authorized_senders"
+                        ],
+                        trusted_authserv_id=flat_defaults[
+                            "auth_trusted_authserv_id"
+                        ],
+                    ),
+                )
+            },
         )
 
     def test_empty_repos_allowed(self, tmp_path: Path) -> None:
@@ -930,12 +1019,12 @@ class TestFromYaml:
         # Repo config
         email_ch = repo.channels["email"]
         assert isinstance(email_ch, EmailChannelConfig)
-        assert email_ch.imap_server == "imap.test.com"
-        assert email_ch.imap_port == 993
-        assert email_ch.smtp_port == 587
-        assert email_ch.account_password == "plain_password"
-        assert email_ch.imap_poll_interval_seconds == 60
-        assert email_ch.imap_use_idle is True
+        assert email_ch.imap.server == "imap.test.com"
+        assert email_ch.imap.port == 993
+        assert email_ch.smtp.port == 587
+        assert email_ch.account.password == "plain_password"
+        assert email_ch.imap.poll_interval == 60
+        assert email_ch.imap.use_idle is True
         assert repo.secrets == {}
 
     def test_full_config(self, master_repo: Path, tmp_path: Path) -> None:
@@ -968,14 +1057,14 @@ class TestFromYaml:
         # Repo config
         email_ch = repo.channels["email"]
         assert isinstance(email_ch, EmailChannelConfig)
-        assert email_ch.imap_port == 143
-        assert email_ch.smtp_port == 25
-        assert email_ch.account_password == "env_pw"
-        assert email_ch.smtp_require_auth is False
-        assert email_ch.imap_connect_retries == 5
-        assert email_ch.imap_poll_interval_seconds == 45
-        assert email_ch.imap_use_idle is False
-        assert email_ch.imap_idle_reconnect_interval_seconds == 1800
+        assert email_ch.imap.port == 143
+        assert email_ch.smtp.port == 25
+        assert email_ch.account.password == "env_pw"
+        assert email_ch.smtp.require_auth is False
+        assert email_ch.imap.connect_retries == 5
+        assert email_ch.imap.poll_interval == 45
+        assert email_ch.imap.use_idle is False
+        assert email_ch.imap.idle_reconnect_interval == 1800
         assert repo.secrets == {
             "GH_TOKEN": "ghp_tok",
             "R2_ACCOUNT_ID": "test-account",
@@ -1113,10 +1202,10 @@ class TestFromYaml:
     def test_container_path_parsed(
         self, master_repo: Path, tmp_path: Path
     ) -> None:
-        """container.path is parsed from server config."""
+        """container_path is parsed from server config."""
         yaml_content = (
             _MINIMAL_YAML.format(repo_url=master_repo)
-            + "    container:\n      path: .devcontainer\n"
+            + "    container_path: .devcontainer\n"
         )
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
@@ -1161,7 +1250,9 @@ class TestFromYaml:
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
 
-        with pytest.raises(ConfigError, match="password is required"):
+        with pytest.raises(
+            ConfigError, match="email.account.password is required"
+        ):
             ServerConfig.from_yaml(yaml_path)
 
     def test_secrets_skip_empty(
@@ -1218,7 +1309,7 @@ class TestFromYaml:
 
         email_ch = config.repos["test"].channels["email"]
         assert isinstance(email_ch, EmailChannelConfig)
-        assert email_ch.imap_server == "imap.test.com"
+        assert email_ch.imap.server == "imap.test.com"
 
     def test_env_override_bool_field(
         self, master_repo: Path, tmp_path: Path
@@ -1236,7 +1327,7 @@ class TestFromYaml:
 
         email_ch = config.repos["test"].channels["email"]
         assert isinstance(email_ch, EmailChannelConfig)
-        assert email_ch.imap_use_idle is False
+        assert email_ch.imap.use_idle is False
 
     def test_env_override_int_field(
         self, master_repo: Path, tmp_path: Path
@@ -1255,7 +1346,7 @@ class TestFromYaml:
 
         email_ch = config.repos["test"].channels["email"]
         assert isinstance(email_ch, EmailChannelConfig)
-        assert email_ch.imap_poll_interval_seconds == 120
+        assert email_ch.imap.poll_interval == 120
 
     def test_repos_not_a_mapping(self, tmp_path: Path) -> None:
         """Raise ConfigError when repos is not a mapping."""
@@ -1297,10 +1388,10 @@ class TestFromYaml:
             "        client_secret: my-secret\n"
         )
         base = _MINIMAL_YAML.format(repo_url=master_repo)
-        # Insert after the from: line (last line of email: section)
+        # Insert before the auth: block (at email: section level)
         yaml_content = base.replace(
-            '      from: "Test <test@example.com>"\n',
-            '      from: "Test <test@example.com>"\n' + oauth2_block,
+            "      auth:\n",
+            oauth2_block + "      auth:\n",
         )
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
@@ -1310,9 +1401,10 @@ class TestFromYaml:
 
         email_ch = repo.channels["email"]
         assert isinstance(email_ch, EmailChannelConfig)
-        assert email_ch.microsoft_oauth2_tenant_id == "my-tenant"
-        assert email_ch.microsoft_oauth2_client_id == "my-client"
-        assert email_ch.microsoft_oauth2_client_secret == "my-secret"
+        assert email_ch.microsoft_oauth2 is not None
+        assert email_ch.microsoft_oauth2.tenant_id == "my-tenant"
+        assert email_ch.microsoft_oauth2.client_id == "my-client"
+        assert email_ch.microsoft_oauth2.client_secret == "my-secret"
 
     def test_microsoft_oauth2_env_vars(
         self, master_repo: Path, tmp_path: Path
@@ -1326,8 +1418,8 @@ class TestFromYaml:
         )
         base = _MINIMAL_YAML.format(repo_url=master_repo)
         yaml_content = base.replace(
-            '      from: "Test <test@example.com>"\n',
-            '      from: "Test <test@example.com>"\n' + oauth2_block,
+            "      auth:\n",
+            oauth2_block + "      auth:\n",
         )
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
@@ -1345,9 +1437,10 @@ class TestFromYaml:
         repo = config.repos["test"]
         email_ch = repo.channels["email"]
         assert isinstance(email_ch, EmailChannelConfig)
-        assert email_ch.microsoft_oauth2_tenant_id == "env-tenant"
-        assert email_ch.microsoft_oauth2_client_id == "env-client"
-        assert email_ch.microsoft_oauth2_client_secret == "env-secret"
+        assert email_ch.microsoft_oauth2 is not None
+        assert email_ch.microsoft_oauth2.tenant_id == "env-tenant"
+        assert email_ch.microsoft_oauth2.client_id == "env-client"
+        assert email_ch.microsoft_oauth2.client_secret == "env-secret"
 
     def test_microsoft_oauth2_password_optional(
         self, master_repo: Path, tmp_path: Path
@@ -1375,8 +1468,9 @@ class TestFromYaml:
 
         email_ch = repo.channels["email"]
         assert isinstance(email_ch, EmailChannelConfig)
-        assert email_ch.account_password is None
-        assert email_ch.microsoft_oauth2_tenant_id == "my-tenant"
+        assert email_ch.account.password is None
+        assert email_ch.microsoft_oauth2 is not None
+        assert email_ch.microsoft_oauth2.tenant_id == "my-tenant"
 
     def test_microsoft_oauth2_absent_defaults_none(
         self, master_repo: Path, tmp_path: Path
@@ -1390,19 +1484,17 @@ class TestFromYaml:
 
         email_ch = repo.channels["email"]
         assert isinstance(email_ch, EmailChannelConfig)
-        assert email_ch.microsoft_oauth2_tenant_id is None
-        assert email_ch.microsoft_oauth2_client_id is None
-        assert email_ch.microsoft_oauth2_client_secret is None
+        assert email_ch.microsoft_oauth2 is None
 
     def test_internal_auth_fallback_from_yaml(
         self, master_repo: Path, tmp_path: Path
     ) -> None:
-        """microsoft_internal_auth_fallback parsed from YAML."""
+        """microsoft_internal_fallback parsed from YAML."""
         base = _MINIMAL_YAML.format(repo_url=master_repo)
         yaml_content = base.replace(
-            "      trusted_authserv_id: mx.test.com\n",
-            "      trusted_authserv_id: mx.test.com\n"
-            "      microsoft_internal_auth_fallback: true\n",
+            "        trusted_authserv_id: mx.test.com\n",
+            "        trusted_authserv_id: mx.test.com\n"
+            "        microsoft_internal_fallback: true\n",
         )
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
@@ -1411,7 +1503,7 @@ class TestFromYaml:
         repo = config.repos["test"]
         email_ch = repo.channels["email"]
         assert isinstance(email_ch, EmailChannelConfig)
-        assert email_ch.auth_microsoft_internal_fallback is True
+        assert email_ch.auth.microsoft_internal_fallback is True
 
     def test_internal_auth_fallback_default_false(
         self, master_repo: Path, tmp_path: Path
@@ -1424,7 +1516,7 @@ class TestFromYaml:
         repo = config.repos["test"]
         email_ch = repo.channels["email"]
         assert isinstance(email_ch, EmailChannelConfig)
-        assert email_ch.auth_microsoft_internal_fallback is False
+        assert email_ch.auth.microsoft_internal_fallback is False
 
     def test_legacy_field_at_repo_level_rejected(
         self, master_repo: Path, tmp_path: Path
@@ -1442,8 +1534,7 @@ class TestFromYaml:
             "      password: secret\n"
             '      from: "Test <test@test.com>"\n'
             "      trusted_authserv_id: mx.test.com\n"
-            "    git:\n"
-            f"      repo_url: {master_repo}\n"
+            f"    repo_url: {master_repo}\n"
         )
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
@@ -1454,9 +1545,7 @@ class TestFromYaml:
         self, master_repo: Path, tmp_path: Path
     ) -> None:
         """Repo with no email block is rejected."""
-        yaml_content = (
-            f"repos:\n  test:\n    git:\n      repo_url: {master_repo}\n"
-        )
+        yaml_content = f"repos:\n  test:\n    repo_url: {master_repo}\n"
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
         with pytest.raises(ConfigError, match="no channel configured"):
@@ -1470,7 +1559,7 @@ class TestFromYaml:
                 "test": {
                     "authorized_senders": ["user@test.com"],
                     "email": {},
-                    "git": {"repo_url": "/tmp/repo"},
+                    "repo_url": "/tmp/repo",
                 },
             },
         }
@@ -1723,7 +1812,7 @@ class TestBuildTaskEnv:
             "GH_TOKEN": GitHubAppCredential(
                 app_id="Iv23li",
                 private_key="key",
-                installation_id="12345",
+                installation_id=12345,
                 scopes=frozenset(["api.github.com"]),
             )
         }
@@ -1754,7 +1843,7 @@ class TestBuildTaskEnv:
             "TOKEN": GitHubAppCredential(
                 app_id="app",
                 private_key="key",
-                installation_id="123",
+                installation_id=123,
                 scopes=frozenset(["api.github.com"]),
             )
         }
@@ -1981,16 +2070,19 @@ vars:
 repos:
   test:
     email:
-      imap_server: !var mail
-      smtp_server: !var smtp
-      username: user
-      password: plain_password
-      from: "T <t@e.com>"
-      authorized_senders:
-        - a@b.com
-      trusted_authserv_id: mx
-    git:
-      repo_url: {master_repo}
+      account:
+        username: user
+        password: plain_password
+        from: "T <t@e.com>"
+      imap:
+        server: !var mail
+      smtp:
+        server: !var smtp
+      auth:
+        authorized_senders:
+          - a@b.com
+        trusted_authserv_id: mx
+    repo_url: {master_repo}
 """
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
@@ -1998,8 +2090,8 @@ repos:
         config = snapshot.value
         email_ch = config.repos["test"].channels["email"]
         assert isinstance(email_ch, EmailChannelConfig)
-        assert email_ch.imap_server == "imap.test.com"
-        assert email_ch.smtp_server == "smtp.test.com"
+        assert email_ch.imap.server == "imap.test.com"
+        assert email_ch.smtp.server == "smtp.test.com"
 
     def test_snapshot_has_raw(self, master_repo: Path, tmp_path: Path) -> None:
         """from_yaml returns snapshot with raw document preserved."""
@@ -2009,16 +2101,19 @@ vars:
 repos:
   test:
     email:
-      imap_server: !var mail
-      smtp_server: smtp.test.com
-      username: user
-      password: pw
-      from: "T <t@e.com>"
-      authorized_senders:
-        - a@b.com
-      trusted_authserv_id: mx
-    git:
-      repo_url: {master_repo}
+      account:
+        username: user
+        password: pw
+        from: "T <t@e.com>"
+      imap:
+        server: !var mail
+      smtp:
+        server: smtp.test.com
+      auth:
+        authorized_senders:
+          - a@b.com
+        trusted_authserv_id: mx
+    repo_url: {master_repo}
 """
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
@@ -2034,16 +2129,19 @@ repos:
 repos:
   test:
     email:
-      imap_server: !var undefined_server
-      smtp_server: smtp.test.com
-      username: user
-      password: pw
-      from: "T <t@e.com>"
-      authorized_senders:
-        - a@b.com
-      trusted_authserv_id: mx
-    git:
-      repo_url: https://example.com/repo.git
+      account:
+        username: user
+        password: pw
+        from: "T <t@e.com>"
+      imap:
+        server: !var undefined_server
+      smtp:
+        server: smtp.test.com
+      auth:
+        authorized_senders:
+          - a@b.com
+        trusted_authserv_id: mx
+    repo_url: https://example.com/repo.git
 """
         yaml_path = tmp_path / "config.yaml"
         yaml_path.write_text(yaml_content)
@@ -3223,8 +3321,7 @@ repos:
       app_token: xapp-test-slack-token-sv
       authorized:
         - workspace_members: true
-    git:
-      repo_url: {master_repo.as_uri()}
+    repo_url: {master_repo.as_uri()}
 """
     config_path = tmp_path / "airut.yaml"
     config_path.write_text(yaml_text)
@@ -3247,21 +3344,24 @@ def test_repo_server_config_dual_channel(
 repos:
   dual:
     email:
-      imap_server: imap.test.com
-      smtp_server: smtp.test.com
-      username: user@test.com
-      password: pass123
-      from: "Bot <bot@test.com>"
-      authorized_senders:
-        - auth@test.com
-      trusted_authserv_id: mx.test.com
+      account:
+        username: user@test.com
+        password: pass123
+        from: "Bot <bot@test.com>"
+      imap:
+        server: imap.test.com
+      smtp:
+        server: smtp.test.com
+      auth:
+        authorized_senders:
+          - auth@test.com
+        trusted_authserv_id: mx.test.com
     slack:
       bot_token: xoxb-test-slack-token-dual
       app_token: xapp-test-slack-token-dual
       authorized:
         - workspace_members: true
-    git:
-      repo_url: {master_repo.as_uri()}
+    repo_url: {master_repo.as_uri()}
 """
     config_path = tmp_path / "airut.yaml"
     config_path.write_text(yaml_text)
@@ -3292,11 +3392,11 @@ class TestGitHubAppCredential:
                 "\ntest\n"
                 "-----END RSA PRIVATE KEY-----"
             ),
-            installation_id="12345",
+            installation_id=12345,
             scopes=frozenset(["api.github.com"]),
         )
         assert cred.app_id == "Iv23liXyz"
-        assert cred.installation_id == "12345"
+        assert cred.installation_id == 12345
         assert cred.base_url == "https://api.github.com"
         assert cred.allow_foreign_credentials is False
         assert cred.permissions is None
@@ -3307,7 +3407,7 @@ class TestGitHubAppCredential:
         cred = GitHubAppCredential(
             app_id="Iv23liXyz",
             private_key="key",
-            installation_id="12345",
+            installation_id=12345,
             scopes=frozenset(["api.github.com", "*.githubusercontent.com"]),
             allow_foreign_credentials=True,
             base_url="https://github.example.com/api/v3",
@@ -3324,7 +3424,7 @@ class TestGitHubAppCredential:
         cred = GitHubAppCredential(
             app_id="app",
             private_key="key",
-            installation_id="123",
+            installation_id=123,
             scopes=frozenset(["api.github.com"]),
         )
         with pytest.raises(AttributeError):
@@ -3339,7 +3439,7 @@ class TestGitHubAppEntry:
         entry = GitHubAppEntry(
             app_id="Iv23liXyz",
             private_key="key",
-            installation_id="12345",
+            installation_id=12345,
             base_url="https://api.github.com",
             scopes=("api.github.com",),
         )
@@ -3347,7 +3447,7 @@ class TestGitHubAppEntry:
         assert d["type"] == CREDENTIAL_TYPE_GITHUB_APP
         assert d["app_id"] == "Iv23liXyz"
         assert d["private_key"] == "key"
-        assert d["installation_id"] == "12345"
+        assert d["installation_id"] == 12345
         assert d["base_url"] == "https://api.github.com"
         assert d["scopes"] == ["api.github.com"]
         assert "allow_foreign_credentials" not in d
@@ -3359,7 +3459,7 @@ class TestGitHubAppEntry:
         entry = GitHubAppEntry(
             app_id="Iv23liXyz",
             private_key="key",
-            installation_id="12345",
+            installation_id=12345,
             base_url="https://api.github.com",
             scopes=("api.github.com",),
             allow_foreign_credentials=True,
@@ -3376,7 +3476,7 @@ class TestGitHubAppEntry:
         entry = GitHubAppEntry(
             app_id="app",
             private_key="key",
-            installation_id="123",
+            installation_id=123,
             base_url="https://api.github.com",
             scopes=("api.github.com",),
         )
@@ -3423,7 +3523,7 @@ class TestResolveGitHubAppCredentials:
                     "\ntest\n"
                     "-----END RSA PRIVATE KEY-----"
                 ),
-                "installation_id": "12345",
+                "installation_id": 12345,
                 "scopes": [
                     "api.github.com",
                     "*.githubusercontent.com",
@@ -3435,7 +3535,7 @@ class TestResolveGitHubAppCredentials:
         assert "GH_TOKEN" in result
         cred = result["GH_TOKEN"]
         assert cred.app_id == "Iv23liXyz"
-        assert cred.installation_id == "12345"
+        assert cred.installation_id == 12345
         assert "api.github.com" in cred.scopes
         assert cred.base_url == "https://api.github.com"
 
@@ -3445,7 +3545,7 @@ class TestResolveGitHubAppCredentials:
             "GH_TOKEN": {
                 "app_id": "Iv23liXyz",
                 "private_key": "key",
-                "installation_id": "12345",
+                "installation_id": 12345,
                 "scopes": ["api.github.com"],
                 "allow_foreign_credentials": True,
                 "base_url": "https://github.example.com/api/v3",
@@ -3469,7 +3569,7 @@ class TestResolveGitHubAppCredentials:
         raw = {
             "GH_TOKEN": {
                 "private_key": "key",
-                "installation_id": "12345",
+                "installation_id": 12345,
                 "scopes": ["api.github.com"],
             }
         }
@@ -3481,7 +3581,7 @@ class TestResolveGitHubAppCredentials:
         raw = {
             "GH_TOKEN": {
                 "app_id": "Iv23li",
-                "installation_id": "12345",
+                "installation_id": 12345,
                 "scopes": ["api.github.com"],
             }
         }
@@ -3497,7 +3597,7 @@ class TestResolveGitHubAppCredentials:
                 "scopes": ["api.github.com"],
             }
         }
-        with pytest.raises(ConfigError, match="installation_id is required"):
+        with pytest.raises(ConfigError, match="installation_id.* is missing"):
             _resolve_github_app_credentials(raw, "repos.test")
 
     def test_missing_scopes_raises(self) -> None:
@@ -3506,7 +3606,7 @@ class TestResolveGitHubAppCredentials:
             "GH_TOKEN": {
                 "app_id": "Iv23li",
                 "private_key": "key",
-                "installation_id": "12345",
+                "installation_id": 12345,
             }
         }
         with pytest.raises(ConfigError, match="scopes is required"):
@@ -3518,7 +3618,7 @@ class TestResolveGitHubAppCredentials:
             "GH_TOKEN": {
                 "app_id": "Iv23li",
                 "private_key": "key",
-                "installation_id": "12345",
+                "installation_id": 12345,
                 "scopes": [],
             }
         }
@@ -3531,7 +3631,7 @@ class TestResolveGitHubAppCredentials:
             "GH_TOKEN": {
                 "app_id": "Iv23li",
                 "private_key": "key",
-                "installation_id": "12345",
+                "installation_id": 12345,
                 "scopes": "api.github.com",
             }
         }
@@ -3545,7 +3645,7 @@ class TestResolveGitHubAppCredentials:
             _resolve_github_app_credentials(raw, "repos.test")
 
     def test_non_numeric_installation_id_raises(self) -> None:
-        """Raises ConfigError when installation_id is not numeric."""
+        """Raises ValueError when installation_id is not numeric."""
         raw = {
             "GH_TOKEN": {
                 "app_id": "Iv23li",
@@ -3554,9 +3654,7 @@ class TestResolveGitHubAppCredentials:
                 "scopes": ["api.github.com"],
             }
         }
-        with pytest.raises(
-            ConfigError, match="installation_id must be numeric"
-        ):
+        with pytest.raises(ValueError, match="invalid literal"):
             _resolve_github_app_credentials(raw, "repos.test")
 
     def test_http_base_url_raises(self) -> None:
@@ -3565,7 +3663,7 @@ class TestResolveGitHubAppCredentials:
             "GH_TOKEN": {
                 "app_id": "Iv23li",
                 "private_key": "key",
-                "installation_id": "12345",
+                "installation_id": 12345,
                 "scopes": ["api.github.com"],
                 "base_url": "http://github.example.com/api/v3",
             }
@@ -3579,7 +3677,7 @@ class TestResolveGitHubAppCredentials:
             "GH_TOKEN": {
                 "app_id": "Iv23li",
                 "private_key": "key",
-                "installation_id": "12345",
+                "installation_id": 12345,
                 "scopes": ["api.github.com"],
                 "permissions": "not-a-mapping",
             }
@@ -3593,7 +3691,7 @@ class TestResolveGitHubAppCredentials:
             "GH_TOKEN": {
                 "app_id": "Iv23li",
                 "private_key": "key",
-                "installation_id": "12345",
+                "installation_id": 12345,
                 "scopes": ["api.github.com"],
                 "repositories": "not-a-list",
             }
@@ -3610,7 +3708,7 @@ class TestBuildTaskEnvGitHubApp:
         *,
         app_id: str = "Iv23liXyz",
         private_key: str = "test-key",
-        installation_id: str = "12345",
+        installation_id: int = 12345,
     ) -> GitHubAppCredential:
         return GitHubAppCredential(
             app_id=app_id,
@@ -3641,7 +3739,7 @@ class TestBuildTaskEnvGitHubApp:
         assert isinstance(entry, GitHubAppEntry)
         assert entry.app_id == "Iv23liXyz"
         assert entry.private_key == "test-key"
-        assert entry.installation_id == "12345"
+        assert entry.installation_id == 12345
         assert entry.base_url == "https://api.github.com"
 
     def test_github_app_priority_over_masked_secrets(self) -> None:
@@ -3666,7 +3764,7 @@ class TestBuildTaskEnvGitHubApp:
         cred = GitHubAppCredential(
             app_id="Iv23li",
             private_key="key",
-            installation_id="123",
+            installation_id=123,
             scopes=frozenset(["api.github.com"]),
             permissions={"contents": "write"},
             repositories=("my-repo",),
@@ -3726,7 +3824,7 @@ class TestRepoServerConfigGitHubApp:
                 "GH_TOKEN": GitHubAppCredential(
                     app_id="Iv23li",
                     private_key="super-secret-key",
-                    installation_id="123",
+                    installation_id=123,
                     scopes=frozenset(["api.github.com"]),
                 )
             },

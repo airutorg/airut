@@ -130,14 +130,13 @@ development Dockerfile for your project.
 
 **Using an existing Dockerfile:** If your repository already has a Dockerfile
 (e.g., in `.devcontainer/`), you can point Airut at it instead of creating a new
-one. Set `container.path` in the server config to the directory containing the
+one. Set `container_path` in the server config to the directory containing the
 Dockerfile:
 
 ```yaml
 repos:
   my-project:
-    container:
-      path: .devcontainer   # use existing devcontainer Dockerfile
+    container_path: .devcontainer   # use existing devcontainer Dockerfile
 ```
 
 This works with any directory that contains a `Dockerfile` and optional context
@@ -243,7 +242,7 @@ limits, secrets, network sandbox) are configured here.
 Open the dashboard at `http://localhost:5200` and click **Configure**. Under the
 **Repositories** section, click **Add Repository** and fill in:
 
-1. **`repos.<repo>.git.repo_url`** — your repository URL (e.g.,
+1. **`repos.<repo>.repo_url`** — your repository URL (e.g.,
    `https://github.com/your-org/your-repo.git`)
 2. **Channel settings** — click **Add Email Channel** or **Add Slack Channel**
    to configure at least one channel:

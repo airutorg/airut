@@ -9,7 +9,7 @@ Airut entrypoint).
 1. **Repo controls its environment**: The target repository defines what tools
    and dependencies it needs (Python, Claude Code, ripgrep, etc.) via a
    Dockerfile. By default Airut reads from `.airut/container/Dockerfile`, but
-   the directory is configurable per-repo via `container.path` in the server
+   the directory is configurable per-repo via `container_path` in the server
    config (e.g., `.devcontainer` to reuse an existing Dockerfile). Changes take
    effect after merging to main — no server restart required.
 2. **Server controls the entrypoint**: The sandbox library generates the

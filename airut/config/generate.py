@@ -63,17 +63,24 @@ _DOCS_BASE = "https://github.com/airutorg/airut/blob/main"
 #: Required fields need placeholders; optional None-default fields need
 #: illustrative example values.  Every entry is validated at generation time.
 _EXAMPLE_VALUES: dict[str, str] = {
-    # Required field placeholders
-    "EmailChannelConfig.imap_server": "mail.example.com",
-    "EmailChannelConfig.smtp_server": "mail.example.com",
-    "EmailChannelConfig.account_username": "airut",
-    "EmailChannelConfig.account_from_address": '"Airut <airut@example.com>"',
-    "EmailChannelConfig.auth_trusted_authserv_id": "mail.example.com",
+    # Required field placeholders — email sub-dataclasses
+    "ImapConfig.server": "mail.example.com",
+    "SmtpConfig.server": "mail.example.com",
+    "EmailAccountConfig.username": "airut",
+    "EmailAccountConfig.from_address": '"Airut <airut@example.com>"',
+    "EmailAuthConfig.trusted_authserv_id": "mail.example.com",
+    # Optional email overrides (illustrative)
+    "EmailAccountConfig.password": "!env EMAIL_PASSWORD",
+    # Microsoft OAuth2 (optional block, all fields required within)
+    "MicrosoftOAuth2Config.tenant_id": "!env MS_OAUTH2_TENANT_ID",
+    "MicrosoftOAuth2Config.client_id": "!env MS_OAUTH2_CLIENT_ID",
+    "MicrosoftOAuth2Config.client_secret": "!env MS_OAUTH2_CLIENT_SECRET",
+    # Slack
     "SlackChannelConfig.bot_token": "!env SLACK_BOT_TOKEN",
     "SlackChannelConfig.app_token": "!env SLACK_APP_TOKEN",
+    # Repo
     "RepoServerConfig.git_repo_url": "https://github.com/you/my-project.git",
     # Optional None-default overrides (illustrative)
-    "EmailChannelConfig.account_password": "!env EMAIL_PASSWORD",
     "GlobalConfig.dashboard_base_url": "dashboard.example.com",
     "GlobalConfig.upstream_dns": '"1.1.1.1"',
     "ResourceLimits.timeout": "!var default_resource_timeout",
@@ -87,7 +94,7 @@ _EXAMPLE_VALUES: dict[str, str] = {
 #: Each entry is a list of YAML lines rendered verbatim at the field's
 #: indentation level.  Keys are validated against the actual schema.
 _COMPLEX_EXAMPLES: dict[str, list[str]] = {
-    "EmailChannelConfig.auth_authorized_senders": [
+    "EmailAuthConfig.authorized_senders": [
         "authorized_senders:",
         "  - you@example.com",
         "  # - *@company.com",
@@ -167,9 +174,14 @@ _SKIP_FIELDS: set[tuple[str, str]] = {
 def _config_classes() -> list[type]:
     """Return the config dataclass classes used for schema walking."""
     from airut.gateway.config import (
+        EmailAccountConfig,
+        EmailAuthConfig,
         EmailChannelConfig,
         GlobalConfig,
+        ImapConfig,
+        MicrosoftOAuth2Config,
         RepoServerConfig,
+        SmtpConfig,
     )
     from airut.gateway.slack.config import SlackChannelConfig
     from airut.sandbox.types import ResourceLimits
@@ -177,6 +189,11 @@ def _config_classes() -> list[type]:
     return [
         GlobalConfig,
         ResourceLimits,
+        EmailAccountConfig,
+        ImapConfig,
+        SmtpConfig,
+        EmailAuthConfig,
+        MicrosoftOAuth2Config,
         EmailChannelConfig,
         RepoServerConfig,
         SlackChannelConfig,
@@ -388,8 +405,17 @@ def _render_field(
     # Nested dataclass (e.g. resource_limits → ResourceLimits)
     nested_cls = _is_nested_dataclass(cls, f)
     if nested_cls is not None:
+        from airut.config.source import YAML_CLASS_STRUCTURES
+
         out.append(f"{indent}# {fm.doc}")
         yaml_name = _yaml_key(f.name, structure)
+        # Look up per-class structure mapping for sub-field YAML keys
+        nested_structure = YAML_CLASS_STRUCTURES.get(nested_cls.__name__)
+        # Will the whole block be commented? (outer field is optional)
+        block_comment = force_comment or (
+            f.default is not dataclasses.MISSING
+            or f.default_factory is not dataclasses.MISSING
+        )
         # Render the nested class's fields under this key
         nested_lines = [f"{yaml_name}:"]
         for nf in dc_fields(nested_cls):
@@ -397,6 +423,19 @@ def _render_field(
             if nfm is None:
                 continue
             nk = f"{nested_cls.__name__}.{nf.name}"
+            sub_yaml_name = _yaml_key(nf.name, nested_structure)
+            # Complex examples (e.g. authorized_senders)
+            if nk in _COMPLEX_EXAMPLES:
+                nested_lines.append(f"  # {nfm.doc}")
+                snippet = _COMPLEX_EXAMPLES[nk]
+                nval, has_default = _field_value(nested_cls, nf)
+                commented = force_comment or (has_default and not plain)
+                for sline in snippet:
+                    if commented:
+                        nested_lines.append(f"  # {sline}" if sline else "  #")
+                    else:
+                        nested_lines.append(f"  {sline}")
+                continue
             nval = _EXAMPLE_VALUES.get(nk)
             if nval is None and nf.default not in (
                 dataclasses.MISSING,
@@ -405,9 +444,22 @@ def _render_field(
                 nval = _format_yaml(nf.default)
             if nval is not None:
                 nested_lines.append(f"  # {nfm.doc}")
-                nested_lines.append(f"  {_yaml_key(nf.name, None)}: {nval}")
-        # Always commented (nested dataclasses default to None or empty)
-        out.extend(_comment_lines(nested_lines, indent))
+                line = f"  {sub_yaml_name}: {nval}"
+                # Comment sub-fields with defaults only when the
+                # outer block itself won't be block-commented.
+                if not block_comment:
+                    nf_has_default = (
+                        nf.default is not dataclasses.MISSING
+                        or nf.default_factory is not dataclasses.MISSING
+                    )
+                    if force_comment or (nf_has_default and not plain):
+                        line = f"  # {sub_yaml_name}: {nval}"
+                nested_lines.append(line)
+        if block_comment:
+            out.extend(_comment_lines(nested_lines, indent))
+        else:
+            for line in nested_lines:
+                out.append(f"{indent}{line}")
         return out
 
     # Simple scalar field
@@ -544,7 +596,7 @@ _HEADER = """\
 # All per-repo configuration (model, effort, resource limits, container env,
 # network, secrets) is managed here.  There is no repo-side airut.yaml —
 # only .airut/network-allowlist.yaml and the container Dockerfile (default
-# .airut/container/Dockerfile, configurable via container.path) live in the
+# .airut/container/Dockerfile, configurable via container_path) live in the
 # repository.
 #
 # Run `airut init` to create a stub at ~/.config/airut/airut.yaml,
@@ -670,7 +722,6 @@ def generate_stub_config() -> str:
         Minimal YAML config file content.
     """
     from airut.gateway.config import (
-        EmailChannelConfig,
         GlobalConfig,
     )
 
@@ -695,64 +746,51 @@ def generate_stub_config() -> str:
         ]
     )
 
-    # Only required email fields, grouped by YAML section
-    stub_fields: list[dataclasses.Field[Any]] = []
-    for f in dc_fields(EmailChannelConfig):
-        fm = get_field_meta(f)
-        if fm is None:
-            continue
-        key = f"EmailChannelConfig.{f.name}"
-        has_default = (
-            f.default is not dataclasses.MISSING
-            or f.default_factory is not dataclasses.MISSING
-        )
-        if has_default and key not in (
-            "EmailChannelConfig.auth_authorized_senders",
-            "EmailChannelConfig.account_password",
-        ):
-            continue
-        stub_fields.append(f)
-
-    # Sort by section so fields in the same section are adjacent
-    # (dataclass ordering puts required fields before optional,
-    # which can split a section like account across auth fields).
-    section_order = ["account", "imap", "smtp", "auth"]
-    stub_fields.sort(
-        key=lambda f: (
-            section_order.index(
-                _yaml_section(f.name, YAML_EMAIL_STRUCTURE) or ""
-            )
-            if _yaml_section(f.name, YAML_EMAIL_STRUCTURE) in section_order
-            else len(section_order)
-        )
+    # Walk email sub-dataclasses to render required fields + selected
+    # optional fields under the email: section.
+    from airut.config.source import YAML_CLASS_STRUCTURES
+    from airut.gateway.config import (
+        EmailAccountConfig,
+        EmailAuthConfig,
+        ImapConfig,
+        SmtpConfig,
     )
 
-    current_section: str | None = None
-    for f in stub_fields:
-        key = f"EmailChannelConfig.{f.name}"
-        section = _yaml_section(f.name, YAML_EMAIL_STRUCTURE)
-        if section != current_section:
-            current_section = section
-            if section is not None:
-                out.append(f"      {section}:")
-        indent = "        " if section else "      "
-        if key in _COMPLEX_EXAMPLES:
-            for line in _COMPLEX_EXAMPLES[key]:
-                out.append(f"{indent}{line}")
-            continue
-        value = _EXAMPLE_VALUES.get(key)
-        if value is None:
-            continue
-        yaml_name = _yaml_key(f.name, YAML_EMAIL_STRUCTURE)
-        out.append(f"{indent}{yaml_name}: {value}")
+    #: Sub-dataclasses in section order, plus which optional fields to include.
+    _stub_sections: list[tuple[str, type, set[str]]] = [
+        ("account", EmailAccountConfig, {"password"}),
+        ("imap", ImapConfig, set()),
+        ("smtp", SmtpConfig, set()),
+        ("auth", EmailAuthConfig, {"authorized_senders"}),
+    ]
+    for section_name, section_cls, include_optional in _stub_sections:
+        section_structure = YAML_CLASS_STRUCTURES.get(section_cls.__name__)
+        out.append(f"      {section_name}:")
+        for nf in dc_fields(section_cls):
+            if get_field_meta(nf) is None:
+                continue  # pragma: no cover
+            nk = f"{section_cls.__name__}.{nf.name}"
+            has_default = (
+                nf.default is not dataclasses.MISSING
+                or nf.default_factory is not dataclasses.MISSING
+            )
+            if has_default and nf.name not in include_optional:
+                continue
+            sub_yaml_name = _yaml_key(nf.name, section_structure)
+            if nk in _COMPLEX_EXAMPLES:
+                for line in _COMPLEX_EXAMPLES[nk]:
+                    out.append(f"        {line}")
+                continue
+            value = _EXAMPLE_VALUES.get(nk)
+            if value is None:
+                continue
+            out.append(f"        {sub_yaml_name}: {value}")
 
-    # git section
+    # repo_url and secrets
     git_url = _EXAMPLE_VALUES["RepoServerConfig.git_repo_url"]
-    git_key = _yaml_key("git_repo_url", YAML_REPO_STRUCTURE)
     out.extend(
         [
-            "    git:",
-            f"      {git_key}: {git_url}",
+            f"    repo_url: {git_url}",
             "    secrets:",
             "      ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY",
         ]

@@ -2671,7 +2671,7 @@ def _github_app_replacement(
     *,
     app_id: str = "Iv23liTestApp",
     private_key: str = "test-private-key",
-    installation_id: str = "12345",
+    installation_id: int = 12345,
     base_url: str = "https://api.github.com",
     scopes: list[str] | None = None,
     allow_foreign_credentials: bool = False,

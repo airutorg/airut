@@ -158,7 +158,7 @@ class GitHubAppCredential:
     env_var: str
     app_id: str
     private_key: str
-    installation_id: str
+    installation_id: int
     scopes: tuple[str, ...]
     allow_foreign_credentials: bool = False
     base_url: str = "https://api.github.com"
@@ -172,7 +172,7 @@ class _GitHubAppEntry:
 
     app_id: str
     private_key: str
-    installation_id: str
+    installation_id: int
     base_url: str
     scopes: tuple[str, ...]
     allow_foreign_credentials: bool = False

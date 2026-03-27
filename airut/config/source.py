@@ -47,35 +47,30 @@ YAML_GLOBAL_STRUCTURE: dict[str, tuple[str, ...]] = {
     "upstream_dns": ("network", "upstream_dns"),
 }
 
-#: Maps flat EmailChannelConfig field names to nested YAML paths
-#: within the ``email:`` block.
-YAML_EMAIL_STRUCTURE: dict[str, tuple[str, ...]] = {
-    "account_username": ("account", "username"),
-    "account_password": ("account", "password"),
-    "account_from_address": ("account", "from"),
-    "imap_server": ("imap", "server"),
-    "imap_port": ("imap", "port"),
-    "imap_connect_retries": ("imap", "connect_retries"),
-    "imap_poll_interval_seconds": ("imap", "poll_interval"),
-    "imap_use_idle": ("imap", "use_idle"),
-    "imap_idle_reconnect_interval_seconds": ("imap", "idle_reconnect_interval"),
-    "smtp_server": ("smtp", "server"),
-    "smtp_port": ("smtp", "port"),
-    "smtp_require_auth": ("smtp", "require_auth"),
-    "auth_authorized_senders": ("auth", "authorized_senders"),
-    "auth_trusted_authserv_id": ("auth", "trusted_authserv_id"),
-    "auth_microsoft_internal_fallback": ("auth", "microsoft_internal_fallback"),
-    "microsoft_oauth2_tenant_id": ("microsoft_oauth2", "tenant_id"),
-    "microsoft_oauth2_client_id": ("microsoft_oauth2", "client_id"),
-    "microsoft_oauth2_client_secret": ("microsoft_oauth2", "client_secret"),
+#: Maps EmailChannelConfig field names to nested YAML paths
+#: within the ``email:`` block.  With the sub-dataclass structure,
+#: top-level fields (account, imap, etc.) map directly to their
+#: YAML keys — no remapping needed at this level.
+YAML_EMAIL_STRUCTURE: dict[str, tuple[str, ...]] = {}
+
+#: Maps EmailAccountConfig field names to YAML keys.
+#: Only ``from_address`` differs (keyword ``from``).
+YAML_EMAIL_ACCOUNT_STRUCTURE: dict[str, tuple[str, ...]] = {
+    "from_address": ("from",),
+}
+
+#: Per-class structure mappings for nested dataclass recursion.
+#: Used by ``editor_schema._get_nested_fields()`` to resolve YAML keys
+#: within sub-dataclasses (e.g. ``from_address`` → ``from``).
+YAML_CLASS_STRUCTURES: dict[str, dict[str, tuple[str, ...]]] = {
+    "EmailAccountConfig": YAML_EMAIL_ACCOUNT_STRUCTURE,
 }
 
 #: Maps flat RepoServerConfig field names to nested YAML paths
 #: within the repo block.
 YAML_REPO_STRUCTURE: dict[str, tuple[str, ...]] = {
-    "git_repo_url": ("git", "repo_url"),
+    "git_repo_url": ("repo_url",),
     "network_sandbox_enabled": ("network", "sandbox_enabled"),
-    "container_path": ("container", "path"),
 }
 
 

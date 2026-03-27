@@ -28,7 +28,7 @@ from airut.yaml_env import make_env_loader
 logger = logging.getLogger(__name__)
 
 #: Current schema version.  Bump when adding a migration.
-CURRENT_CONFIG_VERSION: int = 4
+CURRENT_CONFIG_VERSION: int = 5
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -238,12 +238,53 @@ def _migrate_v3_to_v4(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+def _migrate_v4_to_v5(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v4 -> v5: flatten ``git:`` and ``container:`` wrapper sections.
+
+    Moves ``git.repo_url`` to ``repo_url`` and ``container.path`` to
+    ``container_path`` at the repo level.  Removes the now-empty wrapper
+    sections.
+
+    This is a non-security structural migration — safe to auto-transform.
+
+    Args:
+        raw: Raw config dict.
+
+    Returns:
+        The transformed config dict.
+    """
+    repos = raw.get("repos", {})
+    if not isinstance(repos, dict):
+        return raw
+
+    for repo in repos.values():
+        if not isinstance(repo, dict):
+            continue
+
+        # Flatten git.repo_url → repo_url
+        git_section = repo.get("git")
+        if isinstance(git_section, dict) and "repo_url" in git_section:
+            repo["repo_url"] = git_section.pop("repo_url")
+            if not git_section:
+                del repo["git"]
+
+        # Flatten container.path → container_path
+        container_section = repo.get("container")
+        if isinstance(container_section, dict) and "path" in container_section:
+            repo["container_path"] = container_section.pop("path")
+            if not container_section:
+                del repo["container"]
+
+    return raw
+
+
 #: Migration functions keyed by the version they migrate FROM.
 #: Each takes a raw dict and returns the transformed raw dict.
 MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
     3: _migrate_v3_to_v4,
+    4: _migrate_v4_to_v5,
 }
 
 

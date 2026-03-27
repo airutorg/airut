@@ -115,12 +115,12 @@ class EmailChannelAdapter(ChannelAdapter):
         return cls(
             config=config,
             authenticator=SenderAuthenticator(
-                config.auth_trusted_authserv_id,
+                config.auth.trusted_authserv_id,
                 allow_internal_auth_fallback=(
-                    config.auth_microsoft_internal_fallback
+                    config.auth.microsoft_internal_fallback
                 ),
             ),
-            authorizer=SenderAuthorizer(config.auth_authorized_senders),
+            authorizer=SenderAuthorizer(config.auth.authorized_senders),
             responder=EmailResponder(config),
             listener=EmailChannelListener(config, repo_id=repo_id),
             repo_id=repo_id,
@@ -294,7 +294,7 @@ class EmailChannelAdapter(ChannelAdapter):
             html_body = "I've started working on this and will reply shortly."
 
         outgoing_message_id = generate_message_id(
-            conversation_id, self._config.account_from_address
+            conversation_id, self._config.account.from_address
         )
 
         try:
@@ -336,7 +336,7 @@ class EmailChannelAdapter(ChannelAdapter):
             body = f"{response_text}\n\n*{usage_footer}*"
 
         outgoing_message_id = generate_message_id(
-            conversation_id, self._config.account_from_address
+            conversation_id, self._config.account.from_address
         )
 
         # Collect attachments from outbox directory
@@ -462,7 +462,7 @@ class EmailChannelAdapter(ChannelAdapter):
             )
 
         outgoing_message_id = generate_message_id(
-            conversation_id, self._config.account_from_address
+            conversation_id, self._config.account.from_address
         )
 
         try:

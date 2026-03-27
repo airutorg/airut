@@ -104,9 +104,9 @@ class TestYamlSection:
     def test_top_level_field(self) -> None:
         assert _yaml_section("container_command", YAML_GLOBAL_STRUCTURE) is None
 
-    def test_single_element_path(self) -> None:
-        """Two-element paths map to a section within their block."""
-        assert _yaml_section("imap_server", YAML_EMAIL_STRUCTURE) == "imap"
+    def test_empty_structure_returns_none(self) -> None:
+        """Empty YAML_EMAIL_STRUCTURE means all fields are top-level."""
+        assert _yaml_section("imap", YAML_EMAIL_STRUCTURE) is None
 
     def test_none_structure(self) -> None:
         assert _yaml_section("anything", None) is None
@@ -161,21 +161,19 @@ class TestFieldValue:
         f = next(
             f
             for f in dataclasses.fields(EmailChannelConfig)
-            if f.name == "microsoft_oauth2_tenant_id"
+            if f.name == "microsoft_oauth2"
         )
         value, has_default = _field_value(EmailChannelConfig, f)
         assert value is None
         assert has_default is True
 
     def test_required_with_override(self) -> None:
-        from airut.gateway.config import EmailChannelConfig
+        from airut.gateway.config import ImapConfig
 
         f = next(
-            f
-            for f in dataclasses.fields(EmailChannelConfig)
-            if f.name == "imap_server"
+            f for f in dataclasses.fields(ImapConfig) if f.name == "server"
         )
-        value, has_default = _field_value(EmailChannelConfig, f)
+        value, has_default = _field_value(ImapConfig, f)
         assert value == "mail.example.com"
         assert has_default is False  # field has no default
 
@@ -192,14 +190,14 @@ class TestFieldValue:
         assert has_default is True
 
     def test_bool_default(self) -> None:
-        from airut.gateway.config import EmailChannelConfig
+        from airut.gateway.config import SmtpConfig
 
         f = next(
             f
-            for f in dataclasses.fields(EmailChannelConfig)
-            if f.name == "smtp_require_auth"
+            for f in dataclasses.fields(SmtpConfig)
+            if f.name == "require_auth"
         )
-        value, has_default = _field_value(EmailChannelConfig, f)
+        value, has_default = _field_value(SmtpConfig, f)
         assert value == "true"
         assert has_default is True
 
@@ -293,12 +291,16 @@ class TestGroupFieldsBySection:
         groups = _group_fields_by_section(
             EmailChannelConfig, YAML_EMAIL_STRUCTURE
         )
+        # With empty YAML_EMAIL_STRUCTURE, all fields are top-level (None)
         section_names = [name for name, _ in groups]
-        assert "account" in section_names
-        assert "imap" in section_names
-        assert "smtp" in section_names
-        assert "auth" in section_names
-        assert "microsoft_oauth2" in section_names
+        assert None in section_names
+        # All sub-dataclass fields are grouped under the None section
+        all_fields = [f.name for _, fields in groups for f in fields]
+        assert "account" in all_fields
+        assert "imap" in all_fields
+        assert "smtp" in all_fields
+        assert "auth" in all_fields
+        assert "microsoft_oauth2" in all_fields
 
     def test_skipped_fields(self) -> None:
         from airut.gateway.config import RepoServerConfig
@@ -328,14 +330,12 @@ class TestRenderField:
     """Tests for _render_field."""
 
     def test_required_field_uncommented(self) -> None:
-        from airut.gateway.config import EmailChannelConfig
+        from airut.gateway.config import ImapConfig
 
         f = next(
-            f
-            for f in dataclasses.fields(EmailChannelConfig)
-            if f.name == "imap_server"
+            f for f in dataclasses.fields(ImapConfig) if f.name == "server"
         )
-        lines = _render_field(EmailChannelConfig, f, YAML_EMAIL_STRUCTURE, "  ")
+        lines = _render_field(ImapConfig, f, None, "  ")
         assert any("server: mail.example.com" in x for x in lines)
         # Should NOT be commented
         value_line = [x for x in lines if "server:" in x][0]
@@ -354,17 +354,15 @@ class TestRenderField:
         assert value_line.startswith("# container_command: podman")
 
     def test_force_comment(self) -> None:
-        from airut.gateway.config import EmailChannelConfig
+        from airut.gateway.config import ImapConfig
 
         f = next(
-            f
-            for f in dataclasses.fields(EmailChannelConfig)
-            if f.name == "imap_server"
+            f for f in dataclasses.fields(ImapConfig) if f.name == "server"
         )
         lines = _render_field(
-            EmailChannelConfig,
+            ImapConfig,
             f,
-            YAML_EMAIL_STRUCTURE,
+            None,
             "",
             force_comment=True,
         )
@@ -391,25 +389,27 @@ class TestRenderField:
         assert value_line == "container_command: podman"
 
     def test_plain_mode_none_default(self) -> None:
-        from airut.gateway.config import EmailChannelConfig
+        """Plain mode renders a None-default scalar field without commenting."""
 
-        f = next(
-            f
-            for f in dataclasses.fields(EmailChannelConfig)
-            if f.name == "microsoft_oauth2_tenant_id"
-        )
+        @dataclass(frozen=True)
+        class _PlainNone:
+            opt_field: str | None = field(
+                default=None,
+                metadata=meta("Optional field for testing", Scope.SERVER),
+            )
+
+        f = dataclasses.fields(_PlainNone)[0]
         lines = _render_field(
-            EmailChannelConfig,
+            _PlainNone,
             f,
-            YAML_EMAIL_STRUCTURE,
+            None,
             "",
             plain=True,
         )
-        # Should show key: without commenting
         value_line = [
-            x for x in lines if "tenant_id" in x and "Azure" not in x
+            x for x in lines if "opt_field:" in x and "Optional" not in x
         ][0]
-        assert value_line == "tenant_id:"
+        assert value_line == "opt_field:"
 
     def test_complex_field(self) -> None:
         from airut.gateway.config import RepoServerConfig
@@ -529,9 +529,8 @@ class TestGenerateExampleConfig:
         assert "email:" in content
         assert "server: mail.example.com" in content
 
-    def test_contains_git_section(self) -> None:
+    def test_contains_repo_url(self) -> None:
         content = generate_example_config()
-        assert "git:" in content
         assert "repo_url:" in content
 
     def test_contains_credentials(self) -> None:
@@ -664,7 +663,7 @@ class TestGenerateStubConfig:
         assert "from:" in content
         assert "trusted_authserv_id:" in content
 
-    def test_contains_git_section(self) -> None:
+    def test_contains_repo_url(self) -> None:
         content = generate_stub_config()
         assert "repo_url:" in content
 
@@ -936,19 +935,23 @@ class TestEdgeCases:
     def test_stub_skips_required_field_without_example(self) -> None:
         """Stub generation skips required fields not in _EXAMPLE_VALUES."""
         # Temporarily remove an example value to trigger the skip path
-        saved = generate._EXAMPLE_VALUES.pop("EmailChannelConfig.imap_server")
+        saved = generate._EXAMPLE_VALUES.pop("ImapConfig.server")
         try:
             content = generate_stub_config()
-            # imap_server is still required but has no example value → skipped
             lines = content.split("\n")
-            uncommented = [
+            # Count uncommented "server: mail.example.com" lines.
+            # Without the override, IMAP section should not have it.
+            # SMTP still has its own SmtpConfig.server override.
+            server_lines = [
                 line
                 for line in lines
-                if not line.strip().startswith("#") and "imap_server" in line
+                if not line.strip().startswith("#")
+                and "server: mail.example.com" in line
             ]
-            assert len(uncommented) == 0
+            # Only the SMTP server line should remain (1 instead of 2)
+            assert len(server_lines) == 1
         finally:
-            generate._EXAMPLE_VALUES["EmailChannelConfig.imap_server"] = saved
+            generate._EXAMPLE_VALUES["ImapConfig.server"] = saved
 
     def test_check_coverage_skips_unannotated_fields(self) -> None:
         """check_field_coverage skips fields without FieldMeta."""
@@ -971,6 +974,56 @@ class TestEdgeCases:
         ):
             errors = check_field_coverage()
         assert not any("no_meta" in e for e in errors)
+
+    def test_complex_example_uncommented_top_level(self) -> None:
+        """Top-level complex example renders uncommented when no default."""
+
+        @dataclass(frozen=True)
+        class _Cls:
+            items: list[str] = field(
+                metadata=meta("Items list", Scope.SERVER),
+            )
+
+        snippet = ["items:", "  - one"]
+        with mock.patch.dict(
+            generate._COMPLEX_EXAMPLES, {"_Cls.items": snippet}
+        ):
+            f = dataclasses.fields(_Cls)[0]
+            lines = _render_field(_Cls, f, None, "")
+        assert "items:" in lines
+        assert "  - one" in lines
+
+    def test_nested_complex_example_commented(self) -> None:
+        """Nested complex example renders commented when field has default."""
+
+        @dataclass(frozen=True)
+        class _Inner:
+            tags: list[str] = field(
+                default_factory=list,
+                metadata=meta("Tag list", Scope.SERVER),
+            )
+
+        @dataclass(frozen=True)
+        class _Outer:
+            inner: _Inner = field(
+                metadata=meta("Inner config", Scope.SERVER),
+            )
+
+        snippet = ["tags:", "  - a"]
+        with (
+            mock.patch.dict(
+                generate._COMPLEX_EXAMPLES, {"_Inner.tags": snippet}
+            ),
+            mock.patch(
+                "airut.config.generate._is_nested_dataclass",
+                return_value=_Inner,
+            ),
+        ):
+            f = dataclasses.fields(_Outer)[0]
+            lines = _render_field(_Outer, f, None, "")
+        text = "\n".join(lines)
+        # tags has default_factory=list so it's commented
+        assert "  # tags:" in text
 
 
 class TestDriftDetection:

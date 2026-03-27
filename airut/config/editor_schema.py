@@ -155,12 +155,21 @@ def _get_nested_fields(
     structure: dict[str, tuple[str, ...]] | None,
     owner_cls_name: str,
 ) -> list[EditorFieldSchema]:
-    """Recurse into a dataclass to produce sub-field schemas."""
+    """Recurse into a dataclass to produce sub-field schemas.
+
+    Looks up per-class structure mappings from
+    ``YAML_CLASS_STRUCTURES`` to handle YAML key remapping
+    within sub-dataclasses (e.g. ``from_address`` → ``from``).
+    """
     if not dataclasses.is_dataclass(annotation) or not isinstance(
         annotation, type
     ):
         return []
-    return _walk_fields(annotation, path_prefix, structure, owner_cls_name)
+    # Use per-class structure mapping if available (e.g. EmailAccountConfig)
+    from airut.config.source import YAML_CLASS_STRUCTURES
+
+    cls_structure = YAML_CLASS_STRUCTURES.get(annotation.__name__, structure)
+    return _walk_fields(annotation, path_prefix, cls_structure, owner_cls_name)
 
 
 def _walk_fields(

@@ -8,7 +8,7 @@
 # All per-repo configuration (model, effort, resource limits, container env,
 # network, secrets) is managed here.  There is no repo-side airut.yaml —
 # only .airut/network-allowlist.yaml and the container Dockerfile (default
-# .airut/container/Dockerfile, configurable via container.path) live in the
+# .airut/container/Dockerfile, configurable via container_path) live in the
 # repository.
 #
 # Run `airut init` to create a stub at ~/.config/airut/airut.yaml,
@@ -75,70 +75,61 @@ repos:
   # -------------------------------------------------------------------------
   my-project:
     email:
+      # Email account credentials
       account:
         # Email account username
         username: airut
-
         # From address for outgoing emails
         from: "Airut <airut@example.com>"
-
         # Email account password (not required with OAuth2)
         # password: !env EMAIL_PASSWORD
 
+      # IMAP server settings
       imap:
         # IMAP server hostname
         server: mail.example.com
-
         # IMAP port
         # port: 993
-
         # Max IMAP connection attempts before giving up
         # connect_retries: 3
-
         # Seconds between IMAP polls
         # poll_interval: 60
-
         # Use IMAP IDLE instead of polling
         # use_idle: true
-
         # IDLE reconnect interval in seconds (servers may close after 30 min)
         # idle_reconnect_interval: 1740
 
+      # SMTP server settings
       smtp:
         # SMTP server hostname
         server: mail.example.com
-
         # SMTP port
         # port: 587
-
         # Whether SMTP requires authentication
         # require_auth: true
 
+      # Sender authorization settings
       auth:
         # Email patterns allowed to send commands (e.g. *@company.com)
         authorized_senders:
           - you@example.com
           # - *@company.com
-
         # Trusted authserv-id for DMARC verification (empty string for Microsoft 365)
         trusted_authserv_id: mail.example.com
-
         # Accept Microsoft 365 intra-org messages when DMARC headers are absent
         # microsoft_internal_fallback: false
 
+      # Microsoft 365 OAuth2 credentials
       # microsoft_oauth2:
       #   # Azure AD tenant ID for OAuth2 client credentials flow
-      #   tenant_id:
-      #
+      #   tenant_id: !env MS_OAUTH2_TENANT_ID
       #   # Azure AD application (client) ID
-      #   client_id:
-      #
+      #   client_id: !env MS_OAUTH2_CLIENT_ID
       #   # Azure AD client secret value
-      #   client_secret:
+      #   client_secret: !env MS_OAUTH2_CLIENT_SECRET
 
-    git:
-      # Git repository URL to clone from
-      repo_url: https://github.com/you/my-project.git
+    # Git repository URL to clone from
+    repo_url: https://github.com/you/my-project.git
 
     # Per-repo secrets pool (keys become container env var names)
     # secrets:
@@ -209,13 +200,12 @@ repos:
     # Claude Code version (semver, 'latest', or 'stable')
     # claude_version: latest
 
+    # Path to container directory within the repo (must contain a Dockerfile)
+    # container_path: .airut/container
+
     # network:
     #   # Route container traffic through the network proxy and enforce the allowlist (required for masked/signing/GitHub App credentials)
     #   sandbox_enabled: true
-
-    # container:
-    #   # Path to container directory within the repo (must contain a Dockerfile)
-    #   path: .airut/container
 
     # Slack channel (can coexist with email).
     # See config/slack-app-manifest.json for app setup.

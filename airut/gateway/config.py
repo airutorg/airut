@@ -26,7 +26,7 @@ import logging
 import secrets as secrets_module
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, cast, overload
+from typing import TYPE_CHECKING, Any, cast, overload
 
 from platformdirs import user_config_path, user_state_path
 
@@ -131,18 +131,18 @@ class MaskedSecret:
             from reaching allowlisted hosts.
     """
 
-    value: str = field(metadata=meta("Secret value", Scope.REPO, secret=True))
+    value: str = field(metadata=meta("Secret value", Scope.TASK, secret=True))
     scopes: frozenset[str] = field(
         metadata=meta(
             "Host patterns where replacement applies (e.g. api.github.com)",
-            Scope.REPO,
+            Scope.TASK,
         ),
     )
     headers: tuple[str, ...] = field(
         metadata=meta(
             "Header patterns to scan for surrogates"
             " (e.g. Authorization, or * for all)",
-            Scope.REPO,
+            Scope.TASK,
         ),
     )
     allow_foreign_credentials: bool = field(
@@ -150,7 +150,7 @@ class MaskedSecret:
         metadata=meta(
             "Allow non-surrogate credentials on scoped hosts"
             " (off = strip unrecognized tokens)",
-            Scope.REPO,
+            Scope.TASK,
         ),
     )
 
@@ -195,13 +195,13 @@ class SigningCredentialField:
 
     name: str = field(
         metadata=meta(
-            "Environment variable name for the container", Scope.REPO
+            "Environment variable name for the container", Scope.TASK
         ),
     )
     value: str = field(
         metadata=meta(
             "Credential value (proxy uses this to re-sign)",
-            Scope.REPO,
+            Scope.TASK,
             secret=True,
         ),
     )
@@ -226,23 +226,23 @@ class SigningCredential:
     """
 
     access_key_id: SigningCredentialField = field(
-        metadata=meta("AWS access key ID", Scope.REPO, secret=True),
+        metadata=meta("AWS access key ID", Scope.TASK, secret=True),
     )
     secret_access_key: SigningCredentialField = field(
-        metadata=meta("AWS secret access key", Scope.REPO, secret=True),
+        metadata=meta("AWS secret access key", Scope.TASK, secret=True),
     )
     scopes: frozenset[str] = field(
         metadata=meta(
             "Host patterns where re-signing applies"
             " (e.g. bedrock.us-east-1.amazonaws.com)",
-            Scope.REPO,
+            Scope.TASK,
         ),
     )
     session_token: SigningCredentialField | None = field(
         default=None,
         metadata=meta(
             "STS session token (for temporary credentials)",
-            Scope.REPO,
+            Scope.TASK,
             secret=True,
         ),
     )
@@ -301,19 +301,19 @@ class GitHubAppCredential:
     """
 
     app_id: str = field(
-        metadata=meta("GitHub App Client ID or numeric App ID", Scope.REPO),
+        metadata=meta("GitHub App Client ID or numeric App ID", Scope.TASK),
     )
     private_key: str = field(
-        metadata=meta("PEM-encoded RSA private key", Scope.REPO, secret=True),
+        metadata=meta("PEM-encoded RSA private key", Scope.TASK, secret=True),
     )
-    installation_id: str = field(
-        metadata=meta("Installation ID for the target org/user", Scope.REPO),
+    installation_id: int = field(
+        metadata=meta("Installation ID for the target org/user", Scope.TASK),
     )
     scopes: frozenset[str] = field(
         metadata=meta(
             "Host patterns where token replacement applies"
             " (e.g. api.github.com)",
-            Scope.REPO,
+            Scope.TASK,
         ),
     )
     allow_foreign_credentials: bool = field(
@@ -321,24 +321,24 @@ class GitHubAppCredential:
         metadata=meta(
             "Allow non-surrogate credentials on scoped hosts"
             " (off = strip unrecognized tokens)",
-            Scope.REPO,
+            Scope.TASK,
         ),
     )
     base_url: str = field(
         default="https://api.github.com",
         metadata=meta(
-            "GitHub API base URL (change for GitHub Enterprise)", Scope.REPO
+            "GitHub API base URL (change for GitHub Enterprise)", Scope.TASK
         ),
     )
     permissions: dict[str, str] | None = field(
         default=None,
         metadata=meta(
-            "Restrict token permissions (e.g. contents: read)", Scope.REPO
+            "Restrict token permissions (e.g. contents: read)", Scope.TASK
         ),
     )
     repositories: tuple[str, ...] | None = field(
         default=None,
-        metadata=meta("Restrict token to specific repositories", Scope.REPO),
+        metadata=meta("Restrict token to specific repositories", Scope.TASK),
     )
 
 
@@ -364,7 +364,7 @@ class GitHubAppEntry:
 
     app_id: str
     private_key: str
-    installation_id: str
+    installation_id: int
     base_url: str
     scopes: tuple[str, ...]
     allow_foreign_credentials: bool = False
@@ -787,73 +787,23 @@ class GlobalConfig:
 
 
 @dataclass(frozen=True)
-class EmailChannelConfig(ChannelConfig):
-    """Email channel configuration (IMAP + SMTP).
-
-    Contains all settings specific to the email channel: mail server
-    connectivity, credentials, sender authorization, and polling behaviour.
+class EmailAccountConfig:
+    """Email account credentials.
 
     Attributes:
-        account_username: Email account username.
-        account_password: Email account password (auto-redacted in logs).
+        username: Email account username.
+        from_address: From address for outgoing emails.
+        password: Email account password (auto-redacted in logs).
             Optional when Microsoft OAuth2 is configured.
-        account_from_address: From address for outgoing emails.
-        imap_server: IMAP server hostname.
-        imap_port: IMAP port.
-        imap_connect_retries: Max IMAP connection attempts before giving up.
-        imap_poll_interval_seconds: Seconds between IMAP polls.
-        imap_use_idle: Whether to use IMAP IDLE instead of polling.
-        imap_idle_reconnect_interval_seconds: Reconnect interval for IDLE
-            mode.
-        smtp_server: SMTP server hostname.
-        smtp_port: SMTP port.
-        smtp_require_auth: Whether SMTP requires authentication.
-        auth_authorized_senders: List of email patterns allowed to send
-            commands.  Supports wildcards (e.g., ``*@company.com``).
-        auth_trusted_authserv_id: Trusted authserv-id for DMARC
-            verification.  Set to empty string for Microsoft 365 / EOP
-            which omits the authserv-id.
-        auth_microsoft_internal_fallback: When True and no
-            ``Authentication-Results`` header is present, accept
-            messages with ``X-MS-Exchange-Organization-AuthAs: Internal``
-            as authenticated.  Covers intra-org email in Microsoft 365
-            where EOP omits external authentication headers.
-        microsoft_oauth2_tenant_id: Azure AD tenant ID for OAuth2 client
-            credentials flow.  When set (along with client_id and
-            client_secret), XOAUTH2 is used instead of password auth.
-        microsoft_oauth2_client_id: Azure AD application (client) ID.
-        microsoft_oauth2_client_secret: Azure AD client secret value
-            (auto-redacted in logs).
     """
 
-    # --- Required fields (no defaults) ---
-    account_username: str = field(
+    username: str = field(
         metadata=meta("Email account username", Scope.REPO),
     )
-    account_from_address: str = field(
+    from_address: str = field(
         metadata=meta("From address for outgoing emails", Scope.REPO),
     )
-    imap_server: str = field(
-        metadata=meta("IMAP server hostname", Scope.REPO),
-    )
-    smtp_server: str = field(
-        metadata=meta("SMTP server hostname", Scope.REPO),
-    )
-    auth_authorized_senders: list[str] = field(
-        metadata=meta(
-            "Email patterns allowed to send commands (e.g. *@company.com)",
-            Scope.REPO,
-        ),
-    )
-    auth_trusted_authserv_id: str = field(
-        metadata=meta(
-            "Trusted authserv-id for DMARC verification"
-            " (empty string for Microsoft 365)",
-            Scope.REPO,
-        ),
-    )
-    # --- Fields with defaults ---
-    account_password: str | None = field(
+    password: str | None = field(
         default=None,
         metadata=meta(
             "Email account password (not required with OAuth2)",
@@ -861,26 +811,45 @@ class EmailChannelConfig(ChannelConfig):
             secret=True,
         ),
     )
-    imap_port: int = field(
+
+
+@dataclass(frozen=True)
+class ImapConfig:
+    """IMAP server configuration.
+
+    Attributes:
+        server: IMAP server hostname.
+        port: IMAP port.
+        connect_retries: Max connection attempts before giving up.
+        poll_interval: Seconds between IMAP polls.
+        use_idle: Whether to use IMAP IDLE instead of polling.
+        idle_reconnect_interval: Reconnect interval in seconds for IDLE
+            mode.
+    """
+
+    server: str = field(
+        metadata=meta("IMAP server hostname", Scope.REPO),
+    )
+    port: int = field(
         default=993,
         metadata=meta("IMAP port", Scope.REPO),
     )
-    imap_connect_retries: int = field(
+    connect_retries: int = field(
         default=3,
         metadata=meta(
             "Max IMAP connection attempts before giving up",
             Scope.REPO,
         ),
     )
-    imap_poll_interval_seconds: float = field(
+    poll_interval: float = field(
         default=60,
         metadata=meta("Seconds between IMAP polls", Scope.REPO),
     )
-    imap_use_idle: bool = field(
+    use_idle: bool = field(
         default=True,
         metadata=meta("Use IMAP IDLE instead of polling", Scope.REPO),
     )
-    imap_idle_reconnect_interval_seconds: int = field(
+    idle_reconnect_interval: float = field(
         default=29 * 60,
         metadata=meta(
             "IDLE reconnect interval in seconds"
@@ -888,15 +857,81 @@ class EmailChannelConfig(ChannelConfig):
             Scope.REPO,
         ),
     )
-    smtp_port: int = field(
+
+    def __post_init__(self) -> None:
+        """Validate IMAP configuration."""
+        if self.connect_retries < 1:
+            raise ValueError(
+                f"connect_retries must be >= 1: {self.connect_retries}"
+            )
+        if not (1 <= self.port <= 65535):
+            raise ValueError(f"Invalid IMAP port: {self.port}")
+        if self.poll_interval < 0.1:
+            raise ValueError(
+                f"Poll interval must be >= 0.1s: {self.poll_interval}"
+            )
+        if self.idle_reconnect_interval < 60:
+            raise ValueError(
+                f"IDLE reconnect interval must be >= 60s: "
+                f"{self.idle_reconnect_interval}"
+            )
+
+
+@dataclass(frozen=True)
+class SmtpConfig:
+    """SMTP server configuration.
+
+    Attributes:
+        server: SMTP server hostname.
+        port: SMTP port.
+        require_auth: Whether SMTP requires authentication.
+    """
+
+    server: str = field(
+        metadata=meta("SMTP server hostname", Scope.REPO),
+    )
+    port: int = field(
         default=587,
         metadata=meta("SMTP port", Scope.REPO),
     )
-    smtp_require_auth: bool = field(
+    require_auth: bool = field(
         default=True,
         metadata=meta("Whether SMTP requires authentication", Scope.REPO),
     )
-    auth_microsoft_internal_fallback: bool = field(
+
+    def __post_init__(self) -> None:
+        """Validate SMTP configuration."""
+        if not (1 <= self.port <= 65535):
+            raise ValueError(f"Invalid SMTP port: {self.port}")
+
+
+@dataclass(frozen=True)
+class EmailAuthConfig:
+    """Email sender authorization configuration.
+
+    Attributes:
+        authorized_senders: Email patterns allowed to send commands.
+            Supports wildcards (e.g., ``*@company.com``).
+        trusted_authserv_id: Trusted authserv-id for DMARC verification.
+            Set to empty string for Microsoft 365 / EOP.
+        microsoft_internal_fallback: Accept Microsoft 365 intra-org
+            messages when DMARC headers are absent.
+    """
+
+    authorized_senders: list[str] = field(
+        metadata=meta(
+            "Email patterns allowed to send commands (e.g. *@company.com)",
+            Scope.REPO,
+        ),
+    )
+    trusted_authserv_id: str = field(
+        metadata=meta(
+            "Trusted authserv-id for DMARC verification"
+            " (empty string for Microsoft 365)",
+            Scope.REPO,
+        ),
+    )
+    microsoft_internal_fallback: bool = field(
         default=False,
         metadata=meta(
             "Accept Microsoft 365 intra-org messages"
@@ -904,25 +939,69 @@ class EmailChannelConfig(ChannelConfig):
             Scope.REPO,
         ),
     )
-    microsoft_oauth2_tenant_id: str | None = field(
-        default=None,
+
+
+@dataclass(frozen=True)
+class MicrosoftOAuth2Config:
+    """Microsoft 365 OAuth2 client credentials configuration.
+
+    All three fields must be set together.
+
+    Attributes:
+        tenant_id: Azure AD tenant ID.
+        client_id: Azure AD application (client) ID.
+        client_secret: Azure AD client secret value (auto-redacted).
+    """
+
+    tenant_id: str = field(
         metadata=meta(
             "Azure AD tenant ID for OAuth2 client credentials flow",
             Scope.REPO,
             secret=True,
         ),
     )
-    microsoft_oauth2_client_id: str | None = field(
-        default=None,
+    client_id: str = field(
         metadata=meta("Azure AD application (client) ID", Scope.REPO),
     )
-    microsoft_oauth2_client_secret: str | None = field(
-        default=None,
+    client_secret: str = field(
         metadata=meta(
             "Azure AD client secret value",
             Scope.REPO,
             secret=True,
         ),
+    )
+
+
+@dataclass(frozen=True)
+class EmailChannelConfig(ChannelConfig):
+    """Email channel configuration (IMAP + SMTP).
+
+    Contains all settings specific to the email channel: mail server
+    connectivity, credentials, sender authorization, and polling behaviour.
+
+    Attributes:
+        account: Email account credentials (username, password, from).
+        imap: IMAP server settings and polling behaviour.
+        smtp: SMTP server settings.
+        auth: Sender authorization and DMARC verification.
+        microsoft_oauth2: Optional Microsoft 365 OAuth2 credentials.
+    """
+
+    account: EmailAccountConfig = field(
+        metadata=meta("Email account credentials", Scope.REPO),
+    )
+    imap: ImapConfig = field(
+        metadata=meta("IMAP server settings", Scope.REPO),
+    )
+    smtp: SmtpConfig = field(
+        metadata=meta("SMTP server settings", Scope.REPO),
+    )
+    auth: EmailAuthConfig = field(
+        metadata=meta("Sender authorization settings", Scope.REPO),
+    )
+    microsoft_oauth2: MicrosoftOAuth2Config | None = field(
+        default=None,
+        metadata=meta("Microsoft 365 OAuth2 credentials", Scope.REPO),
     )
 
     def __post_init__(self) -> None:
@@ -931,52 +1010,18 @@ class EmailChannelConfig(ChannelConfig):
         Raises:
             ValueError: If configuration is invalid.
         """
-        if self.account_password:
-            SecretFilter.register_secret(self.account_password)
+        if self.account.password:
+            SecretFilter.register_secret(self.account.password)
 
-        # Register Microsoft OAuth2 client secret for log redaction
-        if self.microsoft_oauth2_client_secret:
-            SecretFilter.register_secret(self.microsoft_oauth2_client_secret)
-
-        # Validate Microsoft OAuth2: all three fields must be set or all None
-        oauth2_fields = (
-            self.microsoft_oauth2_tenant_id,
-            self.microsoft_oauth2_client_id,
-            self.microsoft_oauth2_client_secret,
-        )
-        oauth2_set = [f for f in oauth2_fields if f is not None]
-        if 0 < len(oauth2_set) < 3:
-            raise ValueError(
-                "microsoft_oauth2 requires all three "
-                "fields (tenant_id, client_id, client_secret) to be set"
-            )
-
-        # Password is required when OAuth2 is not configured
-        has_oauth2 = len(oauth2_set) == 3
-        if not has_oauth2 and not self.account_password:
+        if self.microsoft_oauth2:
+            if self.microsoft_oauth2.client_secret:
+                SecretFilter.register_secret(
+                    self.microsoft_oauth2.client_secret
+                )
+        elif not self.account.password:
             raise ValueError(
                 "email.account.password is required when microsoft_oauth2 "
                 "is not configured"
-            )
-
-        if self.imap_connect_retries < 1:
-            raise ValueError(
-                f"imap_connect_retries must be >= 1: "
-                f"{self.imap_connect_retries}"
-            )
-        if not (1 <= self.imap_port <= 65535):
-            raise ValueError(f"Invalid IMAP port: {self.imap_port}")
-        if not (1 <= self.smtp_port <= 65535):
-            raise ValueError(f"Invalid SMTP port: {self.smtp_port}")
-        if self.imap_poll_interval_seconds < 0.1:
-            raise ValueError(
-                f"Poll interval must be >= 0.1s: "
-                f"{self.imap_poll_interval_seconds}"
-            )
-        if self.imap_idle_reconnect_interval_seconds < 60:
-            raise ValueError(
-                f"IDLE reconnect interval must be >= 60s: "
-                f"{self.imap_idle_reconnect_interval_seconds}"
             )
 
     @property
@@ -987,12 +1032,12 @@ class EmailChannelConfig(ChannelConfig):
     @property
     def channel_info(self) -> str:
         """Return a short description for dashboard display."""
-        return self.imap_server
+        return self.imap.server
 
     @property
     def channel_detail(self) -> str:
         """Return agent email address for dashboard display."""
-        return self.account_from_address
+        return self.account.from_address
 
 
 #: Channel type keys recognized in server config.
@@ -1156,23 +1201,21 @@ class RepoServerConfig:
 
         if not self.container_path:
             raise ValueError(
-                f"Repo '{self.repo_id}': container.path cannot be empty"
+                f"Repo '{self.repo_id}': container_path cannot be empty"
             )
         if self.container_path.startswith("/"):
             raise ValueError(
-                f"Repo '{self.repo_id}': container.path must be a relative "
+                f"Repo '{self.repo_id}': container_path must be a relative "
                 f"path, got '{self.container_path}'"
             )
         if ".." in self.container_path.split("/"):
             raise ValueError(
-                f"Repo '{self.repo_id}': container.path must not contain "
+                f"Repo '{self.repo_id}': container_path must not contain "
                 f"'..', got '{self.container_path}'"
             )
 
         if not self.git_repo_url:
-            raise ValueError(
-                f"Repo '{self.repo_id}': git.repo_url cannot be empty"
-            )
+            raise ValueError(f"Repo '{self.repo_id}': repo_url cannot be empty")
 
         if not self.channels:
             raise ValueError(
@@ -1261,15 +1304,15 @@ class ServerConfig:
             ):
                 continue
             inbox_key = (
-                email_config.imap_server.lower(),
-                email_config.account_username.lower(),
+                email_config.imap.server.lower(),
+                email_config.account.username.lower(),
             )
             if inbox_key in seen_inboxes:
                 raise ConfigError(
                     f"Repo '{repo_id}' and repo '{seen_inboxes[inbox_key]}' "
                     f"share the same IMAP inbox "
-                    f"({email_config.imap_server}/"
-                    f"{email_config.account_username}). "
+                    f"({email_config.imap.server}/"
+                    f"{email_config.account.username}). "
                     f"Each repo must have its own inbox."
                 )
             seen_inboxes[inbox_key] = repo_id
@@ -1525,17 +1568,16 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
     claude_version = _resolve(raw.get("claude_version"), str)
     if claude_version is not None:
         repo_overrides["claude_version"] = claude_version
-    container = raw.get("container", {})
-    container_path = _resolve(container.get("path"), str)
+    container_path = _resolve(raw.get("container_path"), str)
     if container_path is not None:
         repo_overrides["container_path"] = container_path
 
     return RepoServerConfig(
         repo_id=repo_id,
         git_repo_url=_resolve(
-            raw.get("git", {}).get("repo_url"),
+            raw.get("repo_url"),
             str,
-            required=f"{prefix}.git.repo_url",
+            required=f"{prefix}.repo_url",
         ),
         channels=channels,
         secrets=secrets,
@@ -1556,87 +1598,113 @@ def _parse_email_channel_config(email: dict, prefix: str) -> EmailChannelConfig:
     Returns:
         EmailChannelConfig instance.
     """
-    account = email.get("account", {})
-    imap = email.get("imap", {})
-    smtp = email.get("smtp", {})
-    auth = email.get("auth", {})
+    raw_account = email.get("account", {})
+    raw_imap = email.get("imap", {})
+    raw_smtp = email.get("smtp", {})
+    raw_auth = email.get("auth", {})
 
-    # Resolve Microsoft OAuth2 config (optional block)
-    ms_oauth2 = email.get("microsoft_oauth2", {})
-    ms_tenant_id: str | None = (
-        _resolve(ms_oauth2.get("tenant_id"), str) if ms_oauth2 else None
-    )
-    ms_client_id: str | None = (
-        _resolve(ms_oauth2.get("client_id"), str) if ms_oauth2 else None
-    )
-    ms_client_secret: str | None = (
-        _resolve(ms_oauth2.get("client_secret"), str) if ms_oauth2 else None
-    )
-
-    # Build optional overrides
-    ec_overrides = {}
-    password = _resolve(account.get("password"), str)
+    # Build EmailAccountConfig
+    acct_overrides: dict[str, Any] = {}
+    password = _resolve(raw_account.get("password"), str)
     if password is not None:
-        ec_overrides["account_password"] = password
-    imap_port = _resolve(imap.get("port"), int)
-    if imap_port is not None:
-        ec_overrides["imap_port"] = imap_port
-    connect_retries = _resolve(imap.get("connect_retries"), int)
-    if connect_retries is not None:
-        ec_overrides["imap_connect_retries"] = connect_retries
-    poll_interval = _resolve(imap.get("poll_interval"), float)
-    if poll_interval is not None:
-        ec_overrides["imap_poll_interval_seconds"] = poll_interval
-    use_idle = _resolve(imap.get("use_idle"), bool)
-    if use_idle is not None:
-        ec_overrides["imap_use_idle"] = use_idle
-    idle_reconnect = _resolve(imap.get("idle_reconnect_interval"), int)
-    if idle_reconnect is not None:
-        ec_overrides["imap_idle_reconnect_interval_seconds"] = idle_reconnect
-    smtp_port = _resolve(smtp.get("port"), int)
-    if smtp_port is not None:
-        ec_overrides["smtp_port"] = smtp_port
-    smtp_require_auth = _resolve(smtp.get("require_auth"), bool)
-    if smtp_require_auth is not None:
-        ec_overrides["smtp_require_auth"] = smtp_require_auth
-    ms_internal_auth = _resolve(auth.get("microsoft_internal_fallback"), bool)
-    if ms_internal_auth is not None:
-        ec_overrides["auth_microsoft_internal_fallback"] = ms_internal_auth
-
-    return EmailChannelConfig(
-        account_username=_resolve(
-            account.get("username"),
+        acct_overrides["password"] = password
+    account = EmailAccountConfig(
+        username=_resolve(
+            raw_account.get("username"),
             str,
             required=f"{prefix}.email.account.username",
         ),
-        account_from_address=_resolve(
-            account.get("from"),
+        from_address=_resolve(
+            raw_account.get("from"),
             str,
             required=f"{prefix}.email.account.from",
         ),
-        imap_server=_resolve(
-            imap.get("server"),
+        **acct_overrides,
+    )
+
+    # Build ImapConfig
+    imap_overrides: dict[str, Any] = {}
+    imap_port = _resolve(raw_imap.get("port"), int)
+    if imap_port is not None:
+        imap_overrides["port"] = imap_port
+    connect_retries = _resolve(raw_imap.get("connect_retries"), int)
+    if connect_retries is not None:
+        imap_overrides["connect_retries"] = connect_retries
+    poll_interval = _resolve(raw_imap.get("poll_interval"), float)
+    if poll_interval is not None:
+        imap_overrides["poll_interval"] = poll_interval
+    use_idle = _resolve(raw_imap.get("use_idle"), bool)
+    if use_idle is not None:
+        imap_overrides["use_idle"] = use_idle
+    idle_reconnect = _resolve(raw_imap.get("idle_reconnect_interval"), float)
+    if idle_reconnect is not None:
+        imap_overrides["idle_reconnect_interval"] = idle_reconnect
+    imap = ImapConfig(
+        server=_resolve(
+            raw_imap.get("server"),
             str,
             required=f"{prefix}.email.imap.server",
         ),
-        smtp_server=_resolve(
-            smtp.get("server"),
+        **imap_overrides,
+    )
+
+    # Build SmtpConfig
+    smtp_overrides: dict[str, Any] = {}
+    smtp_port = _resolve(raw_smtp.get("port"), int)
+    if smtp_port is not None:
+        smtp_overrides["port"] = smtp_port
+    smtp_require_auth = _resolve(raw_smtp.get("require_auth"), bool)
+    if smtp_require_auth is not None:
+        smtp_overrides["require_auth"] = smtp_require_auth
+    smtp = SmtpConfig(
+        server=_resolve(
+            raw_smtp.get("server"),
             str,
             required=f"{prefix}.email.smtp.server",
         ),
-        auth_authorized_senders=_resolve_string_list(
-            auth.get("authorized_senders"),
+        **smtp_overrides,
+    )
+
+    # Build EmailAuthConfig
+    auth_overrides: dict[str, Any] = {}
+    ms_internal_auth = _resolve(
+        raw_auth.get("microsoft_internal_fallback"), bool
+    )
+    if ms_internal_auth is not None:
+        auth_overrides["microsoft_internal_fallback"] = ms_internal_auth
+    auth = EmailAuthConfig(
+        authorized_senders=_resolve_string_list(
+            raw_auth.get("authorized_senders"),
             required=f"{prefix}.email.auth.authorized_senders",
         ),
-        auth_trusted_authserv_id=_resolve(
-            auth.get("trusted_authserv_id"),
+        trusted_authserv_id=_resolve(
+            raw_auth.get("trusted_authserv_id"),
             str,
             required=f"{prefix}.email.auth.trusted_authserv_id",
         ),
-        microsoft_oauth2_tenant_id=ms_tenant_id,
-        microsoft_oauth2_client_id=ms_client_id,
-        microsoft_oauth2_client_secret=ms_client_secret,
-        **ec_overrides,
+        **auth_overrides,
+    )
+
+    # Build MicrosoftOAuth2Config (optional block)
+    raw_ms_oauth2 = email.get("microsoft_oauth2", {})
+    microsoft_oauth2: MicrosoftOAuth2Config | None = None
+    if raw_ms_oauth2:
+        ms_tenant_id = _resolve(raw_ms_oauth2.get("tenant_id"), str)
+        ms_client_id = _resolve(raw_ms_oauth2.get("client_id"), str)
+        ms_client_secret = _resolve(raw_ms_oauth2.get("client_secret"), str)
+        if ms_tenant_id and ms_client_id and ms_client_secret:
+            microsoft_oauth2 = MicrosoftOAuth2Config(
+                tenant_id=ms_tenant_id,
+                client_id=ms_client_id,
+                client_secret=ms_client_secret,
+            )
+
+    return EmailChannelConfig(
+        account=account,
+        imap=imap,
+        smtp=smtp,
+        auth=auth,
+        microsoft_oauth2=microsoft_oauth2,
     )
 
 
@@ -1946,12 +2014,11 @@ def _resolve_github_app_credentials(
             raise ConfigError(f"{key}.private_key is required")
 
         # Resolve installation_id (required, supports !env, must be numeric)
-        raw_installation_id = config.get("installation_id")
-        installation_id = raw_resolve(raw_installation_id)
-        if not installation_id:
-            raise ConfigError(f"{key}.installation_id is required")
-        if not installation_id.isdigit():
-            raise ConfigError(f"{key}.installation_id must be numeric")
+        installation_id = _resolve(
+            config.get("installation_id"),
+            int,
+            required=f"{key}.installation_id",
+        )
 
         # Parse scopes (required)
         raw_scopes = config.get("scopes")

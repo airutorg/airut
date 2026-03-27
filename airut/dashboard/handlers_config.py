@@ -80,11 +80,11 @@ def _make_slack_skeleton() -> dict[str, Any]:
 def _make_repo_skeleton() -> dict[str, Any]:
     """Create a minimal repo skeleton for add-repo.
 
-    Contains required ``git.repo_url`` placeholder and an email channel
+    Contains required ``repo_url`` placeholder and an email channel
     stub so the repo passes validation.
     """
     return {
-        "git": {"repo_url": "https://github.com/org/repo.git"},
+        "repo_url": "https://github.com/org/repo.git",
         "email": _make_email_skeleton(),
     }
 

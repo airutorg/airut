@@ -102,8 +102,8 @@ then runs the existing resolution/validation pipeline.
 The YAML config uses nested sub-blocks (e.g. `execution.max_concurrent`,
 `dashboard.host`, `email.imap.poll_interval`) that map to flat dataclass field
 names (e.g. `max_concurrent_executions`, `dashboard_host`,
-`imap_poll_interval_seconds`). This nesting is a **serialization concern**, not
-a schema concern.
+`email.imap.poll_interval`). This nesting is a **serialization concern**, not a
+schema concern.
 
 `FieldMeta` intentionally does **not** encode YAML paths. The YAML structure is
 a property of `YamlConfigSource`, not of the config schema. A future
@@ -410,11 +410,11 @@ Settings that affect server-wide infrastructure or shared resources:
 Settings scoped to a repository, reloadable by restarting only that repo's
 handler:
 
-- `repos.*.git.repo_url` — git mirror target
+- `repos.*.repo_url` — git mirror target
 - `repos.*.email.*` — email channel credentials and settings
 - `repos.*.slack.*` — slack channel tokens and authorization
 - `repos.*.network.sandbox_enabled` — proxy toggle
-- `repos.*.container.path` — container directory path
+- `repos.*.container_path` — container directory path
 
 ### `Scope.TASK` — Applied Per-Task
 

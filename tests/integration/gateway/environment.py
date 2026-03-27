@@ -17,10 +17,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from airut.gateway.config import (
+    EmailAccountConfig,
+    EmailAuthConfig,
     EmailChannelConfig,
     GlobalConfig,
+    ImapConfig,
     RepoServerConfig,
     ServerConfig,
+    SmtpConfig,
     get_storage_dir,
 )
 from airut.gateway.slack.config import SlackChannelConfig
@@ -186,18 +190,26 @@ class IntegrationEnvironment:
             git_repo_url=str(master_repo),
             channels={
                 "email": EmailChannelConfig(
-                    imap_server="127.0.0.1",
-                    imap_port=imap_port,
-                    smtp_server="127.0.0.1",
-                    smtp_port=smtp_port,
-                    account_username="test",
-                    account_password="test",
-                    account_from_address="Claude Test <claude@test.local>",
-                    auth_authorized_senders=authorized_senders,
-                    auth_trusted_authserv_id="test.local",
-                    imap_use_idle=False,  # Use polling for predictable testing
-                    imap_poll_interval_seconds=0.1,  # Fast polling for tests
-                    smtp_require_auth=False,  # Test server doesn't support AUTH
+                    account=EmailAccountConfig(
+                        username="test",
+                        password="test",
+                        from_address="Claude Test <claude@test.local>",
+                    ),
+                    imap=ImapConfig(
+                        server="127.0.0.1",
+                        port=imap_port,
+                        use_idle=False,
+                        poll_interval=0.1,
+                    ),
+                    smtp=SmtpConfig(
+                        server="127.0.0.1",
+                        port=smtp_port,
+                        require_auth=False,
+                    ),
+                    auth=EmailAuthConfig(
+                        authorized_senders=authorized_senders,
+                        trusted_authserv_id="test.local",
+                    ),
                 )
             },
         )
@@ -304,20 +316,26 @@ class IntegrationEnvironment:
                 git_repo_url=str(master_repo),
                 channels={
                     "email": EmailChannelConfig(
-                        imap_server="127.0.0.1",
-                        imap_port=imap_port,
-                        smtp_server="127.0.0.1",
-                        smtp_port=smtp_port,
-                        account_username=repo_id,
-                        account_password="test",
-                        account_from_address=(
-                            f"{repo_id} <{repo_id}@test.local>"
+                        account=EmailAccountConfig(
+                            username=repo_id,
+                            password="test",
+                            from_address=(f"{repo_id} <{repo_id}@test.local>"),
                         ),
-                        auth_authorized_senders=senders,
-                        auth_trusted_authserv_id="test.local",
-                        imap_use_idle=False,
-                        imap_poll_interval_seconds=0.1,
-                        smtp_require_auth=False,
+                        imap=ImapConfig(
+                            server="127.0.0.1",
+                            port=imap_port,
+                            use_idle=False,
+                            poll_interval=0.1,
+                        ),
+                        smtp=SmtpConfig(
+                            server="127.0.0.1",
+                            port=smtp_port,
+                            require_auth=False,
+                        ),
+                        auth=EmailAuthConfig(
+                            authorized_senders=senders,
+                            trusted_authserv_id="test.local",
+                        ),
                     )
                 },
             )

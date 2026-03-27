@@ -133,7 +133,7 @@ def _add_valid_repo(
     assert r.status_code == 200
 
     _patch_field(
-        client, f"repos.{repo_id}.git.repo_url", "literal", str(git_repo_path)
+        client, f"repos.{repo_id}.repo_url", "literal", str(git_repo_path)
     )
     _patch_field(
         client, f"repos.{repo_id}.email.imap.server", "literal", "127.0.0.1"
@@ -356,9 +356,9 @@ class TestSave:
             assert dashboard is not None
             buf = dashboard._config_handlers._buffer
             assert buf is not None
-            # Make config invalid by removing required git.repo_url
+            # Make config invalid by removing required repo_url
             repo_key = next(iter(buf._raw["repos"]))
-            del buf._raw["repos"][repo_key]["git"]["repo_url"]
+            del buf._raw["repos"][repo_key]["repo_url"]
             buf._dirty = True
 
             r = _post_form(client, "/api/config/save")
@@ -888,7 +888,7 @@ class TestEditorAddRepoLifecycle:
             )
             _patch_field(
                 client,
-                "repos.project-b.git.repo_url",
+                "repos.project-b.repo_url",
                 "literal",
                 str(repo_b_path),
             )

@@ -23,10 +23,15 @@ from airut.gateway.channel import (
 )
 from airut.gateway.config import (
     ConfigError,
+    EmailAccountConfig,
+    EmailAuthConfig,
     EmailChannelConfig,
     GlobalConfig,
+    ImapConfig,
+    MicrosoftOAuth2Config,
     RepoServerConfig,
     ServerConfig,
+    SmtpConfig,
 )
 from airut.gateway.conversation import (
     ConversationError,
@@ -69,10 +74,15 @@ __all__ = [
     "RawMessage",
     # config
     "ConfigError",
+    "EmailAccountConfig",
+    "EmailAuthConfig",
     "EmailChannelConfig",
     "GlobalConfig",
+    "ImapConfig",
+    "MicrosoftOAuth2Config",
     "RepoServerConfig",
     "ServerConfig",
+    "SmtpConfig",
     # conversation
     "ConversationError",
     "ConversationManager",

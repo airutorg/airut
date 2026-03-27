@@ -12,7 +12,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from airut.gateway.channel import ChannelSendError, RawMessage
-from airut.gateway.config import EmailChannelConfig
+from airut.gateway.config import (
+    EmailAccountConfig,
+    EmailAuthConfig,
+    EmailChannelConfig,
+    ImapConfig,
+    SmtpConfig,
+)
 from airut.gateway.email.adapter import (
     EmailChannelAdapter,
     EmailParsedMessage,
@@ -23,15 +29,17 @@ from airut.gateway.email.responder import SMTPSendError
 
 def _make_config() -> EmailChannelConfig:
     return EmailChannelConfig(
-        imap_server="imap.example.com",
-        imap_port=993,
-        smtp_server="smtp.example.com",
-        smtp_port=587,
-        account_username="test@example.com",
-        account_password="pass",
-        account_from_address="Bot <bot@example.com>",
-        auth_authorized_senders=["user@example.com"],
-        auth_trusted_authserv_id="mx.example.com",
+        account=EmailAccountConfig(
+            username="test@example.com",
+            from_address="Bot <bot@example.com>",
+            password="pass",
+        ),
+        imap=ImapConfig(server="imap.example.com", port=993),
+        smtp=SmtpConfig(server="smtp.example.com", port=587),
+        auth=EmailAuthConfig(
+            authorized_senders=["user@example.com"],
+            trusted_authserv_id="mx.example.com",
+        ),
     )
 
 

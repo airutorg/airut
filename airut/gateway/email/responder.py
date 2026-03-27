@@ -98,18 +98,16 @@ class EmailResponder:
 
         # Create Microsoft OAuth2 token provider if configured
         self._token_provider: MicrosoftOAuth2TokenProvider | None = None
-        if config.microsoft_oauth2_tenant_id:
-            assert config.microsoft_oauth2_client_id
-            assert config.microsoft_oauth2_client_secret
+        if config.microsoft_oauth2:
             self._token_provider = MicrosoftOAuth2TokenProvider(
-                tenant_id=config.microsoft_oauth2_tenant_id,
-                client_id=config.microsoft_oauth2_client_id,
-                client_secret=config.microsoft_oauth2_client_secret,
+                tenant_id=config.microsoft_oauth2.tenant_id,
+                client_id=config.microsoft_oauth2.client_id,
+                client_secret=config.microsoft_oauth2.client_secret,
             )
 
         logger.debug(
             "Initialized email responder for: %s",
-            config.smtp_server,
+            config.smtp.server,
         )
 
     def send_reply(
@@ -153,7 +151,7 @@ class EmailResponder:
             else:
                 msg = MIMEMultipart("alternative")
 
-            msg["From"] = self.config.account_from_address
+            msg["From"] = self.config.account.from_address
             msg["To"] = to
             msg["Subject"] = subject
 
@@ -214,7 +212,7 @@ class EmailResponder:
             logger.debug("Sending email to %s: %s", to, subject)
 
             with smtplib.SMTP(
-                self.config.smtp_server, self.config.smtp_port
+                self.config.smtp.server, self.config.smtp.port
             ) as server:
                 server.ehlo()
                 # Only use STARTTLS if the server supports it
@@ -222,12 +220,12 @@ class EmailResponder:
                     server.starttls()
                     server.ehlo()  # Re-identify after TLS for AUTH capabilities
                 # Only authenticate if required (allows testing without auth)
-                if self.config.smtp_require_auth:
+                if self.config.smtp.require_auth:
                     if self._token_provider:
                         # Microsoft OAuth2: XOAUTH2 SASL mechanism
                         auth_string = (
                             self._token_provider.generate_xoauth2_string(
-                                self.config.account_username
+                                self.config.account.username
                             )
                         )
 
@@ -238,10 +236,10 @@ class EmailResponder:
 
                         server.auth("XOAUTH2", _xoauth2_authobject)
                     else:
-                        assert self.config.account_password is not None
+                        assert self.config.account.password is not None
                         server.login(
-                            self.config.account_username,
-                            self.config.account_password,
+                            self.config.account.username,
+                            self.config.account.password,
                         )
                 server.send_message(msg)
 
