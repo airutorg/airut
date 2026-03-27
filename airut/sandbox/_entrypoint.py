@@ -11,8 +11,9 @@ external file. The entrypoint is fundamental to sandbox operation
 
 Two entrypoint variants are provided:
 
-- **Agent entrypoint** (default): Runs ``exec claude "$@"`` -- used by
-  ``AgentTask`` for Claude Code execution.
+- **Agent entrypoint** (default): Runs ``exec /opt/claude/claude "$@"``
+  -- used by ``AgentTask`` for Claude Code execution.  The binary is
+  bind-mounted from the host cache at runtime.
 - **Passthrough entrypoint**: Runs ``exec "$@"`` -- used by
   ``CommandTask`` for arbitrary command execution.
 """
@@ -34,8 +35,9 @@ if [ -f /usr/local/share/ca-certificates/mitmproxy-ca.crt ]; then
     update-ca-certificates 2>/dev/null || true
 fi
 
-# Run Claude Code with all arguments passed through
-exec claude "$@"
+# Run Claude Code with all arguments passed through.
+# The binary is bind-mounted from the host cache at /opt/claude/claude.
+exec /opt/claude/claude "$@"
 """
 
 # The passthrough entrypoint script content. Same setup as the agent

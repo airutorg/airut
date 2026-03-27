@@ -19,7 +19,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 from typing import TYPE_CHECKING
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 if TYPE_CHECKING:
@@ -53,6 +53,12 @@ def _mock_proxy_infra(tmp_path: Path):
     # returns tmp_path/storage/repo_id instead of ~/.local/state/airut/repo_id
     storage_root = tmp_path / "storage"
     storage_root.mkdir(exist_ok=True)
+    # Mock ClaudeBinaryCache to avoid real HTTP requests to GCS
+    mock_cache = MagicMock()
+    mock_cache.ensure.return_value = (Path("/fake/claude"), "1.0.0")
+    mock_cache.resolve_version.return_value = "1.0.0"
+    mock_cache.prune.return_value = 0
+
     with (
         patch("airut.sandbox._proxy.MITMPROXY_CONFDIR", confdir),
         patch("airut.sandbox._network.MITMPROXY_CONFDIR", confdir),
@@ -60,6 +66,10 @@ def _mock_proxy_infra(tmp_path: Path):
         patch(
             "airut.gateway.config.user_state_path",
             return_value=storage_root,
+        ),
+        patch(
+            "airut.gateway.service.gateway.ClaudeBinaryCache",
+            return_value=mock_cache,
         ),
     ):
         yield

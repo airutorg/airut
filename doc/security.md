@@ -182,6 +182,8 @@ See [execution-sandbox.md](execution-sandbox.md) for full details.
 - All Linux capabilities dropped (`--cap-drop=ALL`)
 - Privilege escalation blocked (`--security-opt=no-new-privileges:true`)
 - Controlled mount points (workspace, claude state, inbox, outbox)
+- Claude Code binary bind-mounted read-only from host cache
+  (`/opt/claude/claude`)
 - No host credentials mounted (SSH keys, git config, etc.)
 - Session metadata stored outside container mounts
 - Configurable timeout with hard kill

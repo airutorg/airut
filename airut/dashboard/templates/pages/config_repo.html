@@ -59,10 +59,10 @@
   {# Model & Effort card #}
   <div class="card">
     <div class="cfg-card-header">
-      <span class="cfg-card-title">Model &amp; Effort</span>
+      <span class="cfg-card-title">Model &amp; Execution</span>
     </div>
     {% for f in schema %}
-    {% if f.name in ['model', 'effort'] %}
+    {% if f.name in ['model', 'effort', 'claude_version'] %}
     {% include "components/config/field.html" %}
     {% endif %}
     {% endfor %}

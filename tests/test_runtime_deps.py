@@ -14,7 +14,11 @@ import ast
 import re
 import sys
 import tomllib
-from importlib.metadata import packages_distributions, requires
+from importlib.metadata import (
+    PackageNotFoundError,
+    packages_distributions,
+    requires,
+)
 from pathlib import Path
 
 
@@ -73,7 +77,12 @@ def _resolve_runtime_distributions() -> set[str]:
         if dist in resolved:
             continue
         resolved.add(dist)
-        reqs = requires(dist)
+        try:
+            reqs = requires(dist)
+        except PackageNotFoundError:
+            # Dependency may be satisfied by a stdlib module on this
+            # Python version (e.g. exceptiongroup on 3.11+).
+            continue
         if reqs:
             for req in reqs:
                 # Skip extras/optional deps (lines containing "; extra ==")

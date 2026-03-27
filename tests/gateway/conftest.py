@@ -13,10 +13,14 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _mock_sandbox(tmp_path: Path):
-    """Mock Sandbox and redirect XDG state for gateway tests.
+    """Mock Sandbox, ClaudeBinaryCache, and redirect XDG state.
 
     The sandbox calls podman which isn't available in test
     environments. Provide a mock that returns sensible defaults.
+
+    ClaudeBinaryCache is also mocked to prevent network calls
+    during tests.  The mock ``ensure()`` returns a fake path
+    and version string.
 
     Also redirects ``get_storage_dir()`` to use ``tmp_path`` so
     tests don't touch the real filesystem.
@@ -24,10 +28,23 @@ def _mock_sandbox(tmp_path: Path):
     mock_sandbox_class = MagicMock()
     mock_sandbox_instance = MagicMock()
     mock_sandbox_class.return_value = mock_sandbox_instance
+
+    mock_binary_cache_class = MagicMock()
+    mock_binary_cache = MagicMock()
+    mock_binary_cache.ensure.return_value = (
+        Path("/fake/claude"),
+        "1.0.0",
+    )
+    mock_binary_cache_class.return_value = mock_binary_cache
+
     storage_root = tmp_path / "state"
     storage_root.mkdir(exist_ok=True)
     with (
         patch("airut.gateway.service.gateway.Sandbox", mock_sandbox_class),
+        patch(
+            "airut.gateway.service.gateway.ClaudeBinaryCache",
+            mock_binary_cache_class,
+        ),
         patch(
             "airut.gateway.config.user_state_path",
             return_value=storage_root,

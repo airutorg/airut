@@ -1112,6 +1112,13 @@ class RepoServerConfig:
             Scope.TASK,
         ),
     )
+    claude_version: str = field(
+        default="latest",
+        metadata=meta(
+            "Claude Code version (semver, 'latest', or 'stable')",
+            Scope.TASK,
+        ),
+    )
 
     def __post_init__(self) -> None:
         """Validate configuration and register secrets.
@@ -1163,6 +1170,10 @@ class RepoServerConfig:
                 f"{', '.join(sorted(unknown))}. "
                 f"Supported: {', '.join(sorted(CHANNEL_KEYS))}"
             )
+
+        from airut.sandbox.claude_binary import validate_version
+
+        validate_version(self.claude_version)
 
         channel_summary = ", ".join(
             f"{ct}={cc.channel_info}" for ct, cc in self.channels.items()
@@ -1494,6 +1505,9 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
     parsed_limits = _parse_resource_limits(raw.get("resource_limits"))
     if parsed_limits is not None:
         repo_overrides["resource_limits"] = parsed_limits
+    claude_version = _resolve(raw.get("claude_version"), str)
+    if claude_version is not None:
+        repo_overrides["claude_version"] = claude_version
 
     return RepoServerConfig(
         repo_id=repo_id,

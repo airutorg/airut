@@ -138,6 +138,8 @@ lines to the callback as they appear.
 - Internal network (`airut-conv-{id}`) routing container traffic through proxy
 - Proxy container enforcing allowlist
 - Container with mounts, env, and (for AgentTask) Claude session state
+- Claude Code binary bind-mounted read-only from host cache at
+  `/opt/claude/claude` (managed by `ClaudeBinaryCache`)
 
 ### Owned State
 
@@ -176,6 +178,7 @@ await task.execute(prompt, session_id=..., model=..., effort=...,
   +- Start network log tail task (if on_network_line provided)
   |
   +- Run Claude Code container (async subprocess)
+  |    +- Bind-mount claude binary from host cache (read-only)
   |    +- --cap-drop=ALL, --security-opt=no-new-privileges:true
   |    +- Apply resource limits (--memory, --cpus, --pids-limit)
   |    +- Prompt on stdin, read stdout/stderr concurrently as async streams

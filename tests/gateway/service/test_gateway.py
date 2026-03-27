@@ -16,7 +16,13 @@ from unittest.mock import MagicMock, patch
 from airut.gateway.service import GatewayService, main
 from airut.gateway.service.gateway import PendingMessage
 
-from .conftest import InterruptEvent, make_message, make_service, update_global
+from .conftest import (
+    InterruptEvent,
+    make_message,
+    make_service,
+    update_global,
+    update_repo,
+)
 
 
 class TestGatewayServiceInit:
@@ -1595,6 +1601,97 @@ class TestGarbageCollectorThread:
 
         # Clean up
         del svc.repo_handlers["new_repo"]
+
+    def test_gc_claude_binaries_prunes_inactive(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """GC prunes cached Claude binaries not referenced by config."""
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, conversation_max_age_days=7)
+
+        handler.conversation_manager.list_all.return_value = []
+
+        # Configure the cache mock
+        svc.claude_binary_cache.resolve_version.return_value = "1.0.0"
+        svc.claude_binary_cache.prune.return_value = 2
+
+        svc._shutdown_event.wait = MagicMock(side_effect=[False, True])
+        svc._garbage_collector_thread()
+
+        svc.claude_binary_cache.prune.assert_called_once()
+        call_args = svc.claude_binary_cache.prune.call_args[0][0]
+        assert "1.0.0" in call_args
+
+    def test_gc_claude_binaries_zero_removed(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """GC logs debug when no binaries removed."""
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, conversation_max_age_days=7)
+
+        handler.conversation_manager.list_all.return_value = []
+
+        svc.claude_binary_cache.resolve_version.return_value = "1.0.0"
+        svc.claude_binary_cache.prune.return_value = 0
+
+        svc._shutdown_event.wait = MagicMock(side_effect=[False, True])
+        svc._garbage_collector_thread()
+
+    def test_gc_claude_binaries_resolve_error(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """GC handles version resolution failure gracefully."""
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, conversation_max_age_days=7)
+
+        handler.conversation_manager.list_all.return_value = []
+
+        svc.claude_binary_cache.resolve_version.side_effect = RuntimeError(
+            "resolve failed"
+        )
+        svc.claude_binary_cache.prune.return_value = 0
+
+        svc._shutdown_event.wait = MagicMock(side_effect=[False, True])
+        # Should not crash
+        svc._garbage_collector_thread()
+
+    def test_gc_claude_binaries_repo_version_resolve_error(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """GC handles per-repo version resolution failure."""
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, conversation_max_age_days=7)
+        update_repo(handler, claude_version="2.0.0")
+
+        handler.conversation_manager.list_all.return_value = []
+
+        def resolve_side_effect(version):
+            if version == "2.0.0":
+                raise RuntimeError("repo resolve failed")
+            return "1.0.0"
+
+        svc.claude_binary_cache.resolve_version.side_effect = (
+            resolve_side_effect
+        )
+        svc.claude_binary_cache.prune.return_value = 0
+
+        svc._shutdown_event.wait = MagicMock(side_effect=[False, True])
+        # Should not crash despite repo-level failure
+        svc._garbage_collector_thread()
+
+    def test_gc_claude_binaries_none_cache(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """GC skips binary pruning when cache is None."""
+        svc, handler = make_service(email_config, tmp_path)
+        update_global(svc, conversation_max_age_days=7)
+
+        handler.conversation_manager.list_all.return_value = []
+        svc.claude_binary_cache = None
+
+        svc._shutdown_event.wait = MagicMock(side_effect=[False, True])
+        # Should not crash
+        svc._garbage_collector_thread()
 
 
 class TestMain:

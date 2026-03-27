@@ -130,8 +130,11 @@ development Dockerfile for your project.
 
 **Key requirements:**
 
-- `claude` must be installed and in PATH (Claude Code CLI)
 - `git` should be installed for version control operations
+- The Claude Code binary does **not** need to be installed in the image — Airut
+  downloads and caches it on the host, then bind-mounts it read-only into each
+  container at `/opt/claude/claude`. The version is controlled by the
+  `claude_version` per-repo config field.
 
 **For GitHub repositories:** Install `gh` (GitHub CLI) in the container and use
 the `gh auth git-credential` credential helper. This ensures all git operations
@@ -172,10 +175,8 @@ ENV PATH="/root/.local/bin:$PATH"
 # Python (if needed)
 RUN uv python install 3.13
 
-# Claude Code
-RUN mkdir /tmp/claude-install && cd /tmp/claude-install \
-    && curl -fsSL https://claude.ai/install.sh | bash \
-    && rm -rf /tmp/claude-install
+# Claude Code binary is bind-mounted by Airut at /opt/claude/claude.
+# No need to install it in the image.
 
 # Git config (optional - example uses gh credential helper)
 COPY gitconfig /root/.gitconfig

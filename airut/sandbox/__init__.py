@@ -22,6 +22,11 @@ from airut.sandbox._image_cache import (
     content_hash,
 )
 from airut.sandbox._proxy import ProxyError, build_proxy_spec
+from airut.sandbox.claude_binary import (
+    CLAUDE_BINARY_CONTAINER_PATH,
+    ClaudeBinaryCache,
+    ClaudeBinaryError,
+)
 from airut.sandbox.event_log import EVENTS_FILE_NAME, EventLog
 from airut.sandbox.network_log import NETWORK_LOG_FILENAME, NetworkLog
 from airut.sandbox.sandbox import Sandbox, SandboxConfig, default_proxy_dir
@@ -87,6 +92,10 @@ __all__ = [
     "ImageBuildSpec",
     "content_hash",
     "build_proxy_spec",
+    # claude_binary
+    "CLAUDE_BINARY_CONTAINER_PATH",
+    "ClaudeBinaryCache",
+    "ClaudeBinaryError",
     # errors
     "ImageBuildError",
     "ProxyError",

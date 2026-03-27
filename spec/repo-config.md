@@ -63,19 +63,20 @@ repos:
 
 ### Fields
 
-| Field                        | Type    | Default  | Description                                      |
-| ---------------------------- | ------- | -------- | ------------------------------------------------ |
-| `model`                      | string  | `"opus"` | Claude model for new conversations               |
-| `effort`                     | string  | *(none)* | Effort level passed as `--effort` to Claude Code |
-| `resource_limits.timeout`    | int     | *(none)* | Max container execution time in seconds (>= 10)  |
-| `resource_limits.memory`     | string  | *(none)* | Memory limit, e.g. `"2g"`, `"512m"`              |
-| `resource_limits.cpus`       | float   | *(none)* | CPU limit (>= 0.01, supports fractional cores)   |
-| `resource_limits.pids_limit` | int     | *(none)* | Process limit (>= 1)                             |
-| `network.sandbox_enabled`    | bool    | `true`   | Whether to enforce network allowlist             |
-| `secrets`                    | mapping | `{}`     | Plain secrets injected as env vars               |
-| `masked_secrets`             | mapping | `{}`     | Surrogate-based scoped credentials               |
-| `signing_credentials`        | mapping | `{}`     | AWS SigV4 re-signing credentials                 |
-| `github_app_credentials`     | mapping | `{}`     | Proxy-managed GitHub App token rotation          |
+| Field                        | Type    | Default    | Description                                             |
+| ---------------------------- | ------- | ---------- | ------------------------------------------------------- |
+| `model`                      | string  | `"opus"`   | Claude model for new conversations                      |
+| `effort`                     | string  | *(none)*   | Effort level passed as `--effort` to Claude Code        |
+| `claude_version`             | string  | `"latest"` | Claude Code version (semver, `"latest"`, or `"stable"`) |
+| `resource_limits.timeout`    | int     | *(none)*   | Max container execution time in seconds (>= 10)         |
+| `resource_limits.memory`     | string  | *(none)*   | Memory limit, e.g. `"2g"`, `"512m"`                     |
+| `resource_limits.cpus`       | float   | *(none)*   | CPU limit (>= 0.01, supports fractional cores)          |
+| `resource_limits.pids_limit` | int     | *(none)*   | Process limit (>= 1)                                    |
+| `network.sandbox_enabled`    | bool    | `true`     | Whether to enforce network allowlist                    |
+| `secrets`                    | mapping | `{}`       | Plain secrets injected as env vars                      |
+| `masked_secrets`             | mapping | `{}`       | Surrogate-based scoped credentials                      |
+| `signing_credentials`        | mapping | `{}`       | AWS SigV4 re-signing credentials                        |
+| `github_app_credentials`     | mapping | `{}`       | Proxy-managed GitHub App token rotation                 |
 
 ## Credential Auto-Injection
 
@@ -175,6 +176,7 @@ top level.
 - `git.repo_url` — Repository to clone
 - `model` — Claude model for new conversations (default: `"opus"`)
 - `effort` — Effort level for Claude Code (optional)
+- `claude_version` — Claude Code version (default: `"latest"`)
 - `resource_limits.*` — Per-repo resource limits (timeout, memory, cpus,
   pids_limit), override server-wide defaults
 - `network.sandbox_enabled` — Network sandbox toggle (default: `true`)

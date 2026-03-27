@@ -166,10 +166,8 @@ ENV PATH="/root/.local/bin:$PATH"
 # Python (if needed)
 RUN uv python install 3.13
 
-# Claude Code
-RUN mkdir /tmp/claude-install && cd /tmp/claude-install \
-    && curl -fsSL https://claude.ai/install.sh | bash \
-    && rm -rf /tmp/claude-install
+# Claude Code binary is bind-mounted by Airut at /opt/claude/claude.
+# No need to install it in the image.
 
 # Gerrit credential helper
 COPY gitconfig /root/.gitconfig

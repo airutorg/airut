@@ -46,13 +46,14 @@ restrictions, and credential scoping.
 
 Each conversation gets a fresh container with controlled mounts:
 
-| Mount Point     | Source                          | Access | Purpose                             |
-| --------------- | ------------------------------- | ------ | ----------------------------------- |
-| `/workspace`    | `conversations/{id}/workspace/` | rw     | Git checkout                        |
-| `/root/.claude` | `conversations/{id}/claude/`    | rw     | Claude session state                |
-| `/inbox`        | `conversations/{id}/inbox/`     | rw     | Email attachments                   |
-| `/outbox`       | `conversations/{id}/outbox/`    | rw     | Files to attach to reply            |
-| `/storage`      | `conversations/{id}/storage/`   | rw     | Conversation-scoped persistent data |
+| Mount Point          | Source                          | Access    | Purpose                               |
+| -------------------- | ------------------------------- | --------- | ------------------------------------- |
+| `/workspace`         | `conversations/{id}/workspace/` | rw        | Git checkout                          |
+| `/root/.claude`      | `conversations/{id}/claude/`    | rw        | Claude session state                  |
+| `/inbox`             | `conversations/{id}/inbox/`     | rw        | Email attachments                     |
+| `/outbox`            | `conversations/{id}/outbox/`    | rw        | Files to attach to reply              |
+| `/storage`           | `conversations/{id}/storage/`   | rw        | Conversation-scoped persistent data   |
+| `/opt/claude/claude` | Host binary cache               | read-only | Claude Code binary (managed by Airut) |
 
 Everything outside these mount points is ephemeral — the container filesystem is
 destroyed after each task execution. Only the mounted directories persist

@@ -32,6 +32,7 @@ from airut.sandbox._run_container import (
     _ProcessTracker,
     run_container,
 )
+from airut.sandbox.claude_binary import CLAUDE_BINARY_CONTAINER_PATH
 from airut.sandbox.event_log import EventLog
 from airut.sandbox.network_log import NetworkLog
 from airut.sandbox.secrets import SecretReplacements
@@ -176,6 +177,7 @@ class AgentTask:
         resource_limits: ResourceLimits,
         container_command: str,
         proxy_manager: ProxyManager | None,
+        claude_binary_path: Path | None = None,
     ) -> None:
         self._execution_context_id = execution_context_id
         self._image_tag = image_tag
@@ -187,6 +189,7 @@ class AgentTask:
         self._resource_limits = resource_limits
         self._container_command = container_command
         self._proxy_manager = proxy_manager
+        self._claude_binary_path = claude_binary_path
 
         # Event log (append-only)
         self._event_log = EventLog(execution_context_dir)
@@ -341,7 +344,7 @@ class AgentTask:
     ) -> ExecutionResult:
         """Run the container with the given configuration."""
         # Build claude command
-        claude_cmd = ["claude"]
+        claude_cmd = [CLAUDE_BINARY_CONTAINER_PATH]
         if session_id:
             claude_cmd.extend(["--resume", session_id])
             logger.info("Resuming Claude session: %s", session_id)
@@ -365,7 +368,7 @@ class AgentTask:
             prompt,
         )
 
-        # Build mounts list (caller mounts + claude dir)
+        # Build mounts list (caller mounts + claude dir + binary)
         all_mounts = list(self._mounts) + [
             Mount(
                 host_path=self._claude_dir,
@@ -373,6 +376,14 @@ class AgentTask:
                 read_only=False,
             ),
         ]
+        if self._claude_binary_path is not None:
+            all_mounts.append(
+                Mount(
+                    host_path=self._claude_binary_path,
+                    container_path=CLAUDE_BINARY_CONTAINER_PATH,
+                    read_only=True,
+                ),
+            )
 
         # Build network args
         network_args: list[str] = []

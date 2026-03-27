@@ -199,6 +199,9 @@ repos:
     #   # Max number of processes in the container
     #   pids_limit: 1024
 
+    # Claude Code version (semver, 'latest', or 'stable')
+    # claude_version: latest
+
     # network:
     #   # Route container traffic through the network proxy and enforce the allowlist (required for masked/signing/GitHub App credentials)
     #   sandbox_enabled: true

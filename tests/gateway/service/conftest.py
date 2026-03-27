@@ -151,6 +151,7 @@ def make_service(
         patch("airut.gateway.service.gateway.capture_version_info") as mock_ver,
         patch("airut.gateway.service.gateway.TaskTracker"),
         patch("airut.gateway.service.gateway.Sandbox"),
+        patch("airut.gateway.service.gateway.ClaudeBinaryCache"),
         patch(
             "airut.gateway.service.gateway.get_system_resolver",
             return_value="127.0.0.53",
@@ -160,6 +161,14 @@ def make_service(
         mock_create.return_value = {"email": mock_adapter}
         mock_ver.return_value = (MagicMock(git_sha="abc1234"), MagicMock())
         svc = GatewayService(server_config, repo_root=tmp_path)
+
+    # Configure claude_binary_cache mock to return a valid (path, version).
+    # claude_binary_cache is a MagicMock (patched above), but ty sees the
+    # declared type.
+    svc.claude_binary_cache.ensure.return_value = (  # type: ignore[union-attr]
+        Path("/fake/claude"),
+        "1.0.0",
+    )
 
     handler = svc.repo_handlers["test"]
 
