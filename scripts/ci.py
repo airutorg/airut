@@ -145,7 +145,8 @@ STEPS: list[Step] = [
             "uv run pytest tests/integration/ -n auto -v "
             "-W error::pytest.PytestUnraisableExceptionWarning "
             "-W error::RuntimeWarning "
-            "--allow-hosts=127.0.0.1,localhost"
+            "--allow-hosts=127.0.0.1,localhost,"
+            "claude.ai,storage.googleapis.com"
         ),
         workflow="integration",
     ),

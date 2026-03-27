@@ -107,7 +107,9 @@ without being affected by dev tooling licenses.
 | Integration tests | `pytest tests/integration/ -v --allow-hosts=127.0.0.1...` |
 
 Integration tests run with a mock container tool (configured automatically by
-test fixtures) and require only localhost network access for the test servers.
+test fixtures). Gateway tests require only localhost network access for the test
+servers. Sandbox compatibility tests also access `claude.ai` and
+`storage.googleapis.com`.
 
 ### `--fix` Mode
 
