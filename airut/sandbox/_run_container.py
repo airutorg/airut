@@ -189,6 +189,11 @@ async def run_container(
         "-i",
         "--log-driver=none",
         "--cap-drop=ALL",
+        "--cap-add=CHOWN",
+        "--cap-add=DAC_OVERRIDE",
+        "--cap-add=FOWNER",
+        "--cap-add=SETGID",
+        "--cap-add=SETUID",
         "--security-opt=no-new-privileges:true",
     ]
 

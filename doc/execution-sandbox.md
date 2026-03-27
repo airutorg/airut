@@ -120,13 +120,19 @@ Containers run with rootless Podman:
 - **Working directory**: `/workspace`
 - **Resource limits**: Configurable per-repo (memory, CPUs, process count,
   timeout) — see [Resource Limits](#resource-limits)
-- **Capabilities**: All Linux capabilities dropped (`--cap-drop=ALL`)
+- **Capabilities**: All Linux capabilities dropped (`--cap-drop=ALL`) then a
+  minimal set re-added for package-manager compatibility: `CHOWN`,
+  `DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`
 - **Privilege escalation**: Blocked (`--security-opt=no-new-privileges:true`)
 
 These security options are defense-in-depth measures. Rootless Podman already
-provides strong isolation, but explicitly dropping all capabilities and
-preventing privilege escalation ensures that even if a container escape
-vulnerability exists, the process cannot gain additional privileges.
+provides strong isolation through user namespaces — capabilities inside the
+container are scoped to that namespace and do not grant host-level privileges.
+The five re-added capabilities cover the POSIX ownership/permission model so
+that standard tools (`apt-get`, `npm`, `pip`) work without per-project
+workarounds. Dangerous capabilities like `NET_RAW`, `SYS_ADMIN`, and
+`SYS_PTRACE` remain dropped. `no-new-privileges` prevents setuid binaries from
+escalating beyond the granted set.
 
 The container image is built in two layers — a repo-defined base image and a
 server overlay with the entrypoint. See [spec/image.md](../spec/image.md) for

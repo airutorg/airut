@@ -262,6 +262,11 @@ class TestRunContainer:
 
         call_args = mock_create.call_args[0]
         assert "--cap-drop=ALL" in call_args
+        assert "--cap-add=CHOWN" in call_args
+        assert "--cap-add=DAC_OVERRIDE" in call_args
+        assert "--cap-add=FOWNER" in call_args
+        assert "--cap-add=SETGID" in call_args
+        assert "--cap-add=SETUID" in call_args
         assert "--security-opt=no-new-privileges:true" in call_args
         assert "--log-driver=none" in call_args
 

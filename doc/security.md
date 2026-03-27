@@ -177,7 +177,9 @@ See [execution-sandbox.md](execution-sandbox.md) for full details.
 **Key properties:**
 
 - Each conversation runs in a dedicated Podman container
-- All Linux capabilities dropped (`--cap-drop=ALL`)
+- All Linux capabilities dropped (`--cap-drop=ALL`), then minimal set re-added
+  for package-manager compatibility (`CHOWN`, `DAC_OVERRIDE`, `FOWNER`,
+  `SETGID`, `SETUID`)
 - Privilege escalation blocked (`--security-opt=no-new-privileges:true`)
 - Controlled mount points (workspace, claude state, inbox, outbox)
 - Claude Code binary bind-mounted read-only from host cache
@@ -346,7 +348,7 @@ This is acceptable for a single-user system behind authentication.
 | Slack identity misuse | Platform-enforced identity + authorization rules                              |
 | Unauthorized access   | Sender allowlist (email) / authorized rules (Slack)                           |
 | Bot-to-bot loops      | Slack adapter rejects bot users; email uses DMARC                             |
-| Code execution escape | Podman container isolation, all capabilities dropped, no privilege escalation |
+| Code execution escape | Podman container isolation, minimal capabilities, no privilege escalation     |
 | Data exfiltration     | Network allowlist via proxy                                                   |
 | Credential theft      | Environment-only secrets, no host mounts                                      |
 | Cross-session attack  | Per-conversation isolation (workspace, network)                               |

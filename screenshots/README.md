@@ -98,28 +98,16 @@ Output goes to `screenshots/output/` by default (gitignored).
 
 ## Running in the Airut sandbox
 
-The sandbox container runs as root but with all Linux capabilities stripped
-(`CapEff: 0`). This affects `apt-get` in two ways:
-
-1. **Privilege-dropping fails** — apt's HTTP methods call `setgroups`/`seteuid`
-   to drop to the `_apt` user, which requires `CAP_SETGID`/`CAP_SETUID`. Fix:
-   pass `-o APT::Sandbox::User=root` to skip privilege-dropping.
-
-2. **Cache directory is inaccessible** — `/var/cache/apt/archives/partial/` is
-   owned by `_apt` (mode 0700) and cannot be chmod'd without `CAP_FOWNER`. Fix:
-   redirect the cache to a writable directory with
-   `-o Dir::Cache::Archives=/tmp/apt-cache`.
+The sandbox container runs as root with a minimal capability set (`CHOWN`,
+`DAC_OVERRIDE`, `FOWNER`, `SETGID`, `SETUID`). Standard tools like `apt-get` and
+`npm` work without special workarounds.
 
 ### Step-by-step
 
 ```bash
 # 1. Install system dependencies
-mkdir -p /tmp/apt-cache/partial
-apt-get update -o APT::Sandbox::User=root
-apt-get install -y \
-    -o APT::Sandbox::User=root \
-    -o Dir::Cache::Archives=/tmp/apt-cache \
-    --no-install-recommends \
+apt-get update
+apt-get install -y --no-install-recommends \
     libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 \
     libatspi2.0-0t64 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
     libgbm1 libxkbcommon0 libasound2t64 libdbus-1-3 \
@@ -140,7 +128,7 @@ The network allowlist already permits the required domains:
 
 ### Alternative: bake dependencies into the container image
 
-To skip the runtime apt workarounds, add the system dependencies to
+To avoid installing at runtime, add the system dependencies to
 `.airut/container/Dockerfile`:
 
 ```dockerfile
