@@ -114,6 +114,7 @@ _COMPLEX_EXAMPLES: dict[str, list[str]] = {
         '      - "*.githubusercontent.com"',
         "    headers:",
         '      - "Authorization"',
+        "    allow_foreign_credentials: false",
     ],
     "RepoServerConfig.signing_credentials": [
         "signing_credentials:",
@@ -141,6 +142,13 @@ _COMPLEX_EXAMPLES: dict[str, list[str]] = {
         '      - "github.com"',
         '      - "api.github.com"',
         '      - "*.githubusercontent.com"',
+        "    allow_foreign_credentials: false",
+        '    base_url: "https://api.github.com"',
+        "    permissions:",
+        "      contents: write",
+        "      pull_requests: write",
+        "    repositories:",
+        "      - my-repo",
     ],
 }
 
@@ -527,6 +535,10 @@ def _render_class(
 #: Static header for the example config.
 _HEADER = """\
 # Airut Server Configuration
+#
+# AUTO-GENERATED — do not edit by hand.
+# Source: airut/config/generate.py  (schema in airut/gateway/config.py)
+# Regenerate: uv run python -m airut.config.generate
 #
 # Server-side settings: infrastructure, credentials, and per-repo controls.
 # All per-repo configuration (model, effort, resource limits, container env,

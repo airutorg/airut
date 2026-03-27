@@ -1,5 +1,9 @@
 # Airut Server Configuration
 #
+# AUTO-GENERATED — do not edit by hand.
+# Source: airut/config/generate.py  (schema in airut/gateway/config.py)
+# Regenerate: uv run python -m airut.config.generate
+#
 # Server-side settings: infrastructure, credentials, and per-repo controls.
 # All per-repo configuration (model, effort, resource limits, container env,
 # network, secrets) is managed here.  There is no repo-side airut.yaml —
@@ -149,6 +153,7 @@ repos:
     #       - "*.githubusercontent.com"
     #     headers:
     #       - "Authorization"
+    #     allow_foreign_credentials: false
 
     # AWS SigV4/SigV4A signing credentials for proxy re-signing
     # signing_credentials:
@@ -176,6 +181,13 @@ repos:
     #       - "github.com"
     #       - "api.github.com"
     #       - "*.githubusercontent.com"
+    #     allow_foreign_credentials: false
+    #     base_url: "https://api.github.com"
+    #     permissions:
+    #       contents: write
+    #       pull_requests: write
+    #     repositories:
+    #       - my-repo
 
     # Claude model for new conversations
     # model: opus

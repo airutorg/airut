@@ -15,74 +15,11 @@ Repository-side files that remain in `.airut/`:
 
 ## Per-Repo Schema in Server Config
 
-Each repo is defined under `repos.<repo_id>` in the server config:
-
-```yaml
-repos:
-  my-project:
-    # Channels (at least one required)
-    email: { ... }
-    slack: { ... }
-
-    # Git repository
-    git:
-      repo_url: https://github.com/org/repo.git
-
-    # Claude model (default: "opus")
-    # Channel hints (e.g. email subaddressing) override this for new
-    # conversations.  Resumed conversations keep their stored model.
-    model: opus
-
-    # Effort level passed as --effort to Claude Code (optional)
-    # effort: max
-
-    # Per-repo resource limits (use !var for shared defaults across repos)
-    # resource_limits:
-    #   timeout: !var default_resource_timeout
-    #   memory: !var default_resource_memory
-    #   cpus: !var default_resource_cpus
-    #   pids_limit: !var default_resource_pids_limit
-
-    # Network sandbox toggle (default: true)
-    # network:
-    #   sandbox_enabled: true
-
-    # Container directory path (default: .airut/container)
-    # Override to use an existing Dockerfile, e.g. a devcontainer:
-    # container:
-    #   path: .devcontainer
-
-    # Credential pools (all entries auto-inject as container env vars)
-    secrets:
-      ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
-
-    masked_secrets:
-      GH_TOKEN:
-        value: !env GH_TOKEN
-        scopes: ["github.com", "api.github.com"]
-        headers: ["Authorization"]
-
-    # signing_credentials: { ... }
-    # github_app_credentials: { ... }
-```
-
-### Fields
-
-| Field                        | Type    | Default              | Description                                             |
-| ---------------------------- | ------- | -------------------- | ------------------------------------------------------- |
-| `model`                      | string  | `"opus"`             | Claude model for new conversations                      |
-| `effort`                     | string  | *(none)*             | Effort level passed as `--effort` to Claude Code        |
-| `claude_version`             | string  | `"latest"`           | Claude Code version (semver, `"latest"`, or `"stable"`) |
-| `resource_limits.timeout`    | int     | *(none)*             | Max container execution time in seconds (>= 10)         |
-| `resource_limits.memory`     | string  | *(none)*             | Memory limit, e.g. `"2g"`, `"512m"`                     |
-| `resource_limits.cpus`       | float   | *(none)*             | CPU limit (>= 0.01, supports fractional cores)          |
-| `resource_limits.pids_limit` | int     | *(none)*             | Process limit (>= 1)                                    |
-| `network.sandbox_enabled`    | bool    | `true`               | Whether to enforce network allowlist                    |
-| `container.path`             | string  | `".airut/container"` | Path to container directory in the repo                 |
-| `secrets`                    | mapping | `{}`                 | Plain secrets injected as env vars                      |
-| `masked_secrets`             | mapping | `{}`                 | Surrogate-based scoped credentials                      |
-| `signing_credentials`        | mapping | `{}`                 | AWS SigV4 re-signing credentials                        |
-| `github_app_credentials`     | mapping | `{}`                 | Proxy-managed GitHub App token rotation                 |
+Each repo is defined under `repos.<repo_id>` in the server config. The complete
+field reference — types, defaults, descriptions, and commented examples — is in
+[`config/airut.example.yaml`](../config/airut.example.yaml). For the config
+infrastructure (field metadata, migrations, diffing, variables), see
+[declarative-config.md](declarative-config.md).
 
 ## Credential Auto-Injection
 
@@ -119,30 +56,13 @@ creation time, regardless of current server config.
 
 Shared resource limit defaults are defined as variables in the `vars:` section
 and referenced with `!var` in each repo. This replaces the former top-level
-`resource_limits` block (migrated automatically in config version 3).
-
-```yaml
-vars:
-  default_resource_timeout: 7200
-  default_resource_memory: "8g"
-  default_resource_cpus: 4
-  default_resource_pids_limit: 1024
-
-repos:
-  my-repo:
-    resource_limits:
-      timeout: !var default_resource_timeout
-      memory: !var default_resource_memory
-      cpus: !var default_resource_cpus
-      pids_limit: !var default_resource_pids_limit
-  other-repo:
-    resource_limits:
-      timeout: 3600                             # override for this repo
-      memory: !var default_resource_memory      # shared default
-```
-
-All fields are optional. Omitted fields mean no limit for that dimension. Repos
-can override any field to a literal value or reference a different variable.
+`resource_limits` block (migrated automatically in config version 3). All fields
+are optional. Omitted fields mean no limit for that dimension. Repos can
+override any field to a literal value or reference a different variable. See
+[`config/airut.example.yaml`](../config/airut.example.yaml) for the full `vars:`
+and `resource_limits:` examples, and
+[declarative-config.md](declarative-config.md#config-variables) for `!var`
+syntax and resolution.
 
 ## What Stays in the Repository
 
@@ -167,50 +87,10 @@ pipelines). It is not used by the Airut gateway service.
 
 ## Server Config Reference
 
-Per-repo config is nested under `repos.<repo_id>`. Global settings live at the
-top level.
-
-- `email.*` — Email channel settings nested under `email:`:
-  - `email.account.username`, `email.account.password` — Credentials
-  - `email.account.from` — Sender address
-  - `email.imap.server`, `email.imap.port` — IMAP server connectivity
-  - `email.imap.*` — Polling and idle configuration (connect_retries,
-    poll_interval, use_idle, idle_reconnect_interval)
-  - `email.smtp.server`, `email.smtp.port` — SMTP server connectivity
-  - `email.smtp.require_auth` — Whether SMTP requires authentication
-  - `email.auth.authorized_senders`, `email.auth.trusted_authserv_id` — Access
-    control
-  - `email.auth.microsoft_internal_fallback` — Fallback auth for internal M365
-  - `email.microsoft_oauth2.*` — Microsoft OAuth2 Client Credentials for M365
-    (tenant_id, client_id, client_secret). When configured, XOAUTH2 SASL is used
-    for both IMAP and SMTP instead of password auth. The
-    `email.account.password` field becomes optional when OAuth2 is configured.
-- `slack.*` — Slack channel settings nested under `slack:`:
-  - `slack.bot_token` — Bot User OAuth Token (`xoxb-...`)
-  - `slack.app_token` — App-level token for Socket Mode (`xapp-...`)
-  - `slack.authorized` — Authorization rules: `workspace_members`, `user_group`,
-    `user_id`. See [slack-channel.md](slack-channel.md#authorization-rules)
-- `git.repo_url` — Repository to clone
-- `model` — Claude model for new conversations (default: `"opus"`)
-- `effort` — Effort level for Claude Code (optional)
-- `claude_version` — Claude Code version (default: `"latest"`)
-- `resource_limits.*` — Per-repo resource limits (timeout, memory, cpus,
-  pids_limit); use `!var` for shared defaults across repos
-- `network.sandbox_enabled` — Network sandbox toggle (default: `true`)
-- `container.path` — Path to container directory in the repo (default:
-  `.airut/container`). Override to use an existing Dockerfile (e.g.,
-  `.devcontainer`)
-- `secrets` — Plain secrets injected as container env vars
-- `masked_secrets` — Surrogate-based scoped credentials
-- `signing_credentials` — AWS SigV4 re-signing credentials
-- `github_app_credentials` — Proxy-managed GitHub App token rotation
-- `execution.*` — `max_concurrent`, `shutdown_timeout`,
-  `conversation_max_age_days`, `image_prune`
-- `dashboard.*` — Web UI configuration
-- `container_command` — Container runtime (test-only; production requires
-  podman). Hidden from config editor.
-- `vars.*` — Shared variables referenced with `!var` (e.g. resource limit
-  defaults)
+The complete field reference with types, defaults, and descriptions is in
+[`config/airut.example.yaml`](../config/airut.example.yaml). Per-repo config is
+nested under `repos.<repo_id>`; global settings (`execution`, `dashboard`,
+`network`, `vars`) live at the top level.
 
 **Important:** All channel-specific fields must be nested under their channel
 block (`email:` or `slack:`). A repo must have at least one channel block

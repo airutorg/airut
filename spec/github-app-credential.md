@@ -34,43 +34,10 @@ Key properties:
 
 ## Server Config Schema
 
-GitHub App credentials are declared in a `github_app_credentials` block
-alongside `masked_secrets` and `signing_credentials`:
-
-```yaml
-repos:
-  my-project:
-    github_app_credentials:
-      GH_TOKEN:
-        app_id: !env GH_APP_ID                    # Client ID (Iv23li...) on github.com
-        private_key: !env GH_APP_PRIVATE_KEY       # PEM-encoded RSA private key
-        installation_id: !env GH_APP_INSTALLATION_ID
-        scopes:
-          - "github.com"
-          - "api.github.com"
-          - "*.githubusercontent.com"
-        allow_foreign_credentials: false            # Optional, default: false
-        # Optional: restrict token permissions (subset of app's granted permissions)
-        permissions:
-          contents: write
-          pull_requests: write
-        # Optional: restrict token to specific repos
-        repositories:
-          - "my-repo"
-```
-
-### Fields
-
-| Field                       | Type          | Required | Description                                                   |
-| --------------------------- | ------------- | -------- | ------------------------------------------------------------- |
-| `app_id`                    | string / !env | Yes      | GitHub App Client ID (`Iv23li...`) or numeric App ID for GHES |
-| `private_key`               | string / !env | Yes      | PEM-encoded RSA private key                                   |
-| `installation_id`           | string / !env | Yes      | Installation ID for the target org/user                       |
-| `scopes`                    | list[string]  | Yes      | Fnmatch host patterns where token replacement is allowed      |
-| `base_url`                  | string / !env | No       | GitHub API base URL (default: `https://api.github.com`)       |
-| `allow_foreign_credentials` | bool          | No       | Allow non-surrogate credentials through (default: false)      |
-| `permissions`               | dict          | No       | Restrict token permissions (subset of app's grants)           |
-| `repositories`              | list[string]  | No       | Restrict token to specific repository names                   |
+GitHub App credentials are declared in the `github_app_credentials:` block under
+each repo in the server config, alongside `masked_secrets` and
+`signing_credentials`. For the full field reference (types, defaults, examples),
+see [`config/airut.example.yaml`](../config/airut.example.yaml).
 
 The `app_id` field maps to the JWT `iss` claim. On GitHub.com (and GHES 3.19+),
 this should be the **Client ID** (string starting with `Iv`). On older GHES
@@ -78,26 +45,12 @@ versions, use the numeric App ID.
 
 The `private_key` is the PEM-encoded RSA private key downloaded from the GitHub
 App settings page. Both PKCS#1 (`BEGIN RSA PRIVATE KEY`) and PKCS#8
-(`BEGIN PRIVATE KEY`) formats are supported --
+(`BEGIN PRIVATE KEY`) formats are supported —
 `cryptography.load_pem_private_key()` handles both.
 
-### GHES Support
-
-For GitHub Enterprise Server, add a `base_url` field:
-
-```yaml
-github_app_credentials:
-  GH_TOKEN:
-    app_id: "12345"
-    private_key: !env GH_APP_PEM
-    installation_id: "67890"
-    base_url: "https://github.example.com/api/v3"   # GHES API base
-    scopes:
-      - "github.example.com"
-      - "*.github.example.com"
-```
-
-When `base_url` is absent, the proxy uses `https://api.github.com` as default.
+For GitHub Enterprise Server, set the `base_url` field to the GHES API base URL
+(e.g. `https://github.example.com/api/v3`). When absent, the proxy uses
+`https://api.github.com` as default.
 
 ## Resolution Flow
 

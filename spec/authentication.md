@@ -135,15 +135,8 @@ succeeds if the sender matches any pattern:
 
 ### Example Configuration
 
-Within the `email:` block of a repo's server config:
-
-```yaml
-auth:
-  authorized_senders:
-    - admin@company.com        # Exact match
-    - *@trusted-partner.com    # Any user from this domain
-    - external.contractor@consultant.org
-```
+See [`config/airut.example.yaml`](../config/airut.example.yaml) for the full
+`email.auth` configuration with authorized senders and DMARC settings.
 
 ## From Header Parsing
 

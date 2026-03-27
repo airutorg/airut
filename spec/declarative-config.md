@@ -451,10 +451,12 @@ of `ServerConfig`. All callers access the resolved config via `.value`.
 Existing YAML files without `vars:` work identically — `resolve_vars_section()`
 returns an empty table, `resolve_var_refs()` is a no-op.
 
-### Relationship to spec/repo-config.md
+### Relationship to Other Config References
 
 This spec defines the config **infrastructure** (metadata, migration, diffing,
-round-trip, variables). `spec/repo-config.md` remains the authoritative
-reference for the config **schema** (what fields exist, their types, defaults,
-and semantics). The `vars:` section and `!var` tag are documented there as part
-of the config schema.
+round-trip, variables). The authoritative reference for the config **schema**
+(what fields exist, their types, defaults, and semantics) is
+[`config/airut.example.yaml`](../config/airut.example.yaml).
+`spec/repo-config.md` documents per-repo architectural concerns (credential
+auto-injection, model priority, loading flow) rather than field-level schema
+details.
