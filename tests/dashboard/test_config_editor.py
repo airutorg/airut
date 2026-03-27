@@ -305,7 +305,7 @@ class TestConfigPageLoads:
         html = response.get_data(as_text=True)
         assert "Execution" in html
         assert "Dashboard" in html
-        assert "Container" in html
+        assert "Network" in html
 
     def test_config_page_shows_field_paths(
         self, harness: ConfigEditorHarness

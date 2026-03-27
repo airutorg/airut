@@ -899,7 +899,6 @@ def _make_config_raw() -> dict[str, Any]:
             "port": 5200,
             "base_url": "https://airut.acme.com",
         },
-        "container_command": "podman",
         "network": {
             "upstream_dns": "1.1.1.1",
         },

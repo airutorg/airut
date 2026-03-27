@@ -333,8 +333,6 @@ dashboard:
   port: 5200
   base_url: dashboard.example.com  # For email links
 
-container_command: podman    # or docker
-
 # Server-wide resource limit defaults (all optional).
 # Per-repo values override these. Omitted fields mean no default.
 # resource_limits:

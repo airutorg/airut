@@ -46,8 +46,6 @@ dashboard:
   port: 5200
   base_url: dashboard.example.com
 
-container_command: podman
-
 # Per-repo configuration
 repos:
   airut:

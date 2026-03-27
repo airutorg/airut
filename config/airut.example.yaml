@@ -50,8 +50,9 @@
 #   # Public URL for dashboard links in emails (omitted if empty)
 #   base_url: dashboard.example.com
 
-# Container runtime command (podman or docker)
-# container_command: podman
+# network:
+#   # Upstream DNS server for proxy resolution (auto-detected if empty)
+#   upstream_dns: "1.1.1.1"
 
 # Default container resource limits (repos can override individually)
 # resource_limits:
@@ -63,10 +64,6 @@
 #   cpus: 4
 #   # Max number of processes in the container
 #   pids_limit: 1024
-
-# network:
-#   # Upstream DNS server for proxy resolution (auto-detected if empty)
-#   upstream_dns: "1.1.1.1"
 
 # ---------------------------------------------------------------------------
 # Repositories

@@ -457,7 +457,7 @@ class TestRenderClass:
         text = "\n".join(lines)
         assert "execution:" in text
         assert "dashboard:" in text
-        assert "container_command" in text
+        assert "container_command" not in text  # hidden field
         assert "resource_limits:" in text
         assert "network:" in text
 
@@ -513,7 +513,7 @@ class TestGenerateExampleConfig:
         content = generate_example_config()
         assert "execution:" in content
         assert "dashboard:" in content
-        assert "container_command" in content
+        assert "container_command" not in content  # hidden field
         assert "resource_limits:" in content
         assert "network:" in content
 
@@ -568,7 +568,7 @@ class TestGenerateExampleConfig:
         content = generate_example_config()
         for f in dataclasses.fields(GlobalConfig):
             fm = get_field_meta(f)
-            if fm is not None:
+            if fm is not None and not fm.hidden:
                 assert fm.doc in content, (
                     f"GlobalConfig.{f.name} doc missing from output"
                 )
@@ -686,7 +686,7 @@ class TestGenerateStubConfig:
     def test_includes_global_config_commented(self) -> None:
         content = generate_stub_config()
         assert "# execution:" in content
-        assert "# container_command:" in content
+        assert "# container_command:" not in content  # hidden field
 
 
 # ---------------------------------------------------------------------------

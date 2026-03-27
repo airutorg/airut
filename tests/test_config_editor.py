@@ -285,7 +285,7 @@ class TestSchemaForEditorRealConfigs:
         )
         assert by_name["dashboard_port"].path == "dashboard.port"
         assert by_name["upstream_dns"].path == "network.upstream_dns"
-        assert by_name["container_command"].path == "container_command"
+        assert "container_command" not in by_name  # hidden from editor
 
         # Resource limits is nested
         rl = by_name["resource_limits"]
