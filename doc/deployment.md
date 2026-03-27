@@ -334,16 +334,16 @@ dashboard:
   port: 5200
   base_url: dashboard.example.com  # For email links
 
-# Server-wide resource limit defaults (all optional).
-# Per-repo values override these. Omitted fields mean no default.
-# resource_limits:
-#   timeout: 7200       # Default timeout (seconds)
-#   memory: "8g"        # Default memory limit
-#   cpus: 4             # Default CPU limit
-#   pids_limit: 1024    # Default process limit
-
 repos:
   my-project:
+    # Container resource limits (all optional)
+    resource_limits:
+      timeout: 7200       # Max execution time in seconds
+      memory: "8g"        # Memory limit (e.g. "2g", "512m")
+      cpus: 4             # CPU core limit (supports fractional)
+      pids_limit: 1024    # Max processes (fork bomb protection)
+    # Tip: Use vars: to share settings between repos (see airut.example.yaml)
+
     # Channel configuration (at least one required)
     email:
       account:
@@ -375,7 +375,8 @@ repos:
 
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
-      GH_TOKEN: !env GH_TOKEN
+    # For GitHub tokens, prefer github_app_credentials or masked_secrets
+    # over plain secrets — see Masked Secrets / GitHub App Credentials below.
 ```
 
 ### Secrets
@@ -420,6 +421,8 @@ repos:
           - "github.com"
           - "api.github.com"
           - "*.githubusercontent.com"
+        headers:
+          - "Authorization"
 ```
 
 Real credentials never enter the container. See

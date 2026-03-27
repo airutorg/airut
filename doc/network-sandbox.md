@@ -206,7 +206,9 @@ protection.
 
 This setting is useful as a **break-glass** for operators: if a broken allowlist
 gets checked in, the operator can disable the sandbox while a fix is prepared.
-Note that server config changes require a **server restart** to take effect.
+Config changes are picked up automatically via live reload (or when saved
+through the config editor). The change takes effect once any in-flight tasks for
+the repo complete.
 
 When the sandbox is disabled, a warning is logged. If masked secrets are
 configured, an additional warning is logged because masked secrets depend on the
@@ -638,10 +640,10 @@ repos:
       sandbox_enabled: false
 ```
 
-After changing server config, **restart the server** for it to take effect. With
-the sandbox disabled, the agent has unrestricted network access and can create a
-PR to fix the allowlist. After the fix merges, re-enable the sandbox by removing
-the override (or setting it back to `true`) and restart again.
+The change takes effect automatically via live config reload (once in-flight
+tasks complete). With the sandbox disabled, the agent has unrestricted network
+access and can create a PR to fix the allowlist. After the fix merges, re-enable
+the sandbox by removing the override (or setting it back to `true`).
 
 ### Masked secrets stopped working
 
@@ -665,8 +667,9 @@ config.
 When investigating connectivity problems from inside a container:
 
 1. **Prefer the server-side override** — set `network.sandbox_enabled: false` in
-   server config and restart the server. This avoids modifying the repo.
-2. After debugging, re-enable the sandbox and restart.
+   server config. The change takes effect via live reload once in-flight tasks
+   complete. This avoids modifying the repo.
+2. After debugging, re-enable the sandbox (the change applies via live reload).
 3. Check `conversation_dir/network-sandbox.log` for the audit trail of allowed
    and blocked requests from previous tasks.
 

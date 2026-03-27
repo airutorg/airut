@@ -20,7 +20,6 @@ for running arbitrary commands in CI pipelines and other environments. See
 - [Network Isolation](#network-isolation)
 - [Container Runtime](#container-runtime)
 - [Resource Limits](#resource-limits)
-  - [Two-Layer Configuration](#two-layer-configuration)
   - [cgroup v2 Requirement](#cgroup-v2-requirement)
   - [Other Limits](#other-limits)
 - [Fail-Secure Behavior](#fail-secure-behavior)
@@ -160,23 +159,9 @@ repos:
 Setting `--memory-swap` equal to `--memory` disables swap, preventing slow OOM
 thrashing.
 
-### Two-Layer Configuration
-
-The server config also supports a top-level `resource_limits` block that defines
-default values for all repos:
-
-```yaml
-# ~/.config/airut/airut.yaml (server config, top level)
-resource_limits:
-  timeout: 7200       # Default timeout
-  memory: "8g"        # Default memory limit
-  cpus: 4             # Default CPU limit
-  pids_limit: 1024    # Default process limit
-```
-
-Per-repo values override these defaults. For each field independently: the repo
-value is used if set, otherwise the server default applies. If neither sets a
-value, no limit is enforced for that dimension.
+All fields are independent — omitted fields mean no limit for that dimension. To
+share defaults across repos, use `!var` references (see
+[deployment.md](deployment.md#server-config-configairutairutyaml)).
 
 ### cgroup v2 Requirement
 
