@@ -20,6 +20,7 @@
     <div class="cfg-dict-item">
       <span class="cfg-dict-key">{{ key }}</span>
 
+      <div class="cfg-dict-item-row">
       <div class="cfg-tabbed" data-source="{{ current_source }}">
         <div class="cfg-source">
           <button data-source="literal"
@@ -82,7 +83,7 @@
         {% endif %}
       </div>
 
-      <button class="cfg-btn danger cfg-list-remove"
+      <button class="cfg-btn danger cfg-btn-sm cfg-list-remove"
               hx-post="/api/config/remove"
               hx-vals='{"path":{{ f.path | tojson }},"key":{{ key_json }}}'
               hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
@@ -91,6 +92,7 @@
               hx-confirm="Remove '{{ key }}'?">
         &times;
       </button>
+      </div>
     </div>
     {% endfor %}
     {% endif %}

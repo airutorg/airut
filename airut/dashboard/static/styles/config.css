@@ -421,19 +421,20 @@ select.cfg-tagged-type { max-width: 200px; flex-shrink: 0; }
 /* ---- Dict key-value widget ---- */
 .cfg-dict-items { margin: 8px 0; }
 .cfg-dict-item {
-  display: flex;
-  align-items: flex-end;
-  gap: 6px;
   margin-bottom: 6px;
-  flex-wrap: wrap;
 }
 .cfg-dict-key {
+  display: block;
   font-family: var(--font-mono);
   font-size: 13px;
   font-weight: 500;
   color: var(--text-primary);
-  min-width: 100px;
-  flex-shrink: 0;
+  margin-bottom: 4px;
+}
+.cfg-dict-item-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
 }
 .cfg-dict-add {
   display: flex;
@@ -442,7 +443,11 @@ select.cfg-tagged-type { max-width: 200px; flex-shrink: 0; }
   margin-top: 8px;
 }
 /* Tabbed widget inside dict entries and variable controls */
-.cfg-dict-item .cfg-tabbed,
+.cfg-dict-item .cfg-tabbed {
+  flex: 1;
+  margin-top: 0;
+  max-width: none;
+}
 .cfg-var-controls .cfg-tabbed {
   flex: 1;
   min-width: 150px;
