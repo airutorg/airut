@@ -198,8 +198,10 @@ See [network-sandbox.md](network-sandbox.md) for full details.
 - All HTTP(S) transparently routed through mitmproxy enforcing allowlist — no
   `HTTP_PROXY` env vars needed, works with all tools (Node.js, Go, curl, etc.)
 - Custom DNS responder replaces Podman's default aardvark-dns — returns proxy IP
-  for allowed domains, NXDOMAIN for blocked, and never forwards queries upstream
-  (blocks DNS exfiltration)
+  for all A queries unconditionally, NOTIMP for other record types (AAAA, MX,
+  etc.), and never forwards queries upstream (blocks DNS exfiltration)
+- Allowlist enforcement at the proxy layer (HTTP 403 for blocked requests), not
+  at DNS — this avoids leaking domain existence information
 - Allowlist read from default branch (agent can't modify active list)
 - Per-conversation proxy container and network (isolated from other tasks)
 
@@ -220,7 +222,8 @@ repos:
       bot_token: !env SLACK_BOT_TOKEN
     secrets:
       ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
-      GH_TOKEN: !env GH_TOKEN
+    # For GitHub tokens, prefer github_app_credentials or masked_secrets
+    # over plain secrets — see sections below.
 ```
 
 Actual values come from environment variables or `~/.config/airut/.env`.

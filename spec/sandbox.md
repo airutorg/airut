@@ -263,16 +263,14 @@ field is `None`, the corresponding flag is not passed and no limit is enforced.
 Setting `--memory-swap` equal to `--memory` disables swap for the container,
 preventing slow OOM thrashing.
 
-### Configuration Layers
+### Configuration
 
-Resource limits are configured in the server config
-(`~/.config/airut/airut.yaml`) at two levels:
+Resource limits are configured per-repo in the server config
+(`~/.config/airut/airut.yaml`) under `repos.<name>.resource_limits`. To share
+defaults across repos, define them as variables in the `vars:` section and
+reference them with `!var`.
 
-1. **Server-wide defaults** (top-level `resource_limits`) — optional defaults
-2. **Per-repo overrides** (under `repos.<name>.resource_limits`) — override
-   defaults
-
-See `spec/repo-config.md` for the full resolution logic.
+See `spec/repo-config.md` for the full schema.
 
 ### cgroup v2 Requirement
 

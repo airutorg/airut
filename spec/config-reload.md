@@ -174,7 +174,7 @@ exist.
 **Fields:** `max_concurrent_executions`, `shutdown_timeout_seconds`,
 `conversation_max_age_days`, `image_prune`, `dashboard_enabled`,
 `dashboard_host`, `dashboard_port`, `dashboard_base_url`, `container_command`,
-`upstream_dns`, `resource_limits` (global default).
+`upstream_dns`.
 
 These affect shared infrastructure: thread pool, dashboard server, sandbox
 proxy.
@@ -187,12 +187,11 @@ proxy.
 While server reload is pending, the service continues normally. A new config
 change replaces the pending config (latest wins).
 
-**Note:** Sandbox-related fields (`container_command`, `upstream_dns`) and
-`resource_limits` (global default) require a service restart. Dashboard settings
-and `max_concurrent_executions` are applied via server reload.
-`conversation_max_age_days`, `image_prune`, and `shutdown_timeout_seconds` are
-re-read at use time (GC iteration / shutdown) so they take effect on reload
-without restart.
+**Note:** Sandbox-related fields (`container_command`, `upstream_dns`) require a
+service restart. Dashboard settings and `max_concurrent_executions` are applied
+via server reload. `conversation_max_age_days`, `image_prune`, and
+`shutdown_timeout_seconds` are re-read at use time (GC iteration / shutdown) so
+they take effect on reload without restart.
 
 ### Variable and Environment Resolution
 
