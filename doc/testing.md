@@ -7,9 +7,8 @@ tested for correctness and safety.
 
 ## Unit Tests
 
-94 test files under `tests/` cover all library and script code. CI enforces 100%
-line coverage via `pytest-cov --cov-fail-under=100` — any uncovered line fails
-the build.
+CI enforces 100% line coverage via `pytest-cov --cov-fail-under=100` — any
+uncovered line fails the build.
 
 Key properties:
 
@@ -22,9 +21,8 @@ Key properties:
 
 ## Integration Tests
 
-38 test files under `tests/integration/` exercise full end-to-end workflows.
-These run separately from unit tests via
-`uv run scripts/ci.py --workflow integration`.
+Tests under `tests/integration/` exercise full end-to-end workflows. These run
+separately from unit tests via `uv run scripts/ci.py --workflow integration`.
 
 The integration suite uses purpose-built test servers that simulate external
 dependencies without requiring real infrastructure:
@@ -49,7 +47,7 @@ migration is:
 - **Security-aware** — security-affecting changes raise errors instead of
   silently auto-transforming
 
-92 unit tests and 12 integration tests cover the migration chain, including edge
+Dedicated unit and integration tests cover the migration chain, including edge
 cases (missing keys, malformed sections, variable name collisions) and
 double-migration idempotency.
 
@@ -67,3 +65,16 @@ All checks run via `scripts/ci.py`, which is the single source of truth:
 | Markdown           | mdformat     | Consistent formatting   |
 
 Integration tests run as a separate workflow. Both must pass before merge.
+
+## Code Review
+
+Every change goes through two review layers before landing:
+
+1. **Automated code review** — `CLAUDE.md` mandates a code review subagent that
+   checks each PR for test coverage gaps, missing edge cases, and adherence to
+   testing standards (no skips, no `# pragma: no cover` without justification).
+   All findings must be resolved before the PR is pushed.
+
+2. **Mandatory GitHub PR review** — all PRs require human approval. Reviewers
+   verify that tests match the change, coverage remains at 100%, and integration
+   tests pass in CI.
