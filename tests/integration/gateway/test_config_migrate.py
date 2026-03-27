@@ -63,8 +63,7 @@ repos:
         authorized_senders:
           - auth@test.com
         trusted_authserv_id: mx.test.com
-    git:
-      repo_url: https://example.com/repo.git
+    repo_url: https://example.com/repo.git
 """
 
 

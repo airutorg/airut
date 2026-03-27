@@ -801,10 +801,10 @@ class TestSave:
     def test_save_invalid_config(self, harness: ConfigEditorHarness) -> None:
         harness.client.get("/config")
 
-        # Remove required git.repo_url to make config invalid
+        # Remove required repo_url to make config invalid
         buf = harness.server._config_handlers._buffer
         assert buf is not None
-        del buf._raw["repos"]["test-repo"]["git"]["repo_url"]
+        del buf._raw["repos"]["test-repo"]["repo_url"]
 
         response = harness.client.post(
             "/api/config/save",
@@ -821,10 +821,10 @@ class TestSave:
         """
         harness.client.get("/config")
 
-        # Remove required git.repo_url to make config invalid
+        # Remove required repo_url to make config invalid
         buf = harness.server._config_handlers._buffer
         assert buf is not None
-        del buf._raw["repos"]["test-repo"]["git"]["repo_url"]
+        del buf._raw["repos"]["test-repo"]["repo_url"]
         buf.mark_dirty()
 
         response = harness.client.get("/api/config/diff")
@@ -1594,10 +1594,10 @@ class TestRepoPage:
         harness.client.get("/config")
         response = harness.client.get("/config/repos/test-repo")
         html = response.get_data(as_text=True)
-        assert "repos.test-repo.git.repo_url" in html
+        assert "repos.test-repo.repo_url" in html
         assert "repos.test-repo.model" in html
         assert "repos.test-repo.claude_version" in html
-        assert "repos.test-repo.container.path" in html
+        assert "repos.test-repo.container_path" in html
 
     def test_repo_page_not_found(self, harness: ConfigEditorHarness) -> None:
         harness.client.get("/config")
@@ -1691,7 +1691,7 @@ class TestRepoFieldPatch:
         response = harness.client.patch(
             "/api/config/field",
             data={
-                "path": "repos.test-repo.git.repo_url",
+                "path": "repos.test-repo.repo_url",
                 "source": "env",
                 "value": "GIT_URL",
             },
@@ -1700,9 +1700,7 @@ class TestRepoFieldPatch:
         assert response.status_code == 200
         buf = harness.server._config_handlers._buffer
         assert buf is not None
-        assert isinstance(
-            buf.raw["repos"]["test-repo"]["git"]["repo_url"], EnvVar
-        )
+        assert isinstance(buf.raw["repos"]["test-repo"]["repo_url"], EnvVar)
 
     def test_patch_repo_bool_field(self, harness: ConfigEditorHarness) -> None:
         harness.client.get("/config")
@@ -1742,7 +1740,7 @@ class TestAddRemoveRepo:
     def test_add_repo_creates_skeleton(
         self, harness: ConfigEditorHarness
     ) -> None:
-        """New repo gets a minimal skeleton with git and email stubs."""
+        """New repo gets a minimal skeleton with repo_url and email stubs."""
         harness.client.get("/config")
         harness.client.post(
             "/api/config/add",
@@ -1752,8 +1750,7 @@ class TestAddRemoveRepo:
         buf = harness.server._config_handlers._buffer
         assert buf is not None
         repo = buf.raw["repos"]["new-project"]
-        assert "git" in repo
-        assert "repo_url" in repo["git"]
+        assert "repo_url" in repo
         assert "email" in repo
         # Sensitive fields use empty literal placeholders
         assert repo["email"]["account"]["password"] == ""
@@ -1764,14 +1761,14 @@ class TestAddRemoveRepo:
         harness.client.get("/config")
         buf = harness.server._config_handlers._buffer
         assert buf is not None
-        original_url = buf.raw["repos"]["test-repo"]["git"]["repo_url"]
+        original_url = buf.raw["repos"]["test-repo"]["repo_url"]
 
         harness.client.post(
             "/api/config/add",
             data={"path": "repos", "key": "test-repo"},
             headers=XHR,
         )
-        assert buf.raw["repos"]["test-repo"]["git"]["repo_url"] == original_url
+        assert buf.raw["repos"]["test-repo"]["repo_url"] == original_url
 
     def test_add_repo_dirty_count(self, harness: ConfigEditorHarness) -> None:
         harness.client.get("/config")
@@ -1847,8 +1844,8 @@ class TestRepoDiff:
         response = harness.client.get("/api/config/diff")
         assert response.status_code == 200
         html = response.get_data(as_text=True)
-        # Repo subfields like git.repo_url must appear individually
-        assert "repos.new-project.git.repo_url" in html
+        # Repo subfields like repo_url must appear individually
+        assert "repos.new-project.repo_url" in html
         # Email channel subfields too
         assert "repos.new-project.email.imap.server" in html
 
@@ -1866,7 +1863,7 @@ class TestRepoDiff:
         assert response.status_code == 200
         html = response.get_data(as_text=True)
         # Must show individual subfields, not just "repos.test-repo"
-        assert "repos.test-repo.git.repo_url" in html
+        assert "repos.test-repo.repo_url" in html
         assert "repos.test-repo.email.imap.server" in html
 
     def test_dirty_count_added_repo_counts_subfields(
@@ -1880,7 +1877,7 @@ class TestRepoDiff:
             headers=XHR,
         )
         dirty = int(response.headers.get("X-Dirty-Count", "0"))
-        # A new repo has many subfields (git.repo_url + email fields)
+        # A new repo has many subfields (repo_url + email fields)
         # so the dirty count must be greater than 1.
         assert dirty > 1
 
@@ -3042,7 +3039,7 @@ def _make_sample_raw_with_credentials() -> dict[str, Any]:
         "MY_APP": {
             "app_id": "123456",
             "private_key": "test-key-data",
-            "installation_id": "789012",
+            "installation_id": 789012,
             "scopes": ["api.github.com"],
         },
     }

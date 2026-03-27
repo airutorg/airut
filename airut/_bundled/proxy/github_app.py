@@ -87,7 +87,7 @@ def generate_jwt(app_id: str, private_key_pem: str) -> str:
 
 def fetch_installation_token(
     base_url: str,
-    installation_id: str,
+    installation_id: int,
     jwt: str,
     permissions: dict[str, str] | None = None,
     repositories: list[str] | None = None,

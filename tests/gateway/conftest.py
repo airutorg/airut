@@ -56,22 +56,31 @@ def _mock_sandbox(tmp_path: Path):
 @pytest.fixture
 def email_config(tmp_path: Path, master_repo: Path):
     """Test email service configuration."""
-    from airut.gateway.config import EmailChannelConfig, RepoServerConfig
+    from airut.gateway.config import (
+        EmailAccountConfig,
+        EmailAuthConfig,
+        EmailChannelConfig,
+        ImapConfig,
+        RepoServerConfig,
+        SmtpConfig,
+    )
 
     return RepoServerConfig(
         repo_id="test",
         git_repo_url=str(master_repo),
         channels={
             "email": EmailChannelConfig(
-                imap_server="imap.example.com",
-                imap_port=993,
-                smtp_server="smtp.example.com",
-                smtp_port=587,
-                account_username="test@example.com",
-                account_password="test_password",
-                account_from_address="Test Service <test@example.com>",
-                auth_authorized_senders=["authorized@example.com"],
-                auth_trusted_authserv_id="mx.example.com",
+                account=EmailAccountConfig(
+                    username="test@example.com",
+                    from_address="Test Service <test@example.com>",
+                    password="test_password",
+                ),
+                imap=ImapConfig(server="imap.example.com", port=993),
+                smtp=SmtpConfig(server="smtp.example.com", port=587),
+                auth=EmailAuthConfig(
+                    authorized_senders=["authorized@example.com"],
+                    trusted_authserv_id="mx.example.com",
+                ),
             )
         },
     )
@@ -94,7 +103,15 @@ def microsoft_oauth2_email_config(tmp_path: Path, master_repo: Path):
     Mocks MSAL ConfidentialClientApplication to prevent network requests
     during tests.
     """
-    from airut.gateway.config import EmailChannelConfig, RepoServerConfig
+    from airut.gateway.config import (
+        EmailAccountConfig,
+        EmailAuthConfig,
+        EmailChannelConfig,
+        ImapConfig,
+        MicrosoftOAuth2Config,
+        RepoServerConfig,
+        SmtpConfig,
+    )
 
     with patch(
         "airut.gateway.email.microsoft_oauth2.ConfidentialClientApplication"
@@ -104,18 +121,21 @@ def microsoft_oauth2_email_config(tmp_path: Path, master_repo: Path):
             git_repo_url=str(master_repo),
             channels={
                 "email": EmailChannelConfig(
-                    imap_server="outlook.office365.com",
-                    imap_port=993,
-                    smtp_server="smtp.office365.com",
-                    smtp_port=587,
-                    account_username="test@company.com",
-                    account_password="",
-                    account_from_address="Test Service <test@company.com>",
-                    auth_authorized_senders=["authorized@company.com"],
-                    auth_trusted_authserv_id="mx.company.com",
-                    microsoft_oauth2_tenant_id="test-tenant-id",
-                    microsoft_oauth2_client_id="test-client-id",
-                    microsoft_oauth2_client_secret="test-client-secret",
+                    account=EmailAccountConfig(
+                        username="test@company.com",
+                        from_address="Test Service <test@company.com>",
+                    ),
+                    imap=ImapConfig(server="outlook.office365.com", port=993),
+                    smtp=SmtpConfig(server="smtp.office365.com", port=587),
+                    auth=EmailAuthConfig(
+                        authorized_senders=["authorized@company.com"],
+                        trusted_authserv_id="mx.company.com",
+                    ),
+                    microsoft_oauth2=MicrosoftOAuth2Config(
+                        tenant_id="test-tenant-id",
+                        client_id="test-client-id",
+                        client_secret="test-client-secret",
+                    ),
                 )
             },
         )

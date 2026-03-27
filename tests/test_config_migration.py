@@ -16,6 +16,7 @@ from airut.config.migration import (
     _migrate_v1_to_v2,
     _migrate_v2_to_v3,
     _migrate_v3_to_v4,
+    _migrate_v4_to_v5,
     apply_migrations,
     get_file_config_version,
     migrate_config_file,
@@ -617,6 +618,136 @@ class TestMigrateV3ToV4:
         assert email["auth"]["authorized_senders"] == ["admin@example.com"]
 
 
+class TestMigrateV4ToV5:
+    def test_flattens_git_repo_url(self) -> None:
+        """Moves git.repo_url to repo_url at repo level."""
+        raw: dict[str, Any] = {
+            "repos": {
+                "r": {"git": {"repo_url": "https://example.com/repo.git"}}
+            }
+        }
+        result = _migrate_v4_to_v5(raw)
+        assert result["repos"]["r"]["repo_url"] == (
+            "https://example.com/repo.git"
+        )
+        assert "git" not in result["repos"]["r"]
+
+    def test_flattens_container_path(self) -> None:
+        """Moves container.path to container_path at repo level."""
+        raw: dict[str, Any] = {
+            "repos": {"r": {"container": {"path": ".devcontainer"}}}
+        }
+        result = _migrate_v4_to_v5(raw)
+        assert result["repos"]["r"]["container_path"] == ".devcontainer"
+        assert "container" not in result["repos"]["r"]
+
+    def test_flattens_both(self) -> None:
+        """Flattens both git and container in the same repo."""
+        raw: dict[str, Any] = {
+            "repos": {
+                "r": {
+                    "git": {"repo_url": "x"},
+                    "container": {"path": "c"},
+                    "email": {},
+                }
+            }
+        }
+        result = _migrate_v4_to_v5(raw)
+        repo = result["repos"]["r"]
+        assert repo["repo_url"] == "x"
+        assert repo["container_path"] == "c"
+        assert "git" not in repo
+        assert "container" not in repo
+
+    def test_no_git_section(self) -> None:
+        """Missing git: section → no-op."""
+        raw: dict[str, Any] = {"repos": {"r": {"email": {}}}}
+        result = _migrate_v4_to_v5(raw)
+        assert "repo_url" not in result["repos"]["r"]
+
+    def test_no_container_section(self) -> None:
+        """Missing container: section → no-op."""
+        raw: dict[str, Any] = {"repos": {"r": {"email": {}}}}
+        result = _migrate_v4_to_v5(raw)
+        assert "container_path" not in result["repos"]["r"]
+
+    def test_no_repos_key(self) -> None:
+        """Missing repos: key doesn't crash."""
+        raw: dict[str, Any] = {"execution": {"max_concurrent": 5}}
+        result = _migrate_v4_to_v5(raw)
+        assert result == raw
+
+    def test_non_dict_repos(self) -> None:
+        """Non-dict repos: is left alone."""
+        raw: dict[str, Any] = {"repos": "not-a-dict"}
+        result = _migrate_v4_to_v5(raw)
+        assert result["repos"] == "not-a-dict"
+
+    def test_skips_non_dict_repo(self) -> None:
+        """Non-dict repo entries are skipped."""
+        raw: dict[str, Any] = {"repos": {"bad": "not-a-dict"}}
+        result = _migrate_v4_to_v5(raw)
+        assert result["repos"]["bad"] == "not-a-dict"
+
+    def test_non_dict_git_section(self) -> None:
+        """Non-dict git: section is left alone."""
+        raw: dict[str, Any] = {"repos": {"r": {"git": "not-a-dict"}}}
+        result = _migrate_v4_to_v5(raw)
+        assert result["repos"]["r"]["git"] == "not-a-dict"
+
+    def test_non_dict_container_section(self) -> None:
+        """Non-dict container: section is left alone."""
+        raw: dict[str, Any] = {"repos": {"r": {"container": "not-a-dict"}}}
+        result = _migrate_v4_to_v5(raw)
+        assert result["repos"]["r"]["container"] == "not-a-dict"
+
+    def test_idempotent(self) -> None:
+        """Running the migration twice produces the same result."""
+        raw: dict[str, Any] = {
+            "repos": {
+                "r": {
+                    "git": {"repo_url": "x"},
+                    "container": {"path": "c"},
+                }
+            }
+        }
+        result1 = _migrate_v4_to_v5(raw)
+        result2 = _migrate_v4_to_v5(result1)
+        assert result1 == result2
+
+    def test_multiple_repos(self) -> None:
+        """All repos are migrated."""
+        raw: dict[str, Any] = {
+            "repos": {
+                "a": {"git": {"repo_url": "url-a"}},
+                "b": {"git": {"repo_url": "url-b"}},
+            }
+        }
+        result = _migrate_v4_to_v5(raw)
+        assert result["repos"]["a"]["repo_url"] == "url-a"
+        assert result["repos"]["b"]["repo_url"] == "url-b"
+
+    def test_full_chain_v4_to_v5(self) -> None:
+        """apply_migrations runs v4→v5 for config_version: 4."""
+        raw: dict[str, Any] = {
+            "config_version": 4,
+            "repos": {
+                "r": {
+                    "git": {"repo_url": "https://example.com/repo.git"},
+                    "container": {"path": ".devcontainer"},
+                    "email": {},
+                }
+            },
+        }
+        result = apply_migrations(raw)
+        assert result["config_version"] == CURRENT_CONFIG_VERSION
+        repo = result["repos"]["r"]
+        assert repo["repo_url"] == "https://example.com/repo.git"
+        assert repo["container_path"] == ".devcontainer"
+        assert "git" not in repo
+        assert "container" not in repo
+
+
 class TestGetFileConfigVersion:
     def test_reads_explicit_version(self, tmp_path: Path) -> None:
         """Returns the config_version from the file."""
@@ -758,3 +889,5 @@ class TestMigrateConfigFile:
         assert new == CURRENT_CONFIG_VERSION
         content = config.read_text()
         assert "!env" in content
+        # v4→v5 flattened git.repo_url to repo_url
+        assert "repo_url:" in content

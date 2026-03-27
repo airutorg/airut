@@ -76,7 +76,7 @@ but a human must review and merge before the change takes effect.
 
 The container Dockerfile remains in the repository. By default it is read from
 `.airut/container/Dockerfile`, but the directory can be overridden per-repo via
-`container.path` in the server config (e.g., `.devcontainer` to reuse an
+`container_path` in the server config (e.g., `.devcontainer` to reuse an
 existing devcontainer Dockerfile). The container image is rebuilt from the
 repository's default branch at every task start.
 

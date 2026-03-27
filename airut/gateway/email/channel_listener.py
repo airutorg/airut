@@ -95,17 +95,17 @@ class EmailChannelListener(ChannelListener):
 
         self._log.info(
             "Connecting to IMAP %s:%d",
-            self._config.imap_server,
-            self._config.imap_port,
+            self._config.imap.server,
+            self._config.imap.port,
         )
         self._email_listener.connect(
-            max_retries=self._config.imap_connect_retries,
+            max_retries=self._config.imap.connect_retries,
             stop_event=self._stop_event,
         )
         self._status = ChannelStatus(health=ChannelHealth.CONNECTED)
 
         thread_name = (
-            f"EmailListener-{self._repo_id}-{self._config.imap_server}"
+            f"EmailListener-{self._repo_id}-{self._config.imap.server}"
         )
         self._thread = threading.Thread(
             target=self._listener_loop,
@@ -114,7 +114,7 @@ class EmailChannelListener(ChannelListener):
         )
         self._thread.start()
 
-        mode = "IDLE" if self._config.imap_use_idle else "polling"
+        mode = "IDLE" if self._config.imap.use_idle else "polling"
         self._log.info(
             "Email listener started (%s mode)",
             mode,
@@ -142,7 +142,7 @@ class EmailChannelListener(ChannelListener):
 
     def _listener_loop(self) -> None:
         """Main listener loop, dispatching to IDLE or polling mode."""
-        if self._config.imap_use_idle:
+        if self._config.imap.use_idle:
             self._idle_loop()
         else:
             self._polling_loop()
@@ -210,7 +210,7 @@ class EmailChannelListener(ChannelListener):
         try:
             self._email_listener.disconnect()
             self._email_listener.connect(
-                max_retries=self._config.imap_connect_retries,
+                max_retries=self._config.imap.connect_retries,
                 stop_event=self._stop_event,
             )
             self._log.info("Reconnected to IMAP")
@@ -259,7 +259,7 @@ class EmailChannelListener(ChannelListener):
                             e,
                         )
 
-                self._stop_event.wait(self._config.imap_poll_interval_seconds)
+                self._stop_event.wait(self._config.imap.poll_interval)
 
             except IMAPConnectionError as e:
                 if not self._running:
@@ -276,7 +276,7 @@ class EmailChannelListener(ChannelListener):
         reconnect_attempts = 0
         max_reconnect_attempts = 5
         last_reconnect = time.time()
-        reconnect_interval = self._config.imap_idle_reconnect_interval_seconds
+        reconnect_interval = self._config.imap.idle_reconnect_interval
         el = self._email_listener
         assert self._submit is not None
 
@@ -289,7 +289,7 @@ class EmailChannelListener(ChannelListener):
                     )
                     el.disconnect()
                     el.connect(
-                        max_retries=self._config.imap_connect_retries,
+                        max_retries=self._config.imap.connect_retries,
                         stop_event=self._stop_event,
                     )
                     last_reconnect = time.time()

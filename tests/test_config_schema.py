@@ -220,15 +220,46 @@ class TestSchemaForUIWithRealConfigs:
         assert "container_command" not in names  # hidden from UI
 
     def test_email_channel_config(self) -> None:
-        from airut.gateway.config import EmailChannelConfig
+        from airut.gateway.config import (
+            EmailAccountConfig,
+            EmailAuthConfig,
+            EmailChannelConfig,
+            ImapConfig,
+            SmtpConfig,
+        )
 
         schema = schema_for_ui(EmailChannelConfig)
         names = {s.name for s in schema}
-        assert "imap_server" in names
-        assert "account_password" in names
-        # password should be marked secret
-        password = next(s for s in schema if s.name == "account_password")
+        # Top-level fields are the sub-dataclass names
+        assert "account" in names
+        assert "imap" in names
+        assert "smtp" in names
+        assert "auth" in names
+        assert "microsoft_oauth2" in names
+
+        # Verify sub-dataclass schemas work independently
+        account_schema = schema_for_ui(EmailAccountConfig)
+        account_names = {s.name for s in account_schema}
+        assert "username" in account_names
+        assert "from_address" in account_names
+        assert "password" in account_names
+        password = next(s for s in account_schema if s.name == "password")
         assert password.secret is True
+
+        imap_schema = schema_for_ui(ImapConfig)
+        imap_names = {s.name for s in imap_schema}
+        assert "server" in imap_names
+        assert "port" in imap_names
+
+        smtp_schema = schema_for_ui(SmtpConfig)
+        smtp_names = {s.name for s in smtp_schema}
+        assert "server" in smtp_names
+        assert "port" in smtp_names
+
+        auth_schema = schema_for_ui(EmailAuthConfig)
+        auth_names = {s.name for s in auth_schema}
+        assert "authorized_senders" in auth_names
+        assert "trusted_authserv_id" in auth_names
 
     def test_slack_channel_config(self) -> None:
         from airut.gateway.slack.config import SlackChannelConfig
@@ -279,7 +310,7 @@ class TestSchemaForUIWithRealConfigs:
         # value is secret
         value_field = next(s for s in schema if s.name == "value")
         assert value_field.secret is True
-        assert value_field.scope == "repo"
+        assert value_field.scope == "task"
         # allow_foreign_credentials has a default
         afc = next(s for s in schema if s.name == "allow_foreign_credentials")
         assert afc.required is False
@@ -336,7 +367,7 @@ class TestSchemaForUIWithRealConfigs:
         # private_key is secret
         pk = next(s for s in schema if s.name == "private_key")
         assert pk.secret is True
-        assert pk.scope == "repo"
+        assert pk.scope == "task"
         # app_id is required, not secret
         app_id = next(s for s in schema if s.name == "app_id")
         assert app_id.required is True
@@ -344,6 +375,6 @@ class TestSchemaForUIWithRealConfigs:
         # base_url has a default
         base_url = next(s for s in schema if s.name == "base_url")
         assert base_url.default == "https://api.github.com"
-        # All fields should be REPO scope
+        # All fields should be TASK scope
         for s in schema:
-            assert s.scope == "repo"
+            assert s.scope == "task"

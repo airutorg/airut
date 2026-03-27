@@ -88,110 +88,40 @@ class TestFlatToNestedGlobal:
 
 
 class TestFlatToNestedEmail:
-    def test_maps_imap_fields(self) -> None:
+    def test_passthrough_no_remapping(self) -> None:
+        """YAML_EMAIL_STRUCTURE is empty so all keys pass through unchanged."""
         flat = {
             "imap_poll_interval_seconds": 30,
             "imap_use_idle": False,
-            "imap_idle_reconnect_interval_seconds": 600,
         }
         nested = flat_to_nested_email(flat)
-        assert nested == {
-            "imap": {
-                "poll_interval": 30,
-                "use_idle": False,
-                "idle_reconnect_interval": 600,
-            }
-        }
+        assert nested == flat
 
-    def test_maps_oauth2_fields(self) -> None:
+    def test_passthrough_preserves_all_keys(self) -> None:
         flat = {
-            "microsoft_oauth2_tenant_id": "tenant",
-            "microsoft_oauth2_client_id": "client",
-            "microsoft_oauth2_client_secret": "secret",
+            "account": {"username": "user@example.com"},
+            "imap": {"server": "imap.example.com"},
+            "custom_field": "custom_value",
         }
         nested = flat_to_nested_email(flat)
-        assert nested == {
-            "microsoft_oauth2": {
-                "tenant_id": "tenant",
-                "client_id": "client",
-                "client_secret": "secret",
-            }
-        }
-
-    def test_maps_account_fields(self) -> None:
-        flat = {
-            "account_username": "user@example.com",
-            "account_password": "secret",
-            "account_from_address": "bot@example.com",
-        }
-        nested = flat_to_nested_email(flat)
-        assert nested == {
-            "account": {
-                "username": "user@example.com",
-                "password": "secret",
-                "from": "bot@example.com",
-            }
-        }
-
-    def test_maps_auth_fields(self) -> None:
-        flat = {
-            "auth_authorized_senders": ["user@example.com"],
-            "auth_trusted_authserv_id": "mx.example.com",
-            "auth_microsoft_internal_fallback": True,
-        }
-        nested = flat_to_nested_email(flat)
-        assert nested == {
-            "auth": {
-                "authorized_senders": ["user@example.com"],
-                "trusted_authserv_id": "mx.example.com",
-                "microsoft_internal_fallback": True,
-            }
-        }
-
-    def test_maps_server_fields(self) -> None:
-        flat = {
-            "imap_server": "imap.example.com",
-            "imap_port": 993,
-            "smtp_server": "smtp.example.com",
-            "smtp_port": 587,
-            "smtp_require_auth": True,
-        }
-        nested = flat_to_nested_email(flat)
-        assert nested == {
-            "imap": {
-                "server": "imap.example.com",
-                "port": 993,
-            },
-            "smtp": {
-                "server": "smtp.example.com",
-                "port": 587,
-                "require_auth": True,
-            },
-        }
-
-    def test_unmapped_email_field_stays_flat(self) -> None:
-        flat = {"custom_field": "custom_value"}
-        nested = flat_to_nested_email(flat)
-        assert nested == {"custom_field": "custom_value"}
+        assert nested == flat
 
 
 class TestFlatToNestedRepo:
     def test_maps_git_url(self) -> None:
         flat = {"git_repo_url": "https://github.com/org/repo.git"}
         nested = flat_to_nested_repo(flat)
-        assert nested == {
-            "git": {"repo_url": "https://github.com/org/repo.git"}
-        }
+        assert nested == {"repo_url": "https://github.com/org/repo.git"}
 
     def test_maps_network_sandbox(self) -> None:
         flat = {"network_sandbox_enabled": False}
         nested = flat_to_nested_repo(flat)
         assert nested == {"network": {"sandbox_enabled": False}}
 
-    def test_maps_container_path(self) -> None:
+    def test_container_path_stays_flat(self) -> None:
         flat = {"container_path": ".devcontainer"}
         nested = flat_to_nested_repo(flat)
-        assert nested == {"container": {"path": ".devcontainer"}}
+        assert nested == {"container_path": ".devcontainer"}
 
     def test_unmapped_stays_flat(self) -> None:
         flat = {"model": "sonnet"}

@@ -252,17 +252,20 @@ class TestSchemaForEditorTypeTags:
         assert result == []
 
 
-class TestSchemaParserDefaults:
-    def test_parser_defaults_applied(self) -> None:
-        """PARSER_DEFAULTS injects defaults for EmailChannelConfig."""
-        from airut.gateway.config import EmailChannelConfig
+class TestSchemaSubDataclassDefaults:
+    def test_sub_dataclass_defaults_visible(self) -> None:
+        """Sub-dataclass fields have own defaults (e.g. ImapConfig.port)."""
+        from airut.gateway.config import ImapConfig, SmtpConfig
 
-        schema = schema_for_editor(EmailChannelConfig)
-        by_name = {s.name: s for s in schema}
-        assert by_name["imap_port"].default == 993
-        assert by_name["imap_port"].required is False
-        assert by_name["smtp_port"].default == 587
-        assert by_name["smtp_port"].required is False
+        imap_schema = schema_for_editor(ImapConfig)
+        by_name = {s.name: s for s in imap_schema}
+        assert by_name["port"].default == 993
+        assert by_name["port"].required is False
+
+        smtp_schema = schema_for_editor(SmtpConfig)
+        by_name = {s.name: s for s in smtp_schema}
+        assert by_name["port"].default == 587
+        assert by_name["port"].required is False
 
 
 class TestSchemaForEditorRealConfigs:
@@ -323,7 +326,7 @@ class TestSchemaForEditorRealConfigs:
 
         # Check path mapping with prefix
         by_name = {s.name: s for s in schema}
-        assert by_name["git_repo_url"].path == "repos.my-project.git.repo_url"
+        assert by_name["git_repo_url"].path == "repos.my-project.repo_url"
         assert by_name["model"].path == "repos.my-project.model"
         assert (
             by_name["network_sandbox_enabled"].path
@@ -347,23 +350,38 @@ class TestSchemaForEditorChannels:
             structure=YAML_EMAIL_STRUCTURE,
         )
         names = {s.name for s in schema}
-        assert "imap_server" in names
-        assert "smtp_server" in names
-        assert "account_password" in names
-        assert "auth_authorized_senders" in names
+        # Sub-dataclass fields appear as nested type_tags
+        assert "account" in names
+        assert "imap" in names
+        assert "smtp" in names
+        assert "auth" in names
+        assert "microsoft_oauth2" in names
 
         by_name = {s.name: s for s in schema}
-        assert (
-            by_name["imap_server"].path == "repos.my-project.email.imap.server"
-        )
-        assert by_name["auth_authorized_senders"].type_tag == "list_str"
-        assert by_name["account_password"].secret is True
 
-        # imap nested fields use YAML_EMAIL_STRUCTURE
-        assert (
-            by_name["imap_connect_retries"].path
-            == "repos.my-project.email.imap.connect_retries"
-        )
+        # Sub-dataclasses render as nested
+        assert by_name["account"].type_tag == "nested"
+        assert by_name["imap"].type_tag == "nested"
+        assert by_name["smtp"].type_tag == "nested"
+        assert by_name["auth"].type_tag == "nested"
+
+        # Paths use the sub-dataclass field name
+        assert by_name["account"].path == "repos.my-project.email.account"
+        assert by_name["imap"].path == "repos.my-project.email.imap"
+
+        # Nested fields within sub-dataclasses
+        account_fields = {
+            f.name: f for f in (by_name["account"].nested_fields or [])
+        }
+        assert "password" in account_fields
+        assert account_fields["password"].secret is True
+
+        auth_fields = {f.name: f for f in (by_name["auth"].nested_fields or [])}
+        assert "authorized_senders" in auth_fields
+        assert auth_fields["authorized_senders"].type_tag == "list_str"
+
+        imap_fields = {f.name: f for f in (by_name["imap"].nested_fields or [])}
+        assert "connect_retries" in imap_fields
 
     def test_slack_channel_config(self) -> None:
         from airut.gateway.slack.config import SlackChannelConfig
@@ -672,8 +690,8 @@ class TestEditBufferValidate:
 
     def test_validate_failure(self) -> None:
         raw = _make_sample_raw()
-        # Remove required git.repo_url to trigger validation error
-        del raw["repos"]["test-repo"]["git"]["repo_url"]
+        # Remove required repo_url to trigger validation error
+        del raw["repos"]["test-repo"]["repo_url"]
         buf = EditBuffer(raw, generation=0)
         with pytest.raises(Exception, match="repo_url"):
             buf.validate()

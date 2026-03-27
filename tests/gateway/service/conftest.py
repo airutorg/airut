@@ -68,24 +68,34 @@ def update_global(
         object.__setattr__(svc.global_config, key, value)
 
 
-_EMAIL_FIELDS = {
-    "imap_server",
-    "imap_port",
-    "smtp_server",
-    "smtp_port",
-    "account_username",
-    "account_password",
-    "account_from_address",
-    "auth_authorized_senders",
-    "auth_trusted_authserv_id",
-    "imap_poll_interval_seconds",
-    "imap_use_idle",
-    "imap_idle_reconnect_interval_seconds",
-    "smtp_require_auth",
-    "auth_microsoft_internal_fallback",
-    "microsoft_oauth2_tenant_id",
-    "microsoft_oauth2_client_id",
-    "microsoft_oauth2_client_secret",
+#: Maps flat convenience names to (sub-dataclass attr, field name) pairs
+#: on EmailChannelConfig so ``update_repo`` can set nested fields.
+_EMAIL_SUB_FIELDS: dict[str, tuple[str, str]] = {
+    # account sub-dataclass
+    "account_username": ("account", "username"),
+    "account_password": ("account", "password"),
+    "account_from_address": ("account", "from_address"),
+    # imap sub-dataclass
+    "imap_server": ("imap", "server"),
+    "imap_port": ("imap", "port"),
+    "imap_poll_interval_seconds": ("imap", "poll_interval"),
+    "imap_use_idle": ("imap", "use_idle"),
+    "imap_idle_reconnect_interval_seconds": (
+        "imap",
+        "idle_reconnect_interval",
+    ),
+    # smtp sub-dataclass
+    "smtp_server": ("smtp", "server"),
+    "smtp_port": ("smtp", "port"),
+    "smtp_require_auth": ("smtp", "require_auth"),
+    # auth sub-dataclass
+    "auth_authorized_senders": ("auth", "authorized_senders"),
+    "auth_trusted_authserv_id": ("auth", "trusted_authserv_id"),
+    "auth_microsoft_internal_fallback": ("auth", "microsoft_internal_fallback"),
+    # microsoft_oauth2 sub-dataclass
+    "microsoft_oauth2_tenant_id": ("microsoft_oauth2", "tenant_id"),
+    "microsoft_oauth2_client_id": ("microsoft_oauth2", "client_id"),
+    "microsoft_oauth2_client_secret": ("microsoft_oauth2", "client_secret"),
 }
 
 
@@ -95,8 +105,10 @@ def update_repo(
 ) -> None:
     """Update repo config with new values (frozen dataclass)."""
     for key, value in overrides.items():
-        if key in _EMAIL_FIELDS:
-            object.__setattr__(handler.config.channels["email"], key, value)
+        if key in _EMAIL_SUB_FIELDS:
+            sub_attr, field_name = _EMAIL_SUB_FIELDS[key]
+            sub_obj = getattr(handler.config.channels["email"], sub_attr)
+            object.__setattr__(sub_obj, field_name, value)
         else:
             object.__setattr__(handler.config, key, value)
 

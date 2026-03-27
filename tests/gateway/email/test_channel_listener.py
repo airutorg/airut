@@ -13,28 +13,42 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from airut.gateway.channel import ChannelHealth, RawMessage
-from airut.gateway.config import EmailChannelConfig
+from airut.gateway.config import (
+    EmailAccountConfig,
+    EmailAuthConfig,
+    EmailChannelConfig,
+    ImapConfig,
+    SmtpConfig,
+)
 from airut.gateway.email.channel_listener import EmailChannelListener
 from airut.gateway.email.listener import IMAPConnectionError, IMAPIdleError
 
 
 def _make_config(
-    **overrides: Any,  # noqa: ANN401 - unpacked into mixed-type constructor
+    **imap_overrides: Any,  # noqa: ANN401
 ) -> EmailChannelConfig:
-    """Build an EmailChannelConfig with test defaults."""
-    defaults: dict[str, Any] = {
-        "imap_server": "imap.example.com",
-        "imap_port": 993,
-        "smtp_server": "smtp.example.com",
-        "smtp_port": 587,
-        "account_username": "test@example.com",
-        "account_password": "test_password",
-        "account_from_address": "Test <test@example.com>",
-        "auth_authorized_senders": ["user@example.com"],
-        "auth_trusted_authserv_id": "mx.example.com",
+    """Build an EmailChannelConfig with test defaults.
+
+    Keyword arguments are forwarded to ``ImapConfig``.
+    """
+    imap_kwargs: dict[str, Any] = {
+        "server": "imap.example.com",
+        "port": 993,
     }
-    defaults.update(overrides)
-    return EmailChannelConfig(**defaults)
+    imap_kwargs.update(imap_overrides)
+    return EmailChannelConfig(
+        account=EmailAccountConfig(
+            username="test@example.com",
+            password="test_password",
+            from_address="Test <test@example.com>",
+        ),
+        imap=ImapConfig(**imap_kwargs),
+        smtp=SmtpConfig(server="smtp.example.com", port=587),
+        auth=EmailAuthConfig(
+            authorized_senders=["user@example.com"],
+            trusted_authserv_id="mx.example.com",
+        ),
+    )
 
 
 def _make_message(subject: str = "Test") -> Message:
@@ -57,7 +71,7 @@ def _make_polling_listener() -> tuple[EmailChannelListener, MagicMock]:
     Returns:
         Tuple of (listener, mock_email_listener).
     """
-    config = _make_config(imap_use_idle=False, imap_poll_interval_seconds=1)
+    config = _make_config(use_idle=False, poll_interval=1)
     mock_el = MagicMock()
     cl = EmailChannelListener(config, email_listener=mock_el, repo_id="test")
     cl._running = True
@@ -77,8 +91,8 @@ def _make_idle_listener(
         Tuple of (listener, mock_email_listener).
     """
     config_kwargs: dict[str, Any] = {
-        "imap_use_idle": True,
-        "imap_idle_reconnect_interval_seconds": 99999,
+        "use_idle": True,
+        "idle_reconnect_interval": 99999,
     }
     config_kwargs.update(overrides)
     config = _make_config(**config_kwargs)
@@ -111,7 +125,7 @@ class TestStartStop:
             listener.start(submit)
 
         mock_el.connect.assert_called_once_with(
-            max_retries=listener._config.imap_connect_retries,
+            max_retries=listener._config.imap.connect_retries,
             stop_event=listener._stop_event,
         )
         assert listener._thread is not None
@@ -191,7 +205,7 @@ class TestStartStop:
 class TestDispatch:
     def test_dispatches_to_polling(self) -> None:
         """Dispatches to polling loop when use_imap_idle=False."""
-        config = _make_config(imap_use_idle=False)
+        config = _make_config(use_idle=False)
         mock_el = MagicMock()
         cl = EmailChannelListener(
             config, email_listener=mock_el, repo_id="test"
@@ -205,7 +219,7 @@ class TestDispatch:
 
     def test_dispatches_to_idle(self) -> None:
         """Dispatches to IDLE loop when use_imap_idle=True."""
-        config = _make_config(imap_use_idle=True)
+        config = _make_config(use_idle=True)
         mock_el = MagicMock()
         cl = EmailChannelListener(
             config, email_listener=mock_el, repo_id="test"
@@ -465,7 +479,7 @@ class TestIdleLoop:
     def test_periodic_reconnect(self) -> None:
         """IDLE loop performs periodic reconnect."""
         cl, mock_el = _make_idle_listener(
-            imap_idle_reconnect_interval_seconds=60,
+            idle_reconnect_interval=60,
         )
 
         def fake_fetch():
@@ -641,7 +655,7 @@ class TestIdleLoop:
     def test_idle_timeout_zero(self) -> None:
         """When time_until_reconnect is 0, skip wait."""
         cl, mock_el = _make_idle_listener(
-            imap_idle_reconnect_interval_seconds=60,
+            idle_reconnect_interval=60,
         )
         call_count = 0
 
@@ -697,7 +711,7 @@ class TestFullLifecycle:
 
     def test_polling_start_processes_and_stops(self) -> None:
         """Full polling lifecycle: start(), process message, stop()."""
-        config = _make_config(imap_use_idle=False, imap_poll_interval_seconds=1)
+        config = _make_config(use_idle=False, poll_interval=1)
         mock_el = MagicMock()
         cl = EmailChannelListener(
             config, email_listener=mock_el, repo_id="test"
@@ -733,8 +747,8 @@ class TestFullLifecycle:
     def test_idle_start_processes_and_stops(self) -> None:
         """Full IDLE lifecycle: start(), process message, stop()."""
         config = _make_config(
-            imap_use_idle=True,
-            imap_idle_reconnect_interval_seconds=99999,
+            use_idle=True,
+            idle_reconnect_interval=99999,
         )
         mock_el = MagicMock()
         cl = EmailChannelListener(
@@ -768,7 +782,7 @@ class TestFullLifecycle:
 
     def test_start_wires_submit_callback(self) -> None:
         """start() correctly wires the submit callback to the loop."""
-        config = _make_config(imap_use_idle=False, imap_poll_interval_seconds=1)
+        config = _make_config(use_idle=False, poll_interval=1)
         mock_el = MagicMock()
         cl = EmailChannelListener(
             config, email_listener=mock_el, repo_id="test"

@@ -209,7 +209,7 @@ class TestFetchInstallationToken:
         ):
             token, expires_at = fetch_installation_token(
                 "https://api.github.com",
-                "12345",
+                12345,
                 "fake-jwt",
             )
 
@@ -240,7 +240,7 @@ class TestFetchInstallationToken:
         ):
             fetch_installation_token(
                 "https://api.github.com",
-                "12345",
+                12345,
                 "fake-jwt",
                 permissions={"contents": "write"},
                 repositories=["my-repo"],
@@ -266,7 +266,7 @@ class TestFetchInstallationToken:
         ):
             fetch_installation_token(
                 "https://api.github.com",
-                "12345",
+                12345,
                 "fake-jwt",
             )
 
@@ -288,7 +288,7 @@ class TestFetchInstallationToken:
         ):
             fetch_installation_token(
                 "https://github.example.com/api/v3",
-                "67890",
+                67890,
                 "fake-jwt",
             )
 

@@ -59,13 +59,11 @@ class EmailListener:
 
         # Create Microsoft OAuth2 token provider if configured
         self._token_provider: MicrosoftOAuth2TokenProvider | None = None
-        if config.microsoft_oauth2_tenant_id:
-            assert config.microsoft_oauth2_client_id
-            assert config.microsoft_oauth2_client_secret
+        if config.microsoft_oauth2:
             self._token_provider = MicrosoftOAuth2TokenProvider(
-                tenant_id=config.microsoft_oauth2_tenant_id,
-                client_id=config.microsoft_oauth2_client_id,
-                client_secret=config.microsoft_oauth2_client_secret,
+                tenant_id=config.microsoft_oauth2.tenant_id,
+                client_id=config.microsoft_oauth2.client_id,
+                client_secret=config.microsoft_oauth2.client_secret,
             )
 
         # Pipe for interrupting IDLE wait from another thread.
@@ -76,7 +74,7 @@ class EmailListener:
 
         logger.debug(
             "Initialized email listener for: %s",
-            config.imap_server,
+            config.imap.server,
         )
 
     def _create_interrupt_pipe(self) -> None:
@@ -114,13 +112,13 @@ class EmailListener:
 
                 # Use 10s connection timeout to fail fast on unreachable hosts
                 self.connection = imaplib.IMAP4_SSL(
-                    self.config.imap_server, self.config.imap_port, timeout=10
+                    self.config.imap.server, self.config.imap.port, timeout=10
                 )
 
                 if self._token_provider:
                     # Microsoft OAuth2: XOAUTH2 SASL mechanism
                     auth_string = self._token_provider.generate_xoauth2_string(
-                        self.config.account_username
+                        self.config.account.username
                     ).encode("utf-8")
 
                     def _xoauth2_callback(challenge: bytes) -> bytes:
@@ -134,15 +132,15 @@ class EmailListener:
 
                     self.connection.authenticate("XOAUTH2", _xoauth2_callback)
                 else:
-                    assert self.config.account_password is not None
+                    assert self.config.account.password is not None
                     self.connection.login(
-                        self.config.account_username,
-                        self.config.account_password,
+                        self.config.account.username,
+                        self.config.account.password,
                     )
 
                 logger.info(
                     "Connected to IMAP server: %s",
-                    self.config.imap_server,
+                    self.config.imap.server,
                 )
                 return
 

@@ -152,7 +152,7 @@ def _config_to_yaml(env: IntegrationEnvironment) -> dict[str, Any]:
 
     for repo_id, repo_cfg in env.config.repos.items():
         repo_dict: dict[str, Any] = {
-            "git": {"repo_url": repo_cfg.git_repo_url},
+            "repo_url": repo_cfg.git_repo_url,
             "model": repo_cfg.model,
         }
         if repo_cfg.effort is not None:
@@ -165,26 +165,26 @@ def _config_to_yaml(env: IntegrationEnvironment) -> dict[str, Any]:
             assert isinstance(email_cfg, EmailChannelConfig)
             repo_dict["email"] = {
                 "account": {
-                    "username": email_cfg.account_username,
-                    "password": email_cfg.account_password,
-                    "from": email_cfg.account_from_address,
+                    "username": email_cfg.account.username,
+                    "password": email_cfg.account.password,
+                    "from": email_cfg.account.from_address,
                 },
                 "imap": {
-                    "server": email_cfg.imap_server,
-                    "port": email_cfg.imap_port,
-                    "use_idle": email_cfg.imap_use_idle,
-                    "poll_interval": email_cfg.imap_poll_interval_seconds,
+                    "server": email_cfg.imap.server,
+                    "port": email_cfg.imap.port,
+                    "use_idle": email_cfg.imap.use_idle,
+                    "poll_interval": email_cfg.imap.poll_interval,
                 },
                 "smtp": {
-                    "server": email_cfg.smtp_server,
-                    "port": email_cfg.smtp_port,
-                    "require_auth": email_cfg.smtp_require_auth,
+                    "server": email_cfg.smtp.server,
+                    "port": email_cfg.smtp.port,
+                    "require_auth": email_cfg.smtp.require_auth,
                 },
                 "auth": {
                     "authorized_senders": list(
-                        email_cfg.auth_authorized_senders
+                        email_cfg.auth.authorized_senders
                     ),
-                    "trusted_authserv_id": (email_cfg.auth_trusted_authserv_id),
+                    "trusted_authserv_id": email_cfg.auth.trusted_authserv_id,
                 },
             }
 
@@ -781,20 +781,29 @@ class TestRepoScopeReload:
             gen = service._config_generation
             integration_env.email_server.clear_outbox()
             cf._data["repos"]["project-b"] = {
-                "git": {"repo_url": str(repo_b_path)},
+                "repo_url": str(repo_b_path),
                 "model": "opus",
                 "email": {
-                    "imap_server": "127.0.0.1",
-                    "imap_port": integration_env.imap_port,
-                    "smtp_server": "127.0.0.1",
-                    "smtp_port": integration_env.smtp_port,
-                    "smtp_require_auth": False,
-                    "username": "project-b",
-                    "password": "test",
-                    "from": "project-b <project-b@test.local>",
-                    "authorized_senders": ["user@test.local"],
-                    "trusted_authserv_id": "test.local",
-                    "imap": {"use_idle": False, "poll_interval": 0.1},
+                    "account": {
+                        "username": "project-b",
+                        "password": "test",
+                        "from": "project-b <project-b@test.local>",
+                    },
+                    "imap": {
+                        "server": "127.0.0.1",
+                        "port": integration_env.imap_port,
+                        "use_idle": False,
+                        "poll_interval": 0.1,
+                    },
+                    "smtp": {
+                        "server": "127.0.0.1",
+                        "port": integration_env.smtp_port,
+                        "require_auth": False,
+                    },
+                    "auth": {
+                        "authorized_senders": ["user@test.local"],
+                        "trusted_authserv_id": "test.local",
+                    },
                 },
             }
             cf.write()
@@ -1302,7 +1311,7 @@ class TestErrorHandling:
         with running_service(cf, integration_env) as service:
             gen_before = service._config_generation
 
-            # Write valid YAML but missing required git.repo_url
+            # Write valid YAML but missing required repo_url
             bad_config = {
                 "container_command": cf._data["container_command"],
                 "repos": {

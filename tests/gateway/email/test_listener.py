@@ -49,13 +49,13 @@ def test_connect_success(email_config):
         listener.connect()
 
         mock_imap.assert_called_once_with(
-            email_config.channels["email"].imap_server,
-            email_config.channels["email"].imap_port,
+            email_config.channels["email"].imap.server,
+            email_config.channels["email"].imap.port,
             timeout=10,
         )
         mock_conn.login.assert_called_once_with(
-            email_config.channels["email"].account_username,
-            email_config.channels["email"].account_password,
+            email_config.channels["email"].account.username,
+            email_config.channels["email"].account.password,
         )
         assert listener.connection == mock_conn
 
@@ -91,7 +91,7 @@ def test_connect_oauth2_xoauth2(microsoft_oauth2_email_config):
         # Non-empty challenge (server error) returns empty bytes to abort
         assert auth_fn(b"some-error-json") == b""
         mock_gen.assert_called_once_with(
-            microsoft_oauth2_email_config.channels["email"].account_username
+            microsoft_oauth2_email_config.channels["email"].account.username
         )
 
 

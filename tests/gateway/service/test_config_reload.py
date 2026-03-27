@@ -15,10 +15,14 @@ from unittest.mock import MagicMock, patch
 
 from airut.dashboard.tracker import TaskTracker
 from airut.gateway.config import (
+    EmailAccountConfig,
+    EmailAuthConfig,
     EmailChannelConfig,
     GlobalConfig,
+    ImapConfig,
     RepoServerConfig,
     ServerConfig,
+    SmtpConfig,
 )
 from airut.gateway.service import GatewayService
 
@@ -34,15 +38,17 @@ def _make_email_config(
     on ServerConfig's IMAP inbox uniqueness check.
     """
     email = EmailChannelConfig(
-        imap_server="localhost",
-        imap_port=993,
-        smtp_server="localhost",
-        smtp_port=587,
-        account_username=f"{repo_id}-user",
-        account_password="test",
-        account_from_address=f"claude-{repo_id}@test.local",
-        auth_authorized_senders=["user@test.local"],
-        auth_trusted_authserv_id="test.local",
+        account=EmailAccountConfig(
+            username=f"{repo_id}-user",
+            from_address=f"claude-{repo_id}@test.local",
+            password="test",
+        ),
+        imap=ImapConfig(server="localhost", port=993),
+        smtp=SmtpConfig(server="localhost", port=587),
+        auth=EmailAuthConfig(
+            authorized_senders=["user@test.local"],
+            trusted_authserv_id="test.local",
+        ),
     )
     kwargs: dict[str, Any] = {
         "repo_id": repo_id,

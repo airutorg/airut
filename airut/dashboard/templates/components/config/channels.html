@@ -14,54 +14,40 @@
       </button>
     </div>
 
+    {% for f in email_schema %}
+    {% if f.type_tag == 'nested' and f.name == 'account' %}
     {# Account subsection #}
     <div class="cfg-subsection">
       <div class="cfg-card-header">
         <span class="cfg-card-title">Account</span>
       </div>
-      {% for f in email_schema %}
-      {% if f.name.startswith('account_') %}
-      {% include "components/config/field.html" %}
-      {% endif %}
-      {% endfor %}
+      {% include "components/config/nested.html" %}
     </div>
-
+    {% elif f.type_tag == 'nested' and f.name == 'imap' %}
     {# IMAP subsection #}
     <div class="cfg-subsection">
       <div class="cfg-card-header">
         <span class="cfg-card-title">IMAP</span>
       </div>
-      {% for f in email_schema %}
-      {% if f.name.startswith('imap_') %}
-      {% include "components/config/field.html" %}
-      {% endif %}
-      {% endfor %}
+      {% include "components/config/nested.html" %}
     </div>
-
+    {% elif f.type_tag == 'nested' and f.name == 'smtp' %}
     {# SMTP subsection #}
     <div class="cfg-subsection">
       <div class="cfg-card-header">
         <span class="cfg-card-title">SMTP</span>
       </div>
-      {% for f in email_schema %}
-      {% if f.name.startswith('smtp_') %}
-      {% include "components/config/field.html" %}
-      {% endif %}
-      {% endfor %}
+      {% include "components/config/nested.html" %}
     </div>
-
+    {% elif f.type_tag == 'nested' and f.name == 'auth' %}
     {# Sender Authorization subsection #}
     <div class="cfg-subsection">
       <div class="cfg-card-header">
         <span class="cfg-card-title">Sender Authorization</span>
       </div>
-      {% for f in email_schema %}
-      {% if f.name.startswith('auth_') %}
-      {% include "components/config/field.html" %}
-      {% endif %}
-      {% endfor %}
+      {% include "components/config/nested.html" %}
     </div>
-
+    {% elif f.type_tag == 'nested' and f.name == 'microsoft_oauth2' %}
     {# Microsoft 365 OAuth2 subsection #}
     <div class="cfg-subsection">
       <div class="cfg-card-header">
@@ -72,12 +58,10 @@
         Required when Basic Authentication is disabled.
         Refer to the Airut documentation for setup details.
       </p>
-      {% for f in email_schema %}
-      {% if f.name.startswith('microsoft_oauth2_') %}
-      {% include "components/config/field.html" %}
-      {% endif %}
-      {% endfor %}
+      {% include "components/config/nested.html" %}
     </div>
+    {% endif %}
+    {% endfor %}
   </div>
   {% endif %}
 

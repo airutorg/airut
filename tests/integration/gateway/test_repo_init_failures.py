@@ -24,14 +24,43 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from airut.dashboard.tracker import RepoStatus
 from airut.gateway.config import (
+    EmailAccountConfig,
+    EmailAuthConfig,
     EmailChannelConfig,
     GlobalConfig,
+    ImapConfig,
     RepoServerConfig,
     ServerConfig,
+    SmtpConfig,
 )
 
 from .conftest import MOCK_CONTAINER_COMMAND, wait_for_boot
 from .environment import IntegrationEnvironment, create_test_repo
+
+
+def _email_config(
+    *, imap_port: int = 9999, smtp_port: int = 25
+) -> EmailChannelConfig:
+    """Build an EmailChannelConfig for integration tests."""
+    return EmailChannelConfig(
+        account=EmailAccountConfig(
+            username="test",
+            password="test",
+            from_address="test@test.local",
+        ),
+        imap=ImapConfig(
+            server="127.0.0.1",
+            port=imap_port,
+            use_idle=False,
+            connect_retries=1,
+            poll_interval=0.1,
+        ),
+        smtp=SmtpConfig(server="127.0.0.1", port=smtp_port),
+        auth=EmailAuthConfig(
+            authorized_senders=["user@test.local"],
+            trusted_authserv_id="test.local",
+        ),
+    )
 
 
 class TestImapConnectionFailures:
@@ -64,20 +93,7 @@ class TestImapConnectionFailures:
             repo_id="test",
             git_repo_url=str(master_repo),
             channels={
-                "email": EmailChannelConfig(
-                    imap_server="127.0.0.1",
-                    imap_port=9999,  # No server listening on this port
-                    smtp_server="127.0.0.1",
-                    smtp_port=25,
-                    account_username="test",
-                    account_password="test",
-                    account_from_address="test@test.local",
-                    auth_authorized_senders=["user@test.local"],
-                    auth_trusted_authserv_id="test.local",
-                    imap_use_idle=False,
-                    imap_connect_retries=1,
-                    imap_poll_interval_seconds=0.1,
-                )
+                "email": _email_config(),
             },
         )
         config = ServerConfig(
@@ -129,22 +145,7 @@ class TestImapConnectionFailures:
         repo_config = RepoServerConfig(
             repo_id="unreachable",
             git_repo_url=str(master_repo),
-            channels={
-                "email": EmailChannelConfig(
-                    imap_server="127.0.0.1",  # Refused on port 1
-                    imap_port=1,  # Privileged port - immediate refusal
-                    smtp_server="127.0.0.1",
-                    smtp_port=25,
-                    account_username="test",
-                    account_password="test",
-                    account_from_address="test@test.local",
-                    auth_authorized_senders=["user@test.local"],
-                    auth_trusted_authserv_id="test.local",
-                    imap_use_idle=False,
-                    imap_connect_retries=1,
-                    imap_poll_interval_seconds=0.1,
-                )
-            },
+            channels={"email": _email_config(imap_port=1)},
         )
         config = ServerConfig(
             global_config=global_config,
@@ -188,22 +189,7 @@ class TestGitCloneFailures:
         repo_config = RepoServerConfig(
             repo_id="bad-git",
             git_repo_url="/nonexistent/path/that/does/not/exist",
-            channels={
-                "email": EmailChannelConfig(
-                    imap_server="127.0.0.1",
-                    imap_port=9999,  # No server listening
-                    smtp_server="127.0.0.1",
-                    smtp_port=25,
-                    account_username="test",
-                    account_password="test",
-                    account_from_address="test@test.local",
-                    auth_authorized_senders=["user@test.local"],
-                    auth_trusted_authserv_id="test.local",
-                    imap_use_idle=False,
-                    imap_connect_retries=1,
-                    imap_poll_interval_seconds=0.1,
-                )
-            },
+            channels={"email": _email_config()},
         )
         config = ServerConfig(
             global_config=global_config,

@@ -39,9 +39,7 @@ def make_sample_raw() -> dict[str, Any]:
         },
         "repos": {
             "test-repo": {
-                "git": {
-                    "repo_url": "https://github.com/test/repo.git",
-                },
+                "repo_url": "https://github.com/test/repo.git",
                 "email": {
                     "account": {
                         "username": "user@example.com",
