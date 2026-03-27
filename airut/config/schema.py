@@ -29,8 +29,8 @@ from typing import Any
 class Scope(Enum):
     """When does a change to this setting take effect?"""
 
-    SERVER = "server"  # Requires full server restart
-    REPO = "repo"  # Reloadable per-repo without server restart
+    SERVER = "server"  # Deferred until service idle
+    REPO = "repo"  # Reloadable per-repo
     TASK = "task"  # Applied per-task, effective immediately
 
 

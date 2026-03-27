@@ -144,11 +144,9 @@ SLACK_APP_TOKEN=xapp-...
 both `email:` and `slack:` blocks under the repo. Each channel operates
 independently with its own listener and authentication.
 
-Restart the service to pick up the new configuration:
-
-```bash
-systemctl --user restart airut
-```
+If using the config editor, changes are saved and reloaded automatically — no
+restart needed. If editing the YAML file directly, changes are also picked up
+via live config reload (the channel restarts once any in-flight task completes).
 
 ## Step 4: Test the Setup
 

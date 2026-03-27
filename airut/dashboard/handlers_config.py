@@ -967,15 +967,15 @@ class ConfigEditorHandlers:
             return Response("No live config", status=400)
 
         scope_summary: dict[str, int] = {}
-        requires_restart = False
+        has_server_scope = False
         all_changes: list[dict[str, Any]] = []
 
         def _add_change(change: dict[str, Any]) -> None:
-            nonlocal requires_restart
+            nonlocal has_server_scope
             scope_str = change["scope"]
             scope_summary[scope_str] = scope_summary.get(scope_str, 0) + 1
             if scope_str == "server":
-                requires_restart = True
+                has_server_scope = True
             all_changes.append(change)
 
         def _diff_fields(schema: list[EditorFieldSchema]) -> None:
@@ -1092,7 +1092,7 @@ class ConfigEditorHandlers:
                 error=None,
                 changes=all_changes,
                 scope_summary=scope_summary,
-                requires_restart=requires_restart,
+                has_server_scope=has_server_scope,
                 total_changes=sum(scope_summary.values()),
                 validation_error=validation_error,
             ),

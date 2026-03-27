@@ -449,7 +449,7 @@ Discards the edit buffer. Returns 200 with `HX-Redirect: /config`.
 
 Each card header shows a small badge indicating reload scope:
 
-- **server** — blue (`--status-info`): requires restart
+- **server** — blue (`--status-info`): deferred until service idle
 - **repo** — green (`--status-success`): reloadable per-repo
 - **task** — amber (`--status-warning`): applied per-task immediately
 
