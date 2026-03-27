@@ -75,6 +75,7 @@ all critical checks pass, 1 otherwise.
 | ------------- | -------------------------------------------------------- | ----------------- |
 | Version       | Installed version, upstream update availability          | No                |
 | Configuration | Config file parses without error (missing = defaults)    | Yes               |
+| Config schema | Whether config_version matches current (migration hint)  | No                |
 | Dependencies  | git (>= 2.25), podman (>= 4.0) installed and version met | Yes               |
 | Service       | Unit file exists, service running, version mismatch      | No                |
 
@@ -92,12 +93,47 @@ version commands with a 10-second timeout. Version strings are parsed tolerantly
 - git: 2.25
 - podman: 4.0 (netavark backend required for network sandbox)
 
+**Config schema** status is informational only:
+
+- Reads `config_version` from the YAML file without full validation
+- Reports "up to date (vN)" when the file version matches
+  `CURRENT_CONFIG_VERSION`
+- Reports "migration pending (vN → vM)" when the file version is older, with a
+  hint to run `airut migrate` or save from the dashboard
+- Skipped when no config file exists or the file is unparseable
+
 **Service status** is informational only:
 
 - Checks if `~/.config/systemd/user/airut.service` exists
 - Queries `systemctl --user is-active airut.service`
 - When running and config is available, fetches `/api/version` from the local
   dashboard to detect version mismatch between running and installed binaries
+
+### migrate
+
+```
+airut migrate
+```
+
+Apply pending config schema migrations to the config file.
+
+**Behavior:**
+
+- If no config file exists, prints an error and suggests `airut init` (exit 1)
+- Reads the YAML file, applies all pending migrations from `config_version` to
+  `CURRENT_CONFIG_VERSION`, and writes back atomically
+- Preserves `!env` and `!var` tags during the round-trip
+- If already up to date, prints "already up to date (vN)" and returns 0
+- On success, prints "Migrated config schema: vN → vM" and returns 0
+- On error (parse failure, invalid version), prints the error and returns 1
+
+**When to use:** Run `airut migrate` after updating airut to a version with a
+new config schema. Alternatively, saving from the dashboard config editor also
+applies pending migrations automatically.
+
+**Implementation:** Delegates to `migrate_config_file()` in
+`airut/config/migration.py`, which uses `YamlConfigSource` for atomic load/save
+with tag preservation.
 
 ### update
 
