@@ -1067,6 +1067,109 @@ class TestTemplateValueSource:
         html = response.get_data(as_text=True)
         assert "host_var" in html
 
+    def test_var_ref_on_numeric_field_renders_text_input(
+        self, tmp_path: Path
+    ) -> None:
+        """!var on int/float fields must render type=text, not type=number.
+
+        HTML5 number inputs silently reject non-numeric values, so a var
+        name like 'default_resource_timeout' would appear as an empty
+        field.  Regression test for resource_limits vars not rendering.
+        """
+        from airut.yaml_env import VarRef
+
+        raw = _make_sample_raw()
+        raw["vars"] = {
+            "default_resource_timeout": 7200,
+            "default_resource_cpus": 2.0,
+        }
+        raw["repos"]["test-repo"]["resource_limits"] = {
+            "timeout": VarRef("default_resource_timeout"),
+            "cpus": VarRef("default_resource_cpus"),
+        }
+        h = ConfigEditorHarness(tmp_path, raw=raw)
+        response = h.client.get("/config/repos/test-repo")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+
+        # The var names must appear as input values, not be silently dropped
+        assert "default_resource_timeout" in html
+        assert "default_resource_cpus" in html
+
+        # Inputs for var-sourced numeric fields must be type="text"
+        # (type="number" would hide the string var name)
+        timeout_field_id = "field-repos-test-repo-resource_limits-timeout"
+        assert timeout_field_id in html
+
+        # Extract the field div and check its input type
+        start = html.index(f'id="{timeout_field_id}"')
+        # Find the input within this field's div
+        field_html = html[start : start + 2000]
+        # The active input (not the disabled default one) must be type="text"
+        assert 'type="text"' in field_html
+        assert 'type="number"' not in field_html
+
+    def test_var_ref_on_numeric_field_roundtrips_on_save(
+        self, tmp_path: Path
+    ) -> None:
+        """Changing a var-sourced numeric field must preserve the var name.
+
+        When the user submits the form for a !var field on a numeric type,
+        the var name must be preserved — not reset to empty string.
+        """
+        from airut.yaml_env import VarRef
+
+        raw = _make_sample_raw()
+        raw["vars"] = {"default_resource_timeout": 7200}
+        raw["repos"]["test-repo"]["resource_limits"] = {
+            "timeout": VarRef("default_resource_timeout"),
+        }
+        h = ConfigEditorHarness(tmp_path, raw=raw)
+        h.client.get("/config/repos/test-repo")
+
+        # Re-submit the field with source=var — simulates user clicking save
+        response = h.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.resource_limits.timeout",
+                "source": "var",
+                "value": "default_resource_timeout",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+
+        buf = h.server._config_handlers._buffer
+        assert buf is not None
+        val = buf.get_value("repos.test-repo.resource_limits.timeout")
+        assert isinstance(val, VarRef)
+        assert val.var_name == "default_resource_timeout"
+
+    def test_env_ref_on_numeric_field_renders_text_input(
+        self, tmp_path: Path
+    ) -> None:
+        """!env on int/float fields must also render type=text.
+
+        Same bug as !var: HTML5 number inputs reject non-numeric strings,
+        so an env var name would appear empty.
+        """
+        from airut.yaml_env import EnvVar
+
+        raw = _make_sample_raw()
+        raw["dashboard"]["port"] = EnvVar("DASHBOARD_PORT")
+        h = ConfigEditorHarness(tmp_path, raw=raw)
+        response = h.client.get("/config")
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+
+        field_id = "field-dashboard-port"
+        assert field_id in html
+        start = html.index(f'id="{field_id}"')
+        field_html = html[start : start + 2000]
+        assert "DASHBOARD_PORT" in field_html
+        assert 'type="text"' in field_html
+        assert 'type="number"' not in field_html
+
 
 class TestRepoSummaries:
     def test_repo_with_slack_channel(self, tmp_path: Path) -> None:

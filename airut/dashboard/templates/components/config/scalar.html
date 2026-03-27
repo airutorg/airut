@@ -75,7 +75,7 @@
     </select>
     {% else %}
     <input class="cfg-input"
-           type="{{ 'number' if f.python_type in ['int', 'float'] else 'text' }}"
+           type="{{ 'number' if f.python_type in ['int', 'float'] and current_source == 'literal' else 'text' }}"
            value="{{ display_value if display_value is not none else '' }}"
            {% if current_source == 'env' %}placeholder="ENV_VAR_NAME"{% endif %}
            {% if current_source == 'var' %}placeholder="VAR_NAME"{% endif %}
