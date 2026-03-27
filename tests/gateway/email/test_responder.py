@@ -53,15 +53,16 @@ def test_send_reply_success(email_config):
         )
         mock_server.starttls.assert_called_once()
         mock_server.login.assert_called_once_with(
-            email_config.channels["email"].username,
-            email_config.channels["email"].password,
+            email_config.channels["email"].account_username,
+            email_config.channels["email"].account_password,
         )
         mock_server.send_message.assert_called_once()
 
         # Verify message structure (multipart alternative)
         sent_message = mock_server.send_message.call_args[0][0]
         assert (
-            sent_message["From"] == email_config.channels["email"].from_address
+            sent_message["From"]
+            == email_config.channels["email"].account_from_address
         )
         assert sent_message["To"] == "recipient@example.com"
         assert sent_message["Subject"] == "[ID:abc12345] Re: Test"
@@ -468,7 +469,7 @@ def test_send_reply_oauth2_xoauth2(microsoft_oauth2_email_config):
             auth_fn(b"") == "user=test@company.com\x01auth=Bearer tok\x01\x01"
         )
         mock_gen.assert_called_once_with(
-            microsoft_oauth2_email_config.channels["email"].username
+            microsoft_oauth2_email_config.channels["email"].account_username
         )
         mock_server.send_message.assert_called_once()
 

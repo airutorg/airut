@@ -114,7 +114,7 @@ class EmailChannelListener(ChannelListener):
         )
         self._thread.start()
 
-        mode = "IDLE" if self._config.use_imap_idle else "polling"
+        mode = "IDLE" if self._config.imap_use_idle else "polling"
         self._log.info(
             "Email listener started (%s mode)",
             mode,
@@ -142,7 +142,7 @@ class EmailChannelListener(ChannelListener):
 
     def _listener_loop(self) -> None:
         """Main listener loop, dispatching to IDLE or polling mode."""
-        if self._config.use_imap_idle:
+        if self._config.imap_use_idle:
             self._idle_loop()
         else:
             self._polling_loop()
@@ -259,7 +259,7 @@ class EmailChannelListener(ChannelListener):
                             e,
                         )
 
-                self._stop_event.wait(self._config.poll_interval_seconds)
+                self._stop_event.wait(self._config.imap_poll_interval_seconds)
 
             except IMAPConnectionError as e:
                 if not self._running:
@@ -276,7 +276,7 @@ class EmailChannelListener(ChannelListener):
         reconnect_attempts = 0
         max_reconnect_attempts = 5
         last_reconnect = time.time()
-        reconnect_interval = self._config.idle_reconnect_interval_seconds
+        reconnect_interval = self._config.imap_idle_reconnect_interval_seconds
         el = self._email_listener
         assert self._submit is not None
 

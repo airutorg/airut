@@ -12,9 +12,9 @@ each with its own messaging channels, authorization, secrets, and storage.
    create a shared task queue and violate isolation. Each Slack app (bot token)
    maps to one repo.
 3. **Per-repo authorization.** Each repo has its own authorization rules. Email
-   uses `authorized_senders` and `trusted_authserv_id`; Slack uses `authorized`
-   rules (workspace members, user groups, user IDs). Different people can be
-   authorized for different repos.
+   uses `auth.authorized_senders` and `auth.trusted_authserv_id`; Slack uses
+   `authorized` rules (workspace members, user groups, user IDs). Different
+   people can be authorized for different repos.
 4. **No shared state between repos.** Storage, git mirrors, conversations,
    secrets, and email accounts are fully isolated per repo. The only shared
    resources are the global task limit and infrastructure (dashboard, proxy
@@ -53,20 +53,23 @@ repos:
       repo_url: https://github.com/airutorg/airut.git
 
     email:
-      imap_server: mail.example.com
-      imap_port: 993
-      smtp_server: mail.example.com
-      smtp_port: 587
-      username: airut
-      password: !env EMAIL_PASSWORD_AIRUT
-      from: "Airut <airut@example.com>"
-      authorized_senders:
-        - admin@example.com
-      trusted_authserv_id: mail.example.com
+      account:
+        username: airut
+        password: !env EMAIL_PASSWORD_AIRUT
+        from: "Airut <airut@example.com>"
       imap:
+        server: mail.example.com
+        port: 993
         poll_interval: 30
         use_idle: true
         idle_reconnect_interval: 1740
+      smtp:
+        server: mail.example.com
+        port: 587
+      auth:
+        authorized_senders:
+          - admin@example.com
+        trusted_authserv_id: mail.example.com
 
     slack:
       bot_token: !env SLACK_BOT_TOKEN_AIRUT
@@ -84,18 +87,21 @@ repos:
     git:
       repo_url: https://github.com/other/repo.git
     email:
-      imap_server: mail.example.com
-      imap_port: 993
-      smtp_server: mail.example.com
-      smtp_port: 587
-      username: bot
-      password: !env EMAIL_PASSWORD_OTHER
-      from: "Bot <bot@example.com>"
-      authorized_senders:
-        - someone@example.com
-      trusted_authserv_id: mail.example.com
+      account:
+        username: bot
+        password: !env EMAIL_PASSWORD_OTHER
+        from: "Bot <bot@example.com>"
       imap:
+        server: mail.example.com
+        port: 993
         use_idle: true
+      smtp:
+        server: mail.example.com
+        port: 587
+      auth:
+        authorized_senders:
+          - someone@example.com
+        trusted_authserv_id: mail.example.com
     secrets:
       GH_TOKEN: !env GH_TOKEN_OTHER
 ```
@@ -109,18 +115,18 @@ repos:
 - **SMTP is per-repo.** Replies come from the same email address that receives
   tasks for that repo.
 - **Authorization is per-repo and per-channel.** Email uses
-  `email.authorized_senders` (address patterns). Slack uses `slack.authorized`
-  (workspace/group/user rules). Each repo is independent.
-- **`email.trusted_authserv_id` is per-repo** since email settings differ per
-  repo.
+  `email.auth.authorized_senders` (address patterns). Slack uses
+  `slack.authorized` (workspace/group/user rules). Each repo is independent.
+- **`email.auth.trusted_authserv_id` is per-repo** since email settings differ
+  per repo.
 
 ### Validation Rules
 
 At config load time:
 
 - **No duplicate inboxes:** No two repos may share the same
-  `(imap_server, username)` pair. This enforces the "no shared task queue"
-  constraint.
+  `(imap.server, account.username)` pair. This enforces the "no shared task
+  queue" constraint.
 - **At least one channel per repo:** Each repo must have at least one channel
   block (`email:`, `slack:`, or both). Channel keys must match recognized types.
 
@@ -272,19 +278,19 @@ class EmailChannelConfig(ChannelConfig):
 
     imap_server: str
     smtp_server: str
-    username: str
-    password: str
-    from_address: str
-    authorized_senders: list[str]
-    trusted_authserv_id: str
+    account_username: str
+    account_password: str
+    account_from_address: str
+    auth_authorized_senders: list[str]
+    auth_trusted_authserv_id: str
     imap_port: int = 993
     smtp_port: int = 587
     imap_connect_retries: int = 3
-    poll_interval_seconds: float = 60
-    use_imap_idle: bool = True
-    idle_reconnect_interval_seconds: int = 29 * 60
+    imap_poll_interval_seconds: float = 60
+    imap_use_idle: bool = True
+    imap_idle_reconnect_interval_seconds: int = 29 * 60
     smtp_require_auth: bool = True
-    microsoft_internal_auth_fallback: bool = False
+    auth_microsoft_internal_fallback: bool = False
     microsoft_oauth2_tenant_id: str | None = None
     microsoft_oauth2_client_id: str | None = None
     microsoft_oauth2_client_secret: str | None = None

@@ -406,6 +406,11 @@ select.cfg-tagged-type { max-width: 200px; flex-shrink: 0; }
   margin-top: 14px;
   padding-top: 4px;
 }
+.cfg-subsection + .cfg-subsection {
+  border-top: 1px solid var(--border);
+  margin-top: 18px;
+  padding-top: 14px;
+}
 .cfg-subsection-hint {
   font-size: 12px;
   color: var(--text-tertiary);

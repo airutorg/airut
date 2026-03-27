@@ -247,8 +247,9 @@ Open the dashboard at `http://localhost:5200` and click **Configure**. Under the
    `https://github.com/your-org/your-repo.git`)
 2. **Channel settings** — click **Add Email Channel** or **Add Slack Channel**
    to configure at least one channel:
-   - **Email**: Set `repos.<repo>.email.imap_server`, `smtp_server`, `username`,
-     `password`, `from`, `authorized_senders`, and `trusted_authserv_id`. See
+   - **Email**: Set `repos.<repo>.email.imap.server`, `smtp.server`,
+     `account.username`, `account.password`, `account.from`,
+     `auth.authorized_senders`, and `auth.trusted_authserv_id`. See
      [email-setup.md](email-setup.md) for details on each field. The email
      account must be dedicated to this repository — Airut permanently deletes
      messages after processing.
@@ -291,19 +292,22 @@ match the labels shown in the config editor.
 repos:
   your-repo:
     email:
-      imap_server: mail.example.com
-      imap_port: 993
-      smtp_server: mail.example.com
-      smtp_port: 587
-      username: your-repo-bot
-      password: !env YOUR_REPO_EMAIL_PASSWORD
-      from: "Your Repo Bot <your-repo-bot@example.com>"
-      authorized_senders:
-        - you@example.com
-        - *@your-company.com
-      trusted_authserv_id: mail.example.com
+      account:
+        username: your-repo-bot
+        password: !env YOUR_REPO_EMAIL_PASSWORD
+        from: "Your Repo Bot <your-repo-bot@example.com>"
       imap:
+        server: mail.example.com
+        port: 993
         use_idle: true
+      smtp:
+        server: mail.example.com
+        port: 587
+      auth:
+        authorized_senders:
+          - you@example.com
+          - *@your-company.com
+        trusted_authserv_id: mail.example.com
 
     git:
       repo_url: https://github.com/your-org/your-repo.git

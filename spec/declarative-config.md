@@ -102,8 +102,8 @@ then runs the existing resolution/validation pipeline.
 The YAML config uses nested sub-blocks (e.g. `execution.max_concurrent`,
 `dashboard.host`, `email.imap.poll_interval`) that map to flat dataclass field
 names (e.g. `max_concurrent_executions`, `dashboard_host`,
-`poll_interval_seconds`). This nesting is a **serialization concern**, not a
-schema concern.
+`imap_poll_interval_seconds`). This nesting is a **serialization concern**, not
+a schema concern.
 
 `FieldMeta` intentionally does **not** encode YAML paths. The YAML structure is
 a property of `YamlConfigSource`, not of the config schema. A future
@@ -130,10 +130,11 @@ round-trip fidelity.
 "provided" when its corresponding raw dict key exists, regardless of the
 resolved value:
 
-- `password: !env PASSWORD` where `$PASSWORD` is unset — the key exists, so the
-  field **is** provided. Resolution may still raise `ConfigError`, but
+- `account.password: !env PASSWORD` where `$PASSWORD` is unset — the key exists,
+  so the field **is** provided. Resolution may still raise `ConfigError`, but
   provenance tracking is separate from validation.
-- `password:` (YAML null) — the key exists, so the field **is** provided.
+- `account.password:` (YAML null) — the key exists, so the field **is**
+  provided.
 - Key absent from YAML entirely — the field is **not** provided; the default
   applies.
 
@@ -189,16 +190,21 @@ vars:
 repos:
   my-project:
     email:
-      imap_server: !var mail_server
-      smtp_server: !var mail_server
-      password: !env EMAIL_PASSWORD    # !env still works directly
+      account:
+        password: !env EMAIL_PASSWORD    # !env still works directly
+      imap:
+        server: !var mail_server
+      smtp:
+        server: !var mail_server
     secrets:
       ANTHROPIC_API_KEY: !var anthropic_key
 
   another-project:
     email:
-      imap_server: !var mail_server
-      smtp_server: !var mail_server
+      imap:
+        server: !var mail_server
+      smtp:
+        server: !var mail_server
 ```
 
 Variable values are **literals** or **`!env` references**. The `vars:` section
@@ -326,7 +332,7 @@ resolution/validation.
 #### Security-Sensitive Migrations
 
 Some migrations involve fields that affect authorization (e.g.
-`authorized_senders`). For these, the migration function must **reject the
+`auth.authorized_senders`). For these, the migration function must **reject the
 config with a `ConfigError`** rather than silently transforming it.
 
 The rule: migration functions may automatically transform **non-security** field

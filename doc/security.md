@@ -126,10 +126,10 @@ Airut verifies sender identity via DMARC before processing any email. This
 prevents spoofed emails from triggering code execution.
 
 The authentication flow validates the `From` header against
-`Authentication-Results` headers from the configured `trusted_authserv_id` (your
-mail server). Only the first (topmost) header is examined — lower headers may be
-attacker-injected. After authentication, the sender is checked against the
-per-repo `authorized_senders` allowlist.
+`Authentication-Results` headers from the configured `auth.trusted_authserv_id`
+(your mail server). Only the first (topmost) header is examined — lower headers
+may be attacker-injected. After authentication, the sender is checked against
+the per-repo `auth.authorized_senders` allowlist.
 
 Both layers must pass. A valid DMARC pass from an unauthorized sender is
 rejected.
@@ -214,7 +214,8 @@ tags:
 repos:
   my-project:
     email:
-      password: !env EMAIL_PASSWORD     # Channel credentials
+      account:
+        password: !env EMAIL_PASSWORD   # Channel credentials
     slack:
       bot_token: !env SLACK_BOT_TOKEN
     secrets:
@@ -390,8 +391,8 @@ available — repos only define the container image and network allowlist.
 
 **Email:**
 
-- Missing `trusted_authserv_id`: Authentication fails (reject all)
-- Empty `authorized_senders`: Authorization fails (reject all)
+- Missing `auth.trusted_authserv_id`: Authentication fails (reject all)
+- Empty `auth.authorized_senders`: Authorization fails (reject all)
 - DMARC check failure: Message rejected (no processing)
 
 **Slack:**

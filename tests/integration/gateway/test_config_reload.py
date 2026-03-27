@@ -164,19 +164,27 @@ def _config_to_yaml(env: IntegrationEnvironment) -> dict[str, Any]:
         if email_cfg is not None:
             assert isinstance(email_cfg, EmailChannelConfig)
             repo_dict["email"] = {
-                "imap_server": email_cfg.imap_server,
-                "imap_port": email_cfg.imap_port,
-                "smtp_server": email_cfg.smtp_server,
-                "smtp_port": email_cfg.smtp_port,
-                "smtp_require_auth": email_cfg.smtp_require_auth,
-                "username": email_cfg.username,
-                "password": email_cfg.password,
-                "from": email_cfg.from_address,
-                "authorized_senders": list(email_cfg.authorized_senders),
-                "trusted_authserv_id": email_cfg.trusted_authserv_id,
+                "account": {
+                    "username": email_cfg.account_username,
+                    "password": email_cfg.account_password,
+                    "from": email_cfg.account_from_address,
+                },
                 "imap": {
-                    "use_idle": email_cfg.use_imap_idle,
-                    "poll_interval": email_cfg.poll_interval_seconds,
+                    "server": email_cfg.imap_server,
+                    "port": email_cfg.imap_port,
+                    "use_idle": email_cfg.imap_use_idle,
+                    "poll_interval": email_cfg.imap_poll_interval_seconds,
+                },
+                "smtp": {
+                    "server": email_cfg.smtp_server,
+                    "port": email_cfg.smtp_port,
+                    "require_auth": email_cfg.smtp_require_auth,
+                },
+                "auth": {
+                    "authorized_senders": list(
+                        email_cfg.auth_authorized_senders
+                    ),
+                    "trusted_authserv_id": (email_cfg.auth_trusted_authserv_id),
                 },
             }
 
@@ -721,7 +729,7 @@ class TestRepoScopeReload:
             gen = service._config_generation
             integration_env.email_server.clear_outbox()
             cf.set(
-                "repos.test.email.authorized_senders",
+                "repos.test.email.auth.authorized_senders",
                 ["user@test.local", "bob@test.local"],
             )
             wait_for_reload(service, gen)
@@ -880,7 +888,7 @@ class TestRepoScopeReload:
             # Modify repo-scope config while task runs
             gen = service._config_generation
             cf.set(
-                "repos.test.email.authorized_senders",
+                "repos.test.email.auth.authorized_senders",
                 ["user@test.local", "new-user@test.local"],
             )
             wait_for_reload(service, gen)

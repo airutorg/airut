@@ -171,16 +171,20 @@ Per-repo config is nested under `repos.<repo_id>`. Global settings live at the
 top level.
 
 - `email.*` — Email channel settings nested under `email:`:
-  - `email.imap_server`, `email.smtp_server` — Mail server connectivity
-  - `email.username`, `email.password` — Credentials
-  - `email.from` — Sender address
-  - `email.authorized_senders`, `email.trusted_authserv_id` — Access control
+  - `email.account.username`, `email.account.password` — Credentials
+  - `email.account.from` — Sender address
+  - `email.imap.server`, `email.imap.port` — IMAP server connectivity
+  - `email.imap.*` — Polling and idle configuration (connect_retries,
+    poll_interval, use_idle, idle_reconnect_interval)
+  - `email.smtp.server`, `email.smtp.port` — SMTP server connectivity
+  - `email.smtp.require_auth` — Whether SMTP requires authentication
+  - `email.auth.authorized_senders`, `email.auth.trusted_authserv_id` — Access
+    control
+  - `email.auth.microsoft_internal_fallback` — Fallback auth for internal M365
   - `email.microsoft_oauth2.*` — Microsoft OAuth2 Client Credentials for M365
     (tenant_id, client_id, client_secret). When configured, XOAUTH2 SASL is used
-    for both IMAP and SMTP instead of password auth. The `email.password` field
-    becomes optional when OAuth2 is configured.
-  - `email.microsoft_internal_auth_fallback` — Fallback auth for internal M365
-  - `email.imap.*` — Polling and idle configuration
+    for both IMAP and SMTP instead of password auth. The
+    `email.account.password` field becomes optional when OAuth2 is configured.
 - `slack.*` — Slack channel settings nested under `slack:`:
   - `slack.bot_token` — Bot User OAuth Token (`xoxb-...`)
   - `slack.app_token` — App-level token for Socket Mode (`xapp-...`)

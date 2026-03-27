@@ -17,7 +17,7 @@ trusted `Authentication-Results` headers.
 
 ### Configuration
 
-- `trusted_authserv_id` (required): Hostname of the mail server whose
+- `auth.trusted_authserv_id` (required): Hostname of the mail server whose
   `Authentication-Results` headers are trusted (e.g., `mail.example.com`). Set
   to empty string (`""`) for Microsoft 365 / EOP, which omits the authserv-id
   from the header (see [Microsoft 365 Quirk](#microsoft-365-quirk) below).
@@ -81,8 +81,8 @@ Authentication-Results: spf=pass (sender IP is 10.0.0.1)
  dmarc=pass action=none header.from=example.com;compauth=pass reason=100
 ```
 
-When `trusted_authserv_id` is set to empty string (`""`), the authserv-id check
-is skipped entirely. Security relies on the first-header-only policy: the
+When `auth.trusted_authserv_id` is set to empty string (`""`), the authserv-id
+check is skipped entirely. Security relies on the first-header-only policy: the
 receiving MTA always prepends its `Authentication-Results` header at the top
 (RFC 8601 §5), so the first header is always from the MTA. This is the same
 trust model as the standard configuration, minus the authserv-id verification.
@@ -100,7 +100,7 @@ X-MS-Exchange-Organization-AuthAs: Internal
 This indicates the message was sent within the organization and authenticated by
 Exchange's internal transport pipeline.
 
-When `microsoft_internal_auth_fallback` is set to `true` and the message has
+When `auth.microsoft_internal_fallback` is set to `true` and the message has
 **no** `Authentication-Results` header, the authenticator accepts the message if
 `X-MS-Exchange-Organization-AuthAs` is `Internal`. If any
 `Authentication-Results` header is present (even with a DMARC failure), the
@@ -118,7 +118,7 @@ on the email address string returned by the authenticator.
 
 ### Configuration
 
-- `authorized_senders` (required): List of email patterns allowed to send
+- `auth.authorized_senders` (required): List of email patterns allowed to send
   commands. Supports:
   - Exact addresses: `user@example.com`
   - Domain wildcards: `*@example.com` (matches any user at that domain)
@@ -138,10 +138,11 @@ succeeds if the sender matches any pattern:
 Within the `email:` block of a repo's server config:
 
 ```yaml
-authorized_senders:
-  - admin@company.com        # Exact match
-  - *@trusted-partner.com    # Any user from this domain
-  - external.contractor@consultant.org
+auth:
+  authorized_senders:
+    - admin@company.com        # Exact match
+    - *@trusted-partner.com    # Any user from this domain
+    - external.contractor@consultant.org
 ```
 
 ## From Header Parsing

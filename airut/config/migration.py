@@ -24,7 +24,7 @@ from airut.gateway.config import ConfigError
 logger = logging.getLogger(__name__)
 
 #: Current schema version.  Bump when adding a migration.
-CURRENT_CONFIG_VERSION: int = 3
+CURRENT_CONFIG_VERSION: int = 4
 
 
 def _migrate_v1_to_v2(raw: dict[str, Any]) -> dict[str, Any]:
@@ -181,11 +181,65 @@ def _migrate_v2_to_v3(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+#: Mapping from old flat email YAML keys to their new nested location.
+#: Each entry is (old_key, new_section, new_key).  Keys already under
+#: ``imap:`` or ``microsoft_oauth2:`` are handled separately.
+_V4_EMAIL_MOVES: list[tuple[str, str, str]] = [
+    ("username", "account", "username"),
+    ("password", "account", "password"),
+    ("from", "account", "from"),
+    ("imap_server", "imap", "server"),
+    ("imap_port", "imap", "port"),
+    ("smtp_server", "smtp", "server"),
+    ("smtp_port", "smtp", "port"),
+    ("smtp_require_auth", "smtp", "require_auth"),
+    ("authorized_senders", "auth", "authorized_senders"),
+    ("trusted_authserv_id", "auth", "trusted_authserv_id"),
+    ("microsoft_internal_auth_fallback", "auth", "microsoft_internal_fallback"),
+]
+
+
+def _migrate_v3_to_v4(raw: dict[str, Any]) -> dict[str, Any]:
+    """Migrate v3 -> v4: reorganize email fields into subsections.
+
+    Restructures the flat ``email:`` block into nested subsections:
+    ``account:``, ``imap:``, ``smtp:``, ``auth:``.  The
+    ``microsoft_oauth2:`` section is already nested and stays unchanged.
+
+    This is a non-security structural migration — field values are
+    preserved unchanged, only the nesting changes.
+
+    Args:
+        raw: Raw config dict.
+
+    Returns:
+        The transformed config dict.
+    """
+    repos = raw.get("repos", {})
+    if not isinstance(repos, dict):
+        return raw
+
+    for repo in repos.values():
+        if not isinstance(repo, dict):
+            continue
+        email = repo.get("email")
+        if not isinstance(email, dict):
+            continue
+
+        # Move flat top-level keys into their new sections
+        for old_key, section, new_key in _V4_EMAIL_MOVES:
+            if old_key in email:
+                email.setdefault(section, {})[new_key] = email.pop(old_key)
+
+    return raw
+
+
 #: Migration functions keyed by the version they migrate FROM.
 #: Each takes a raw dict and returns the transformed raw dict.
 MIGRATIONS: dict[int, Callable[[dict[str, Any]], dict[str, Any]]] = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
+    3: _migrate_v3_to_v4,
 }
 
 

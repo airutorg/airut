@@ -105,8 +105,8 @@ class TestYamlSection:
         assert _yaml_section("container_command", YAML_GLOBAL_STRUCTURE) is None
 
     def test_single_element_path(self) -> None:
-        """Single-element paths are top-level within their block."""
-        assert _yaml_section("imap_server", YAML_EMAIL_STRUCTURE) is None
+        """Two-element paths map to a section within their block."""
+        assert _yaml_section("imap_server", YAML_EMAIL_STRUCTURE) == "imap"
 
     def test_none_structure(self) -> None:
         assert _yaml_section("anything", None) is None
@@ -294,8 +294,10 @@ class TestGroupFieldsBySection:
             EmailChannelConfig, YAML_EMAIL_STRUCTURE
         )
         section_names = [name for name, _ in groups]
-        assert None in section_names  # top-level email fields
+        assert "account" in section_names
         assert "imap" in section_names
+        assert "smtp" in section_names
+        assert "auth" in section_names
         assert "microsoft_oauth2" in section_names
 
     def test_skipped_fields(self) -> None:
@@ -334,10 +336,10 @@ class TestRenderField:
             if f.name == "imap_server"
         )
         lines = _render_field(EmailChannelConfig, f, YAML_EMAIL_STRUCTURE, "  ")
-        assert any("imap_server: mail.example.com" in x for x in lines)
+        assert any("server: mail.example.com" in x for x in lines)
         # Should NOT be commented
-        value_line = [x for x in lines if "imap_server:" in x][0]
-        assert not value_line.strip().startswith("# imap_server:")
+        value_line = [x for x in lines if "server:" in x][0]
+        assert not value_line.strip().startswith("# server:")
 
     def test_optional_field_commented(self) -> None:
         from airut.gateway.config import GlobalConfig
@@ -366,8 +368,8 @@ class TestRenderField:
             "",
             force_comment=True,
         )
-        value_line = [x for x in lines if "imap_server:" in x][0]
-        assert value_line.startswith("# imap_server:")
+        value_line = [x for x in lines if "server:" in x][0]
+        assert value_line.startswith("# server:")
 
     def test_plain_mode(self) -> None:
         from airut.gateway.config import GlobalConfig
@@ -467,9 +469,11 @@ class TestRenderClass:
             EmailChannelConfig, YAML_EMAIL_STRUCTURE, indent="      "
         )
         text = "\n".join(lines)
-        assert "imap_server: mail.example.com" in text
-        assert "smtp_server: mail.example.com" in text
+        assert "server: mail.example.com" in text
         assert "imap:" in text
+        assert "smtp:" in text
+        assert "account:" in text
+        assert "auth:" in text
         assert "microsoft_oauth2:" in text
 
     def test_force_comment(self) -> None:
@@ -523,8 +527,7 @@ class TestGenerateExampleConfig:
     def test_contains_email_channel(self) -> None:
         content = generate_example_config()
         assert "email:" in content
-        assert "imap_server: mail.example.com" in content
-        assert "smtp_server: mail.example.com" in content
+        assert "server: mail.example.com" in content
 
     def test_contains_git_section(self) -> None:
         content = generate_example_config()
@@ -552,10 +555,17 @@ class TestGenerateExampleConfig:
     def test_required_fields_uncommented(self) -> None:
         content = generate_example_config()
         lines = content.split("\n")
-        imap_lines = [line for line in lines if "imap_server: mail" in line]
-        assert len(imap_lines) >= 1
+        # imap/smtp "server: mail.example.com" lines under repos should be
+        # uncommented.  Exclude the vars header comment which also contains
+        # "mail_server: mail.example.com".
+        server_lines = [
+            line
+            for line in lines
+            if "server: mail.example.com" in line and "mail_server" not in line
+        ]
+        assert len(server_lines) >= 1
         # Should be uncommented (just indented, no #)
-        for line in imap_lines:
+        for line in server_lines:
             stripped = line.lstrip()
             assert not stripped.startswith("#")
 
@@ -649,10 +659,8 @@ class TestGenerateStubConfig:
 
     def test_contains_required_email_fields(self) -> None:
         content = generate_stub_config()
-        assert "imap_server:" in content
-        assert "smtp_server:" in content
+        assert "server:" in content  # imap/smtp server
         assert "username:" in content
-        assert "password:" in content
         assert "from:" in content
         assert "trusted_authserv_id:" in content
 
@@ -922,7 +930,7 @@ class TestEdgeCases:
             ),
         ):
             content = generate_stub_config()
-        assert "imap_server:" in content
+        assert "server:" in content  # imap/smtp server
         assert "no_meta_field" not in content
 
     def test_stub_skips_required_field_without_example(self) -> None:

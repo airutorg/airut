@@ -190,18 +190,21 @@ credential pools. Add the channel and git configuration:
 repos:
   my-project:
     email:
-      imap_server: mail.example.com
-      imap_port: 993
-      smtp_server: mail.example.com
-      smtp_port: 587
-      username: my-project-bot
-      password: !env MY_PROJECT_EMAIL_PASSWORD
-      from: "My Project Bot <my-project-bot@example.com>"
-      authorized_senders:
-        - you@example.com
-      trusted_authserv_id: mail.example.com
+      account:
+        username: my-project-bot
+        password: !env MY_PROJECT_EMAIL_PASSWORD
+        from: "My Project Bot <my-project-bot@example.com>"
       imap:
+        server: mail.example.com
+        port: 993
         use_idle: true
+      smtp:
+        server: mail.example.com
+        port: 587
+      auth:
+        authorized_senders:
+          - you@example.com
+        trusted_authserv_id: mail.example.com
 
     git:
       repo_url: https://gerrit.example.com/a/my-project

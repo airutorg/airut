@@ -61,14 +61,18 @@ class TestEndToEndFlow:
             repo_url=str(master_repo),
             storage_dir=email_config.storage_dir,
         )
-        authenticator = SenderAuthenticator(email_channel.trusted_authserv_id)
-        authorizer = SenderAuthorizer(email_channel.authorized_senders)
+        authenticator = SenderAuthenticator(
+            email_channel.auth_trusted_authserv_id
+        )
+        authorizer = SenderAuthorizer(email_channel.auth_authorized_senders)
         responder = EmailResponder(email_channel)
 
         # Extract underlying email from RawMessage
         email_msg = sample_email_message.content
         email_msg.replace_header("Subject", "Please help with task")
-        email_msg.replace_header("From", email_channel.authorized_senders[0])
+        email_msg.replace_header(
+            "From", email_channel.auth_authorized_senders[0]
+        )
 
         # Validate authentication and authorization
         sender = authenticator.authenticate(email_msg)
@@ -150,8 +154,10 @@ class TestEndToEndFlow:
         sample_email_message,
     ):
         """Test that unauthorized senders are rejected."""
-        authenticator = SenderAuthenticator(email_channel.trusted_authserv_id)
-        authorizer = SenderAuthorizer(email_channel.authorized_senders)
+        authenticator = SenderAuthenticator(
+            email_channel.auth_trusted_authserv_id
+        )
+        authorizer = SenderAuthorizer(email_channel.auth_authorized_senders)
 
         # Modify message to have unauthorized sender
         email_msg = sample_email_message.content
@@ -197,7 +203,7 @@ class TestEndToEndFlow:
 
         # Create email with attachment
         msg = MIMEMultipart()
-        msg["From"] = email_channel.authorized_senders[0]
+        msg["From"] = email_channel.auth_authorized_senders[0]
         msg["To"] = "claude@example.com"
         msg["Subject"] = "Please process this file"
         msg["Message-ID"] = "<attach123@example.com>"
@@ -223,8 +229,10 @@ class TestEndToEndFlow:
             repo_url=str(master_repo),
             storage_dir=email_config.storage_dir,
         )
-        authenticator = SenderAuthenticator(email_channel.trusted_authserv_id)
-        authorizer = SenderAuthorizer(email_channel.authorized_senders)
+        authenticator = SenderAuthenticator(
+            email_channel.auth_trusted_authserv_id
+        )
+        authorizer = SenderAuthorizer(email_channel.auth_authorized_senders)
 
         # Validate authentication and authorization
         sender = authenticator.authenticate(msg)
@@ -367,8 +375,10 @@ class TestComponentIntegration:
         # Create all components from config
         listener = EmailListener(email_channel)
         responder = EmailResponder(email_channel)
-        authenticator = SenderAuthenticator(email_channel.trusted_authserv_id)
-        authorizer = SenderAuthorizer(email_channel.authorized_senders)
+        authenticator = SenderAuthenticator(
+            email_channel.auth_trusted_authserv_id
+        )
+        authorizer = SenderAuthorizer(email_channel.auth_authorized_senders)
         conversation_manager = ConversationManager(
             repo_url=email_config.git_repo_url,
             storage_dir=email_config.storage_dir,
@@ -869,7 +879,7 @@ class TestAcknowledgmentReply:
         )
 
         parsed = EmailParsedMessage(
-            sender=email_channel.authorized_senders[0],
+            sender=email_channel.auth_authorized_senders[0],
             body="New request",
             conversation_id=None,
             model_hint=None,
@@ -882,7 +892,7 @@ class TestAcknowledgmentReply:
 
         responder.send_reply.assert_called_once()
         call_kwargs = responder.send_reply.call_args[1]
-        assert call_kwargs["to"] == email_channel.authorized_senders[0]
+        assert call_kwargs["to"] == email_channel.auth_authorized_senders[0]
         assert f"[ID:{conv_id}]" in call_kwargs["subject"]
         assert "Re:" in call_kwargs["subject"]
         assert "started working" in call_kwargs["body"]
@@ -914,7 +924,7 @@ class TestAcknowledgmentReply:
 
         conv_id = "xyz98765"
         parsed = EmailParsedMessage(
-            sender=email_channel.authorized_senders[0],
+            sender=email_channel.auth_authorized_senders[0],
             body="Follow-up",
             conversation_id=conv_id,
             model_hint=None,
@@ -953,7 +963,7 @@ class TestAcknowledgmentReply:
         )
 
         parsed = EmailParsedMessage(
-            sender=email_channel.authorized_senders[0],
+            sender=email_channel.auth_authorized_senders[0],
             body="Request",
             conversation_id=None,
             model_hint=None,
@@ -1060,7 +1070,7 @@ class TestAcknowledgmentReply:
         adapter.save_attachments.return_value = []
 
         parsed = ParsedMessage(
-            sender=email_channel.authorized_senders[0],
+            sender=email_channel.auth_authorized_senders[0],
             body="New request",
             conversation_id=None,
             model_hint=None,
@@ -1140,7 +1150,7 @@ class TestAcknowledgmentReply:
         adapter.save_attachments.return_value = []
 
         parsed = ParsedMessage(
-            sender=email_channel.authorized_senders[0],
+            sender=email_channel.auth_authorized_senders[0],
             body="New request without ID",
             conversation_id=None,
             model_hint=None,
@@ -1175,11 +1185,11 @@ class TestAcknowledgmentReply:
                 imap_port=993,
                 smtp_server="smtp.example.com",
                 smtp_port=587,
-                username="test@example.com",
-                password="test_password",
-                from_address="Test Service <test@example.com>",
-                authorized_senders=["authorized@example.com"],
-                trusted_authserv_id="mx.example.com",
+                account_username="test@example.com",
+                account_password="test_password",
+                account_from_address="Test Service <test@example.com>",
+                auth_authorized_senders=["authorized@example.com"],
+                auth_trusted_authserv_id="mx.example.com",
             ),
             authenticator=MagicMock(),
             authorizer=MagicMock(),
@@ -1232,7 +1242,7 @@ class TestAcknowledgmentReply:
         )
 
         parsed = EmailParsedMessage(
-            sender=email_channel.authorized_senders[0],
+            sender=email_channel.auth_authorized_senders[0],
             body="New request",
             conversation_id=None,
             model_hint=None,
@@ -1293,7 +1303,7 @@ class TestAcknowledgmentReply:
         adapter.save_attachments.return_value = []
 
         parsed = ParsedMessage(
-            sender=email_channel.authorized_senders[0],
+            sender=email_channel.auth_authorized_senders[0],
             body="Follow-up",
             conversation_id=conv_id,
             model_hint=None,
@@ -1444,7 +1454,7 @@ class TestDuplicateMessageRejection:
 
         # Worker receives raw msg; adapter returns parsed with same conv_id
         parsed = ParsedMessage(
-            sender=email_channel.authorized_senders[0],
+            sender=email_channel.auth_authorized_senders[0],
             body="Follow-up",
             conversation_id=conv_id,
             model_hint=None,
@@ -1501,7 +1511,7 @@ class TestDuplicateMessageRejection:
         service.tracker.complete_task(conv_id, CompletionReason.SUCCESS)
 
         parsed = ParsedMessage(
-            sender=email_channel.authorized_senders[0],
+            sender=email_channel.auth_authorized_senders[0],
             body="Follow-up",
             conversation_id=conv_id,
             model_hint=None,
@@ -1565,7 +1575,7 @@ class TestDuplicateMessageRejection:
 
         # Worker receives raw msg; adapter returns parsed with same conv_id
         parsed = ParsedMessage(
-            sender=email_channel.authorized_senders[0],
+            sender=email_channel.auth_authorized_senders[0],
             body="Follow-up",
             conversation_id=conv_id,
             model_hint=None,
@@ -1617,7 +1627,7 @@ class TestDuplicateMessageRejection:
 
         # Worker receives a raw message; adapter returns parsed with no conv_id
         parsed = ParsedMessage(
-            sender=email_channel.authorized_senders[0],
+            sender=email_channel.auth_authorized_senders[0],
             body="Brand new request",
             conversation_id=None,
             model_hint=None,
@@ -1682,7 +1692,7 @@ class TestRejectionReply:
         )
 
         parsed = EmailParsedMessage(
-            sender=email_channel.authorized_senders[0],
+            sender=email_channel.auth_authorized_senders[0],
             body="Original request",
             conversation_id=None,
             model_hint=None,
@@ -1719,11 +1729,11 @@ class TestRejectionReply:
             imap_port=993,
             smtp_server="smtp.example.com",
             smtp_port=587,
-            username="test@example.com",
-            password="test_password",
-            from_address="Test Service <test@example.com>",
-            authorized_senders=["authorized@example.com"],
-            trusted_authserv_id="mx.example.com",
+            account_username="test@example.com",
+            account_password="test_password",
+            account_from_address="Test Service <test@example.com>",
+            auth_authorized_senders=["authorized@example.com"],
+            auth_trusted_authserv_id="mx.example.com",
         )
         adapter = EmailChannelAdapter(
             config=email_channel_config,
@@ -1777,7 +1787,7 @@ class TestRejectionReply:
         )
 
         parsed = EmailParsedMessage(
-            sender=email_channel.authorized_senders[0],
+            sender=email_channel.auth_authorized_senders[0],
             body="Request",
             conversation_id=None,
             model_hint=None,

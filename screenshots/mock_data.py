@@ -926,20 +926,28 @@ def _make_config_raw() -> dict[str, Any]:
                     "ANTHROPIC_API_KEY": VarRef("anthropic_key"),
                 },
                 "email": {
-                    "imap_server": VarRef("imap_host"),
-                    "imap_port": 993,
-                    "smtp_server": VarRef("smtp_host"),
-                    "smtp_port": 587,
-                    "username": EnvVar("EMAIL_USER"),
-                    "password": EnvVar("EMAIL_PASS"),
-                    "from": "airut@acme.com",
-                    "authorized_senders": [
-                        "alice@acme.com",
-                        "bob@acme.com",
-                        "carol@acme.com",
-                        "*@eng.acme.com",
-                    ],
-                    "trusted_authserv_id": "acme.com",
+                    "account": {
+                        "username": EnvVar("EMAIL_USER"),
+                        "password": EnvVar("EMAIL_PASS"),
+                        "from": "airut@acme.com",
+                    },
+                    "imap": {
+                        "server": VarRef("imap_host"),
+                        "port": 993,
+                    },
+                    "smtp": {
+                        "server": VarRef("smtp_host"),
+                        "port": 587,
+                    },
+                    "auth": {
+                        "authorized_senders": [
+                            "alice@acme.com",
+                            "bob@acme.com",
+                            "carol@acme.com",
+                            "*@eng.acme.com",
+                        ],
+                        "trusted_authserv_id": "acme.com",
+                    },
                 },
                 "slack": {
                     "bot_token": EnvVar("SLACK_BOT_TOKEN"),
@@ -958,16 +966,24 @@ def _make_config_raw() -> dict[str, Any]:
                     "ANTHROPIC_API_KEY": VarRef("anthropic_key"),
                 },
                 "email": {
-                    "imap_server": VarRef("imap_host"),
-                    "smtp_server": VarRef("smtp_host"),
-                    "username": EnvVar("EMAIL_USER_FE"),
-                    "password": EnvVar("EMAIL_PASS"),
-                    "from": "airut+fe@acme.com",
-                    "authorized_senders": [
-                        "alice@acme.com",
-                        "bob@acme.com",
-                    ],
-                    "trusted_authserv_id": "acme.com",
+                    "account": {
+                        "username": EnvVar("EMAIL_USER_FE"),
+                        "password": EnvVar("EMAIL_PASS"),
+                        "from": "airut+fe@acme.com",
+                    },
+                    "imap": {
+                        "server": VarRef("imap_host"),
+                    },
+                    "smtp": {
+                        "server": VarRef("smtp_host"),
+                    },
+                    "auth": {
+                        "authorized_senders": [
+                            "alice@acme.com",
+                            "bob@acme.com",
+                        ],
+                        "trusted_authserv_id": "acme.com",
+                    },
                 },
             },
         },

@@ -349,15 +349,15 @@ class TestSchemaForEditorChannels:
         names = {s.name for s in schema}
         assert "imap_server" in names
         assert "smtp_server" in names
-        assert "password" in names
-        assert "authorized_senders" in names
+        assert "account_password" in names
+        assert "auth_authorized_senders" in names
 
         by_name = {s.name: s for s in schema}
         assert (
-            by_name["imap_server"].path == "repos.my-project.email.imap_server"
+            by_name["imap_server"].path == "repos.my-project.email.imap.server"
         )
-        assert by_name["authorized_senders"].type_tag == "list_str"
-        assert by_name["password"].secret is True
+        assert by_name["auth_authorized_senders"].type_tag == "list_str"
+        assert by_name["account_password"].secret is True
 
         # imap nested fields use YAML_EMAIL_STRUCTURE
         assert (
@@ -480,20 +480,24 @@ class TestEditBufferDirty:
 
     def test_dirty_after_add(self) -> None:
         buf = EditBuffer(_make_sample_raw(), generation=0)
-        buf.add_item("repos.test-repo.email.authorized_senders")
+        buf.add_item("repos.test-repo.email.auth.authorized_senders")
         assert buf.dirty is True
 
     def test_dirty_after_remove(self) -> None:
         buf = EditBuffer(_make_sample_raw(), generation=0)
-        buf.remove_item("repos.test-repo.email.authorized_senders", index=0)
+        buf.remove_item(
+            "repos.test-repo.email.auth.authorized_senders", index=0
+        )
         assert buf.dirty is True
 
 
 class TestEditBufferAddItem:
     def test_add_list_item(self) -> None:
         buf = EditBuffer(_make_sample_raw(), generation=0)
-        buf.add_item("repos.test-repo.email.authorized_senders")
-        senders = buf.raw["repos"]["test-repo"]["email"]["authorized_senders"]
+        buf.add_item("repos.test-repo.email.auth.authorized_senders")
+        senders = buf.raw["repos"]["test-repo"]["email"]["auth"][
+            "authorized_senders"
+        ]
         assert len(senders) == 2
         assert senders[-1] == ""
 
@@ -521,8 +525,12 @@ class TestEditBufferAddItem:
 class TestEditBufferRemoveItem:
     def test_remove_list_item(self) -> None:
         buf = EditBuffer(_make_sample_raw(), generation=0)
-        buf.remove_item("repos.test-repo.email.authorized_senders", index=0)
-        senders = buf.raw["repos"]["test-repo"]["email"]["authorized_senders"]
+        buf.remove_item(
+            "repos.test-repo.email.auth.authorized_senders", index=0
+        )
+        senders = buf.raw["repos"]["test-repo"]["email"]["auth"][
+            "authorized_senders"
+        ]
         assert len(senders) == 0
 
     def test_remove_keyed_item(self) -> None:
@@ -571,17 +579,21 @@ class TestEditBufferSetListItem:
         raw = _make_sample_raw()
         buf = EditBuffer(raw, generation=0)
         buf.set_list_item(
-            "repos.test-repo.email.authorized_senders", 0, "new@example.com"
+            "repos.test-repo.email.auth.authorized_senders",
+            0,
+            "new@example.com",
         )
-        assert buf.raw["repos"]["test-repo"]["email"]["authorized_senders"] == [
-            "new@example.com"
-        ]
+        assert buf.raw["repos"]["test-repo"]["email"]["auth"][
+            "authorized_senders"
+        ] == ["new@example.com"]
         assert buf.dirty
 
     def test_set_list_item_out_of_range(self) -> None:
         raw = _make_sample_raw()
         buf = EditBuffer(raw, generation=0)
-        buf.set_list_item("repos.test-repo.email.authorized_senders", 99, "bad")
+        buf.set_list_item(
+            "repos.test-repo.email.auth.authorized_senders", 99, "bad"
+        )
         # Out-of-range should not modify
         assert not buf.dirty
 
