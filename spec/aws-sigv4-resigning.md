@@ -14,103 +14,24 @@ For general masked secrets (bearer tokens, API keys), see
 
 ## Config Schema
 
-### Server Config
+AWS signing credentials are declared in the `signing_credentials:` block under
+each repo in the server config, alongside `masked_secrets`. Each field uses a
+`name`/`value` structure — `name` declares the environment variable name
+injected into the container, and `value` provides the real credential. For the
+full field reference (types, defaults, examples), see
+[`config/airut.example.yaml`](../config/airut.example.yaml).
 
-AWS signing credentials are declared in a `signing_credentials` block alongside
-`masked_secrets`. Each field uses a `name`/`value` structure — `name` declares
-the environment variable name injected into the container, and `value` provides
-the real credential:
-
-```yaml
-repos:
-  my-project:
-    masked_secrets:
-      GH_TOKEN:
-        value: !env GH_TOKEN
-        scopes: ["github.com", "api.github.com"]
-        headers: ["Authorization"]
-
-    signing_credentials:
-      AWS_PROD:
-        type: aws-sigv4                        # signing protocol
-        access_key_id:
-          name: AWS_ACCESS_KEY_ID              # env var name injected into container
-          value: !env PROD_AWS_ACCESS_KEY_ID
-        secret_access_key:
-          name: AWS_SECRET_ACCESS_KEY
-          value: !env PROD_AWS_SECRET_ACCESS_KEY
-        session_token:                         # optional (STS temp credentials)
-          name: AWS_SESSION_TOKEN
-          value: !env AWS_SESSION_TOKEN
-        scopes:
-          - "*.amazonaws.com"
-          - "*.r2.cloudflarestorage.com"
-
-      R2_STORAGE:
-        type: aws-sigv4
-        access_key_id:
-          name: R2_ACCESS_KEY_ID
-          value: !env R2_ACCESS_KEY_ID
-        secret_access_key:
-          name: R2_SECRET_ACCESS_KEY
-          value: !env R2_SECRET_ACCESS_KEY
-        scopes:
-          - "*.r2.cloudflarestorage.com"
-```
-
-Each `name` declares the environment variable name that will be injected into
-the container. The container receives a format-preserving surrogate; the proxy
-re-signs requests with the real credentials for scoped hosts.
-
-### Fields
-
-| Field                                                | Type        | Required | Description                                |
-| ---------------------------------------------------- | ----------- | -------- | ------------------------------------------ |
-| `signing_credentials`                                | mapping     | No       | Named signing credential sets              |
-| `signing_credentials.<name>.type`                    | string      | Yes      | Signing protocol (`aws-sigv4`)             |
-| `signing_credentials.<name>.access_key_id.name`      | string      | Yes      | Env var name injected into container       |
-| `signing_credentials.<name>.access_key_id.value`     | string/!env | Yes      | AWS access key ID                          |
-| `signing_credentials.<name>.secret_access_key.name`  | string      | Yes      | Env var name injected into container       |
-| `signing_credentials.<name>.secret_access_key.value` | string/!env | Yes      | AWS secret access key                      |
-| `signing_credentials.<name>.session_token.name`      | string      | Yes      | Env var name injected into container       |
-| `signing_credentials.<name>.session_token.value`     | string/!env | No       | STS session token (`X-Amz-Security-Token`) |
-| `signing_credentials.<name>.scopes`                  | list[str]   | Yes      | Fnmatch patterns for allowed hosts         |
+The container receives format-preserving surrogates; the proxy re-signs requests
+with the real credentials for scoped hosts.
 
 ### Transparent Upgrade Path
 
-The server admin can migrate between plain secrets and signing credentials by
-changing only the server config:
-
-**Plain secrets (no masking):**
-
-```yaml
-secrets:
-  AWS_ACCESS_KEY_ID: !env AWS_ACCESS_KEY_ID
-  AWS_SECRET_ACCESS_KEY: !env AWS_SECRET_ACCESS_KEY
-  AWS_SESSION_TOKEN: !env AWS_SESSION_TOKEN
-```
-
-**Signing credentials (proxy re-signs):**
-
-```yaml
-signing_credentials:
-  AWS_PROD:
-    type: aws-sigv4
-    access_key_id:
-      name: AWS_ACCESS_KEY_ID
-      value: !env AWS_ACCESS_KEY_ID
-    secret_access_key:
-      name: AWS_SECRET_ACCESS_KEY
-      value: !env AWS_SECRET_ACCESS_KEY
-    session_token:
-      name: AWS_SESSION_TOKEN
-      value: !env AWS_SESSION_TOKEN
-    scopes: ["*.amazonaws.com"]
-```
-
-In both cases, the container sees `AWS_ACCESS_KEY_ID` as an env var. The
-difference is whether the container receives real values or surrogates, and
-whether the proxy performs re-signing.
+The server admin can migrate between plain `secrets` and `signing_credentials`
+by changing only the server config. In both cases, the container sees the same
+env var names (e.g. `AWS_ACCESS_KEY_ID`). The difference is whether the
+container receives real values or surrogates, and whether the proxy performs
+re-signing. See [`config/airut.example.yaml`](../config/airut.example.yaml) for
+both configurations.
 
 ## Surrogate Generation
 

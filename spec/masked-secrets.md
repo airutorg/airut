@@ -11,69 +11,19 @@ see
 
 ## Server Config Schema
 
-Masked secrets are declared alongside regular `secrets` in `config/airut.yaml`:
-
-```yaml
-repos:
-  my-project:
-    secrets:
-      OPENAI_API_KEY: !env OPENAI_API_KEY      # Plain secret
-
-    masked_secrets:
-      GH_TOKEN:
-        value: !env GH_TOKEN
-        scopes:
-          - "github.com"
-          - "api.github.com"
-          - "*.githubusercontent.com"
-      ANTHROPIC_API_KEY:
-        value: !env ANTHROPIC_API_KEY
-        scopes:
-          - "api.anthropic.com"
-```
-
-### Fields
-
-| Field                                             | Type         | Required | Description                                              |
-| ------------------------------------------------- | ------------ | -------- | -------------------------------------------------------- |
-| `masked_secrets`                                  | mapping      | No       | Named masked secrets for this repo                       |
-| `masked_secrets.<name>.value`                     | string/!env  | Yes      | Secret value (supports `!env` tag)                       |
-| `masked_secrets.<name>.scopes`                    | list[string] | Yes      | Fnmatch patterns for allowed hosts                       |
-| `masked_secrets.<name>.headers`                   | list[string] | Yes      | Fnmatch patterns for headers to scan                     |
-| `masked_secrets.<name>.allow_foreign_credentials` | bool         | No       | Allow non-surrogate credentials through (default: false) |
+Masked secrets are declared in the `masked_secrets:` block under each repo in
+the server config, alongside regular `secrets`. For the full field reference
+(types, defaults, examples), see
+[`config/airut.example.yaml`](../config/airut.example.yaml).
 
 Both `scopes` and `headers` use fnmatch pattern matching. Header matching is
 **case-insensitive** per RFC 7230 (e.g., `"Authorization"` matches
-`authorization`, `AUTHORIZATION`, etc.).
+`authorization`, `AUTHORIZATION`, etc.). Common header patterns:
 
-**Headers examples:**
-
-```yaml
-masked_secrets:
-  # Match all headers (scan everything)
-  UNIVERSAL_TOKEN:
-    value: !env UNIVERSAL_TOKEN
-    scopes: ["api.example.com"]
-    headers: ["*"]
-
-  # Match specific header
-  GH_TOKEN:
-    value: !env GH_TOKEN
-    scopes: ["github.com", "api.github.com"]
-    headers: ["Authorization"]
-
-  # Match pattern (e.g., all X-* headers)
-  CUSTOM_TOKEN:
-    value: !env CUSTOM_TOKEN
-    scopes: ["api.example.com"]
-    headers: ["X-*"]
-
-  # GitLab-style header
-  GITLAB_TOKEN:
-    value: !env GITLAB_TOKEN
-    scopes: ["gitlab.com"]
-    headers: ["Private-Token"]
-```
+- `"Authorization"` — match a specific header
+- `"*"` — match all headers (scan everything)
+- `"X-*"` — match headers starting with X- (any case)
+- `"Private-Token"` — GitLab-style header
 
 ## Resolution Behavior
 

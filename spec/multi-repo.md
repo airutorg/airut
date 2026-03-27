@@ -30,81 +30,11 @@ each with its own messaging channels, authorization, secrets, and storage.
 
 ## Server Configuration
 
-The server config (`config/airut.yaml`) is restructured. Global settings live at
-the top level. Everything repo-specific moves under `repos.<name>`.
-
-```yaml
-# Global settings (shared across all repos)
-execution:
-  max_concurrent: 3
-  shutdown_timeout: 60
-  conversation_max_age_days: 7
-
-dashboard:
-  enabled: true
-  host: 127.0.0.1
-  port: 5200
-  base_url: dashboard.example.com
-
-# Per-repo configuration
-repos:
-  airut:
-    git:
-      repo_url: https://github.com/airutorg/airut.git
-
-    email:
-      account:
-        username: airut
-        password: !env EMAIL_PASSWORD_AIRUT
-        from: "Airut <airut@example.com>"
-      imap:
-        server: mail.example.com
-        port: 993
-        poll_interval: 30
-        use_idle: true
-        idle_reconnect_interval: 1740
-      smtp:
-        server: mail.example.com
-        port: 587
-      auth:
-        authorized_senders:
-          - admin@example.com
-        trusted_authserv_id: mail.example.com
-
-    slack:
-      bot_token: !env SLACK_BOT_TOKEN_AIRUT
-      app_token: !env SLACK_APP_TOKEN_AIRUT
-      authorized:
-        - workspace_members: true
-
-    # Per-repo secrets pool
-    secrets:
-      CLAUDE_CODE_OAUTH_TOKEN: !env CLAUDE_CODE_OAUTH_TOKEN
-      GH_TOKEN: !env GH_TOKEN_AIRUT
-      R2_ACCESS_KEY_ID: !env R2_ACCESS_KEY_ID
-
-  another-repo:
-    git:
-      repo_url: https://github.com/other/repo.git
-    email:
-      account:
-        username: bot
-        password: !env EMAIL_PASSWORD_OTHER
-        from: "Bot <bot@example.com>"
-      imap:
-        server: mail.example.com
-        port: 993
-        use_idle: true
-      smtp:
-        server: mail.example.com
-        port: 587
-      auth:
-        authorized_senders:
-          - someone@example.com
-        trusted_authserv_id: mail.example.com
-    secrets:
-      GH_TOKEN: !env GH_TOKEN_OTHER
-```
+The server config (`~/.config/airut/airut.yaml`) has global settings at the top
+level and everything repo-specific under `repos.<name>`. See
+[`config/airut.example.yaml`](../config/airut.example.yaml) for the complete
+field reference, and [repo-config.md](repo-config.md) for per-repo schema
+details.
 
 ### Key Design Decisions
 
@@ -254,68 +184,11 @@ With multi-repo, `start_task_proxy` receives the allowlist content from the
 
 ## Configuration Classes
 
-```python
-@dataclass(frozen=True)
-class GlobalConfig:
-    """Global server settings (not repo-specific)."""
-
-    max_concurrent_executions: int
-    shutdown_timeout_seconds: int
-    conversation_max_age_days: int
-    dashboard_enabled: bool
-    dashboard_host: str
-    dashboard_port: int
-    dashboard_base_url: str | None
-    container_command: str
-
-
-@dataclass(frozen=True)
-class EmailChannelConfig(ChannelConfig):
-    """Email channel configuration (nested under email: in YAML).
-
-    Implements the ChannelConfig protocol (channel_type, channel_info).
-    """
-
-    imap_server: str
-    smtp_server: str
-    account_username: str
-    account_password: str
-    account_from_address: str
-    auth_authorized_senders: list[str]
-    auth_trusted_authserv_id: str
-    imap_port: int = 993
-    smtp_port: int = 587
-    imap_connect_retries: int = 3
-    imap_poll_interval_seconds: float = 60
-    imap_use_idle: bool = True
-    imap_idle_reconnect_interval_seconds: int = 29 * 60
-    smtp_require_auth: bool = True
-    auth_microsoft_internal_fallback: bool = False
-    microsoft_oauth2_tenant_id: str | None = None
-    microsoft_oauth2_client_id: str | None = None
-    microsoft_oauth2_client_secret: str | None = None
-
-
-@dataclass(frozen=True)
-class RepoServerConfig:
-    """Per-repo server-side configuration."""
-
-    repo_id: str
-    git_repo_url: str
-    channels: dict[str, ChannelConfig]  # keyed by channel type
-    secrets: dict[str, str]
-    masked_secrets: dict[str, MaskedSecret]
-    signing_credentials: dict[str, SigningCredential]
-    network_sandbox_enabled: bool = True
-
-
-@dataclass(frozen=True)
-class ServerConfig:
-    """Complete server configuration."""
-
-    global_config: GlobalConfig
-    repos: dict[str, RepoServerConfig]
-```
+The config dataclasses (`GlobalConfig`, `EmailChannelConfig`,
+`SlackChannelConfig`, `RepoServerConfig`, `ServerConfig`, and credential types)
+carry declarative `FieldMeta` annotations for documentation, scope, and secret
+flags. See [declarative-config.md](declarative-config.md) for the metadata
+system and [repo-config.md](repo-config.md) for the per-repo schema.
 
 All per-repo settings (model, effort, resource limits, network, credential
 pools) are parsed from the server config at startup.

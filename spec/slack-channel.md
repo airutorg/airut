@@ -488,38 +488,9 @@ app is a future consideration.
 
 Slack config is a per-repo block, parallel to `email:`. A repo can have both
 `email:` and `slack:` active simultaneously (see
-[multi-repo.md](multi-repo.md)). The `slack:` block lives under `repos.<name>`:
-
-```yaml
-repos:
-  my-project:
-    git:
-      repo_url: https://github.com/you/my-project.git
-
-    email:
-      # ... email config (optional, can coexist with slack)
-
-    slack:
-      # Bot token (xoxb-...) -- from OAuth & Permissions page
-      bot_token: !env SLACK_BOT_TOKEN
-
-      # App-level token (xapp-...) -- for Socket Mode
-      app_token: !env SLACK_APP_TOKEN
-
-      # Authorization rules (at least one required)
-      authorized:
-        - workspace_members: true
-        # - user_group: engineering
-        # - user_id: U12345678
-
-    secrets:
-      ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY
-    masked_secrets:
-      GH_TOKEN:
-        value: !env GH_TOKEN
-        scopes: ["github.com", "api.github.com"]
-        headers: ["Authorization"]
-```
+[multi-repo.md](multi-repo.md)). The `slack:` block lives under `repos.<name>`.
+For the full field reference (tokens, authorization rules, examples), see
+[`config/airut.example.yaml`](../config/airut.example.yaml).
 
 A Slack-only repo omits the `email:` block entirely. At least one channel must
 be present per repo. See [multi-repo.md](multi-repo.md) for the full
