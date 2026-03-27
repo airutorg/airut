@@ -249,6 +249,14 @@ airut/
 └── tests/                 # Unit and integration tests
 ```
 
+## Testing
+
+Airut enforces **100% unit test coverage** in CI — every line must be tested,
+with no skips or exceptions. Integration tests verify end-to-end workflows
+including email, Slack, config reload, and session recovery. Config schema
+migrations are independently tested for correctness and idempotency. See
+[doc/testing.md](doc/testing.md) for details.
+
 ## Development
 
 This project is developed with Claude Code. See [CLAUDE.md](CLAUDE.md) for
