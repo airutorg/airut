@@ -494,7 +494,30 @@ class TestSendReply:
 
 
 class TestSendError:
-    def test_sends_error_reply(self) -> None:
+    def test_sends_error_reply_with_conversation_id(self) -> None:
+        """Error reply includes [ID:conv_id] in subject when conv_id given."""
+        adapter, _, _, responder = _make_adapter()
+        parsed = EmailParsedMessage(
+            sender="user@example.com",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            original_message_id="<msg1@ex.com>",
+            original_references=["<ref1@ex.com>"],
+            decoded_subject="Test Subject",
+        )
+
+        adapter.send_error(parsed, "conv1", "Something broke")
+        responder.send_reply.assert_called_once()
+        call_kw = responder.send_reply.call_args[1]
+        assert call_kw["body"] == "Something broke"
+        assert "[ID:conv1]" in call_kw["subject"]
+        # References should include the full chain
+        assert "<ref1@ex.com>" in call_kw["references"]
+        assert "<msg1@ex.com>" in call_kw["references"]
+
+    def test_sends_error_reply_without_conversation_id(self) -> None:
+        """Error reply uses plain subject when conv_id is None."""
         adapter, _, _, responder = _make_adapter()
         parsed = EmailParsedMessage(
             sender="user@example.com",
@@ -505,11 +528,11 @@ class TestSendError:
             decoded_subject="Test Subject",
         )
 
-        adapter.send_error(parsed, "conv1", "Something broke")
+        adapter.send_error(parsed, None, "Something broke")
         responder.send_reply.assert_called_once()
         call_kw = responder.send_reply.call_args[1]
-        assert call_kw["body"] == "Something broke"
         assert call_kw["subject"] == "Re: Test Subject"
+        assert call_kw["references"] == ["<msg1@ex.com>"]
 
     def test_smtp_failure_logged(self) -> None:
         adapter, _, _, responder = _make_adapter()

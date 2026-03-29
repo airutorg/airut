@@ -15,7 +15,8 @@ import re
 import secrets
 import smtplib
 import time
-from email.mime.application import MIMEApplication
+from email import encoders
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import parseaddr
@@ -192,12 +193,11 @@ class EmailResponder:
                     if mime_type is None:
                         mime_type = "application/octet-stream"
 
-                    # Split into maintype/subtype
                     maintype, subtype = mime_type.split("/", 1)
 
-                    attachment = MIMEApplication(
-                        content, _subtype=subtype, name=filename
-                    )
+                    attachment = MIMEBase(maintype, subtype)
+                    attachment.set_payload(content)
+                    encoders.encode_base64(attachment)
                     attachment.add_header(
                         "Content-Disposition", "attachment", filename=filename
                     )
@@ -232,6 +232,11 @@ class EmailResponder:
                         def _xoauth2_authobject(
                             _challenge: bytes | None = None,
                         ) -> str:
+                            if _challenge is not None:
+                                # Server sent an error challenge (334);
+                                # respond with empty string to acknowledge
+                                # per the XOAUTH2 spec.
+                                return ""
                             return auth_string
 
                         server.auth("XOAUTH2", _xoauth2_authobject)
