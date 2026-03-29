@@ -509,6 +509,7 @@ class MinimalIMAPServer:
         self._port: int | None = None
         self._ssl_context: ssl.SSLContext | None = None
         self._client_tasks: set[asyncio.Task[None]] = set()
+        self._client_writers: set[asyncio.StreamWriter] = set()
 
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -519,6 +520,7 @@ class MinimalIMAPServer:
         )
         addr = writer.get_extra_info("peername")
         logger.debug("IMAP client connected from %s", addr)
+        self._client_writers.add(writer)
 
         try:
             # Send greeting
@@ -606,11 +608,12 @@ class MinimalIMAPServer:
         except (Exception, asyncio.CancelledError) as e:
             logger.debug("IMAP client error/cancelled for %s: %s", addr, e)
         finally:
+            self._client_writers.discard(writer)
             try:
                 if not writer.is_closing():
                     writer.close()
-                    await writer.wait_closed()
-            except Exception:
+                await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
+            except (Exception, asyncio.CancelledError):
                 pass
             logger.debug("IMAP client disconnected from %s", addr)
 
@@ -648,7 +651,15 @@ class MinimalIMAPServer:
         """Stop the IMAP server."""
         if self._server:
             self._server.close()
-            await self._server.wait_closed()
+            # Abort all client transports immediately.  writer.close()
+            # initiates an SSL shutdown that hangs when the peer has
+            # already raw-closed the socket.  transport.abort() tears
+            # down the connection without waiting for the handshake.
+            for writer in list(self._client_writers):
+                transport = writer.transport
+                if transport is not None:
+                    transport.abort()
+            # Cancel client tasks and wait for cleanup.
             tasks = set(self._client_tasks)
             for task in tasks:
                 task.cancel()
@@ -661,6 +672,11 @@ class MinimalIMAPServer:
                 except TimeoutError:
                     logger.debug("Timed out waiting for client tasks to cancel")
             self._client_tasks.clear()
+            self._client_writers.clear()
+            # In Python 3.12+, wait_closed() blocks until all active
+            # connections are fully closed — safe now that we closed
+            # them above.
+            await self._server.wait_closed()
             logger.info("IMAP server stopped")
 
 
