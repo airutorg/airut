@@ -138,6 +138,47 @@ class MailboxStore:
         self._new_message_event.clear()
         return self._new_message_event.wait(timeout)
 
+    def get_unseen_seq_nums(self) -> list[int]:
+        r"""Get 1-based sequence numbers of unseen messages.
+
+        Sequence numbers are positional indices into the list of
+        non-deleted messages.  Unlike UIDs, they shift when earlier
+        messages are expunged.
+        """
+        with self._lock:
+            non_deleted = [m for m in self._messages if not m.deleted]
+            return [
+                i + 1
+                for i, m in enumerate(non_deleted)
+                if "\\Seen" not in m.flags
+            ]
+
+    def get_message_by_seq(self, seq_num: int) -> EmailMessage | None:
+        """Get message by 1-based sequence number."""
+        with self._lock:
+            non_deleted = [m for m in self._messages if not m.deleted]
+            if 1 <= seq_num <= len(non_deleted):
+                return non_deleted[seq_num - 1].message
+            return None
+
+    def add_flag_by_seq(self, seq_num: int, flag: str) -> bool:
+        """Add flag to message by 1-based sequence number."""
+        with self._lock:
+            non_deleted = [m for m in self._messages if not m.deleted]
+            if 1 <= seq_num <= len(non_deleted):
+                msg = non_deleted[seq_num - 1]
+                msg.flags.add(flag)
+                if flag == "\\Deleted":
+                    msg.deleted = True
+                logger.debug(
+                    "Added flag %s to seq=%d (UID=%d)",
+                    flag,
+                    seq_num,
+                    msg.uid,
+                )
+                return True
+            return False
+
     def get_all_messages(self) -> list[EmailMessage]:
         """Get all non-deleted messages."""
         with self._lock:
@@ -165,14 +206,16 @@ class MinimalIMAPHandler:
     Implements only the commands needed by EmailListener:
     - LOGIN, LOGOUT
     - SELECT
-    - SEARCH UNSEEN
-    - FETCH (RFC822)
-    - STORE (+FLAGS)
+    - SEARCH UNSEEN (sequence numbers) / UID SEARCH UNSEEN (UIDs)
+    - FETCH (sequence number) / UID FETCH (UID)
+    - STORE (sequence number) / UID STORE (UID)
     - EXPUNGE
     - IDLE, DONE
 
-    This is a simplified implementation that doesn't follow the full
-    IMAP4 spec but is sufficient for our integration tests.
+    Non-UID commands use sequence numbers (1-based positional indices
+    into non-deleted messages).  UID-prefixed commands use stable UIDs.
+    This distinction matters because sequence numbers shift when
+    messages are expunged, while UIDs do not.
     """
 
     def __init__(
@@ -190,6 +233,17 @@ class MinimalIMAPHandler:
         self.selected_mailbox: str | None = None
         self._tag_counter = 0
         self._idle_mode = False
+
+    @staticmethod
+    def _parse_flag(flag_str: str) -> str:
+        r"""Extract flag from STORE flag argument.
+
+        Handles both parenthesized (from imaplib.store) and bare
+        (from imaplib.uid) formats:
+        - ``(\Seen)`` → ``\Seen``
+        - ``\Seen``   → ``\Seen``
+        """
+        return flag_str.strip().strip("()")
 
     def handle_command(
         self, tag: str, command: str, args: str
@@ -245,38 +299,34 @@ class MinimalIMAPHandler:
         elif command == "SEARCH":
             if not self.selected_mailbox:
                 return [f"{tag} NO No mailbox selected"]
-            # We only support SEARCH UNSEEN
             if "UNSEEN" in args.upper():
-                uids = self.inbox.get_unseen_uids()
-                uid_str = " ".join(str(u) for u in uids)
-                return [f"* SEARCH {uid_str}", f"{tag} OK SEARCH completed"]
+                # Non-UID SEARCH returns sequence numbers
+                seq_nums = self.inbox.get_unseen_seq_nums()
+                seq_str = " ".join(str(s) for s in seq_nums)
+                return [
+                    f"* SEARCH {seq_str}",
+                    f"{tag} OK SEARCH completed",
+                ]
             return [f"{tag} BAD Unsupported SEARCH criteria"]
 
         elif command == "FETCH":
             if not self.selected_mailbox:
                 return [f"{tag} NO No mailbox selected"]
-            # Parse: uid (RFC822) or uid (FLAGS)
             parts = args.split(None, 1)
             if len(parts) < 2:
                 return [f"{tag} BAD Invalid FETCH arguments"]
-            uid_str, fetch_items = parts
-            uid = int(uid_str)
-            msg = self.inbox.get_message(uid)
+            seq_num = int(parts[0])
+            fetch_items = parts[1]
+            # Non-UID FETCH uses sequence numbers
+            msg = self.inbox.get_message_by_seq(seq_num)
             if msg is None:
                 return [f"{tag} NO Message not found"]
 
             if "RFC822" in fetch_items.upper():
-                # Convert message to bytes
                 msg_bytes = msg.as_bytes()
-                # IMAP literal format:
-                # * uid FETCH (RFC822 {size}\r\n
-                # <literal bytes>)\r\n
-                # tag OK FETCH completed\r\n
-                #
-                # The literal is size bytes, followed by a line with
-                # the closing paren. We send as a single bytes object.
                 return [
-                    f"* {uid} FETCH (RFC822 {{{len(msg_bytes)}}}\r\n".encode()
+                    f"* {seq_num} FETCH (RFC822 "
+                    f"{{{len(msg_bytes)}}}\r\n".encode()
                     + msg_bytes
                     + b")\r\n",
                     f"{tag} OK FETCH completed",
@@ -286,20 +336,24 @@ class MinimalIMAPHandler:
         elif command == "STORE":
             if not self.selected_mailbox:
                 return [f"{tag} NO No mailbox selected"]
-            # Parse: uid +FLAGS (\Seen) or uid +FLAGS (\Deleted)
             parts = args.split(None, 2)
             if len(parts) < 3:
                 return [f"{tag} BAD Invalid STORE arguments"]
-            uid = int(parts[0])
-            # Extract flag from parentheses
-            flag_match = args.find("(")
-            if flag_match == -1:
-                return [f"{tag} BAD Invalid STORE flags"]
-            flag_end = args.find(")", flag_match)
-            flag = args[flag_match + 1 : flag_end]
-            if self.inbox.add_flag(uid, flag):
+            seq_num = int(parts[0])
+            flag = self._parse_flag(parts[2])
+            # Non-UID STORE uses sequence numbers
+            if self.inbox.add_flag_by_seq(seq_num, flag):
                 return [f"{tag} OK STORE completed"]
             return [f"{tag} NO Message not found"]
+
+        elif command == "UID":
+            # UID-prefixed commands use stable UIDs
+            sub_parts = args.split(None, 1)
+            if not sub_parts:
+                return [f"{tag} BAD Missing UID sub-command"]
+            sub_cmd = sub_parts[0].upper()
+            sub_args = sub_parts[1] if len(sub_parts) > 1 else ""
+            return self._handle_uid_command(tag, sub_cmd, sub_args)
 
         elif command == "EXPUNGE":
             if not self.selected_mailbox:
@@ -320,6 +374,65 @@ class MinimalIMAPHandler:
 
         else:
             return [f"{tag} BAD Unknown command {command}"]
+
+    def _handle_uid_command(
+        self, tag: str, command: str, args: str
+    ) -> list[str | bytes]:
+        """Handle UID-prefixed commands using stable UID lookups.
+
+        Per RFC 3501 §6.4.8, a non-existent UID is silently ignored:
+        UID FETCH returns OK with no data, UID STORE returns OK
+        without performing any operations.
+        """
+        if command == "SEARCH":
+            if not self.selected_mailbox:
+                return [f"{tag} NO No mailbox selected"]
+            if "UNSEEN" in args.upper():
+                uids = self.inbox.get_unseen_uids()
+                uid_str = " ".join(str(u) for u in uids)
+                return [
+                    f"* SEARCH {uid_str}",
+                    f"{tag} OK SEARCH completed",
+                ]
+            return [f"{tag} BAD Unsupported SEARCH criteria"]
+
+        elif command == "FETCH":
+            if not self.selected_mailbox:
+                return [f"{tag} NO No mailbox selected"]
+            parts = args.split(None, 1)
+            if len(parts) < 2:
+                return [f"{tag} BAD Invalid FETCH arguments"]
+            uid = int(parts[0])
+            fetch_items = parts[1]
+            msg = self.inbox.get_message(uid)
+            # Non-existent UID → OK with no data (RFC 3501 §6.4.8)
+            if msg is None:
+                return [f"{tag} OK FETCH completed"]
+
+            if "RFC822" in fetch_items.upper():
+                msg_bytes = msg.as_bytes()
+                return [
+                    f"* {uid} FETCH (RFC822 {{{len(msg_bytes)}}}\r\n".encode()
+                    + msg_bytes
+                    + b")\r\n",
+                    f"{tag} OK FETCH completed",
+                ]
+            return [f"{tag} BAD Unsupported FETCH items"]
+
+        elif command == "STORE":
+            if not self.selected_mailbox:
+                return [f"{tag} NO No mailbox selected"]
+            parts = args.split(None, 2)
+            if len(parts) < 3:
+                return [f"{tag} BAD Invalid STORE arguments"]
+            uid = int(parts[0])
+            flag = self._parse_flag(parts[2])
+            # Non-existent UID → OK, no-op (RFC 3501 §6.4.8)
+            self.inbox.add_flag(uid, flag)
+            return [f"{tag} OK STORE completed"]
+
+        else:
+            return [f"{tag} BAD Unknown UID sub-command"]
 
     def handle_idle_done(self, tag: str) -> list[str]:
         """Handle DONE command to exit IDLE mode."""
