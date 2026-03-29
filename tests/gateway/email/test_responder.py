@@ -411,6 +411,53 @@ def test_send_reply_with_binary_attachment(email_config):
         assert attachment.get_content_type() == "application/octet-stream"
 
 
+def test_send_reply_attachment_preserves_mime_type(email_config):
+    """Test attachments preserve the correct MIME maintype.
+
+    An image attachment should have Content-Type image/png, not
+    application/png.  The code must not hardcode 'application' as the
+    maintype for all attachments.
+    """
+    responder = EmailResponder(email_config.channels["email"])
+
+    with patch("smtplib.SMTP") as mock_smtp_class:
+        mock_server = MagicMock()
+        mock_smtp_class.return_value.__enter__.return_value = mock_server
+
+        responder.send_reply(
+            to="recipient@example.com",
+            subject="Test",
+            body="Image attached.",
+            attachments=[("photo.png", b"\x89PNG\r\n\x1a\n")],
+        )
+
+        sent_message = mock_server.send_message.call_args[0][0]
+        parts = sent_message.get_payload()
+        attachment = parts[1]
+        assert attachment.get_content_type() == "image/png"
+
+
+def test_send_reply_text_attachment_mime_type(email_config):
+    """Test text file attachment gets text/plain, not application/plain."""
+    responder = EmailResponder(email_config.channels["email"])
+
+    with patch("smtplib.SMTP") as mock_smtp_class:
+        mock_server = MagicMock()
+        mock_smtp_class.return_value.__enter__.return_value = mock_server
+
+        responder.send_reply(
+            to="recipient@example.com",
+            subject="Test",
+            body="Text file attached.",
+            attachments=[("notes.txt", b"Some notes")],
+        )
+
+        sent_message = mock_server.send_message.call_args[0][0]
+        parts = sent_message.get_payload()
+        attachment = parts[1]
+        assert attachment.get_content_type() == "text/plain"
+
+
 def test_send_reply_with_unknown_extension_attachment(email_config):
     """Test attachment with unknown file extension."""
     responder = EmailResponder(email_config.channels["email"])
@@ -463,15 +510,51 @@ def test_send_reply_oauth2_xoauth2(microsoft_oauth2_email_config):
         mock_server.auth.assert_called_once()
         call_args = mock_server.auth.call_args
         assert call_args[0][0] == "XOAUTH2"
-        # The second arg is a callable; invoke it to verify the auth string
+        # The second arg is a callable; invoke it with no challenge (initial
+        # response) to verify the auth string
         auth_fn = call_args[0][1]
-        assert (
-            auth_fn(b"") == "user=test@company.com\x01auth=Bearer tok\x01\x01"
-        )
+        assert auth_fn() == "user=test@company.com\x01auth=Bearer tok\x01\x01"
         mock_gen.assert_called_once_with(
             microsoft_oauth2_email_config.channels["email"].account.username
         )
         mock_server.send_message.assert_called_once()
+
+
+def test_send_reply_oauth2_xoauth2_error_challenge(
+    microsoft_oauth2_email_config,
+):
+    """Test XOAUTH2 callback returns empty string on server error challenge.
+
+    Per the XOAUTH2 spec, when the server rejects the initial auth and sends
+    a 334 challenge (base64-encoded error JSON), the client must respond with
+    an empty string to acknowledge the error — not re-send the auth string.
+    """
+    responder = EmailResponder(microsoft_oauth2_email_config.channels["email"])
+    assert responder._token_provider is not None
+
+    with (
+        patch("smtplib.SMTP") as mock_smtp_class,
+        patch.object(
+            responder._token_provider,
+            "generate_xoauth2_string",
+            return_value="user=test@company.com\x01auth=Bearer tok\x01\x01",
+        ),
+    ):
+        mock_server = MagicMock()
+        mock_smtp_class.return_value.__enter__.return_value = mock_server
+
+        responder.send_reply(
+            to="recipient@example.com",
+            subject="Test",
+            body="OAuth2 reply.",
+        )
+
+        auth_fn = mock_server.auth.call_args[0][1]
+        # First call (no challenge) returns the auth string
+        assert auth_fn() != ""
+        # Second call (with error challenge) must return empty string
+        error_challenge = b'{"status":"401","schemes":"Bearer"}'
+        assert auth_fn(error_challenge) == ""
 
 
 def test_send_reply_oauth2_token_error_raises_smtp_send_error(
@@ -568,6 +651,27 @@ def test_send_reply_with_message_id(email_config):
             sent_message["Message-ID"]
             == "<airut.abc12345.1700000000@example.com>"
         )
+
+
+def test_send_reply_skips_starttls_when_not_supported(email_config):
+    """Test STARTTLS is skipped when server doesn't advertise it."""
+    responder = EmailResponder(email_config.channels["email"])
+
+    with patch("smtplib.SMTP") as mock_smtp_class:
+        mock_server = MagicMock()
+        mock_smtp_class.return_value.__enter__.return_value = mock_server
+        mock_server.has_extn.return_value = False
+
+        responder.send_reply(
+            to="recipient@example.com",
+            subject="Test",
+            body="Body",
+        )
+
+        mock_server.starttls.assert_not_called()
+        # ehlo() called only once (not re-called after STARTTLS)
+        assert mock_server.ehlo.call_count == 1
+        mock_server.send_message.assert_called_once()
 
 
 def test_send_reply_without_message_id(email_config):

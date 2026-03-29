@@ -398,16 +398,22 @@ class EmailChannelAdapter(ChannelAdapter):
         """Send error notification email."""
         assert isinstance(parsed, EmailParsedMessage)
 
-        subject = f"Re: {parsed.decoded_subject}"
-        message_id = parsed.original_message_id
+        if conversation_id:
+            subject, references_list = self._build_reply_headers(
+                parsed, conversation_id
+            )
+        else:
+            subject = f"Re: {parsed.decoded_subject}"
+            message_id = parsed.original_message_id
+            references_list = [message_id] if message_id else []
 
         try:
             self._responder.send_reply(
                 to=parsed.sender,
                 subject=subject,
                 body=error_message,
-                in_reply_to=message_id,
-                references=[message_id] if message_id else [],
+                in_reply_to=parsed.original_message_id,
+                references=references_list,
             )
         except SMTPSendError as e:
             logger.error("Failed to send error reply: %s", e)
