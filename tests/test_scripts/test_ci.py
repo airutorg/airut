@@ -167,7 +167,37 @@ class TestRunStep:
                 step, fix_mode=False, verbose=False, step_timeout=300
             )
             assert success is False
+            assert "STEP TIMEOUT" in output
             assert "timed out after 300 seconds" in output
+            assert "ALWAYS a bug" in output
+            assert "Do NOT ignore" in output
+            assert "ci.py --step-timeout 600" in output
+
+    def test_timeout_reports_effective_timeout_with_deadline(
+        self,
+    ) -> None:
+        """Reports effective timeout when capped by deadline."""
+        step = Step(name="Test", command="sleep 999", workflow="code")
+        # Deadline = 105.0, monotonic returns 100.0 → remaining = 5s
+        deadline = 105.0
+        with (
+            patch("scripts.ci.subprocess.run") as mock_run,
+            patch("scripts.ci.time") as mock_time,
+        ):
+            mock_time.monotonic.return_value = 100.0
+            mock_run.side_effect = subprocess.TimeoutExpired(
+                cmd="sleep 999", timeout=5
+            )
+            success, output = run_step(
+                step,
+                fix_mode=False,
+                verbose=False,
+                step_timeout=300,
+                deadline=deadline,
+            )
+            assert success is False
+            assert "timed out after 5 seconds" in output
+            # Override hint still uses step_timeout * 2
             assert "ci.py --step-timeout 600" in output
 
     def test_worktree_clean_check_clean(self) -> None:

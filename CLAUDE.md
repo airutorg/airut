@@ -279,6 +279,8 @@ config-only) or the user explicitly opts out.
 - **No `# type: ignore`** without specific error code and justification
 - **No `# noqa`** without specific code and justification
 - **Clean worktree** - formatting changes must be committed
+- **Timeouts are always bugs** - never "expected in this environment" or
+  transient. Root-cause and fix; do not retry or ignore.
 
 ## Project Structure
 
