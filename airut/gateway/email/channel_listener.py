@@ -253,6 +253,8 @@ class EmailChannelListener(ChannelListener):
                             display_title=message.get("Subject", ""),
                         )
                         self._submit(raw)
+                    except IMAPConnectionError:
+                        raise  # Bubble up for reconnection
                     except Exception as e:
                         self._log.exception(
                             "Failed to submit message: %s",
@@ -314,6 +316,8 @@ class EmailChannelListener(ChannelListener):
                             display_title=message.get("Subject", ""),
                         )
                         self._submit(raw)
+                    except IMAPConnectionError:
+                        raise  # Bubble up for reconnection
                     except Exception as e:
                         self._log.exception(
                             "Failed to submit message: %s",
