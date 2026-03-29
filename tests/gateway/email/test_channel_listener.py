@@ -393,6 +393,35 @@ class TestPollingLoop:
 
         cl._polling_loop()
 
+    def test_delete_connection_error_triggers_reconnect(self) -> None:
+        """IMAPConnectionError during delete triggers reconnection.
+
+        When the IMAP connection dies between fetch_unread() and
+        delete_message(), the connection error must propagate to the
+        outer handler for reconnection — not be swallowed by the
+        inner per-message exception handler.
+        """
+        cl, mock_el = _make_polling_listener()
+        cl._submit = MagicMock()
+        call_count = 0
+
+        def fake_fetch():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [("1", _make_message())]
+            cl._running = False
+            return []
+
+        mock_el.fetch_unread.side_effect = fake_fetch
+        mock_el.delete_message.side_effect = IMAPConnectionError("socket died")
+
+        cl._polling_loop()
+
+        # Must have triggered reconnection, not just logged "submit error"
+        mock_el.disconnect.assert_called_once()
+        assert mock_el.connect.call_count == 1
+
     def test_status_degraded_during_reconnect(self) -> None:
         """Status changes to DEGRADED during reconnection."""
         cl, mock_el = _make_polling_listener()
@@ -517,6 +546,33 @@ class TestIdleLoop:
         mock_el.delete_message.side_effect = RuntimeError("fail")
 
         cl._idle_loop()
+
+    def test_delete_connection_error_triggers_reconnect(self) -> None:
+        """IMAPConnectionError during delete triggers reconnection.
+
+        Same as the polling loop variant: connection errors from
+        delete_message() must bubble up for reconnection instead of
+        being swallowed by the per-message exception handler.
+        """
+        cl, mock_el = _make_idle_listener()
+        call_count = 0
+
+        def fake_fetch():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [("1", _make_message())]
+            cl._running = False
+            return []
+
+        mock_el.fetch_unread.side_effect = fake_fetch
+        mock_el.delete_message.side_effect = IMAPConnectionError("socket died")
+
+        cl._idle_loop()
+
+        # Must have triggered reconnection
+        mock_el.disconnect.assert_called_once()
+        assert mock_el.connect.call_count == 1
 
     def test_idle_start_has_pending_skips_idle(self) -> None:
         """When idle_start detects pending messages, skip IDLE.

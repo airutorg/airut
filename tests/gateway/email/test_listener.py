@@ -499,6 +499,25 @@ def test_mark_as_read_imap_error(email_config):
         listener.mark_as_read(b"123")
 
 
+def test_mark_as_read_oserror(email_config):
+    """Test mark_as_read wraps OSError as IMAPConnectionError.
+
+    A socket timeout or connection reset during UID STORE should be
+    wrapped consistently, just like fetch_unread() does.
+    """
+    listener = EmailListener(email_config.channels["email"])
+
+    mock_conn = MagicMock()
+    listener.connection = mock_conn
+    mock_conn.select.return_value = ("OK", [b"42"])
+    mock_conn.uid.side_effect = OSError("The read operation timed out")
+
+    with pytest.raises(
+        IMAPConnectionError, match="Failed to mark message as read"
+    ):
+        listener.mark_as_read(b"123")
+
+
 def test_delete_message_success(email_config):
     """Test deleting message."""
     listener = EmailListener(email_config.channels["email"])
@@ -554,6 +573,23 @@ def test_delete_message_imap_error(email_config):
     listener.connection = mock_conn
     mock_conn.select.return_value = ("OK", [b"42"])
     mock_conn.uid.side_effect = imaplib.IMAP4.error("Delete failed")
+
+    with pytest.raises(IMAPConnectionError, match="Failed to delete message"):
+        listener.delete_message(b"123")
+
+
+def test_delete_message_oserror(email_config):
+    """Test delete_message wraps OSError as IMAPConnectionError.
+
+    A socket timeout or connection reset during UID STORE should be
+    wrapped consistently, just like fetch_unread() does.
+    """
+    listener = EmailListener(email_config.channels["email"])
+
+    mock_conn = MagicMock()
+    listener.connection = mock_conn
+    mock_conn.select.return_value = ("OK", [b"42"])
+    mock_conn.uid.side_effect = OSError("Connection reset by peer")
 
     with pytest.raises(IMAPConnectionError, match="Failed to delete message"):
         listener.delete_message(b"123")
@@ -881,6 +917,52 @@ def test_idle_done_non_ok_tagged_response(email_config, caplog):
 
     mock_conn.send.assert_called_once_with(b"DONE\r\n")
     assert "IDLE completed with non-OK status" in caplog.text
+    assert listener._idle_tag is None
+
+
+def test_idle_done_no_status_not_confused_by_ok_substring(email_config, caplog):
+    """Test idle_done detects NO status even when 'OK' appears in text.
+
+    The word "BROKEN" contains "OK" as a substring. A naive
+    ``b"OK" in response`` check would misidentify a NO response as
+    OK when the error text contains words like BROKEN, TOKEN, LOOKUP.
+    """
+    listener = EmailListener(email_config.channels["email"])
+
+    mock_conn = MagicMock()
+    listener.connection = mock_conn
+    listener._idle_tag = "A001"
+
+    # "BROKEN" contains "OK" as a substring at index 2-3
+    mock_conn.readline.return_value = b"A001 NO BROKEN pipe\r\n"
+
+    listener.idle_done()
+
+    mock_conn.send.assert_called_once_with(b"DONE\r\n")
+    # Must detect as non-OK, not be fooled by "OK" in "BROKEN"
+    assert "IDLE completed with non-OK status" in caplog.text
+    assert listener._idle_tag is None
+
+
+def test_idle_done_fallback_ok_not_confused_by_substring(email_config, caplog):
+    """Test idle_done fallback path detects NO despite 'OK' in text.
+
+    When idle_tag is None (fallback path), the same substring issue
+    applies: ``b"OK" in response`` can match within words.
+    """
+    listener = EmailListener(email_config.channels["email"])
+
+    mock_conn = MagicMock()
+    listener.connection = mock_conn
+    listener._idle_tag = None
+
+    # Tag-less response with "OK" embedded in "TOKEN"
+    mock_conn.readline.return_value = b"ZZZZ NO invalid TOKEN\r\n"
+
+    listener.idle_done()
+
+    # Should log as unexpected, not silently accept as OK
+    assert "Unexpected IDLE response" in caplog.text
     assert listener._idle_tag is None
 
 

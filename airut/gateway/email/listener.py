@@ -257,7 +257,7 @@ class EmailListener:
                     msg_id.decode(),
                 )
             logger.debug("Marked message %s as read", msg_id.decode())
-        except imaplib.IMAP4.error as e:
+        except (imaplib.IMAP4.error, OSError) as e:
             raise IMAPConnectionError(f"Failed to mark message as read: {e}")
 
     def delete_message(self, msg_id: bytes) -> None:
@@ -287,7 +287,7 @@ class EmailListener:
             # Expunge to permanently delete
             self.connection.expunge()
             logger.debug("Deleted message %s", msg_id.decode())
-        except imaplib.IMAP4.error as e:
+        except (imaplib.IMAP4.error, OSError) as e:
             raise IMAPConnectionError(f"Failed to delete message: {e}")
 
     def disconnect(self) -> None:
@@ -526,7 +526,10 @@ class EmailListener:
 
                 # Tagged response - check if it matches our IDLE tag
                 if tag_bytes and response.startswith(tag_bytes):
-                    if b"OK" in response.upper():
+                    # RFC 3501: tagged response is "tag SP status SP text"
+                    parts = response.split(None, 2)
+                    status_word = parts[1].upper() if len(parts) >= 2 else b""
+                    if status_word == b"OK":
                         logger.debug("Exited IDLE mode")
                     else:
                         logger.warning(
@@ -536,8 +539,12 @@ class EmailListener:
                     break
 
                 # Fallback: response doesn't start with * or our tag
-                # Could be an error or unexpected format
-                if b"OK" in response.upper():
+                # Could be an error or unexpected format.
+                # Parse status word to avoid false positives from
+                # "OK" appearing as a substring in other words.
+                parts = response.split(None, 2)
+                status_word = parts[1].upper() if len(parts) >= 2 else b""
+                if status_word == b"OK":
                     logger.debug("Exited IDLE mode (fallback OK match)")
                     break
 
