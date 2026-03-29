@@ -210,6 +210,42 @@ def test_connect_oserror_retry(email_config):
         assert listener.connection == mock_conn
 
 
+def test_fetch_unread_uses_uid_commands(email_config, sample_email_bytes):
+    """Test fetch_unread uses UID commands, not sequence numbers.
+
+    IMAP sequence numbers shift when messages are deleted/expunged mid-loop,
+    causing 'STORE command error: BAD ... Invalid messageset'. UIDs are
+    stable and survive deletions within the same session.
+    """
+    listener = EmailListener(email_config.channels["email"])
+
+    mock_conn = MagicMock()
+    listener.connection = mock_conn
+
+    mock_conn.select.return_value = ("OK", [b"42"])
+    mock_conn.uid.side_effect = [
+        ("OK", [b"101 102 103"]),  # UID SEARCH
+        ("OK", [(b"101 (RFC822 {123})", sample_email_bytes)]),
+        ("OK", [(b"102 (RFC822 {123})", sample_email_bytes)]),
+        ("OK", [(b"103 (RFC822 {123})", sample_email_bytes)]),
+    ]
+
+    messages = listener.fetch_unread()
+
+    assert len(messages) == 3
+    assert all(
+        isinstance(msg_id, bytes) and isinstance(msg, Message)
+        for msg_id, msg in messages
+    )
+
+    mock_conn.select.assert_called_once_with("INBOX")
+    # Must use uid() — never connection.search() or connection.fetch()
+    assert mock_conn.uid.call_count == 4
+    mock_conn.uid.assert_any_call("search", "UNSEEN")
+    mock_conn.search.assert_not_called()
+    mock_conn.fetch.assert_not_called()
+
+
 def test_fetch_unread_success(email_config, sample_email_bytes):
     """Test fetching unread messages."""
     listener = EmailListener(email_config.channels["email"])
@@ -217,10 +253,10 @@ def test_fetch_unread_success(email_config, sample_email_bytes):
     mock_conn = MagicMock()
     listener.connection = mock_conn
 
-    # Mock IMAP search and fetch responses
+    # Mock UID-based IMAP search and fetch responses
     mock_conn.select.return_value = ("OK", [b"42"])
-    mock_conn.search.return_value = ("OK", [b"1 2 3"])
-    mock_conn.fetch.side_effect = [
+    mock_conn.uid.side_effect = [
+        ("OK", [b"1 2 3"]),  # UID SEARCH
         ("OK", [(b"1 (RFC822 {123})", sample_email_bytes)]),
         ("OK", [(b"2 (RFC822 {123})", sample_email_bytes)]),
         ("OK", [(b"3 (RFC822 {123})", sample_email_bytes)]),
@@ -235,7 +271,7 @@ def test_fetch_unread_success(email_config, sample_email_bytes):
     )
 
     mock_conn.select.assert_called_once_with("INBOX")
-    mock_conn.search.assert_called_once_with(None, "UNSEEN")
+    mock_conn.uid.assert_any_call("search", "UNSEEN")
 
 
 def test_fetch_unread_empty_inbox(email_config):
@@ -246,7 +282,7 @@ def test_fetch_unread_empty_inbox(email_config):
     listener.connection = mock_conn
 
     mock_conn.select.return_value = ("OK", [b"0"])
-    mock_conn.search.return_value = ("OK", [b""])
+    mock_conn.uid.return_value = ("OK", [b""])
 
     messages = listener.fetch_unread()
 
@@ -271,7 +307,7 @@ def test_fetch_unread_search_fails(email_config):
     listener.connection = mock_conn
 
     mock_conn.select.return_value = ("OK", [b"42"])
-    mock_conn.search.return_value = ("NO", [])
+    mock_conn.uid.return_value = ("NO", [])
 
     with pytest.raises(IMAPConnectionError, match="IMAP search failed"):
         listener.fetch_unread()
@@ -311,8 +347,8 @@ def test_fetch_unread_skip_failed_message(email_config, sample_email_bytes):
     listener.connection = mock_conn
 
     mock_conn.select.return_value = ("OK", [b"42"])
-    mock_conn.search.return_value = ("OK", [b"1 2"])
-    mock_conn.fetch.side_effect = [
+    mock_conn.uid.side_effect = [
+        ("OK", [b"1 2"]),  # UID SEARCH
         ("OK", [(b"1 (RFC822 {123})", sample_email_bytes)]),
         ("NO", []),  # Second message fails
     ]
@@ -333,8 +369,8 @@ def test_fetch_unread_malformed_response_bytes_not_tuple(
     listener.connection = mock_conn
 
     mock_conn.select.return_value = ("OK", [b"42"])
-    mock_conn.search.return_value = ("OK", [b"1 2"])
-    mock_conn.fetch.side_effect = [
+    mock_conn.uid.side_effect = [
+        ("OK", [b"1 2"]),  # UID SEARCH
         ("OK", [(b"1 (RFC822 {123})", sample_email_bytes)]),
         # Malformed response: data[0] is bytes, not a tuple
         # This can happen with some IMAP servers
@@ -355,9 +391,11 @@ def test_fetch_unread_malformed_response_non_bytes_body(email_config, caplog):
     listener.connection = mock_conn
 
     mock_conn.select.return_value = ("OK", [b"42"])
-    mock_conn.search.return_value = ("OK", [b"1"])
-    # Response has tuple but body element is int (simulating the crash scenario)
-    mock_conn.fetch.return_value = ("OK", [(b"1 (RFC822 {123})", 12345)])
+    mock_conn.uid.side_effect = [
+        ("OK", [b"1"]),  # UID SEARCH
+        # Body element is int, not bytes (crash scenario)
+        ("OK", [(b"1 (RFC822 {123})", 12345)]),
+    ]
 
     messages = listener.fetch_unread()
 
@@ -411,12 +449,12 @@ def test_mark_as_read_success(email_config):
     listener.connection = mock_conn
 
     mock_conn.select.return_value = ("OK", [b"42"])
-    mock_conn.store.return_value = ("OK", [b"1 (FLAGS (\\Seen))"])
+    mock_conn.uid.return_value = ("OK", [b"1 (FLAGS (\\Seen))"])
 
     listener.mark_as_read(b"123")
 
     mock_conn.select.assert_called_once_with("INBOX")
-    mock_conn.store.assert_called_once_with("123", "+FLAGS", "\\Seen")
+    mock_conn.uid.assert_called_once_with("store", "123", "+FLAGS", "\\Seen")
 
 
 def test_mark_as_read_non_ok_status(email_config):
@@ -427,13 +465,13 @@ def test_mark_as_read_non_ok_status(email_config):
     listener.connection = mock_conn
 
     mock_conn.select.return_value = ("OK", [b"42"])
-    mock_conn.store.return_value = ("NO", [])  # Non-OK status
+    mock_conn.uid.return_value = ("NO", [])  # Non-OK status
 
     # Should not raise error, just log warning
     listener.mark_as_read(b"123")
 
     mock_conn.select.assert_called_once_with("INBOX")
-    mock_conn.store.assert_called_once_with("123", "+FLAGS", "\\Seen")
+    mock_conn.uid.assert_called_once_with("store", "123", "+FLAGS", "\\Seen")
 
 
 def test_mark_as_read_not_connected(email_config):
@@ -453,7 +491,7 @@ def test_mark_as_read_imap_error(email_config):
     mock_conn = MagicMock()
     listener.connection = mock_conn
     mock_conn.select.return_value = ("OK", [b"42"])
-    mock_conn.store.side_effect = imaplib.IMAP4.error("Store failed")
+    mock_conn.uid.side_effect = imaplib.IMAP4.error("Store failed")
 
     with pytest.raises(
         IMAPConnectionError, match="Failed to mark message as read"
@@ -469,13 +507,13 @@ def test_delete_message_success(email_config):
     listener.connection = mock_conn
 
     mock_conn.select.return_value = ("OK", [b"42"])
-    mock_conn.store.return_value = ("OK", [b"1 (FLAGS (\\Deleted))"])
+    mock_conn.uid.return_value = ("OK", [b"1 (FLAGS (\\Deleted))"])
     mock_conn.expunge.return_value = ("OK", [b"1"])
 
     listener.delete_message(b"123")
 
     mock_conn.select.assert_called_once_with("INBOX")
-    mock_conn.store.assert_called_once_with("123", "+FLAGS", "\\Deleted")
+    mock_conn.uid.assert_called_once_with("store", "123", "+FLAGS", "\\Deleted")
     mock_conn.expunge.assert_called_once()
 
 
@@ -487,14 +525,14 @@ def test_delete_message_non_ok_status(email_config):
     listener.connection = mock_conn
 
     mock_conn.select.return_value = ("OK", [b"42"])
-    mock_conn.store.return_value = ("NO", [])  # Non-OK status
+    mock_conn.uid.return_value = ("NO", [])  # Non-OK status
     mock_conn.expunge.return_value = ("OK", [])
 
     # Should not raise error, just log warning
     listener.delete_message(b"123")
 
     mock_conn.select.assert_called_once_with("INBOX")
-    mock_conn.store.assert_called_once_with("123", "+FLAGS", "\\Deleted")
+    mock_conn.uid.assert_called_once_with("store", "123", "+FLAGS", "\\Deleted")
     mock_conn.expunge.assert_called_once()
 
 
@@ -515,7 +553,7 @@ def test_delete_message_imap_error(email_config):
     mock_conn = MagicMock()
     listener.connection = mock_conn
     mock_conn.select.return_value = ("OK", [b"42"])
-    mock_conn.store.side_effect = imaplib.IMAP4.error("Delete failed")
+    mock_conn.uid.side_effect = imaplib.IMAP4.error("Delete failed")
 
     with pytest.raises(IMAPConnectionError, match="Failed to delete message"):
         listener.delete_message(b"123")
@@ -534,14 +572,14 @@ def test_idle_start_success(email_config):
     # Mock _new_tag to return a tag
     mock_conn._new_tag.return_value = b"A001"
     mock_conn.select.return_value = ("OK", [b"42"])
-    mock_conn.search.return_value = ("OK", [b""])
+    mock_conn.uid.return_value = ("OK", [b""])
     mock_conn.readline.return_value = b"+ idling\r\n"
 
     result = listener.idle_start()
 
     assert result is False
     mock_conn.select.assert_called_once_with("INBOX")
-    mock_conn.search.assert_called_once_with(None, "UNSEEN")
+    mock_conn.uid.assert_called_once_with("search", "UNSEEN")
     mock_conn.send.assert_called_once_with(b"A001 IDLE\r\n")
     assert listener._idle_tag == "A001"
 
@@ -565,7 +603,7 @@ def test_idle_start_not_accepted(email_config):
 
     mock_conn._new_tag.return_value = b"A001"
     mock_conn.select.return_value = ("OK", [b"42"])
-    mock_conn.search.return_value = ("OK", [b""])
+    mock_conn.uid.return_value = ("OK", [b""])
     mock_conn.readline.return_value = b"A001 BAD IDLE not supported\r\n"
 
     with pytest.raises(IMAPIdleError, match="IDLE not accepted"):
@@ -588,13 +626,13 @@ def test_idle_start_has_pending_messages(email_config):
     listener.connection = mock_conn
 
     mock_conn.select.return_value = ("OK", [b"42"])
-    mock_conn.search.return_value = ("OK", [b"1 2"])
+    mock_conn.uid.return_value = ("OK", [b"1 2"])
 
     result = listener.idle_start()
 
     assert result is True
     mock_conn.select.assert_called_once_with("INBOX")
-    mock_conn.search.assert_called_once_with(None, "UNSEEN")
+    mock_conn.uid.assert_called_once_with("search", "UNSEEN")
     # IDLE command should NOT have been sent
     mock_conn.send.assert_not_called()
     assert listener._idle_tag is None

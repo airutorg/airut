@@ -187,7 +187,7 @@ class EmailListener:
         """Fetch unread messages from INBOX.
 
         Returns:
-            List of tuples (imap_msg_id, parsed_message).
+            List of tuples (imap_uid, parsed_message).
 
         Raises:
             IMAPConnectionError: If not connected or fetch fails.
@@ -198,8 +198,10 @@ class EmailListener:
         try:
             self.connection.select("INBOX")
 
-            # Search for unread messages
-            status, message_ids = self.connection.search(None, "UNSEEN")
+            # Use UID commands (RFC 3501 §6.4.8, mandatory in IMAP4rev1).
+            # UIDs are stable across the session, unlike sequence numbers
+            # which shift when earlier messages are deleted/expunged.
+            status, message_ids = self.connection.uid("search", "UNSEEN")
 
             if status != "OK":
                 raise IMAPConnectionError(f"IMAP search failed: {status}")
@@ -208,7 +210,7 @@ class EmailListener:
             parser = BytesParser()
 
             for msg_id in message_ids[0].split():
-                status, data = self.connection.fetch(msg_id, "(RFC822)")
+                status, data = self.connection.uid("fetch", msg_id, "(RFC822)")
 
                 # IMAP fetch returns data like [(header, body), b')']
                 # We need to validate the response format before parsing
@@ -235,7 +237,7 @@ class EmailListener:
         """Mark a message as read.
 
         Args:
-            msg_id: IMAP message ID from fetch_unread().
+            msg_id: IMAP UID returned by fetch_unread().
 
         Raises:
             IMAPConnectionError: If not connected or marking fails.
@@ -245,8 +247,8 @@ class EmailListener:
 
         try:
             self.connection.select("INBOX")
-            status, data = self.connection.store(
-                msg_id.decode(), "+FLAGS", "\\Seen"
+            status, data = self.connection.uid(
+                "store", msg_id.decode(), "+FLAGS", "\\Seen"
             )
             if status != "OK":
                 logger.warning(
@@ -262,7 +264,7 @@ class EmailListener:
         """Delete a message permanently.
 
         Args:
-            msg_id: IMAP message ID from fetch_unread().
+            msg_id: IMAP UID returned by fetch_unread().
 
         Raises:
             IMAPConnectionError: If not connected or deletion fails.
@@ -272,9 +274,9 @@ class EmailListener:
 
         try:
             self.connection.select("INBOX")
-            # Mark for deletion
-            status, data = self.connection.store(
-                msg_id.decode(), "+FLAGS", "\\Deleted"
+            # Mark for deletion using UID (stable across expunges)
+            status, data = self.connection.uid(
+                "store", msg_id.decode(), "+FLAGS", "\\Deleted"
             )
             if status != "OK":
                 logger.warning(
@@ -409,7 +411,7 @@ class EmailListener:
             # the race between the previous fetch_unread() and IDLE: if a
             # message arrived in between, we detect it here and return
             # without entering IDLE.
-            status, message_ids = self.connection.search(None, "UNSEEN")
+            status, message_ids = self.connection.uid("search", "UNSEEN")
             if status == "OK" and message_ids[0].strip():
                 logger.debug(
                     "Skipping IDLE: %d unseen messages pending",
