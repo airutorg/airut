@@ -218,17 +218,32 @@ def run_step(
             timeout=effective_timeout,
         )
     except subprocess.TimeoutExpired:
+        reported_timeout = (
+            int(effective_timeout)
+            if effective_timeout is not None
+            else step_timeout
+        )
         error_msg = (
-            f"Step timed out after {step_timeout} seconds.\n\n"
-            "NOTIFY USER: This may indicate a hanging test or "
-            "insufficient timeout.\n"
-            "Possible actions:\n"
-            "  1. Retry the CI run to check if this was a transient "
-            "error\n"
-            "  2. Investigate which test or check is hanging\n"
-            "  3. Run with higher timeout: "
-            f"ci.py --step-timeout {step_timeout * 2}\n"
-            "  4. Disable timeout entirely: ci.py --step-timeout 0"
+            f"STEP TIMEOUT: Step timed out after {reported_timeout} seconds.\n"
+            "\n"
+            "─── IMPORTANT: Read carefully ───\n"
+            "\n"
+            "A timeout is ALWAYS a bug — never an environment issue.\n"
+            "Do NOT ignore, retry, or dismiss this as transient.\n"
+            "\n"
+            "1. INVESTIGATE: Find which test or check is hanging.\n"
+            "   Run the step command directly with verbose output\n"
+            "   (e.g. pytest --timeout=10 -v) to identify the culprit.\n"
+            "\n"
+            "2. ROOT-CAUSE: Common causes are missing mocks, real network\n"
+            "   calls, unbounded retries, sleep() in tests, or deadlocks.\n"
+            "\n"
+            "3. FIX the underlying issue. Do not increase the timeout\n"
+            "   unless you have confirmed that total execution time has\n"
+            "   legitimately increased (new tests, heavier checks).\n"
+            "\n"
+            f"Override once:   ci.py --step-timeout {step_timeout * 2}\n"
+            "Disable:         ci.py --step-timeout 0"
         )
         return False, error_msg
 
