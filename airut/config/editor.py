@@ -210,15 +210,19 @@ def _expand_item_fields(
 
     for leaf in collect_leaf_fields(item_fields):
         old_v = (
-            old_dict.get(leaf.name, MISSING) if old is not MISSING else MISSING
+            get_raw_value(old_dict, leaf.path)
+            if old is not MISSING
+            else MISSING
         )
         new_v = (
-            new_dict.get(leaf.name, MISSING) if new is not MISSING else MISSING
+            get_raw_value(new_dict, leaf.path)
+            if new is not MISSING
+            else MISSING
         )
         if not raw_values_equal(old_v, new_v):
             result.append(
                 {
-                    "field": f"{prefix}.{leaf.name}",
+                    "field": f"{prefix}.{leaf.path}",
                     "scope": scope,
                     "old": format_raw_value(old_v),
                     "new": format_raw_value(new_v),
