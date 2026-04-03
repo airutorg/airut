@@ -22,8 +22,10 @@ from airut.gateway.service.gateway import (
     main,
 )
 from airut.gateway.service.message_processing import (
+    SandboxTaskResult,
     build_recovery_prompt,
     process_message,
+    run_in_sandbox,
 )
 from airut.gateway.service.repo_handler import RepoHandler
 from airut.gateway.service.usage_stats import UsageStats
@@ -37,8 +39,10 @@ __all__ = [
     # repo_handler
     "RepoHandler",
     # message_processing
+    "SandboxTaskResult",
     "build_recovery_prompt",
     "process_message",
+    "run_in_sandbox",
     # usage_stats
     "UsageStats",
 ]

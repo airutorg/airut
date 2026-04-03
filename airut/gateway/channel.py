@@ -237,6 +237,19 @@ class ChannelAdapter(Protocol):
         """Channel listener for message lifecycle management."""
         ...
 
+    def channel_context(self) -> str:
+        """Return the base system prompt for this channel type.
+
+        The string contains channel-specific instructions about
+        the interface (email, Slack, etc.), formatting, tool
+        limitations, and directory layout.  It does not include
+        per-message details like the email subject.
+
+        Used by ``process_message()`` to build the full prompt and
+        by the scheduler to construct prompts for periodic tasks.
+        """
+        ...
+
     def authenticate_and_parse(
         self, raw_message: RawMessage[Any]
     ) -> ParsedMessage:

@@ -863,6 +863,31 @@ class TestCreatePlanStreamer:
         assert adapter.create_plan_streamer(parsed) is None
 
 
+class TestChannelContext:
+    def test_returns_email_instructions(self) -> None:
+        """channel_context() returns the email system prompt."""
+        adapter, _, _, _ = _make_adapter()
+        ctx = adapter.channel_context()
+        assert "email interface" in ctx
+        assert "AskUserQuestion" in ctx
+        assert "/outbox" in ctx
+        assert "/storage" in ctx
+
+    def test_consistent_with_authenticate_and_parse(
+        self,
+    ) -> None:
+        """channel_context() matches what authenticate_and_parse uses."""
+        adapter, auth, authz, _ = _make_adapter()
+        auth.authenticate.return_value = "user@example.com"
+        authz.is_authorized.return_value = True
+        msg = _make_raw_message(subject="")
+
+        parsed = adapter.authenticate_and_parse(msg)
+        ctx = adapter.channel_context()
+        # The parsed channel_context starts with the base context
+        assert parsed.channel_context.startswith(ctx)
+
+
 class TestCleanupConversations:
     def test_noop(self) -> None:
         """Email adapter has no per-conversation state to clean up."""

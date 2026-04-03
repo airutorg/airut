@@ -16,7 +16,11 @@ from airut.dashboard.tracker import CompletionReason
 from airut.gateway.channel import ChannelSendError, ParsedMessage
 from airut.gateway.config import RepoServerConfig
 from airut.gateway.service import build_recovery_prompt
-from airut.gateway.service.message_processing import process_message
+from airut.gateway.service.message_processing import (
+    SandboxTaskResult,
+    process_message,
+    run_in_sandbox,
+)
 from airut.sandbox import ExecutionResult, Outcome
 from airut.sandbox.claude_binary import ClaudeBinaryError
 from airut.sandbox.types import ResourceLimits
@@ -2039,3 +2043,199 @@ class TestBuildRecoveryPrompt:
         assert "[...truncated]" in result
         # Should contain first 3000 chars
         assert "x" * 3000 in result
+
+
+class TestRunInSandbox:
+    """Tests for run_in_sandbox shared core."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_build_task_env(self):
+        with patch.object(
+            RepoServerConfig,
+            "build_task_env",
+            return_value=({}, {}),
+        ):
+            yield
+
+    def _setup(
+        self,
+        email_config: RepoServerConfig,
+        tmp_path: Path,
+    ) -> tuple[Any, Any, MagicMock]:
+        svc, handler = make_service(email_config, tmp_path)
+        update_repo(
+            handler,
+            resource_limits=ResourceLimits(timeout=300),
+        )
+
+        repo_path = tmp_path / "repo"
+        repo_path.mkdir()
+
+        handler.conversation_manager.exists.return_value = False
+        handler.conversation_manager.initialize_new.return_value = (
+            "conv1",
+            repo_path,
+        )
+        handler.conversation_manager.get_conversation_dir.return_value = (
+            tmp_path / "conversations"
+        )
+        mock_mirror = MagicMock()
+        mock_mirror.list_directory.return_value = ["Dockerfile"]
+
+        def _read_file(path: str) -> bytes:
+            if "Dockerfile" in path:
+                return b"FROM python:3.13-slim\n"
+            if "network-allowlist" in path:
+                return b"domains: []\nurl_prefixes: []\n"
+            return b""
+
+        mock_mirror.read_file.side_effect = _read_file
+        handler.conversation_manager.mirror = mock_mirror
+
+        mock_conv_store = MagicMock()
+        mock_conv_store.get_session_id_for_resume.return_value = None
+        mock_conv_store.get_model.return_value = None
+        mock_conv_store.get_effort.return_value = None
+
+        mock_task = MagicMock()
+        mock_task.execute = AsyncMock(return_value=_make_success_result())
+        mock_task.event_log = MagicMock()
+        svc.sandbox.ensure_image.return_value = "airut:test"
+        svc.sandbox.create_task.return_value = mock_task
+        svc._mock_task = mock_task
+
+        return svc, handler, mock_conv_store
+
+    def test_creates_new_conversation(
+        self,
+        email_config: RepoServerConfig,
+        tmp_path: Path,
+    ) -> None:
+        """run_in_sandbox creates a conversation when id=None."""
+        svc, handler, cs = self._setup(email_config, tmp_path)
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=cs,
+        ):
+            result = run_in_sandbox(
+                svc,
+                handler,
+                prompt="ctx\n\nDo something",
+                task_id="task1",
+                model="opus",
+                effort=None,
+            )
+
+        assert isinstance(result, SandboxTaskResult)
+        assert result.outcome == Outcome.SUCCESS
+        assert result.conversation_id == "conv1"
+        assert result.response_text == "Done!"
+        assert result.is_error is False
+        assert result.usage_stats is not None
+        handler.conversation_manager.initialize_new.assert_called_once()
+
+    def test_uses_existing_conversation(
+        self,
+        email_config: RepoServerConfig,
+        tmp_path: Path,
+    ) -> None:
+        """run_in_sandbox skips init when id is provided."""
+        svc, handler, cs = self._setup(email_config, tmp_path)
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=cs,
+        ):
+            result = run_in_sandbox(
+                svc,
+                handler,
+                prompt="ctx\n\nDo something",
+                task_id="task1",
+                model="opus",
+                effort=None,
+                conversation_id="existing-conv",
+            )
+
+        assert result.conversation_id == "existing-conv"
+        handler.conversation_manager.initialize_new.assert_not_called()
+
+    def test_timeout_result(
+        self,
+        email_config: RepoServerConfig,
+        tmp_path: Path,
+    ) -> None:
+        """run_in_sandbox returns timeout result."""
+        svc, handler, cs = self._setup(email_config, tmp_path)
+        svc._mock_task.execute = AsyncMock(
+            return_value=_make_failure_result(outcome=Outcome.TIMEOUT)
+        )
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=cs,
+        ):
+            result = run_in_sandbox(
+                svc,
+                handler,
+                prompt="ctx\n\nDo something",
+                task_id="task1",
+                model="opus",
+                effort=None,
+            )
+
+        assert result.outcome == Outcome.TIMEOUT
+        assert result.is_error is True
+        assert "interrupted" in result.response_text
+
+    def test_failure_result(
+        self,
+        email_config: RepoServerConfig,
+        tmp_path: Path,
+    ) -> None:
+        """run_in_sandbox returns failure result."""
+        svc, handler, cs = self._setup(email_config, tmp_path)
+        svc._mock_task.execute = AsyncMock(
+            return_value=_make_failure_result(error_summary="container crashed")
+        )
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=cs,
+        ):
+            result = run_in_sandbox(
+                svc,
+                handler,
+                prompt="ctx\n\nDo something",
+                task_id="task1",
+                model="opus",
+                effort=None,
+            )
+
+        assert result.outcome == Outcome.CONTAINER_FAILED
+        assert result.is_error is True
+        assert "container crashed" in result.response_text
+
+    def test_layout_accessible(
+        self,
+        email_config: RepoServerConfig,
+        tmp_path: Path,
+    ) -> None:
+        """SandboxTaskResult includes layout for outbox access."""
+        svc, handler, cs = self._setup(email_config, tmp_path)
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=cs,
+        ):
+            result = run_in_sandbox(
+                svc,
+                handler,
+                prompt="ctx\n\nDo something",
+                task_id="task1",
+                model="opus",
+                effort=None,
+            )
+
+        assert result.layout is not None
+        assert result.layout.outbox is not None
