@@ -38,6 +38,7 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
   migration, diffing, round-trip, config variables)
 - `spec/config-reload.md` — live config reload (file watching, scope-aware
   application, deferred reload)
+- `spec/periodic-tasks.md` — cron-triggered tasks with email/Slack delivery
 - `spec/multi-repo.md` — multi-repository support design
 - `spec/slack-channel.md` — Slack channel implementation (Socket Mode)
 - `spec/integration-tests.md` — end-to-end test specification

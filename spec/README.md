@@ -20,6 +20,8 @@ For high-level documentation, see [doc/](../doc/).
 - [integration-tests.md](integration-tests.md) — End-to-end test specification
 - [config-reload.md](config-reload.md) — Live config reload (file watching,
   scope-aware application, deferred reload)
+- [periodic-tasks.md](periodic-tasks.md) — Cron-triggered tasks with email/Slack
+  delivery
 
 ## Sandbox
 
