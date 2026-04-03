@@ -834,6 +834,29 @@ class TestTypeCheckErrors:
             adapter.send_rejection(wrong, "c1", "reason", None)
 
 
+class TestChannelContext:
+    def test_returns_slack_instructions(self, tmp_path: Path) -> None:
+        """channel_context() returns the Slack system prompt."""
+        adapter, _, _, _ = _make_adapter(tmp_path)
+        ctx = adapter.channel_context()
+        assert "Slack" in ctx
+        assert "AskUserQuestion" in ctx
+        assert "/outbox" in ctx
+        assert "/storage" in ctx
+
+    def test_consistent_with_authenticate_and_parse(
+        self, tmp_path: Path
+    ) -> None:
+        """channel_context() matches authenticate_and_parse."""
+        adapter, _, authorizer, _ = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        msg = _make_raw_message()
+
+        parsed = adapter.authenticate_and_parse(msg)
+        ctx = adapter.channel_context()
+        assert parsed.channel_context == ctx
+
+
 class TestCleanupConversations:
     def test_removes_stale_thread_mappings(self, tmp_path: Path) -> None:
         adapter, _, _, thread_store = _make_adapter(tmp_path)

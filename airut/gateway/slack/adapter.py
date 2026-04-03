@@ -150,6 +150,30 @@ class SlackChannelAdapter(ChannelAdapter):
             raise RuntimeError("SlackChannelAdapter created without a listener")
         return self._listener
 
+    def channel_context(self) -> str:
+        """Return the base system prompt for the Slack channel.
+
+        This is the standard set of instructions about the Slack
+        interface, formatting, tool limitations, and directory layout
+        that applies to every Slack-delivered task — both interactive
+        messages and scheduled tasks.
+        """
+        return (
+            "User is interacting with this session via Slack "
+            "and will receive your last reply as a Slack message. "
+            "After the reply, everything not in /workspace, /inbox, "
+            "and /storage is reset. "
+            "Markdown formatting (except tables) is supported "
+            "in your responses. "
+            "To send files back to the user, place them in the "
+            "/outbox directory root (no subdirectories). "
+            "Use /storage to persist files across messages.\n\n"
+            "IMPORTANT: AskUserQuestion and plan mode tools "
+            "(EnterPlanMode/ExitPlanMode) do not work over Slack. "
+            "If you need clarification, include questions in "
+            "your response text and the user will reply via Slack."
+        )
+
     def authenticate_and_parse(
         self, raw_message: RawMessage[JsonDict]
     ) -> SlackParsedMessage:
@@ -201,30 +225,13 @@ class SlackChannelAdapter(ChannelAdapter):
         # Build display title
         display_title = text[:_MAX_TITLE_LENGTH].split("\n")[0] if text else ""
 
-        # Build channel context
-        channel_context = (
-            "User is interacting with this session via Slack "
-            "and will receive your last reply as a Slack message. "
-            "After the reply, everything not in /workspace, /inbox, "
-            "and /storage is reset. "
-            "Markdown formatting (except tables) is supported "
-            "in your responses. "
-            "To send files back to the user, place them in the "
-            "/outbox directory root (no subdirectories). "
-            "Use /storage to persist files across messages.\n\n"
-            "IMPORTANT: AskUserQuestion and plan mode tools "
-            "(EnterPlanMode/ExitPlanMode) do not work over Slack. "
-            "If you need clarification, include questions in "
-            "your response text and the user will reply via Slack."
-        )
-
         return SlackParsedMessage(
             sender=user_id,
             body=text,
             conversation_id=conversation_id,
             model_hint=None,
             display_title=display_title or "(no message)",
-            channel_context=channel_context,
+            channel_context=self.channel_context(),
             slack_channel_id=channel_id,
             slack_thread_ts=thread_ts,
             slack_file_urls=slack_file_urls,

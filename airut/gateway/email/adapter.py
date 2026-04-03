@@ -142,6 +142,29 @@ class EmailChannelAdapter(ChannelAdapter):
         """Expose responder for low-level SMTP access."""
         return self._responder
 
+    def channel_context(self) -> str:
+        """Return the base system prompt for the email channel.
+
+        This is the standard set of instructions about the email
+        interface, formatting, tool limitations, and directory layout
+        that applies to every email-delivered task — both interactive
+        messages and scheduled tasks.
+        """
+        return (
+            "User is interacting with this session via email interface "
+            "and will receive your last reply as email. "
+            "After the reply, everything not in /workspace, /inbox, "
+            "and /storage is reset. "
+            "Markdown formatting is supported in your responses. "
+            "To send files back to the user, place them in the "
+            "/outbox directory root (no subdirectories). "
+            "Use /storage to persist files across messages.\n\n"
+            "IMPORTANT: AskUserQuestion and plan mode tools "
+            "(EnterPlanMode/ExitPlanMode) do not work over email "
+            "interface. If you need clarification, include questions in "
+            "your response text and the user will reply via email."
+        )
+
     def authenticate_and_parse(
         self, raw_message: RawMessage[Message]
     ) -> EmailParsedMessage:
@@ -206,26 +229,13 @@ class EmailChannelAdapter(ChannelAdapter):
         # Extract body (HTML quotes stripped)
         clean_body = extract_body(email_msg)
 
-        # Build channel context
-        channel_context = (
-            "User is interacting with this session via email interface "
-            "and will receive your last reply as email. "
-            "After the reply, everything not in /workspace, /inbox, "
-            "and /storage is reset. "
-            "Markdown formatting is supported in your responses. "
-            "To send files back to the user, place them in the "
-            "/outbox directory root (no subdirectories). "
-            "Use /storage to persist files across messages.\n\n"
-            "IMPORTANT: AskUserQuestion and plan mode tools "
-            "(EnterPlanMode/ExitPlanMode) do not work over email "
-            "interface. If you need clarification, include questions in "
-            "your response text and the user will reply via email."
-        )
+        # Build channel context from the shared base
+        ctx = self.channel_context()
 
         # Include subject in channel context for new conversations
         # so Claude can see the email subject line as context.
         if not conv_id and subject:
-            channel_context += f"\n\nSubject: {subject}"
+            ctx += f"\n\nSubject: {subject}"
 
         # Expose subject on ParsedMessage for protocol-agnostic checks
         # (e.g. allowing empty body when subject carries the request).
@@ -237,7 +247,7 @@ class EmailChannelAdapter(ChannelAdapter):
             conversation_id=conv_id,
             model_hint=model_hint,
             display_title=subject or "(no subject)",
-            channel_context=channel_context,
+            channel_context=ctx,
             subject=msg_subject,
             original_message_id=email_msg.get("Message-ID"),
             original_references=references,
