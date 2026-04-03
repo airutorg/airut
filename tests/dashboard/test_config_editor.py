@@ -4032,6 +4032,189 @@ class TestDiffDictField:
         )
         assert changes == []
 
+    def test_diff_keyed_collection_nested_dataclass(self) -> None:
+        """Nested dataclass fields use path (not name) for value lookup."""
+        from airut.config.editor import (
+            MISSING,
+            EditorFieldSchema,
+            diff_dict_field,
+        )
+
+        # Simulates a keyed collection item with a nested dataclass —
+        # e.g. SigningCredential has nested SigningCredentialField sub-fields.
+        # collect_leaf_fields() produces leaves where path != name:
+        #   leaf.name="name", leaf.path="access_key_id.name"
+        item_fields = [
+            EditorFieldSchema(
+                name="access_key_id",
+                path="access_key_id",
+                type_tag="nested",
+                python_type="SigningCredentialField",
+                default=MISSING,
+                required=True,
+                doc="Access key ID",
+                scope="task",
+                secret=True,
+                nested_fields=[
+                    EditorFieldSchema(
+                        name="name",
+                        path="access_key_id.name",
+                        type_tag="scalar",
+                        python_type="str",
+                        default=MISSING,
+                        required=True,
+                        doc="Env var name",
+                        scope="task",
+                        secret=False,
+                    ),
+                    EditorFieldSchema(
+                        name="value",
+                        path="access_key_id.value",
+                        type_tag="scalar",
+                        python_type="str",
+                        default=MISSING,
+                        required=True,
+                        doc="Credential value",
+                        scope="task",
+                        secret=True,
+                    ),
+                ],
+            ),
+            EditorFieldSchema(
+                name="scopes",
+                path="scopes",
+                type_tag="list_str",
+                python_type="tuple[str, ...]",
+                default=(),
+                required=False,
+                doc="Host patterns",
+                scope="task",
+                secret=False,
+            ),
+        ]
+        fs = EditorFieldSchema(
+            name="signing_credentials",
+            path="repos.test.signing_credentials",
+            type_tag="keyed_collection",
+            python_type="dict",
+            default=None,
+            required=False,
+            doc="Signing credentials",
+            scope="task",
+            secret=False,
+            item_fields=item_fields,
+        )
+
+        # Change access_key_id.value, keep access_key_id.name and scopes same
+        changes = diff_dict_field(
+            fs,
+            {
+                "AWS": {
+                    "access_key_id": {"name": "AWS_KEY", "value": "new_key"},
+                    "scopes": ["*.amazonaws.com"],
+                }
+            },
+            {
+                "AWS": {
+                    "access_key_id": {"name": "AWS_KEY", "value": "old_key"},
+                    "scopes": ["*.amazonaws.com"],
+                }
+            },
+        )
+        # Must show the nested path, not the flat leaf name
+        assert len(changes) == 1
+        assert (
+            changes[0]["field"]
+            == "repos.test.signing_credentials.AWS.access_key_id.value"
+        )
+        assert changes[0]["old"] == "old_key"
+        assert changes[0]["new"] == "new_key"
+
+    def test_diff_keyed_collection_nested_added(self) -> None:
+        """Adding item with nested fields shows all leaves."""
+        from airut.config.editor import (
+            MISSING,
+            EditorFieldSchema,
+            diff_dict_field,
+        )
+
+        item_fields = [
+            EditorFieldSchema(
+                name="deliver",
+                path="deliver",
+                type_tag="nested",
+                python_type="ScheduleDelivery",
+                default=MISSING,
+                required=True,
+                doc="Delivery target",
+                scope="repo",
+                secret=False,
+                nested_fields=[
+                    EditorFieldSchema(
+                        name="channel",
+                        path="deliver.channel",
+                        type_tag="scalar",
+                        python_type="str",
+                        default=MISSING,
+                        required=True,
+                        doc="Channel type",
+                        scope="repo",
+                        secret=False,
+                    ),
+                    EditorFieldSchema(
+                        name="to",
+                        path="deliver.to",
+                        type_tag="scalar",
+                        python_type="str",
+                        default=MISSING,
+                        required=True,
+                        doc="Recipient",
+                        scope="repo",
+                        secret=False,
+                    ),
+                ],
+            ),
+            EditorFieldSchema(
+                name="cron",
+                path="cron",
+                type_tag="scalar",
+                python_type="str",
+                default=MISSING,
+                required=True,
+                doc="Cron expression",
+                scope="repo",
+                secret=False,
+            ),
+        ]
+        fs = EditorFieldSchema(
+            name="schedules",
+            path="repos.test.schedules",
+            type_tag="keyed_collection",
+            python_type="dict",
+            default=None,
+            required=False,
+            doc="Schedules",
+            scope="repo",
+            secret=False,
+            item_fields=item_fields,
+        )
+
+        changes = diff_dict_field(
+            fs,
+            {
+                "daily": {
+                    "deliver": {"channel": "email", "to": "a@b.com"},
+                    "cron": "0 9 * * 1-5",
+                }
+            },
+            MISSING,
+        )
+        fields = {c["field"] for c in changes}
+        assert "repos.test.schedules.daily.deliver.channel" in fields
+        assert "repos.test.schedules.daily.deliver.to" in fields
+        assert "repos.test.schedules.daily.cron" in fields
+        assert len(changes) == 3
+
     def test_count_dict_field_changes(self) -> None:
         from airut.config.editor import count_dict_field_changes
 
