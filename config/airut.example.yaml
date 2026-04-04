@@ -203,6 +203,26 @@ repos:
     # Path to container directory within the repo (must contain a Dockerfile)
     # container_path: .airut/container
 
+    # Periodic task schedules keyed by name
+    # schedules:
+    #   # Prompt mode: run Claude with a fixed prompt on a schedule
+    #   daily-report:
+    #     cron: "0 9 * * 1-5"
+    #     prompt: >
+    #       Summarize recent changes and open issues.
+    #     deliver:
+    #       to: team@example.com
+    #     # timezone: America/New_York
+    #     # model: sonnet
+    #
+    #   # Script mode: run a command, then Claude if it produces output
+    #   # nightly-check:
+    #   #   cron: "0 2 * * *"
+    #   #   trigger_command: "./scripts/check-status.sh"
+    #   #   trigger_timeout: 120
+    #   #   deliver:
+    #   #     to: oncall@example.com
+
     # network:
     #   # Route container traffic through the network proxy and enforce the allowlist (required for masked/signing/GitHub App credentials)
     #   sandbox_enabled: true

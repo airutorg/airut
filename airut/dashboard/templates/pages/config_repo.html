@@ -160,6 +160,19 @@
   {% endif %}
   {% endfor %}
 
+  {# Scheduled Tasks section #}
+  {% for f in schema %}
+  {% if f.name == 'schedules' %}
+  <h2 class="cfg-section-title">Scheduled Tasks</h2>
+  <div class="card">
+    <div class="cfg-card-header">
+      <span class="cfg-card-title">Schedules</span>
+    </div>
+    {% include "components/config/field.html" %}
+  </div>
+  {% endif %}
+  {% endfor %}
+
   {# Remove repo #}
   <h2 class="cfg-section-title">Danger Zone</h2>
   <div class="card">

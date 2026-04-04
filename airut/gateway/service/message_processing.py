@@ -205,10 +205,12 @@ def build_recovery_prompt(
     return "\n".join(parts)
 
 
-def _build_image(
+def build_image(
     service: GatewayService,
     mirror: GitMirrorCache,
     container_dir: str = _DEFAULT_CONTAINER_DIR,
+    *,
+    passthrough_entrypoint: bool = False,
 ) -> str:
     """Build or reuse container image from git mirror.
 
@@ -217,6 +219,10 @@ def _build_image(
         mirror: Git mirror cache.
         container_dir: Path to container directory in the repo
             (default: ``.airut/container``).
+        passthrough_entrypoint: If True, build an image with the
+            passthrough entrypoint (``exec "$@"``) instead of the
+            agent entrypoint (``exec /opt/claude/claude "$@"``).
+            Used for ``CommandTask`` execution.
 
     Returns:
         Image tag for container execution.
@@ -255,7 +261,11 @@ def _build_image(
 
         raise ImageBuildError(f"No Dockerfile found in {container_dir}")
 
-    return service.sandbox.ensure_image(dockerfile_content, context_files)
+    return service.sandbox.ensure_image(
+        dockerfile_content,
+        context_files,
+        passthrough_entrypoint=passthrough_entrypoint,
+    )
 
 
 def _build_reply_summary(
@@ -404,7 +414,7 @@ def run_in_sandbox(
     layout = create_conversation_layout(conversation_dir)
     prepare_conversation(layout)
 
-    image_tag = _build_image(service, conv_mgr.mirror, repo_cfg.container_path)
+    image_tag = build_image(service, conv_mgr.mirror, repo_cfg.container_path)
 
     mounts = [
         Mount(layout.workspace, "/workspace"),
@@ -439,7 +449,7 @@ def run_in_sandbox(
 
             raise ProxyError(f"Failed to read/parse allowlist: {e}") from e
 
-        replacements = _convert_replacement_map(replacement_map)
+        replacements = convert_replacement_map(replacement_map)
         network_sandbox = NetworkSandboxConfig(
             allowlist=allowlist,
             replacements=replacements,
@@ -992,7 +1002,7 @@ def process_message(
         return CompletionReason.INTERNAL_ERROR, conv_id
 
 
-def _convert_replacement_map(
+def convert_replacement_map(
     replacement_map: ReplacementMap,
 ) -> SecretReplacements:
     """Convert gateway ReplacementMap to sandbox types.

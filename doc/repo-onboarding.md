@@ -17,7 +17,8 @@ Code interaction via email and/or Slack.
     - [Manual Configuration (Alternative)](#manual-configuration-alternative)
   - [6. Set Up Branch Protection](#6-set-up-branch-protection)
   - [7. Set Up CI Sandbox (Recommended)](#7-set-up-ci-sandbox-recommended)
-  - [8. Test the Setup](#8-test-the-setup)
+  - [8. Configure Scheduled Tasks (Optional)](#8-configure-scheduled-tasks-optional)
+  - [9. Test the Setup](#9-test-the-setup)
 - [Alternative: Gerrit-Based Repositories](#alternative-gerrit-based-repositories)
 - [Configuration Reference](#configuration-reference)
 - [Troubleshooting](#troubleshooting)
@@ -463,7 +464,26 @@ workflows that execute repository code (which most CI workflows do) allow the
 agent to run unsandboxed code on GitHub Actions runners. See
 [ci-sandbox.md](ci-sandbox.md) for the full guide and security requirements.
 
-### 8. Test the Setup
+### 8. Configure Scheduled Tasks (Optional)
+
+If you want to run periodic tasks (e.g., daily PR reviews, nightly health
+checks), add a `schedules` block to the repo's server config:
+
+```yaml
+repos:
+  your-repo:
+    schedules:
+      daily-review:
+        cron: "0 9 * * 1-5"
+        prompt: "Review open PRs and summarize their status."
+        deliver:
+          to: "dev-team@example.com"
+```
+
+See [periodic-tasks.md](periodic-tasks.md) for prompt mode, script mode, and the
+full field reference.
+
+### 9. Test the Setup
 
 **Email:** Send a test email:
 

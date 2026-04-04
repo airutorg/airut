@@ -97,6 +97,16 @@ block (`email:` or `slack:`). A repo must have at least one channel block
 configured. Multiple channels can coexist under the same repo — each runs its
 own listener and feeds messages through the shared processing pipeline.
 
+## Scheduled Tasks
+
+Per-repo schedules are defined under `repos.<repo_id>.schedules` in the server
+config. Each schedule is a named entry with a cron expression, delivery target,
+and either a prompt or trigger command.
+
+Schedules are repo-scoped — they are parsed, validated, and reloaded as part of
+the repo config. See [periodic-tasks.md](periodic-tasks.md) for the full schema
+and [doc/periodic-tasks.md](../doc/periodic-tasks.md) for the user-facing guide.
+
 ## Loading Flow
 
 1. Service starts, loads server config (`ServerConfig.from_yaml()`)

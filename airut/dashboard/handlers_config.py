@@ -77,6 +77,20 @@ def _make_slack_skeleton() -> dict[str, Any]:
     }
 
 
+def _make_schedule_skeleton() -> dict[str, Any]:
+    """Create a minimal schedule skeleton for add-schedule.
+
+    Contains required ``cron`` and ``deliver`` fields with sensible
+    defaults.  Optional fields take their dataclass defaults.
+    ``deliver.channel`` is omitted so the editor shows "Default"
+    (the parser defaults to ``"email"``).
+    """
+    return {
+        "cron": "0 9 * * 1-5",
+        "deliver": {"to": ""},
+    }
+
+
 def _make_repo_skeleton() -> dict[str, Any]:
     """Create a minimal repo skeleton for add-repo.
 
@@ -768,6 +782,11 @@ class ConfigEditorHandlers:
         if channel_added is not None:
             return channel_added
 
+        # Special handling for adding a schedule (use skeleton)
+        schedule_added = self._try_add_schedule(buffer, path, key)
+        if schedule_added is not None:
+            return schedule_added
+
         # Tagged union lists need a proper default item
         fs = self._find_field_in_all_schemas(path)
         if fs and fs.type_tag == "tagged_union_list":
@@ -854,6 +873,33 @@ class ConfigEditorHandlers:
                 repo["slack"] = _make_slack_skeleton()
             buffer.mark_dirty()
         return self._respond_with_channels_fragment(buffer, repo_id)
+
+    def _try_add_schedule(
+        self,
+        buffer: EditBuffer,
+        path: str,
+        key: str | None,
+    ) -> Response | None:
+        """Handle adding a schedule if path matches; returns None otherwise.
+
+        Detects paths like ``repos.<id>.schedules`` and creates a
+        skeleton with required fields pre-populated.
+        """
+        if key is None:
+            return None
+        parts = path.split(".")
+        if len(parts) == 3 and parts[0] == "repos" and parts[2] == "schedules":
+            repo_id = parts[1]
+            repos = buffer.raw.get("repos", {})
+            repo = repos.get(repo_id)
+            if not isinstance(repo, dict):
+                return Response(f"Repo '{repo_id}' not found", status=400)
+            schedules = repo.setdefault("schedules", {})
+            if key not in schedules:
+                schedules[key] = _make_schedule_skeleton()
+                buffer.mark_dirty()
+            return self._respond_with_field_fragment(buffer, path)
+        return None
 
     def _try_remove_channel(
         self,

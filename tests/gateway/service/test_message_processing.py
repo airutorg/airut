@@ -18,6 +18,7 @@ from airut.gateway.config import RepoServerConfig
 from airut.gateway.service import build_recovery_prompt
 from airut.gateway.service.message_processing import (
     SandboxTaskResult,
+    build_image,
     process_message,
     run_in_sandbox,
 )
@@ -1525,7 +1526,7 @@ class TestSandboxDisabledWarning:
 
 
 class TestBuildImageErrors:
-    """Tests for _build_image error paths exercised through process_message."""
+    """Tests for build_image error paths exercised through process_message."""
 
     @pytest.fixture(autouse=True)
     def _patch_build_task_env(self):
@@ -1691,6 +1692,42 @@ class TestBuildImageErrors:
         )
 
 
+class TestBuildImagePassthrough:
+    """Tests for build_image passthrough_entrypoint parameter."""
+
+    def test_passthrough_forwarded_to_ensure_image(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """passthrough_entrypoint=True is forwarded to ensure_image."""
+        svc, handler = make_service(email_config, tmp_path)
+        mock_mirror = MagicMock()
+        mock_mirror.list_directory.return_value = ["Dockerfile"]
+        mock_mirror.read_file.return_value = b"FROM ubuntu:24.04\n"
+        svc.sandbox.ensure_image.return_value = "airut:passthrough"
+
+        tag = build_image(svc, mock_mirror, passthrough_entrypoint=True)
+
+        assert tag == "airut:passthrough"
+        svc.sandbox.ensure_image.assert_called_once()
+        call_kwargs = svc.sandbox.ensure_image.call_args
+        assert call_kwargs.kwargs["passthrough_entrypoint"] is True
+
+    def test_default_is_agent_entrypoint(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """Default build_image uses agent entrypoint (passthrough=False)."""
+        svc, handler = make_service(email_config, tmp_path)
+        mock_mirror = MagicMock()
+        mock_mirror.list_directory.return_value = ["Dockerfile"]
+        mock_mirror.read_file.return_value = b"FROM ubuntu:24.04\n"
+        svc.sandbox.ensure_image.return_value = "airut:agent"
+
+        build_image(svc, mock_mirror)
+
+        call_kwargs = svc.sandbox.ensure_image.call_args
+        assert call_kwargs.kwargs.get("passthrough_entrypoint") is False
+
+
 class TestAllowlistParseError:
     """Tests for network allowlist read/parse failure path."""
 
@@ -1776,7 +1813,7 @@ class TestAllowlistParseError:
 
 
 class TestConvertReplacementMap:
-    """Tests for _convert_replacement_map exercised through process_message."""
+    """Tests for convert_replacement_map exercised through process_message."""
 
     def _setup_svc(
         self, email_config: RepoServerConfig, tmp_path: Path

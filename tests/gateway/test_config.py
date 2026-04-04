@@ -1212,6 +1212,61 @@ class TestFromYaml:
         config = ServerConfig.from_yaml(yaml_path).value
         assert config.repos["test"].container_path == ".devcontainer"
 
+    def test_schedule_parsed_from_yaml(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Schedules in YAML are parsed into ScheduleConfig."""
+        yaml_content = (
+            _MINIMAL_YAML.format(repo_url=master_repo)
+            + "    schedules:\n"
+            + "      daily-review:\n"
+            + "        cron: '0 9 * * 1-5'\n"
+            + "        prompt: Review PRs\n"
+            + "        deliver:\n"
+            + "          channel: email\n"
+            + "          to: user@example.com\n"
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        config = ServerConfig.from_yaml(yaml_path).value
+        repo = config.repos["test"]
+        assert "daily-review" in repo.schedules
+        assert repo.schedules["daily-review"].prompt == "Review PRs"
+
+    def test_schedule_defaults_channel_and_timezone(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Channel defaults to email, timezone defaults to None."""
+        yaml_content = (
+            _MINIMAL_YAML.format(repo_url=master_repo)
+            + "    schedules:\n"
+            + "      nightly:\n"
+            + "        cron: '0 2 * * *'\n"
+            + "        prompt: Check status\n"
+            + "        deliver:\n"
+            + "          to: ops@example.com\n"
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        config = ServerConfig.from_yaml(yaml_path).value
+        sched = config.repos["test"].schedules["nightly"]
+        assert sched.deliver.channel == "email"
+        assert sched.timezone is None
+
+    def test_schedule_non_dict_raises(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Non-dict schedule value raises ConfigError."""
+        yaml_content = (
+            _MINIMAL_YAML.format(repo_url=master_repo)
+            + "    schedules:\n"
+            + "      bad-schedule: not-a-dict\n"
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        with pytest.raises(ConfigError, match="must be a YAML mapping"):
+            ServerConfig.from_yaml(yaml_path)
+
     def test_missing_file(self, tmp_path: Path) -> None:
         """Raise ConfigError when file does not exist."""
         with pytest.raises(ConfigError, match="Config file not found"):
@@ -3831,3 +3886,204 @@ class TestRepoServerConfigGitHubApp:
         )
         assert config is not None
         assert "super-secret-key" in SecretFilter._secrets
+
+
+# ── Schedule config tests ─────────────────────────────────────────────
+
+
+class TestScheduleConfig:
+    """Tests for ScheduleConfig and ScheduleDelivery."""
+
+    def test_prompt_mode(self) -> None:
+        from airut.gateway.config import ScheduleConfig, ScheduleDelivery
+
+        config = ScheduleConfig(
+            cron="0 9 * * 1-5",
+            deliver=ScheduleDelivery(channel="email", to="user@example.com"),
+            prompt="Review PRs",
+        )
+        assert config.prompt == "Review PRs"
+        assert config.trigger_command is None
+        assert config.timezone is None
+        assert config.output_limit == 102400
+
+    def test_script_mode(self) -> None:
+        from airut.gateway.config import ScheduleConfig, ScheduleDelivery
+
+        config = ScheduleConfig(
+            cron="0 2 * * *",
+            deliver=ScheduleDelivery(channel="email", to="ops@example.com"),
+            trigger_command="./check.sh --verbose",
+            trigger_timeout=300,
+        )
+        assert config.prompt is None
+        assert config.trigger_command == "./check.sh --verbose"
+        assert config.trigger_timeout == 300
+
+    def test_overrides(self) -> None:
+        from airut.gateway.config import ScheduleConfig, ScheduleDelivery
+
+        config = ScheduleConfig(
+            cron="0 9 * * *",
+            deliver=ScheduleDelivery(channel="email", to="a@b.com"),
+            prompt="test",
+            model="sonnet",
+            effort="high",
+            timezone="Europe/Helsinki",
+            output_limit=204800,
+        )
+        assert config.model == "sonnet"
+        assert config.effort == "high"
+        assert config.timezone == "Europe/Helsinki"
+        assert config.output_limit == 204800
+
+
+class TestScheduleConfigParsing:
+    """Tests for _parse_schedule_config and RepoServerConfig validation."""
+
+    def _make_repo_config(self, **schedule_raw: dict) -> "RepoServerConfig":
+        from airut.gateway.config import (
+            RepoServerConfig,
+            ScheduleConfig,
+            ScheduleDelivery,
+        )
+
+        schedules = {}
+        for name, raw in schedule_raw.items():
+            schedules[name] = ScheduleConfig(
+                cron=raw.get("cron", "0 9 * * *"),
+                deliver=ScheduleDelivery(
+                    channel=raw.get("channel", "email"),
+                    to=raw.get("to", "user@example.com"),
+                ),
+                prompt=raw.get("prompt"),
+                trigger_command=raw.get("trigger_command"),
+                timezone=raw.get("timezone", "UTC"),
+            )
+
+        return RepoServerConfig(
+            repo_id="test",
+            git_repo_url="https://github.com/test/repo.git",
+            channels={"email": MagicMock(channel_info="test")},
+            schedules=schedules,
+        )
+
+    def test_valid_prompt_schedule(self) -> None:
+        config = self._make_repo_config(daily={"prompt": "Review PRs"})
+        assert "daily" in config.schedules
+
+    def test_missing_both_prompt_and_trigger(self) -> None:
+        with pytest.raises(ValueError, match="exactly one"):
+            self._make_repo_config(bad={})
+
+    def test_both_prompt_and_trigger(self) -> None:
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            self._make_repo_config(
+                bad={
+                    "prompt": "test",
+                    "trigger_command": "./check.sh",
+                }
+            )
+
+    def test_invalid_delivery_channel(self) -> None:
+        with pytest.raises(ValueError, match="does not match"):
+            self._make_repo_config(bad={"prompt": "test", "channel": "slack"})
+
+    def test_invalid_cron(self) -> None:
+        with pytest.raises(ValueError, match="invalid expression"):
+            self._make_repo_config(
+                bad={"prompt": "test", "cron": "invalid cron"}
+            )
+
+    def test_invalid_timezone(self) -> None:
+        with pytest.raises(ValueError, match="invalid timezone"):
+            self._make_repo_config(
+                bad={"prompt": "test", "timezone": "Invalid/Zone"}
+            )
+
+
+class TestParseScheduleConfigFromYAML:
+    """Tests for _parse_schedule_config from raw YAML dicts."""
+
+    def test_parse_prompt_mode(self) -> None:
+        from airut.gateway.config import _parse_schedule_config
+
+        raw = {
+            "cron": "0 9 * * 1-5",
+            "prompt": "Review PRs",
+            "deliver": {"channel": "email", "to": "user@example.com"},
+        }
+        config = _parse_schedule_config("daily", raw, "repos.test")
+        assert config.cron == "0 9 * * 1-5"
+        assert config.prompt == "Review PRs"
+        assert config.trigger_command is None
+        assert config.deliver.channel == "email"
+        assert config.deliver.to == "user@example.com"
+
+    def test_parse_script_mode(self) -> None:
+        from airut.gateway.config import _parse_schedule_config
+
+        raw = {
+            "cron": "0 2 * * *",
+            "trigger_command": "./check.sh --verbose",
+            "trigger_timeout": 300,
+            "deliver": {"channel": "email", "to": "ops@example.com"},
+            "output_limit": 204800,
+        }
+        config = _parse_schedule_config("nightly", raw, "repos.test")
+        assert config.trigger_command == "./check.sh --verbose"
+        assert config.trigger_timeout == 300
+        assert config.output_limit == 204800
+
+    def test_parse_with_overrides(self) -> None:
+        from airut.gateway.config import _parse_schedule_config
+
+        raw = {
+            "cron": "0 9 * * *",
+            "prompt": "test",
+            "deliver": {"channel": "email", "to": "a@b.com"},
+            "timezone": "Europe/Helsinki",
+            "model": "sonnet",
+            "effort": "high",
+        }
+        config = _parse_schedule_config("test", raw, "repos.test")
+        assert config.timezone == "Europe/Helsinki"
+        assert config.model == "sonnet"
+        assert config.effort == "high"
+
+    def test_parse_missing_cron(self) -> None:
+        from airut.gateway.config import ConfigError, _parse_schedule_config
+
+        raw = {
+            "prompt": "test",
+            "deliver": {"channel": "email", "to": "a@b.com"},
+        }
+        with pytest.raises(ConfigError, match="cron"):
+            _parse_schedule_config("test", raw, "repos.test")
+
+    def test_parse_missing_deliver(self) -> None:
+        from airut.gateway.config import ConfigError, _parse_schedule_config
+
+        raw = {
+            "cron": "0 9 * * *",
+            "prompt": "test",
+        }
+        with pytest.raises(ConfigError, match="deliver"):
+            _parse_schedule_config("test", raw, "repos.test")
+
+    def test_parse_trigger_timeout_without_command(self) -> None:
+        """trigger_timeout without trigger_command parses fine.
+
+        Validation catches the missing trigger_command at RepoServerConfig
+        level (neither prompt nor trigger_command set).
+        """
+        from airut.gateway.config import _parse_schedule_config
+
+        raw = {
+            "cron": "0 9 * * *",
+            "trigger_timeout": 300,
+            "deliver": {"channel": "email", "to": "a@b.com"},
+        }
+        config = _parse_schedule_config("test", raw, "repos.test")
+        assert config.trigger_command is None
+        assert config.trigger_timeout == 300

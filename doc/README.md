@@ -60,6 +60,8 @@ Named "Airut" (Finnish: herald/messenger).
 - [Gerrit onboarding](gerrit-onboarding.md) — Gerrit-specific onboarding
 - [Agentic operation](agentic-operation.md) — Message-to-PR workflow patterns
   and best practices
+- [Periodic tasks](periodic-tasks.md) — Cron-triggered scheduled tasks with
+  email delivery
 - [Testing](testing.md) — Test strategy, coverage enforcement, and config
   migration testing
 

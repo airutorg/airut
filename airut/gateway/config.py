@@ -1040,6 +1040,101 @@ class EmailChannelConfig(ChannelConfig):
         return self.account.from_address
 
 
+# ---------------------------------------------------------------------------
+# Schedule configuration
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ScheduleDelivery:
+    """Delivery target for a scheduled task result.
+
+    Attributes:
+        to: Recipient address (email address).
+        channel: Delivery channel type (default: email).
+    """
+
+    to: str = field(
+        metadata=meta("Recipient address (email address)", Scope.REPO),
+    )
+    channel: str = field(
+        default="email",
+        metadata=meta(
+            "Delivery channel type (default: email)",
+            Scope.REPO,
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class ScheduleConfig:
+    """A single periodic task schedule.
+
+    Exactly one of ``prompt`` or ``trigger_command`` must be set.
+
+    Attributes:
+        cron: 5-field cron expression (minute hour dom month dow).
+        deliver: Delivery target for task results.
+        timezone: IANA timezone for cron evaluation.
+        prompt: Prompt text for prompt mode.
+        trigger_command: Shell command for script mode.
+        trigger_timeout: Timeout override for trigger command.
+        model: Override repo default model.
+        effort: Override repo default effort level.
+        output_limit: Max script output bytes (default 100KB).
+    """
+
+    cron: str = field(
+        metadata=meta(
+            "5-field cron expression (minute hour dom month dow)", Scope.REPO
+        ),
+    )
+    deliver: ScheduleDelivery = field(
+        metadata=meta("Delivery target for task results", Scope.REPO),
+    )
+    timezone: str | None = field(
+        default=None,
+        metadata=meta(
+            "IANA timezone for cron evaluation (empty = server local time)",
+            Scope.REPO,
+        ),
+    )
+    prompt: str | None = field(
+        default=None,
+        metadata=meta(
+            "Prompt text (mutually exclusive with trigger_command)",
+            Scope.REPO,
+        ),
+    )
+    trigger_command: str | None = field(
+        default=None,
+        metadata=meta(
+            "Shell command for script mode (mutually exclusive with prompt)",
+            Scope.REPO,
+        ),
+    )
+    trigger_timeout: int | None = field(
+        default=None,
+        metadata=meta(
+            "Timeout override for trigger command"
+            " (empty = repo resource_limits default)",
+            Scope.REPO,
+        ),
+    )
+    model: str | None = field(
+        default=None,
+        metadata=meta("Override repo default model", Scope.TASK),
+    )
+    effort: str | None = field(
+        default=None,
+        metadata=meta("Override repo default effort level", Scope.TASK),
+    )
+    output_limit: int = field(
+        default=102400,
+        metadata=meta("Max script output bytes (default 100KB)", Scope.REPO),
+    )
+
+
 #: Channel type keys recognized in server config.
 #: Extend as new channel types are added.
 CHANNEL_KEYS = {"email", "slack"}
@@ -1166,6 +1261,13 @@ class RepoServerConfig:
             Scope.REPO,
         ),
     )
+    schedules: dict[str, ScheduleConfig] = field(
+        default_factory=dict,
+        metadata=meta(
+            "Periodic task schedules keyed by name",
+            Scope.REPO,
+        ),
+    )
 
     def __post_init__(self) -> None:
         """Validate configuration and register secrets.
@@ -1230,6 +1332,49 @@ class RepoServerConfig:
                 f"{', '.join(sorted(unknown))}. "
                 f"Supported: {', '.join(sorted(CHANNEL_KEYS))}"
             )
+
+        # Validate schedules
+        if self.schedules:
+            from zoneinfo import ZoneInfo
+
+            from airut.gateway.scheduler.cron import CronExpression
+
+            for sched_name, sched in self.schedules.items():
+                sched_prefix = f"repos.{self.repo_id}.schedules.{sched_name}"
+                if sched.prompt is None and sched.trigger_command is None:
+                    raise ValueError(
+                        f"{sched_prefix}: exactly one of 'prompt' or "
+                        f"'trigger_command' must be set"
+                    )
+                if (
+                    sched.prompt is not None
+                    and sched.trigger_command is not None
+                ):
+                    raise ValueError(
+                        f"{sched_prefix}: 'prompt' and 'trigger_command'"
+                        f" are mutually exclusive"
+                    )
+                if sched.deliver.channel not in self.channels:
+                    raise ValueError(
+                        f"{sched_prefix}.deliver.channel: "
+                        f"'{sched.deliver.channel}' does not match a "
+                        f"configured channel "
+                        f"({', '.join(sorted(self.channels))})"
+                    )
+                try:
+                    CronExpression(sched.cron)
+                except ValueError as e:
+                    raise ValueError(
+                        f"{sched_prefix}.cron: invalid expression: {e}"
+                    ) from e
+                if sched.timezone is not None:
+                    try:
+                        ZoneInfo(sched.timezone)
+                    except Exception as e:
+                        raise ValueError(
+                            f"{sched_prefix}.timezone: invalid timezone "
+                            f"'{sched.timezone}': {e}"
+                        ) from e
 
         from airut.sandbox.claude_binary import validate_version
 
@@ -1572,6 +1717,20 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
     if container_path is not None:
         repo_overrides["container_path"] = container_path
 
+    # Parse schedules
+    raw_schedules = raw.get("schedules", {})
+    schedules: dict[str, ScheduleConfig] = {}
+    if isinstance(raw_schedules, dict):
+        for sched_id, sched_raw in raw_schedules.items():
+            sched_id = str(sched_id)
+            if not isinstance(sched_raw, dict):
+                raise ConfigError(
+                    f"{prefix}.schedules.{sched_id} must be a YAML mapping"
+                )
+            schedules[sched_id] = _parse_schedule_config(
+                sched_id, sched_raw, prefix
+            )
+
     return RepoServerConfig(
         repo_id=repo_id,
         git_repo_url=_resolve(
@@ -1584,6 +1743,7 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
         masked_secrets=masked_secrets,
         signing_credentials=signing_credentials,
         github_app_credentials=github_app_credentials,
+        schedules=schedules,
         **repo_overrides,
     )
 
@@ -1784,6 +1944,60 @@ def _parse_slack_channel_config(
         bot_token=bot_token,
         app_token=app_token,
         authorized=tuple(authorized),
+    )
+
+
+def _parse_schedule_config(
+    schedule_id: str,
+    raw: dict,
+    prefix: str,
+) -> ScheduleConfig:
+    """Parse a single schedule config block.
+
+    Args:
+        schedule_id: Schedule name (key from ``schedules``).
+        raw: Raw YAML dict for this schedule.
+        prefix: Config path prefix for error messages.
+
+    Returns:
+        ScheduleConfig instance.
+
+    Raises:
+        ConfigError: If required fields are missing or invalid.
+    """
+    key = f"{prefix}.schedules.{schedule_id}"
+
+    cron = _resolve(raw.get("cron"), str, required=f"{key}.cron")
+
+    # Parse deliver block (required)
+    raw_deliver = raw.get("deliver")
+    if not isinstance(raw_deliver, dict):
+        raise ConfigError(f"{key}.deliver is required and must be a mapping")
+    deliver = ScheduleDelivery(
+        channel=_resolve(raw_deliver.get("channel"), str) or "email",
+        to=_resolve(raw_deliver.get("to"), str, required=f"{key}.deliver.to"),
+    )
+
+    # Parse optional fields
+    timezone = _resolve(raw.get("timezone"), str)
+    prompt = _resolve(raw.get("prompt"), str)
+    trigger_command = _resolve(raw.get("trigger_command"), str)
+    trigger_timeout = _resolve(raw.get("trigger_timeout"), int)
+    model = _resolve(raw.get("model"), str)
+    effort = _resolve(raw.get("effort"), str)
+    output_limit_raw = _resolve(raw.get("output_limit"), int)
+    output_limit = output_limit_raw if output_limit_raw is not None else 102400
+
+    return ScheduleConfig(
+        cron=cron,
+        deliver=deliver,
+        timezone=timezone,
+        prompt=prompt,
+        trigger_command=trigger_command,
+        trigger_timeout=trigger_timeout,
+        model=model,
+        effort=effort,
+        output_limit=output_limit,
     )
 
 

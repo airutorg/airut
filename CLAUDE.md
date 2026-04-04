@@ -25,6 +25,7 @@ High-level documentation in `doc/` (see `doc/README.md` for full list):
 - `doc/repo-onboarding.md` — onboarding new repositories
 - `doc/gerrit-onboarding.md` — Gerrit-specific onboarding
 - `doc/agentic-operation.md` — message-to-PR workflow patterns
+- `doc/periodic-tasks.md` — cron-triggered scheduled tasks with email delivery
 - `doc/testing.md` — test strategy, coverage enforcement, config migration
   testing
 
@@ -41,6 +42,8 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
 - `spec/multi-repo.md` — multi-repository support design
 - `spec/slack-channel.md` — Slack channel implementation (Socket Mode)
 - `spec/integration-tests.md` — end-to-end test specification
+- `spec/periodic-tasks.md` — cron-triggered periodic tasks (scheduler,
+  prompt/script modes, email delivery)
 - `spec/sandbox.md` — sandbox library for safe containerized Claude Code
   execution
 - `spec/sandbox-action.md` — reusable GitHub Action wrapping airut-sandbox

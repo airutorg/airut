@@ -31,6 +31,7 @@ operation.
 - [Workflow Patterns](#workflow-patterns)
   - [Standard Task Flow](#standard-task-flow)
   - [Review Feedback Loop](#review-feedback-loop)
+  - [Scheduled Task Workflow](#scheduled-task-workflow)
   - [Conflict Resolution](#conflict-resolution)
 - [Autonomous Learning](#autonomous-learning)
 - [Summary](#summary)
@@ -294,6 +295,22 @@ Note: The agent does not receive GitHub notifications directly. The user must
 send a follow-up message (email reply or Slack thread message) to trigger
 another execution cycle. The agent can then access all PR comments and code
 review via the GitHub API.
+
+### Scheduled Task Workflow
+
+Periodic tasks extend agentic operation to run on a cron schedule without manual
+triggering. The scheduler dispatches tasks to the same worker pool as
+interactive messages, and results are delivered via email. Recipients can reply
+to continue the conversation — the same review feedback loop applies.
+
+Use cases:
+
+- **Daily PR reviews** — prompt mode with a review instruction
+- **Nightly health checks** — script mode runs a check command, Claude is
+  invoked only when there's output to analyze
+- **Weekly summaries** — prompt mode with a reporting instruction
+
+See [periodic-tasks.md](periodic-tasks.md) for configuration details.
 
 ### Conflict Resolution
 
