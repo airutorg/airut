@@ -28,7 +28,7 @@ def run_ci() -> tuple[int, str]:
     """Run ci.py --fix and return (exit_code, combined_output)."""
     ci_script = Path(__file__).parent / "ci.py"
     result = subprocess.run(
-        [sys.executable, str(ci_script), "--fix", "--timeout", "0"],
+        [sys.executable, str(ci_script), "--fix"],
         capture_output=True,
         text=True,
     )

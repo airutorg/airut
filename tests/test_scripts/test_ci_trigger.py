@@ -25,11 +25,10 @@ class TestRunCi:
 
             assert exit_code == 0
             assert "All 7 checks passed" in output
-            # Verify ci.py is called with --fix and --timeout 0
+            # Verify ci.py is called with --fix (default timeouts)
             cmd = mock_run.call_args[0][0]
             assert "--fix" in cmd
-            assert "--timeout" in cmd
-            assert cmd[-1] == "0"
+            assert "--timeout" not in cmd
 
     def test_returns_exit_code_and_output_on_failure(self) -> None:
         """run_ci returns non-zero exit code and output when CI fails."""
