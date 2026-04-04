@@ -166,6 +166,7 @@ _COMPLEX_EXAMPLES: dict[str, list[str]] = {
         "      Summarize recent changes and open issues.",
         "    deliver:",
         "      to: team@example.com",
+        "    # subject: Daily Report",
         "    # timezone: America/New_York",
         "    # model: sonnet",
         "",

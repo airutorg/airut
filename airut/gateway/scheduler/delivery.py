@@ -75,7 +75,8 @@ def _deliver_via_email(
     result: SandboxTaskResult,
 ) -> None:
     """Deliver result via email adapter's ``send_new_message()``."""
-    subject = f"[ID:{result.conversation_id}] {schedule_name}"
+    display_name = config.subject or schedule_name
+    subject = f"[ID:{result.conversation_id}] {display_name}"
 
     # Collect outbox files
     outbox_dir = result.layout.outbox

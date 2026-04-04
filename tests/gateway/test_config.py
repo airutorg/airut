@@ -4071,6 +4071,29 @@ class TestParseScheduleConfigFromYAML:
         with pytest.raises(ConfigError, match="deliver"):
             _parse_schedule_config("test", raw, "repos.test")
 
+    def test_parse_subject_override(self) -> None:
+        from airut.gateway.config import _parse_schedule_config
+
+        raw = {
+            "cron": "0 9 * * 1-5",
+            "prompt": "Review PRs",
+            "subject": "Weekly PR Summary",
+            "deliver": {"channel": "email", "to": "user@example.com"},
+        }
+        config = _parse_schedule_config("weekly-prs", raw, "repos.test")
+        assert config.subject == "Weekly PR Summary"
+
+    def test_parse_subject_defaults_to_none(self) -> None:
+        from airut.gateway.config import _parse_schedule_config
+
+        raw = {
+            "cron": "0 9 * * 1-5",
+            "prompt": "Review PRs",
+            "deliver": {"channel": "email", "to": "user@example.com"},
+        }
+        config = _parse_schedule_config("daily", raw, "repos.test")
+        assert config.subject is None
+
     def test_parse_trigger_timeout_without_command(self) -> None:
         """trigger_timeout without trigger_command parses fine.
 
