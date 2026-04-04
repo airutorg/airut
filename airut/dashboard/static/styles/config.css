@@ -170,6 +170,8 @@
 .cfg-tabbed[data-source="literal"] .cfg-input { background: var(--status-info-bg); }
 .cfg-tabbed[data-source="env"] .cfg-input { background: var(--status-warning-bg); }
 .cfg-tabbed[data-source="var"] .cfg-input { background: var(--status-success-bg); }
+/* Match container bg to source tint so rounded corners don't show gray */
+.cfg-tabbed-multiline[data-source="literal"] { background: var(--status-info-bg); }
 
 /* ---- Input ---- */
 .cfg-input {
