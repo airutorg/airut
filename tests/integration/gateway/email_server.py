@@ -901,7 +901,7 @@ class TestEmailServer:
                 return None
             # Block until a new message arrives or timeout
             self._outbox._new_message_event.clear()
-            self._outbox._new_message_event.wait(timeout=min(remaining, 0.1))
+            self._outbox._new_message_event.wait(timeout=min(remaining, 0.03))
 
     def clear_outbox(self) -> None:
         """Clear all sent messages from the outbox."""
