@@ -27,6 +27,7 @@ Environment Variables:
 import json
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -48,19 +49,46 @@ def _state_path() -> Path | None:
 
 
 def _load_state() -> dict:
-    """Load persisted state, returning defaults when absent."""
+    """Load persisted state, returning defaults when absent.
+
+    Retries on transient read failures (empty content, corrupt JSON,
+    ``FileNotFoundError``) that can occur when a concurrent process
+    is atomically replacing the state file via :func:`os.replace`.
+    """
     path = _state_path()
     if path and path.exists():
-        return json.loads(path.read_text())
+        for attempt in range(3):
+            try:
+                data = path.read_text()
+                if data:
+                    return json.loads(data)
+            except (json.JSONDecodeError, OSError):
+                pass
+            if attempt < 2:
+                time.sleep(0.05)
     return {"networks": [], "containers": {}}
 
 
 def _save_state(state: dict) -> None:
-    """Persist *state* to disk (no-op when state dir is unset)."""
+    """Persist *state* to disk atomically (no-op when state dir is unset).
+
+    Writes to a temporary file then uses :func:`os.replace` so that
+    concurrent readers never observe a truncated/empty file.
+    """
     path = _state_path()
     if path:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(state))
+        fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(state, f)
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+            raise
 
 
 # ---------------------------------------------------------------------------
