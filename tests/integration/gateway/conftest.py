@@ -434,7 +434,7 @@ def wait_for_conv_completion(
         if remaining <= 0:
             # Return whatever we have
             return tasks[0] if tasks else None
-        time.sleep(min(0.1, remaining))
+        time.sleep(min(0.03, remaining))
 
 
 def wait_for_task(
@@ -463,7 +463,7 @@ def wait_for_task(
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return None
-        time.sleep(min(0.1, remaining))
+        time.sleep(min(0.03, remaining))
 
 
 def wait_for_boot(
