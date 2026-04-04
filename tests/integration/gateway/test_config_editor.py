@@ -195,6 +195,7 @@ def _add_valid_repo(
     buf.raw["repos"][repo_id]["email"].setdefault("imap", {})
     buf.raw["repos"][repo_id]["email"]["imap"]["use_idle"] = False
     buf.raw["repos"][repo_id]["email"]["imap"]["poll_interval"] = 0.1
+    buf.raw["repos"][repo_id]["email"]["imap"]["connect_retries"] = 1
 
 
 # ------------------------------------------------------------------ #
@@ -1068,7 +1069,7 @@ class TestEditorAddRepoLifecycle:
             integration_env.email_server.add_inbox("project-b")
 
             # Wait a bit — no reload should fire
-            time.sleep(0.5)
+            time.sleep(0.2)
             assert "project-b" not in service.repo_handlers, (
                 "Repo appeared in handlers without a config change"
             )
