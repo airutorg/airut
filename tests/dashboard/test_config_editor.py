@@ -493,7 +493,7 @@ class TestFieldPatch:
         vals = json.loads(m.group(1))
         # dashboard.port has default 5200 — template should fall through
         # to f.default instead of using the env var name.
-        assert vals["value"] == "5200"
+        assert vals["value"] == 5200
 
     def test_patch_var_to_literal_int_field(
         self, harness: ConfigEditorHarness
@@ -531,7 +531,7 @@ class TestFieldPatch:
         )
         assert m, "Literal button not found in response HTML"
         vals = json.loads(m.group(1))
-        assert vals["value"] == "5200"
+        assert vals["value"] == 5200
 
     def test_patch_field_string_coerced_to_int(
         self, harness: ConfigEditorHarness
@@ -2559,6 +2559,130 @@ class TestAddSchedule:
             buf.raw["repos"]["test-repo"]["schedules"]["daily"]["cron"]
             == "0 8 * * *"
         )
+
+
+class TestMultilineTextarea:
+    """Multiline fields render as <textarea> only when source is literal."""
+
+    @pytest.fixture
+    def schedule_harness(self, tmp_path: Path) -> ConfigEditorHarness:
+        """Config with a scheduled task that has a prompt set."""
+        raw = _make_sample_raw()
+        raw["repos"]["test-repo"]["schedules"] = {
+            "daily-review": {
+                "cron": "0 9 * * 1-5",
+                "prompt": "Review open PRs",
+                "deliver": {"to": "admin@example.com"},
+            },
+        }
+        return ConfigEditorHarness(tmp_path, raw=raw)
+
+    def test_literal_prompt_renders_textarea(
+        self, schedule_harness: ConfigEditorHarness
+    ) -> None:
+        """Prompt field with literal value renders a <textarea>."""
+        schedule_harness.client.get("/config")
+        response = schedule_harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "<textarea" in html
+        assert "cfg-textarea" in html
+        assert "Review open PRs" in html
+
+    def test_literal_prompt_has_multiline_class(
+        self, schedule_harness: ConfigEditorHarness
+    ) -> None:
+        """Multiline literal field gets cfg-tabbed-multiline class."""
+        schedule_harness.client.get("/config")
+        response = schedule_harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "cfg-tabbed-multiline" in html
+
+    def test_unset_prompt_renders_input_not_textarea(
+        self, tmp_path: Path
+    ) -> None:
+        """Prompt field when unset renders <input>, not textarea."""
+        raw = _make_sample_raw()
+        raw["repos"]["test-repo"]["schedules"] = {
+            "daily-review": {
+                "cron": "0 9 * * 1-5",
+                "trigger_command": "echo ok",
+                "deliver": {"to": "admin@example.com"},
+            },
+        }
+        h = ConfigEditorHarness(tmp_path, raw=raw)
+        h.client.get("/config")
+        response = h.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        # prompt is unset — must NOT be a textarea
+        assert "cfg-textarea" not in html
+
+    def test_env_prompt_renders_input_not_textarea(
+        self,
+        schedule_harness: ConfigEditorHarness,
+    ) -> None:
+        """Prompt with env source renders <input>, not textarea."""
+        schedule_harness.client.get("/config")
+        # Switch prompt from literal to env source
+        schedule_harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": ("repos.test-repo.schedules.daily-review.prompt"),
+                "source": "env",
+                "value": "REVIEW_PROMPT",
+            },
+            headers=XHR,
+        )
+        response = schedule_harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "cfg-textarea" not in html
+
+    def test_patch_multiline_value(
+        self, schedule_harness: ConfigEditorHarness
+    ) -> None:
+        """PATCH with multiline literal value stores newlines correctly."""
+        schedule_harness.client.get("/config")
+        multiline_prompt = (
+            "Step 1: Review PRs\nStep 2: Check CI\nStep 3: Report"
+        )
+        response = schedule_harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.schedules.daily-review.prompt",
+                "source": "literal",
+                "value": multiline_prompt,
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "<textarea" in html
+        buf = schedule_harness.server._config_handlers._buffer
+        assert buf is not None
+        stored = buf.raw["repos"]["test-repo"]["schedules"]["daily-review"][
+            "prompt"
+        ]
+        assert stored == multiline_prompt
+        assert "\n" in stored
+
+    def test_switch_to_env_renders_input(
+        self, schedule_harness: ConfigEditorHarness
+    ) -> None:
+        """Switching a multiline field from literal to env renders <input>."""
+        schedule_harness.client.get("/config")
+        response = schedule_harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": "repos.test-repo.schedules.daily-review.prompt",
+                "source": "env",
+                "value": "MY_PROMPT",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        html = response.get_data(as_text=True)
+        assert "<textarea" not in html
+        assert "cfg-textarea" not in html
+        assert "<input" in html
 
 
 class TestAddChannel:

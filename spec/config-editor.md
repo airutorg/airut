@@ -270,6 +270,17 @@ a checkbox. This avoids CSP issues with inline event handlers (the server sets
 `script-src 'self'`) and provides a consistent visual appearance matching other
 field types.
 
+### Multiline Fields
+
+Fields with `multiline: True` in `FIELD_OVERRIDES` render as a `<textarea>`
+instead of a single-line `<input>` when the Literal source tab is active. When
+the source is Environment, Variable, or Default, the field renders as a standard
+single-line input. The textarea container uses `cfg-tabbed-multiline` for a
+wider max-width (600px vs 400px) to accommodate longer content.
+
+Currently `GitHubAppCredential.private_key` and `ScheduleConfig.prompt` use this
+override.
+
 ### Variables Section
 
 The `vars:` top-level YAML section is edited as a dedicated widget on the global
@@ -507,7 +518,11 @@ variants for field tinting:
   for source-specific field tinting.
 - **`.cfg-source`** — tab bar inside `.cfg-tabbed`. Active tab color maps to
   standard status variables per source type.
-- **`.cfg-input`** — text/number/select input (`--font-mono`, 13px).
+- **`.cfg-input`** — text/number/select/textarea input (`--font-mono`, 13px).
+- **`.cfg-textarea`** — textarea variant for multiline fields (vertical resize,
+  min-height 60px).
+- **`.cfg-tabbed-multiline`** — wider tabbed wrapper (600px) for multiline
+  fields.
 - **`.cfg-btn`** — action buttons with `:disabled` state (opacity 0.4).
 - **`.cfg-banner`** — feedback banners (success/error/warning/info).
 - **`.cfg-dialog`** — centered modal (`margin: auto` for `<dialog>`).

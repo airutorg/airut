@@ -340,6 +340,37 @@ class TestSchemaForEditorRealConfigs:
         assert rl.nested_fields is not None
 
 
+class TestSchemaMultilineOverrides:
+    def test_schedule_prompt_multiline(self) -> None:
+        """ScheduleConfig.prompt has multiline=True via FIELD_OVERRIDES."""
+        from airut.gateway.config import ScheduleConfig
+
+        schema = schema_for_editor(ScheduleConfig)
+        by_name = {s.name: s for s in schema}
+        assert by_name["prompt"].multiline is True
+
+    def test_github_app_private_key_multiline(self) -> None:
+        """GitHubAppCredential.private_key has multiline=True."""
+        from airut.gateway.config import GitHubAppCredential
+
+        schema = schema_for_editor(GitHubAppCredential)
+        by_name = {s.name: s for s in schema}
+        assert by_name["private_key"].multiline is True
+
+    def test_regular_string_not_multiline(self) -> None:
+        """Fields without FIELD_OVERRIDES default to multiline=False."""
+
+        @dataclass(frozen=True)
+        class Cfg:
+            name: str = field(
+                default="",
+                metadata=meta("Name", Scope.SERVER),
+            )
+
+        schema = schema_for_editor(Cfg)
+        assert schema[0].multiline is False
+
+
 class TestSchemaForEditorChannels:
     def test_email_channel_config(self) -> None:
         from airut.config.source import YAML_EMAIL_STRUCTURE
