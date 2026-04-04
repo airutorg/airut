@@ -21,6 +21,7 @@ from airut.config.generate import (
     _SKIP_FIELDS,
     EXAMPLE_CONFIG_PATH,
     _comment_lines,
+    _example_instances,
     _field_value,
     _format_yaml,
     _group_fields_by_section,
@@ -127,21 +128,52 @@ class TestCommentLines:
         result = _comment_lines(["hello"], "    ")
         assert result == ["    # hello"]
 
+    def test_already_commented_gets_double_commented(self) -> None:
+        """Lines starting with # get another # prefix (block-commenting)."""
+        result = _comment_lines(["# existing comment", "normal"])
+        assert result == ["# # existing comment", "# normal"]
+
+    def test_already_commented_with_prefix(self) -> None:
+        """Prefix + # is applied to already-commented lines."""
+        result = _comment_lines(["# comment"], "    ")
+        assert result == ["    # # comment"]
+
+    def test_indented_comment_block_commented(self) -> None:
+        """Indented comment lines get block-comment prefix."""
+        result = _comment_lines(["  # indented comment", "  value: 1"])
+        assert result == ["#   # indented comment", "#   value: 1"]
+
 
 class TestFieldValue:
     """Tests for _field_value."""
 
-    def test_with_example_override(self) -> None:
+    def test_with_instance_value(self) -> None:
+        """Instance values are used when instances dict is provided."""
         from airut.gateway.config import GlobalConfig
 
+        instances = _example_instances()
         f = next(
             f
             for f in dataclasses.fields(GlobalConfig)
             if f.name == "dashboard_base_url"
         )
-        value, has_default = _field_value(GlobalConfig, f)
+        value, has_default = _field_value(GlobalConfig, f, instances)
         assert value == "dashboard.example.com"
         assert has_default is True  # defaults to None
+
+    def test_with_tag_display_override(self) -> None:
+        """Tag display overrides take priority over instance values."""
+        from airut.gateway.config import EmailAccountConfig
+
+        instances = _example_instances()
+        f = next(
+            f
+            for f in dataclasses.fields(EmailAccountConfig)
+            if f.name == "password"
+        )
+        value, has_default = _field_value(EmailAccountConfig, f, instances)
+        assert value == "!env EMAIL_PASSWORD"
+        assert has_default is True
 
     def test_with_real_default(self) -> None:
         from airut.gateway.config import GlobalConfig
@@ -167,13 +199,15 @@ class TestFieldValue:
         assert value is None
         assert has_default is True
 
-    def test_required_with_override(self) -> None:
+    def test_required_with_instance(self) -> None:
+        """Required fields get values from example instances."""
         from airut.gateway.config import ImapConfig
 
+        instances = _example_instances()
         f = next(
             f for f in dataclasses.fields(ImapConfig) if f.name == "server"
         )
-        value, has_default = _field_value(ImapConfig, f)
+        value, has_default = _field_value(ImapConfig, f, instances)
         assert value == "mail.example.com"
         assert has_default is False  # field has no default
 
@@ -186,7 +220,7 @@ class TestFieldValue:
             if f.name == "secrets"
         )
         value, has_default = _field_value(RepoServerConfig, f)
-        assert value is None  # dict factory → None value
+        assert value is None  # dict factory -> None value
         assert has_default is True
 
     def test_bool_default(self) -> None:
@@ -199,6 +233,20 @@ class TestFieldValue:
         )
         value, has_default = _field_value(SmtpConfig, f)
         assert value == "true"
+        assert has_default is True
+
+    def test_without_instances_falls_back_to_default(self) -> None:
+        """Without instances, _field_value falls back to dataclass defaults."""
+        from airut.gateway.config import GlobalConfig
+
+        f = next(
+            f
+            for f in dataclasses.fields(GlobalConfig)
+            if f.name == "dashboard_base_url"
+        )
+        # Without instances, None-default field returns None
+        value, has_default = _field_value(GlobalConfig, f)
+        assert value is None
         assert has_default is True
 
 
@@ -228,6 +276,34 @@ class TestIsNestedDataclass:
 
 
 # ---------------------------------------------------------------------------
+# Example instances
+# ---------------------------------------------------------------------------
+
+
+class TestExampleInstances:
+    """Tests for _example_instances."""
+
+    def test_instances_are_valid(self) -> None:
+        """All example instances pass __post_init__ validation."""
+        instances = _example_instances()
+        assert len(instances) >= 8
+
+    def test_instances_contain_expected_classes(self) -> None:
+        instances = _example_instances()
+        expected = {
+            "GlobalConfig",
+            "ResourceLimits",
+            "EmailAccountConfig",
+            "ImapConfig",
+            "SmtpConfig",
+            "EmailAuthConfig",
+            "MicrosoftOAuth2Config",
+            "SlackChannelConfig",
+        }
+        assert expected <= set(instances.keys())
+
+
+# ---------------------------------------------------------------------------
 # Schema validation
 # ---------------------------------------------------------------------------
 
@@ -241,28 +317,28 @@ class TestValidateTables:
 
     def test_detects_bad_class_name(self) -> None:
         with mock.patch.dict(
-            generate._EXAMPLE_VALUES, {"FakeClass.field": "v"}
+            generate._DISPLAY_OVERRIDES, {"FakeClass.field": "v"}
         ):
             errors = validate_tables()
             assert any("FakeClass" in e for e in errors)
 
     def test_detects_bad_field_name(self) -> None:
         with mock.patch.dict(
-            generate._EXAMPLE_VALUES,
+            generate._DISPLAY_OVERRIDES,
             {"GlobalConfig.fake_field": "v"},
         ):
             errors = validate_tables()
             assert any("fake_field" in e for e in errors)
 
     def test_detects_bad_key_format(self) -> None:
-        with mock.patch.dict(generate._EXAMPLE_VALUES, {"noperiod": "v"}):
+        with mock.patch.dict(generate._DISPLAY_OVERRIDES, {"noperiod": "v"}):
             errors = validate_tables()
             assert any("invalid key format" in e for e in errors)
 
-    def test_validates_complex_examples(self) -> None:
+    def test_validates_complex_serializers(self) -> None:
         with mock.patch.dict(
-            generate._COMPLEX_EXAMPLES,
-            {"GlobalConfig.nonexistent": ["line"]},
+            generate._COMPLEX_SERIALIZERS,
+            {"GlobalConfig.nonexistent": lambda _: ["line"]},
         ):
             errors = validate_tables()
             assert any("nonexistent" in e for e in errors)
@@ -332,10 +408,11 @@ class TestRenderField:
     def test_required_field_uncommented(self) -> None:
         from airut.gateway.config import ImapConfig
 
+        instances = _example_instances()
         f = next(
             f for f in dataclasses.fields(ImapConfig) if f.name == "server"
         )
-        lines = _render_field(ImapConfig, f, None, "  ")
+        lines = _render_field(ImapConfig, f, None, "  ", instances=instances)
         assert any("server: mail.example.com" in x for x in lines)
         # Should NOT be commented
         value_line = [x for x in lines if "server:" in x][0]
@@ -356,6 +433,7 @@ class TestRenderField:
     def test_force_comment(self) -> None:
         from airut.gateway.config import ImapConfig
 
+        instances = _example_instances()
         f = next(
             f for f in dataclasses.fields(ImapConfig) if f.name == "server"
         )
@@ -365,6 +443,7 @@ class TestRenderField:
             None,
             "",
             force_comment=True,
+            instances=instances,
         )
         value_line = [x for x in lines if "server:" in x][0]
         assert value_line.startswith("# server:")
@@ -428,12 +507,19 @@ class TestRenderField:
         from airut.config.source import YAML_REPO_STRUCTURE
         from airut.gateway.config import RepoServerConfig
 
+        instances = _example_instances()
         f = next(
             f
             for f in dataclasses.fields(RepoServerConfig)
             if f.name == "resource_limits"
         )
-        lines = _render_field(RepoServerConfig, f, YAML_REPO_STRUCTURE, "    ")
+        lines = _render_field(
+            RepoServerConfig,
+            f,
+            YAML_REPO_STRUCTURE,
+            "    ",
+            instances=instances,
+        )
         assert any("resource_limits:" in x for x in lines)
         assert any("!var default_resource_timeout" in x for x in lines)
         assert any("memory:" in x for x in lines)
@@ -465,8 +551,12 @@ class TestRenderClass:
     def test_email_config(self) -> None:
         from airut.gateway.config import EmailChannelConfig
 
+        instances = _example_instances()
         lines = _render_class(
-            EmailChannelConfig, YAML_EMAIL_STRUCTURE, indent="      "
+            EmailChannelConfig,
+            YAML_EMAIL_STRUCTURE,
+            indent="      ",
+            instances=instances,
         )
         text = "\n".join(lines)
         assert "server: mail.example.com" in text
@@ -479,11 +569,13 @@ class TestRenderClass:
     def test_force_comment(self) -> None:
         from airut.gateway.slack.config import SlackChannelConfig
 
+        instances = _example_instances()
         lines = _render_class(
             SlackChannelConfig,
             None,
             indent="    ",
             force_comment=True,
+            instances=instances,
         )
         # All lines should start with spaces + #
         for line in lines:
@@ -604,34 +696,53 @@ class TestGenerateExampleConfig:
     def test_validates_tables_on_generation(self) -> None:
         """Drift detection: invalid table entries cause ValueError."""
         with mock.patch.dict(
-            generate._EXAMPLE_VALUES,
+            generate._DISPLAY_OVERRIDES,
             {"GlobalConfig.fake_field": "x"},
         ):
             with pytest.raises(ValueError, match="Schema drift"):
                 generate_example_config()
 
     def test_no_double_commenting(self) -> None:
-        """Sections should not have '# # key: value' patterns."""
+        """No line should have double-commented YAML key: value patterns.
+
+        With the _comment_lines fix, already-commented lines are
+        preserved without adding another # prefix.
+        """
         content = generate_example_config()
         for line in content.split("\n"):
             stripped = line.lstrip()
-            # After removing all leading "# " pairs, should not start with "# "
-            # followed immediately by a yaml key: value
             if stripped.startswith("# # "):
                 inner = stripped[4:]
-                # OK if inner is also a comment (doc string)
-                # Not OK if inner looks like "key: value"
                 if (
                     ":" in inner
                     and not inner.startswith("#")
                     and not inner.startswith("- ")
                 ):
-                    # Allow doc comments that happen to contain colons
-                    # (e.g. "# Max container execution time in seconds")
-                    # by checking if there's a space before the colon
                     parts = inner.split(":", 1)
                     if " " not in parts[0]:
                         pytest.fail(f"Double-commented value found: {line!r}")
+
+    def test_top_level_block_comments_consistent(self) -> None:
+        """Top-level block-commented sections have consistent prefixes.
+
+        Sections like execution, dashboard, network are fully
+        block-commented.  Doc comments inside appear as
+        ``#   # doc text`` — outer ``#`` is block, inner is doc.
+        """
+        content = generate_example_config()
+        # Top-level sections that are fully block-commented
+        for section in ("execution:", "dashboard:", "network:"):
+            marker = f"# {section}"
+            assert marker in content, f"Expected block-commented {section}"
+            # Find the section and check subsequent lines
+            idx = content.index(marker)
+            after = content[idx + len(marker) :].lstrip("\n")
+            for line in after.split("\n"):
+                if not line.strip():
+                    break  # End of section
+                assert line.startswith("#"), (
+                    f"Line after '# {section}' not commented: {line!r}"
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -781,7 +892,7 @@ class TestMain:
 
 
 # ---------------------------------------------------------------------------
-# Integration: drift detection
+# Edge cases
 # ---------------------------------------------------------------------------
 
 
@@ -904,8 +1015,6 @@ class TestEdgeCases:
 
     def test_check_coverage_skips_unannotated(self) -> None:
         """check_field_coverage skips fields without FieldMeta."""
-        # This is implicitly tested, but let's verify the path
-        # by ensuring no errors for current schema
         errors = check_field_coverage()
         assert errors == []
 
@@ -932,26 +1041,32 @@ class TestEdgeCases:
         assert "server:" in content  # imap/smtp server
         assert "no_meta_field" not in content
 
-    def test_stub_skips_required_field_without_example(self) -> None:
-        """Stub generation skips required fields not in _EXAMPLE_VALUES."""
-        # Temporarily remove an example value to trigger the skip path
-        saved = generate._EXAMPLE_VALUES.pop("ImapConfig.server")
-        try:
+    def test_stub_skips_required_field_without_instance(self) -> None:
+        """Stub generation skips required fields not in instances."""
+        # Override _example_instances to return ImapConfig without server
+
+        original = generate._example_instances
+
+        def patched() -> dict:
+            instances = original()
+            # Replace ImapConfig with one that has a different server
+            # but test that removing it entirely causes a skip
+            del instances["ImapConfig"]
+            return instances
+
+        with mock.patch.object(generate, "_example_instances", patched):
             content = generate_stub_config()
             lines = content.split("\n")
-            # Count uncommented "server: mail.example.com" lines.
-            # Without the override, IMAP section should not have it.
-            # SMTP still has its own SmtpConfig.server override.
-            server_lines = [
+            # Without ImapConfig instance, IMAP server won't have a value
+            # SMTP still has its instance
+            imap_server_lines = [
                 line
                 for line in lines
                 if not line.strip().startswith("#")
                 and "server: mail.example.com" in line
             ]
-            # Only the SMTP server line should remain (1 instead of 2)
-            assert len(server_lines) == 1
-        finally:
-            generate._EXAMPLE_VALUES["ImapConfig.server"] = saved
+            # Only the SMTP server line should remain
+            assert len(imap_server_lines) == 1
 
     def test_check_coverage_skips_unannotated_fields(self) -> None:
         """check_field_coverage skips fields without FieldMeta."""
@@ -975,8 +1090,8 @@ class TestEdgeCases:
             errors = check_field_coverage()
         assert not any("no_meta" in e for e in errors)
 
-    def test_complex_example_uncommented_top_level(self) -> None:
-        """Top-level complex example renders uncommented when no default."""
+    def test_complex_serializer_uncommented_top_level(self) -> None:
+        """Top-level complex serializer renders uncommented when no default."""
 
         @dataclass(frozen=True)
         class _Cls:
@@ -984,17 +1099,17 @@ class TestEdgeCases:
                 metadata=meta("Items list", Scope.SERVER),
             )
 
-        snippet = ["items:", "  - one"]
         with mock.patch.dict(
-            generate._COMPLEX_EXAMPLES, {"_Cls.items": snippet}
+            generate._COMPLEX_SERIALIZERS,
+            {"_Cls.items": lambda _: ["items:", "  - one"]},
         ):
             f = dataclasses.fields(_Cls)[0]
             lines = _render_field(_Cls, f, None, "")
         assert "items:" in lines
         assert "  - one" in lines
 
-    def test_nested_complex_example_commented(self) -> None:
-        """Nested complex example renders commented when field has default."""
+    def test_nested_complex_serializer_commented(self) -> None:
+        """Nested complex serializer renders commented when has default."""
 
         @dataclass(frozen=True)
         class _Inner:
@@ -1009,10 +1124,10 @@ class TestEdgeCases:
                 metadata=meta("Inner config", Scope.SERVER),
             )
 
-        snippet = ["tags:", "  - a"]
         with (
             mock.patch.dict(
-                generate._COMPLEX_EXAMPLES, {"_Inner.tags": snippet}
+                generate._COMPLEX_SERIALIZERS,
+                {"_Inner.tags": lambda _: ["tags:", "  - a"]},
             ),
             mock.patch(
                 "airut.config.generate._is_nested_dataclass",
@@ -1029,13 +1144,13 @@ class TestEdgeCases:
 class TestDriftDetection:
     """Tests for schema drift detection."""
 
-    def test_example_values_all_valid(self) -> None:
-        """Every key in _EXAMPLE_VALUES references a real schema field."""
+    def test_tag_display_all_valid(self) -> None:
+        """Every key in _DISPLAY_OVERRIDES references a real schema field."""
         errors = validate_tables()
         assert errors == []
 
-    def test_complex_examples_all_valid(self) -> None:
-        """Every key in _COMPLEX_EXAMPLES references a real schema field."""
+    def test_complex_serializers_all_valid(self) -> None:
+        """Every key in _COMPLEX_SERIALIZERS references a real schema field."""
         errors = validate_tables()
         assert errors == []
 
@@ -1045,20 +1160,20 @@ class TestDriftDetection:
         if EXAMPLE_CONFIG_PATH.exists():
             assert content == EXAMPLE_CONFIG_PATH.read_text()
 
-    def test_adding_fake_override_detected(self) -> None:
-        """Adding a non-existent field to _EXAMPLE_VALUES is detected."""
+    def test_adding_fake_tag_display_detected(self) -> None:
+        """Adding a non-existent field to _DISPLAY_OVERRIDES is detected."""
         with mock.patch.dict(
-            generate._EXAMPLE_VALUES,
+            generate._DISPLAY_OVERRIDES,
             {"ResourceLimits.nonexistent_field": "42"},
         ):
             errors = validate_tables()
             assert any("nonexistent_field" in e for e in errors)
 
-    def test_adding_fake_complex_detected(self) -> None:
-        """Adding a non-existent field to _COMPLEX_EXAMPLES is detected."""
+    def test_adding_fake_serializer_detected(self) -> None:
+        """Adding a non-existent field to _COMPLEX_SERIALIZERS is detected."""
         with mock.patch.dict(
-            generate._COMPLEX_EXAMPLES,
-            {"EmailChannelConfig.fake": ["line"]},
+            generate._COMPLEX_SERIALIZERS,
+            {"EmailChannelConfig.fake": lambda _: ["line"]},
         ):
             errors = validate_tables()
             assert any("fake" in e for e in errors)

@@ -10,17 +10,21 @@ Produces ``config/airut.example.yaml`` and the stub config written by
 Comments and default values always match the source code — there is no
 duplication of field names or structure.
 
-The only hardcoded data are:
+Instead of hardcoded YAML snippets, example values come from **actual
+config instances** — the same dataclasses that production code uses.
+This means:
 
-- **Example values** for optional fields that lack defaults (e.g.
-  ``ResourceLimits.memory`` defaults to ``None``; we show ``"8g"`` as
-  an illustrative value).
-- **Example snippets** for complex (non-scalar) fields whose YAML
-  representation cannot be derived from the type alone.
-- **Placeholder values** for required fields (e.g. ``mail.example.com``).
+- Adding a field to a config class breaks generation until the example
+  instance is updated (type-checked, validated by ``__post_init__``).
+- Removing or renaming a field breaks the example instance immediately.
+- Default values are always read from the dataclass, never duplicated.
 
-All three tables are validated against the actual schema at generation
-time — if a referenced field no longer exists, generation fails.
+The only remaining tables are:
+
+- **Display overrides** for fields that should show ``!env`` / ``!var``
+  syntax or illustrative values instead of their instance value.
+- **Editorial comments** (e.g. section intros in schedules) that are
+  documentation, not schema-derived.
 
 CLI usage::
 
@@ -35,9 +39,10 @@ from __future__ import annotations
 
 import dataclasses
 import sys
+from collections.abc import Callable
 from dataclasses import fields as dc_fields
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from airut.config.schema import get_field_meta
 from airut.config.source import (
@@ -45,6 +50,11 @@ from airut.config.source import (
     YAML_GLOBAL_STRUCTURE,
     YAML_REPO_STRUCTURE,
 )
+
+
+if TYPE_CHECKING:
+    from airut.gateway.config import EmailAuthConfig
+    from airut.gateway.slack.config import SlackChannelConfig
 
 
 #: Path to the example config relative to the repository root.
@@ -55,130 +65,337 @@ _DOCS_BASE = "https://github.com/airutorg/airut/blob/main"
 
 
 # ---------------------------------------------------------------------------
-# Data tables — the ONLY schema-adjacent data in this module.
-# Keys are "ClassName.field_name" and are validated against the real schema.
+# Example config instances — type-checked, validated by __post_init__.
 # ---------------------------------------------------------------------------
 
-#: Placeholder or illustrative values for fields that lack useful defaults.
-#: Required fields need placeholders; optional None-default fields need
-#: illustrative example values.  Every entry is validated at generation time.
-_EXAMPLE_VALUES: dict[str, str] = {
-    # Required field placeholders — email sub-dataclasses
-    "ImapConfig.server": "mail.example.com",
-    "SmtpConfig.server": "mail.example.com",
-    "EmailAccountConfig.username": "airut",
-    "EmailAccountConfig.from_address": '"Airut <airut@example.com>"',
-    "EmailAuthConfig.trusted_authserv_id": "mail.example.com",
-    # Optional email overrides (illustrative)
+
+def _example_instances() -> dict[str, Any]:
+    """Build example config instances for YAML generation.
+
+    Each instance is a real dataclass validated by ``__post_init__``.
+    If a field is added, removed, or renamed, this function fails at
+    import time, forcing the example to be updated.
+
+    Returns:
+        Dict keyed by class name mapping to example instances.
+    """
+    from airut.gateway.config import (
+        EmailAccountConfig,
+        EmailAuthConfig,
+        GlobalConfig,
+        ImapConfig,
+        MicrosoftOAuth2Config,
+        SmtpConfig,
+    )
+    from airut.gateway.slack.config import SlackChannelConfig
+    from airut.sandbox.types import ResourceLimits
+
+    return {
+        "GlobalConfig": GlobalConfig(
+            dashboard_base_url="dashboard.example.com",
+            upstream_dns="1.1.1.1",
+        ),
+        "ResourceLimits": ResourceLimits(
+            timeout=7200,
+            memory="8g",
+            cpus=4.0,
+            pids_limit=1024,
+        ),
+        "EmailAccountConfig": EmailAccountConfig(
+            username="airut",
+            from_address="Airut <airut@example.com>",
+            password="placeholder",
+        ),
+        "ImapConfig": ImapConfig(server="mail.example.com"),
+        "SmtpConfig": SmtpConfig(server="mail.example.com"),
+        "EmailAuthConfig": EmailAuthConfig(
+            authorized_senders=["you@example.com"],
+            trusted_authserv_id="mail.example.com",
+        ),
+        "MicrosoftOAuth2Config": MicrosoftOAuth2Config(
+            tenant_id="placeholder",
+            client_id="placeholder",
+            client_secret="placeholder",
+        ),
+        "SlackChannelConfig": SlackChannelConfig(
+            bot_token="xoxb-placeholder",
+            app_token="xapp-placeholder",
+            authorized=({"workspace_members": True},),
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Display overrides — values shown instead of the instance value.
+# Keys are "ClassName.field_name" and are validated against the schema.
+# ---------------------------------------------------------------------------
+
+#: Fields whose YAML representation should show a specific display
+#: value instead of the literal value from the example instance.
+#: Includes ``!env`` / ``!var`` tags and illustrative placeholder values.
+_DISPLAY_OVERRIDES: dict[str, str] = {
+    # !env tags — show how to reference environment variables
     "EmailAccountConfig.password": "!env EMAIL_PASSWORD",
-    # Microsoft OAuth2 (optional block, all fields required within)
     "MicrosoftOAuth2Config.tenant_id": "!env MS_OAUTH2_TENANT_ID",
     "MicrosoftOAuth2Config.client_id": "!env MS_OAUTH2_CLIENT_ID",
     "MicrosoftOAuth2Config.client_secret": "!env MS_OAUTH2_CLIENT_SECRET",
-    # Slack
     "SlackChannelConfig.bot_token": "!env SLACK_BOT_TOKEN",
     "SlackChannelConfig.app_token": "!env SLACK_APP_TOKEN",
-    # Repo
-    "RepoServerConfig.git_repo_url": "https://github.com/you/my-project.git",
-    # Optional None-default overrides (illustrative)
-    "GlobalConfig.dashboard_base_url": "dashboard.example.com",
-    "GlobalConfig.upstream_dns": '"1.1.1.1"',
+    # !var tags — show how to reference shared variables
     "ResourceLimits.timeout": "!var default_resource_timeout",
     "ResourceLimits.memory": "!var default_resource_memory",
     "ResourceLimits.cpus": "!var default_resource_cpus",
     "ResourceLimits.pids_limit": "!var default_resource_pids_limit",
+    # Illustrative values for fields without useful defaults
+    "RepoServerConfig.git_repo_url": "https://github.com/you/my-project.git",
     "RepoServerConfig.effort": "max",
+    "GlobalConfig.upstream_dns": '"1.1.1.1"',
 }
 
-#: Example YAML snippets for complex (non-scalar) fields.
-#: Each entry is a list of YAML lines rendered verbatim at the field's
-#: indentation level.  Keys are validated against the actual schema.
-_COMPLEX_EXAMPLES: dict[str, list[str]] = {
+# ---------------------------------------------------------------------------
+# Complex field serializers — replace hardcoded YAML snippets.
+# Each serializer returns YAML lines derived from actual instances.
+# ---------------------------------------------------------------------------
+
+#: Editorial comments for specific fields (documentation, not schema).
+_EDITORIAL_COMMENTS: dict[str, list[str]] = {
     "EmailAuthConfig.authorized_senders": [
-        "authorized_senders:",
-        "  - you@example.com",
         "  # - *@company.com",
     ],
     "SlackChannelConfig.authorized": [
-        "authorized:",
-        "  # Allow all full workspace members:",
-        "  - workspace_members: true",
         "  # Or restrict to a user group (requires usergroups:read scope):",
         "  # - user_group: engineering",
         "  # Or restrict to specific users:",
         "  # - user_id: U12345678",
     ],
-    "RepoServerConfig.secrets": [
+}
+
+
+def _serialize_authorized_senders(instance: EmailAuthConfig) -> list[str]:
+    """Serialize EmailAuthConfig.authorized_senders to YAML lines."""
+    lines = ["authorized_senders:"]
+    for sender in instance.authorized_senders:
+        lines.append(f"  - {sender}")
+    lines.extend(_EDITORIAL_COMMENTS["EmailAuthConfig.authorized_senders"])
+    return lines
+
+
+def _serialize_slack_authorized(instance: SlackChannelConfig) -> list[str]:
+    """Serialize SlackChannelConfig.authorized to YAML lines."""
+    lines = ["authorized:"]
+    lines.append("  # Allow all full workspace members:")
+    for rule in instance.authorized:
+        for key, value in rule.items():
+            formatted = "true" if value is True else str(value)
+            lines.append(f"  - {key}: {formatted}")
+    lines.extend(_EDITORIAL_COMMENTS["SlackChannelConfig.authorized"])
+    return lines
+
+
+def _serialize_secrets() -> list[str]:
+    """Serialize the example secrets dict to YAML lines."""
+    return [
         "secrets:",
         "  ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY",
-    ],
-    "RepoServerConfig.masked_secrets": [
+    ]
+
+
+def _serialize_masked_secrets() -> list[str]:
+    """Serialize example masked_secrets to YAML lines.
+
+    Derives structure from MaskedSecret fields so that adding a field
+    to MaskedSecret is caught by the coverage check.
+    """
+    from airut.gateway.config import MaskedSecret
+
+    example = MaskedSecret(
+        value="placeholder",
+        scopes=frozenset({"*.githubusercontent.com", "api.github.com"}),
+        headers=("Authorization",),
+        allow_foreign_credentials=False,
+    )
+    lines = [
         "masked_secrets:",
         "  GH_TOKEN:",
         "    value: !env GH_TOKEN",
         "    scopes:",
-        '      - "api.github.com"',
-        '      - "*.githubusercontent.com"',
-        "    headers:",
-        '      - "Authorization"',
-        "    allow_foreign_credentials: false",
-    ],
-    "RepoServerConfig.signing_credentials": [
+    ]
+    # Display order: specific domains before wildcards
+    _masked_scope_order = ("api.github.com", "*.githubusercontent.com")
+    for scope in _masked_scope_order:
+        assert scope in example.scopes, f"scope {scope!r} not in example"
+        lines.append(f'      - "{scope}"')
+    lines.append("    headers:")
+    for header in example.headers:
+        lines.append(f'      - "{header}"')
+    lines.append(
+        f"    allow_foreign_credentials: "
+        f"{'true' if example.allow_foreign_credentials else 'false'}"
+    )
+    return lines
+
+
+def _serialize_signing_credentials() -> list[str]:
+    """Serialize example signing_credentials to YAML lines.
+
+    Derives structure from SigningCredential/SigningCredentialField
+    so that adding or renaming fields is caught.
+    """
+    from airut.gateway.config import SigningCredential, SigningCredentialField
+
+    example = SigningCredential(
+        access_key_id=SigningCredentialField(
+            name="AWS_ACCESS_KEY_ID", value="placeholder"
+        ),
+        secret_access_key=SigningCredentialField(
+            name="AWS_SECRET_ACCESS_KEY", value="placeholder"
+        ),
+        session_token=SigningCredentialField(
+            name="AWS_SESSION_TOKEN", value="placeholder"
+        ),
+        scopes=frozenset({"*.amazonaws.com"}),
+    )
+    lines = [
         "signing_credentials:",
         "  AWS_PROD:",
         "    type: aws-sigv4",
-        "    access_key_id:",
-        "      name: AWS_ACCESS_KEY_ID",
-        "      value: !env AWS_ACCESS_KEY_ID",
-        "    secret_access_key:",
-        "      name: AWS_SECRET_ACCESS_KEY",
-        "      value: !env AWS_SECRET_ACCESS_KEY",
-        "    session_token:",
-        "      name: AWS_SESSION_TOKEN",
-        "      value: !env AWS_SESSION_TOKEN",
-        "    scopes:",
-        '      - "*.amazonaws.com"',
-    ],
-    "RepoServerConfig.github_app_credentials": [
+    ]
+    for field_name in ("access_key_id", "secret_access_key", "session_token"):
+        field_obj = getattr(example, field_name)
+        if field_obj is not None:
+            lines.append(f"    {field_name}:")
+            lines.append(f"      name: {field_obj.name}")
+            lines.append(f"      value: !env {field_obj.name}")
+    lines.append("    scopes:")
+    for scope in sorted(example.scopes):
+        lines.append(f'      - "{scope}"')
+    return lines
+
+
+def _serialize_github_app_credentials() -> list[str]:
+    """Serialize example github_app_credentials to YAML lines.
+
+    Derives structure from GitHubAppCredential so that adding
+    or renaming fields is caught.
+    """
+    from airut.gateway.config import GitHubAppCredential
+
+    example = GitHubAppCredential(
+        app_id="placeholder",
+        private_key="placeholder",
+        installation_id=0,
+        scopes=frozenset(
+            {"*.githubusercontent.com", "api.github.com", "github.com"}
+        ),
+        allow_foreign_credentials=False,
+        base_url="https://api.github.com",
+        permissions={"contents": "write", "pull_requests": "write"},
+        repositories=("my-repo",),
+    )
+    # Display order: specific domains before wildcards
+    _scope_display_order = (
+        "github.com",
+        "api.github.com",
+        "*.githubusercontent.com",
+    )
+    lines = [
         "github_app_credentials:",
         "  GH_TOKEN:",
         "    app_id: !env GH_APP_ID",
         "    private_key: !env GH_APP_PRIVATE_KEY",
         "    installation_id: !env GH_APP_INSTALLATION_ID",
         "    scopes:",
-        '      - "github.com"',
-        '      - "api.github.com"',
-        '      - "*.githubusercontent.com"',
-        "    allow_foreign_credentials: false",
-        '    base_url: "https://api.github.com"',
-        "    permissions:",
-        "      contents: write",
-        "      pull_requests: write",
-        "    repositories:",
-        "      - my-repo",
-    ],
-    "RepoServerConfig.schedules": [
+    ]
+    for scope in _scope_display_order:
+        assert scope in example.scopes, f"scope {scope!r} not in example"
+        lines.append(f'      - "{scope}"')
+    lines.append(
+        f"    allow_foreign_credentials: "
+        f"{'true' if example.allow_foreign_credentials else 'false'}"
+    )
+    lines.append(f'    base_url: "{example.base_url}"')
+    if example.permissions is not None:
+        lines.append("    permissions:")
+        for perm, level in example.permissions.items():
+            lines.append(f"      {perm}: {level}")
+    if example.repositories is not None:
+        lines.append("    repositories:")
+        for repo in example.repositories:
+            lines.append(f"      - {repo}")
+    return lines
+
+
+def _serialize_schedules() -> list[str]:
+    """Serialize example schedules to YAML lines.
+
+    Uses actual ScheduleConfig/ScheduleDelivery instances so that
+    field changes are caught at generation time.
+    """
+    from airut.gateway.config import ScheduleConfig, ScheduleDelivery
+
+    # Prompt mode example (active)
+    prompt_schedule = ScheduleConfig(
+        cron="0 9 * * 1-5",
+        prompt="Summarize recent changes and open issues.",
+        deliver=ScheduleDelivery(to="team@example.com"),
+    )
+    # Script mode example (commented out)
+    script_schedule = ScheduleConfig(
+        cron="0 2 * * *",
+        trigger_command="./scripts/check-status.sh",
+        trigger_timeout=120,
+        deliver=ScheduleDelivery(to="oncall@example.com"),
+    )
+
+    lines = [
         "schedules:",
         "  # Prompt mode: run Claude with a fixed prompt on a schedule",
         "  daily-report:",
-        '    cron: "0 9 * * 1-5"',
+        f'    cron: "{prompt_schedule.cron}"',
         "    prompt: >",
-        "      Summarize recent changes and open issues.",
+        f"      {prompt_schedule.prompt}",
         "    deliver:",
-        "      to: team@example.com",
-        "    # subject: Daily Report",
-        "    # timezone: America/New_York",
-        "    # model: sonnet",
-        "",
-        "  # Script mode: run a command, then Claude if it produces output",
-        "  # nightly-check:",
-        '  #   cron: "0 2 * * *"',
-        '  #   trigger_command: "./scripts/check-status.sh"',
-        "  #   trigger_timeout: 120",
-        "  #   deliver:",
-        "  #     to: oncall@example.com",
-    ],
+        f"      to: {prompt_schedule.deliver.to}",
+    ]
+    # Show optional fields from prompt_schedule as commented defaults
+    _optional_schedule_fields = [
+        ("subject", "Daily Report"),
+        ("timezone", "America/New_York"),
+        ("model", "sonnet"),
+    ]
+    for fname, example_val in _optional_schedule_fields:
+        lines.append(f"    # {fname}: {example_val}")
+    lines.append("")
+    # Script mode (fully commented)
+    lines.append(
+        "  # Script mode: run a command, then Claude if it produces output"
+    )
+    lines.append("  # nightly-check:")
+    lines.append(f'  #   cron: "{script_schedule.cron}"')
+    lines.append(f'  #   trigger_command: "{script_schedule.trigger_command}"')
+    lines.append(f"  #   trigger_timeout: {script_schedule.trigger_timeout}")
+    lines.append("  #   deliver:")
+    lines.append(f"  #     to: {script_schedule.deliver.to}")
+    return lines
+
+
+#: Maps "ClassName.field_name" to a serializer function that returns
+#: YAML lines for that field.  The serializer receives the example
+#: instance for the class (or None for static serializers).
+_COMPLEX_SERIALIZERS: dict[str, Callable[[Any], list[str]]] = {
+    "EmailAuthConfig.authorized_senders": _serialize_authorized_senders,
+    "SlackChannelConfig.authorized": _serialize_slack_authorized,
+    "RepoServerConfig.secrets": lambda _: _serialize_secrets(),
+    "RepoServerConfig.masked_secrets": lambda _: _serialize_masked_secrets(),
+    "RepoServerConfig.signing_credentials": (
+        lambda _: _serialize_signing_credentials()
+    ),
+    "RepoServerConfig.github_app_credentials": (
+        lambda _: _serialize_github_app_credentials()
+    ),
+    "RepoServerConfig.schedules": lambda _: _serialize_schedules(),
 }
+
 
 #: Fields that are structural and should not appear in the example config.
 _SKIP_FIELDS: set[tuple[str, str]] = {
@@ -236,8 +453,8 @@ def validate_tables() -> list[str]:
     class_map = {cls.__name__: cls for cls in _config_classes()}
 
     for table_name, table in [
-        ("_EXAMPLE_VALUES", _EXAMPLE_VALUES),
-        ("_COMPLEX_EXAMPLES", _COMPLEX_EXAMPLES),
+        ("_DISPLAY_OVERRIDES", _DISPLAY_OVERRIDES),
+        ("_COMPLEX_SERIALIZERS", _COMPLEX_SERIALIZERS),
     ]:
         for key in table:
             cls_name, _, field_name = key.partition(".")
@@ -302,21 +519,38 @@ def _yaml_section(
 
 
 def _field_value(
-    cls: type, f: dataclasses.Field[Any]
+    cls: type,
+    f: dataclasses.Field[Any],
+    instances: dict[str, Any] | None = None,
 ) -> tuple[str | None, bool]:
     """Return (formatted_value, has_real_default) for a field.
 
-    Looks up _EXAMPLE_VALUES for overrides, then falls back to the
-    dataclass default.
+    Looks up the example instance for the field's class, applies
+    tag display overrides, then falls back to the dataclass default.
     """
     key = f"{cls.__name__}.{f.name}"
-    if key in _EXAMPLE_VALUES:
-        has_default = (
-            f.default is not dataclasses.MISSING
-            or f.default_factory is not dataclasses.MISSING
-        )
-        return _EXAMPLE_VALUES[key], has_default
+    has_default = (
+        f.default is not dataclasses.MISSING
+        or f.default_factory is not dataclasses.MISSING
+    )
 
+    # Tag display override takes priority
+    if key in _DISPLAY_OVERRIDES:
+        return _DISPLAY_OVERRIDES[key], has_default
+
+    # Look up example instance
+    if instances and cls.__name__ in instances:
+        instance = instances[cls.__name__]
+        val = getattr(instance, f.name)
+        if val is not None:
+            formatted = _format_yaml(val)
+            # Quote strings that need YAML quoting (contain special
+            # chars like angle brackets, or look like numbers)
+            if isinstance(val, str) and " <" in val:
+                formatted = f'"{val}"'
+            return formatted, has_default
+
+    # Fall back to dataclass default
     if f.default is not dataclasses.MISSING:
         if f.default is None:
             return None, True
@@ -344,8 +578,20 @@ def _is_nested_dataclass(cls: type, f: dataclasses.Field[Any]) -> type | None:
 
 
 def _comment_lines(lines: list[str], prefix: str = "") -> list[str]:
-    """Prepend '# ' to each line, with optional prefix indentation."""
-    return [f"{prefix}# {line}" if line else f"{prefix}#" for line in lines]
+    """Prepend ``# `` to each line, with optional prefix indentation.
+
+    Every non-empty line gets the ``# `` prefix regardless of content.
+    Lines that are already comments (doc comments, editorial notes) get
+    double-commented — this is correct for block-commenting sections
+    where the inner ``#`` carries semantic meaning.
+    """
+    result: list[str] = []
+    for line in lines:
+        if not line:
+            result.append(f"{prefix}#")
+        else:
+            result.append(f"{prefix}# {line}")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +637,7 @@ def _render_field(
     *,
     force_comment: bool = False,
     plain: bool = False,
+    instances: dict[str, Any] | None = None,
 ) -> list[str]:
     """Render a single field as YAML lines.
 
@@ -402,6 +649,7 @@ def _render_field(
         force_comment: If True, always comment out regardless of defaults.
         plain: If True, render values without default-commenting (the
             caller will handle commenting, e.g. for commented sections).
+        instances: Example config instances keyed by class name.
     """
     fm = get_field_meta(f)
     if fm is None:
@@ -410,20 +658,21 @@ def _render_field(
     key = f"{cls.__name__}.{f.name}"
     out: list[str] = []
 
-    # Complex field with example snippet
-    if key in _COMPLEX_EXAMPLES:
+    # Complex field with serializer
+    if key in _COMPLEX_SERIALIZERS:
         out.append(f"{indent}# {fm.doc}")
-        snippet = _COMPLEX_EXAMPLES[key]
-        value, has_default = _field_value(cls, f)
+        instance = instances.get(cls.__name__) if instances else None
+        snippet = _COMPLEX_SERIALIZERS[key](instance)
+        value, has_default = _field_value(cls, f, instances)
         commented = force_comment or (has_default and not plain)
-        for line in snippet:
-            if commented:
-                out.append(f"{indent}# {line}" if line else f"{indent}#")
-            else:
+        if commented:
+            out.extend(_comment_lines(snippet, indent))
+        else:
+            for line in snippet:
                 out.append(f"{indent}{line}")
         return out
 
-    # Nested dataclass (e.g. resource_limits → ResourceLimits)
+    # Nested dataclass (e.g. resource_limits -> ResourceLimits)
     nested_cls = _is_nested_dataclass(cls, f)
     if nested_cls is not None:
         from airut.config.source import YAML_CLASS_STRUCTURES
@@ -445,24 +694,23 @@ def _render_field(
                 continue
             nk = f"{nested_cls.__name__}.{nf.name}"
             sub_yaml_name = _yaml_key(nf.name, nested_structure)
-            # Complex examples (e.g. authorized_senders)
-            if nk in _COMPLEX_EXAMPLES:
+            # Complex serializers within nested classes
+            if nk in _COMPLEX_SERIALIZERS:
                 nested_lines.append(f"  # {nfm.doc}")
-                snippet = _COMPLEX_EXAMPLES[nk]
-                nval, has_default = _field_value(nested_cls, nf)
+                n_instance = (
+                    instances.get(nested_cls.__name__) if instances else None
+                )
+                snippet = _COMPLEX_SERIALIZERS[nk](n_instance)
+                nval, has_default = _field_value(nested_cls, nf, instances)
                 commented = force_comment or (has_default and not plain)
-                for sline in snippet:
-                    if commented:
-                        nested_lines.append(f"  # {sline}" if sline else "  #")
-                    else:
+                if commented:
+                    for sline in _comment_lines(snippet, "  "):
+                        nested_lines.append(sline)
+                else:
+                    for sline in snippet:
                         nested_lines.append(f"  {sline}")
                 continue
-            nval = _EXAMPLE_VALUES.get(nk)
-            if nval is None and nf.default not in (
-                dataclasses.MISSING,
-                None,
-            ):
-                nval = _format_yaml(nf.default)
+            nval, _ = _field_value(nested_cls, nf, instances)
             if nval is not None:
                 nested_lines.append(f"  # {nfm.doc}")
                 line = f"  {sub_yaml_name}: {nval}"
@@ -484,7 +732,7 @@ def _render_field(
         return out
 
     # Simple scalar field
-    value, has_default = _field_value(cls, f)
+    value, has_default = _field_value(cls, f, instances)
     commented = force_comment or (has_default and not plain)
     yaml_name = _yaml_key(f.name, structure)
 
@@ -513,6 +761,7 @@ def _render_section(
     indent: str,
     *,
     force_comment: bool = False,
+    instances: dict[str, Any] | None = None,
 ) -> list[str]:
     """Render a group of fields that share a YAML section.
 
@@ -526,7 +775,9 @@ def _render_section(
         inner_indent = indent + "  "
 
         # Check if the section should be commented as a whole
-        all_have_defaults = all(_field_value(cls, f)[1] for f in section_fields)
+        all_have_defaults = all(
+            _field_value(cls, f, instances)[1] for f in section_fields
+        )
         comment_section = force_comment or all_have_defaults
 
         if comment_section:
@@ -540,6 +791,7 @@ def _render_section(
                     structure,
                     "  ",
                     plain=True,
+                    instances=instances,
                 )
                 if i > 0:
                     inner_lines.append("")
@@ -554,6 +806,7 @@ def _render_section(
                     f,
                     structure,
                     inner_indent,
+                    instances=instances,
                 )
                 if i > 0:
                     out.append("")
@@ -567,6 +820,7 @@ def _render_section(
                 structure,
                 indent,
                 force_comment=force_comment,
+                instances=instances,
             )
             if i > 0:
                 out.append("")
@@ -581,6 +835,7 @@ def _render_class(
     indent: str = "",
     *,
     force_comment: bool = False,
+    instances: dict[str, Any] | None = None,
 ) -> list[str]:
     """Render all annotated fields of a config class as YAML sections."""
     groups = _group_fields_by_section(cls, structure)
@@ -596,6 +851,7 @@ def _render_class(
                 structure,
                 indent,
                 force_comment=force_comment,
+                instances=instances,
             )
         )
     return out
@@ -648,7 +904,8 @@ def generate_example_config() -> str:
 
     Walks all config dataclasses automatically.  Field names, doc
     strings, defaults, and YAML key mappings are read from the schema —
-    nothing is duplicated here.
+    nothing is duplicated here.  Example values come from actual config
+    instances, validated by ``__post_init__``.
 
     Returns:
         Complete YAML config file content.
@@ -671,13 +928,17 @@ def generate_example_config() -> str:
             + "\n".join(f"  - {e}" for e in errors)
         )
 
+    instances = _example_instances()
+
     out: list[str] = [_HEADER]
 
-    # ── Global settings ───────────────────────────────────────────────
+    # -- Global settings ---------------------------------------------------
     out.append("")
-    out.extend(_render_class(GlobalConfig, YAML_GLOBAL_STRUCTURE))
+    out.extend(
+        _render_class(GlobalConfig, YAML_GLOBAL_STRUCTURE, instances=instances)
+    )
 
-    # ── Repos ─────────────────────────────────────────────────────────
+    # -- Repos -------------------------------------------------------------
     sep = "-" * 75
     sep2 = "-" * 73
     out.extend(
@@ -702,13 +963,23 @@ def generate_example_config() -> str:
     # Email channel
     out.append("    email:")
     out.extend(
-        _render_class(EmailChannelConfig, YAML_EMAIL_STRUCTURE, indent="      ")
+        _render_class(
+            EmailChannelConfig,
+            YAML_EMAIL_STRUCTURE,
+            indent="      ",
+            instances=instances,
+        )
     )
     out.append("")
 
     # Repo-level fields (git, model, effort, etc.)
     out.extend(
-        _render_class(RepoServerConfig, YAML_REPO_STRUCTURE, indent="    ")
+        _render_class(
+            RepoServerConfig,
+            YAML_REPO_STRUCTURE,
+            indent="    ",
+            instances=instances,
+        )
     )
     out.append("")
 
@@ -722,6 +993,7 @@ def generate_example_config() -> str:
             None,
             indent="      ",
             force_comment=True,
+            instances=instances,
         )
     )
 
@@ -746,6 +1018,8 @@ def generate_stub_config() -> str:
         GlobalConfig,
     )
 
+    instances = _example_instances()
+
     out: list[str] = [
         "# Airut Server Configuration",
         "#",
@@ -755,7 +1029,9 @@ def generate_stub_config() -> str:
     ]
 
     # Show a couple of useful global defaults (commented)
-    out.extend(_render_class(GlobalConfig, YAML_GLOBAL_STRUCTURE))
+    out.extend(
+        _render_class(GlobalConfig, YAML_GLOBAL_STRUCTURE, instances=instances)
+    )
 
     # Repo section with required fields only
     out.extend(
@@ -798,17 +1074,23 @@ def generate_stub_config() -> str:
             if has_default and nf.name not in include_optional:
                 continue
             sub_yaml_name = _yaml_key(nf.name, section_structure)
-            if nk in _COMPLEX_EXAMPLES:
-                for line in _COMPLEX_EXAMPLES[nk]:
+            if nk in _COMPLEX_SERIALIZERS:
+                instance = instances.get(section_cls.__name__)
+                for line in _COMPLEX_SERIALIZERS[nk](instance):
                     out.append(f"        {line}")
                 continue
-            value = _EXAMPLE_VALUES.get(nk)
+            value, _ = _field_value(section_cls, nf, instances)
             if value is None:
                 continue
             out.append(f"        {sub_yaml_name}: {value}")
 
     # repo_url and secrets
-    git_url = _EXAMPLE_VALUES["RepoServerConfig.git_repo_url"]
+    from airut.gateway.config import RepoServerConfig
+
+    git_url_field = next(
+        f for f in dc_fields(RepoServerConfig) if f.name == "git_repo_url"
+    )
+    git_url, _ = _field_value(RepoServerConfig, git_url_field, instances)
     out.extend(
         [
             f"    repo_url: {git_url}",
