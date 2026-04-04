@@ -702,6 +702,15 @@ This avoids blocking worker threads on conversation locks. With explicit
 queuing, worker slots are only consumed during actual execution, not while
 waiting for a conversation to become free.
 
+## Scheduler
+
+The `Scheduler` is a service-level component (not a channel adapter) that
+manages periodic task execution. It maintains resolved schedules per repo,
+dispatches due tasks to the shared `ThreadPoolExecutor`, and supports live
+config reload via `rebuild_repo()` / `remove_repo()`.
+
+See [periodic-tasks.md](periodic-tasks.md) for the full specification.
+
 ## Future Enhancements
 
 None currently planned. Previous items (rich HTML email, task stop/cancel) have

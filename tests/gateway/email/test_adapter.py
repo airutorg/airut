@@ -921,3 +921,45 @@ class TestFromConfig:
         mock_listener.assert_called_once_with(config, repo_id="test")
         assert adapter.listener is mock_listener.return_value
         assert adapter.responder is mock_resp.return_value
+
+
+class TestSendNewMessage:
+    """Test send_new_message for scheduled task delivery."""
+
+    def test_basic_send(self) -> None:
+        adapter, _, _, responder = _make_adapter()
+        adapter.send_new_message(
+            to="user@example.com",
+            subject="[ID:conv1] daily-report",
+            body="Task results",
+            conversation_id="conv1",
+            attachments=[],
+        )
+
+        responder.send_reply.assert_called_once()
+        call_kw = responder.send_reply.call_args[1]
+        assert call_kw["to"] == "user@example.com"
+        assert call_kw["subject"] == "[ID:conv1] daily-report"
+        assert "Task results" in call_kw["body"]
+        # No in_reply_to — this is a new conversation
+        assert call_kw.get("in_reply_to") is None
+        # Message-ID includes conversation ID
+        assert "conv1" in call_kw["message_id"]
+        assert call_kw["message_id"].startswith("<airut.")
+        # Empty attachments → None
+        assert call_kw["attachments"] is None
+
+    def test_send_with_attachments(self) -> None:
+        adapter, _, _, responder = _make_adapter()
+        attachments = [("report.txt", b"data")]
+
+        adapter.send_new_message(
+            to="user@example.com",
+            subject="test",
+            body="body",
+            conversation_id="conv2",
+            attachments=attachments,
+        )
+
+        call_kw = responder.send_reply.call_args[1]
+        assert call_kw["attachments"] == [("report.txt", b"data")]

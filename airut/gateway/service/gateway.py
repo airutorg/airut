@@ -65,6 +65,7 @@ from airut.gateway.config import (
     get_config_path,
 )
 from airut.gateway.dotenv_loader import reset_dotenv_state
+from airut.gateway.scheduler.service import Scheduler
 from airut.gateway.service.adapter_factory import create_adapters
 from airut.gateway.service.message_processing import (
     process_message,
@@ -261,6 +262,9 @@ class GatewayService:
         self.claude_binary_cache: ClaudeBinaryCache | None = ClaudeBinaryCache(
             binary_cache_dir,
         )
+
+        # Scheduler (initialized after repo handlers, started during boot)
+        self._scheduler: Scheduler | None = None
 
         # Initialize per-repo handlers (failures are recorded, not raised)
         self.repo_handlers: dict[str, RepoHandler] = {}
@@ -524,6 +528,10 @@ class GatewayService:
                 ", ".join(r.repo_id for r in failed_repos),
             )
 
+        # Start scheduler after repos are live
+        self._scheduler = Scheduler(self)
+        self._scheduler.start()
+
         # Phase: ready
         boot = self._boot_store.get().value
         self._boot_store.update(
@@ -590,6 +598,10 @@ class GatewayService:
         # Stop config watcher before listeners
         if self._watcher:
             self._watcher.stop()
+
+        # Stop scheduler before executor pool shutdown
+        if self._scheduler:
+            self._scheduler.stop()
 
         # Shutdown sandbox
         self.sandbox.shutdown()
@@ -926,6 +938,8 @@ class GatewayService:
                 channels=_build_channel_infos(repo_config),
                 storage_dir=str(repo_config.storage_dir),
             )
+            if self._scheduler:
+                self._scheduler.rebuild_repo(repo_id)
             self._update_repos_store_entry(repo_id, repo_state)
             logger.info("Repo '%s': added and started", repo_id)
         except Exception as e:
@@ -947,6 +961,10 @@ class GatewayService:
         Stops listeners immediately to prevent new messages, but keeps
         the handler until active tasks drain.
         """
+        # Remove schedules immediately regardless of deferral
+        if self._scheduler:
+            self._scheduler.remove_repo(repo_id)
+
         handler = self.repo_handlers.get(repo_id)
         if self.tracker.has_active_tasks_for_repo(repo_id):
             if handler:
@@ -991,6 +1009,8 @@ class GatewayService:
                 )
 
             handler.start_listener()
+            if self._scheduler:
+                self._scheduler.rebuild_repo(repo_id)
             self._set_repo_status(repo_id, RepoStatus.LIVE)
             logger.info("Repo '%s': reload complete", repo_id)
         except Exception:

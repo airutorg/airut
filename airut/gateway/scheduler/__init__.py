@@ -5,13 +5,15 @@
 
 """Scheduler package for periodic cron-triggered tasks.
 
-Provides a built-in cron expression parser for scheduling periodic tasks.
+Provides a built-in cron expression parser and a scheduler service
+that dispatches periodic tasks to the shared executor pool.
 """
 
 from airut.gateway.scheduler.cron import CronExpression
+from airut.gateway.scheduler.service import Scheduler
 
 
 __all__ = [
-    # cron
     "CronExpression",
+    "Scheduler",
 ]

@@ -157,6 +157,26 @@ _COMPLEX_EXAMPLES: dict[str, list[str]] = {
         "    repositories:",
         "      - my-repo",
     ],
+    "RepoServerConfig.schedules": [
+        "schedules:",
+        "  # Prompt mode: run Claude with a fixed prompt on a schedule",
+        "  daily-report:",
+        '    cron: "0 9 * * 1-5"',
+        "    prompt: >",
+        "      Summarize recent changes and open issues.",
+        "    deliver:",
+        "      to: team@example.com",
+        "    # timezone: America/New_York",
+        "    # model: sonnet",
+        "",
+        "  # Script mode: run a command, then Claude if it produces output",
+        "  # nightly-check:",
+        '  #   cron: "0 2 * * *"',
+        '  #   trigger_command: "./scripts/check-status.sh"',
+        "  #   trigger_timeout: 120",
+        "  #   deliver:",
+        "  #     to: oncall@example.com",
+    ],
 }
 
 #: Fields that are structural and should not appear in the example config.

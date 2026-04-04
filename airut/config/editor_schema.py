@@ -29,6 +29,7 @@ MISSING = dataclasses.MISSING
 
 FIELD_OVERRIDES: dict[str, dict[str, Any]] = {
     "GitHubAppCredential.private_key": {"multiline": True},
+    "ScheduleConfig.prompt": {"multiline": True},
 }
 
 TAGGED_UNION_RULES: dict[str, list[tuple[str, str, str]]] = {

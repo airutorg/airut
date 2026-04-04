@@ -254,6 +254,31 @@ class TestCommandTaskExecute:
         assert "hello" in cmd
         assert "world" in cmd
 
+    async def test_no_entrypoint_override(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """execute() does not override the image entrypoint.
+
+        The correct entrypoint (agent or passthrough) is baked into the
+        image at build time.  CommandTask must NOT pass an entrypoint
+        override to run_container.
+        """
+        task = _make_command_task(tmp_path)
+
+        calls: list[dict] = []
+
+        async def capture_rc(**kwargs):
+            calls.append(kwargs)
+            return await create_mock_run_container(returncode=0)(**kwargs)
+
+        monkeypatch.setattr("airut.sandbox.task.run_container", capture_rc)
+
+        await task.execute(["./check.sh"])
+
+        assert "entrypoint" not in calls[0]
+
     async def test_unexpected_error_wrapped(
         self,
         tmp_path: Path,

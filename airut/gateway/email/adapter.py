@@ -499,6 +499,39 @@ class EmailChannelAdapter(ChannelAdapter):
         except SMTPSendError as e:
             logger.warning("Failed to send rejection reply (non-fatal): %s", e)
 
+    def send_new_message(
+        self,
+        to: str,
+        subject: str,
+        body: str,
+        conversation_id: str,
+        attachments: list[tuple[str, bytes]],
+    ) -> None:
+        """Send a new (non-reply) email and register for reply routing.
+
+        Used by scheduled tasks to deliver results. The Message-ID embeds
+        the conversation ID so replies route back through the normal
+        interactive flow.
+
+        Args:
+            to: Recipient email address.
+            subject: Email subject line.
+            body: Markdown-formatted body text.
+            conversation_id: Conversation ID for Message-ID encoding.
+            attachments: List of (filename, content) pairs.
+        """
+        outgoing_message_id = generate_message_id(
+            conversation_id, self._config.account.from_address
+        )
+
+        self._responder.send_reply(
+            to=to,
+            subject=subject,
+            body=body,
+            message_id=outgoing_message_id,
+            attachments=attachments if attachments else None,
+        )
+
     def create_plan_streamer(
         self, parsed: ParsedMessage
     ) -> PlanStreamer | None:

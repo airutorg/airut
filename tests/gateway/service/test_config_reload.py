@@ -505,6 +505,33 @@ class TestAddRemoveRepo:
 
         assert "new-repo" in svc.repo_handlers
 
+    def test_add_repo_calls_scheduler_rebuild(self, tmp_path: Path) -> None:
+        svc = _make_service(tmp_path)
+        svc._scheduler = MagicMock()
+        new_repo = _make_email_config(repo_id="new-repo")
+
+        with (
+            patch(
+                "airut.gateway.service.repo_handler.create_adapters"
+            ) as mock_create,
+            patch("airut.gateway.service.repo_handler.ConversationManager"),
+        ):
+            mock_create.return_value = {"email": MagicMock()}
+            svc._add_repo("new-repo", new_repo)
+
+        svc._scheduler.rebuild_repo.assert_called_once_with("new-repo")
+
+    def test_remove_repo_calls_scheduler_remove(self, tmp_path: Path) -> None:
+        svc = _make_service(tmp_path)
+        svc._scheduler = MagicMock()
+        with patch.object(
+            TaskTracker,
+            "has_active_tasks_for_repo",
+            return_value=False,
+        ):
+            svc._remove_repo("test")
+        svc._scheduler.remove_repo.assert_called_once_with("test")
+
     def test_remove_idle_repo(self, tmp_path: Path) -> None:
         svc = _make_service(tmp_path)
         with patch.object(
@@ -870,6 +897,19 @@ class TestApplySingleRepoReload:
             svc._apply_single_repo_reload("test", old_config)
 
         mock_cm.assert_called_once()
+
+    def test_reload_calls_scheduler_rebuild(self, tmp_path: Path) -> None:
+        """Successful reload calls scheduler.rebuild_repo()."""
+        svc = _make_service(tmp_path)
+        svc._scheduler = MagicMock()
+
+        with patch(
+            "airut.gateway.service.gateway.create_adapters",
+            return_value={"email": MagicMock()},
+        ):
+            svc._apply_single_repo_reload("test")
+
+        svc._scheduler.rebuild_repo.assert_called_once_with("test")
 
     def test_reload_failure_triggers_rollback(self, tmp_path: Path) -> None:
         """Failed reload rolls back to old config."""

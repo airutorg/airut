@@ -20,6 +20,7 @@ operate simultaneously for the same repository.
   - [Storage Structure](#storage-structure)
   - [Multi-Repository Architecture](#multi-repository-architecture)
   - [Configuration](#configuration)
+  - [Scheduled Tasks](#scheduled-tasks)
 - [Key Design Decisions](#key-design-decisions)
   - [Channel Interfaces](#channel-interfaces)
   - [Container Isolation](#container-isolation)
@@ -420,6 +421,8 @@ All per-repo configuration lives in the server config
   github_app_credentials) — all auto-injected into the container as environment
   variables by their key name
 - Concurrency limits and dashboard settings
+- Scheduled tasks (cron expressions, prompts/triggers, delivery targets) — see
+  [periodic-tasks.md](periodic-tasks.md)
 
 **Repository-side files** (checked into the target repo under `.airut/`):
 
@@ -429,6 +432,24 @@ All per-repo configuration lives in the server config
   task start)
 
 See [spec/repo-config.md](../spec/repo-config.md) for the full schema.
+
+### Scheduled Tasks
+
+In addition to interactive messages from channels, Airut can run tasks on a cron
+schedule. The **Scheduler** is a service-level component (separate from channel
+adapters) that evaluates cron expressions, dispatches due tasks to the shared
+worker pool, and delivers results via email. It reuses the same sandbox pipeline
+— container images, mounts, network sandbox, and secrets — as interactive tasks.
+
+There are two modes: **prompt mode** runs Claude with a fixed prompt on every
+fire, and **script mode** runs a command first, only invoking Claude when there
+is output to analyze or a failure to investigate. Recipients can reply to the
+delivery email to continue the conversation through the normal channel flow.
+
+Schedules are defined per-repo in the server config under
+`repos.<repo_id>.schedules`. See [periodic-tasks.md](periodic-tasks.md) for the
+full user guide and [spec/periodic-tasks.md](../spec/periodic-tasks.md) for the
+implementation specification.
 
 ## Key Design Decisions
 
@@ -485,6 +506,7 @@ runs Claude Code with `--dangerously-skip-permissions` in sandbox mode.
   management
 - [execution-sandbox.md](execution-sandbox.md) — Container isolation details
 - [network-sandbox.md](network-sandbox.md) — Network allowlist and proxy
+- [periodic-tasks.md](periodic-tasks.md) — Cron-triggered scheduled tasks
 - [deployment.md](deployment.md) — Installation and configuration
 - [spec/gateway-architecture.md](../spec/gateway-architecture.md) — Detailed
   implementation spec

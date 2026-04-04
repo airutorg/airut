@@ -108,6 +108,7 @@ class TestSchemaForEditor:
             )
 
         schema = schema_for_editor(Cfg)
+        # Optional nested dataclass → "nested" (same widget as required nested)
         assert schema[0].type_tag == "nested"
         assert schema[0].nested_fields is not None
         assert len(schema[0].nested_fields) == 1

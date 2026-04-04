@@ -1189,6 +1189,16 @@ class TestRepoSummaries:
 class TestRepoPageExcludesRepoId:
     """Bug: repo_id is an internal property and must not appear in the UI."""
 
+    def test_repo_page_shows_scheduled_tasks_section(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """The per-repo page must show the Scheduled Tasks section."""
+        harness.client.get("/config")
+        response = harness.client.get("/config/repos/test-repo")
+        html = response.get_data(as_text=True)
+        assert "Scheduled Tasks" in html
+        assert "repos.test-repo.schedules" in html
+
     def test_repo_page_does_not_show_repo_id_field(
         self, harness: ConfigEditorHarness
     ) -> None:
@@ -2477,6 +2487,78 @@ class TestRepoPageChannels:
         response = harness.client.get("/config/repos/test-repo")
         html = response.get_data(as_text=True)
         assert "Channel editing will be available" not in html
+
+
+class TestAddSchedule:
+    """Test adding a schedule via handle_add."""
+
+    def test_add_schedule_creates_skeleton(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/add",
+            data={"path": "repos.test-repo.schedules", "key": "daily-review"},
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        schedules = buf.raw["repos"]["test-repo"]["schedules"]
+        assert "daily-review" in schedules
+        sched = schedules["daily-review"]
+        assert sched["cron"] == "0 9 * * 1-5"
+        assert "channel" not in sched["deliver"]  # default, not explicit
+
+    def test_add_schedule_nonexistent_repo(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/add",
+            data={"path": "repos.nonexistent.schedules", "key": "daily"},
+            headers=XHR,
+        )
+        assert response.status_code == 400
+
+    def test_add_schedule_no_key(self, harness: ConfigEditorHarness) -> None:
+        """No key provided — falls through to default add handler."""
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/add",
+            data={"path": "repos.test-repo.schedules"},
+            headers=XHR,
+        )
+        # Without a key, _try_add_schedule returns None (falls through)
+        # The default handler should handle it
+        assert response.status_code == 200
+
+    def test_add_schedule_duplicate_key(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Adding same schedule key twice does not overwrite."""
+        harness.client.get("/config")
+        harness.client.post(
+            "/api/config/add",
+            data={"path": "repos.test-repo.schedules", "key": "daily"},
+            headers=XHR,
+        )
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        buf.raw["repos"]["test-repo"]["schedules"]["daily"]["cron"] = (
+            "0 8 * * *"
+        )
+
+        harness.client.post(
+            "/api/config/add",
+            data={"path": "repos.test-repo.schedules", "key": "daily"},
+            headers=XHR,
+        )
+        # Should not overwrite the modified cron
+        assert (
+            buf.raw["repos"]["test-repo"]["schedules"]["daily"]["cron"]
+            == "0 8 * * *"
+        )
 
 
 class TestAddChannel:
