@@ -10,17 +10,15 @@ Produces ``config/airut.example.yaml`` and the stub config written by
 Comments and default values always match the source code — there is no
 duplication of field names or structure.
 
-The only hardcoded data are:
+Complex fields (dicts of typed dataclasses, schedules, credentials) are
+represented as **example instances** — actual Python objects constructed
+from the config dataclasses.  If a field is renamed, added, or removed
+on the dataclass, the instance construction fails at generation time,
+preventing silent drift.
 
-- **Example values** for optional fields that lack defaults (e.g.
-  ``ResourceLimits.memory`` defaults to ``None``; we show ``"8g"`` as
-  an illustrative value).
-- **Example snippets** for complex (non-scalar) fields whose YAML
-  representation cannot be derived from the type alone.
-- **Placeholder values** for required fields (e.g. ``mail.example.com``).
-
-All three tables are validated against the actual schema at generation
-time — if a referenced field no longer exists, generation fails.
+The only hardcoded data remaining as YAML snippets are fields with
+untyped union values (e.g. Slack ``authorized`` rules) where each dict
+entry represents a different authorization strategy.
 
 CLI usage::
 
@@ -45,6 +43,7 @@ from airut.config.source import (
     YAML_GLOBAL_STRUCTURE,
     YAML_REPO_STRUCTURE,
 )
+from airut.yaml_env import EnvVar, VarRef
 
 
 #: Path to the example config relative to the repository root.
@@ -59,9 +58,9 @@ _DOCS_BASE = "https://github.com/airutorg/airut/blob/main"
 # Keys are "ClassName.field_name" and are validated against the real schema.
 # ---------------------------------------------------------------------------
 
-#: Placeholder or illustrative values for fields that lack useful defaults.
-#: Required fields need placeholders; optional None-default fields need
-#: illustrative example values.  Every entry is validated at generation time.
+#: Placeholder or illustrative values for scalar fields that lack useful
+#: defaults.  Required fields need placeholders; optional None-default
+#: fields need illustrative example values.
 _EXAMPLE_VALUES: dict[str, str] = {
     # Required field placeholders — email sub-dataclasses
     "ImapConfig.server": "mail.example.com",
@@ -90,93 +89,120 @@ _EXAMPLE_VALUES: dict[str, str] = {
     "RepoServerConfig.effort": "max",
 }
 
-#: Example YAML snippets for complex (non-scalar) fields.
-#: Each entry is a list of YAML lines rendered verbatim at the field's
-#: indentation level.  Keys are validated against the actual schema.
-_COMPLEX_EXAMPLES: dict[str, list[str]] = {
-    "EmailAuthConfig.authorized_senders": [
-        "authorized_senders:",
-        "  - you@example.com",
-        "  # - *@company.com",
-    ],
+
+def _build_example_instances() -> dict[str, Any]:
+    """Build example instances for complex (non-scalar) config fields.
+
+    Returns a dict keyed by ``"ClassName.field_name"`` with values that
+    are actual Python objects — dicts of dataclass instances, lists, etc.
+    Construction uses the real config dataclasses, so any schema change
+    (renamed field, added required field) causes a build-time error.
+    """
+    from airut.gateway.config import (
+        GitHubAppCredential,
+        MaskedSecret,
+        ScheduleConfig,
+        ScheduleDelivery,
+        SigningCredential,
+        SigningCredentialField,
+    )
+
+    return {
+        "EmailAuthConfig.authorized_senders": [
+            "you@example.com",
+        ],
+        "RepoServerConfig.secrets": {
+            "ANTHROPIC_API_KEY": EnvVar("ANTHROPIC_API_KEY"),
+        },
+        "RepoServerConfig.masked_secrets": {
+            "GH_TOKEN": MaskedSecret(
+                value=EnvVar("GH_TOKEN"),  # type: ignore[arg-type]
+                scopes=frozenset(["api.github.com", "*.githubusercontent.com"]),
+                headers=("Authorization",),
+                allow_foreign_credentials=False,
+            ),
+        },
+        "RepoServerConfig.signing_credentials": {
+            "AWS_PROD": SigningCredential(
+                access_key_id=SigningCredentialField(
+                    name="AWS_ACCESS_KEY_ID",
+                    value=EnvVar("AWS_ACCESS_KEY_ID"),  # type: ignore[arg-type]
+                ),
+                secret_access_key=SigningCredentialField(
+                    name="AWS_SECRET_ACCESS_KEY",
+                    value=EnvVar("AWS_SECRET_ACCESS_KEY"),  # type: ignore[arg-type]
+                ),
+                scopes=frozenset(["*.amazonaws.com"]),
+                session_token=SigningCredentialField(
+                    name="AWS_SESSION_TOKEN",
+                    value=EnvVar("AWS_SESSION_TOKEN"),  # type: ignore[arg-type]
+                ),
+            ),
+        },
+        "RepoServerConfig.github_app_credentials": {
+            "GH_TOKEN": GitHubAppCredential(
+                app_id=EnvVar("GH_APP_ID"),  # type: ignore[arg-type]
+                private_key=EnvVar("GH_APP_PRIVATE_KEY"),  # type: ignore[arg-type]
+                installation_id=EnvVar("GH_APP_INSTALLATION_ID"),  # type: ignore[arg-type]
+                scopes=frozenset(
+                    [
+                        "github.com",
+                        "api.github.com",
+                        "*.githubusercontent.com",
+                    ]
+                ),
+                allow_foreign_credentials=False,
+                base_url="https://api.github.com",
+                permissions={"contents": "write", "pull_requests": "write"},
+                repositories=("my-repo",),
+            ),
+        },
+        "RepoServerConfig.schedules": {
+            "daily-report": ScheduleConfig(
+                cron="0 9 * * 1-5",
+                deliver=ScheduleDelivery(to="team@example.com"),
+                subject="Daily Report",
+                timezone="America/New_York",
+                prompt="Summarize recent changes and open issues.",
+                model="sonnet",
+            ),
+            "nightly-check": ScheduleConfig(
+                cron="0 2 * * *",
+                deliver=ScheduleDelivery(to="oncall@example.com"),
+                trigger_command="./scripts/check-status.sh",
+                trigger_timeout=120,
+            ),
+        },
+    }
+
+
+#: Lazily-built cache of example instances.
+_example_instances: dict[str, Any] | None = None
+
+
+def _get_example_instances() -> dict[str, Any]:
+    """Return (and cache) the example instances dict."""
+    global _example_instances  # noqa: PLW0603
+    if _example_instances is None:
+        _example_instances = _build_example_instances()
+    return _example_instances
+
+
+#: YAML snippets for complex fields whose values are untyped dicts and
+#: cannot be represented as dataclass instances.  Each line is a tuple
+#: of ``(text, is_comment)`` to prevent double-commenting.
+_COMPLEX_SNIPPETS: dict[str, list[tuple[str, bool]]] = {
     "SlackChannelConfig.authorized": [
-        "authorized:",
-        "  # Allow all full workspace members:",
-        "  - workspace_members: true",
-        "  # Or restrict to a user group (requires usergroups:read scope):",
-        "  # - user_group: engineering",
-        "  # Or restrict to specific users:",
-        "  # - user_id: U12345678",
-    ],
-    "RepoServerConfig.secrets": [
-        "secrets:",
-        "  ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY",
-    ],
-    "RepoServerConfig.masked_secrets": [
-        "masked_secrets:",
-        "  GH_TOKEN:",
-        "    value: !env GH_TOKEN",
-        "    scopes:",
-        '      - "api.github.com"',
-        '      - "*.githubusercontent.com"',
-        "    headers:",
-        '      - "Authorization"',
-        "    allow_foreign_credentials: false",
-    ],
-    "RepoServerConfig.signing_credentials": [
-        "signing_credentials:",
-        "  AWS_PROD:",
-        "    type: aws-sigv4",
-        "    access_key_id:",
-        "      name: AWS_ACCESS_KEY_ID",
-        "      value: !env AWS_ACCESS_KEY_ID",
-        "    secret_access_key:",
-        "      name: AWS_SECRET_ACCESS_KEY",
-        "      value: !env AWS_SECRET_ACCESS_KEY",
-        "    session_token:",
-        "      name: AWS_SESSION_TOKEN",
-        "      value: !env AWS_SESSION_TOKEN",
-        "    scopes:",
-        '      - "*.amazonaws.com"',
-    ],
-    "RepoServerConfig.github_app_credentials": [
-        "github_app_credentials:",
-        "  GH_TOKEN:",
-        "    app_id: !env GH_APP_ID",
-        "    private_key: !env GH_APP_PRIVATE_KEY",
-        "    installation_id: !env GH_APP_INSTALLATION_ID",
-        "    scopes:",
-        '      - "github.com"',
-        '      - "api.github.com"',
-        '      - "*.githubusercontent.com"',
-        "    allow_foreign_credentials: false",
-        '    base_url: "https://api.github.com"',
-        "    permissions:",
-        "      contents: write",
-        "      pull_requests: write",
-        "    repositories:",
-        "      - my-repo",
-    ],
-    "RepoServerConfig.schedules": [
-        "schedules:",
-        "  # Prompt mode: run Claude with a fixed prompt on a schedule",
-        "  daily-report:",
-        '    cron: "0 9 * * 1-5"',
-        "    prompt: >",
-        "      Summarize recent changes and open issues.",
-        "    deliver:",
-        "      to: team@example.com",
-        "    # subject: Daily Report",
-        "    # timezone: America/New_York",
-        "    # model: sonnet",
-        "",
-        "  # Script mode: run a command, then Claude if it produces output",
-        "  # nightly-check:",
-        '  #   cron: "0 2 * * *"',
-        '  #   trigger_command: "./scripts/check-status.sh"',
-        "  #   trigger_timeout: 120",
-        "  #   deliver:",
-        "  #     to: oncall@example.com",
+        ("authorized:", False),
+        ("  # Allow all full workspace members:", True),
+        ("  - workspace_members: true", False),
+        (
+            "  # Or restrict to a user group (requires usergroups:read scope):",
+            True,
+        ),
+        ("  # - user_group: engineering", True),
+        ("  # Or restrict to specific users:", True),
+        ("  # - user_id: U12345678", True),
     ],
 }
 
@@ -237,7 +263,8 @@ def validate_tables() -> list[str]:
 
     for table_name, table in [
         ("_EXAMPLE_VALUES", _EXAMPLE_VALUES),
-        ("_COMPLEX_EXAMPLES", _COMPLEX_EXAMPLES),
+        ("_EXAMPLE_INSTANCES", _get_example_instances()),
+        ("_COMPLEX_SNIPPETS", _COMPLEX_SNIPPETS),
     ]:
         for key in table:
             cls_name, _, field_name = key.partition(".")
@@ -269,7 +296,11 @@ def validate_tables() -> list[str]:
 
 
 def _format_yaml(value: object) -> str:
-    """Format a Python default value as a YAML scalar string."""
+    """Format a Python value as a YAML scalar string."""
+    if isinstance(value, EnvVar):
+        return f"!env {value.var_name}"
+    if isinstance(value, VarRef):
+        return f"!var {value.var_name}"
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (int, float)):
@@ -349,6 +380,179 @@ def _comment_lines(lines: list[str], prefix: str = "") -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Instance-based rendering
+# ---------------------------------------------------------------------------
+
+
+def _format_scalar(value: object, *, in_sequence: bool = False) -> str:
+    """Format a scalar value for YAML, adding quotes where needed.
+
+    Args:
+        value: The value to format.
+        in_sequence: If True, quote host-like strings (with dots) for
+            readability in scope/pattern lists.
+    """
+    if isinstance(value, (EnvVar, VarRef)):
+        return _format_yaml(value)
+    if isinstance(value, bool):
+        return _format_yaml(value)
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        # Quote strings containing glob wildcards or YAML special chars
+        if any(c in value for c in "*{}[]>,|&!#%`"):
+            return f'"{value}"'
+        # In sequences, quote host-like patterns (contain dots) for clarity
+        if in_sequence and "." in value:
+            return f'"{value}"'
+        return value
+    return str(value)  # pragma: no cover
+
+
+def _render_instance(
+    key: str,
+    yaml_name: str,
+    fm_doc: str,
+    indent: str,
+    *,
+    commented: bool,
+    schedule_name_comments: dict[str, list[str]] | None = None,
+) -> list[str]:
+    """Render an example instance field as commented YAML.
+
+    Args:
+        key: Lookup key in _get_example_instances() (ClassName.field_name).
+        yaml_name: YAML key name for the field.
+        fm_doc: Field doc string for the comment header.
+        indent: Indentation prefix.
+        commented: Whether to comment out the entire block.
+        schedule_name_comments: Optional per-schedule-name comment lines
+            to insert before each keyed entry.
+    """
+    instances = _get_example_instances()
+    value = instances[key]
+    out: list[str] = [f"{indent}# {fm_doc}"]
+
+    # Render the value as YAML lines
+    body_lines = _render_instance_body(yaml_name, value, schedule_name_comments)
+
+    if commented:
+        out.extend(_comment_lines(body_lines, indent))
+    else:
+        for line in body_lines:
+            out.append(f"{indent}{line}")
+    return out
+
+
+def _render_dataclass_fields(
+    instance: object, indent: str, *, extra_fields: dict[str, str] | None = None
+) -> list[str]:
+    """Render dataclass instance fields as YAML lines.
+
+    Skips fields whose value equals the dataclass default (to avoid
+    showing noise like ``output_limit: 102400``).
+
+    Args:
+        instance: A frozen dataclass instance.
+        indent: Prefix for each line.
+        extra_fields: Additional key-value pairs to insert before the
+            dataclass fields (e.g. ``{"type": "aws-sigv4"}``).
+    """
+    out: list[str] = []
+    if extra_fields:
+        for k, v in extra_fields.items():
+            out.append(f"{indent}{k}: {v}")
+    for f in dc_fields(instance):  # type: ignore[arg-type]
+        fval = getattr(instance, f.name)
+        if fval is None:
+            continue
+        # Skip fields whose value matches the default
+        if f.default is not dataclasses.MISSING and fval == f.default:
+            continue
+        if (
+            f.default_factory is not dataclasses.MISSING
+            and fval == f.default_factory()
+        ):
+            continue
+        _append_field_value(out, f.name, fval, indent)
+    return out
+
+
+def _append_field_value(
+    out: list[str], name: str, value: object, indent: str
+) -> None:
+    """Append a single YAML key-value pair to *out*."""
+    if isinstance(value, (str, int, float, bool, EnvVar, VarRef)):
+        out.append(f"{indent}{name}: {_format_scalar(value)}")
+    elif isinstance(value, (list, tuple, frozenset)):
+        items = sorted(value) if isinstance(value, frozenset) else list(value)
+        if not items:
+            return
+        out.append(f"{indent}{name}:")
+        for item in items:
+            out.append(f"{indent}  - {_format_scalar(item, in_sequence=True)}")
+    elif isinstance(value, dict):
+        if not value:
+            return
+        out.append(f"{indent}{name}:")
+        for k, v in value.items():
+            out.append(f"{indent}  {k}: {_format_scalar(v)}")
+    elif dataclasses.is_dataclass(value) and not isinstance(value, type):
+        out.append(f"{indent}{name}:")
+        out.extend(_render_dataclass_fields(value, indent + "  "))
+    else:
+        out.append(
+            f"{indent}{name}: {_format_scalar(value)}"
+        )  # pragma: no cover
+
+
+def _render_instance_body(
+    yaml_name: str,
+    value: object,
+    schedule_name_comments: dict[str, list[str]] | None = None,
+) -> list[str]:
+    """Render instance value as YAML body lines (without indent prefix).
+
+    Handles dicts-of-dataclasses (keyed entries), simple dicts, and lists.
+    """
+    from airut.gateway.config import (
+        SIGNING_TYPE_AWS_SIGV4,
+        SigningCredential,
+    )
+
+    body: list[str] = [f"{yaml_name}:"]
+
+    if isinstance(value, dict):
+        for entry_name, entry_val in value.items():
+            name_str = str(entry_name)
+            # Insert per-entry comment if provided
+            if schedule_name_comments and name_str in schedule_name_comments:
+                for cline in schedule_name_comments[name_str]:
+                    body.append(cline)
+
+            if dataclasses.is_dataclass(entry_val):
+                body.append(f"  {entry_name}:")
+                # Add type discriminator for signing credentials
+                extra: dict[str, str] | None = None
+                if isinstance(entry_val, SigningCredential):
+                    extra = {"type": SIGNING_TYPE_AWS_SIGV4}
+                body.extend(
+                    _render_dataclass_fields(
+                        entry_val, "    ", extra_fields=extra
+                    )
+                )
+            elif isinstance(entry_val, (EnvVar, VarRef)):
+                body.append(f"  {entry_name}: {_format_yaml(entry_val)}")
+            else:
+                body.append(f"  {entry_name}: {_format_scalar(entry_val)}")
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            body.append(f"  - {_format_scalar(item, in_sequence=True)}")
+
+    return body
+
+
+# ---------------------------------------------------------------------------
 # Section-based rendering
 # ---------------------------------------------------------------------------
 
@@ -408,19 +612,44 @@ def _render_field(
         return []  # pragma: no cover
 
     key = f"{cls.__name__}.{f.name}"
+    yaml_name = _yaml_key(f.name, structure)
     out: list[str] = []
 
-    # Complex field with example snippet
-    if key in _COMPLEX_EXAMPLES:
-        out.append(f"{indent}# {fm.doc}")
-        snippet = _COMPLEX_EXAMPLES[key]
-        value, has_default = _field_value(cls, f)
+    # Instance-based complex field
+    instances = _get_example_instances()
+    if key in instances:
+        _, has_default = _field_value(cls, f)
         commented = force_comment or (has_default and not plain)
-        for line in snippet:
+
+        # Schedule fields get per-entry comments
+        schedule_comments = None
+        if key == "RepoServerConfig.schedules":
+            schedule_comments = _schedule_comments()
+
+        return _render_instance(
+            key,
+            yaml_name,
+            fm.doc,
+            indent,
+            commented=commented,
+            schedule_name_comments=schedule_comments,
+        )
+
+    # Snippet-based complex field (untyped, e.g. Slack authorized)
+    if key in _COMPLEX_SNIPPETS:
+        out.append(f"{indent}# {fm.doc}")
+        snippet = _COMPLEX_SNIPPETS[key]
+        _, has_default = _field_value(cls, f)
+        commented = force_comment or (has_default and not plain)
+        for text, is_comment in snippet:
             if commented:
-                out.append(f"{indent}# {line}" if line else f"{indent}#")
+                if is_comment:
+                    # Already a comment — just indent, don't add another #
+                    out.append(f"{indent}{text}" if text else f"{indent}#")
+                else:
+                    out.append(f"{indent}# {text}" if text else f"{indent}#")
             else:
-                out.append(f"{indent}{line}")
+                out.append(f"{indent}{text}")
         return out
 
     # Nested dataclass (e.g. resource_limits → ResourceLimits)
@@ -429,7 +658,6 @@ def _render_field(
         from airut.config.source import YAML_CLASS_STRUCTURES
 
         out.append(f"{indent}# {fm.doc}")
-        yaml_name = _yaml_key(f.name, structure)
         # Look up per-class structure mapping for sub-field YAML keys
         nested_structure = YAML_CLASS_STRUCTURES.get(nested_cls.__name__)
         # Will the whole block be commented? (outer field is optional)
@@ -445,18 +673,40 @@ def _render_field(
                 continue
             nk = f"{nested_cls.__name__}.{nf.name}"
             sub_yaml_name = _yaml_key(nf.name, nested_structure)
-            # Complex examples (e.g. authorized_senders)
-            if nk in _COMPLEX_EXAMPLES:
-                nested_lines.append(f"  # {nfm.doc}")
-                snippet = _COMPLEX_EXAMPLES[nk]
-                nval, has_default = _field_value(nested_cls, nf)
-                commented = force_comment or (has_default and not plain)
-                for sline in snippet:
-                    if commented:
-                        nested_lines.append(f"  # {sline}" if sline else "  #")
-                    else:
-                        nested_lines.append(f"  {sline}")
+
+            # Instance-based sub-field
+            if nk in instances:
+                _, has_default = _field_value(nested_cls, nf)
+                sub_commented = force_comment or (has_default and not plain)
+                sub_body = _render_instance_body(sub_yaml_name, instances[nk])
+                if sub_commented:
+                    nested_lines.append(f"  # {nfm.doc}")
+                    for sl in sub_body:
+                        nested_lines.append(f"  # {sl}" if sl else "  #")
+                else:
+                    nested_lines.append(f"  # {nfm.doc}")
+                    for sl in sub_body:
+                        nested_lines.append(f"  {sl}")
                 continue
+
+            # Snippet-based sub-field
+            if nk in _COMPLEX_SNIPPETS:
+                nested_lines.append(f"  # {nfm.doc}")
+                snippet = _COMPLEX_SNIPPETS[nk]
+                _, has_default = _field_value(nested_cls, nf)
+                sub_commented = force_comment or (has_default and not plain)
+                for text, is_comment in snippet:
+                    if sub_commented:
+                        if is_comment:
+                            nested_lines.append(f"  {text}" if text else "  #")
+                        else:
+                            nested_lines.append(
+                                f"  # {text}" if text else "  #"
+                            )
+                    else:
+                        nested_lines.append(f"  {text}")
+                continue
+
             nval = _EXAMPLE_VALUES.get(nk)
             if nval is None and nf.default not in (
                 dataclasses.MISSING,
@@ -486,7 +736,6 @@ def _render_field(
     # Simple scalar field
     value, has_default = _field_value(cls, f)
     commented = force_comment or (has_default and not plain)
-    yaml_name = _yaml_key(f.name, structure)
 
     out.append(f"{indent}# {fm.doc}")
     if value is not None:
@@ -599,6 +848,24 @@ def _render_class(
             )
         )
     return out
+
+
+# ---------------------------------------------------------------------------
+# Schedule rendering helpers
+# ---------------------------------------------------------------------------
+
+
+def _schedule_comments() -> dict[str, list[str]]:
+    """Return per-schedule-name comment annotations."""
+    return {
+        "daily-report": [
+            "  # Prompt mode: run Claude with a fixed prompt on a schedule",
+        ],
+        "nightly-check": [
+            "",
+            "  # Script mode: run a command, then Claude if it produces output",
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -777,6 +1044,8 @@ def generate_stub_config() -> str:
         SmtpConfig,
     )
 
+    instances = _get_example_instances()
+
     #: Sub-dataclasses in section order, plus which optional fields to include.
     _stub_sections: list[tuple[str, type, set[str]]] = [
         ("account", EmailAccountConfig, {"password"}),
@@ -798,8 +1067,9 @@ def generate_stub_config() -> str:
             if has_default and nf.name not in include_optional:
                 continue
             sub_yaml_name = _yaml_key(nf.name, section_structure)
-            if nk in _COMPLEX_EXAMPLES:
-                for line in _COMPLEX_EXAMPLES[nk]:
+            if nk in instances:
+                body = _render_instance_body(sub_yaml_name, instances[nk])
+                for line in body:
                     out.append(f"        {line}")
                 continue
             value = _EXAMPLE_VALUES.get(nk)
@@ -809,13 +1079,12 @@ def generate_stub_config() -> str:
 
     # repo_url and secrets
     git_url = _EXAMPLE_VALUES["RepoServerConfig.git_repo_url"]
-    out.extend(
-        [
-            f"    repo_url: {git_url}",
-            "    secrets:",
-            "      ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY",
-        ]
+    secrets_body = _render_instance_body(
+        "secrets", instances["RepoServerConfig.secrets"]
     )
+    out.append(f"    repo_url: {git_url}")
+    for line in secrets_body:
+        out.append(f"    {line}")
 
     return "\n".join(out) + "\n"
 

@@ -112,8 +112,7 @@ repos:
       auth:
         # Email patterns allowed to send commands (e.g. *@company.com)
         authorized_senders:
-          - you@example.com
-          # - *@company.com
+          - "you@example.com"
         # Trusted authserv-id for DMARC verification (empty string for Microsoft 365)
         trusted_authserv_id: mail.example.com
         # Accept Microsoft 365 intra-org messages when DMARC headers are absent
@@ -140,11 +139,10 @@ repos:
     #   GH_TOKEN:
     #     value: !env GH_TOKEN
     #     scopes:
-    #       - "api.github.com"
     #       - "*.githubusercontent.com"
+    #       - "api.github.com"
     #     headers:
-    #       - "Authorization"
-    #     allow_foreign_credentials: false
+    #       - Authorization
 
     # AWS SigV4/SigV4A signing credentials for proxy re-signing
     # signing_credentials:
@@ -156,11 +154,11 @@ repos:
     #     secret_access_key:
     #       name: AWS_SECRET_ACCESS_KEY
     #       value: !env AWS_SECRET_ACCESS_KEY
+    #     scopes:
+    #       - "*.amazonaws.com"
     #     session_token:
     #       name: AWS_SESSION_TOKEN
     #       value: !env AWS_SESSION_TOKEN
-    #     scopes:
-    #       - "*.amazonaws.com"
 
     # GitHub App credentials for proxy-managed token rotation
     # github_app_credentials:
@@ -169,11 +167,9 @@ repos:
     #     private_key: !env GH_APP_PRIVATE_KEY
     #     installation_id: !env GH_APP_INSTALLATION_ID
     #     scopes:
-    #       - "github.com"
-    #       - "api.github.com"
     #       - "*.githubusercontent.com"
-    #     allow_foreign_credentials: false
-    #     base_url: "https://api.github.com"
+    #       - "api.github.com"
+    #       - "github.com"
     #     permissions:
     #       contents: write
     #       pull_requests: write
@@ -208,21 +204,20 @@ repos:
     #   # Prompt mode: run Claude with a fixed prompt on a schedule
     #   daily-report:
     #     cron: "0 9 * * 1-5"
-    #     prompt: >
-    #       Summarize recent changes and open issues.
     #     deliver:
     #       to: team@example.com
-    #     # subject: Daily Report
-    #     # timezone: America/New_York
-    #     # model: sonnet
+    #     subject: Daily Report
+    #     timezone: America/New_York
+    #     prompt: Summarize recent changes and open issues.
+    #     model: sonnet
     #
     #   # Script mode: run a command, then Claude if it produces output
-    #   # nightly-check:
-    #   #   cron: "0 2 * * *"
-    #   #   trigger_command: "./scripts/check-status.sh"
-    #   #   trigger_timeout: 120
-    #   #   deliver:
-    #   #     to: oncall@example.com
+    #   nightly-check:
+    #     cron: "0 2 * * *"
+    #     deliver:
+    #       to: oncall@example.com
+    #     trigger_command: ./scripts/check-status.sh
+    #     trigger_timeout: 120
 
     # network:
     #   # Route container traffic through the network proxy and enforce the allowlist (required for masked/signing/GitHub App credentials)
@@ -239,9 +234,9 @@ repos:
 
       # Authorization rules (first match grants access)
       # authorized:
-      #   # Allow all full workspace members:
+        # Allow all full workspace members:
       #   - workspace_members: true
-      #   # Or restrict to a user group (requires usergroups:read scope):
-      #   # - user_group: engineering
-      #   # Or restrict to specific users:
-      #   # - user_id: U12345678
+        # Or restrict to a user group (requires usergroups:read scope):
+        # - user_group: engineering
+        # Or restrict to specific users:
+        # - user_id: U12345678

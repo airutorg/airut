@@ -22,11 +22,15 @@ from airut.config.generate import (
     EXAMPLE_CONFIG_PATH,
     _comment_lines,
     _field_value,
+    _format_scalar,
     _format_yaml,
+    _get_example_instances,
     _group_fields_by_section,
     _is_nested_dataclass,
     _render_class,
     _render_field,
+    _render_instance,
+    _render_instance_body,
     _render_section,
     _yaml_key,
     _yaml_section,
@@ -42,6 +46,7 @@ from airut.config.source import (
     YAML_GLOBAL_STRUCTURE,
     YAML_REPO_STRUCTURE,
 )
+from airut.yaml_env import EnvVar, VarRef
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +76,44 @@ class TestFormatYaml:
         """Bool is a subclass of int; bool must be checked first."""
         assert _format_yaml(True) == "true"
         assert _format_yaml(False) == "false"
+
+    def test_env_var(self) -> None:
+        assert _format_yaml(EnvVar("MY_VAR")) == "!env MY_VAR"
+
+    def test_var_ref(self) -> None:
+        assert _format_yaml(VarRef("my_var")) == "!var my_var"
+
+
+class TestFormatScalar:
+    """Tests for _format_scalar."""
+
+    def test_plain_string(self) -> None:
+        assert _format_scalar("hello") == "hello"
+
+    def test_quotes_wildcards(self) -> None:
+        assert _format_scalar("*.example.com") == '"*.example.com"'
+
+    def test_quotes_dots_in_sequence(self) -> None:
+        assert (
+            _format_scalar("api.github.com", in_sequence=True)
+            == '"api.github.com"'
+        )
+
+    def test_no_quotes_dots_outside_sequence(self) -> None:
+        assert _format_scalar("api.github.com") == "api.github.com"
+
+    def test_env_var(self) -> None:
+        assert _format_scalar(EnvVar("FOO")) == "!env FOO"
+
+    def test_var_ref(self) -> None:
+        assert _format_scalar(VarRef("bar")) == "!var bar"
+
+    def test_bool(self) -> None:
+        assert _format_scalar(True) == "true"
+        assert _format_scalar(False) == "false"
+
+    def test_int(self) -> None:
+        assert _format_scalar(42) == "42"
 
 
 class TestYamlKey:
@@ -259,13 +302,88 @@ class TestValidateTables:
             errors = validate_tables()
             assert any("invalid key format" in e for e in errors)
 
-    def test_validates_complex_examples(self) -> None:
+    def test_validates_complex_snippets(self) -> None:
         with mock.patch.dict(
-            generate._COMPLEX_EXAMPLES,
-            {"GlobalConfig.nonexistent": ["line"]},
+            generate._COMPLEX_SNIPPETS,
+            {"GlobalConfig.nonexistent": [("line", False)]},
         ):
             errors = validate_tables()
             assert any("nonexistent" in e for e in errors)
+
+    def test_validates_example_instances(self) -> None:
+        instances = _get_example_instances()
+        with mock.patch.object(
+            generate,
+            "_get_example_instances",
+            return_value={**instances, "GlobalConfig.fake": "x"},
+        ):
+            errors = validate_tables()
+            assert any("fake" in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# Instance rendering
+# ---------------------------------------------------------------------------
+
+
+class TestRenderInstanceBody:
+    """Tests for _render_instance_body."""
+
+    def test_simple_dict(self) -> None:
+        body = _render_instance_body("secrets", {"KEY": EnvVar("KEY")})
+        assert body == ["secrets:", "  KEY: !env KEY"]
+
+    def test_list_value(self) -> None:
+        body = _render_instance_body("authorized_senders", ["a@b.com"])
+        assert body == ["authorized_senders:", '  - "a@b.com"']
+
+    def test_scalar_dict_value(self) -> None:
+        body = _render_instance_body("items", {"key": "val"})
+        assert body == ["items:", "  key: val"]
+
+    def test_schedule_comments(self) -> None:
+        from airut.gateway.config import ScheduleConfig, ScheduleDelivery
+
+        sched = {
+            "test-job": ScheduleConfig(
+                cron="0 0 * * *",
+                deliver=ScheduleDelivery(to="x@y.com"),
+                prompt="Do stuff.",
+            ),
+        }
+        comments = {"test-job": ["  # My comment"]}
+        body = _render_instance_body("schedules", sched, comments)
+        assert "  # My comment" in body
+        assert any("test-job:" in line for line in body)
+
+
+class TestExampleInstances:
+    """Tests for _build_example_instances / _get_example_instances."""
+
+    def test_all_keys_valid(self) -> None:
+        """All instance keys reference real schema fields."""
+        errors = validate_tables()
+        assert errors == []
+
+    def test_instances_are_cached(self) -> None:
+        a = _get_example_instances()
+        b = _get_example_instances()
+        assert a is b
+
+    def test_masked_secret_is_real_dataclass(self) -> None:
+        from airut.gateway.config import MaskedSecret
+
+        instances = _get_example_instances()
+        ms = instances["RepoServerConfig.masked_secrets"]["GH_TOKEN"]
+        assert isinstance(ms, MaskedSecret)
+
+    def test_schedule_configs_are_real(self) -> None:
+        from airut.gateway.config import ScheduleConfig
+
+        instances = _get_example_instances()
+        schedules = instances["RepoServerConfig.schedules"]
+        assert isinstance(schedules["daily-report"], ScheduleConfig)
+        assert isinstance(schedules["nightly-check"], ScheduleConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +529,8 @@ class TestRenderField:
         ][0]
         assert value_line == "opt_field:"
 
-    def test_complex_field(self) -> None:
+    def test_instance_field(self) -> None:
+        """Instance-based complex fields render with doc and content."""
         from airut.gateway.config import RepoServerConfig
 
         f = next(
@@ -420,7 +539,7 @@ class TestRenderField:
             if f.name == "secrets"
         )
         lines = _render_field(RepoServerConfig, f, YAML_REPO_STRUCTURE, "    ")
-        # Complex fields with default_factory=dict are commented out
+        # Instance fields with default_factory=dict are commented out
         assert any("# secrets:" in x for x in lines)
         assert any("ANTHROPIC_API_KEY" in x for x in lines)
 
@@ -591,10 +710,32 @@ class TestGenerateExampleConfig:
 
     def test_example_overrides_present(self) -> None:
         content = generate_example_config()
-        assert "timeout: 7200" in content
-        assert 'memory: "8g"' in content
-        assert "cpus: 4" in content
+        assert "timeout: !var default_resource_timeout" in content
+        assert "memory: !var default_resource_memory" in content
+        assert "cpus: !var default_resource_cpus" in content
         assert "effort: max" in content
+
+    def test_instance_based_credentials(self) -> None:
+        """Instance-generated credential blocks appear correctly."""
+        content = generate_example_config()
+        # Masked secrets
+        assert "GH_TOKEN:" in content
+        assert "!env GH_TOKEN" in content
+        # Signing credentials
+        assert "type: aws-sigv4" in content
+        assert "AWS_ACCESS_KEY_ID" in content
+        # GitHub App credentials
+        assert "!env GH_APP_ID" in content
+        assert "!env GH_APP_PRIVATE_KEY" in content
+
+    def test_instance_based_schedules(self) -> None:
+        """Instance-generated schedule blocks appear correctly."""
+        content = generate_example_config()
+        assert "daily-report:" in content
+        assert "nightly-check:" in content
+        assert "Prompt mode" in content
+        assert "Script mode" in content
+        assert "trigger_command:" in content
 
     def test_idempotent(self) -> None:
         c1 = generate_example_config()
@@ -975,44 +1116,109 @@ class TestEdgeCases:
             errors = check_field_coverage()
         assert not any("no_meta" in e for e in errors)
 
-    def test_complex_example_uncommented_top_level(self) -> None:
-        """Top-level complex example renders uncommented when no default."""
+    def test_snippet_uncommented_top_level(self) -> None:
+        """Top-level snippet renders uncommented when field has no default."""
 
         @dataclass(frozen=True)
         class _Cls:
-            items: list[str] = field(
+            items: tuple[dict[str, str | bool], ...] = field(
                 metadata=meta("Items list", Scope.SERVER),
             )
 
-        snippet = ["items:", "  - one"]
+        snippet = [("items:", False), ("  - one", False)]
         with mock.patch.dict(
-            generate._COMPLEX_EXAMPLES, {"_Cls.items": snippet}
+            generate._COMPLEX_SNIPPETS, {"_Cls.items": snippet}
         ):
             f = dataclasses.fields(_Cls)[0]
             lines = _render_field(_Cls, f, None, "")
         assert "items:" in lines
         assert "  - one" in lines
 
-    def test_nested_complex_example_commented(self) -> None:
-        """Nested complex example renders commented when field has default."""
+    def test_instance_uncommented_required(self) -> None:
+        """Instance field renders uncommented when field has no default."""
+        instances = _get_example_instances()
+        with mock.patch.object(
+            generate,
+            "_get_example_instances",
+            return_value={
+                **instances,
+                "_Test.items": ["a"],
+            },
+        ):
+            lines = _render_instance(
+                "_Test.items",
+                "items",
+                "Test items",
+                "  ",
+                commented=False,
+            )
+        assert any(
+            "items:" in x and not x.strip().startswith("#") for x in lines
+        )
+
+    def test_append_field_empty_list(self) -> None:
+        """_append_field_value skips empty lists."""
+        from airut.config.generate import _append_field_value
+
+        out: list[str] = []
+        _append_field_value(out, "items", [], "")
+        assert out == []
+
+    def test_append_field_empty_dict(self) -> None:
+        """_append_field_value skips empty dicts."""
+        from airut.config.generate import _append_field_value
+
+        out: list[str] = []
+        _append_field_value(out, "perms", {}, "")
+        assert out == []
+
+    def test_append_field_dict(self) -> None:
+        """_append_field_value renders dicts."""
+        from airut.config.generate import _append_field_value
+
+        out: list[str] = []
+        _append_field_value(out, "perms", {"read": "true"}, "  ")
+        assert out == ["  perms:", "    read: true"]
+
+    def test_render_dataclass_fields_skips_default_factory(self) -> None:
+        """Fields with default_factory whose value matches are skipped."""
+        from airut.config.generate import _render_dataclass_fields
+
+        @dataclass
+        class _D:
+            tags: list[str] = field(default_factory=list)
+            name: str = "x"
+
+        inst = _D()  # tags=[], name="x" — both are defaults
+        lines = _render_dataclass_fields(inst, "")
+        assert lines == []
+
+    def test_nested_instance_sub_field_commented(self) -> None:
+        """Nested dataclass with instance sub-field rendered commented."""
 
         @dataclass(frozen=True)
         class _Inner:
-            tags: list[str] = field(
+            items: list[str] = field(
                 default_factory=list,
-                metadata=meta("Tag list", Scope.SERVER),
+                metadata=meta("Item list", Scope.SERVER),
             )
 
         @dataclass(frozen=True)
         class _Outer:
             inner: _Inner = field(
+                default_factory=_Inner,
                 metadata=meta("Inner config", Scope.SERVER),
             )
 
-        snippet = ["tags:", "  - a"]
+        instances = _get_example_instances()
         with (
-            mock.patch.dict(
-                generate._COMPLEX_EXAMPLES, {"_Inner.tags": snippet}
+            mock.patch.object(
+                generate,
+                "_get_example_instances",
+                return_value={
+                    **instances,
+                    "_Inner.items": ["a", "b"],
+                },
             ),
             mock.patch(
                 "airut.config.generate._is_nested_dataclass",
@@ -1022,8 +1228,79 @@ class TestEdgeCases:
             f = dataclasses.fields(_Outer)[0]
             lines = _render_field(_Outer, f, None, "")
         text = "\n".join(lines)
-        # tags has default_factory=list so it's commented
-        assert "  # tags:" in text
+        # The whole block is commented (outer has default_factory)
+        assert "# items:" in text
+
+    def test_nested_snippet_sub_field_uncommented(self) -> None:
+        """Snippet sub-field without default is uncommented."""
+
+        @dataclass(frozen=True)
+        class _Inner:
+            rules: tuple[dict[str, str], ...] = field(
+                metadata=meta("Auth rules", Scope.SERVER),
+            )
+
+        @dataclass(frozen=True)
+        class _Outer:
+            inner: _Inner = field(
+                metadata=meta("Inner config", Scope.SERVER),
+            )
+
+        snippet = [("rules:", False), ("  - key: val", False)]
+        with (
+            mock.patch.dict(
+                generate._COMPLEX_SNIPPETS,
+                {"_Inner.rules": snippet},
+            ),
+            mock.patch(
+                "airut.config.generate._is_nested_dataclass",
+                return_value=_Inner,
+            ),
+        ):
+            f = dataclasses.fields(_Outer)[0]
+            lines = _render_field(_Outer, f, None, "")
+        text = "\n".join(lines)
+        assert "rules:" in text
+        assert "key: val" in text
+
+    def test_nested_snippet_sub_field_commented(self) -> None:
+        """Nested dataclass: snippet sub-field with default is commented."""
+
+        @dataclass(frozen=True)
+        class _Inner:
+            rules: tuple[dict[str, str], ...] = field(
+                default_factory=tuple,
+                metadata=meta("Auth rules", Scope.SERVER),
+            )
+
+        @dataclass(frozen=True)
+        class _Outer:
+            inner: _Inner = field(
+                metadata=meta("Inner config", Scope.SERVER),
+            )
+
+        snippet = [
+            ("rules:", False),
+            ("  - key: val", False),
+            ("# inline comment", True),
+        ]
+        with (
+            mock.patch.dict(
+                generate._COMPLEX_SNIPPETS,
+                {"_Inner.rules": snippet},
+            ),
+            mock.patch(
+                "airut.config.generate._is_nested_dataclass",
+                return_value=_Inner,
+            ),
+        ):
+            f = dataclasses.fields(_Outer)[0]
+            lines = _render_field(_Outer, f, None, "")
+        text = "\n".join(lines)
+        assert "# rules:" in text
+        # is_comment=True lines are not double-commented
+        assert "# # inline comment" not in text
+        assert "# inline comment" in text
 
 
 class TestDriftDetection:
@@ -1034,8 +1311,13 @@ class TestDriftDetection:
         errors = validate_tables()
         assert errors == []
 
-    def test_complex_examples_all_valid(self) -> None:
-        """Every key in _COMPLEX_EXAMPLES references a real schema field."""
+    def test_example_instances_all_valid(self) -> None:
+        """Every key in _EXAMPLE_INSTANCES references a real schema field."""
+        errors = validate_tables()
+        assert errors == []
+
+    def test_complex_snippets_all_valid(self) -> None:
+        """Every key in _COMPLEX_SNIPPETS references a real schema field."""
         errors = validate_tables()
         assert errors == []
 
@@ -1054,11 +1336,11 @@ class TestDriftDetection:
             errors = validate_tables()
             assert any("nonexistent_field" in e for e in errors)
 
-    def test_adding_fake_complex_detected(self) -> None:
-        """Adding a non-existent field to _COMPLEX_EXAMPLES is detected."""
+    def test_adding_fake_snippet_detected(self) -> None:
+        """Adding a non-existent field to _COMPLEX_SNIPPETS is detected."""
         with mock.patch.dict(
-            generate._COMPLEX_EXAMPLES,
-            {"EmailChannelConfig.fake": ["line"]},
+            generate._COMPLEX_SNIPPETS,
+            {"EmailChannelConfig.fake": [("line", False)]},
         ):
             errors = validate_tables()
             assert any("fake" in e for e in errors)
