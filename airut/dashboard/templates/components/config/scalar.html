@@ -12,7 +12,7 @@
     <span class="cfg-label">{{ f.path }}</span>
   </div>
 
-  <div class="cfg-tabbed" data-source="{{ current_source }}">
+  <div class="cfg-tabbed{% if f.multiline and current_source == 'literal' %} cfg-tabbed-multiline{% endif %}" data-source="{{ current_source }}">
     {# Source tabs #}
     <div class="cfg-source">
       {% if not f.required or f.default is not none %}
@@ -27,7 +27,7 @@
       <button data-source="literal"
               class="{{ 'active' if current_source == 'literal' else '' }}"
               hx-patch="/api/config/field"
-              hx-vals='{"path":"{{ f.path }}","source":"literal","value":{% if current_source == "literal" and display_value is not none %}"{{ display_value }}"{% elif f.default is not none and f.default != MISSING %}"{{ f.default }}"{% else %}""{% endif %}}'
+              hx-vals='{"path":"{{ f.path }}","source":"literal","value":{% if current_source == "literal" and display_value is not none %}{{ display_value | tojson }}{% elif f.default is not none and f.default != MISSING %}{{ f.default | tojson }}{% else %}""{% endif %}}'
               hx-headers='{"X-Requested-With":"XMLHttpRequest"}'>
         Literal
       </button>
@@ -73,6 +73,15 @@
       <option value="true" {{ 'selected' if display_value else '' }}>true</option>
       <option value="false" {{ 'selected' if not display_value else '' }}>false</option>
     </select>
+    {% elif f.multiline and current_source == 'literal' %}
+    <textarea class="cfg-input cfg-textarea"
+              rows="6"
+              hx-patch="/api/config/field"
+              hx-trigger="change"
+              hx-vals='{"path":"{{ f.path }}","source":"{{ current_source }}"}'
+              hx-headers='{"X-Requested-With":"XMLHttpRequest"}'
+              name="value"
+              hx-include="this">{{ display_value if display_value is not none else '' }}</textarea>
     {% else %}
     <input class="cfg-input"
            type="{{ 'number' if f.python_type in ['int', 'float'] and current_source == 'literal' else 'text' }}"

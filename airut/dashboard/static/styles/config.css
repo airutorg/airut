@@ -202,6 +202,15 @@ select.cfg-input {
   color: var(--text-tertiary);
   cursor: default;
 }
+textarea.cfg-textarea {
+  resize: vertical;
+  min-height: 60px;
+  line-height: 1.4;
+  white-space: pre;
+}
+.cfg-tabbed-multiline {
+  max-width: 600px;
+}
 
 /* ---- Help text ---- */
 .cfg-help {
@@ -558,7 +567,8 @@ details.cfg-collection-card[open] > .cfg-collection-header::before {
   .cfg-input {
     max-width: 100%;
   }
-  .cfg-tabbed {
+  .cfg-tabbed,
+  .cfg-tabbed-multiline {
     max-width: 100%;
   }
   /* Prevent iOS Safari auto-zoom on focused inputs */
