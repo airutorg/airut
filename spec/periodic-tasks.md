@@ -101,6 +101,7 @@ repos:
       daily-review:
         cron: "0 9 * * 1-5"
         timezone: "Europe/Helsinki"
+        subject: "Daily PR Review"
         prompt: "Review open PRs and summarize their status."
         deliver:
           channel: email
@@ -118,18 +119,19 @@ repos:
 
 ### Schema
 
-| Field             | Type          | Default    | Description                                   |
-| ----------------- | ------------- | ---------- | --------------------------------------------- |
-| `cron`            | `str`         | (required) | 5-field cron expression                       |
-| `deliver.to`      | `str`         | (required) | Recipient address                             |
-| `deliver.channel` | `str`         | `"email"`  | Delivery channel type                         |
-| `timezone`        | `str \| None` | `None`     | IANA timezone (empty = server local time)     |
-| `prompt`          | `str \| None` | `None`     | Prompt text (mutually exclusive with trigger) |
-| `trigger_command` | `str \| None` | `None`     | Shell command for script mode                 |
-| `trigger_timeout` | `int \| None` | `None`     | Timeout override (empty = repo default)       |
-| `model`           | `str \| None` | `None`     | Override repo default model                   |
-| `effort`          | `str \| None` | `None`     | Override repo default effort level            |
-| `output_limit`    | `int`         | `102400`   | Max script output bytes                       |
+| Field             | Type          | Default    | Description                                    |
+| ----------------- | ------------- | ---------- | ---------------------------------------------- |
+| `cron`            | `str`         | (required) | 5-field cron expression                        |
+| `deliver.to`      | `str`         | (required) | Recipient address                              |
+| `deliver.channel` | `str`         | `"email"`  | Delivery channel type                          |
+| `subject`         | `str \| None` | `None`     | Override email subject (empty = schedule name) |
+| `timezone`        | `str \| None` | `None`     | IANA timezone (empty = server local time)      |
+| `prompt`          | `str \| None` | `None`     | Prompt text (mutually exclusive with trigger)  |
+| `trigger_command` | `str \| None` | `None`     | Shell command for script mode                  |
+| `trigger_timeout` | `int \| None` | `None`     | Timeout override (empty = repo default)        |
+| `model`           | `str \| None` | `None`     | Override repo default model                    |
+| `effort`          | `str \| None` | `None`     | Override repo default effort level             |
+| `output_limit`    | `int`         | `102400`   | Max script output bytes                        |
 
 ### Validation
 
@@ -313,7 +315,10 @@ client sets `In-Reply-To` to the Message-ID. The IMAP listener picks it up,
 `extract_conversation_id_from_headers()` extracts the conversation ID, and the
 conversation resumes through the normal interactive flow.
 
-Subject format: `[ID:{conversation_id}] {schedule_name}`
+Subject format: `[ID:{conversation_id}] {subject or schedule_name}`
+
+When the schedule has a `subject` field set, it is used instead of the schedule
+name.
 
 `send_new_message()` is **not** part of the `ChannelAdapter` protocol because
 the parameters are inherently channel-specific. The `delivery.py` module

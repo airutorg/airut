@@ -116,6 +116,21 @@ class TestDeliverViaEmail:
         assert "[ID:abc12345] daily" == kwargs["subject"]
         assert "Task done" in kwargs["body"]
 
+    def test_subject_override(self) -> None:
+        adapter = MagicMock(spec=EmailChannelAdapter)
+        config = ScheduleConfig(
+            cron="0 9 * * *",
+            deliver=ScheduleDelivery(channel="email", to="user@example.com"),
+            subject="Weekly PR Summary",
+            prompt="Test prompt",
+        )
+        result = _make_result()
+
+        _deliver_via_email(adapter, "weekly-prs", config, result)
+
+        kwargs = adapter.send_new_message.call_args.kwargs
+        assert kwargs["subject"] == "[ID:abc12345] Weekly PR Summary"
+
     def test_delivery_with_usage_stats(self) -> None:
         adapter = MagicMock(spec=EmailChannelAdapter)
         config = _make_schedule_config()

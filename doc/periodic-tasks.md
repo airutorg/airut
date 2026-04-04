@@ -36,8 +36,9 @@ network sandbox, and secrets as interactive channel messages.
 
 Schedules are defined per-repo in the server config
 (`~/.config/airut/airut.yaml`) under `repos.<repo_id>.schedules`. Each schedule
-has a name (used as the email subject), a cron expression, and a delivery
-target.
+has a name (used as the default email subject), a cron expression, and a
+delivery target. Set the optional `subject` field to override the email subject
+line.
 
 ### Prompt Mode
 
@@ -93,18 +94,19 @@ via email. The recipient can then reply to continue the conversation.
 
 ### Schedule Fields
 
-| Field             | Type          | Default    | Description                                   |
-| ----------------- | ------------- | ---------- | --------------------------------------------- |
-| `cron`            | `str`         | (required) | 5-field cron expression                       |
-| `deliver.to`      | `str`         | (required) | Recipient address                             |
-| `deliver.channel` | `str`         | `"email"`  | Delivery channel type                         |
-| `timezone`        | `str \| None` | `None`     | IANA timezone (empty = server local time)     |
-| `prompt`          | `str \| None` | `None`     | Prompt text (mutually exclusive with trigger) |
-| `trigger_command` | `str \| None` | `None`     | Shell command for script mode                 |
-| `trigger_timeout` | `int \| None` | `None`     | Timeout override (empty = repo default)       |
-| `model`           | `str \| None` | `None`     | Override repo default model                   |
-| `effort`          | `str \| None` | `None`     | Override repo default effort level            |
-| `output_limit`    | `int`         | `102400`   | Max script output bytes                       |
+| Field             | Type          | Default    | Description                                    |
+| ----------------- | ------------- | ---------- | ---------------------------------------------- |
+| `cron`            | `str`         | (required) | 5-field cron expression                        |
+| `deliver.to`      | `str`         | (required) | Recipient address                              |
+| `deliver.channel` | `str`         | `"email"`  | Delivery channel type                          |
+| `subject`         | `str \| None` | `None`     | Override email subject (empty = schedule name) |
+| `timezone`        | `str \| None` | `None`     | IANA timezone (empty = server local time)      |
+| `prompt`          | `str \| None` | `None`     | Prompt text (mutually exclusive with trigger)  |
+| `trigger_command` | `str \| None` | `None`     | Shell command for script mode                  |
+| `trigger_timeout` | `int \| None` | `None`     | Timeout override (empty = repo default)        |
+| `model`           | `str \| None` | `None`     | Override repo default model                    |
+| `effort`          | `str \| None` | `None`     | Override repo default effort level             |
+| `output_limit`    | `int`         | `102400`   | Max script output bytes                        |
 
 Exactly one of `prompt` or `trigger_command` must be set. The `deliver.channel`
 must match a configured channel type in the same repo (only `"email"` is
@@ -124,7 +126,8 @@ transitions.
 
 Results are delivered via the configured channel (currently email only). The
 email subject includes the conversation ID:
-`[ID:{conversation_id}] {schedule_name}`.
+`[ID:{conversation_id}] {subject or schedule_name}`. When the `subject` field is
+set in the schedule config, it overrides the schedule name in the subject line.
 
 When a recipient replies to a delivery email, their email client sets
 `In-Reply-To` to the original Message-ID. The IMAP listener extracts the

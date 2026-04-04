@@ -1075,6 +1075,7 @@ class ScheduleConfig:
     Attributes:
         cron: 5-field cron expression (minute hour dom month dow).
         deliver: Delivery target for task results.
+        subject: Override email subject (empty = schedule name).
         timezone: IANA timezone for cron evaluation.
         prompt: Prompt text for prompt mode.
         trigger_command: Shell command for script mode.
@@ -1091,6 +1092,13 @@ class ScheduleConfig:
     )
     deliver: ScheduleDelivery = field(
         metadata=meta("Delivery target for task results", Scope.REPO),
+    )
+    subject: str | None = field(
+        default=None,
+        metadata=meta(
+            "Override email subject line (empty = schedule name)",
+            Scope.REPO,
+        ),
     )
     timezone: str | None = field(
         default=None,
@@ -1979,6 +1987,7 @@ def _parse_schedule_config(
     )
 
     # Parse optional fields
+    subject = _resolve(raw.get("subject"), str)
     timezone = _resolve(raw.get("timezone"), str)
     prompt = _resolve(raw.get("prompt"), str)
     trigger_command = _resolve(raw.get("trigger_command"), str)
@@ -1991,6 +2000,7 @@ def _parse_schedule_config(
     return ScheduleConfig(
         cron=cron,
         deliver=deliver,
+        subject=subject,
         timezone=timezone,
         prompt=prompt,
         trigger_command=trigger_command,
