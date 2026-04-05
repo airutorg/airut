@@ -43,6 +43,9 @@ Airut and reviewing the resulting PRs.
   agents push PRs for human review.
 - **Email and Slack channels**: Authenticate via DMARC (email) or workspace
   membership (Slack), with sender authorization per repo.
+- **Scheduled tasks**: Run Claude on a cron schedule — daily code reviews,
+  nightly health checks, weekly summaries. Results are delivered via email, and
+  recipients can reply to continue the conversation.
 - **Web dashboard**: Monitor running tasks, view network activity logs, and
   configure the server.
 
@@ -149,6 +152,8 @@ starting point for onboarding your own projects.
   repositories
 - **[doc/agentic-operation.md](doc/agentic-operation.md)** — Message-to-PR
   workflow patterns
+- **[doc/periodic-tasks.md](doc/periodic-tasks.md)** — Scheduled tasks (cron,
+  prompt/script modes, email delivery)
 - **[doc/ci-sandbox.md](doc/ci-sandbox.md)** — Sandboxing CI with
   `airut-sandbox` and `airutorg/sandbox-action`
 
