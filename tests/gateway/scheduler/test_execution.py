@@ -301,6 +301,113 @@ class TestBuildScriptErrorPrompt:
         assert "error!" in prompt
 
 
+class TestInlineBashCommand:
+    """Test that inline bash commands (bash -c '...') are parsed correctly."""
+
+    @patch("airut.gateway.scheduler.execution.deliver_result")
+    @patch("airut.gateway.scheduler.execution.run_in_sandbox")
+    @patch("airut.gateway.scheduler.execution._run_command_task")
+    def test_bash_c_with_shell_operators(
+        self,
+        mock_cmd: MagicMock,
+        mock_sandbox: MagicMock,
+        mock_deliver: MagicMock,
+    ) -> None:
+        """Bash -c 'cmd1 && cmd2' is split correctly by shlex."""
+        svc = _make_service()
+        handler = _make_handler()
+        config = _make_schedule_config(
+            prompt=None,
+            trigger_command="bash -c 'echo hello && echo world'",
+        )
+
+        mock_cmd.return_value = MagicMock(
+            exit_code=0, stdout="hello\nworld\n", stderr=""
+        )
+        mock_sandbox.return_value = _make_sandbox_result()
+
+        execute_scheduled_task(svc, handler, "inline-bash", config, "task-1")
+
+        # Verify the command was parsed into the correct list
+        cmd_arg = mock_cmd.call_args.args[3]
+        assert cmd_arg == ["bash", "-c", "echo hello && echo world"]
+
+    @patch("airut.gateway.scheduler.execution.deliver_result")
+    @patch("airut.gateway.scheduler.execution.run_in_sandbox")
+    @patch("airut.gateway.scheduler.execution._run_command_task")
+    def test_bash_c_with_pipes_and_semicolons(
+        self,
+        mock_cmd: MagicMock,
+        mock_sandbox: MagicMock,
+        mock_deliver: MagicMock,
+    ) -> None:
+        """Bash -c with pipes and semicolons preserves the full expression."""
+        svc = _make_service()
+        handler = _make_handler()
+        config = _make_schedule_config(
+            prompt=None,
+            trigger_command="bash -c 'cat /tmp/data | grep error; echo done'",
+        )
+
+        mock_cmd.return_value = MagicMock(
+            exit_code=0, stdout="done\n", stderr=""
+        )
+        mock_sandbox.return_value = _make_sandbox_result()
+
+        execute_scheduled_task(svc, handler, "pipe-test", config, "task-1")
+
+        cmd_arg = mock_cmd.call_args.args[3]
+        assert cmd_arg == [
+            "bash",
+            "-c",
+            "cat /tmp/data | grep error; echo done",
+        ]
+
+    @patch("airut.gateway.scheduler.execution.deliver_result")
+    @patch("airut.gateway.scheduler.execution.run_in_sandbox")
+    @patch("airut.gateway.scheduler.execution._run_command_task")
+    def test_bash_c_failed_produces_error_prompt_with_full_command(
+        self,
+        mock_cmd: MagicMock,
+        mock_sandbox: MagicMock,
+        mock_deliver: MagicMock,
+    ) -> None:
+        """Failed inline bash command appears correctly in error prompt."""
+        svc = _make_service()
+        handler = _make_handler()
+        config = _make_schedule_config(
+            prompt=None,
+            trigger_command="bash -c 'test -f /missing && echo ok'",
+        )
+
+        mock_cmd.return_value = MagicMock(
+            exit_code=1, stdout="", stderr="test failed"
+        )
+        mock_sandbox.return_value = _make_sandbox_result()
+
+        execute_scheduled_task(svc, handler, "fail-test", config, "task-1")
+
+        prompt = mock_sandbox.call_args.kwargs["prompt"]
+        assert "failed unexpectedly" in prompt
+        assert "Exit code: 1" in prompt
+        # The reconstructed command should be quoted properly
+        assert "bash -c" in prompt
+
+    def test_shlex_split_preserves_inner_operators(self) -> None:
+        """Direct unit test: shlex.split keeps && inside single quotes."""
+        import shlex
+
+        result = shlex.split("bash -c 'cd /tmp && ls -la'")
+        assert result == ["bash", "-c", "cd /tmp && ls -la"]
+
+    def test_shlex_split_preserves_double_quoted_operators(self) -> None:
+        """Double-quoted expressions also preserve shell operators."""
+        import shlex
+
+        result = shlex.split('bash -c "echo a || echo b"')
+        assert result == ["bash", "-c", "echo a || echo b"]
+
+
 class TestRunCommandTask:
     """Test _run_command_task sandbox setup."""
 
