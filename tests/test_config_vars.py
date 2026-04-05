@@ -187,7 +187,7 @@ class TestEdgeCases:
 
     def test_var_ref_as_mapping_key_raises(self) -> None:
         """VarRef used as a dict key raises ConfigError."""
-        raw: dict[str, Any] = {VarRef("x"): "value"}  # type: ignore[dict-item]  # ty:ignore[invalid-assignment]
+        raw: dict[Any, Any] = {VarRef("x"): "value"}
         with pytest.raises(ConfigError, match="mapping key"):
             resolve_var_refs(raw, {"x": "resolved"})
 

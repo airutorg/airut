@@ -189,8 +189,9 @@ def extract_body(message: Message) -> str:
             if part.get_content_type() == "text/html":
                 payload = part.get_payload(decode=True)
                 if payload:
+                    assert isinstance(payload, bytes)
                     charset = part.get_content_charset() or "utf-8"
-                    html_body = payload.decode(charset, errors="replace")  # type: ignore[union-attr]  # ty:ignore[unresolved-attribute]
+                    html_body = payload.decode(charset, errors="replace")
                     body = html_to_text(html_body, strip_quotes=True)
                     logger.debug(
                         "Extracted body from HTML part (%d chars HTML"
@@ -206,8 +207,9 @@ def extract_body(message: Message) -> str:
             if part.get_content_type() == "text/plain":
                 payload = part.get_payload(decode=True)
                 if payload:
+                    assert isinstance(payload, bytes)
                     charset = part.get_content_charset() or "utf-8"
-                    body = payload.decode(charset, errors="replace")  # type: ignore[union-attr]  # ty:ignore[unresolved-attribute]
+                    body = payload.decode(charset, errors="replace")
                     logger.debug(
                         "Extracted body from multipart message"
                         " (%d chars, charset=%s)",
@@ -221,8 +223,9 @@ def extract_body(message: Message) -> str:
 
         payload = message.get_payload(decode=True)
         if payload:
+            assert isinstance(payload, bytes)
             charset = message.get_content_charset() or "utf-8"
-            raw = payload.decode(charset, errors="replace")  # type: ignore[union-attr]  # ty:ignore[unresolved-attribute]
+            raw = payload.decode(charset, errors="replace")
             if content_type == "text/html":
                 body = html_to_text(raw, strip_quotes=True)
                 logger.debug(
@@ -277,8 +280,9 @@ def extract_attachments(
                     filepath = inbox_dir / filename
                     payload = part.get_payload(decode=True)
                     if payload:
+                        assert isinstance(payload, bytes)
                         with open(filepath, "wb") as f:
-                            f.write(payload)  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+                            f.write(payload)
                         filenames.append(filename)
                         logger.debug(
                             "Saved attachment: %s (%d bytes)",

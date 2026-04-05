@@ -22,7 +22,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from email.message import EmailMessage
+from email.message import EmailMessage, Message
 
 from aiosmtpd.controller import Controller
 from aiosmtpd.handlers import Message as SMTPMessageHandler
@@ -49,7 +49,7 @@ class StoredMessage:
     """A message stored in the mailbox."""
 
     uid: int
-    message: EmailMessage
+    message: Message
     flags: set[str] = field(default_factory=set)
     deleted: bool = False
 
@@ -67,7 +67,7 @@ class MailboxStore:
         self._lock = threading.Lock()
         self._new_message_event = threading.Event()
 
-    def add_message(self, msg: EmailMessage) -> int:
+    def add_message(self, msg: Message) -> int:
         """Add a message and return its UID."""
         with self._lock:
             uid = self._next_uid
@@ -88,7 +88,7 @@ class MailboxStore:
                 if not m.deleted and "\\Seen" not in m.flags
             ]
 
-    def get_message(self, uid: int) -> EmailMessage | None:
+    def get_message(self, uid: int) -> Message | None:
         """Get message by UID."""
         with self._lock:
             for m in self._messages:
@@ -153,7 +153,7 @@ class MailboxStore:
                 if "\\Seen" not in m.flags
             ]
 
-    def get_message_by_seq(self, seq_num: int) -> EmailMessage | None:
+    def get_message_by_seq(self, seq_num: int) -> Message | None:
         """Get message by 1-based sequence number."""
         with self._lock:
             non_deleted = [m for m in self._messages if not m.deleted]
@@ -179,7 +179,7 @@ class MailboxStore:
                 return True
             return False
 
-    def get_all_messages(self) -> list[EmailMessage]:
+    def get_all_messages(self) -> list[Message]:
         """Get all non-deleted messages."""
         with self._lock:
             return [m.message for m in self._messages if not m.deleted]
@@ -192,9 +192,7 @@ class TestSMTPHandler(SMTPMessageHandler):
         super().__init__()
         self.outbox = outbox
 
-    def handle_message(  # type: ignore[override]
-        self, message: EmailMessage
-    ) -> None:  # ty:ignore[invalid-method-override]
+    def handle_message(self, message: Message) -> None:
         """Handle incoming SMTP message by storing in outbox."""
         logger.info("SMTP received message: %s", message.get("Subject", ""))
         self.outbox.add_message(message)
@@ -872,15 +870,15 @@ class TestEmailServer:
         """
         return self._inboxes[username].add_message(msg)
 
-    def get_sent_messages(self) -> list[EmailMessage]:
+    def get_sent_messages(self) -> list[Message]:
         """Get all messages sent via SMTP."""
         return self._outbox.get_all_messages()
 
     def wait_for_sent(
         self,
-        predicate: Callable[[EmailMessage], bool] | None = None,
+        predicate: Callable[[Message], bool] | None = None,
         timeout: float = 30.0,
-    ) -> EmailMessage | None:
+    ) -> Message | None:
         """Wait for a sent message matching the predicate.
 
         Args:

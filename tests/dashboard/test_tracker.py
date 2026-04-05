@@ -1028,7 +1028,7 @@ class TestTodoItem:
         """Test TodoItem is frozen (immutable)."""
         item = TodoItem(content="Test", status=TodoStatus.PENDING)
         with pytest.raises(AttributeError):
-            item.content = "Changed"  # type: ignore[misc]  # ty:ignore[invalid-assignment]
+            item.content = "Changed"  # ty:ignore[invalid-assignment]
 
 
 class TestTaskStatus:

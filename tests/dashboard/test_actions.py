@@ -295,7 +295,7 @@ class TestEventRendering:
         """Test system event with many tools truncates display."""
         many_tools = [f"Tool{i}" for i in range(25)]
         harness.add_events(
-            {"type": "system", "subtype": "init", "tools": many_tools},  # type: ignore[invalid-argument-type]  # dict[str, str|list[str]] ⊂ JsonDict; ty recursive alias limitation  # ty:ignore[invalid-argument-type]
+            {"type": "system", "subtype": "init", "tools": many_tools},  # ty:ignore[invalid-argument-type]  # dict[str, str|list[str]] ⊂ JsonDict; ty recursive alias limitation
             result_event(),
         )
 

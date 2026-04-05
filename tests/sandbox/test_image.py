@@ -109,7 +109,7 @@ class TestImageBuildSpec:
         """ImageBuildSpec is immutable."""
         spec = ImageBuildSpec(kind="repo", dockerfile=b"FROM ubuntu\n")
         with pytest.raises(AttributeError):
-            spec.kind = "overlay"  # type: ignore[misc]  # ty:ignore[invalid-assignment]
+            spec.kind = "overlay"  # ty:ignore[invalid-assignment]
 
 
 class TestImageCacheTagFor:

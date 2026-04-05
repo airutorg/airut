@@ -339,9 +339,8 @@ class TestPollingLoop:
             cl._stop_event.set()
             return original_wait(timeout)
 
-        cl._stop_event.wait = interrupt_on_backoff  # type: ignore[assignment]  # ty:ignore[invalid-assignment]
-
-        cl._polling_loop()
+        with patch.object(cl._stop_event, "wait", interrupt_on_backoff):
+            cl._polling_loop()
 
         # Should NOT have attempted reconnection
         mock_el.disconnect.assert_not_called()

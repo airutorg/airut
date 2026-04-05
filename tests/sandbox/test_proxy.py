@@ -87,7 +87,7 @@ class TestContextProxy:
             subnet_octet=1,
         )
         with pytest.raises(AttributeError):
-            proxy.proxy_ip = "10.0.0.2"  # type: ignore[misc]  # ty:ignore[invalid-assignment]
+            proxy.proxy_ip = "10.0.0.2"  # ty:ignore[invalid-assignment]
 
 
 class TestProxyError:

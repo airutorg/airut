@@ -77,7 +77,7 @@ class TestConfigSnapshotNested:
     def test_nested_config_snapshot(self) -> None:
         child = NestedConfig(name="custom")
         child_snap = ConfigSnapshot(child, frozenset({"name"}))
-        parent = ParentConfig(child=child_snap, value=42)  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+        parent = ParentConfig(child=child_snap, value=42)  # ty:ignore[invalid-argument-type]
         parent_snap = ConfigSnapshot(parent, frozenset({"child", "value"}))
 
         result = parent_snap.to_dict()
@@ -86,7 +86,7 @@ class TestConfigSnapshotNested:
     def test_nested_config_snapshot_defaults_excluded(self) -> None:
         child = NestedConfig(name="custom")
         child_snap = ConfigSnapshot(child, frozenset({"name"}))
-        parent = ParentConfig(child=child_snap, value=42)  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+        parent = ParentConfig(child=child_snap, value=42)  # ty:ignore[invalid-argument-type]
         # Only "child" is provided, not "value"
         parent_snap = ConfigSnapshot(parent, frozenset({"child"}))
 

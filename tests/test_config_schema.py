@@ -51,7 +51,7 @@ class TestFieldMeta:
     def test_frozen(self) -> None:
         fm = FieldMeta(doc="test", scope=Scope.TASK)
         with pytest.raises(dataclasses.FrozenInstanceError):
-            fm.doc = "changed"  # type: ignore[misc]  # ty:ignore[invalid-assignment]
+            fm.doc = "changed"  # ty:ignore[invalid-assignment]
 
 
 class TestMeta:
