@@ -1237,7 +1237,7 @@ class TestStateProviders:
         assert result[0].repo_id == "r1"
 
     def test_get_work_dirs(self, email_config, tmp_path: Path) -> None:
-        """_get_work_dirs returns dirs for live repos only."""
+        """_get_work_dirs returns dirs for non-failed repos."""
         from airut.dashboard.tracker import ChannelInfo, RepoState, RepoStatus
 
         svc, handler = make_service(email_config, tmp_path)
@@ -1284,6 +1284,58 @@ class TestStateProviders:
         )
         result = svc._get_work_dirs()
         assert len(result) == 0
+
+    def test_get_work_dirs_includes_reload_pending(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """_get_work_dirs includes repos with RELOAD_PENDING status."""
+        from airut.dashboard.tracker import ChannelInfo, RepoState, RepoStatus
+
+        svc, handler = make_service(email_config, tmp_path)
+        svc._repos_store.update(
+            (
+                RepoState(
+                    repo_id="test",
+                    status=RepoStatus.RELOAD_PENDING,
+                    git_repo_url="https://example.com/r1",
+                    channels=(
+                        ChannelInfo(
+                            channel_type="email", info="imap.example.com"
+                        ),
+                    ),
+                    storage_dir="/s/test",
+                ),
+            )
+        )
+        result = svc._get_work_dirs()
+        assert len(result) == 1
+        assert result[0] == handler.conversation_manager.conversations_dir
+
+    def test_get_work_dirs_includes_reloading(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """_get_work_dirs includes repos with RELOADING status."""
+        from airut.dashboard.tracker import ChannelInfo, RepoState, RepoStatus
+
+        svc, handler = make_service(email_config, tmp_path)
+        svc._repos_store.update(
+            (
+                RepoState(
+                    repo_id="test",
+                    status=RepoStatus.RELOADING,
+                    git_repo_url="https://example.com/r1",
+                    channels=(
+                        ChannelInfo(
+                            channel_type="email", info="imap.example.com"
+                        ),
+                    ),
+                    storage_dir="/s/test",
+                ),
+            )
+        )
+        result = svc._get_work_dirs()
+        assert len(result) == 1
+        assert result[0] == handler.conversation_manager.conversations_dir
 
 
 class TestStopExecution:

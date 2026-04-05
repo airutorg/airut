@@ -39,8 +39,22 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
+from airut.config.source import YamlConfigSource
+from airut.dashboard.tracker import RepoStatus
+from airut.gateway.config import ServerConfig
+from airut.gateway.service import GatewayService
 
-from .conftest import get_message_text, wait_for_conv_completion
+from .conftest import (
+    config_to_yaml,
+    gate_mock,
+    get_message_text,
+    release_gate,
+    wait_for_conv_completion,
+    wait_for_gate,
+    wait_for_reload,
+    wait_for_service_ready,
+    wait_for_task,
+)
 from .environment import IntegrationEnvironment
 
 
@@ -451,3 +465,124 @@ class TestDashboardAPIBeforeBoot:
         assert data["counts"]["queued"] == 0
         assert data["counts"]["executing"] == 0
         assert data["counts"]["completed"] == 0
+
+
+class TestDashboardDuringReload:
+    """Dashboard endpoints must remain accessible during pending repo reload.
+
+    Reproduces the bug where network/events log streams returned 404 when
+    a repo had RELOAD_PENDING status because _get_work_dirs() only
+    included LIVE repos.
+    """
+
+    def test_network_poll_during_pending_repo_reload(
+        self,
+        tmp_path: Path,
+        integration_env: IntegrationEnvironment,
+        create_email,
+        extract_conversation_id,
+    ) -> None:
+        """Network and events poll endpoints return 200 during RELOAD_PENDING.
+
+        Starts a gate-controlled task, triggers a repo-scope config change
+        (which defers reload while task is active), then verifies that
+        dashboard endpoints for the active conversation still respond with
+        200 instead of 404.
+        """
+        gate_dir = tmp_path / "gate_dashboard"
+        config_path = integration_env.repo_root / "airut.yaml"
+        source = YamlConfigSource(config_path)
+        yaml_data = config_to_yaml(integration_env)
+        source.save(yaml_data)
+
+        snapshot = ServerConfig.from_source(source)
+        service = GatewayService(
+            snapshot.value,
+            repo_root=integration_env.repo_root,
+            egress_network=integration_env.egress_network,
+            config_source=source,
+            config_snapshot=snapshot,
+        )
+        service_thread = threading.Thread(target=service.start, daemon=True)
+        service_thread.start()
+
+        try:
+            # Wait for boot
+            wait_for_service_ready(service)
+
+            # Start gate-controlled task
+            msg = create_email(
+                subject="Dashboard reload test",
+                body=gate_mock(str(gate_dir)),
+            )
+            integration_env.email_server.inject_message(msg)
+
+            # Wait for task to reach the gate (executing)
+            executing_task = wait_for_task(
+                service.tracker,
+                lambda t: t.status.value == "executing",
+                timeout=15.0,
+            )
+            assert executing_task is not None
+            wait_for_gate(gate_dir)
+
+            # Get conversation ID from acknowledgment email
+            ack = integration_env.email_server.wait_for_sent(
+                lambda m: "started working" in get_message_text(m).lower(),
+                timeout=15.0,
+            )
+            assert ack is not None
+            conv_id = extract_conversation_id(ack["Subject"])
+            assert conv_id is not None
+
+            # Trigger repo-scope config change while task is active
+            gen = service._config_generation
+            yaml_data["repos"]["test"]["email"]["auth"][
+                "authorized_senders"
+            ] = ["user@test.local", "extra@test.local"]
+            source.save(yaml_data)
+
+            # Wait for config generation to advance
+            wait_for_reload(service, gen)
+
+            # Verify repo is in RELOAD_PENDING state
+            repo_states = service._repos_store.get().value
+            test_repo = next(r for r in repo_states if r.repo_id == "test")
+            assert test_repo.status == RepoStatus.RELOAD_PENDING, (
+                f"Expected RELOAD_PENDING, got {test_repo.status}"
+            )
+
+            # Now test dashboard endpoints — these should return 200,
+            # not 404 as they did before the fix
+            assert service.dashboard is not None
+
+            from werkzeug.test import Client
+
+            client = Client(service.dashboard._wsgi_app)
+
+            # Network log poll
+            r = client.get(f"/api/conversation/{conv_id}/network/poll?offset=0")
+            assert r.status_code == 200, (
+                f"network/poll returned {r.status_code} during RELOAD_PENDING"
+            )
+
+            # Events log poll
+            r = client.get(f"/api/conversation/{conv_id}/events/poll?offset=0")
+            assert r.status_code == 200, (
+                f"events/poll returned {r.status_code} during RELOAD_PENDING"
+            )
+
+            # Conversation detail API
+            r = client.get(f"/api/conversation/{conv_id}")
+            assert r.status_code == 200, (
+                f"conversation API returned {r.status_code} during"
+                " RELOAD_PENDING"
+            )
+
+            # Release gate and let task complete
+            release_gate(gate_dir)
+            wait_for_conv_completion(service.tracker, conv_id, timeout=15.0)
+
+        finally:
+            service.stop()
+            service_thread.join(timeout=10.0)

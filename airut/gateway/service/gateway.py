@@ -570,19 +570,21 @@ class GatewayService:
         """Return current work dirs for the dashboard.
 
         Called by the dashboard on each request to get fresh state.
-        Only includes directories for repos that started successfully.
+        Includes directories for repos in any non-FAILED state so that
+        conversations remain accessible during pending or in-progress
+        reloads.
 
         Returns:
-            List of work directories for live repos.
+            List of work directories for non-failed repos.
         """
         repo_states = self._repos_store.get().value
-        live_repo_ids = {
-            r.repo_id for r in repo_states if r.status == RepoStatus.LIVE
+        active_repo_ids = {
+            r.repo_id for r in repo_states if r.status != RepoStatus.FAILED
         }
         return [
             repo.conversation_manager.conversations_dir
             for repo_id, repo in self.repo_handlers.items()
-            if repo_id in live_repo_ids
+            if repo_id in active_repo_ids
         ]
 
     def stop(self) -> None:
