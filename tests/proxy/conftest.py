@@ -25,7 +25,7 @@ def _install_mitmproxy_mock() -> None:
         return  # Already installed (or real mitmproxy available)
 
     mitmproxy_mod = types.ModuleType("mitmproxy")
-    mitmproxy_mod.ctx = MagicMock()  # type: ignore[attr-defined]
+    mitmproxy_mod.ctx = MagicMock()  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
 
     # Build a minimal http module with HTTPFlow and Response.make
     http_mod = types.ModuleType("mitmproxy.http")
@@ -81,8 +81,8 @@ def _install_mitmproxy_mock() -> None:
             headers: dict | None = None,
         ) -> "_MockResponse":
             resp = _MockResponse(status_code)
-            resp._content = content  # type: ignore[attr-defined]
-            resp._headers = headers  # type: ignore[attr-defined]
+            resp._content = content  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
+            resp._headers = headers  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
             return resp
 
     class _MockError:
@@ -105,19 +105,19 @@ def _install_mitmproxy_mock() -> None:
             self.error = error
             self.metadata: dict = {}
 
-    http_mod.HTTPFlow = _MockHTTPFlow  # type: ignore[attr-defined]
-    http_mod.Response = _MockResponse  # type: ignore[attr-defined]
+    http_mod.HTTPFlow = _MockHTTPFlow  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
+    http_mod.Response = _MockResponse  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
 
     sys.modules["mitmproxy"] = mitmproxy_mod
     sys.modules["mitmproxy.http"] = http_mod
 
     # Expose mock helpers for test files
-    mitmproxy_mod.http = http_mod  # type: ignore[attr-defined]
-    http_mod.MockRequest = _MockRequest  # type: ignore[attr-defined]
-    http_mod.MockResponse = _MockResponse  # type: ignore[attr-defined]
-    http_mod.MockHTTPFlow = _MockHTTPFlow  # type: ignore[attr-defined]
-    http_mod.MockError = _MockError  # type: ignore[attr-defined]
-    http_mod.MockHeaders = _MockHeaders  # type: ignore[attr-defined]
+    mitmproxy_mod.http = http_mod  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
+    http_mod.MockRequest = _MockRequest  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
+    http_mod.MockResponse = _MockResponse  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
+    http_mod.MockHTTPFlow = _MockHTTPFlow  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
+    http_mod.MockError = _MockError  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
+    http_mod.MockHeaders = _MockHeaders  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
 
 
 def _add_proxy_to_path() -> None:

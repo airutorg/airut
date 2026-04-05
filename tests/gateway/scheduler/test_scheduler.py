@@ -306,8 +306,8 @@ class TestSchedulerExceptionPaths:
             # Second call: signal stop
             scheduler._stop_event.set()
 
-        scheduler._tick = mock_tick  # type: ignore[method-assign]
-        scheduler._compute_sleep = lambda: 0.1  # type: ignore[method-assign]
+        scheduler._tick = mock_tick  # type: ignore[method-assign]  # ty:ignore[invalid-assignment]
+        scheduler._compute_sleep = lambda: 0.1  # type: ignore[method-assign]  # ty:ignore[invalid-assignment]
         scheduler._run()
 
         # Should have called tick at least twice (error + stop)

@@ -60,14 +60,14 @@ class TestSlackChannelConfig:
             authorized=({"workspace_members": True},),
         )
         with pytest.raises(AttributeError):
-            config.bot_token = "new"  # type: ignore[misc]
+            config.bot_token = "new"  # type: ignore[misc]  # ty:ignore[invalid-assignment]
 
     def test_list_coerced_to_tuple(self) -> None:
         """Passing a list for authorized gets coerced to tuple."""
         config = SlackChannelConfig(
             bot_token="xoxb-test",
             app_token="xapp-test",
-            authorized=[{"workspace_members": True}],  # type: ignore[arg-type]
+            authorized=[{"workspace_members": True}],  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
         )
         assert isinstance(config.authorized, tuple)
 

@@ -339,7 +339,7 @@ class TestPollingLoop:
             cl._stop_event.set()
             return original_wait(timeout)
 
-        cl._stop_event.wait = interrupt_on_backoff  # type: ignore[assignment]
+        cl._stop_event.wait = interrupt_on_backoff  # type: ignore[assignment]  # ty:ignore[invalid-assignment]
 
         cl._polling_loop()
 

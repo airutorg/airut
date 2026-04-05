@@ -177,7 +177,7 @@ def make_service(
     # Configure claude_binary_cache mock to return a valid (path, version).
     # claude_binary_cache is a MagicMock (patched above), but ty sees the
     # declared type.
-    svc.claude_binary_cache.ensure.return_value = (  # type: ignore[union-attr]
+    svc.claude_binary_cache.ensure.return_value = (  # type: ignore[union-attr]  # ty:ignore[unresolved-attribute]
         Path("/fake/claude"),
         "1.0.0",
     )

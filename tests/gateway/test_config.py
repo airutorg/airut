@@ -3483,7 +3483,7 @@ class TestGitHubAppCredential:
             scopes=frozenset(["api.github.com"]),
         )
         with pytest.raises(AttributeError):
-            cred.app_id = "other"  # type: ignore[misc]
+            cred.app_id = "other"  # type: ignore[misc]  # ty:ignore[invalid-assignment]
 
 
 class TestGitHubAppEntry:
@@ -3536,7 +3536,7 @@ class TestGitHubAppEntry:
             scopes=("api.github.com",),
         )
         with pytest.raises(AttributeError):
-            entry.app_id = "other"  # type: ignore[misc]
+            entry.app_id = "other"  # type: ignore[misc]  # ty:ignore[invalid-assignment]
 
 
 class TestGenerateGitHubAppSurrogate:

@@ -158,7 +158,7 @@ def create_jinja_env() -> Environment:
     )
 
     # Register template globals (available in all templates)
-    globals_dict: dict[str, object] = env.globals  # type: ignore[assignment]
+    globals_dict: dict[str, object] = env.globals  # type: ignore[assignment]  # ty:ignore[invalid-assignment]
     globals_dict["format_duration"] = format_duration
     globals_dict["format_timestamp"] = format_timestamp
     globals_dict["logo_svg"] = _LOGO_SVG

@@ -375,7 +375,7 @@ class TestSlackServer:
         if files:
             # list[JsonDict] is list[JsonValue] which is JsonValue; ty
             # cannot resolve recursive type alias subtyping.
-            payload["files"] = files  # type: ignore[invalid-assignment]
+            payload["files"] = files  # type: ignore[invalid-assignment]  # ty:ignore[invalid-assignment]
 
         display_title = text[:60].split("\n")[0] if text else ""
 
