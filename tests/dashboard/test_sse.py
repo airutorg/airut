@@ -9,6 +9,7 @@ import json
 import threading
 from pathlib import Path
 from typing import cast
+from unittest.mock import patch
 
 from airut._json_types import JsonDict
 from airut.dashboard.sse import (
@@ -797,14 +798,13 @@ class TestSSEEventsLogStream:
             # Drain: return actual data
             return real_tail(offset)
 
-        event_log.tail = fake_tail  # type: ignore[assignment]  # ty:ignore[invalid-assignment]
-
-        # Collect remaining
-        remaining = []
-        for event in gen:
-            remaining.append(event)
-            if "event: done\n" in event:
-                break
+        with patch.object(event_log, "tail", fake_tail):
+            # Collect remaining
+            remaining = []
+            for event in gen:
+                remaining.append(event)
+                if "event: done\n" in event:
+                    break
 
         # Drain should have emitted HTML
         html_msgs = [e for e in remaining if "event: html\n" in e]
@@ -1033,13 +1033,12 @@ class TestSSENetworkLogStream:
                 return [], offset
             return real_tail(offset)
 
-        network_log.tail = fake_tail  # type: ignore[assignment]  # ty:ignore[invalid-assignment]
-
-        remaining = []
-        for event in gen:
-            remaining.append(event)
-            if "event: done\n" in event:
-                break
+        with patch.object(network_log, "tail", fake_tail):
+            remaining = []
+            for event in gen:
+                remaining.append(event)
+                if "event: done\n" in event:
+                    break
 
         html_msgs = [e for e in remaining if "event: html\n" in e]
         assert len(html_msgs) >= 1

@@ -206,7 +206,7 @@ class TestLogToFile:
             def flush(self) -> None:
                 raise OSError("disk full")
 
-        _log_to_file(FailWriter(), "should not crash")  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+        _log_to_file(FailWriter(), "should not crash")  # ty:ignore[invalid-argument-type]
 
     def test_multiple_writes(self) -> None:
         """Multiple calls append sequentially."""

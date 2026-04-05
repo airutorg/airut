@@ -13,12 +13,12 @@ import os
 import sys
 import time
 from collections.abc import Callable, Generator
-from email.message import EmailMessage, Message
+from email.message import Message
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock, patch
 
 
@@ -211,7 +211,7 @@ def create_email() -> Callable[..., MIMEMultipart | MIMEText]:
 @pytest.fixture
 def wait_for_response(
     integration_env: IntegrationEnvironment,
-) -> Callable[..., EmailMessage]:
+) -> Callable[..., Message]:
     """Fixture that provides a helper to wait for email responses.
 
     Returns a function that waits for a response email matching
@@ -226,9 +226,9 @@ def wait_for_response(
     """
 
     def _wait(
-        predicate: Callable[[EmailMessage], bool] | None = None,
+        predicate: Callable[[Message], bool] | None = None,
         timeout: float = 30.0,
-    ) -> EmailMessage:
+    ) -> Message:
         """Wait for a response email.
 
         Args:
@@ -338,9 +338,12 @@ def _create_slack_adapter_factory(
                     channel_config, repo_id=config.repo_id
                 )
             elif isinstance(channel_config, SlackChannelConfig):
-                client = slack_server.web_client
+                # slack_server provides test fakes (FakeWebClient,
+                # FakeSocketModeHandler) that satisfy the runtime
+                # interface but are not subclasses of the SDK types.
+                client = cast("Any", slack_server.web_client)
                 authorizer = SlackAuthorizer(
-                    client=client,  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+                    client=client,
                     rules=channel_config.authorized,
                     workspace_team_id=slack_server.workspace_team_id,
                 )
@@ -357,12 +360,12 @@ def _create_slack_adapter_factory(
                 listener = SlackChannelListener(
                     config=channel_config,
                     app=app,
-                    handler=slack_server.handler,  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+                    handler=cast("Any", slack_server.handler),
                 )
 
                 adapter = SlackChannelAdapter(
                     config=channel_config,
-                    client=client,  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+                    client=client,
                     authorizer=authorizer,
                     thread_store=thread_store,
                     slack_listener=listener,
@@ -378,7 +381,7 @@ def _create_slack_adapter_factory(
                     slack_server.set_submit_callback(submit)
                     _original(submit)
 
-                listener.start = patched_start  # type: ignore[assignment]  # ty:ignore[invalid-assignment]
+                listener.start = patched_start  # ty:ignore[invalid-assignment]
             else:
                 raise ValueError(
                     f"Unknown channel config: {type(channel_config).__name__}"

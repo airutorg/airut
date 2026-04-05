@@ -14,6 +14,7 @@ import concurrent.futures
 import threading
 import time
 from pathlib import Path
+from typing import cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1061,8 +1062,9 @@ class TestAcknowledgmentReply:
         mock_task = MagicMock()
         mock_task.execute.side_effect = track_execute
         mock_task.event_log = MagicMock()
-        service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock  # ty:ignore[invalid-assignment]
-        service.sandbox.create_task.return_value = mock_task  # type: ignore[invalid-assignment]  # mock  # ty:ignore[invalid-assignment]
+        mock_sandbox = cast(MagicMock, service.sandbox)
+        mock_sandbox.ensure_image.return_value = "airut:test"
+        mock_sandbox.create_task.return_value = mock_task
 
         # Create mock adapter
         adapter = MagicMock()
@@ -1141,8 +1143,9 @@ class TestAcknowledgmentReply:
             error_summary=None,
         )
         mock_task.event_log = MagicMock()
-        service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock  # ty:ignore[invalid-assignment]
-        service.sandbox.create_task.return_value = mock_task  # type: ignore[invalid-assignment]  # mock  # ty:ignore[invalid-assignment]
+        mock_sandbox = cast(MagicMock, service.sandbox)
+        mock_sandbox.ensure_image.return_value = "airut:test"
+        mock_sandbox.create_task.return_value = mock_task
 
         # Create mock adapter
         adapter = MagicMock()
@@ -1304,8 +1307,9 @@ class TestAcknowledgmentReply:
             error_summary=None,
         )
         mock_task.event_log = MagicMock()
-        service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock  # ty:ignore[invalid-assignment]
-        service.sandbox.create_task.return_value = mock_task  # type: ignore[invalid-assignment]  # mock  # ty:ignore[invalid-assignment]
+        mock_sandbox = cast(MagicMock, service.sandbox)
+        mock_sandbox.ensure_image.return_value = "airut:test"
+        mock_sandbox.create_task.return_value = mock_task
 
         # Create mock adapter
         adapter = MagicMock()

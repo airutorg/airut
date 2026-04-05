@@ -122,7 +122,7 @@ class TestVersioned:
     def test_versioned_is_immutable(self) -> None:
         v = Versioned(version=1, value="test")
         try:
-            v.version = 2  # type: ignore[misc]  # ty:ignore[invalid-assignment]
+            v.version = 2  # ty:ignore[invalid-assignment]
             assert False, "Should have raised"
         except AttributeError:
             pass

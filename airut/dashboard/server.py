@@ -368,7 +368,7 @@ class DashboardServer:
                 if wakeup_r in readable:
                     break
                 if server_fd in readable:
-                    server._handle_request_noblock()  # type: ignore[attr-defined]  # inherited from BaseServer  # ty:ignore[unresolved-attribute]
+                    server._handle_request_noblock()  # ty:ignore[unresolved-attribute]  # inherited from BaseServer
         except OSError:
             pass
 

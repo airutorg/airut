@@ -10,7 +10,7 @@ import json
 import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 
 if TYPE_CHECKING:
@@ -3786,7 +3786,9 @@ class TestPrefixedField:
         from airut.dashboard.templating import create_jinja_env
 
         env = create_jinja_env()
-        return env.globals["prefixed_field"]  # type: ignore[return-value]  # ty:ignore[invalid-return-type]
+        return cast(
+            Callable[..., "EditorFieldSchema"], env.globals["prefixed_field"]
+        )
 
     def test_prefixed_field_rejects_non_schema(self) -> None:
         pf = self._get_pf()
@@ -4529,7 +4531,7 @@ class TestHumanizeTypeFilter:
         from airut.dashboard.templating import create_jinja_env
 
         env = create_jinja_env()
-        return env.filters["humanize_type"]  # type: ignore[return-value]  # ty:ignore[invalid-return-type]
+        return cast(Callable[..., str], env.filters["humanize_type"])
 
     def test_basic_camel_case(self) -> None:
         assert self._get_filter()("MaskedSecret") == "Masked Secret"

@@ -8,7 +8,7 @@
 import threading
 from email.parser import BytesParser
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -174,10 +174,8 @@ def make_service(
         mock_ver.return_value = (MagicMock(git_sha="abc1234"), MagicMock())
         svc = GatewayService(server_config, repo_root=tmp_path)
 
-    # Configure claude_binary_cache mock to return a valid (path, version).
-    # claude_binary_cache is a MagicMock (patched above), but ty sees the
-    # declared type.
-    svc.claude_binary_cache.ensure.return_value = (  # type: ignore[union-attr]  # ty:ignore[unresolved-attribute]
+    # claude_binary_cache is a MagicMock (patched above).
+    cast(MagicMock, svc.claude_binary_cache).ensure.return_value = (
         Path("/fake/claude"),
         "1.0.0",
     )

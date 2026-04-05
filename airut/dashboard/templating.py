@@ -16,6 +16,7 @@ import re
 from collections.abc import Callable
 from importlib.resources import files
 from pathlib import Path
+from typing import Any, cast
 
 from jinja2 import BaseLoader, Environment, TemplateNotFound
 
@@ -157,13 +158,15 @@ def create_jinja_env() -> Environment:
         lstrip_blocks=True,
     )
 
-    # Register template globals (available in all templates)
-    globals_dict: dict[str, object] = env.globals  # type: ignore[assignment]  # ty:ignore[invalid-assignment]
-    globals_dict["format_duration"] = format_duration
-    globals_dict["format_timestamp"] = format_timestamp
-    globals_dict["logo_svg"] = _LOGO_SVG
-    globals_dict["static_url"] = static_url
-    globals_dict["MISSING"] = dataclasses.MISSING
+    # Register template globals (available in all templates).
+    # Jinja2's env.globals is dict[str, Any] at runtime but ty infers
+    # a narrow union from the stub defaults, so widen via cast.
+    g = cast(dict[str, Any], env.globals)
+    g["format_duration"] = format_duration
+    g["format_timestamp"] = format_timestamp
+    g["logo_svg"] = _LOGO_SVG
+    g["static_url"] = static_url
+    g["MISSING"] = dataclasses.MISSING
 
     # Config editor helpers — lazy import to avoid circular deps
     def _value_source(value: object) -> tuple[str, object]:
@@ -194,8 +197,8 @@ def create_jinja_env() -> Environment:
             item_fields=new_item_fields,
         )
 
-    globals_dict["value_source"] = _value_source
-    globals_dict["prefixed_field"] = _prefixed_field
+    g["value_source"] = _value_source
+    g["prefixed_field"] = _prefixed_field
 
     # Filters
     type_display_names: dict[str, str] = {

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
 from airut.gateway.config import ScheduleConfig, ScheduleDelivery
@@ -306,9 +306,11 @@ class TestSchedulerExceptionPaths:
             # Second call: signal stop
             scheduler._stop_event.set()
 
-        scheduler._tick = mock_tick  # type: ignore[method-assign]  # ty:ignore[invalid-assignment]
-        scheduler._compute_sleep = lambda: 0.1  # type: ignore[method-assign]  # ty:ignore[invalid-assignment]
-        scheduler._run()
+        with (
+            patch.object(scheduler, "_tick", mock_tick),
+            patch.object(scheduler, "_compute_sleep", lambda: 0.1),
+        ):
+            scheduler._run()
 
         # Should have called tick at least twice (error + stop)
         assert call_count >= 2
