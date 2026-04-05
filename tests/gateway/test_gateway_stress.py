@@ -805,10 +805,10 @@ class TestCaptureVersionInfo:
 class TestMultiRepoInteractions:
     """Tests for interactions across multiple repos."""
 
-    def test_work_dirs_only_includes_live_repos(
+    def test_work_dirs_excludes_failed_repos(
         self, email_config, tmp_path: Path
     ) -> None:
-        """_get_work_dirs returns dirs only for LIVE repos."""
+        """_get_work_dirs excludes FAILED repos."""
         svc, handler = make_service(email_config, tmp_path)
 
         svc._repos_store.update(
@@ -844,7 +844,7 @@ class TestMultiRepoInteractions:
     def test_work_dirs_empty_when_no_repos(
         self, email_config, tmp_path: Path
     ) -> None:
-        """_get_work_dirs returns empty list when no repos are live."""
+        """_get_work_dirs returns empty list when no non-failed repos."""
         svc, _ = make_service(email_config, tmp_path)
         # Default repos_store is empty tuple
         dirs = svc._get_work_dirs()
