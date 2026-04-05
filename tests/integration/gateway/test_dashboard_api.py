@@ -34,7 +34,6 @@ Endpoints covered:
 import json
 import sys
 import threading
-import time
 from pathlib import Path
 
 
@@ -45,7 +44,17 @@ from airut.dashboard.tracker import RepoStatus
 from airut.gateway.config import ServerConfig
 from airut.gateway.service import GatewayService
 
-from .conftest import get_message_text, wait_for_conv_completion, wait_for_task
+from .conftest import (
+    config_to_yaml,
+    gate_mock,
+    get_message_text,
+    release_gate,
+    wait_for_conv_completion,
+    wait_for_gate,
+    wait_for_reload,
+    wait_for_service_ready,
+    wait_for_task,
+)
 from .environment import IntegrationEnvironment
 
 
@@ -458,96 +467,6 @@ class TestDashboardAPIBeforeBoot:
         assert data["counts"]["completed"] == 0
 
 
-def _gate_mock(gate_dir: str) -> str:
-    """Return mock code that blocks until a gate file is written."""
-    return f"""
-events = [
-    generate_system_event(session_id),
-    generate_assistant_event("Working..."),
-    generate_result_event(session_id, "Done"),
-]
-
-def sync_between_events(event_num):
-    if event_num == 1:
-        gate = Path("{gate_dir}")
-        gate.mkdir(parents=True, exist_ok=True)
-        (gate / "ready").write_text("1")
-        while not (gate / "release").exists():
-            time.sleep(0.05)
-"""
-
-
-def _wait_for_gate(gate_dir: Path, timeout: float = 15.0) -> None:
-    """Wait until the gate mock writes its ready file."""
-    ready = gate_dir / "ready"
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if ready.exists():
-            return
-        time.sleep(0.05)
-    raise TimeoutError(f"Gate ready file not created within {timeout}s")
-
-
-def _release_gate(gate_dir: Path) -> None:
-    """Signal the gate mock to continue and complete."""
-    gate_dir.mkdir(parents=True, exist_ok=True)
-    (gate_dir / "release").write_text("1")
-
-
-def _config_to_yaml(env: IntegrationEnvironment) -> dict:
-    """Convert an IntegrationEnvironment to a YAML-serializable dict."""
-    from airut.gateway.config import EmailChannelConfig
-
-    gc = env.config.global_config
-    result: dict = {
-        "container_command": gc.container_command,
-        "execution": {
-            "max_concurrent": gc.max_concurrent_executions,
-            "shutdown_timeout": gc.shutdown_timeout_seconds,
-        },
-        "dashboard": {
-            "enabled": gc.dashboard_enabled,
-            "host": gc.dashboard_host,
-            "port": gc.dashboard_port,
-        },
-        "repos": {},
-    }
-    for repo_id, repo_cfg in env.config.repos.items():
-        repo_dict: dict = {
-            "repo_url": repo_cfg.git_repo_url,
-            "model": repo_cfg.model,
-        }
-        email_cfg = repo_cfg.channels.get("email")
-        if email_cfg is not None:
-            assert isinstance(email_cfg, EmailChannelConfig)
-            repo_dict["email"] = {
-                "account": {
-                    "username": email_cfg.account.username,
-                    "password": email_cfg.account.password,
-                    "from": email_cfg.account.from_address,
-                },
-                "imap": {
-                    "server": email_cfg.imap.server,
-                    "port": email_cfg.imap.port,
-                    "use_idle": email_cfg.imap.use_idle,
-                    "poll_interval": email_cfg.imap.poll_interval,
-                },
-                "smtp": {
-                    "server": email_cfg.smtp.server,
-                    "port": email_cfg.smtp.port,
-                    "require_auth": email_cfg.smtp.require_auth,
-                },
-                "auth": {
-                    "authorized_senders": list(
-                        email_cfg.auth.authorized_senders
-                    ),
-                    "trusted_authserv_id": email_cfg.auth.trusted_authserv_id,
-                },
-            }
-        result["repos"][repo_id] = repo_dict
-    return result
-
-
 class TestDashboardDuringReload:
     """Dashboard endpoints must remain accessible during pending repo reload.
 
@@ -573,7 +492,7 @@ class TestDashboardDuringReload:
         gate_dir = tmp_path / "gate_dashboard"
         config_path = integration_env.repo_root / "airut.yaml"
         source = YamlConfigSource(config_path)
-        yaml_data = _config_to_yaml(integration_env)
+        yaml_data = config_to_yaml(integration_env)
         source.save(yaml_data)
 
         snapshot = ServerConfig.from_source(source)
@@ -589,12 +508,12 @@ class TestDashboardDuringReload:
 
         try:
             # Wait for boot
-            _wait_for_boot(service)
+            wait_for_service_ready(service)
 
             # Start gate-controlled task
             msg = create_email(
                 subject="Dashboard reload test",
-                body=_gate_mock(str(gate_dir)),
+                body=gate_mock(str(gate_dir)),
             )
             integration_env.email_server.inject_message(msg)
 
@@ -605,7 +524,7 @@ class TestDashboardDuringReload:
                 timeout=15.0,
             )
             assert executing_task is not None
-            _wait_for_gate(gate_dir)
+            wait_for_gate(gate_dir)
 
             # Get conversation ID from acknowledgment email
             ack = integration_env.email_server.wait_for_sent(
@@ -624,7 +543,7 @@ class TestDashboardDuringReload:
             source.save(yaml_data)
 
             # Wait for config generation to advance
-            _wait_for_config_generation(service, gen)
+            wait_for_reload(service, gen)
 
             # Verify repo is in RELOAD_PENDING state
             repo_states = service._repos_store.get().value
@@ -661,39 +580,9 @@ class TestDashboardDuringReload:
             )
 
             # Release gate and let task complete
-            _release_gate(gate_dir)
+            release_gate(gate_dir)
             wait_for_conv_completion(service.tracker, conv_id, timeout=15.0)
 
         finally:
             service.stop()
             service_thread.join(timeout=10.0)
-
-
-def _wait_for_boot(service: "GatewayService", timeout: float = 15.0) -> None:
-    """Wait for service boot to reach READY."""
-    from airut.dashboard.tracker import BootPhase
-
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        boot = service._boot_store.get().value
-        if boot.phase == BootPhase.READY:
-            return
-        if boot.phase == BootPhase.FAILED:
-            raise RuntimeError(f"Service boot failed: {boot.error_message}")
-        time.sleep(0.05)
-    raise TimeoutError(f"Service did not boot within {timeout}s")
-
-
-def _wait_for_config_generation(
-    service: "GatewayService",
-    generation: int,
-    timeout: float = 5.0,
-) -> None:
-    """Wait until config_generation > generation."""
-    with service._reload_condition:
-        if not service._reload_condition.wait_for(
-            lambda: service._config_generation > generation, timeout
-        ):
-            raise TimeoutError(
-                f"Config reload did not advance within {timeout}s"
-            )

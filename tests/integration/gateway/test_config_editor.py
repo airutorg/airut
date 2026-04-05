@@ -38,13 +38,16 @@ from airut.config.source import make_env_loader
 from airut.gateway.config import GlobalConfig, ServerConfig
 from airut.gateway.service import GatewayService
 
-from .conftest import MOCK_CONTAINER_COMMAND, get_message_text
+from .conftest import (
+    MOCK_CONTAINER_COMMAND,
+    get_message_text,
+    wait_for_reload,
+    wait_for_service_ready,
+)
 from .environment import IntegrationEnvironment, create_test_repo
 from .test_config_reload import (
     ConfigFile,
-    _wait_for_service_ready,
     running_service,
-    wait_for_reload,
     wait_for_repo_status,
 )
 
@@ -244,7 +247,7 @@ class TestConfigPageRendering:
         service_thread = threading.Thread(target=service.start, daemon=True)
         service_thread.start()
         try:
-            _wait_for_service_ready(service)
+            wait_for_service_ready(service)
             assert service.dashboard is not None, "Dashboard should be enabled"
             client = Client(service.dashboard._wsgi_app)
 

@@ -36,9 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from airut.config.source import YamlConfigSource
 from airut.conversation import ConversationStore
-from airut.dashboard.tracker import BootPhase
 from airut.gateway.config import (
-    EmailChannelConfig,
     ServerConfig,
     get_storage_dir,
 )
@@ -47,8 +45,14 @@ from airut.yaml_env import EnvVar, VarRef
 
 from .conftest import (
     MOCK_CONTAINER_COMMAND,
+    config_to_yaml,
+    gate_mock,
     get_message_text,
+    release_gate,
     wait_for_conv_completion,
+    wait_for_gate,
+    wait_for_reload,
+    wait_for_service_ready,
     wait_for_task,
 )
 from .email_server import TestEmailServer as _TestEmailServer
@@ -75,7 +79,7 @@ class ConfigFile:
     ) -> "ConfigFile":
         """Build a ConfigFile from an IntegrationEnvironment."""
         cf = cls(path)
-        cf._data = _config_to_yaml(env)
+        cf._data = config_to_yaml(env)
         cf.write()
         return cf
 
@@ -133,66 +137,6 @@ class ConfigFile:
         return self._data
 
 
-def _config_to_yaml(env: IntegrationEnvironment) -> dict[str, Any]:
-    """Convert an IntegrationEnvironment to a YAML-serializable dict."""
-    gc = env.config.global_config
-    result: dict[str, Any] = {
-        "container_command": gc.container_command,
-        "execution": {
-            "max_concurrent": gc.max_concurrent_executions,
-            "shutdown_timeout": gc.shutdown_timeout_seconds,
-        },
-        "dashboard": {
-            "enabled": gc.dashboard_enabled,
-            "host": gc.dashboard_host,
-            "port": gc.dashboard_port,
-        },
-        "repos": {},
-    }
-
-    for repo_id, repo_cfg in env.config.repos.items():
-        repo_dict: dict[str, Any] = {
-            "repo_url": repo_cfg.git_repo_url,
-            "model": repo_cfg.model,
-        }
-        if repo_cfg.effort is not None:
-            repo_dict["effort"] = repo_cfg.effort
-        if repo_cfg.secrets:
-            repo_dict["secrets"] = dict(repo_cfg.secrets)
-
-        email_cfg = repo_cfg.channels.get("email")
-        if email_cfg is not None:
-            assert isinstance(email_cfg, EmailChannelConfig)
-            repo_dict["email"] = {
-                "account": {
-                    "username": email_cfg.account.username,
-                    "password": email_cfg.account.password,
-                    "from": email_cfg.account.from_address,
-                },
-                "imap": {
-                    "server": email_cfg.imap.server,
-                    "port": email_cfg.imap.port,
-                    "use_idle": email_cfg.imap.use_idle,
-                    "poll_interval": email_cfg.imap.poll_interval,
-                },
-                "smtp": {
-                    "server": email_cfg.smtp.server,
-                    "port": email_cfg.smtp.port,
-                    "require_auth": email_cfg.smtp.require_auth,
-                },
-                "auth": {
-                    "authorized_senders": list(
-                        email_cfg.auth.authorized_senders
-                    ),
-                    "trusted_authserv_id": email_cfg.auth.trusted_authserv_id,
-                },
-            }
-
-        result["repos"][repo_id] = repo_dict
-
-    return result
-
-
 def create_file_service(
     config_file: ConfigFile,
     env: IntegrationEnvironment,
@@ -207,27 +151,6 @@ def create_file_service(
         config_source=source,
         config_snapshot=snapshot,
     )
-
-
-def wait_for_reload(
-    service: GatewayService,
-    generation: int,
-    timeout: float = 5.0,
-) -> None:
-    """Wait until config_generation > generation.
-
-    Uses the service's ``_reload_condition`` for instant wakeup
-    instead of polling.
-    """
-    with service._reload_condition:
-        if not service._reload_condition.wait_for(
-            lambda: service._config_generation > generation, timeout
-        ):
-            raise TimeoutError(
-                f"Config reload did not complete within {timeout}s "
-                f"(generation={service._config_generation}, "
-                f"expected>{generation})"
-            )
 
 
 def wait_for_reload_error(
@@ -279,21 +202,6 @@ def wait_for_repo_status(
     )
 
 
-def _wait_for_service_ready(
-    service: GatewayService, timeout: float = 15.0
-) -> None:
-    """Wait for the service to complete boot."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        boot = service._boot_store.get().value
-        if boot.phase == BootPhase.READY:
-            return
-        if boot.phase == BootPhase.FAILED:
-            raise RuntimeError(f"Service boot failed: {boot.error_message}")
-        time.sleep(0.05)
-    raise TimeoutError(f"Service did not boot within {timeout}s")
-
-
 def _wait_for_watcher_ready(
     service: GatewayService, timeout: float = 5.0
 ) -> None:
@@ -319,7 +227,7 @@ def running_service(
     service_thread = threading.Thread(target=service.start, daemon=True)
     service_thread.start()
     try:
-        _wait_for_service_ready(service)
+        wait_for_service_ready(service)
         _wait_for_watcher_ready(service)
         yield service
     finally:
@@ -359,48 +267,6 @@ events = [
     generate_result_event(session_id, "Done"),
 ]
 """
-
-
-def _gate_mock(gate_dir: str) -> str:
-    """Return mock code that blocks until a gate file is written.
-
-    The mock writes ``<gate_dir>/ready`` when it starts blocking,
-    and polls for ``<gate_dir>/release`` to continue.  This lets
-    tests control task duration deterministically instead of using
-    ``time.sleep()``.
-    """
-    return f"""
-events = [
-    generate_system_event(session_id),
-    generate_assistant_event("Working..."),
-    generate_result_event(session_id, "Done"),
-]
-
-def sync_between_events(event_num):
-    if event_num == 1:
-        gate = Path("{gate_dir}")
-        gate.mkdir(parents=True, exist_ok=True)
-        (gate / "ready").write_text("1")
-        while not (gate / "release").exists():
-            time.sleep(0.05)
-"""
-
-
-def _wait_for_gate(gate_dir: Path, timeout: float = 15.0) -> None:
-    """Wait until the gate mock writes its ready file."""
-    ready = gate_dir / "ready"
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if ready.exists():
-            return
-        time.sleep(0.05)
-    raise TimeoutError(f"Gate ready file not created within {timeout}s")
-
-
-def _release_gate(gate_dir: Path) -> None:
-    """Signal the gate mock to continue and complete."""
-    gate_dir.mkdir(parents=True, exist_ok=True)
-    (gate_dir / "release").write_text("1")
 
 
 def _read_env_capture(conv_id: str, repo_id: str = "test") -> dict[str, str]:
@@ -881,7 +747,7 @@ class TestRepoScopeReload:
             # Start a gate-controlled task
             msg = create_email(
                 subject="Slow task",
-                body=_gate_mock(str(gate_dir)),
+                body=gate_mock(str(gate_dir)),
             )
             integration_env.email_server.inject_message(msg)
 
@@ -892,7 +758,7 @@ class TestRepoScopeReload:
                 timeout=15.0,
             )
             assert executing_task is not None
-            _wait_for_gate(gate_dir)
+            wait_for_gate(gate_dir)
 
             # Modify repo-scope config while task runs
             gen = service._config_generation
@@ -904,7 +770,7 @@ class TestRepoScopeReload:
 
             # Repo should be pending reload (task still active)
             # Release the gate to let the task complete
-            _release_gate(gate_dir)
+            release_gate(gate_dir)
 
             # Wait for task to complete — should succeed
             ack = integration_env.email_server.wait_for_sent(
@@ -1163,7 +1029,7 @@ class TestServerScopeReload:
             # Start gate-controlled task
             msg = create_email(
                 subject="Slow server test",
-                body=_gate_mock(str(gate_dir)),
+                body=gate_mock(str(gate_dir)),
             )
             integration_env.email_server.inject_message(msg)
 
@@ -1174,7 +1040,7 @@ class TestServerScopeReload:
                 timeout=15.0,
             )
             assert executing_task is not None
-            _wait_for_gate(gate_dir)
+            wait_for_gate(gate_dir)
 
             # Change dashboard port while task runs
             gen = service._config_generation
@@ -1187,7 +1053,7 @@ class TestServerScopeReload:
             assert service.dashboard.port == port1
 
             # Release the gate to let the task complete
-            _release_gate(gate_dir)
+            release_gate(gate_dir)
 
             # Wait for task to complete
             ack = integration_env.email_server.wait_for_sent(
