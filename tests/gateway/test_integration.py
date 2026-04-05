@@ -1061,8 +1061,8 @@ class TestAcknowledgmentReply:
         mock_task = MagicMock()
         mock_task.execute.side_effect = track_execute
         mock_task.event_log = MagicMock()
-        service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock
-        service.sandbox.create_task.return_value = mock_task  # type: ignore[invalid-assignment]  # mock
+        service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock  # ty:ignore[invalid-assignment]
+        service.sandbox.create_task.return_value = mock_task  # type: ignore[invalid-assignment]  # mock  # ty:ignore[invalid-assignment]
 
         # Create mock adapter
         adapter = MagicMock()
@@ -1141,8 +1141,8 @@ class TestAcknowledgmentReply:
             error_summary=None,
         )
         mock_task.event_log = MagicMock()
-        service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock
-        service.sandbox.create_task.return_value = mock_task  # type: ignore[invalid-assignment]  # mock
+        service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock  # ty:ignore[invalid-assignment]
+        service.sandbox.create_task.return_value = mock_task  # type: ignore[invalid-assignment]  # mock  # ty:ignore[invalid-assignment]
 
         # Create mock adapter
         adapter = MagicMock()
@@ -1304,8 +1304,8 @@ class TestAcknowledgmentReply:
             error_summary=None,
         )
         mock_task.event_log = MagicMock()
-        service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock
-        service.sandbox.create_task.return_value = mock_task  # type: ignore[invalid-assignment]  # mock
+        service.sandbox.ensure_image.return_value = "airut:test"  # type: ignore[invalid-assignment]  # mock  # ty:ignore[invalid-assignment]
+        service.sandbox.create_task.return_value = mock_task  # type: ignore[invalid-assignment]  # mock  # ty:ignore[invalid-assignment]
 
         # Create mock adapter
         adapter = MagicMock()

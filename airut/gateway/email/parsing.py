@@ -190,7 +190,7 @@ def extract_body(message: Message) -> str:
                 payload = part.get_payload(decode=True)
                 if payload:
                     charset = part.get_content_charset() or "utf-8"
-                    html_body = payload.decode(charset, errors="replace")  # type: ignore[union-attr]
+                    html_body = payload.decode(charset, errors="replace")  # type: ignore[union-attr]  # ty:ignore[unresolved-attribute]
                     body = html_to_text(html_body, strip_quotes=True)
                     logger.debug(
                         "Extracted body from HTML part (%d chars HTML"
@@ -207,7 +207,7 @@ def extract_body(message: Message) -> str:
                 payload = part.get_payload(decode=True)
                 if payload:
                     charset = part.get_content_charset() or "utf-8"
-                    body = payload.decode(charset, errors="replace")  # type: ignore[union-attr]
+                    body = payload.decode(charset, errors="replace")  # type: ignore[union-attr]  # ty:ignore[unresolved-attribute]
                     logger.debug(
                         "Extracted body from multipart message"
                         " (%d chars, charset=%s)",
@@ -222,7 +222,7 @@ def extract_body(message: Message) -> str:
         payload = message.get_payload(decode=True)
         if payload:
             charset = message.get_content_charset() or "utf-8"
-            raw = payload.decode(charset, errors="replace")  # type: ignore[union-attr]
+            raw = payload.decode(charset, errors="replace")  # type: ignore[union-attr]  # ty:ignore[unresolved-attribute]
             if content_type == "text/html":
                 body = html_to_text(raw, strip_quotes=True)
                 logger.debug(
@@ -278,7 +278,7 @@ def extract_attachments(
                     payload = part.get_payload(decode=True)
                     if payload:
                         with open(filepath, "wb") as f:
-                            f.write(payload)  # type: ignore[arg-type]
+                            f.write(payload)  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
                         filenames.append(filename)
                         logger.debug(
                             "Saved attachment: %s (%d bytes)",

@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from mitmproxy.http import (  # type: ignore[attr-defined]
+from mitmproxy.http import (  # type: ignore[attr-defined]  # ty:ignore[unresolved-import]
     MockError,
     MockHTTPFlow,
     MockRequest,
@@ -1090,7 +1090,7 @@ def _pf_with_signing() -> ProxyFilter:
     pf.domains = ["*.amazonaws.com", "*.r2.cloudflarestorage.com"]
     # SigningReplacement values (str | list[str]) are valid
     # _JsonValue subtypes; ty cannot prove TypedDict compat.
-    pf.replacements = {  # type: ignore[invalid-assignment]
+    pf.replacements = {  # type: ignore[invalid-assignment]  # ty:ignore[invalid-assignment]
         SURROGATE_ACCESS_KEY_ID: SIGNING_REPLACEMENT,
     }
     return pf

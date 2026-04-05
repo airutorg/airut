@@ -468,7 +468,7 @@ class TestMaskedSecret:
             headers=("Authorization",),
         )
         with __import__("pytest").raises(AttributeError):
-            secret.env_var = "OTHER"  # type: ignore[misc]
+            secret.env_var = "OTHER"  # type: ignore[misc]  # ty:ignore[invalid-assignment]
 
 
 class TestSigningCredential:
@@ -514,7 +514,7 @@ class TestSigningCredential:
             scopes=(),
         )
         with __import__("pytest").raises(AttributeError):
-            cred.access_key_id = "X"  # type: ignore[misc]
+            cred.access_key_id = "X"  # type: ignore[misc]  # ty:ignore[invalid-assignment]
 
 
 class TestPreparedSecrets:
@@ -577,7 +577,7 @@ class TestGitHubAppCredential:
             scopes=("api.github.com",),
         )
         with __import__("pytest").raises(AttributeError):
-            cred.app_id = "other"  # type: ignore[misc]
+            cred.app_id = "other"  # type: ignore[misc]  # ty:ignore[invalid-assignment]
 
 
 class TestGitHubAppEntry:

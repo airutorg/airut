@@ -2680,7 +2680,7 @@ class TestSandboxCliConfig:
 
         config = _SandboxCliConfig()
         with pytest.raises(AttributeError):
-            config.network_sandbox = False  # type: ignore[misc]
+            config.network_sandbox = False  # type: ignore[misc]  # ty:ignore[invalid-assignment]
 
 
 # -------------------------------------------------------------------

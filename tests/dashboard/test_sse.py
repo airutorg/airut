@@ -797,7 +797,7 @@ class TestSSEEventsLogStream:
             # Drain: return actual data
             return real_tail(offset)
 
-        event_log.tail = fake_tail  # type: ignore[assignment]
+        event_log.tail = fake_tail  # type: ignore[assignment]  # ty:ignore[invalid-assignment]
 
         # Collect remaining
         remaining = []
@@ -1033,7 +1033,7 @@ class TestSSENetworkLogStream:
                 return [], offset
             return real_tail(offset)
 
-        network_log.tail = fake_tail  # type: ignore[assignment]
+        network_log.tail = fake_tail  # type: ignore[assignment]  # ty:ignore[invalid-assignment]
 
         remaining = []
         for event in gen:

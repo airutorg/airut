@@ -29,7 +29,7 @@ class TestAllowlistDomain:
     def test_frozen(self) -> None:
         d = AllowlistDomain(host="example.com")
         with pytest.raises(AttributeError):
-            d.host = "other.com"  # type: ignore[misc]
+            d.host = "other.com"  # type: ignore[misc]  # ty:ignore[invalid-assignment]
 
 
 class TestAllowlistUrlPattern:
@@ -54,7 +54,7 @@ class TestAllowlistUrlPattern:
     def test_frozen(self) -> None:
         p = AllowlistUrlPattern(host="example.com")
         with pytest.raises(AttributeError):
-            p.host = "other.com"  # type: ignore[misc]
+            p.host = "other.com"  # type: ignore[misc]  # ty:ignore[invalid-assignment]
 
 
 class TestAllowlist:
@@ -78,7 +78,7 @@ class TestAllowlist:
     def test_frozen(self) -> None:
         al = Allowlist(domains=(), url_patterns=())
         with pytest.raises(AttributeError):
-            al.domains = ()  # type: ignore[misc]
+            al.domains = ()  # type: ignore[misc]  # ty:ignore[invalid-assignment]
 
 
 class TestParseAllowlistYaml:

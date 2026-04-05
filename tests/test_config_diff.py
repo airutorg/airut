@@ -180,8 +180,8 @@ class TestDiffConfigsWithSnapshots:
         inner_b = Inner(x=2)
         snap_a = ConfigSnapshot(inner_a, frozenset({"x"}))
         snap_b = ConfigSnapshot(inner_b, frozenset({"x"}))
-        outer_a = Outer(child=snap_a)  # type: ignore[arg-type]
-        outer_b = Outer(child=snap_b)  # type: ignore[arg-type]
+        outer_a = Outer(child=snap_a)  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
+        outer_b = Outer(child=snap_b)  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
 
         a = ConfigSnapshot(outer_a, frozenset({"child"}))
         b = ConfigSnapshot(outer_b, frozenset({"child"}))

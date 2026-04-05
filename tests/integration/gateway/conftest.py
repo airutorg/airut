@@ -340,7 +340,7 @@ def _create_slack_adapter_factory(
             elif isinstance(channel_config, SlackChannelConfig):
                 client = slack_server.web_client
                 authorizer = SlackAuthorizer(
-                    client=client,  # type: ignore[arg-type]
+                    client=client,  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
                     rules=channel_config.authorized,
                     workspace_team_id=slack_server.workspace_team_id,
                 )
@@ -357,12 +357,12 @@ def _create_slack_adapter_factory(
                 listener = SlackChannelListener(
                     config=channel_config,
                     app=app,
-                    handler=slack_server.handler,  # type: ignore[arg-type]
+                    handler=slack_server.handler,  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
                 )
 
                 adapter = SlackChannelAdapter(
                     config=channel_config,
-                    client=client,  # type: ignore[arg-type]
+                    client=client,  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
                     authorizer=authorizer,
                     thread_store=thread_store,
                     slack_listener=listener,
@@ -378,7 +378,7 @@ def _create_slack_adapter_factory(
                     slack_server.set_submit_callback(submit)
                     _original(submit)
 
-                listener.start = patched_start  # type: ignore[assignment]
+                listener.start = patched_start  # type: ignore[assignment]  # ty:ignore[invalid-assignment]
             else:
                 raise ValueError(
                     f"Unknown channel config: {type(channel_config).__name__}"

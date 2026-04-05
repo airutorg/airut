@@ -67,7 +67,7 @@ class ConfigSnapshot[T]:
         """
         result: dict[str, Any] = {}
 
-        for f in dataclasses.fields(self._instance):  # type: ignore[arg-type]
+        for f in dataclasses.fields(self._instance):  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
             if not include_defaults and f.name not in self._provided_keys:
                 continue
 
@@ -79,7 +79,7 @@ class ConfigSnapshot[T]:
     def __repr__(self) -> str:
         cls_name = type(self._instance).__name__
         n_provided = len(self._provided_keys)
-        n_total = len(dataclasses.fields(self._instance))  # type: ignore[arg-type]
+        n_total = len(dataclasses.fields(self._instance))  # type: ignore[arg-type]  # ty:ignore[invalid-argument-type]
         return f"ConfigSnapshot({cls_name}, provided={n_provided}/{n_total})"
 
     def __eq__(self, other: object) -> bool:

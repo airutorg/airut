@@ -194,7 +194,7 @@ class TestSMTPHandler(SMTPMessageHandler):
 
     def handle_message(  # type: ignore[override]
         self, message: EmailMessage
-    ) -> None:
+    ) -> None:  # ty:ignore[invalid-method-override]
         """Handle incoming SMTP message by storing in outbox."""
         logger.info("SMTP received message: %s", message.get("Subject", ""))
         self.outbox.add_message(message)
