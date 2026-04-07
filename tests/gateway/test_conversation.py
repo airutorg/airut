@@ -16,6 +16,7 @@ from airut.gateway.conversation import (
     ConversationError,
     ConversationManager,
     GitCloneError,
+    _force_rmtree,
 )
 
 
@@ -324,3 +325,118 @@ class TestConversationManager:
         path = manager.get_conversation_dir("abcdef01")
 
         assert path == storage_dir / "conversations" / "abcdef01"
+
+    def test_delete_falls_back_to_podman_unshare(
+        self, master_repo: Path, storage_dir: Path
+    ) -> None:
+        """delete() falls back to podman unshare on PermissionError."""
+        manager = ConversationManager(str(master_repo), storage_dir)
+        conversation_id, repo_path = manager.initialize_new()
+        conversation_dir = manager.get_conversation_dir(conversation_id)
+
+        with (
+            patch(
+                "airut.gateway.conversation.shutil.rmtree",
+                side_effect=PermissionError("Permission denied"),
+            ),
+            patch("airut.gateway.conversation.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+
+            result = manager.delete(conversation_id)
+
+        assert result is True
+        mock_run.assert_called_once_with(
+            ["podman", "unshare", "rm", "-rf", str(conversation_dir)],
+            capture_output=True,
+            timeout=60,
+        )
+
+
+class TestForceRmtree:
+    """Tests for _force_rmtree helper."""
+
+    def test_normal_rmtree_succeeds(self, tmp_path: Path) -> None:
+        """Uses shutil.rmtree when it succeeds."""
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "file.txt").write_text("hello")
+
+        _force_rmtree(target)
+
+        assert not target.exists()
+
+    def test_falls_back_to_podman_unshare(self, tmp_path: Path) -> None:
+        """Falls back to podman unshare on PermissionError."""
+        target = tmp_path / "target"
+        target.mkdir()
+
+        with (
+            patch(
+                "airut.gateway.conversation.shutil.rmtree",
+                side_effect=PermissionError("Permission denied"),
+            ),
+            patch("airut.gateway.conversation.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(returncode=0)
+
+            _force_rmtree(target)
+
+        mock_run.assert_called_once_with(
+            ["podman", "unshare", "rm", "-rf", str(target)],
+            capture_output=True,
+            timeout=60,
+        )
+
+    def test_raises_when_both_fail(self, tmp_path: Path) -> None:
+        """Raises OSError when podman unshare also fails."""
+        target = tmp_path / "target"
+        target.mkdir()
+
+        with (
+            patch(
+                "airut.gateway.conversation.shutil.rmtree",
+                side_effect=PermissionError("Permission denied"),
+            ),
+            patch("airut.gateway.conversation.subprocess.run") as mock_run,
+        ):
+            mock_run.return_value = MagicMock(
+                returncode=1, stderr=b"unshare failed"
+            )
+
+            with pytest.raises(OSError, match="podman unshare rm -rf failed"):
+                _force_rmtree(target)
+
+    def test_podman_unshare_timeout_raises_oserror(
+        self, tmp_path: Path
+    ) -> None:
+        """Raises OSError when podman unshare times out."""
+        target = tmp_path / "target"
+        target.mkdir()
+
+        with (
+            patch(
+                "airut.gateway.conversation.shutil.rmtree",
+                side_effect=PermissionError("Permission denied"),
+            ),
+            patch(
+                "airut.gateway.conversation.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(
+                    cmd=["podman", "unshare", "rm", "-rf", str(target)],
+                    timeout=60,
+                ),
+            ),
+        ):
+            with pytest.raises(OSError, match="timed out"):
+                _force_rmtree(target)
+
+    def test_non_permission_error_propagates(self, tmp_path: Path) -> None:
+        """Non-PermissionError from shutil.rmtree propagates directly."""
+        target = tmp_path / "nonexistent"
+
+        with patch(
+            "airut.gateway.conversation.shutil.rmtree",
+            side_effect=FileNotFoundError("No such file"),
+        ):
+            with pytest.raises(FileNotFoundError):
+                _force_rmtree(target)
