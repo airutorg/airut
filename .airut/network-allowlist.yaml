@@ -100,6 +100,12 @@ url_prefixes:
   - host: unpkg.com
     path: /htmx-ext-sse*
     methods: [GET, HEAD]
+  - host: registry.npmjs.org
+    path: /htmx.org*
+    methods: [GET]
+  - host: registry.npmjs.org
+    path: /htmx-ext-sse*
+    methods: [GET]
 
   # Slack API documentation — read-only reference
   - host: docs.slack.dev
