@@ -13,12 +13,50 @@ import logging
 import re
 import secrets
 import shutil
+import subprocess
 from pathlib import Path
 
 from airut.git_mirror import GitMirrorCache
 
 
 logger = logging.getLogger(__name__)
+
+
+def _force_rmtree(path: Path) -> None:
+    """Remove a directory tree, handling rootless-podman UID-mapped files.
+
+    Rootless podman maps container UIDs to subordinate host UIDs.  Files
+    created inside a container may be owned by those subordinate UIDs,
+    making them undeletable by the host user with plain ``shutil.rmtree``.
+
+    Falls back to ``podman unshare rm -rf`` which runs inside the same
+    user namespace and can therefore remove those files.
+    """
+    try:
+        shutil.rmtree(path)
+    except PermissionError as perm_err:
+        logger.debug(
+            "shutil.rmtree failed with PermissionError, "
+            "falling back to podman unshare: %s",
+            path,
+        )
+        try:
+            result = subprocess.run(
+                ["podman", "unshare", "rm", "-rf", str(path)],
+                capture_output=True,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired as timeout_err:
+            raise OSError(
+                f"podman unshare rm -rf timed out for {path}"
+            ) from timeout_err
+        if result.returncode != 0:
+            stderr = result.stderr.decode(errors="replace").strip()
+            raise OSError(
+                f"podman unshare rm -rf failed (rc={result.returncode})"
+                f": {stderr}"
+            ) from perm_err
+        logger.debug("Removed via podman unshare: %s", path)
 
 
 CONVERSATION_ID_PATTERN = re.compile(r"^[0-9a-f]{8}$")
@@ -136,7 +174,7 @@ class ConversationManager:
                 logger.debug(
                     "Cleaning up partial conversation at %s", conversation_dir
                 )
-                shutil.rmtree(conversation_dir)
+                _force_rmtree(conversation_dir)
 
             raise GitCloneError(
                 f"Failed to clone repository for conversation "
@@ -234,7 +272,7 @@ class ConversationManager:
             return False
 
         logger.info("Deleting conversation: %s", conversation_id)
-        shutil.rmtree(conversation_dir)
+        _force_rmtree(conversation_dir)
         logger.debug("Deleted conversation directory at %s", conversation_dir)
 
         return True
