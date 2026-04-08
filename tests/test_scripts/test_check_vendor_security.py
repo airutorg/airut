@@ -358,8 +358,8 @@ class TestGithubGet:
 class TestGetLatestVersion:
     """Tests for get_latest_version."""
 
-    def test_returns_version_from_unpkg(self) -> None:
-        """Returns version from unpkg package.json."""
+    def test_returns_version_from_npm_registry(self) -> None:
+        """Returns version from npm registry."""
         with patch("scripts.check_vendor_security.urlopen") as mock_urlopen:
             mock_response = mock_urlopen.return_value.__enter__.return_value
             mock_response.read.return_value = b'{"version": "2.0.9"}'

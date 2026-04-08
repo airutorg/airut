@@ -192,7 +192,7 @@ def _check_condition(ver: tuple[int, ...], condition: str) -> bool:
 
 
 def get_latest_version(npm_package: str) -> str | None:
-    """Get the latest version of an npm package via unpkg.
+    """Get the latest version of an npm package from the npm registry.
 
     Args:
         npm_package: The npm package name (e.g., "htmx.org").
@@ -200,8 +200,8 @@ def get_latest_version(npm_package: str) -> str | None:
     Returns:
         Version string, or None on failure.
     """
-    url = f"https://unpkg.com/{npm_package}/package.json"
-    request = Request(url)
+    url = f"https://registry.npmjs.org/{npm_package}/latest"
+    request = Request(url, headers={"Accept": "application/json"})
     try:
         with urlopen(request, timeout=30) as response:
             data = json.loads(response.read())
