@@ -27,6 +27,7 @@ Every network fetch is required to succeed — no silent passes.
 from __future__ import annotations
 
 import re
+import time
 
 import httpx
 import pytest
@@ -44,6 +45,39 @@ _LINUX_PLATFORMS = frozenset(
 
 # Timeout for individual HTTP requests (seconds).
 _HTTP_TIMEOUT = 30
+
+# Retry parameters for transient HTTP errors (429, 5xx).
+_MAX_RETRIES = 3
+_RETRY_BACKOFF_BASE = 2.0  # seconds
+
+
+def _request_with_retry(
+    client: httpx.Client,
+    method: str,
+    url: str,
+) -> httpx.Response:
+    """Issue an HTTP request with retry on 429 / 5xx errors.
+
+    Returns the response on success (2xx/3xx) or non-retryable 4xx.
+    Raises ``HTTPStatusError`` on persistent 429 or 5xx after
+    exhausting retries, and on any other client error immediately.
+    """
+    last_resp: httpx.Response | None = None
+    for attempt in range(_MAX_RETRIES + 1):
+        resp = client.request(method, url)
+        if resp.status_code != 429 and resp.status_code < 500:
+            return resp
+        last_resp = resp
+        if attempt < _MAX_RETRIES:
+            delay = _RETRY_BACKOFF_BASE * (2**attempt)
+            # Respect Retry-After header if present.
+            retry_after = resp.headers.get("retry-after")
+            if retry_after and retry_after.isdigit():
+                delay = max(delay, float(retry_after))
+            time.sleep(delay)
+    assert last_resp is not None
+    last_resp.raise_for_status()
+    return last_resp  # unreachable, but satisfies type checker
 
 
 @pytest.mark.allow_hosts(
@@ -63,7 +97,7 @@ class TestInstallScriptCompat:
     def bootstrap_script(self) -> str:
         """Fetch the install script, following redirects to bootstrap.sh."""
         with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as c:
-            resp = c.get("https://claude.ai/install.sh")
+            resp = _request_with_retry(c, "GET", "https://claude.ai/install.sh")
             resp.raise_for_status()
             return resp.text
 
@@ -72,7 +106,7 @@ class TestInstallScriptCompat:
         """Resolve the ``latest`` channel to a concrete version."""
         url = f"{GCS_BUCKET}/latest"
         with httpx.Client(timeout=_HTTP_TIMEOUT) as c:
-            resp = c.get(url)
+            resp = _request_with_retry(c, "GET", url)
             resp.raise_for_status()
             version = resp.text.strip()
             assert re.match(r"^\d+\.\d+\.\d+", version), (
@@ -85,7 +119,7 @@ class TestInstallScriptCompat:
         """Fetch the manifest for the latest version."""
         url = f"{GCS_BUCKET}/{latest_version}/manifest.json"
         with httpx.Client(timeout=_HTTP_TIMEOUT) as c:
-            resp = c.get(url)
+            resp = _request_with_retry(c, "GET", url)
             resp.raise_for_status()
             return resp.text
 
@@ -94,7 +128,7 @@ class TestInstallScriptCompat:
     def test_redirect_lands_on_gcs_bucket(self) -> None:
         """claude.ai/install.sh redirects to the expected GCS bucket."""
         with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=False) as c:
-            resp = c.get("https://claude.ai/install.sh")
+            resp = _request_with_retry(c, "GET", "https://claude.ai/install.sh")
             if resp.is_redirect:
                 location = resp.headers["location"]
                 assert GCS_BUCKET.split("/", 3)[2] in location, (
@@ -103,7 +137,6 @@ class TestInstallScriptCompat:
                 )
             else:
                 # Direct response — verify it contains the bootstrap script
-                resp.raise_for_status()
                 bucket_uuid = "86c565f3-f756-42ad-8dfa-d59b1c096819"
                 assert bucket_uuid in resp.text, (
                     "Direct response from claude.ai/install.sh does not "
@@ -183,7 +216,7 @@ class TestInstallScriptCompat:
         """
         url = f"{GCS_BUCKET}/{latest_version}/linux-x64/claude"
         with httpx.Client(timeout=_HTTP_TIMEOUT) as c:
-            resp = c.head(url)
+            resp = _request_with_retry(c, "HEAD", url)
             resp.raise_for_status()
             # Verify it's a substantial binary (> 1 MB)
             content_length = resp.headers.get("content-length")
