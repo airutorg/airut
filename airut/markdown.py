@@ -61,7 +61,7 @@ def markdown_to_html(text: str) -> str:
             in_list = False
             list_type = ""
 
-    for line in lines:
+    for i, line in enumerate(lines):
         # Handle fenced code blocks
         if line.strip().startswith("```"):
             if in_code_block:
@@ -84,18 +84,28 @@ def markdown_to_html(text: str) -> str:
             code_block_lines.append(line)
             continue
 
-        # Handle tables
-        if _is_table_line(line):
-            flush_list()
-            if not in_table:
+        # Handle tables - per GFM spec, a valid table requires a separator
+        # row (e.g. |---|---|) immediately after the header row. Lines with
+        # pipes but no following separator are treated as regular text.
+        if not in_table:
+            if (
+                _is_table_line(line)
+                and i + 1 < len(lines)
+                and _is_separator_line(lines[i + 1])
+            ):
+                flush_list()
                 in_table = True
-            table_lines.append(line)
-            continue
-        elif in_table:
-            # End of table
-            result_lines.append(_render_table(table_lines))
-            table_lines = []
-            in_table = False
+                table_lines.append(line)
+                continue
+        else:
+            if _is_separator_line(line) or _is_table_line(line):
+                table_lines.append(line)
+                continue
+            else:
+                # End of table
+                result_lines.append(_render_table(table_lines))
+                table_lines = []
+                in_table = False
 
         # Handle lists
         line_list_type = _get_list_type(line)
