@@ -4791,6 +4791,52 @@ class TestDiffDictField:
         # Should count each dict key individually
         assert dirty >= 2
 
+    def test_dirty_count_added_repo_list_fields(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Dirty count for added repo counts list elements."""
+        harness.client.get("/config")
+        harness.client.post(
+            "/api/config/add",
+            data={"path": "repos", "key": "new-repo"},
+            headers=XHR,
+        )
+        auth_path = "repos.new-repo.email.auth.authorized_senders"
+        # Add two senders
+        harness.client.post(
+            "/api/config/add",
+            data={"path": auth_path},
+            headers=XHR,
+        )
+        harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": auth_path,
+                "source": "literal",
+                "index": "0",
+                "value": "a@x.com",
+            },
+            headers=XHR,
+        )
+        harness.client.post(
+            "/api/config/add",
+            data={"path": auth_path},
+            headers=XHR,
+        )
+        resp = harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": auth_path,
+                "source": "literal",
+                "index": "1",
+                "value": "b@x.com",
+            },
+            headers=XHR,
+        )
+        dirty = int(resp.headers["X-Dirty-Count"])
+        # Should count each list element individually
+        assert dirty >= 2
+
     def test_diff_list_field_in_common_repo(
         self, harness: ConfigEditorHarness
     ) -> None:

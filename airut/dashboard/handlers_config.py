@@ -467,6 +467,8 @@ class ConfigEditorHandlers:
             for fs, val in self._iter_repo_set_fields(repo_id, raw):
                 if fs.type_tag in DICT_FIELD_TYPES and isinstance(val, dict):
                     n += len(val)
+                elif fs.type_tag == "list_str" and isinstance(val, list):
+                    n += len(val)
                 else:
                     n += 1
             return n
