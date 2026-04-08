@@ -419,6 +419,88 @@ class TestTables:
         # since we're within a table row.
         assert "<table" in result
 
+    def test_pipe_text_without_separator_not_table(self):
+        """Lines with pipes but no separator row are not tables."""
+        text = "Option A | Option B | Option C"
+        result = markdown_to_html(text)
+        assert "<table" not in result
+        assert "<td>" not in result
+        assert "Option A" in result
+        assert "Option B" in result
+
+    def test_source_line_with_pipes_not_table(self):
+        """Source attribution lines with pipe separators are not tables."""
+        text = (
+            "**Source:** Anthropic"
+            " | [Announcement](https://example.com)"
+            " | [Blog](https://example.com/blog)"
+            " | [HN Discussion (425 pts)](https://news.example.com)"
+        )
+        result = markdown_to_html(text)
+        assert "<table" not in result
+        assert "<td>" not in result
+        assert "<strong>Source:</strong>" in result
+        assert '<a href="https://example.com">Announcement</a>' in result
+
+    def test_multiple_pipe_lines_without_separator_not_table(self):
+        """Multiple consecutive pipe lines without separator are not tables."""
+        text = "A | B | C\nD | E | F\nG | H | I"
+        result = markdown_to_html(text)
+        assert "<table" not in result
+        assert "<td>" not in result
+        # Lines should be rendered as regular text
+        assert "A" in result
+        assert "D" in result
+
+    def test_pipe_line_at_end_not_table(self):
+        """Pipe line at end of input (no following separator) is not a table."""
+        text = "Some text\nA | B | C"
+        result = markdown_to_html(text)
+        assert "<table" not in result
+
+    def test_separator_without_header_not_table(self):
+        """Separator line without a preceding header is not a table."""
+        text = "|---|---|\n| 1 | 2 |"
+        result = markdown_to_html(text)
+        # The separator line alone doesn't start a table per GFM spec
+        assert "<table" not in result
+
+    def test_table_still_works_with_separator(self):
+        """Valid table with header + separator + data still works."""
+        text = "| Name | Value |\n|---|---|\n| foo | bar |\n| baz | qux |"
+        result = markdown_to_html(text)
+        assert "<table" in result
+        assert ">Name</th>" in result
+        assert ">Value</th>" in result
+        assert ">foo</td>" in result
+        assert ">bar</td>" in result
+        assert ">baz</td>" in result
+        assert ">qux</td>" in result
+
+    def test_document_with_pipes_and_tables(self):
+        """Document mixing pipe text and real tables renders correctly."""
+        text = (
+            "# Title\n"
+            "\n"
+            "**Source:** X | [Link](https://example.com) | [HN](https://hn.com)\n"
+            "\n"
+            "Some paragraph.\n"
+            "\n"
+            "| Col A | Col B |\n"
+            "|-------|-------|\n"
+            "| 1     | 2     |\n"
+            "\n"
+            "More text | with pipes | in it"
+        )
+        result = markdown_to_html(text)
+        # Only one table (the real one with separator)
+        assert result.count("<table") == 1
+        # The source line should be plain text with links
+        assert '<a href="https://example.com">Link</a>' in result
+        # The "More text" line should be plain text
+        assert "More text" in result
+        assert result.count("</table>") == 1
+
 
 class TestRemoveCodeSpans:
     """Tests for _remove_code_spans helper."""
