@@ -37,7 +37,9 @@ __all__ = [
     "DICT_FIELD_TYPES",
     "collect_leaf_fields",
     "count_dict_field_changes",
+    "count_list_field_changes",
     "diff_dict_field",
+    "diff_list_field",
     "find_var_references",
     "format_raw_value",
     "get_raw_value",
@@ -187,6 +189,62 @@ def diff_dict_field(
     return result
 
 
+def _iter_list_diffs(
+    buf_val: object,
+    live_val: object,
+) -> list[tuple[str, object, object]]:
+    """Yield (element, old_val, new_val) for changed elements between two lists.
+
+    Treats lists as sets; order is ignored.
+    """
+    buf_set: set[str] = (
+        set(cast("list[str]", buf_val)) if isinstance(buf_val, list) else set()
+    )
+    live_set: set[str] = (
+        set(cast("list[str]", live_val))
+        if isinstance(live_val, list)
+        else set()
+    )
+    result: list[tuple[str, object, object]] = []
+    for elem in sorted(live_set - buf_set):
+        result.append((elem, elem, MISSING))
+    for elem in sorted(buf_set - live_set):
+        result.append((elem, MISSING, elem))
+    return result
+
+
+def diff_list_field(
+    fs: EditorFieldSchema,
+    buf_val: object,
+    live_val: object,
+) -> list[dict[str, Any]]:
+    """Expand a list-typed field into per-element diff entries.
+
+    Returns a list of change dicts with ``field``, ``scope``, ``old``,
+    ``new`` keys — one per added/removed element.  Lists are compared
+    as sets; order changes are ignored.
+    """
+    result: list[dict[str, Any]] = []
+    for elem, old, new in _iter_list_diffs(buf_val, live_val):
+        result.append(
+            {
+                "field": f"{fs.path}.{elem}",
+                "scope": fs.scope,
+                "old": format_raw_value(old),
+                "new": format_raw_value(new),
+            }
+        )
+    return result
+
+
+def count_list_field_changes(
+    buf_val: object,
+    live_val: object,
+) -> int:
+    """Count per-element differences in a list-typed field."""
+    return len(_iter_list_diffs(buf_val, live_val))
+
+
 def _expand_item_fields(
     result: list[dict[str, Any]],
     prefix: str,
@@ -220,14 +278,36 @@ def _expand_item_fields(
             else MISSING
         )
         if not raw_values_equal(old_v, new_v):
-            result.append(
-                {
-                    "field": f"{prefix}.{leaf.path}",
-                    "scope": scope,
-                    "old": format_raw_value(old_v),
-                    "new": format_raw_value(new_v),
-                }
-            )
+            leaf_prefix = f"{prefix}.{leaf.path}"
+            if leaf.type_tag == "dict_str_str":
+                for key, old_kv, new_kv in _iter_dict_diffs(new_v, old_v):
+                    result.append(
+                        {
+                            "field": f"{leaf_prefix}.{key}",
+                            "scope": scope,
+                            "old": format_raw_value(old_kv),
+                            "new": format_raw_value(new_kv),
+                        }
+                    )
+            elif leaf.type_tag == "list_str":
+                for elem, old_ev, new_ev in _iter_list_diffs(new_v, old_v):
+                    result.append(
+                        {
+                            "field": f"{leaf_prefix}.{elem}",
+                            "scope": scope,
+                            "old": format_raw_value(old_ev),
+                            "new": format_raw_value(new_ev),
+                        }
+                    )
+            else:
+                result.append(
+                    {
+                        "field": leaf_prefix,
+                        "scope": scope,
+                        "old": format_raw_value(old_v),
+                        "new": format_raw_value(new_v),
+                    }
+                )
 
 
 def count_dict_field_changes(

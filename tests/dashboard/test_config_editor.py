@@ -4099,9 +4099,11 @@ class TestDiffDictField:
         )
         fields = {c["field"] for c in changes}
         assert "repos.test.masked_secrets.TOKEN.value" in fields
-        assert "repos.test.masked_secrets.TOKEN.scopes" in fields
+        # list_str fields are expanded per-element
+        assert "repos.test.masked_secrets.TOKEN.scopes.github.com" in fields
         # Should NOT contain the opaque summary
         assert all("entries" not in c["new"] for c in changes)
+        assert all("items" not in c["new"] for c in changes)
 
     def test_diff_keyed_collection_removed_key(self) -> None:
         """Removing a keyed collection entry shows per-sub-field removal."""
@@ -4430,6 +4432,273 @@ class TestDiffDictField:
         assert count_dict_field_changes({}, {"A": "1"}) == 1
         assert count_dict_field_changes({"A": "1"}, {"A": "1"}) == 0
 
+    def test_diff_list_field_added_element(self) -> None:
+        """List field diff shows individual added elements."""
+        from airut.config.editor import EditorFieldSchema, diff_list_field
+
+        fs = EditorFieldSchema(
+            name="repositories",
+            path="repos.test.credentials.APP.repositories",
+            type_tag="list_str",
+            python_type="tuple[str, ...]",
+            default=None,
+            required=False,
+            doc="Repositories",
+            scope="task",
+            secret=False,
+        )
+        changes = diff_list_field(fs, ["repo-a", "repo-b"], ["repo-a"])
+        assert len(changes) == 1
+        assert changes[0]["field"].endswith(".repo-b")
+        assert changes[0]["old"] == "(not set)"
+        assert changes[0]["new"] == "repo-b"
+
+    def test_diff_list_field_removed_element(self) -> None:
+        """List field diff shows individual removed elements."""
+        from airut.config.editor import EditorFieldSchema, diff_list_field
+
+        fs = EditorFieldSchema(
+            name="scopes",
+            path="repos.test.credentials.APP.scopes",
+            type_tag="list_str",
+            python_type="frozenset[str]",
+            default=None,
+            required=False,
+            doc="Scopes",
+            scope="task",
+            secret=False,
+        )
+        changes = diff_list_field(fs, ["a.com"], ["a.com", "b.com"])
+        assert len(changes) == 1
+        assert changes[0]["field"].endswith(".b.com")
+        assert changes[0]["old"] == "b.com"
+        assert changes[0]["new"] == "(not set)"
+
+    def test_diff_list_field_no_changes(self) -> None:
+        """Identical lists produce no diff rows."""
+        from airut.config.editor import EditorFieldSchema, diff_list_field
+
+        fs = EditorFieldSchema(
+            name="scopes",
+            path="repos.test.scopes",
+            type_tag="list_str",
+            python_type="frozenset[str]",
+            default=None,
+            required=False,
+            doc="Scopes",
+            scope="task",
+            secret=False,
+        )
+        changes = diff_list_field(fs, ["a", "b"], ["a", "b"])
+        assert changes == []
+
+    def test_diff_list_field_from_missing(self) -> None:
+        """List field diff from MISSING shows all elements as added."""
+        from airut.config.editor import (
+            MISSING,
+            EditorFieldSchema,
+            diff_list_field,
+        )
+
+        fs = EditorFieldSchema(
+            name="repositories",
+            path="repos.test.repositories",
+            type_tag="list_str",
+            python_type="tuple[str, ...]",
+            default=None,
+            required=False,
+            doc="Repositories",
+            scope="task",
+            secret=False,
+        )
+        changes = diff_list_field(fs, ["repo-a", "repo-b"], MISSING)
+        assert len(changes) == 2
+        assert all(c["old"] == "(not set)" for c in changes)
+
+    def test_count_list_field_changes(self) -> None:
+        from airut.config.editor import count_list_field_changes
+
+        assert count_list_field_changes(["a", "b"], ["a"]) == 1
+        assert count_list_field_changes([], ["a"]) == 1
+        assert count_list_field_changes(["a"], ["a"]) == 0
+        assert count_list_field_changes(["a", "b"], ["c"]) == 3
+
+    def test_expand_item_dict_str_str_subfield(self) -> None:
+        """Keyed collection diff expands dict_str_str sub-fields per-key."""
+        from airut.config.editor import (
+            MISSING,
+            EditorFieldSchema,
+            diff_dict_field,
+        )
+
+        item_fields = [
+            EditorFieldSchema(
+                name="app_id",
+                path="app_id",
+                type_tag="scalar",
+                python_type="str",
+                default=MISSING,
+                required=True,
+                doc="App ID",
+                scope="task",
+                secret=False,
+            ),
+            EditorFieldSchema(
+                name="permissions",
+                path="permissions",
+                type_tag="dict_str_str",
+                python_type="dict[str, str]",
+                default=None,
+                required=False,
+                doc="Token permissions",
+                scope="task",
+                secret=False,
+            ),
+        ]
+        fs = EditorFieldSchema(
+            name="credentials",
+            path="repos.test.credentials",
+            type_tag="keyed_collection",
+            python_type="dict",
+            default=None,
+            required=False,
+            doc="GitHub App credentials",
+            scope="task",
+            secret=False,
+            item_fields=item_fields,
+        )
+        changes = diff_dict_field(
+            fs,
+            {
+                "MY_APP": {
+                    "app_id": "123",
+                    "permissions": {"contents": "write", "metadata": "read"},
+                }
+            },
+            {
+                "MY_APP": {
+                    "app_id": "123",
+                    "permissions": {"contents": "read"},
+                }
+            },
+        )
+        fields = {c["field"] for c in changes}
+        # Should expand permissions per-key, not show "(N entries)"
+        assert "repos.test.credentials.MY_APP.permissions.contents" in fields
+        assert "repos.test.credentials.MY_APP.permissions.metadata" in fields
+        assert all("entries" not in c.get("new", "") for c in changes)
+        assert all("entries" not in c.get("old", "") for c in changes)
+
+    def test_expand_item_list_str_subfield(self) -> None:
+        """Keyed collection diff expands list_str sub-fields per-element."""
+        from airut.config.editor import (
+            MISSING,
+            EditorFieldSchema,
+            diff_dict_field,
+        )
+
+        item_fields = [
+            EditorFieldSchema(
+                name="app_id",
+                path="app_id",
+                type_tag="scalar",
+                python_type="str",
+                default=MISSING,
+                required=True,
+                doc="App ID",
+                scope="task",
+                secret=False,
+            ),
+            EditorFieldSchema(
+                name="repositories",
+                path="repositories",
+                type_tag="list_str",
+                python_type="tuple[str, ...]",
+                default=None,
+                required=False,
+                doc="Restrict to repos",
+                scope="task",
+                secret=False,
+            ),
+        ]
+        fs = EditorFieldSchema(
+            name="credentials",
+            path="repos.test.credentials",
+            type_tag="keyed_collection",
+            python_type="dict",
+            default=None,
+            required=False,
+            doc="GitHub App credentials",
+            scope="task",
+            secret=False,
+            item_fields=item_fields,
+        )
+        changes = diff_dict_field(
+            fs,
+            {
+                "MY_APP": {
+                    "app_id": "123",
+                    "repositories": ["repo-a", "repo-c"],
+                }
+            },
+            {
+                "MY_APP": {
+                    "app_id": "123",
+                    "repositories": ["repo-a", "repo-b"],
+                }
+            },
+        )
+        fields = {c["field"] for c in changes}
+        # Should expand repositories per-element, not show "(N items)"
+        assert "repos.test.credentials.MY_APP.repositories.repo-b" in fields
+        assert "repos.test.credentials.MY_APP.repositories.repo-c" in fields
+        assert all("items" not in c.get("new", "") for c in changes)
+        assert all("items" not in c.get("old", "") for c in changes)
+
+    def test_expand_item_list_str_added_item(self) -> None:
+        """Adding keyed item expands list_str per-element."""
+        from airut.config.editor import (
+            MISSING,
+            EditorFieldSchema,
+            diff_dict_field,
+        )
+
+        item_fields = [
+            EditorFieldSchema(
+                name="scopes",
+                path="scopes",
+                type_tag="list_str",
+                python_type="frozenset[str]",
+                default=[],
+                required=False,
+                doc="Host patterns",
+                scope="task",
+                secret=False,
+            ),
+        ]
+        fs = EditorFieldSchema(
+            name="credentials",
+            path="repos.test.credentials",
+            type_tag="keyed_collection",
+            python_type="dict",
+            default=None,
+            required=False,
+            doc="Credentials",
+            scope="task",
+            secret=False,
+            item_fields=item_fields,
+        )
+        changes = diff_dict_field(
+            fs,
+            {"APP": {"scopes": ["api.github.com", "uploads.github.com"]}},
+            MISSING,
+        )
+        fields = {c["field"] for c in changes}
+        assert "repos.test.credentials.APP.scopes.api.github.com" in fields
+        assert "repos.test.credentials.APP.scopes.uploads.github.com" in fields
+        # Must NOT show opaque "(N items)" summary
+        assert all("items" not in c.get("new", "") for c in changes)
+
     def test_dirty_count_per_key(
         self, cred_harness: ConfigEditorHarness
     ) -> None:
@@ -4521,6 +4790,66 @@ class TestDiffDictField:
         dirty = int(resp.headers["X-Dirty-Count"])
         # Should count each dict key individually
         assert dirty >= 2
+
+    def test_diff_list_field_in_common_repo(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Diff expands list_str fields per-element."""
+        harness.client.get("/config")
+        auth_path = "repos.test-repo.email.auth.authorized_senders"
+        # Add a new sender to authorized_senders
+        harness.client.post(
+            "/api/config/add",
+            data={"path": auth_path},
+            headers=XHR,
+        )
+        harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": auth_path,
+                "source": "literal",
+                "index": "1",
+                "value": "new@example.com",
+            },
+            headers=XHR,
+        )
+        response = harness.client.get("/api/config/diff")
+        html = response.get_data(as_text=True)
+        # Per-element: show the element, not "(N items)"
+        assert "new@example.com" in html
+        assert "items" not in html
+
+    def test_diff_added_repo_with_list_fields(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Diff for added repo expands list_str."""
+        harness.client.get("/config")
+        harness.client.post(
+            "/api/config/add",
+            data={"path": "repos", "key": "new-repo"},
+            headers=XHR,
+        )
+        auth_path = "repos.new-repo.email.auth.authorized_senders"
+        harness.client.post(
+            "/api/config/add",
+            data={"path": auth_path},
+            headers=XHR,
+        )
+        harness.client.patch(
+            "/api/config/field",
+            data={
+                "path": auth_path,
+                "source": "literal",
+                "index": "0",
+                "value": "dev@x.com",
+            },
+            headers=XHR,
+        )
+        response = harness.client.get("/api/config/diff")
+        html = response.get_data(as_text=True)
+        # Per-element: show the sender, not "(N items)"
+        assert "dev@x.com" in html
+        assert "items" not in html
 
 
 class TestHumanizeTypeFilter:
