@@ -25,7 +25,9 @@ from airut.config.editor import (
     EditorFieldSchema,
     collect_leaf_fields,
     count_dict_field_changes,
+    count_list_field_changes,
     diff_dict_field,
+    diff_list_field,
     find_var_references,
     format_raw_value,
     get_raw_value,
@@ -426,6 +428,8 @@ class ConfigEditorHandlers:
             live_val = get_raw_value(snapshot.raw, fs.path)
             if fs.type_tag in DICT_FIELD_TYPES:
                 return count_dict_field_changes(buf_val, live_val)
+            if fs.type_tag == "list_str":
+                return count_list_field_changes(buf_val, live_val)
             if not raw_values_equal(buf_val, live_val):
                 return 1
             return 0
@@ -462,6 +466,8 @@ class ConfigEditorHandlers:
             n = 0
             for fs, val in self._iter_repo_set_fields(repo_id, raw):
                 if fs.type_tag in DICT_FIELD_TYPES and isinstance(val, dict):
+                    n += len(val)
+                elif fs.type_tag == "list_str" and isinstance(val, list):
                     n += len(val)
                 else:
                     n += 1
@@ -1041,6 +1047,12 @@ class ConfigEditorHandlers:
                         _add_change(change)
                     continue
 
+                # List fields: expand to per-element diffs
+                if fs.type_tag == "list_str":
+                    for change in diff_list_field(fs, buf_val, live_val):
+                        _add_change(change)
+                    continue
+
                 if raw_values_equal(buf_val, live_val):
                     continue
 
@@ -1107,6 +1119,9 @@ class ConfigEditorHandlers:
                 if fs.type_tag in DICT_FIELD_TYPES:
                     for change in diff_dict_field(fs, val, MISSING):
                         _add_change(change)
+                elif fs.type_tag == "list_str":
+                    for change in diff_list_field(fs, val, MISSING):
+                        _add_change(change)
                 else:
                     _add_change(
                         {
@@ -1120,6 +1135,9 @@ class ConfigEditorHandlers:
             for fs, val in self._iter_repo_set_fields(repo_id, snapshot.raw):
                 if fs.type_tag in DICT_FIELD_TYPES:
                     for change in diff_dict_field(fs, MISSING, val):
+                        _add_change(change)
+                elif fs.type_tag == "list_str":
+                    for change in diff_list_field(fs, MISSING, val):
                         _add_change(change)
                 else:
                     _add_change(
