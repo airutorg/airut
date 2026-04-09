@@ -25,6 +25,7 @@ so it works with all tools (Node.js, Go, curl, Python, git).
   - [Network Allowlist](#network-allowlist)
     - [Pattern Matching Rules](#pattern-matching-rules)
     - [HTTP Method Filtering](#http-method-filtering)
+    - [Wildcard Host for Credential-Only Sandboxing](#wildcard-host-for-credential-only-sandboxing)
   - [Agent Self-Service Flow](#agent-self-service-flow)
 - [Masked Secrets (Token Replacement)](#masked-secrets-token-replacement)
   - [Problem](#problem)
@@ -304,6 +305,41 @@ url_prefixes:
   `url_prefixes` if you need method restrictions
 - The 403 response distinguishes method-blocked from host/path-blocked requests,
   so agents get actionable feedback
+
+#### Wildcard Host for Credential-Only Sandboxing
+
+If the sandbox is used primarily for
+[credential masking](#masked-secrets-token-replacement) and the repository
+contains only public material, you can allow read-only access to all domains
+while restricting write methods to specific hosts:
+
+```yaml
+url_prefixes:
+  # Read-only access to all domains
+  - host: "*"
+    path: ""
+    methods: [GET, HEAD]
+
+  # Write access only where needed
+  - host: api.anthropic.com
+    path: /v1/messages*
+    methods: [POST]
+  - host: api.github.com
+    path: /graphql
+    methods: [POST]
+```
+
+**How it works:** `host: "*"` matches any hostname (via fnmatch). The proxy
+checks entries sequentially — if the wildcard entry rejects a method, later
+entries for specific hosts can still allow it. Domain entries (`domains`
+section) are checked first and allow all methods unconditionally, so they
+override the wildcard restriction.
+
+**Security note:** This opens read access to the entire internet from the
+sandbox. A compromised agent could exfiltrate data via GET query parameters or
+URL paths to any domain. This is acceptable when the repository contains only
+public material and the sandbox is used solely to protect credentials via masked
+secrets, signing credentials, or GitHub App credentials.
 
 ### Agent Self-Service Flow
 
