@@ -50,6 +50,25 @@ gh pr view <number> --json title,body
 - **Other Changes** section for smaller improvements as a bullet list.
 - Keep descriptions user-facing: focus on what changed and why, not
   implementation details.
+- **Upgrade** section at the end of every release. Use the standard upgrade
+  instructions below, amended with any manual migration steps specific to the
+  release.
+
+**Standard upgrade instructions** — include this as the final section of every
+release. Copy the block below verbatim:
+
+> **Upgrade**
+>
+> `airut update`
+>
+> If `airut check` reports a pending config schema migration after updating, run
+> `airut migrate`.
+
+If the release includes breaking changes or manual migration steps (e.g., new
+required config fields, renamed settings, changed defaults), add them between
+the `airut update` and `airut migrate` lines. For example, add a "Manual steps
+for this release" list describing what the user needs to do (rename a config
+field, remove a deprecated setting, etc.).
 
 Send the draft to the user for review over email. Iterate until approved.
 
