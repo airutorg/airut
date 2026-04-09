@@ -549,6 +549,109 @@ class TestMethodFiltering:
         assert al._is_allowed("api.example.com", "/data", "DELETE") is False
 
 
+class TestWildcardHostMethodFiltering:
+    """Tests for wildcard host (*) with method filtering.
+
+    Verifies that ``host: "*"`` can be used with method restrictions to
+    allow read-only access (GET/HEAD) to all domains while restricting
+    write methods (POST, PUT, DELETE) to specific hosts.  This is useful
+    when the sandbox is used primarily for credential masking and the
+    repository contains only public material.
+    """
+
+    def test_wildcard_host_allows_listed_methods(self) -> None:
+        """Wildcard host with methods allows only listed methods."""
+        al = MockNetworkAllowlist()
+        al.url_prefixes = [
+            {"host": "*", "path": "", "methods": ["GET", "HEAD"]},
+        ]
+
+        assert al._is_allowed("any-domain.com", "/any/path", "GET") is True
+        assert al._is_allowed("any-domain.com", "/any/path", "HEAD") is True
+        assert al._is_allowed("example.org", "/foo", "GET") is True
+
+    def test_wildcard_host_blocks_unlisted_methods(self) -> None:
+        """Wildcard host with methods blocks methods not in the list."""
+        al = MockNetworkAllowlist()
+        al.url_prefixes = [
+            {"host": "*", "path": "", "methods": ["GET", "HEAD"]},
+        ]
+
+        assert al._is_allowed("any-domain.com", "/any/path", "POST") is False
+        assert al._is_allowed("example.org", "/foo", "PUT") is False
+        assert al._is_allowed("evil.com", "/exfil", "DELETE") is False
+
+    def test_wildcard_host_with_specific_host_override(self) -> None:
+        """Specific host entry allows methods beyond the wildcard default.
+
+        When ``host: "*"`` restricts to GET/HEAD, a more specific entry
+        can grant additional methods for select hosts.  The proxy checks
+        entries sequentially: if the wildcard rejects the method, the
+        next matching entry can still allow it.
+        """
+        al = MockNetworkAllowlist()
+        al.url_prefixes = [
+            {"host": "*", "path": "", "methods": ["GET", "HEAD"]},
+            {
+                "host": "api.anthropic.com",
+                "path": "/v1/messages*",
+                "methods": ["POST"],
+            },
+            {
+                "host": "api.github.com",
+                "path": "/graphql",
+                "methods": ["POST"],
+            },
+        ]
+
+        # GET/HEAD allowed everywhere
+        assert al._is_allowed("random-site.com", "/page", "GET") is True
+        assert al._is_allowed("api.anthropic.com", "/v1/models", "GET") is True
+        assert al._is_allowed("api.github.com", "/users", "HEAD") is True
+
+        # POST allowed only for specific host+path entries
+        assert (
+            al._is_allowed("api.anthropic.com", "/v1/messages", "POST") is True
+        )
+        assert al._is_allowed("api.github.com", "/graphql", "POST") is True
+
+        # POST blocked for hosts/paths without specific entries
+        assert al._is_allowed("random-site.com", "/page", "POST") is False
+        assert al._is_allowed("evil.com", "/exfil", "POST") is False
+
+    def test_wildcard_host_with_domain_entry_override(self) -> None:
+        """Domain entries take precedence and allow all methods.
+
+        Domains are checked before url_prefixes.  A domain entry allows
+        all methods unconditionally, overriding the wildcard restriction.
+        """
+        al = MockNetworkAllowlist()
+        al.domains = ["trusted.internal.com"]
+        al.url_prefixes = [
+            {"host": "*", "path": "", "methods": ["GET", "HEAD"]},
+        ]
+
+        # Domain entry: all methods allowed
+        assert al._is_allowed("trusted.internal.com", "/api", "POST") is True
+        assert al._is_allowed("trusted.internal.com", "/api", "DELETE") is True
+
+        # Non-domain hosts: only GET/HEAD via wildcard
+        assert al._is_allowed("other.com", "/api", "GET") is True
+        assert al._is_allowed("other.com", "/api", "POST") is False
+
+    def test_wildcard_host_with_path_restriction(self) -> None:
+        """Wildcard host can be combined with path patterns."""
+        al = MockNetworkAllowlist()
+        al.url_prefixes = [
+            {"host": "*", "path": "/public*", "methods": ["GET", "HEAD"]},
+        ]
+
+        # Matching path: allowed
+        assert al._is_allowed("any-site.com", "/public/data", "GET") is True
+        # Non-matching path: blocked
+        assert al._is_allowed("any-site.com", "/private/data", "GET") is False
+
+
 class TestMatchHeaderPattern:
     """Tests for _match_header_pattern function (case-insensitive matching)."""
 
