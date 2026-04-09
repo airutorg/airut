@@ -87,6 +87,35 @@ url_prefixes:
     path: /rest/runs*
     methods: [GET, POST]
 
+  # GitHub Actions — read-only access for action version pinning.
+  # Used to resolve floating tags (e.g., v4) to commit SHAs and verify
+  # pinned SHAs are up to date.  Only repos we reference in workflows
+  # are listed; add new entries when adopting new actions.
+  - host: api.github.com
+    path: /repos/actions/checkout*
+    methods: [GET]
+  - host: api.github.com
+    path: /repos/actions/cache*
+    methods: [GET]
+  - host: api.github.com
+    path: /repos/actions/upload-artifact*
+    methods: [GET]
+  - host: api.github.com
+    path: /repos/actions/download-artifact*
+    methods: [GET]
+  - host: api.github.com
+    path: /repos/actions/create-github-app-token*
+    methods: [GET]
+  - host: api.github.com
+    path: /repos/astral-sh/setup-uv*
+    methods: [GET]
+  - host: api.github.com
+    path: /repos/pypa/gh-action-pypi-publish*
+    methods: [GET]
+  - host: api.github.com
+    path: /repos/cloudflare/wrangler-action*
+    methods: [GET]
+
   # htmx vendored dependency — security advisory checks (CI) and downloads (update script)
   - host: api.github.com
     path: /advisories*
