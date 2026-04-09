@@ -385,10 +385,10 @@ ______________________________________________________________________
 
 _You have write access to this section. Populate it with lessons learned._
 
-1. **Use context managers for httpx clients**: When making HTTP requests in
-   loops, always use `with httpx.Client() as client:` context managers to
-   prevent file descriptor leaks. Never call `httpx.get()` repeatedly without a
-   context manager.
+1. **Use context managers for urllib requests**: When making HTTP requests,
+   always use `with urllib.request.urlopen(...) as resp:` to ensure the response
+   is closed promptly. Never call `urlopen()` in a loop without a context
+   manager.
 
 2. **Prefer testing + removing pragma over keeping untested code**: When
    encountering `# pragma: no cover`, investigate if test coverage can be added.

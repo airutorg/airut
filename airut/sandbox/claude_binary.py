@@ -41,9 +41,9 @@ import shutil
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
-
-import httpx
 
 
 logger = logging.getLogger(__name__)
@@ -276,11 +276,9 @@ class ClaudeBinaryCache:
         # Fetch from GCS
         url = f"{GCS_BUCKET}/{channel}"
         try:
-            with httpx.Client(timeout=30) as client:
-                response = client.get(url)
-                response.raise_for_status()
-                resolved = response.text.strip()
-        except httpx.HTTPError as e:
+            with urllib.request.urlopen(url, timeout=30) as resp:
+                resolved = resp.read().decode().strip()
+        except urllib.error.URLError as e:
             raise ClaudeBinaryError(
                 f"Failed to resolve Claude '{channel}' version: {e}"
             ) from e
@@ -311,11 +309,9 @@ class ClaudeBinaryCache:
         # Download manifest
         manifest_url = f"{GCS_BUCKET}/{version}/manifest.json"
         try:
-            with httpx.Client(timeout=30) as client:
-                response = client.get(manifest_url)
-                response.raise_for_status()
-                manifest_json = response.text
-        except httpx.HTTPError as e:
+            with urllib.request.urlopen(manifest_url, timeout=30) as resp:
+                manifest_json = resp.read().decode()
+        except urllib.error.URLError as e:
             raise ClaudeBinaryError(
                 f"Failed to download manifest for {version}: {e}"
             ) from e
@@ -339,14 +335,15 @@ class ClaudeBinaryCache:
         tmp_path = Path(tmp_path_str)
         try:
             try:
-                with httpx.Client(timeout=300) as client:
-                    with client.stream("GET", binary_url) as resp:
-                        resp.raise_for_status()
-                        with os.fdopen(fd, "wb") as f:
-                            for chunk in resp.iter_bytes(8192):
-                                f.write(chunk)
+                with urllib.request.urlopen(binary_url, timeout=300) as resp:
+                    with os.fdopen(fd, "wb") as f:
+                        while True:
+                            chunk = resp.read(8192)
+                            if not chunk:
+                                break
+                            f.write(chunk)
                         fd = -1  # Prevent double-close
-            except httpx.HTTPError as e:
+            except urllib.error.URLError as e:
                 raise ClaudeBinaryError(
                     f"Failed to download Claude {version} binary: {e}"
                 ) from e
