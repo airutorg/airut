@@ -13,6 +13,7 @@ import shutil
 import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from urllib.error import URLError
 
 import pytest
 
@@ -25,6 +26,29 @@ from airut.sandbox.claude_binary import (
     detect_platform,
     validate_version,
 )
+
+
+# -------------------------------------------------------------------
+# Helpers
+# -------------------------------------------------------------------
+
+
+def _url_response(data: bytes | list[bytes]) -> MagicMock:
+    """Create a mock ``urlopen()`` return value (context manager).
+
+    Args:
+        data: If bytes, ``read()`` always returns that value.
+              If list, ``read()`` returns items sequentially
+              (use for chunked streaming; append ``b""`` as sentinel).
+    """
+    resp = MagicMock()
+    resp.__enter__ = MagicMock(return_value=resp)
+    resp.__exit__ = MagicMock(return_value=False)
+    if isinstance(data, list):
+        resp.read.side_effect = data
+    else:
+        resp.read.return_value = data
+    return resp
 
 
 # -------------------------------------------------------------------
@@ -213,6 +237,9 @@ def _make_manifest(checksum: str, platform: str = "linux-x64") -> str:
     return json.dumps({"platforms": {platform: {"checksum": checksum}}})
 
 
+_URLOPEN = "airut.sandbox.claude_binary.urllib.request.urlopen"
+
+
 class TestClaudeBinaryCache:
     """Tests for ClaudeBinaryCache."""
 
@@ -235,28 +262,11 @@ class TestClaudeBinaryCache:
 
         cache = ClaudeBinaryCache(tmp_path, platform_override="linux-x64")
 
-        mock_response = MagicMock()
-        mock_response.text = manifest
-        mock_response.status_code = 200
+        manifest_resp = _url_response(manifest.encode())
+        binary_resp = _url_response([binary_content, b""])
 
-        mock_stream_response = MagicMock()
-        mock_stream_response.__enter__ = MagicMock(
-            return_value=mock_stream_response
-        )
-        mock_stream_response.__exit__ = MagicMock(return_value=False)
-        mock_stream_response.raise_for_status = MagicMock()
-        mock_stream_response.iter_bytes = MagicMock(
-            return_value=[binary_content]
-        )
-
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
-        mock_client.get.return_value = mock_response
-        mock_client.stream.return_value = mock_stream_response
-
-        with patch("airut.sandbox.claude_binary.httpx.Client") as mc:
-            mc.return_value = mock_client
+        with patch(_URLOPEN) as mock_urlopen:
+            mock_urlopen.side_effect = [manifest_resp, binary_resp]
             path, version = cache.ensure("1.2.3")
 
         assert version == "1.2.3"
@@ -285,17 +295,10 @@ class TestClaudeBinaryCache:
 
         cache = ClaudeBinaryCache(tmp_path, platform_override="linux-x64")
 
-        mock_response = MagicMock()
-        mock_response.text = "2.0.0"
-        mock_response.status_code = 200
+        channel_resp = _url_response(b"2.0.0")
 
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
-        mock_client.get.return_value = mock_response
-
-        with patch("airut.sandbox.claude_binary.httpx.Client") as mc:
-            mc.return_value = mock_client
+        with patch(_URLOPEN) as mock_urlopen:
+            mock_urlopen.side_effect = [channel_resp]
             path, version = cache.ensure("latest")
 
         assert version == "2.0.0"
@@ -313,29 +316,14 @@ class TestClaudeBinaryCache:
 
         cache = ClaudeBinaryCache(tmp_path, platform_override="linux-x64")
 
-        mock_response = MagicMock()
-        mock_response.text = manifest
-        mock_response.status_code = 200
-
-        mock_stream_response = MagicMock()
-        mock_stream_response.__enter__ = MagicMock(
-            return_value=mock_stream_response
-        )
-        mock_stream_response.__exit__ = MagicMock(return_value=False)
-        mock_stream_response.raise_for_status = MagicMock()
-        mock_stream_response.iter_bytes = MagicMock(return_value=[b"binary"])
-
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
-        mock_client.get.return_value = mock_response
-        mock_client.stream.return_value = mock_stream_response
+        manifest_resp = _url_response(manifest.encode())
+        binary_resp = _url_response([b"binary", b""])
 
         with (
-            patch("airut.sandbox.claude_binary.httpx.Client") as mc,
+            patch(_URLOPEN) as mock_urlopen,
             pytest.raises(ClaudeBinaryError, match="Checksum mismatch"),
         ):
-            mc.return_value = mock_client
+            mock_urlopen.side_effect = [manifest_resp, binary_resp]
             cache.ensure("1.2.3")
 
     def test_ensure_http_error_on_channel_resolution(
@@ -344,57 +332,35 @@ class TestClaudeBinaryCache:
         """Channel resolution HTTP error raises ClaudeBinaryError."""
         cache = ClaudeBinaryCache(tmp_path, platform_override="linux-x64")
 
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
-
-        import httpx
-
-        mock_client.get.side_effect = httpx.ConnectError("connection failed")
-
         with (
-            patch("airut.sandbox.claude_binary.httpx.Client") as mc,
+            patch(_URLOPEN) as mock_urlopen,
             pytest.raises(ClaudeBinaryError, match="Failed to resolve"),
         ):
-            mc.return_value = mock_client
+            mock_urlopen.side_effect = URLError("connection failed")
             cache.ensure("latest")
 
     def test_ensure_invalid_channel_response(self, tmp_path: Path) -> None:
         """ensure() raises on invalid version from channel endpoint."""
         cache = ClaudeBinaryCache(tmp_path, platform_override="linux-x64")
 
-        mock_response = MagicMock()
-        mock_response.text = "not-a-version"
-        mock_response.status_code = 200
-
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
-        mock_client.get.return_value = mock_response
+        channel_resp = _url_response(b"not-a-version")
 
         with (
-            patch("airut.sandbox.claude_binary.httpx.Client") as mc,
+            patch(_URLOPEN) as mock_urlopen,
             pytest.raises(ClaudeBinaryError, match="Invalid version"),
         ):
-            mc.return_value = mock_client
+            mock_urlopen.side_effect = [channel_resp]
             cache.ensure("latest")
 
     def test_ensure_http_error_on_manifest(self, tmp_path: Path) -> None:
         """ensure() raises ClaudeBinaryError when manifest download fails."""
         cache = ClaudeBinaryCache(tmp_path, platform_override="linux-x64")
 
-        import httpx
-
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
-        mock_client.get.side_effect = httpx.ConnectError("refused")
-
         with (
-            patch("airut.sandbox.claude_binary.httpx.Client") as mc,
+            patch(_URLOPEN) as mock_urlopen,
             pytest.raises(ClaudeBinaryError, match="Failed to download"),
         ):
-            mc.return_value = mock_client
+            mock_urlopen.side_effect = URLError("refused")
             cache.ensure("1.2.3")
 
     def test_ensure_platform_not_in_manifest(self, tmp_path: Path) -> None:
@@ -404,20 +370,13 @@ class TestClaudeBinaryCache:
         )
         cache = ClaudeBinaryCache(tmp_path, platform_override="linux-x64")
 
-        mock_response = MagicMock()
-        mock_response.text = manifest
-        mock_response.status_code = 200
-
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
-        mock_client.get.return_value = mock_response
+        manifest_resp = _url_response(manifest.encode())
 
         with (
-            patch("airut.sandbox.claude_binary.httpx.Client") as mc,
+            patch(_URLOPEN) as mock_urlopen,
             pytest.raises(ClaudeBinaryError, match="Platform.*not found"),
         ):
-            mc.return_value = mock_client
+            mock_urlopen.side_effect = [manifest_resp]
             cache.ensure("1.2.3")
 
     def test_ensure_cleanup_on_download_failure(self, tmp_path: Path) -> None:
@@ -426,24 +385,16 @@ class TestClaudeBinaryCache:
         manifest = _make_manifest(checksum)
         cache = ClaudeBinaryCache(tmp_path, platform_override="linux-x64")
 
-        import httpx
-
-        mock_manifest_response = MagicMock()
-        mock_manifest_response.text = manifest
-        mock_manifest_response.status_code = 200
-
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
-        mock_client.get.return_value = mock_manifest_response
-        # stream() raises before os.fdopen, so fd is still open
-        mock_client.stream.side_effect = httpx.ConnectError("download fail")
+        manifest_resp = _url_response(manifest.encode())
 
         with (
-            patch("airut.sandbox.claude_binary.httpx.Client") as mc,
+            patch(_URLOPEN) as mock_urlopen,
             pytest.raises(ClaudeBinaryError, match="Failed to download"),
         ):
-            mc.return_value = mock_client
+            mock_urlopen.side_effect = [
+                manifest_resp,
+                URLError("download fail"),
+            ]
             cache.ensure("1.2.3")
 
         # Temp file should be cleaned up
@@ -463,24 +414,17 @@ class TestClaudeBinaryCache:
             resolution_ttl_seconds=3600,
         )
 
-        mock_response = MagicMock()
-        mock_response.text = "3.0.0"
-        mock_response.status_code = 200
+        channel_resp = _url_response(b"3.0.0")
 
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
-        mock_client.get.return_value = mock_response
-
-        with patch("airut.sandbox.claude_binary.httpx.Client") as mc:
-            mc.return_value = mock_client
+        with patch(_URLOPEN) as mock_urlopen:
+            mock_urlopen.side_effect = [channel_resp]
             # First call resolves via network
             cache.ensure("latest")
             # Second call uses cache
             cache.ensure("latest")
 
-        # Only 1 HTTP call (not 2) — the second was cached
-        assert mock_client.get.call_count == 1
+        # Only 1 HTTP call (not 2) -- the second was cached
+        assert mock_urlopen.call_count == 1
 
 
 # -------------------------------------------------------------------
@@ -612,17 +556,10 @@ class TestResolveVersion:
         """'latest' resolves via GCS."""
         cache = ClaudeBinaryCache(tmp_path, platform_override="linux-x64")
 
-        mock_response = MagicMock()
-        mock_response.text = "4.0.0"
-        mock_response.status_code = 200
+        channel_resp = _url_response(b"4.0.0")
 
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
-        mock_client.get.return_value = mock_response
-
-        with patch("airut.sandbox.claude_binary.httpx.Client") as mc:
-            mc.return_value = mock_client
+        with patch(_URLOPEN) as mock_urlopen:
+            mock_urlopen.side_effect = [channel_resp]
             assert cache.resolve_version("latest") == "4.0.0"
 
     def test_invalid_raises(self, tmp_path: Path) -> None:
