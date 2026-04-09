@@ -30,7 +30,6 @@ airut
 │       ├── charset-normalizer v3.4.4
 │       ├── idna v3.11
 │       └── urllib3 v2.6.3
-├── python-dotenv v1.2.1
 ├── pyyaml v6.0.3
 └── werkzeug v3.1.5
     └── markupsafe v3.0.3
@@ -65,7 +64,6 @@ class TestResolveRuntimePackages:
             "msal",
             "pycparser",
             "pyjwt",
-            "python-dotenv",
             "pyyaml",
             "requests",
             "urllib3",
