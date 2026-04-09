@@ -15,11 +15,13 @@ The loader reads environment variables from two locations (in order):
    overrides when running ``airut`` interactively
 
 Variables set by the first file are **not** overwritten by the second
-(``python-dotenv`` respects existing env vars by default).
+(``load_dotenv`` does not overwrite existing env vars by default).
 """
 
 import logging
 from pathlib import Path
+
+from airut.dotenv import load_dotenv
 
 
 logger = logging.getLogger(__name__)
@@ -35,14 +37,12 @@ def load_dotenv_once() -> None:
 
     Loads from ``~/.config/airut/.env`` (XDG) first, then from the
     current working directory's ``.env``.  Variables defined in the XDG
-    file take precedence because ``python-dotenv`` does not overwrite
+    file take precedence because ``load_dotenv`` does not overwrite
     existing environment variables by default.
     """
     global _dotenv_loaded
     if _dotenv_loaded:
         return
-
-    from dotenv import load_dotenv
 
     from airut.gateway.config import get_dotenv_path
 

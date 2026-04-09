@@ -24,7 +24,7 @@ class TestLoadDotenvOnce:
         xdg_env = tmp_path / ".env"
         xdg_env.touch()
         with (
-            patch("dotenv.load_dotenv", mock_ld),
+            patch("airut.gateway.dotenv_loader.load_dotenv", mock_ld),
             patch(
                 "airut.gateway.config.get_dotenv_path",
                 return_value=xdg_env,
@@ -41,7 +41,7 @@ class TestLoadDotenvOnce:
         xdg_env.touch()
         mock_ld = MagicMock()
         with (
-            patch("dotenv.load_dotenv", mock_ld),
+            patch("airut.gateway.dotenv_loader.load_dotenv", mock_ld),
             patch(
                 "airut.gateway.config.get_dotenv_path",
                 return_value=xdg_env,
@@ -65,7 +65,7 @@ class TestLoadDotenvOnce:
         cwd_env.touch()
         mock_ld = MagicMock()
         with (
-            patch("dotenv.load_dotenv", mock_ld),
+            patch("airut.gateway.dotenv_loader.load_dotenv", mock_ld),
             patch(
                 "airut.gateway.config.get_dotenv_path",
                 return_value=xdg_env,
@@ -88,7 +88,7 @@ class TestLoadDotenvOnce:
         cwd_env.touch()
         mock_ld = MagicMock()
         with (
-            patch("dotenv.load_dotenv", mock_ld),
+            patch("airut.gateway.dotenv_loader.load_dotenv", mock_ld),
             patch(
                 "airut.gateway.config.get_dotenv_path",
                 return_value=xdg_env,
@@ -109,7 +109,7 @@ class TestLoadDotenvOnce:
         mock_ld = MagicMock()
         xdg_env = tmp_path / "nonexistent" / ".env"
         with (
-            patch("dotenv.load_dotenv", mock_ld),
+            patch("airut.gateway.dotenv_loader.load_dotenv", mock_ld),
             patch(
                 "airut.gateway.config.get_dotenv_path",
                 return_value=xdg_env,
@@ -128,7 +128,7 @@ class TestLoadDotenvOnce:
         xdg_env = tmp_path / ".env"
         xdg_env.touch()
         with (
-            patch("dotenv.load_dotenv", mock_ld),
+            patch("airut.gateway.dotenv_loader.load_dotenv", mock_ld),
             patch(
                 "airut.gateway.config.get_dotenv_path",
                 return_value=xdg_env,

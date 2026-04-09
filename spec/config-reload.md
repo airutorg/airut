@@ -203,10 +203,10 @@ config reaches the reload logic. This means:
   detects the _resolved_ value changed and classifies it by the downstream
   field's scope.
 - **`!env` changes propagate on reload.** `reset_dotenv_state()` is called
-  before `from_source()`. Note: `python-dotenv`'s `load_dotenv()` does not
-  override variables already in `os.environ` — only new variables are picked up.
-  Direct `os.environ` changes are always picked up since `!env` reads
-  `os.environ` at parse time.
+  before `from_source()`. Note: `load_dotenv()` does not override variables
+  already in `os.environ` — only new variables are picked up. Direct
+  `os.environ` changes are always picked up since `!env` reads `os.environ` at
+  parse time.
 - **`vars:` has no scope of its own.** Changes propagate as changes to the
   fields that reference them, with their correct scopes.
 - **No-op detection works on resolved values.** Renaming a var without changing
