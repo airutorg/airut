@@ -93,6 +93,27 @@ def _make_schedule_skeleton() -> dict[str, Any]:
     }
 
 
+def _make_github_app_skeleton() -> dict[str, Any]:
+    """Create a GitHub App credential skeleton with sensible defaults.
+
+    Pre-populates the host scopes and base URL so users only need to
+    fill in app-specific values (app_id, private_key, installation_id).
+    """
+    return {
+        "scopes": [
+            "github.com",
+            "api.github.com",
+            "*.githubusercontent.com",
+        ],
+        "permissions": {
+            "contents": "write",
+            "pull_requests": "write",
+            "actions": "read",
+            "checks": "read",
+        },
+    }
+
+
 def _make_repo_skeleton() -> dict[str, Any]:
     """Create a minimal repo skeleton for add-repo.
 
@@ -788,10 +809,16 @@ class ConfigEditorHandlers:
         if channel_added is not None:
             return channel_added
 
-        # Special handling for adding a schedule (use skeleton)
-        schedule_added = self._try_add_schedule(buffer, path, key)
-        if schedule_added is not None:
-            return schedule_added
+        # Keyed collections with skeleton defaults
+        for field_name, make_skeleton in (
+            ("schedules", _make_schedule_skeleton),
+            ("github_app_credentials", _make_github_app_skeleton),
+        ):
+            result = self._try_add_keyed_skeleton(
+                buffer, path, key, field_name, make_skeleton
+            )
+            if result is not None:
+                return result
 
         # Tagged union lists need a proper default item
         fs = self._find_field_in_all_schemas(path)
@@ -880,29 +907,32 @@ class ConfigEditorHandlers:
             buffer.mark_dirty()
         return self._respond_with_channels_fragment(buffer, repo_id)
 
-    def _try_add_schedule(
+    def _try_add_keyed_skeleton(
         self,
         buffer: EditBuffer,
         path: str,
         key: str | None,
+        field_name: str,
+        make_skeleton: Callable[[], dict[str, Any]],
     ) -> Response | None:
-        """Handle adding a schedule if path matches; returns None otherwise.
+        """Add a keyed collection item with a pre-populated skeleton.
 
-        Detects paths like ``repos.<id>.schedules`` and creates a
-        skeleton with required fields pre-populated.
+        Detects paths like ``repos.<id>.<field_name>`` and creates a
+        new entry using *make_skeleton* if the key doesn't already exist.
+        Returns ``None`` if the path doesn't match.
         """
         if key is None:
             return None
         parts = path.split(".")
-        if len(parts) == 3 and parts[0] == "repos" and parts[2] == "schedules":
+        if len(parts) == 3 and parts[0] == "repos" and parts[2] == field_name:
             repo_id = parts[1]
             repos = buffer.raw.get("repos", {})
             repo = repos.get(repo_id)
             if not isinstance(repo, dict):
                 return Response(f"Repo '{repo_id}' not found", status=400)
-            schedules = repo.setdefault("schedules", {})
-            if key not in schedules:
-                schedules[key] = _make_schedule_skeleton()
+            collection = repo.setdefault(field_name, {})
+            if key not in collection:
+                collection[key] = make_skeleton()
                 buffer.mark_dirty()
             return self._respond_with_field_fragment(buffer, path)
         return None

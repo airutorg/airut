@@ -300,44 +300,68 @@ class GitHubAppCredential:
     """
 
     app_id: str = field(
-        metadata=meta("GitHub App Client ID or numeric App ID", Scope.TASK),
+        metadata=meta(
+            "GitHub App Client ID (Iv1... or Iv23...) or numeric App ID"
+            " — find it on the App's settings page under General > About",
+            Scope.TASK,
+        ),
     )
     private_key: str = field(
-        metadata=meta("PEM-encoded RSA private key", Scope.TASK, secret=True),
+        metadata=meta(
+            "PEM-encoded RSA private key — generate under the App's"
+            " settings > Private keys",
+            Scope.TASK,
+            secret=True,
+        ),
     )
     installation_id: int = field(
-        metadata=meta("Installation ID for the target org/user", Scope.TASK),
+        metadata=meta(
+            "Numeric installation ID — visible in the URL after installing"
+            " the App: /installations/<id>",
+            Scope.TASK,
+        ),
     )
     scopes: frozenset[str] = field(
         metadata=meta(
-            "Host patterns where token replacement applies"
-            " (e.g. api.github.com)",
+            "Host patterns where the proxy replaces the surrogate token"
+            " (fnmatch syntax, e.g. api.github.com,"
+            " *.githubusercontent.com)",
             Scope.TASK,
         ),
     )
     allow_foreign_credentials: bool = field(
         default=False,
         metadata=meta(
-            "Allow non-surrogate credentials on scoped hosts"
-            " (off = strip unrecognized tokens)",
+            "Allow non-surrogate Authorization headers on scoped hosts"
+            " — when off (default), unrecognized tokens are stripped"
+            " for isolation",
             Scope.TASK,
         ),
     )
     base_url: str = field(
         default="https://api.github.com",
         metadata=meta(
-            "GitHub API base URL (change for GitHub Enterprise)", Scope.TASK
+            "GitHub API base URL — change to"
+            " https://<host>/api/v3 for GitHub Enterprise Server",
+            Scope.TASK,
         ),
     )
     permissions: dict[str, str] | None = field(
         default=None,
         metadata=meta(
-            "Restrict token permissions (e.g. contents: read)", Scope.TASK
+            "Restrict installation token permissions"
+            " (e.g. contents: write, pull_requests: write)"
+            " — omit to use the App's full permissions",
+            Scope.TASK,
         ),
     )
     repositories: tuple[str, ...] | None = field(
         default=None,
-        metadata=meta("Restrict token to specific repositories", Scope.TASK),
+        metadata=meta(
+            "Restrict token to specific repository names"
+            " — omit to use all repositories from the installation",
+            Scope.TASK,
+        ),
     )
 
 
