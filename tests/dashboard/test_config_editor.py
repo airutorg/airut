@@ -2561,6 +2561,94 @@ class TestAddSchedule:
         )
 
 
+class TestAddGitHubAppCredential:
+    """Test adding a GitHub App credential via handle_add."""
+
+    def test_add_github_app_creates_skeleton(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/add",
+            data={
+                "path": "repos.test-repo.github_app_credentials",
+                "key": "GH_TOKEN",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 200
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        creds = buf.raw["repos"]["test-repo"]["github_app_credentials"]
+        assert "GH_TOKEN" in creds
+        cred = creds["GH_TOKEN"]
+        assert cred["scopes"] == [
+            "github.com",
+            "api.github.com",
+            "*.githubusercontent.com",
+        ]
+        assert "base_url" not in cred  # left as default
+        assert cred["permissions"] == {
+            "contents": "write",
+            "pull_requests": "write",
+            "actions": "read",
+            "checks": "read",
+        }
+
+    def test_add_github_app_nonexistent_repo(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/add",
+            data={
+                "path": "repos.nonexistent.github_app_credentials",
+                "key": "GH_TOKEN",
+            },
+            headers=XHR,
+        )
+        assert response.status_code == 400
+
+    def test_add_github_app_no_key(self, harness: ConfigEditorHarness) -> None:
+        """No key provided — falls through to default add handler."""
+        harness.client.get("/config")
+        response = harness.client.post(
+            "/api/config/add",
+            data={"path": "repos.test-repo.github_app_credentials"},
+            headers=XHR,
+        )
+        assert response.status_code == 200
+
+    def test_add_github_app_duplicate_key(
+        self, harness: ConfigEditorHarness
+    ) -> None:
+        """Adding same credential key twice does not overwrite."""
+        harness.client.get("/config")
+        harness.client.post(
+            "/api/config/add",
+            data={
+                "path": "repos.test-repo.github_app_credentials",
+                "key": "GH_TOKEN",
+            },
+            headers=XHR,
+        )
+        buf = harness.server._config_handlers._buffer
+        assert buf is not None
+        gh_creds = buf.raw["repos"]["test-repo"]["github_app_credentials"]
+        gh_creds["GH_TOKEN"]["app_id"] = "Iv23li8e2xyz123"
+
+        harness.client.post(
+            "/api/config/add",
+            data={
+                "path": "repos.test-repo.github_app_credentials",
+                "key": "GH_TOKEN",
+            },
+            headers=XHR,
+        )
+        # Should not overwrite the modified app_id
+        assert gh_creds["GH_TOKEN"]["app_id"] == "Iv23li8e2xyz123"
+
+
 class TestMultilineTextarea:
     """Multiline fields render as <textarea> only when source is literal."""
 
