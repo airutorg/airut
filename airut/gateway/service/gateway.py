@@ -30,8 +30,6 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from platformdirs import user_state_path
-
 from airut.config.schema import Scope, get_field_meta
 from airut.config.snapshot import ConfigSnapshot
 from airut.config.source import ConfigSource, YamlConfigSource
@@ -74,6 +72,7 @@ from airut.gateway.service.repo_handler import RepoHandler
 from airut.logging import configure_logging
 from airut.sandbox import AgentTask, ClaudeBinaryCache, Sandbox, SandboxConfig
 from airut.version import GitVersionInfo, get_git_version_info
+from airut.xdg import user_state_path
 
 
 logger = logging.getLogger(__name__)

@@ -28,13 +28,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast, overload
 
-from platformdirs import user_config_path, user_state_path
-
 from airut._json_types import JsonDict
 from airut.config.schema import Scope, meta
 from airut.gateway.channel import ChannelConfig
 from airut.logging import SecretFilter
 from airut.sandbox.types import ResourceLimits
+from airut.xdg import user_config_path, user_state_path
 from airut.yaml_env import EnvVar, YamlValue, raw_resolve
 
 
