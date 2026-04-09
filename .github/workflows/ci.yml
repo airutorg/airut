@@ -6,10 +6,14 @@ on:
   pull_request:
     branches: [main]
 
+permissions: {}
+
 jobs:
   code:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: airutorg/sandbox-action@main
         with:
@@ -19,6 +23,8 @@ jobs:
   security:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: airutorg/sandbox-action@main
         with:
@@ -28,6 +34,8 @@ jobs:
   integration:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - uses: airutorg/sandbox-action@main
         with:
