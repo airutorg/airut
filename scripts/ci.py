@@ -152,7 +152,7 @@ STEPS: list[Step] = [
             "-W error::pytest.PytestUnraisableExceptionWarning "
             "-W error::RuntimeWarning "
             "--allow-hosts=127.0.0.1,localhost,"
-            "claude.ai,storage.googleapis.com"
+            "claude.ai,downloads.claude.ai,storage.googleapis.com"
         ),
         workflow="integration",
     ),

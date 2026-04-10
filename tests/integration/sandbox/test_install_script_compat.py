@@ -11,8 +11,8 @@ ClaudeBinaryCache.  Detects divergence early — before users hit
 download failures at runtime.
 
 Checks:
-    1. claude.ai/install.sh redirects to a bootstrap script on the
-       expected GCS bucket.
+    1. claude.ai/install.sh redirects to a bootstrap script on a
+       known host (GCS bucket or downloads.claude.ai CDN).
     2. The bootstrap script uses the same GCS bucket URL, manifest
        path pattern, and binary path pattern as ClaudeBinaryCache.
     3. The ``latest`` channel resolves to a valid semver version.
@@ -50,6 +50,14 @@ _HTTP_TIMEOUT = 30
 _MAX_RETRIES = 3
 _RETRY_BACKOFF_BASE = 2.0  # seconds
 
+# Hosts that claude.ai/install.sh may redirect to for bootstrap.sh.
+_KNOWN_BOOTSTRAP_HOSTS = frozenset(
+    {
+        "storage.googleapis.com",
+        "downloads.claude.ai",
+    }
+)
+
 
 def _request_with_retry(
     client: httpx.Client,
@@ -85,6 +93,7 @@ def _request_with_retry(
         "127.0.0.1",
         "localhost",
         "claude.ai",
+        "downloads.claude.ai",
         "storage.googleapis.com",
     ]
 )
@@ -95,9 +104,17 @@ class TestInstallScriptCompat:
 
     @pytest.fixture(scope="class")
     def bootstrap_script(self) -> str:
-        """Fetch the install script, following redirects to bootstrap.sh."""
-        with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as c:
-            resp = _request_with_retry(c, "GET", "https://claude.ai/install.sh")
+        """Fetch the bootstrap script directly from GCS.
+
+        The install URL (claude.ai/install.sh) may redirect through a CDN
+        that isn't universally reachable (e.g. downloads.claude.ai returns
+        403 without specific headers).  Since the redirect target is already
+        validated by ``test_redirect_lands_on_known_host``, fetch the
+        canonical copy from GCS directly.
+        """
+        url = f"{GCS_BUCKET}/bootstrap.sh"
+        with httpx.Client(timeout=_HTTP_TIMEOUT) as c:
+            resp = _request_with_retry(c, "GET", url)
             resp.raise_for_status()
             return resp.text
 
@@ -125,15 +142,17 @@ class TestInstallScriptCompat:
 
     # -- tests -----------------------------------------------------------
 
-    def test_redirect_lands_on_gcs_bucket(self) -> None:
-        """claude.ai/install.sh redirects to the expected GCS bucket."""
+    def test_redirect_lands_on_known_host(self) -> None:
+        """claude.ai/install.sh redirects to a known bootstrap host."""
         with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=False) as c:
             resp = _request_with_retry(c, "GET", "https://claude.ai/install.sh")
             if resp.is_redirect:
                 location = resp.headers["location"]
-                assert GCS_BUCKET.split("/", 3)[2] in location, (
-                    f"Redirect target {location!r} does not point to "
-                    f"expected GCS host"
+                assert any(
+                    host in location for host in _KNOWN_BOOTSTRAP_HOSTS
+                ), (
+                    f"Redirect target {location!r} does not point to a "
+                    f"known bootstrap host: {_KNOWN_BOOTSTRAP_HOSTS}"
                 )
             else:
                 # Direct response — verify it contains the bootstrap script
