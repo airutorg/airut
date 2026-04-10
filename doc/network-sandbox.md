@@ -579,7 +579,7 @@ manages installation tokens:
 6. Proxy replaces the surrogate with the real installation token in the header.
    For Basic Auth, the proxy decodes the Base64 payload, replaces the surrogate
    in the password field, and re-encodes — the same mechanism used for
-   [masked secrets](#basic-auth-support).
+   [masked secrets](../spec/masked-secrets.md#basic-auth-support).
 7. Request goes to GitHub with a valid, short-lived token
 
 ```yaml
