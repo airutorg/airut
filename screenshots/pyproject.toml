@@ -10,3 +10,6 @@ dependencies = [
 
 [tool.uv.sources]
 airut = { path = "..", editable = true }
+
+[tool.uv-secure.vulnerability_criteria]
+ignore_vulnerabilities = []

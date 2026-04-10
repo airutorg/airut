@@ -131,6 +131,14 @@ STEPS: list[Step] = [
         workflow="security",
     ),
     Step(
+        name="Screenshots vulnerability scan",
+        command=(
+            "uv run uv-secure screenshots/uv.lock"
+            " --config screenshots/pyproject.toml"
+        ),
+        workflow="security",
+    ),
+    Step(
         name="Proxy requirements.txt drift check",
         command=(
             "uv export --format requirements-txt --no-dev --frozen"
