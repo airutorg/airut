@@ -96,6 +96,7 @@ STEPS: list[Step] = [
             "uv run pytest -n auto"
             " --cov=airut --cov=scripts"
             " --cov-fail-under=100"
+            " --cov-report=term-missing:skip-covered"
         ),
         workflow="code",
     ),
