@@ -86,6 +86,11 @@ STEPS: list[Step] = [
         fix_command="uv run python scripts/check_markdown.py --fix",
     ),
     Step(
+        name="Markdown cross-reference check",
+        command="uv run python scripts/check_xrefs.py",
+        workflow="code",
+    ),
+    Step(
         name="Test coverage",
         command=(
             "uv run pytest -n auto"
