@@ -355,8 +355,9 @@ class TestRunCi:
             mock_run_step.return_value = (True, "")
             with patch.object(sys.stdout, "isatty", return_value=False):
                 run_ci(workflows=["security"])
-            # license + vuln scan + proxy scan + proxy drift + vendor security
-            assert mock_run_step.call_count == 5
+            # license + vuln scan + proxy scan + screenshots scan
+            # + proxy drift + vendor security
+            assert mock_run_step.call_count == 6
 
     def test_invalid_workflow(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Returns 2 for invalid workflow filter."""
@@ -485,8 +486,9 @@ class TestRunCi:
                 5.0,  # check before step 1
                 10.0,  # check before step 2
                 12.0,  # check before step 3
-                14.0,  # check before step 4
-                14.5,  # check before step 5
+                13.0,  # check before step 4
+                14.0,  # check before step 5
+                14.5,  # check before step 6
                 15.0,  # elapsed for summary
             ]
             mock_run_step.return_value = (True, "")
@@ -507,8 +509,9 @@ class TestRunCi:
                 105.0,  # check before step 1
                 110.0,  # check before step 2
                 112.0,  # check before step 3
-                114.0,  # check before step 4
-                114.5,  # check before step 5
+                113.0,  # check before step 4
+                114.0,  # check before step 5
+                114.5,  # check before step 6
                 115.0,  # elapsed for summary
             ]
             mock_run_step.return_value = (True, "")
