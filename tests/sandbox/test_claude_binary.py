@@ -19,9 +19,12 @@ import pytest
 
 from airut.sandbox.claude_binary import (
     CLAUDE_BINARY_CONTAINER_PATH,
+    DOWNLOADS_BASE,
+    GCS_BUCKET,
     ClaudeBinaryCache,
     ClaudeBinaryError,
     _extract_checksum,
+    _open_release_url,
     _sha256_file,
     detect_platform,
     validate_version,
@@ -62,6 +65,85 @@ class TestConstants:
     def test_container_path(self) -> None:
         """Container path is /opt/claude/claude."""
         assert CLAUDE_BINARY_CONTAINER_PATH == "/opt/claude/claude"
+
+    def test_downloads_base(self) -> None:
+        """Primary CDN URL is downloads.claude.ai."""
+        assert "downloads.claude.ai" in DOWNLOADS_BASE
+
+    def test_gcs_bucket(self) -> None:
+        """Fallback GCS bucket URL."""
+        assert "storage.googleapis.com" in GCS_BUCKET
+
+
+# -------------------------------------------------------------------
+# _open_release_url
+# -------------------------------------------------------------------
+
+
+class TestOpenReleaseUrl:
+    """Tests for _open_release_url() CDN-with-fallback."""
+
+    def test_primary_succeeds(self) -> None:
+        """Returns response from CDN on first try."""
+        resp = _url_response(b"data")
+
+        with patch(_URLOPEN) as mock_urlopen:
+            mock_urlopen.return_value = resp
+            result = _open_release_url("latest")
+
+        assert result is resp
+        mock_urlopen.assert_called_once()
+        url = mock_urlopen.call_args[0][0]
+        assert url.startswith(DOWNLOADS_BASE)
+
+    def test_fallback_on_primary_failure(self) -> None:
+        """Falls back to GCS when CDN fails."""
+        resp = _url_response(b"data")
+
+        with patch(_URLOPEN) as mock_urlopen:
+            mock_urlopen.side_effect = [URLError("cdn down"), resp]
+            result = _open_release_url("latest")
+
+        assert result is resp
+        assert mock_urlopen.call_count == 2
+        first_url = mock_urlopen.call_args_list[0][0][0]
+        second_url = mock_urlopen.call_args_list[1][0][0]
+        assert first_url.startswith(DOWNLOADS_BASE)
+        assert second_url.startswith(GCS_BUCKET)
+
+    def test_all_sources_fail(self) -> None:
+        """Raises URLError when all sources fail."""
+        with (
+            patch(_URLOPEN) as mock_urlopen,
+            pytest.raises(URLError, match="gcs also down"),
+        ):
+            mock_urlopen.side_effect = [
+                URLError("cdn down"),
+                URLError("gcs also down"),
+            ]
+            _open_release_url("latest")
+
+    def test_timeout_passed_through(self) -> None:
+        """Custom timeout is forwarded to urlopen."""
+        resp = _url_response(b"data")
+
+        with patch(_URLOPEN) as mock_urlopen:
+            mock_urlopen.return_value = resp
+            _open_release_url("1.0.0/manifest.json", timeout=300)
+
+        mock_urlopen.assert_called_once()
+        assert mock_urlopen.call_args[1]["timeout"] == 300
+
+    def test_path_appended_to_base(self) -> None:
+        """Path is appended to base URL."""
+        resp = _url_response(b"data")
+
+        with patch(_URLOPEN) as mock_urlopen:
+            mock_urlopen.return_value = resp
+            _open_release_url("1.2.3/linux-x64/claude")
+
+        url = mock_urlopen.call_args[0][0]
+        assert url.endswith("/1.2.3/linux-x64/claude")
 
 
 # -------------------------------------------------------------------
@@ -238,6 +320,7 @@ def _make_manifest(checksum: str, platform: str = "linux-x64") -> str:
 
 
 _URLOPEN = "airut.sandbox.claude_binary.urllib.request.urlopen"
+_OPEN_RELEASE_URL = "airut.sandbox.claude_binary._open_release_url"
 
 
 class TestClaudeBinaryCache:
@@ -265,8 +348,8 @@ class TestClaudeBinaryCache:
         manifest_resp = _url_response(manifest.encode())
         binary_resp = _url_response([binary_content, b""])
 
-        with patch(_URLOPEN) as mock_urlopen:
-            mock_urlopen.side_effect = [manifest_resp, binary_resp]
+        with patch(_OPEN_RELEASE_URL) as mock_open:
+            mock_open.side_effect = [manifest_resp, binary_resp]
             path, version = cache.ensure("1.2.3")
 
         assert version == "1.2.3"
@@ -297,8 +380,8 @@ class TestClaudeBinaryCache:
 
         channel_resp = _url_response(b"2.0.0")
 
-        with patch(_URLOPEN) as mock_urlopen:
-            mock_urlopen.side_effect = [channel_resp]
+        with patch(_OPEN_RELEASE_URL) as mock_open:
+            mock_open.side_effect = [channel_resp]
             path, version = cache.ensure("latest")
 
         assert version == "2.0.0"
@@ -320,10 +403,10 @@ class TestClaudeBinaryCache:
         binary_resp = _url_response([b"binary", b""])
 
         with (
-            patch(_URLOPEN) as mock_urlopen,
+            patch(_OPEN_RELEASE_URL) as mock_open,
             pytest.raises(ClaudeBinaryError, match="Checksum mismatch"),
         ):
-            mock_urlopen.side_effect = [manifest_resp, binary_resp]
+            mock_open.side_effect = [manifest_resp, binary_resp]
             cache.ensure("1.2.3")
 
     def test_ensure_http_error_on_channel_resolution(
@@ -333,10 +416,10 @@ class TestClaudeBinaryCache:
         cache = ClaudeBinaryCache(tmp_path, platform_override="linux-x64")
 
         with (
-            patch(_URLOPEN) as mock_urlopen,
+            patch(_OPEN_RELEASE_URL) as mock_open,
             pytest.raises(ClaudeBinaryError, match="Failed to resolve"),
         ):
-            mock_urlopen.side_effect = URLError("connection failed")
+            mock_open.side_effect = URLError("connection failed")
             cache.ensure("latest")
 
     def test_ensure_invalid_channel_response(self, tmp_path: Path) -> None:
@@ -346,10 +429,10 @@ class TestClaudeBinaryCache:
         channel_resp = _url_response(b"not-a-version")
 
         with (
-            patch(_URLOPEN) as mock_urlopen,
+            patch(_OPEN_RELEASE_URL) as mock_open,
             pytest.raises(ClaudeBinaryError, match="Invalid version"),
         ):
-            mock_urlopen.side_effect = [channel_resp]
+            mock_open.side_effect = [channel_resp]
             cache.ensure("latest")
 
     def test_ensure_http_error_on_manifest(self, tmp_path: Path) -> None:
@@ -357,10 +440,10 @@ class TestClaudeBinaryCache:
         cache = ClaudeBinaryCache(tmp_path, platform_override="linux-x64")
 
         with (
-            patch(_URLOPEN) as mock_urlopen,
+            patch(_OPEN_RELEASE_URL) as mock_open,
             pytest.raises(ClaudeBinaryError, match="Failed to download"),
         ):
-            mock_urlopen.side_effect = URLError("refused")
+            mock_open.side_effect = URLError("refused")
             cache.ensure("1.2.3")
 
     def test_ensure_platform_not_in_manifest(self, tmp_path: Path) -> None:
@@ -373,10 +456,10 @@ class TestClaudeBinaryCache:
         manifest_resp = _url_response(manifest.encode())
 
         with (
-            patch(_URLOPEN) as mock_urlopen,
+            patch(_OPEN_RELEASE_URL) as mock_open,
             pytest.raises(ClaudeBinaryError, match="Platform.*not found"),
         ):
-            mock_urlopen.side_effect = [manifest_resp]
+            mock_open.side_effect = [manifest_resp]
             cache.ensure("1.2.3")
 
     def test_ensure_cleanup_on_download_failure(self, tmp_path: Path) -> None:
@@ -388,10 +471,10 @@ class TestClaudeBinaryCache:
         manifest_resp = _url_response(manifest.encode())
 
         with (
-            patch(_URLOPEN) as mock_urlopen,
+            patch(_OPEN_RELEASE_URL) as mock_open,
             pytest.raises(ClaudeBinaryError, match="Failed to download"),
         ):
-            mock_urlopen.side_effect = [
+            mock_open.side_effect = [
                 manifest_resp,
                 URLError("download fail"),
             ]
@@ -416,15 +499,15 @@ class TestClaudeBinaryCache:
 
         channel_resp = _url_response(b"3.0.0")
 
-        with patch(_URLOPEN) as mock_urlopen:
-            mock_urlopen.side_effect = [channel_resp]
+        with patch(_OPEN_RELEASE_URL) as mock_open:
+            mock_open.side_effect = [channel_resp]
             # First call resolves via network
             cache.ensure("latest")
             # Second call uses cache
             cache.ensure("latest")
 
         # Only 1 HTTP call (not 2) -- the second was cached
-        assert mock_urlopen.call_count == 1
+        assert mock_open.call_count == 1
 
 
 # -------------------------------------------------------------------
@@ -553,13 +636,13 @@ class TestResolveVersion:
         assert cache.resolve_version("1.2.3") == "1.2.3"
 
     def test_latest_resolves(self, tmp_path: Path) -> None:
-        """'latest' resolves via GCS."""
+        """'latest' resolves via CDN."""
         cache = ClaudeBinaryCache(tmp_path, platform_override="linux-x64")
 
         channel_resp = _url_response(b"4.0.0")
 
-        with patch(_URLOPEN) as mock_urlopen:
-            mock_urlopen.side_effect = [channel_resp]
+        with patch(_OPEN_RELEASE_URL) as mock_open:
+            mock_open.side_effect = [channel_resp]
             assert cache.resolve_version("latest") == "4.0.0"
 
     def test_invalid_raises(self, tmp_path: Path) -> None:

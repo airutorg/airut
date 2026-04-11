@@ -110,8 +110,8 @@ without being affected by dev tooling licenses.
 
 Integration tests run with a mock container tool (configured automatically by
 test fixtures). Gateway tests require only localhost network access for the test
-servers. Sandbox compatibility tests also access `claude.ai` and
-`storage.googleapis.com`.
+servers. Sandbox compatibility tests also access `claude.ai`,
+`downloads.claude.ai`, and `storage.googleapis.com`.
 
 ### `--fix` Mode
 

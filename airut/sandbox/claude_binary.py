@@ -18,9 +18,10 @@ Cache layout::
 
 Version resolution:
 
-- ``"latest"`` and ``"stable"`` are resolved via the GCS distribution
-  bucket.  The resolved version string is cached with a TTL to avoid
-  hitting GCS on every task startup.
+- ``"latest"`` and ``"stable"`` are resolved via the release
+  distribution CDN (``downloads.claude.ai``), falling back to the
+  GCS bucket.  The resolved version string is cached with a TTL
+  to avoid network calls on every task startup.
 - Explicit semver versions (e.g. ``"1.0.33"``) are used directly.
 
 Thread Safety:
@@ -32,6 +33,7 @@ Thread Safety:
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import logging
 import os
@@ -49,11 +51,17 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-#: GCS bucket URL for Claude Code releases.
+#: Primary CDN URL for Claude Code releases.
+DOWNLOADS_BASE = "https://downloads.claude.ai/claude-code-releases"
+
+#: GCS bucket URL for Claude Code releases (fallback).
 GCS_BUCKET = (
     "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad"
     "-8dfa-d59b1c096819/claude-code-releases"
 )
+
+#: Ordered base URLs for release artifacts (CDN first, GCS fallback).
+_RELEASE_BASES = [DOWNLOADS_BASE, GCS_BUCKET]
 
 #: Container path where the binary is bind-mounted.
 CLAUDE_BINARY_CONTAINER_PATH = "/opt/claude/claude"
@@ -121,11 +129,40 @@ def validate_version(version: str) -> None:
         )
 
 
+def _open_release_url(
+    path: str, *, timeout: int = 30
+) -> http.client.HTTPResponse:
+    """Fetch a release artifact, trying CDN first with GCS fallback.
+
+    Args:
+        path: Relative path within the releases directory
+            (e.g. ``latest``, ``1.0.0/manifest.json``).
+        timeout: Request timeout in seconds.
+
+    Returns:
+        HTTP response (usable as context manager).
+
+    Raises:
+        urllib.error.URLError: If all sources fail.
+    """
+    last_error: urllib.error.URLError | None = None
+    for base in _RELEASE_BASES:
+        url = f"{base}/{path}"
+        try:
+            return urllib.request.urlopen(url, timeout=timeout)
+        except urllib.error.URLError as e:
+            logger.debug("Fetch failed for %s: %s", url, e)
+            last_error = e
+    assert last_error is not None
+    raise last_error
+
+
 class ClaudeBinaryCache:
     """Thread-safe cache for Claude Code binaries.
 
-    Downloads binaries from the GCS distribution bucket, verifies
-    SHA-256 checksums from the manifest, and caches them on disk.
+    Downloads binaries from ``downloads.claude.ai`` (with GCS fallback),
+    verifies SHA-256 checksums from the manifest, and caches them on
+    disk.
 
     Args:
         cache_dir: Root directory for cached binaries.
@@ -166,7 +203,7 @@ class ClaudeBinaryCache:
         """Ensure a Claude binary is cached and return its path.
 
         For channel names (``latest``, ``stable``), resolves to a
-        concrete version via the GCS bucket.  Downloads and verifies
+        concrete version via the CDN.  Downloads and verifies
         the binary if not already cached.
 
         Args:
@@ -273,10 +310,8 @@ class ClaudeBinaryCache:
                     )
                     return resolved
 
-        # Fetch from GCS
-        url = f"{GCS_BUCKET}/{channel}"
         try:
-            with urllib.request.urlopen(url, timeout=30) as resp:
+            with _open_release_url(channel) as resp:
                 resolved = resp.read().decode().strip()
         except urllib.error.URLError as e:
             raise ClaudeBinaryError(
@@ -307,9 +342,8 @@ class ClaudeBinaryCache:
         version_dir.mkdir(parents=True, exist_ok=True)
 
         # Download manifest
-        manifest_url = f"{GCS_BUCKET}/{version}/manifest.json"
         try:
-            with urllib.request.urlopen(manifest_url, timeout=30) as resp:
+            with _open_release_url(f"{version}/manifest.json") as resp:
                 manifest_json = resp.read().decode()
         except urllib.error.URLError as e:
             raise ClaudeBinaryError(
@@ -325,7 +359,6 @@ class ClaudeBinaryCache:
             )
 
         # Download binary to temp file
-        binary_url = f"{GCS_BUCKET}/{version}/{self._platform}/claude"
         binary_path = version_dir / "claude"
 
         # Use a temp file in the same directory for atomic rename
@@ -335,7 +368,9 @@ class ClaudeBinaryCache:
         tmp_path = Path(tmp_path_str)
         try:
             try:
-                with urllib.request.urlopen(binary_url, timeout=300) as resp:
+                with _open_release_url(
+                    f"{version}/{self._platform}/claude", timeout=300
+                ) as resp:
                     with os.fdopen(fd, "wb") as f:
                         while True:
                             chunk = resp.read(8192)
