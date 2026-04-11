@@ -150,10 +150,13 @@ url_prefixes:
     path: /chrome-for-testing-public/*
     methods: [GET, HEAD]
 
-  # Claude Code install script — integration test validates upstream compatibility
+  # Claude Code install/download — binary cache and integration tests
   - host: claude.ai
     path: /install.sh
     methods: [GET]
+  - host: downloads.claude.ai
+    path: /claude-code-releases/*
+    methods: [GET, HEAD]
   - host: storage.googleapis.com
     path: /claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/*
     methods: [GET, HEAD]
