@@ -956,6 +956,51 @@ def _make_config_raw() -> dict[str, Any]:
                         {"workspace_members": True},
                     ],
                 },
+                "schedules": {
+                    "weekly-dependency-audit": {
+                        "cron": "0 8 * * 1",
+                        "timezone": "America/New_York",
+                        "subject": (
+                            "Weekly Dependency Audit"
+                            " \u2014 Supply Chain Risk Report"
+                        ),
+                        "prompt": (
+                            "Run a full dependency update audit"
+                            " for this repository:\n"
+                            "\n"
+                            "1. Check all direct and transitive"
+                            " dependencies for available updates\n"
+                            "2. For each dependency with an"
+                            " available update, note the current"
+                            " and latest version\n"
+                            "3. Flag any dependency published less"
+                            " than 30 days ago as a supply chain"
+                            " risk\n"
+                            "4. For flagged dependencies, check:"
+                            " maintainer history, download counts,"
+                            " recent commit activity, and whether"
+                            " the package has changed ownership"
+                            " recently\n"
+                            "5. Attempt the update on a branch,"
+                            " run the test suite, and report any"
+                            " failures\n"
+                            "\n"
+                            "Deliver a structured report with"
+                            " sections: Critical Updates, Supply"
+                            " Chain Risks, Test Results, and"
+                            " Recommended Actions. If any"
+                            " dependency looks suspicious (new"
+                            " maintainer, very low downloads,"
+                            " typosquatting potential), highlight"
+                            " it prominently."
+                        ),
+                        "model": "sonnet",
+                        "effort": "max",
+                        "deliver": {
+                            "to": "security-team@acme.com",
+                        },
+                    },
+                },
             },
             "frontend": {
                 "git": {
