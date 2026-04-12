@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import quote
 
 from mock_data import MockDashboard, create_mock_dashboard
@@ -37,19 +38,45 @@ from playwright.sync_api import Page, sync_playwright
 
 logger = logging.getLogger(__name__)
 
-# Pages to capture: (name, url_template)
+
+class PageSpec(NamedTuple):
+    """Specification for a page to capture.
+
+    Attributes:
+        name: Screenshot file name prefix.
+        url_template: URL path with ``{key}`` placeholders.
+        scroll_to: Optional ``<h2>`` heading text to scroll into view
+            and auto-expand ``<details>`` elements beneath.
+        scroll_offset: Extra pixels to scroll down after finding the
+            heading (default 0).  Useful to push past fields at the
+            top and center the most interesting content.
+    """
+
+    name: str
+    url_template: str
+    scroll_to: str | None = None
+    scroll_offset: int = 0
+
+
+# Pages to capture.
 # URL templates use {key} placeholders resolved from MockDashboard.ids.
-PAGES: list[tuple[str, str]] = [
-    ("dashboard", "/"),
-    ("task-executing", "/task/{executing_task}"),
-    ("task-completed", "/task/{completed_task}"),
-    ("conversation", "/conversation/{completed_conv}"),
-    ("repo-live", "/repo/{live_repo}"),
-    ("repo-failed", "/repo/{failed_repo}"),
-    ("actions", "/conversation/{executing_conv}/actions"),
-    ("network", "/conversation/{executing_conv}/network"),
-    ("config-global", "/config"),
-    ("config-repo", "/config/repos/{config_repo}"),
+PAGES: list[PageSpec] = [
+    PageSpec("dashboard", "/"),
+    PageSpec("task-executing", "/task/{executing_task}"),
+    PageSpec("task-completed", "/task/{completed_task}"),
+    PageSpec("conversation", "/conversation/{completed_conv}"),
+    PageSpec("repo-live", "/repo/{live_repo}"),
+    PageSpec("repo-failed", "/repo/{failed_repo}"),
+    PageSpec("actions", "/conversation/{executing_conv}/actions"),
+    PageSpec("network", "/conversation/{executing_conv}/network"),
+    PageSpec("config-global", "/config"),
+    PageSpec("config-repo", "/config/repos/{config_repo}"),
+    PageSpec(
+        "config-schedules",
+        "/config/repos/{config_repo}",
+        "Scheduled Tasks",
+        scroll_offset=200,
+    ),
 ]
 
 SCHEMES = ("light", "dark")
@@ -87,6 +114,9 @@ def capture_page(
     page: Page,
     url: str,
     output_path: Path,
+    *,
+    scroll_to: str | None = None,
+    scroll_offset: int = 0,
 ) -> None:
     """Navigate to a URL and capture a viewport-sized screenshot.
 
@@ -97,9 +127,39 @@ def capture_page(
         page: Playwright page instance.
         url: URL to navigate to.
         output_path: Path to save the PNG screenshot.
+        scroll_to: Optional ``<h2>`` heading text to scroll into view
+            before capturing.  Also expands any ``<details>`` elements
+            within the scrolled section.
+        scroll_offset: Extra pixels to scroll down after positioning
+            on the heading.
     """
     page.goto(url)
     page.wait_for_load_state("load")
+
+    if scroll_to:
+        page.evaluate(
+            """([text, offset]) => {
+                // Find h2 section title by text content
+                const headings = document.querySelectorAll('h2');
+                let el = null;
+                for (const h of headings) {
+                    if (h.textContent.trim() === text) { el = h; break; }
+                }
+                if (!el) return;
+                // Open collapsed <details> in subsequent siblings
+                let sib = el.nextElementSibling;
+                while (sib && !sib.matches('h2')) {
+                    sib.querySelectorAll('details:not([open])')
+                        .forEach(d => d.setAttribute('open', ''));
+                    sib = sib.nextElementSibling;
+                }
+                // Scroll with offset for fixed navbar (48px) + padding
+                const y = el.getBoundingClientRect().top
+                    + window.scrollY - 60 + offset;
+                window.scrollTo({top: y});
+            }""",
+            [scroll_to, scroll_offset],
+        )
 
     page.screenshot(path=str(output_path))
 
@@ -154,7 +214,7 @@ def generate_screenshots(
     output_dir: Path,
     *,
     schemes: tuple[str, ...] = SCHEMES,
-    pages: list[tuple[str, str]] | None = None,
+    pages: list[PageSpec] | None = None,
 ) -> list[Path]:
     """Generate all screenshots.
 
@@ -188,14 +248,20 @@ def generate_screenshots(
             )
             page = context.new_page()
 
-            for name, url_template in pages:
-                url = resolve_url(base_url, url_template, dashboard.ids)
-                raw_path = output_dir / f"{name}-{scheme}-raw.png"
-                logger.info("Capturing %s (%s)", name, scheme)
-                capture_page(page, url, raw_path)
+            for spec in pages:
+                url = resolve_url(base_url, spec.url_template, dashboard.ids)
+                raw_path = output_dir / f"{spec.name}-{scheme}-raw.png"
+                logger.info("Capturing %s (%s)", spec.name, scheme)
+                capture_page(
+                    page,
+                    url,
+                    raw_path,
+                    scroll_to=spec.scroll_to,
+                    scroll_offset=spec.scroll_offset,
+                )
                 w, h = _png_dimensions(raw_path)
                 logger.info("  -> raw %dx%d", w, h)
-                raw_paths.append((name, scheme, raw_path))
+                raw_paths.append((spec.name, scheme, raw_path))
 
             context.close()
 
@@ -307,11 +373,11 @@ def main() -> None:
     else:
         schemes = (args.scheme,)
 
-    pages: list[tuple[str, str]] | None = None
+    pages: list[PageSpec] | None = None
     if args.page:
-        pages = [(n, t) for n, t in PAGES if n == args.page]
+        pages = [p for p in PAGES if p.name == args.page]
         if not pages:
-            valid = ", ".join(n for n, _ in PAGES)
+            valid = ", ".join(p.name for p in PAGES)
             logger.error(
                 "Unknown page '%s'. Valid: %s",
                 args.page,

@@ -81,18 +81,19 @@ uv run --project screenshots python screenshots/generate.py --scheme light --pag
 
 ### Available pages
 
-| Name             | URL pattern                              |
-| ---------------- | ---------------------------------------- |
-| `dashboard`      | `/`                                      |
-| `task-executing` | `/task/{executing_task}`                 |
-| `task-completed` | `/task/{completed_task}`                 |
-| `conversation`   | `/conversation/{completed_conv}`         |
-| `repo-live`      | `/repo/{live_repo}`                      |
-| `repo-failed`    | `/repo/{failed_repo}`                    |
-| `actions`        | `/conversation/{executing_conv}/actions` |
-| `network`        | `/conversation/{executing_conv}/network` |
-| `config-global`  | `/config`                                |
-| `config-repo`    | `/config/repos/{config_repo}`            |
+| Name               | URL pattern                                           |
+| ------------------ | ----------------------------------------------------- |
+| `dashboard`        | `/`                                                   |
+| `task-executing`   | `/task/{executing_task}`                              |
+| `task-completed`   | `/task/{completed_task}`                              |
+| `conversation`     | `/conversation/{completed_conv}`                      |
+| `repo-live`        | `/repo/{live_repo}`                                   |
+| `repo-failed`      | `/repo/{failed_repo}`                                 |
+| `actions`          | `/conversation/{executing_conv}/actions`              |
+| `network`          | `/conversation/{executing_conv}/network`              |
+| `config-global`    | `/config`                                             |
+| `config-repo`      | `/config/repos/{config_repo}`                         |
+| `config-schedules` | `/config/repos/{config_repo}` (scrolled to schedules) |
 
 Output goes to `screenshots/output/` by default (gitignored).
 
