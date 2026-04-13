@@ -9,13 +9,16 @@ from airut.markdown import (
     _convert_inline,
     _convert_line,
     _get_list_type,
+    _is_blockquote_line,
     _is_separator_line,
     _is_table_line,
     _join_paragraph,
     _remove_code_spans,
+    _render_blockquote,
     _render_list,
     _render_table,
     _split_table_cells,
+    _strip_blockquote_marker,
     markdown_to_html,
 )
 
@@ -1061,3 +1064,288 @@ class TestHelperFunctions:
     def test_join_paragraph_empty_list(self):
         """Test _join_paragraph with empty list."""
         assert _join_paragraph([]) == ""
+
+    def test_is_blockquote_line(self):
+        """Test _is_blockquote_line function."""
+        assert _is_blockquote_line("> text") is True
+        assert _is_blockquote_line(">text") is True
+        assert _is_blockquote_line(">") is True
+        assert _is_blockquote_line(" > text") is True
+        assert _is_blockquote_line("  > text") is True
+        assert _is_blockquote_line("   > text") is True
+        # 4+ spaces is indented code, not blockquote
+        assert _is_blockquote_line("    > text") is False
+        assert _is_blockquote_line("text") is False
+        assert _is_blockquote_line("") is False
+        assert _is_blockquote_line("   ") is False
+
+    def test_strip_blockquote_marker(self):
+        """Test _strip_blockquote_marker function."""
+        # Standard: > followed by space
+        assert _strip_blockquote_marker("> text") == "text"
+        # No space after >: content starts immediately
+        assert _strip_blockquote_marker(">text") == "text"
+        # Empty blockquote line (just >)
+        assert _strip_blockquote_marker(">") == ""
+        # Only one space stripped after >; additional spaces are content
+        assert _strip_blockquote_marker(">  text") == " text"
+        # Leading spaces before > are stripped
+        assert _strip_blockquote_marker("  > text") == "text"
+
+    def test_render_blockquote_simple(self):
+        """Test _render_blockquote with simple content."""
+        result = _render_blockquote(["> hello"])
+        assert "<blockquote" in result
+        assert "hello" in result
+        assert "</blockquote>" in result
+
+    def test_render_blockquote_empty(self):
+        """Test _render_blockquote with empty list."""
+        assert _render_blockquote([]) == ""
+
+
+class TestBlockquotes:
+    """Tests for blockquote conversion per CommonMark spec (section 5.1).
+
+    A block quote marker consists of 0-3 spaces of initial indent, plus
+    the ``>`` character, plus an optional single space. The content after
+    stripping the marker is processed recursively as markdown.
+    """
+
+    def test_simple_blockquote(self):
+        """Single-line blockquote renders as <blockquote>."""
+        result = markdown_to_html("> Hello")
+        assert "<blockquote" in result
+        assert "Hello" in result
+        assert "</blockquote>" in result
+
+    def test_blockquote_no_space_after_marker(self):
+        """Blockquote without space after > is still valid per CommonMark."""
+        result = markdown_to_html(">Hello")
+        assert "<blockquote" in result
+        assert "Hello" in result
+        assert "</blockquote>" in result
+
+    def test_multiline_blockquote_soft_breaks(self):
+        """Consecutive > lines form single blockquote with soft breaks."""
+        text = "> Line 1\n> Line 2\n> Line 3"
+        result = markdown_to_html(text)
+        assert result.count("<blockquote") == 1
+        assert result.count("</blockquote>") == 1
+        # Soft line breaks join with spaces (paragraph semantics)
+        assert "Line 1 Line 2 Line 3" in result
+
+    def test_blockquote_paragraph_separation(self):
+        """Blank > line creates paragraph break within blockquote."""
+        text = "> Para 1\n>\n> Para 2"
+        result = markdown_to_html(text)
+        assert result.count("<blockquote") == 1
+        # Both paragraphs inside the same blockquote
+        assert "Para 1" in result
+        assert "Para 2" in result
+
+    def test_nested_blockquote(self):
+        """Nested blockquote with > > marker."""
+        text = "> > Nested"
+        result = markdown_to_html(text)
+        # Should have two levels of blockquote
+        assert result.count("<blockquote") == 2
+        assert result.count("</blockquote>") == 2
+        assert "Nested" in result
+
+    def test_nested_blockquote_no_space(self):
+        """Nested blockquote with >> (no space between markers)."""
+        text = ">> Nested"
+        result = markdown_to_html(text)
+        assert result.count("<blockquote") == 2
+        assert result.count("</blockquote>") == 2
+        assert "Nested" in result
+
+    def test_deeply_nested_blockquote(self):
+        """Three levels of nesting."""
+        text = "> > > Deep"
+        result = markdown_to_html(text)
+        assert result.count("<blockquote") == 3
+        assert result.count("</blockquote>") == 3
+        assert "Deep" in result
+
+    def test_blockquote_with_inline_formatting(self):
+        """Blockquote content supports inline formatting."""
+        text = "> **Bold** and *italic* and `code`"
+        result = markdown_to_html(text)
+        assert "<blockquote" in result
+        assert "<strong>Bold</strong>" in result
+        assert "<em>italic</em>" in result
+        assert "<code>code</code>" in result
+
+    def test_blockquote_with_link(self):
+        """Blockquote content supports links."""
+        text = "> See [docs](https://example.com)"
+        result = markdown_to_html(text)
+        assert "<blockquote" in result
+        assert '<a href="https://example.com">docs</a>' in result
+
+    def test_blockquote_with_header(self):
+        """Blockquote containing a header."""
+        text = "> # Title\n> Some text"
+        result = markdown_to_html(text)
+        assert "<blockquote" in result
+        assert "<strong><u>Title</u></strong>" in result
+        assert "Some text" in result
+
+    def test_blockquote_with_list(self):
+        """Blockquote containing a list."""
+        text = "> - Item 1\n> - Item 2"
+        result = markdown_to_html(text)
+        assert "<blockquote" in result
+        assert "<ul>" in result
+        assert "<li>Item 1</li>" in result
+        assert "<li>Item 2</li>" in result
+
+    def test_blockquote_with_code_block(self):
+        """Blockquote containing a fenced code block."""
+        text = "> ```\n> code here\n> ```"
+        result = markdown_to_html(text)
+        assert "<blockquote" in result
+        assert "<pre>code here</pre>" in result
+
+    def test_blockquote_preceded_by_paragraph(self):
+        """Paragraph text before a blockquote flushes correctly."""
+        text = "Some text\n> Quoted"
+        result = markdown_to_html(text)
+        assert "Some text" in result
+        assert "<blockquote" in result
+        assert "Quoted" in result
+        # Paragraph should appear before blockquote
+        assert result.index("Some text") < result.index("<blockquote")
+
+    def test_blockquote_followed_by_paragraph(self):
+        """Text after blockquote renders correctly."""
+        text = "> Quoted\nAfter text"
+        result = markdown_to_html(text)
+        assert "<blockquote" in result
+        assert "Quoted" in result
+        assert "After text" in result
+        # Blockquote should appear before text
+        assert result.index("</blockquote>") < result.index("After text")
+
+    def test_two_separate_blockquotes(self):
+        """Blank line without > separates into two blockquotes."""
+        text = "> First\n\n> Second"
+        result = markdown_to_html(text)
+        assert result.count("<blockquote") == 2
+        assert result.count("</blockquote>") == 2
+        assert "First" in result
+        assert "Second" in result
+
+    def test_blockquote_html_escaping(self):
+        """HTML in blockquote is properly escaped."""
+        text = "> <script>alert('xss')</script>"
+        result = markdown_to_html(text)
+        assert "<blockquote" in result
+        assert "<script>" not in result
+        assert "&lt;script&gt;" in result
+
+    def test_empty_blockquote_marker(self):
+        """Bare > marker produces blockquote with empty content."""
+        result = markdown_to_html(">")
+        assert "<blockquote" in result
+        assert "</blockquote>" in result
+
+    def test_blockquote_at_end_of_document(self):
+        """Blockquote at end of document flushes correctly."""
+        text = "Text before\n\n> Final quote"
+        result = markdown_to_html(text)
+        assert "Text before" in result
+        assert "<blockquote" in result
+        assert "Final quote" in result
+        assert result.endswith("</blockquote>")
+
+    def test_blockquote_between_paragraphs(self):
+        """Blockquote between two paragraphs."""
+        text = "Before\n\n> Quoted\n\nAfter"
+        result = markdown_to_html(text)
+        assert result.index("Before") < result.index("<blockquote")
+        assert result.index("</blockquote>") < result.index("After")
+
+    def test_blockquote_leading_spaces(self):
+        """Up to 3 leading spaces before > are allowed."""
+        for spaces in range(4):
+            prefix = " " * spaces
+            result = markdown_to_html(f"{prefix}> Hello")
+            assert "<blockquote" in result, (
+                f"Failed with {spaces} leading spaces"
+            )
+            assert "Hello" in result
+
+    def test_four_spaces_before_marker_not_blockquote(self):
+        """Four leading spaces before > is not a blockquote."""
+        result = markdown_to_html("    > Not a quote")
+        assert "<blockquote" not in result
+
+    def test_blockquote_preserves_extra_content_spaces(self):
+        """Only one space after > is stripped; extra spaces are content."""
+        text = ">  Two spaces"
+        result = markdown_to_html(text)
+        assert "<blockquote" in result
+        # The extra space is preserved in content
+        assert " Two spaces" in result
+
+    def test_blockquote_with_hard_break(self):
+        """Hard line break inside blockquote via trailing backslash."""
+        text = "> Line 1\\\n> Line 2"
+        result = markdown_to_html(text)
+        assert "<blockquote" in result
+        assert "Line 1<br>Line 2" in result
+
+    def test_blockquote_with_table(self):
+        """Blockquote containing a table."""
+        text = "> | A | B |\n> |---|---|\n> | 1 | 2 |"
+        result = markdown_to_html(text)
+        assert "<blockquote" in result
+        assert "<table" in result
+        assert ">A</th>" in result
+        assert ">1</td>" in result
+
+    def test_blockquote_interrupts_paragraph(self):
+        """Per CommonMark, blockquote can interrupt a paragraph."""
+        text = "Paragraph\n> Quote"
+        result = markdown_to_html(text)
+        assert "Paragraph" in result
+        assert "<blockquote" in result
+        assert "Quote" in result
+
+    def test_blockquote_mixed_with_other_blocks(self):
+        """Document with blockquote mixed among other block elements."""
+        text = "# Title\n\n> Quoted text\n\n- List item\n\n> Another quote"
+        result = markdown_to_html(text)
+        assert "<strong><u>Title</u></strong>" in result
+        assert result.count("<blockquote") == 2
+        assert "<li>List item</li>" in result
+
+    def test_blockquote_only_marker_between_content(self):
+        """Bare > between content lines keeps single blockquote."""
+        text = "> Line 1\n>\n> Line 2"
+        result = markdown_to_html(text)
+        assert result.count("<blockquote") == 1
+        assert "Line 1" in result
+        assert "Line 2" in result
+
+    def test_blockquote_with_ordered_list(self):
+        """Blockquote containing an ordered list."""
+        text = "> 1. First\n> 2. Second"
+        result = markdown_to_html(text)
+        assert "<blockquote" in result
+        assert "<ol>" in result
+        assert "<li>First</li>" in result
+        assert "<li>Second</li>" in result
+
+    def test_blockquote_immediately_after_table(self):
+        """Blockquote right after a table flushes the table first."""
+        text = "| A | B |\n|---|---|\n| 1 | 2 |\n> Quoted"
+        result = markdown_to_html(text)
+        assert "<table" in result
+        assert "</table>" in result
+        assert "<blockquote" in result
+        assert "Quoted" in result
+        assert result.index("</table>") < result.index("<blockquote")
