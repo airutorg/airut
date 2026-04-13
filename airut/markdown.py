@@ -27,6 +27,7 @@ Supported syntax:
 - Tables: | header | header |
 - Unordered lists: - item or * item
 - Ordered lists: 1. item
+- Block quotes: > quoted text (nested with >> or > >)
 """
 
 import html
@@ -58,7 +59,17 @@ def markdown_to_html(text: str) -> str:
     in_list = False
     list_lines: list[str] = []
     list_type: str = ""  # "ul" or "ol"
+    in_blockquote = False
+    blockquote_lines: list[str] = []
     paragraph_lines: list[str] = []
+
+    def flush_table() -> None:
+        """Flush pending table lines to result."""
+        nonlocal in_table, table_lines
+        if in_table and table_lines:
+            result_lines.append(_render_table(table_lines))
+            table_lines = []
+            in_table = False
 
     def flush_list() -> None:
         """Flush pending list lines to result."""
@@ -68,6 +79,14 @@ def markdown_to_html(text: str) -> str:
             list_lines = []
             in_list = False
             list_type = ""
+
+    def flush_blockquote() -> None:
+        """Flush pending blockquote lines to result."""
+        nonlocal in_blockquote, blockquote_lines
+        if in_blockquote and blockquote_lines:
+            result_lines.append(_render_blockquote(blockquote_lines))
+            blockquote_lines = []
+            in_blockquote = False
 
     def flush_paragraph() -> None:
         """Flush pending paragraph lines to result.
@@ -93,11 +112,9 @@ def markdown_to_html(text: str) -> str:
                 in_code_block = False
             else:
                 # Start code block - flush any pending structures
-                if in_table:
-                    result_lines.append(_render_table(table_lines))
-                    table_lines = []
-                    in_table = False
+                flush_table()
                 flush_list()
+                flush_blockquote()
                 flush_paragraph()
                 in_code_block = True
             continue
@@ -105,6 +122,20 @@ def markdown_to_html(text: str) -> str:
         if in_code_block:
             code_block_lines.append(line)
             continue
+
+        # Handle block quotes
+        if _is_blockquote_line(line):
+            if not in_blockquote:
+                # Start blockquote - flush pending structures
+                flush_table()
+                flush_list()
+                flush_paragraph()
+                in_blockquote = True
+            blockquote_lines.append(line)
+            continue
+        elif in_blockquote:
+            # End of blockquote
+            flush_blockquote()
 
         # Handle tables - per GFM spec, a valid table requires a separator
         # row (e.g. |---|---|) immediately after the header row. Lines with
@@ -126,9 +157,7 @@ def markdown_to_html(text: str) -> str:
                 continue
             else:
                 # End of table
-                result_lines.append(_render_table(table_lines))
-                table_lines = []
-                in_table = False
+                flush_table()
 
         # Handle lists
         line_list_type = _get_list_type(line)
@@ -172,11 +201,13 @@ def markdown_to_html(text: str) -> str:
         result_lines.append(f"<pre>{html.escape(code_content)}</pre>")
 
     # Handle unclosed table
-    if in_table and table_lines:
-        result_lines.append(_render_table(table_lines))
+    flush_table()
 
     # Handle unclosed list
     flush_list()
+
+    # Handle unclosed blockquote
+    flush_blockquote()
 
     # Handle remaining paragraph
     flush_paragraph()
@@ -572,3 +603,73 @@ def _render_list(lines: list[str], list_type: str) -> str:
     html_parts.append(f"</{list_type}>")
 
     return "".join(html_parts)
+
+
+def _is_blockquote_line(line: str) -> bool:
+    """Check if a line is a block quote line per CommonMark section 5.1.
+
+    A block quote marker is 0-3 spaces of initial indent, then ``>``,
+    optionally followed by a space and content.
+
+    Args:
+        line: Line to check.
+
+    Returns:
+        True if line is a block quote line.
+    """
+    stripped = line.lstrip(" ")
+    # Leading indent must be 0-3 spaces
+    indent = len(line) - len(stripped)
+    if indent > 3:
+        return False
+    return stripped.startswith(">")
+
+
+def _strip_blockquote_marker(line: str) -> str:
+    """Strip the block quote marker from a line.
+
+    Removes leading spaces (0-3), the ``>`` character, and one optional
+    space after ``>``. Additional spaces are preserved as content.
+
+    Args:
+        line: Block quote line.
+
+    Returns:
+        Line content with marker stripped.
+    """
+    stripped = line.lstrip(" ")
+    # Remove the > character
+    after_marker = stripped[1:]
+    # Remove one optional space after >
+    if after_marker.startswith(" "):
+        after_marker = after_marker[1:]
+    return after_marker
+
+
+_BLOCKQUOTE_STYLE = (
+    "margin:0 0 0 0.8em;border-left:2px solid #ccc;"
+    "padding:0 0 0 0.6em;color:#666;"
+)
+
+
+def _render_blockquote(lines: list[str]) -> str:
+    """Render block quote lines as an HTML blockquote.
+
+    Strips the ``>`` marker from each line and recursively converts the
+    inner content with ``markdown_to_html``, then wraps the result in a
+    ``<blockquote>`` element with email-friendly inline styling.
+
+    Args:
+        lines: List of raw block quote lines (with ``>`` markers).
+
+    Returns:
+        HTML blockquote string, or empty string if lines is empty.
+    """
+    if not lines:
+        return ""
+
+    inner_lines = [_strip_blockquote_marker(line) for line in lines]
+    inner_content = "\n".join(inner_lines)
+    converted = markdown_to_html(inner_content)
+
+    return f'<blockquote style="{_BLOCKQUOTE_STYLE}">{converted}</blockquote>'
