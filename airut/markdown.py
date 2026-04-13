@@ -10,7 +10,14 @@ supporting a limited subset of markdown syntax that renders well in email
 clients. Uses standard HTML tags without custom styling, letting email
 clients handle presentation.
 
+Follows CommonMark paragraph semantics: consecutive non-blank lines
+form a paragraph with soft line breaks rendered as spaces. Hard line
+breaks (trailing backslash or two+ trailing spaces) render as <br>.
+Blank lines separate paragraphs.
+
 Supported syntax:
+- Paragraphs: consecutive lines joined (soft breaks), blank lines separate
+- Hard line breaks: trailing backslash or two+ trailing spaces
 - Headers: # (bold underline), ## (bold italic underline), ### (underline),
   #### (italic underline), ##### (italic), ###### (bold)
 - Bold: **text** or __text__
@@ -51,6 +58,7 @@ def markdown_to_html(text: str) -> str:
     in_list = False
     list_lines: list[str] = []
     list_type: str = ""  # "ul" or "ol"
+    paragraph_lines: list[str] = []
 
     def flush_list() -> None:
         """Flush pending list lines to result."""
@@ -60,6 +68,19 @@ def markdown_to_html(text: str) -> str:
             list_lines = []
             in_list = False
             list_type = ""
+
+    def flush_paragraph() -> None:
+        """Flush pending paragraph lines to result.
+
+        Joins accumulated paragraph lines using soft/hard break rules
+        and appends the result with a trailing <br> for visual separation
+        from subsequent content.
+        """
+        nonlocal paragraph_lines
+        if paragraph_lines:
+            joined = _join_paragraph(paragraph_lines)
+            result_lines.append(joined + "<br>")
+            paragraph_lines = []
 
     for i, line in enumerate(lines):
         # Handle fenced code blocks
@@ -77,6 +98,7 @@ def markdown_to_html(text: str) -> str:
                     table_lines = []
                     in_table = False
                 flush_list()
+                flush_paragraph()
                 in_code_block = True
             continue
 
@@ -94,6 +116,7 @@ def markdown_to_html(text: str) -> str:
                 and _is_separator_line(lines[i + 1])
             ):
                 flush_list()
+                flush_paragraph()
                 in_table = True
                 table_lines.append(line)
                 continue
@@ -110,6 +133,7 @@ def markdown_to_html(text: str) -> str:
         # Handle lists
         line_list_type = _get_list_type(line)
         if line_list_type:
+            flush_paragraph()
             if not in_list:
                 in_list = True
                 list_type = line_list_type
@@ -124,13 +148,21 @@ def markdown_to_html(text: str) -> str:
             # End of list
             flush_list()
 
-        # Process regular line - add <br> to all lines for proper HTML rendering
-        # Empty lines become standalone <br>, content lines end with <br>
-        converted = _convert_line(line)
-        if converted == "<br>":
-            result_lines.append(converted)
-        else:
+        # Handle headers (block-level, not part of paragraphs)
+        if re.match(r"^#{1,6}\s+", line):
+            flush_paragraph()
+            converted = _convert_line(line)
             result_lines.append(converted + "<br>")
+            continue
+
+        # Handle blank lines (paragraph separator)
+        if not line.strip():
+            flush_paragraph()
+            result_lines.append("<br>")
+            continue
+
+        # Accumulate paragraph line (soft/hard breaks handled on flush)
+        paragraph_lines.append(line)
 
     # Handle unclosed code block
     if in_code_block and code_block_lines:
@@ -144,6 +176,9 @@ def markdown_to_html(text: str) -> str:
     # Handle unclosed list
     flush_list()
 
+    # Handle remaining paragraph
+    flush_paragraph()
+
     result = "\n".join(result_lines)
 
     # Strip trailing <br> from the final output
@@ -151,6 +186,51 @@ def markdown_to_html(text: str) -> str:
         result = result[:-4]
 
     return result
+
+
+def _join_paragraph(lines: list[str]) -> str:
+    r"""Join paragraph lines with soft breaks as spaces and hard breaks as <br>.
+
+    Per CommonMark spec (sections 4.8, 6.7, 6.8):
+    - Soft line breaks (regular newlines) are rendered as spaces
+    - Hard line breaks (trailing ``\\`` or two+ trailing spaces) render as <br>
+    - Hard breaks on the last line of a paragraph are ignored
+    - Trailing whitespace is stripped from each line
+
+    Args:
+        lines: List of raw paragraph lines.
+
+    Returns:
+        Joined HTML string with inline formatting applied.
+    """
+    parts: list[str] = []
+    for i, line in enumerate(lines):
+        hard_break = False
+        content = line
+
+        # Check for hard line break (not on last line of paragraph)
+        if i < len(lines) - 1:
+            if content.endswith("\\"):
+                content = content[:-1]
+                hard_break = True
+            elif content.endswith("  "):  # Two or more trailing spaces
+                content = content.rstrip()
+                hard_break = True
+            else:
+                # Soft break: strip trailing whitespace
+                content = content.rstrip()
+        else:
+            # Last line: strip trailing whitespace (no hard break at end)
+            content = content.rstrip()
+
+        escaped = html.escape(content)
+        converted = _convert_inline(escaped)
+        parts.append(converted)
+
+        if i < len(lines) - 1:
+            parts.append("<br>" if hard_break else " ")
+
+    return "".join(parts)
 
 
 def _convert_line(line: str) -> str:

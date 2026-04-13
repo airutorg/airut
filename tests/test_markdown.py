@@ -11,6 +11,7 @@ from airut.markdown import (
     _get_list_type,
     _is_separator_line,
     _is_table_line,
+    _join_paragraph,
     _remove_code_spans,
     _render_list,
     _render_table,
@@ -33,10 +34,10 @@ class TestMarkdownToHtml:
         assert result == "Hello, this is plain text."
 
     def test_multiple_lines(self):
-        """Test multiple lines - each ends with br except last."""
+        """Test multiple lines form a paragraph with soft breaks as spaces."""
         text = "Line 1\nLine 2\nLine 3"
         result = markdown_to_html(text)
-        assert result == "Line 1<br>\nLine 2<br>\nLine 3"
+        assert result == "Line 1 Line 2 Line 3"
 
     def test_empty_line_becomes_standalone_br(self):
         """Test empty line becomes standalone br tag."""
@@ -55,6 +56,182 @@ class TestMarkdownToHtml:
         text = "\nLine 1"
         result = markdown_to_html(text)
         assert result == "<br>\nLine 1"
+
+
+class TestParagraphs:
+    """Tests for CommonMark paragraph behavior (section 4.8).
+
+    Consecutive non-blank lines form a paragraph. Soft line breaks
+    within a paragraph are rendered as spaces. Blank lines separate
+    paragraphs.
+    """
+
+    def test_multiline_paragraph_joins_with_space(self):
+        """Consecutive non-blank lines join with spaces (soft breaks)."""
+        text = "Line 1\nLine 2\nLine 3"
+        result = markdown_to_html(text)
+        assert result == "Line 1 Line 2 Line 3"
+
+    def test_two_paragraphs_separated_by_blank_line(self):
+        """Blank line separates two paragraphs."""
+        text = "Paragraph one.\n\nParagraph two."
+        result = markdown_to_html(text)
+        assert result == "Paragraph one.<br>\n<br>\nParagraph two."
+
+    def test_three_paragraphs(self):
+        """Multiple paragraphs separated by blank lines."""
+        text = "First.\n\nSecond.\n\nThird."
+        result = markdown_to_html(text)
+        assert result == "First.<br>\n<br>\nSecond.<br>\n<br>\nThird."
+
+    def test_multiline_paragraphs_with_blank_separator(self):
+        """Multi-line paragraphs join internally, separate at blank lines."""
+        text = "Line A1\nLine A2\n\nLine B1\nLine B2"
+        result = markdown_to_html(text)
+        assert result == "Line A1 Line A2<br>\n<br>\nLine B1 Line B2"
+
+    def test_multiple_blank_lines_between_paragraphs(self):
+        """Multiple blank lines produce multiple br tags."""
+        text = "First.\n\n\nSecond."
+        result = markdown_to_html(text)
+        assert result == "First.<br>\n<br>\n<br>\nSecond."
+
+    def test_paragraph_with_inline_formatting_across_lines(self):
+        """Inline formatting works within joined paragraph lines."""
+        text = "This is **bold**\nand *italic* text."
+        result = markdown_to_html(text)
+        assert (
+            result == "This is <strong>bold</strong> and <em>italic</em> text."
+        )
+
+    def test_paragraph_before_code_block(self):
+        """Paragraph flushes before code block."""
+        text = "Some text\n```\ncode\n```"
+        result = markdown_to_html(text)
+        assert result == "Some text<br>\n<pre>code</pre>"
+
+    def test_paragraph_after_code_block(self):
+        """Paragraph starts after code block."""
+        text = "```\ncode\n```\nSome text"
+        result = markdown_to_html(text)
+        assert result == "<pre>code</pre>\nSome text"
+
+    def test_multiline_paragraph_between_code_blocks(self):
+        """Multi-line paragraph between code blocks joins correctly."""
+        text = "```\ncode1\n```\nMiddle text\nmore text\n```\ncode2\n```"
+        result = markdown_to_html(text)
+        assert (
+            result
+            == "<pre>code1</pre>\nMiddle text more text<br>\n<pre>code2</pre>"
+        )
+
+    def test_paragraph_before_list(self):
+        """Paragraph flushes before list starts."""
+        text = "Some text\n- item 1\n- item 2"
+        result = markdown_to_html(text)
+        assert (
+            result == "Some text<br>\n<ul><li>item 1</li><li>item 2</li></ul>"
+        )
+
+    def test_paragraph_before_header(self):
+        """Paragraph flushes before header."""
+        text = "Some text\n# Header"
+        result = markdown_to_html(text)
+        assert result == "Some text<br>\n<strong><u>Header</u></strong>"
+
+    def test_paragraph_after_header(self):
+        """Paragraph starts after header."""
+        text = "# Header\nSome text"
+        result = markdown_to_html(text)
+        assert result == "<strong><u>Header</u></strong><br>\nSome text"
+
+    def test_paragraph_strips_trailing_spaces(self):
+        """Trailing spaces on paragraph lines are stripped."""
+        text = "Hello   \nworld"
+        result = markdown_to_html(text)
+        # One trailing space would be a soft break (not enough for hard break)
+        # but three trailing spaces is a hard break (two or more)
+        assert result == "Hello<br>world"
+
+    def test_paragraph_single_trailing_space_soft_break(self):
+        """Single trailing space is a soft break, not a hard break."""
+        text = "Hello \nworld"
+        result = markdown_to_html(text)
+        assert result == "Hello world"
+
+
+class TestHardLineBreaks:
+    """Tests for hard line breaks per CommonMark spec (section 6.7).
+
+    A line ending preceded by two or more spaces or a backslash
+    is rendered as <br> (hard line break).
+    """
+
+    def test_backslash_hard_break(self):
+        """Trailing backslash creates hard line break."""
+        text = "Line 1\\\nLine 2"
+        result = markdown_to_html(text)
+        assert result == "Line 1<br>Line 2"
+
+    def test_two_trailing_spaces_hard_break(self):
+        """Two trailing spaces create hard line break."""
+        text = "Line 1  \nLine 2"
+        result = markdown_to_html(text)
+        assert result == "Line 1<br>Line 2"
+
+    def test_multiple_trailing_spaces_hard_break(self):
+        """More than two trailing spaces also create hard break."""
+        text = "Line 1     \nLine 2"
+        result = markdown_to_html(text)
+        assert result == "Line 1<br>Line 2"
+
+    def test_backslash_last_line_literal(self):
+        """Trailing backslash on last line of paragraph is kept as literal."""
+        result = markdown_to_html("Hello\\")
+        assert result == "Hello\\"
+
+    def test_trailing_spaces_last_line_stripped(self):
+        """Trailing spaces on last line of paragraph are stripped."""
+        result = markdown_to_html("Hello  ")
+        assert result == "Hello"
+
+    def test_backslash_end_of_paragraph_literal(self):
+        """Backslash at end of paragraph (before blank line) is literal."""
+        text = "Line 1\\\n\nLine 2"
+        result = markdown_to_html(text)
+        # Backslash is preserved as literal text on last line of paragraph
+        assert "Line 1\\" in result
+        assert "Line 2" in result
+
+    def test_trailing_spaces_end_of_paragraph_stripped(self):
+        """Trailing spaces at end of paragraph are stripped."""
+        text = "Line 1  \n\nLine 2"
+        result = markdown_to_html(text)
+        assert result == "Line 1<br>\n<br>\nLine 2"
+
+    def test_mixed_hard_and_soft_breaks(self):
+        """Mix of hard and soft breaks in one paragraph."""
+        text = "Line 1\\\nLine 2\nLine 3"
+        result = markdown_to_html(text)
+        assert result == "Line 1<br>Line 2 Line 3"
+
+    def test_multiple_hard_breaks(self):
+        """Multiple consecutive hard breaks."""
+        text = "Line 1\\\nLine 2\\\nLine 3"
+        result = markdown_to_html(text)
+        assert result == "Line 1<br>Line 2<br>Line 3"
+
+    def test_hard_break_with_inline_formatting(self):
+        """Hard break works with inline formatting."""
+        text = "**Bold**\\\n*italic*"
+        result = markdown_to_html(text)
+        assert result == "<strong>Bold</strong><br><em>italic</em>"
+
+    def test_hard_break_spaces_with_formatting(self):
+        """Hard break via spaces works with inline formatting."""
+        text = "**Bold**  \n*italic*"
+        result = markdown_to_html(text)
+        assert result == "<strong>Bold</strong><br><em>italic</em>"
 
 
 class TestHeaders:
@@ -780,6 +957,11 @@ class TestHelperFunctions:
         """Test _convert_line with header."""
         assert _convert_line("# Header") == "<strong><u>Header</u></strong>"
 
+    def test_convert_line_regular_text(self):
+        """Test _convert_line with regular text."""
+        result = _convert_line("Hello **world**")
+        assert result == "Hello <strong>world</strong>"
+
     def test_convert_inline_all_formats(self):
         """Test _convert_inline with all formats."""
         text = "**bold** *italic* `code` [link](url)"
@@ -854,3 +1036,38 @@ class TestHelperFunctions:
         lines = ["1. First", "2. Second"]
         result = _render_list(lines, "ol")
         assert result == "<ol><li>First</li><li>Second</li></ol>"
+
+    def test_join_paragraph_single_line(self):
+        """Test _join_paragraph with single line."""
+        assert _join_paragraph(["Hello"]) == "Hello"
+
+    def test_join_paragraph_soft_breaks(self):
+        """Test _join_paragraph joins lines with spaces."""
+        assert _join_paragraph(["A", "B", "C"]) == "A B C"
+
+    def test_join_paragraph_hard_break_backslash(self):
+        """Test _join_paragraph handles backslash hard break."""
+        assert _join_paragraph(["A\\", "B"]) == "A<br>B"
+
+    def test_join_paragraph_hard_break_spaces(self):
+        """Test _join_paragraph handles two trailing spaces as hard break."""
+        assert _join_paragraph(["A  ", "B"]) == "A<br>B"
+
+    def test_join_paragraph_hard_break_last_line_ignored(self):
+        """Test _join_paragraph ignores hard break on last line."""
+        # Backslash on last line is literal
+        assert _join_paragraph(["A\\"]) == "A\\"
+        # Trailing spaces on last line are stripped
+        assert _join_paragraph(["A  "]) == "A"
+
+    def test_join_paragraph_inline_conversion(self):
+        """Test _join_paragraph converts inline elements."""
+        assert _join_paragraph(["**bold**"]) == "<strong>bold</strong>"
+
+    def test_join_paragraph_html_escaping(self):
+        """Test _join_paragraph escapes HTML."""
+        assert _join_paragraph(["<script>"]) == "&lt;script&gt;"
+
+    def test_join_paragraph_empty_list(self):
+        """Test _join_paragraph with empty list."""
+        assert _join_paragraph([]) == ""
