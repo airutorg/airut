@@ -882,6 +882,101 @@ class TestLists:
         assert '<ol start="2"><li>Second</li></ol>' in result
         assert '<ol start="3"><li>Third</li></ol>' in result
 
+    def test_multiline_list_item_continuation(self):
+        """Continuation lines without marker join the current list item."""
+        text = "- First line\n  second line\n  third line"
+        result = markdown_to_html(text)
+        assert result == "<ul><li>First line second line third line</li></ul>"
+
+    def test_multiline_list_item_lazy_continuation(self):
+        """Lazy continuation lines (minimal indent) join the list item."""
+        text = "- First line\n continuation"
+        result = markdown_to_html(text)
+        assert result == "<ul><li>First line continuation</li></ul>"
+
+    def test_multiline_list_multiple_items(self):
+        """Multiple multiline list items each join their continuations."""
+        text = (
+            "- Item one first\n  item one second\n"
+            "- Item two first\n  item two second"
+        )
+        result = markdown_to_html(text)
+        expected = (
+            "<ul>"
+            "<li>Item one first item one second</li>"
+            "<li>Item two first item two second</li>"
+            "</ul>"
+        )
+        assert result == expected
+
+    def test_multiline_list_item_with_inline_formatting(self):
+        """Inline formatting works across continuation lines."""
+        text = "- **Bold title** — description\n  continues with *italic* here"
+        result = markdown_to_html(text)
+        assert "<li><strong>Bold title</strong>" in result
+        assert "<em>italic</em> here</li>" in result
+        # Should be a single list item
+        assert result.count("<li>") == 1
+
+    def test_multiline_ordered_list_continuation(self):
+        """Ordered list items support continuation lines."""
+        text = "1. First item\n   continues here\n2. Second item"
+        result = markdown_to_html(text)
+        assert "<li>First item continues here</li>" in result
+        assert "<li>Second item</li>" in result
+
+    def test_multiline_list_item_blank_line_ends_list(self):
+        """Blank line after continuation ends the list."""
+        text = "- Item one\n  continued\n\nParagraph"
+        result = markdown_to_html(text)
+        assert "<ul><li>Item one continued</li></ul>" in result
+        assert result.endswith("Paragraph")
+
+    def test_multiline_list_item_header_ends_list(self):
+        """Header after list item ends the list, not continuation."""
+        text = "- Item\n# Header"
+        result = markdown_to_html(text)
+        assert "<ul><li>Item</li></ul>" in result
+        assert "<strong><u>Header</u></strong>" in result
+
+    def test_multiline_list_item_code_fence_ends_list(self):
+        """Code fence after list item ends the list."""
+        text = "- Item\n```\ncode\n```"
+        result = markdown_to_html(text)
+        assert "<ul><li>Item</li></ul>" in result
+        assert "<pre>code</pre>" in result
+
+    def test_multiline_list_item_blockquote_ends_list(self):
+        """Blockquote after list item ends the list."""
+        text = "- Item\n> Quote"
+        result = markdown_to_html(text)
+        assert "<ul><li>Item</li></ul>" in result
+        assert "<blockquote" in result
+
+    def test_multiline_list_real_world_newsletter(self):
+        """Real-world newsletter-style bullet with links and continuations."""
+        text = (
+            "- **Meta building AI clone** — FT reports Meta is developing\n"
+            " photorealistic AI characters starting with Mark Zuckerberg\n"
+            " ([FT](https://example.com/ft) |\n"
+            " [Ars](https://example.com/ars))."
+        )
+        result = markdown_to_html(text)
+        # Should be a single list item
+        assert result.count("<li>") == 1
+        assert result.count("</li>") == 1
+        # Should contain all content joined
+        assert "<strong>Meta building AI clone</strong>" in result
+        assert "photorealistic AI characters" in result
+        assert '<a href="https://example.com/ft">FT</a>' in result
+        assert '<a href="https://example.com/ars">Ars</a>' in result
+
+    def test_multiline_list_hard_break_in_continuation(self):
+        """Hard break (trailing backslash) works within list continuation."""
+        text = "- Line one\\\n  Line two"
+        result = markdown_to_html(text)
+        assert "<li>Line one<br>Line two</li>" in result
+
 
 class TestHtmlEscaping:
     """Tests for HTML escaping."""
@@ -1016,19 +1111,27 @@ class TestHelperFunctions:
     def test_render_list_empty(self):
         """Test _render_list with empty list."""
         assert _render_list([], "ul") == ""
-        assert _render_list(["- Item"], "") == ""
+        assert _render_list([["- Item"]], "") == ""
 
     def test_render_list_unordered(self):
         """Test _render_list for unordered list."""
-        lines = ["- Item 1", "- Item 2"]
-        result = _render_list(lines, "ul")
+        items = [["- Item 1"], ["- Item 2"]]
+        result = _render_list(items, "ul")
         assert result == "<ul><li>Item 1</li><li>Item 2</li></ul>"
 
     def test_render_list_ordered(self):
         """Test _render_list for ordered list."""
-        lines = ["1. First", "2. Second"]
-        result = _render_list(lines, "ol")
+        items = [["1. First"], ["2. Second"]]
+        result = _render_list(items, "ol")
         assert result == "<ol><li>First</li><li>Second</li></ol>"
+
+    def test_render_list_multiline_item(self):
+        """Test _render_list with continuation lines."""
+        items = [["- First line", "  second line"], ["- Single line"]]
+        result = _render_list(items, "ul")
+        assert result == (
+            "<ul><li>First line second line</li><li>Single line</li></ul>"
+        )
 
     def test_join_paragraph_single_line(self):
         """Test _join_paragraph with single line."""

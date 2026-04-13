@@ -57,7 +57,7 @@ def markdown_to_html(text: str) -> str:
     in_table = False
     table_lines: list[str] = []
     in_list = False
-    list_lines: list[str] = []
+    list_items: list[list[str]] = []
     list_type: str = ""  # "ul" or "ol"
     in_blockquote = False
     blockquote_lines: list[str] = []
@@ -72,11 +72,11 @@ def markdown_to_html(text: str) -> str:
             in_table = False
 
     def flush_list() -> None:
-        """Flush pending list lines to result."""
-        nonlocal in_list, list_lines, list_type
-        if in_list and list_lines:
-            result_lines.append(_render_list(list_lines, list_type))
-            list_lines = []
+        """Flush pending list items to result."""
+        nonlocal in_list, list_items, list_type
+        if in_list and list_items:
+            result_lines.append(_render_list(list_items, list_type))
+            list_items = []
             in_list = False
             list_type = ""
 
@@ -171,10 +171,17 @@ def markdown_to_html(text: str) -> str:
                 flush_list()
                 in_list = True
                 list_type = line_list_type
-            list_lines.append(line)
+            list_items.append([line])
             continue
         elif in_list:
-            # End of list
+            # Check for lazy continuation line per CommonMark section 5.3.
+            # A non-blank, non-block-start line continues the current item.
+            stripped = line.strip()
+            is_header = bool(re.match(r"^(#{1,6})\s+(.+)$", stripped))
+            if stripped and not is_header and list_items:
+                list_items[-1].append(line)
+                continue
+            # Otherwise end of list
             flush_list()
 
         # Handle headers (block-level, not part of paragraphs)
@@ -561,23 +568,27 @@ def _get_list_type(line: str) -> str:
     return ""
 
 
-def _render_list(lines: list[str], list_type: str) -> str:
-    """Render markdown list lines as HTML list.
+def _render_list(items: list[list[str]], list_type: str) -> str:
+    """Render markdown list items as HTML list.
+
+    Each item is a list of raw lines: the first line carries the list
+    marker, subsequent lines are continuation lines.  Continuation lines
+    are joined using paragraph semantics (soft breaks become spaces).
 
     Args:
-        lines: List of list item lines.
+        items: List of items, each a list of raw lines.
         list_type: "ul" for unordered or "ol" for ordered.
 
     Returns:
         HTML list string.
     """
-    if not lines or not list_type:
+    if not items or not list_type:
         return ""
 
     # For ordered lists, parse the start number from the first item
     start_attr = ""
-    if list_type == "ol" and lines:
-        first_line = lines[0].strip()
+    if list_type == "ol" and items:
+        first_line = items[0][0].strip()
         match = re.match(r"^(\d+)\.\s+", first_line)
         if match:
             start_num = int(match.group(1))
@@ -586,19 +597,21 @@ def _render_list(lines: list[str], list_type: str) -> str:
 
     html_parts = [f"<{list_type}{start_attr}>"]
 
-    for line in lines:
-        stripped = line.strip()
-        # Extract content after list marker
+    for item_lines in items:
+        # First line: strip the list marker
+        first = item_lines[0].strip()
         if list_type == "ul":
-            # Remove - or * and following space
-            content = re.sub(r"^[-*]\s+", "", stripped)
+            content = re.sub(r"^[-*]\s+", "", first)
         else:
-            # Remove number, dot, and following space
-            content = re.sub(r"^\d+\.\s+", "", stripped)
+            content = re.sub(r"^\d+\.\s+", "", first)
 
-        escaped_content = html.escape(content)
-        converted_content = _convert_inline(escaped_content)
-        html_parts.append(f"<li>{converted_content}</li>")
+        # Build content lines: first line (marker stripped) + continuations
+        content_lines = [content]
+        for cont_line in item_lines[1:]:
+            content_lines.append(cont_line.strip())
+
+        joined = _join_paragraph(content_lines)
+        html_parts.append(f"<li>{joined}</li>")
 
     html_parts.append(f"</{list_type}>")
 
