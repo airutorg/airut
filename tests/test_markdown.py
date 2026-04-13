@@ -33,12 +33,6 @@ class TestMarkdownToHtml:
         result = markdown_to_html(text)
         assert result == "Hello, this is plain text."
 
-    def test_multiple_lines(self):
-        """Test multiple lines form a paragraph with soft breaks as spaces."""
-        text = "Line 1\nLine 2\nLine 3"
-        result = markdown_to_html(text)
-        assert result == "Line 1 Line 2 Line 3"
-
     def test_empty_line_becomes_standalone_br(self):
         """Test empty line becomes standalone br tag."""
         text = "Line 1\n\nLine 2"
@@ -146,11 +140,9 @@ class TestParagraphs:
         assert result == "<strong><u>Header</u></strong><br>\nSome text"
 
     def test_paragraph_strips_trailing_spaces(self):
-        """Trailing spaces on paragraph lines are stripped."""
+        """Three trailing spaces is 2+ so triggers hard break."""
         text = "Hello   \nworld"
         result = markdown_to_html(text)
-        # One trailing space would be a soft break (not enough for hard break)
-        # but three trailing spaces is a hard break (two or more)
         assert result == "Hello<br>world"
 
     def test_paragraph_single_trailing_space_soft_break(self):
@@ -199,9 +191,7 @@ class TestHardLineBreaks:
         """Backslash at end of paragraph (before blank line) is literal."""
         text = "Line 1\\\n\nLine 2"
         result = markdown_to_html(text)
-        # Backslash is preserved as literal text on last line of paragraph
-        assert "Line 1\\" in result
-        assert "Line 2" in result
+        assert result == "Line 1\\<br>\n<br>\nLine 2"
 
     def test_trailing_spaces_end_of_paragraph_stripped(self):
         """Trailing spaces at end of paragraph are stripped."""

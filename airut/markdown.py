@@ -149,9 +149,11 @@ def markdown_to_html(text: str) -> str:
             flush_list()
 
         # Handle headers (block-level, not part of paragraphs)
-        if re.match(r"^#{1,6}\s+", line):
+        header_match = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if header_match:
             flush_paragraph()
-            converted = _convert_line(line)
+            level = len(header_match.group(1))
+            converted = _render_header(level, header_match.group(2))
             result_lines.append(converted + "<br>")
             continue
 
@@ -233,6 +235,37 @@ def _join_paragraph(lines: list[str]) -> str:
     return "".join(parts)
 
 
+def _render_header(level: int, content: str) -> str:
+    """Render a header with inline styling for email.
+
+    Converts header content to inline styles to keep font size constant
+    across email clients:
+    # => bold underline, ## => bold italic underline,
+    ### => underline, #### => italic underline, ##### => italic,
+    ###### => bold
+
+    Args:
+        level: Header level (1-6).
+        content: Raw header text (will be HTML-escaped).
+
+    Returns:
+        HTML string with inline styling.
+    """
+    escaped = _convert_inline(html.escape(content))
+    if level == 1:
+        return f"<strong><u>{escaped}</u></strong>"
+    elif level == 2:
+        return f"<strong><em><u>{escaped}</u></em></strong>"
+    elif level == 3:
+        return f"<u>{escaped}</u>"
+    elif level == 4:
+        return f"<em><u>{escaped}</u></em>"
+    elif level == 5:
+        return f"<em>{escaped}</em>"
+    else:  # level == 6
+        return f"<strong>{escaped}</strong>"
+
+
 def _convert_line(line: str) -> str:
     """Convert a single line of markdown to HTML.
 
@@ -242,28 +275,10 @@ def _convert_line(line: str) -> str:
     Returns:
         HTML-converted line.
     """
-    # Handle headers (must be done before escaping)
-    # Convert to inline styles to keep font size constant:
-    # # => bold underline, ## => bold italic underline,
-    # ### => underline, #### => italic underline, ##### => italic,
-    # ###### => bold
     header_match = re.match(r"^(#{1,6})\s+(.+)$", line)
     if header_match:
         level = len(header_match.group(1))
-        content = header_match.group(2)
-        escaped_content = _convert_inline(html.escape(content))
-        if level == 1:
-            return f"<strong><u>{escaped_content}</u></strong>"
-        elif level == 2:
-            return f"<strong><em><u>{escaped_content}</u></em></strong>"
-        elif level == 3:
-            return f"<u>{escaped_content}</u>"
-        elif level == 4:
-            return f"<em><u>{escaped_content}</u></em>"
-        elif level == 5:
-            return f"<em>{escaped_content}</em>"
-        else:  # level == 6
-            return f"<strong>{escaped_content}</strong>"
+        return _render_header(level, header_match.group(2))
 
     # Handle empty lines
     if not line.strip():
