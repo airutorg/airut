@@ -25,8 +25,8 @@ Supported syntax:
 - Preformatted text: ```code blocks``` and `inline code`
 - Links: [text](url)
 - Tables: | header | header |
-- Unordered lists: - item or * item
-- Ordered lists: 1. item
+- Unordered lists: - item or * item (with lazy continuation lines)
+- Ordered lists: 1. item (with lazy continuation lines)
 - Block quotes: > quoted text (nested with >> or > >)
 """
 
