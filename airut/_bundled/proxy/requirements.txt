@@ -324,8 +324,8 @@ markupsafe==3.0.3 \
     #   flask
     #   jinja2
     #   werkzeug
-mitmproxy==12.2.1 \
-    --hash=sha256:7a508cc9fb906253eb26460d99b3572bf5a7b4a185ab62534379ac1915677dd2
+mitmproxy==12.2.2 \
+    --hash=sha256:7b111ba3b83b34b0d9b653044685db7c3f5fbc63b39b8f06439642da83910713
     # via airut-proxy
 mitmproxy-linux==0.12.9 ; sys_platform == 'linux' \
     --hash=sha256:94b10fee02aa42287739623cef921e1a53955005d45c9e2fa309ae9f0bf8d37d \
