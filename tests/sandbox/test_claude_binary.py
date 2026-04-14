@@ -31,6 +31,9 @@ from airut.sandbox.claude_binary import (
 )
 
 
+_URLOPEN_WITH_RETRY = "airut.sandbox.claude_binary.urlopen_with_retry"
+
+
 # -------------------------------------------------------------------
 # Helpers
 # -------------------------------------------------------------------
@@ -87,62 +90,73 @@ class TestOpenReleaseUrl:
         """Returns response from CDN on first try."""
         resp = _url_response(b"data")
 
-        with patch(_URLOPEN) as mock_urlopen:
-            mock_urlopen.return_value = resp
+        with patch(_URLOPEN_WITH_RETRY) as mock_fetch:
+            mock_fetch.return_value = resp
             result = _open_release_url("latest")
 
         assert result is resp
-        mock_urlopen.assert_called_once()
-        url = mock_urlopen.call_args[0][0]
+        mock_fetch.assert_called_once()
+        url = mock_fetch.call_args[0][0]
         assert url.startswith(DOWNLOADS_BASE)
 
     def test_fallback_on_primary_failure(self) -> None:
         """Falls back to GCS when CDN fails."""
         resp = _url_response(b"data")
 
-        with patch(_URLOPEN) as mock_urlopen:
-            mock_urlopen.side_effect = [URLError("cdn down"), resp]
+        with patch(_URLOPEN_WITH_RETRY) as mock_fetch:
+            mock_fetch.side_effect = [URLError("cdn down"), resp]
             result = _open_release_url("latest")
 
         assert result is resp
-        assert mock_urlopen.call_count == 2
-        first_url = mock_urlopen.call_args_list[0][0][0]
-        second_url = mock_urlopen.call_args_list[1][0][0]
+        assert mock_fetch.call_count == 2
+        first_url = mock_fetch.call_args_list[0][0][0]
+        second_url = mock_fetch.call_args_list[1][0][0]
         assert first_url.startswith(DOWNLOADS_BASE)
         assert second_url.startswith(GCS_BUCKET)
 
     def test_all_sources_fail(self) -> None:
         """Raises URLError when all sources fail."""
         with (
-            patch(_URLOPEN) as mock_urlopen,
+            patch(_URLOPEN_WITH_RETRY) as mock_fetch,
             pytest.raises(URLError, match="gcs also down"),
         ):
-            mock_urlopen.side_effect = [
+            mock_fetch.side_effect = [
                 URLError("cdn down"),
                 URLError("gcs also down"),
             ]
             _open_release_url("latest")
 
     def test_timeout_passed_through(self) -> None:
-        """Custom timeout is forwarded to urlopen."""
+        """Custom timeout is forwarded to urlopen_with_retry."""
         resp = _url_response(b"data")
 
-        with patch(_URLOPEN) as mock_urlopen:
-            mock_urlopen.return_value = resp
+        with patch(_URLOPEN_WITH_RETRY) as mock_fetch:
+            mock_fetch.return_value = resp
             _open_release_url("1.0.0/manifest.json", timeout=300)
 
-        mock_urlopen.assert_called_once()
-        assert mock_urlopen.call_args[1]["timeout"] == 300
+        mock_fetch.assert_called_once()
+        assert mock_fetch.call_args[1]["timeout"] == 300
+
+    def test_max_retries_passed_through(self) -> None:
+        """Custom max_retries is forwarded to urlopen_with_retry."""
+        resp = _url_response(b"data")
+
+        with patch(_URLOPEN_WITH_RETRY) as mock_fetch:
+            mock_fetch.return_value = resp
+            _open_release_url("latest", max_retries=5)
+
+        mock_fetch.assert_called_once()
+        assert mock_fetch.call_args[1]["max_retries"] == 5
 
     def test_path_appended_to_base(self) -> None:
         """Path is appended to base URL."""
         resp = _url_response(b"data")
 
-        with patch(_URLOPEN) as mock_urlopen:
-            mock_urlopen.return_value = resp
+        with patch(_URLOPEN_WITH_RETRY) as mock_fetch:
+            mock_fetch.return_value = resp
             _open_release_url("1.2.3/linux-x64/claude")
 
-        url = mock_urlopen.call_args[0][0]
+        url = mock_fetch.call_args[0][0]
         assert url.endswith("/1.2.3/linux-x64/claude")
 
 
@@ -319,7 +333,6 @@ def _make_manifest(checksum: str, platform: str = "linux-x64") -> str:
     return json.dumps({"platforms": {platform: {"checksum": checksum}}})
 
 
-_URLOPEN = "airut.sandbox.claude_binary.urllib.request.urlopen"
 _OPEN_RELEASE_URL = "airut.sandbox.claude_binary._open_release_url"
 
 
