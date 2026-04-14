@@ -57,6 +57,8 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
   re-signing
 - `spec/github-app-credential.md` — GitHub App credential support with
   proxy-managed token rotation
+- `spec/graphql-repo-scoping.md` — GraphQL repository scoping for GitHub App
+  credentials (exfiltration mitigation)
 - `spec/dashboard.md` — web dashboard for task monitoring
 - `spec/cli.md` — CLI subcommands, service management, self-update
 - `spec/pr-workflow-tool.md` — PR workflow automation (ci.py, pr.py)

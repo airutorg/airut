@@ -46,6 +46,8 @@ For high-level documentation, see [doc/](../doc/).
   masking via proxy re-signing
 - [github-app-credential.md](github-app-credential.md) — GitHub App credential
   support with proxy-managed token rotation
+- [graphql-repo-scoping.md](graphql-repo-scoping.md) — GraphQL repository
+  scoping for GitHub App credentials (exfiltration mitigation)
 
 ## Dashboard
 

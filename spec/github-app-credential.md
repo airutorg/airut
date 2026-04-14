@@ -328,6 +328,19 @@ proxy_filter.py request()
    the surrogate in the password field, and re-encodes. This follows the same
    pattern as masked secrets' `_replace_in_header()` method.
 
+## GraphQL Repository Scoping
+
+GitHub App installation tokens can perform certain mutations (e.g.,
+`createIssue`) on **any public repository**, regardless of the App's
+installation scope. To prevent data exfiltration via GraphQL mutations targeting
+out-of-scope repos, the proxy parses the GraphQL query AST (via `graphql-core`)
+and scans the JSON variables to extract all `repositoryId` values, blocking
+requests targeting repos outside the configured set.
+
+See [graphql-repo-scoping.md](graphql-repo-scoping.md) for the full
+specification (node ID resolution, request inspection, decision logic, evasion
+analysis).
+
 ## Future Enhancements
 
 - **Token revocation on session end**: The proxy could revoke the installation
