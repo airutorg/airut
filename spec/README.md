@@ -53,6 +53,11 @@ For high-level documentation, see [doc/](../doc/).
 - [config-editor.md](config-editor.md) — Web config editor (edit buffer pattern,
   field-level mutations, diff-before-save)
 
+## Markdown
+
+- [markdown.md](markdown.md) — Markdown to HTML pipeline (mistune parser,
+  EmailRenderer, table pre-processing)
+
 ## Infrastructure
 
 - [cli.md](cli.md) — CLI subcommands, service management, self-update
