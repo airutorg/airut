@@ -44,8 +44,9 @@ import tempfile
 import threading
 import time
 import urllib.error
-import urllib.request
 from pathlib import Path
+
+from airut.http import urlopen_with_retry
 
 
 logger = logging.getLogger(__name__)
@@ -130,14 +131,22 @@ def validate_version(version: str) -> None:
 
 
 def _open_release_url(
-    path: str, *, timeout: int = 30
+    path: str,
+    *,
+    timeout: int = 30,
+    max_retries: int = 3,
 ) -> http.client.HTTPResponse:
     """Fetch a release artifact, trying CDN first with GCS fallback.
+
+    Each source is attempted with exponential-backoff retry for
+    transient failures (connection errors, timeouts, 5xx responses)
+    before falling back to the next source.
 
     Args:
         path: Relative path within the releases directory
             (e.g. ``latest``, ``1.0.0/manifest.json``).
-        timeout: Request timeout in seconds.
+        timeout: Per-request timeout in seconds.
+        max_retries: Retry attempts per source for transient failures.
 
     Returns:
         HTTP response (usable as context manager).
@@ -149,7 +158,9 @@ def _open_release_url(
     for base in _RELEASE_BASES:
         url = f"{base}/{path}"
         try:
-            return urllib.request.urlopen(url, timeout=timeout)
+            return urlopen_with_retry(
+                url, timeout=timeout, max_retries=max_retries
+            )
         except urllib.error.URLError as e:
             logger.debug("Fetch failed for %s: %s", url, e)
             last_error = e
