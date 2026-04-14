@@ -496,7 +496,7 @@ wheels = [
 
 [[package]]
 name = "mitmproxy"
-version = "12.2.1"
+version = "12.2.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aioquic" },
@@ -527,7 +527,7 @@ dependencies = [
     { name = "zstandard" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/54/d4/2acc254beec19403269652ead42735c98baf6d56d060ef9dfe34256bda22/mitmproxy-12.2.1-py3-none-any.whl", hash = "sha256:7a508cc9fb906253eb26460d99b3572bf5a7b4a185ab62534379ac1915677dd2", size = 1650400, upload-time = "2025-11-24T19:01:11.712Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/14/32b4c3a9c3380e0cf1bed1976951e70510c06f1ba7c0dc46f9e69e3965ae/mitmproxy-12.2.2-py3-none-any.whl", hash = "sha256:7b111ba3b83b34b0d9b653044685db7c3f5fbc63b39b8f06439642da83910713", size = 1651385, upload-time = "2026-04-12T21:49:54.312Z" },
 ]
 
 [[package]]
