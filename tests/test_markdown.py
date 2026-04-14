@@ -450,6 +450,16 @@ class TestTables:
         assert "</table>" in result
         assert result.endswith("Regular text")
 
+    def test_table_has_trailing_br_for_spacing(self):
+        """Table output ends with <br> for visual separation."""
+        text = "| A | B |\n|---|---|\n| 1 | 2 |"
+        result = markdown_to_html(text)
+        assert result.endswith("</table>")
+        # When followed by text, the <br> provides spacing
+        text2 = "| A | B |\n|---|---|\n| 1 | 2 |\n\nAfter"
+        result2 = markdown_to_html(text2)
+        assert "</table><br>" in result2
+
     def test_table_followed_by_code_block(self):
         """Test table immediately followed by code block."""
         text = "| A | B |\n|---|---|\n| 1 | 2 |\n\n```\ncode\n```"

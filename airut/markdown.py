@@ -163,7 +163,7 @@ class EmailRenderer(mistune.HTMLRenderer):
     # -- Table tokens (via table plugin) --
 
     def table(self, text: str) -> str:
-        return '<table style="' + _TABLE_STYLE + '">' + text + "</table>\n"
+        return '<table style="' + _TABLE_STYLE + '">' + text + "</table><br>\n"
 
     def table_head(self, text: str) -> str:
         return "<tr>" + text + "</tr>"
