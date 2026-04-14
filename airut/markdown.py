@@ -3,19 +3,21 @@
 # This software is released under the MIT License.
 # https://opensource.org/licenses/MIT
 
-"""Lightweight markdown to HTML conversion for email content.
+"""Markdown to HTML conversion for email content using mistune.
 
 This module provides markdown to HTML conversion for email service emails,
-supporting a limited subset of markdown syntax that renders well in email
-clients. Uses standard HTML tags without custom styling, letting email
-clients handle presentation.
+using mistune v3 as the CommonMark parser with a custom ``EmailRenderer``
+that produces email-friendly HTML output.
 
-Follows CommonMark paragraph semantics: consecutive non-blank lines
-form a paragraph with soft line breaks rendered as spaces. Hard line
-breaks (trailing backslash or two+ trailing spaces) render as <br>.
-Blank lines separate paragraphs.
+The ``EmailRenderer`` subclasses ``mistune.HTMLRenderer`` and overrides
+every render method to produce output suitable for email clients:
+no ``<p>`` tags (replaced with ``<br>``), inline styles for tables and
+blockquotes, and heading levels mapped to inline formatting.
 
-Supported syntax:
+A ``_prepare_tables()`` pre-processing step handles two mistune table
+limitations: pipes inside code spans and column count mismatches.
+
+Supported syntax (CommonMark plus GFM tables):
 - Paragraphs: consecutive lines joined (soft breaks), blank lines separate
 - Hard line breaks: trailing backslash or two+ trailing spaces
 - Headers: # (bold underline), ## (bold italic underline), ### (underline),
@@ -24,22 +26,187 @@ Supported syntax:
 - Italic: *text* or _text_
 - Preformatted text: ```code blocks``` and `inline code`
 - Links: [text](url)
-- Tables: | header | header |
-- Unordered lists: - item or * item (with lazy continuation lines)
-- Ordered lists: 1. item (with lazy continuation lines)
+- Images: rendered as links
+- Tables: | header | header | (GFM tables via mistune plugin)
+- Unordered lists: - item or * item
+- Ordered lists: 1. item (with start attribute support)
 - Block quotes: > quoted text (nested with >> or > >)
+- Thematic breaks: --- or *** or ___
+- Inline/block HTML: escaped (not passed through)
 """
 
 import html
 import re
+from typing import cast
+
+import mistune
+import mistune.plugins.table
+
+
+_PIPE_SENTINEL = "\uf000"
+
+_TABLE_STYLE = "border:1px solid #ccc;border-collapse:collapse;"
+_CELL_STYLE = "border:1px solid #ccc;padding:4px 8px;"
+
+_BLOCKQUOTE_STYLE = (
+    "margin:0 0 0 0.8em;border-left:2px solid #ccc;"
+    "padding:0 0 0 0.6em;color:#666;"
+)
+
+
+class EmailRenderer(mistune.HTMLRenderer):
+    """Render mistune tokens as email-friendly HTML."""
+
+    # -- Inline tokens --
+
+    def text(self, text: str) -> str:
+        return mistune.escape(text)
+
+    def emphasis(self, text: str) -> str:
+        return "<em>" + text + "</em>"
+
+    def strong(self, text: str) -> str:
+        return "<strong>" + text + "</strong>"
+
+    def codespan(self, text: str) -> str:
+        return (
+            "<code>"
+            + mistune.escape(text.replace(_PIPE_SENTINEL, "|"))
+            + "</code>"
+        )
+
+    def link(self, text: str, url: str, title: str | None = None) -> str:
+        return '<a href="' + mistune.escape(url) + '">' + text + "</a>"
+
+    def linebreak(self) -> str:
+        return "<br>"
+
+    def softbreak(self) -> str:
+        return " "
+
+    def image(self, text: str, url: str, title: str | None = None) -> str:
+        return (
+            '<a href="'
+            + mistune.escape(url)
+            + '">'
+            + mistune.escape(text or url)
+            + "</a>"
+        )
+
+    def inline_html(self, html: str) -> str:
+        return mistune.escape(html)
+
+    # -- Block tokens --
+
+    def heading(self, text: str, level: int, **attrs: object) -> str:
+        if level == 1:
+            styled = "<strong><u>" + text + "</u></strong>"
+        elif level == 2:
+            styled = "<strong><em><u>" + text + "</u></em></strong>"
+        elif level == 3:
+            styled = "<u>" + text + "</u>"
+        elif level == 4:
+            styled = "<em><u>" + text + "</u></em>"
+        elif level == 5:
+            styled = "<em>" + text + "</em>"
+        else:
+            styled = "<strong>" + text + "</strong>"
+        return styled + "<br>\n"
+
+    def paragraph(self, text: str) -> str:
+        return text + "<br>\n"
+
+    def blank_line(self) -> str:
+        return "<br>\n"
+
+    def block_code(self, code: str, info: str | None = None) -> str:
+        return "<pre>" + html.escape(code.rstrip("\n")) + "</pre>\n"
+
+    def block_quote(self, text: str) -> str:
+        inner = text.rstrip("\n")
+        if inner.endswith("<br>"):
+            inner = inner[:-4]
+        return (
+            '<blockquote style="'
+            + _BLOCKQUOTE_STYLE
+            + '">'
+            + inner
+            + "</blockquote>\n"
+        )
+
+    def list(self, text: str, ordered: bool, **attrs: object) -> str:
+        tag = "ol" if ordered else "ul"
+        start = attrs.get("start")
+        start_attr = (
+            f' start="{start}"' if start is not None and start != 1 else ""
+        )
+        return f"<{tag}{start_attr}>{text}</{tag}>\n"
+
+    def list_item(self, text: str) -> str:
+        inner = text.strip()
+        if inner.endswith("<br>"):
+            inner = inner[:-4]
+        return "<li>" + inner + "</li>"
+
+    def thematic_break(self) -> str:
+        return "<hr>\n"
+
+    def block_html(self, html: str) -> str:
+        return mistune.escape(html)
+
+    def block_text(self, text: str) -> str:
+        return text
+
+    def block_error(self, text: str) -> str:
+        return ""
+
+    # -- Table tokens (via table plugin) --
+
+    def table(self, text: str) -> str:
+        return '<table style="' + _TABLE_STYLE + '">' + text + "</table>\n"
+
+    def table_head(self, text: str) -> str:
+        return "<tr>" + text + "</tr>"
+
+    def table_body(self, text: str) -> str:
+        return text
+
+    def table_row(self, text: str) -> str:
+        return "<tr>" + text + "</tr>"
+
+    def table_cell(
+        self,
+        text: str,
+        align: str | None = None,
+        head: bool = False,
+    ) -> str:
+        tag = "th" if head else "td"
+        return (
+            "<"
+            + tag
+            + ' style="'
+            + _CELL_STYLE
+            + '">'
+            + text
+            + "</"
+            + tag
+            + ">"
+        )
+
+
+_email_md = mistune.create_markdown(
+    renderer=EmailRenderer(),
+    plugins=["table", mistune.plugins.table.table_in_quote],
+)
 
 
 def markdown_to_html(text: str) -> str:
     """Convert markdown text to HTML for email.
 
-    Converts a subset of markdown syntax to HTML, using standard HTML tags
-    without custom fonts or styling. The resulting HTML is suitable for
-    embedding in email messages.
+    Converts markdown syntax to HTML using mistune with a custom
+    EmailRenderer that produces email-friendly output. Table blocks
+    are pre-processed to handle pipes in code spans and column count
+    mismatches.
 
     Args:
         text: Markdown-formatted text.
@@ -49,640 +216,182 @@ def markdown_to_html(text: str) -> str:
     """
     if not text:
         return ""
-
-    lines = text.split("\n")
-    result_lines: list[str] = []
-    in_code_block = False
-    code_block_lines: list[str] = []
-    in_table = False
-    table_lines: list[str] = []
-    in_list = False
-    list_items: list[list[str]] = []
-    list_type: str = ""  # "ul" or "ol"
-    in_blockquote = False
-    blockquote_lines: list[str] = []
-    paragraph_lines: list[str] = []
-
-    def flush_table() -> None:
-        """Flush pending table lines to result."""
-        nonlocal in_table, table_lines
-        if in_table and table_lines:
-            result_lines.append(_render_table(table_lines))
-            table_lines = []
-            in_table = False
-
-    def flush_list() -> None:
-        """Flush pending list items to result."""
-        nonlocal in_list, list_items, list_type
-        if in_list and list_items:
-            result_lines.append(_render_list(list_items, list_type))
-            list_items = []
-            in_list = False
-            list_type = ""
-
-    def flush_blockquote() -> None:
-        """Flush pending blockquote lines to result."""
-        nonlocal in_blockquote, blockquote_lines
-        if in_blockquote and blockquote_lines:
-            result_lines.append(_render_blockquote(blockquote_lines))
-            blockquote_lines = []
-            in_blockquote = False
-
-    def flush_paragraph() -> None:
-        """Flush pending paragraph lines to result.
-
-        Joins accumulated paragraph lines using soft/hard break rules
-        and appends the result with a trailing <br> for visual separation
-        from subsequent content.
-        """
-        nonlocal paragraph_lines
-        if paragraph_lines:
-            joined = _join_paragraph(paragraph_lines)
-            result_lines.append(joined + "<br>")
-            paragraph_lines = []
-
-    for i, line in enumerate(lines):
-        # Handle fenced code blocks
-        if line.strip().startswith("```"):
-            if in_code_block:
-                # End code block
-                code_content = "\n".join(code_block_lines)
-                result_lines.append(f"<pre>{html.escape(code_content)}</pre>")
-                code_block_lines = []
-                in_code_block = False
-            else:
-                # Start code block - flush any pending structures
-                flush_table()
-                flush_list()
-                flush_blockquote()
-                flush_paragraph()
-                in_code_block = True
-            continue
-
-        if in_code_block:
-            code_block_lines.append(line)
-            continue
-
-        # Handle block quotes
-        if _is_blockquote_line(line):
-            if not in_blockquote:
-                # Start blockquote - flush pending structures
-                flush_table()
-                flush_list()
-                flush_paragraph()
-                in_blockquote = True
-            blockquote_lines.append(line)
-            continue
-        elif in_blockquote:
-            # End of blockquote
-            flush_blockquote()
-
-        # Handle tables - per GFM spec, a valid table requires a separator
-        # row (e.g. |---|---|) immediately after the header row. Lines with
-        # pipes but no following separator are treated as regular text.
-        if not in_table:
-            if (
-                _is_table_line(line)
-                and i + 1 < len(lines)
-                and _is_separator_line(lines[i + 1])
-            ):
-                flush_list()
-                flush_paragraph()
-                in_table = True
-                table_lines.append(line)
-                continue
-        else:
-            if _is_separator_line(line) or _is_table_line(line):
-                table_lines.append(line)
-                continue
-            else:
-                # End of table
-                flush_table()
-
-        # Handle lists
-        line_list_type = _get_list_type(line)
-        if line_list_type:
-            flush_paragraph()
-            if not in_list:
-                in_list = True
-                list_type = line_list_type
-            elif line_list_type != list_type:
-                # Switching list type - flush current list
-                flush_list()
-                in_list = True
-                list_type = line_list_type
-            list_items.append([line])
-            continue
-        elif in_list:
-            # Check for lazy continuation line per CommonMark section 5.3.
-            # A non-blank, non-block-start line continues the current item.
-            stripped = line.strip()
-            is_header = bool(re.match(r"^(#{1,6})\s+(.+)$", stripped))
-            if stripped and not is_header and list_items:
-                list_items[-1].append(line)
-                continue
-            # Otherwise end of list
-            flush_list()
-
-        # Handle headers (block-level, not part of paragraphs)
-        header_match = re.match(r"^(#{1,6})\s+(.+)$", line)
-        if header_match:
-            flush_paragraph()
-            level = len(header_match.group(1))
-            converted = _render_header(level, header_match.group(2))
-            result_lines.append(converted + "<br>")
-            continue
-
-        # Handle blank lines (paragraph separator)
-        if not line.strip():
-            flush_paragraph()
-            result_lines.append("<br>")
-            continue
-
-        # Accumulate paragraph line (soft/hard breaks handled on flush)
-        paragraph_lines.append(line)
-
-    # Handle unclosed code block
-    if in_code_block and code_block_lines:
-        code_content = "\n".join(code_block_lines)
-        result_lines.append(f"<pre>{html.escape(code_content)}</pre>")
-
-    # Handle unclosed table
-    flush_table()
-
-    # Handle unclosed list
-    flush_list()
-
-    # Handle unclosed blockquote
-    flush_blockquote()
-
-    # Handle remaining paragraph
-    flush_paragraph()
-
-    result = "\n".join(result_lines)
-
-    # Strip trailing <br> from the final output
+    prepared = _prepare_tables(text)
+    result = cast(str, _email_md(prepared))
+    # Strip trailing whitespace/newlines and trailing <br>
+    result = result.rstrip("\n")
     if result.endswith("<br>"):
         result = result[:-4]
-
     return result
 
 
-def _join_paragraph(lines: list[str]) -> str:
-    r"""Join paragraph lines with soft breaks as spaces and hard breaks as <br>.
+# -- Table pre-processing --
 
-    Per CommonMark spec (sections 4.8, 6.7, 6.8):
-    - Soft line breaks (regular newlines) are rendered as spaces
-    - Hard line breaks (trailing ``\\`` or two+ trailing spaces) render as <br>
-    - Hard breaks on the last line of a paragraph are ignored
-    - Trailing whitespace is stripped from each line
+# Pattern to identify a table separator line: only |, -, :, and spaces
+_SEPARATOR_RE = re.compile(r"^[ ]{0,3}[|]?[ :]*-[-: |]*$")
+
+
+def _prepare_tables(text: str) -> str:
+    """Pre-process table blocks before passing to mistune.
+
+    Applies two fixes to table blocks:
+
+    1. Replaces pipes inside code spans with a sentinel character so
+       mistune's cell splitter doesn't treat them as column separators.
+    2. Normalizes row column counts so every row matches the separator's
+       column count (padding short rows, truncating long rows).
+
+    Non-table content passes through unchanged.
 
     Args:
-        lines: List of raw paragraph lines.
+        text: Raw markdown text.
 
     Returns:
-        Joined HTML string with inline formatting applied.
+        Text with table blocks pre-processed.
     """
-    parts: list[str] = []
-    for i, line in enumerate(lines):
-        hard_break = False
-        content = line
+    lines = text.split("\n")
+    result: list[str] = []
+    i = 0
 
-        # Check for hard line break (not on last line of paragraph)
-        if i < len(lines) - 1:
-            if content.endswith("\\"):
-                content = content[:-1]
-                hard_break = True
-            elif content.endswith("  "):  # Two or more trailing spaces
-                content = content.rstrip()
-                hard_break = True
-            else:
-                # Soft break: strip trailing whitespace
-                content = content.rstrip()
+    while i < len(lines):
+        # Look for table start: a line with pipes, followed immediately
+        # by a separator line
+        if (
+            i + 1 < len(lines)
+            and "|" in lines[i]
+            and _is_sep_line(lines[i + 1])
+        ):
+            # Found a table block — collect all lines
+            table_start = i
+            sep_idx = i + 1
+
+            # Count columns from separator line
+            sep_line = lines[sep_idx]
+            n_cols = _count_columns(sep_line)
+
+            # Process header line
+            result.append(
+                _normalize_table_row(
+                    _escape_code_pipes(lines[table_start]), n_cols
+                )
+            )
+            # Pass separator through as-is
+            result.append(lines[sep_idx])
+            i = sep_idx + 1
+
+            # Process data rows
+            while i < len(lines) and "|" in lines[i]:
+                if _is_sep_line(lines[i]):
+                    # Another separator — end of table block
+                    break
+                result.append(
+                    _normalize_table_row(_escape_code_pipes(lines[i]), n_cols)
+                )
+                i += 1
         else:
-            # Last line: strip trailing whitespace (no hard break at end)
-            content = content.rstrip()
+            result.append(lines[i])
+            i += 1
 
-        escaped = html.escape(content)
-        converted = _convert_inline(escaped)
-        parts.append(converted)
-
-        if i < len(lines) - 1:
-            parts.append("<br>" if hard_break else " ")
-
-    return "".join(parts)
+    return "\n".join(result)
 
 
-def _render_header(level: int, content: str) -> str:
-    """Render a header with inline styling for email.
-
-    Converts header content to inline styles to keep font size constant
-    across email clients:
-    # => bold underline, ## => bold italic underline,
-    ### => underline, #### => italic underline, ##### => italic,
-    ###### => bold
-
-    Args:
-        level: Header level (1-6).
-        content: Raw header text (will be HTML-escaped).
-
-    Returns:
-        HTML string with inline styling.
-    """
-    escaped = _convert_inline(html.escape(content))
-    if level == 1:
-        return f"<strong><u>{escaped}</u></strong>"
-    elif level == 2:
-        return f"<strong><em><u>{escaped}</u></em></strong>"
-    elif level == 3:
-        return f"<u>{escaped}</u>"
-    elif level == 4:
-        return f"<em><u>{escaped}</u></em>"
-    elif level == 5:
-        return f"<em>{escaped}</em>"
-    else:  # level == 6
-        return f"<strong>{escaped}</strong>"
+def _is_sep_line(line: str) -> bool:
+    """Check if a line is a table separator (e.g. |---|---|)."""
+    stripped = line.strip()
+    if not stripped or "-" not in stripped:
+        return False
+    return bool(_SEPARATOR_RE.match(stripped))
 
 
-def _convert_line(line: str) -> str:
-    """Convert a single line of markdown to HTML.
+def _escape_code_pipes(line: str) -> str:
+    r"""Replace | inside backtick code spans with sentinel character.
+
+    Scans the line for backtick-delimited code spans (single, double,
+    or triple backticks) and replaces any ``|`` inside them with the
+    sentinel ``\uf000``. Unmatched opening backticks are left as-is.
 
     Args:
-        line: Single line of markdown text.
+        line: A single table row string.
 
     Returns:
-        HTML-converted line.
-    """
-    header_match = re.match(r"^(#{1,6})\s+(.+)$", line)
-    if header_match:
-        level = len(header_match.group(1))
-        return _render_header(level, header_match.group(2))
-
-    # Handle empty lines
-    if not line.strip():
-        return "<br>"
-
-    # Escape HTML and convert inline elements
-    escaped = html.escape(line)
-    converted = _convert_inline(escaped)
-
-    return converted
-
-
-def _convert_inline(text: str) -> str:
-    """Convert inline markdown elements to HTML.
-
-    Handles bold, italic, inline code, and links.
-
-    Args:
-        text: HTML-escaped text with markdown inline elements.
-
-    Returns:
-        Text with inline elements converted to HTML.
-    """
-    # Inline code (must be done first to prevent other conversions inside code)
-    # Match backticks but handle escaped HTML entities
-    text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
-
-    # Links: [text](url) - url was HTML-escaped, so unescape for href
-    def replace_link(match: re.Match[str]) -> str:
-        link_text = match.group(1)
-        url = html.unescape(match.group(2))
-        return f'<a href="{html.escape(url)}">{link_text}</a>'
-
-    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", replace_link, text)
-
-    # Bold: **text** or __text__ (must be done before italic)
-    text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
-    text = re.sub(r"__([^_]+)__", r"<strong>\1</strong>", text)
-
-    # Italic: *text* or _text_
-    # Use negative lookbehind/lookahead to avoid matching inside words for _
-    text = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", text)
-    underscore_pattern = r"(?<![a-zA-Z0-9])_([^_]+)_(?![a-zA-Z0-9])"
-    text = re.sub(underscore_pattern, r"<em>\1</em>", text)
-
-    return text
-
-
-def _remove_code_spans(text: str) -> str:
-    """Replace inline code spans with a placeholder character.
-
-    Handles both single (`` ` ``) and multi-backtick (```` `` ````) delimiters.
-    Unmatched opening backticks are left as-is.
-
-    Args:
-        text: Input text.
-
-    Returns:
-        Text with code span contents replaced by ``X``.
+        Line with pipes inside code spans replaced by sentinel.
     """
     result: list[str] = []
     i = 0
-    while i < len(text):
-        if text[i] == "`":
+    while i < len(line):
+        if line[i] == "`":
             # Determine backtick run length
             tick_start = i
-            while i < len(text) and text[i] == "`":
+            while i < len(line) and line[i] == "`":
                 i += 1
-            opener = text[tick_start:i]
+            opener = line[tick_start:i]
             # Look for matching closing backtick run
-            close_pos = text.find(opener, i)
+            close_pos = line.find(opener, i)
             if close_pos != -1:
-                result.append("X")
+                # Replace pipes in the code span content
+                content = line[i:close_pos]
+                result.append(opener)
+                result.append(content.replace("|", _PIPE_SENTINEL))
+                result.append(opener)
                 i = close_pos + len(opener)
             else:
                 # No closing backticks — keep as literal text
                 result.append(opener)
         else:
-            result.append(text[i])
+            result.append(line[i])
             i += 1
     return "".join(result)
 
 
-def _is_table_line(line: str) -> bool:
-    """Check if a line is part of a markdown table.
-
-    Pipes inside inline code (backticks) are ignored when detecting tables.
-
-    Args:
-        line: Line to check.
-
-    Returns:
-        True if line appears to be a table row.
-    """
-    stripped = line.strip()
-    if not stripped:
-        return False
-
-    # Replace inline code segments with placeholder before checking for pipes.
-    # This prevents pipes inside `code` from triggering table detection
-    # while preserving cell content so code-only cells remain non-empty.
-    line_without_code = _remove_code_spans(stripped)
-
-    # Table lines start and/or contain pipes
-    # Separator lines look like |---|---|
-    if "|" in line_without_code:
-        # Must have at least two cells or be a separator
-        parts = line_without_code.split("|")
-        # Filter out empty parts from leading/trailing pipes
-        non_empty = [p for p in parts if p.strip()]
-        return len(non_empty) >= 1
-
-    return False
-
-
-def _is_separator_line(line: str) -> bool:
-    """Check if a line is a table separator (|---|---|).
-
-    Args:
-        line: Line to check.
-
-    Returns:
-        True if line is a separator row.
-    """
-    stripped = line.strip()
-    # Separator contains only |, -, :, and spaces
-    return bool(re.match(r"^[\|\-:\s]+$", stripped)) and "-" in stripped
-
-
-def _split_table_cells(line: str) -> list[str]:
-    """Split a table row into cell contents, respecting inline code spans.
-
-    Pipes inside backtick-delimited code (single or multi-backtick) are not
-    treated as column separators.
-
-    Args:
-        line: A single table row string (e.g. ``| A | B |``).
-
-    Returns:
-        List of cell content strings (stripped of surrounding whitespace).
-    """
-    stripped = line.strip()
+def _count_columns(sep_line: str) -> int:
+    """Count the number of columns in a table separator line."""
+    stripped = sep_line.strip()
+    # Remove leading/trailing pipes
     if stripped.startswith("|"):
         stripped = stripped[1:]
     if stripped.endswith("|"):
         stripped = stripped[:-1]
-
-    cells: list[str] = []
-    current: list[str] = []
-    i = 0
-    while i < len(stripped):
-        ch = stripped[i]
-        if ch == "`":
-            # Determine backtick run length
-            tick_start = i
-            while i < len(stripped) and stripped[i] == "`":
-                i += 1
-            opener = stripped[tick_start:i]
-            current.append(opener)
-            # Scan for matching closing backtick run
-            close_pos = stripped.find(opener, i)
-            if close_pos != -1:
-                current.append(stripped[i:close_pos])
-                current.append(opener)
-                i = close_pos + len(opener)
-            # If no closing backticks, treat them as literal text
-        elif ch == "|":
-            cells.append("".join(current).strip())
-            current = []
-            i += 1
-        else:
-            current.append(ch)
-            i += 1
-    cells.append("".join(current).strip())
-    return cells
+    return len(stripped.split("|"))
 
 
-def _render_table(lines: list[str]) -> str:
-    """Render markdown table lines as HTML table.
+def _normalize_table_row(line: str, n_cols: int) -> str:
+    """Normalize a table row to have exactly n_cols columns.
+
+    Pads short rows with empty cells, truncates long rows.
 
     Args:
-        lines: List of table lines (including header and separator).
+        line: A table row string (already pipe-escaped).
+        n_cols: Expected number of columns.
 
     Returns:
-        HTML table string.
-    """
-    if not lines:
-        return ""
-
-    rows: list[list[str]] = []
-    has_header = False
-
-    for i, line in enumerate(lines):
-        if _is_separator_line(line):
-            # Mark that we have a header (rows before separator)
-            if i > 0:
-                has_header = True
-            continue
-
-        cells = _split_table_cells(line)
-        rows.append(cells)
-
-    if not rows:
-        return ""
-
-    # Build HTML table with minimal inline border styling
-    # Using inline styles for email client compatibility
-    border_style = "border:1px solid #ccc;border-collapse:collapse;"
-    cell_style = "border:1px solid #ccc;padding:4px 8px;"
-    html_parts = [f'<table style="{border_style}">']
-
-    for i, row in enumerate(rows):
-        html_parts.append("<tr>")
-        # First row is header if we found a separator after it
-        tag = "th" if has_header and i == 0 else "td"
-        for cell in row:
-            escaped_cell = html.escape(cell)
-            converted_cell = _convert_inline(escaped_cell)
-            cell_html = f'<{tag} style="{cell_style}">{converted_cell}</{tag}>'
-            html_parts.append(cell_html)
-        html_parts.append("</tr>")
-
-    html_parts.append("</table>")
-
-    return "".join(html_parts)
-
-
-def _get_list_type(line: str) -> str:
-    """Determine if a line is a list item and what type.
-
-    Args:
-        line: Line to check.
-
-    Returns:
-        "ul" for unordered list, "ol" for ordered list, "" if not a list item.
+        Normalized table row.
     """
     stripped = line.strip()
-    if not stripped:
-        return ""
+    has_leading = stripped.startswith("|")
+    has_trailing = stripped.endswith("|")
 
-    # Unordered list: starts with - or * followed by space
-    if re.match(r"^[-*]\s+", stripped):
-        return "ul"
+    # Strip outer pipes for splitting
+    inner = stripped
+    if has_leading:
+        inner = inner[1:]
+    if has_trailing:
+        inner = inner[:-1]
 
-    # Ordered list: starts with number followed by . and space
-    if re.match(r"^\d+\.\s+", stripped):
-        return "ol"
+    cells = inner.split("|")
 
-    return ""
+    if len(cells) == n_cols:
+        return line  # No change needed
 
+    # Pad or truncate
+    if len(cells) < n_cols:
+        cells.extend(["  "] * (n_cols - len(cells)))
+    else:
+        cells = cells[:n_cols]
 
-def _render_list(items: list[list[str]], list_type: str) -> str:
-    """Render markdown list items as HTML list.
-
-    Each item is a list of raw lines: the first line carries the list
-    marker, subsequent lines are continuation lines.  Continuation lines
-    are joined using paragraph semantics (soft breaks become spaces).
-
-    Args:
-        items: List of items, each a list of raw lines.
-        list_type: "ul" for unordered or "ol" for ordered.
-
-    Returns:
-        HTML list string.
-    """
-    if not items or not list_type:
-        return ""
-
-    # For ordered lists, parse the start number from the first item
-    start_attr = ""
-    if list_type == "ol" and items:
-        first_line = items[0][0].strip()
-        match = re.match(r"^(\d+)\.\s+", first_line)
-        if match:
-            start_num = int(match.group(1))
-            if start_num != 1:
-                start_attr = f' start="{start_num}"'
-
-    html_parts = [f"<{list_type}{start_attr}>"]
-
-    for item_lines in items:
-        # First line: strip the list marker
-        first = item_lines[0].strip()
-        if list_type == "ul":
-            content = re.sub(r"^[-*]\s+", "", first)
-        else:
-            content = re.sub(r"^\d+\.\s+", "", first)
-
-        # Build content lines: first line (marker stripped) + continuations
-        content_lines = [content]
-        for cont_line in item_lines[1:]:
-            content_lines.append(cont_line.strip())
-
-        joined = _join_paragraph(content_lines)
-        html_parts.append(f"<li>{joined}</li>")
-
-    html_parts.append(f"</{list_type}>")
-
-    return "".join(html_parts)
-
-
-def _is_blockquote_line(line: str) -> bool:
-    """Check if a line is a block quote line per CommonMark section 5.1.
-
-    A block quote marker is 0-3 spaces of initial indent, then ``>``,
-    optionally followed by a space and content.
-
-    Args:
-        line: Line to check.
-
-    Returns:
-        True if line is a block quote line.
-    """
-    stripped = line.lstrip(" ")
-    # Leading indent must be 0-3 spaces
-    indent = len(line) - len(stripped)
-    if indent > 3:
-        return False
-    return stripped.startswith(">")
-
-
-def _strip_blockquote_marker(line: str) -> str:
-    """Strip the block quote marker from a line.
-
-    Removes leading spaces (0-3), the ``>`` character, and one optional
-    space after ``>``. Additional spaces are preserved as content.
-
-    Args:
-        line: Block quote line.
-
-    Returns:
-        Line content with marker stripped.
-    """
-    stripped = line.lstrip(" ")
-    # Remove the > character
-    after_marker = stripped[1:]
-    # Remove one optional space after >
-    if after_marker.startswith(" "):
-        after_marker = after_marker[1:]
-    return after_marker
-
-
-_BLOCKQUOTE_STYLE = (
-    "margin:0 0 0 0.8em;border-left:2px solid #ccc;"
-    "padding:0 0 0 0.6em;color:#666;"
-)
-
-
-def _render_blockquote(lines: list[str]) -> str:
-    """Render block quote lines as an HTML blockquote.
-
-    Strips the ``>`` marker from each line and recursively converts the
-    inner content with ``markdown_to_html``, then wraps the result in a
-    ``<blockquote>`` element with email-friendly inline styling.
-
-    Args:
-        lines: List of raw block quote lines (with ``>`` markers).
-
-    Returns:
-        HTML blockquote string, or empty string if lines is empty.
-    """
-    if not lines:
-        return ""
-
-    inner_lines = [_strip_blockquote_marker(line) for line in lines]
-    inner_content = "\n".join(inner_lines)
-    converted = markdown_to_html(inner_content)
-
-    return f'<blockquote style="{_BLOCKQUOTE_STYLE}">{converted}</blockquote>'
+    # Reconstruct with same pipe style
+    joined = "|".join(cells)
+    if has_leading:
+        joined = "|" + joined
+    if has_trailing:
+        joined = joined + "|"
+    return joined
