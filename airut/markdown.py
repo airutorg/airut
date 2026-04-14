@@ -160,7 +160,11 @@ def markdown_to_html(text: str) -> str:
                 flush_table()
 
         # Handle lists
-        line_list_type = _get_list_type(line)
+        line_list_type, start_number = _get_list_type(line)
+        # Per CommonMark §5.3, an ordered list can only interrupt a
+        # paragraph if its start number is 1.
+        if line_list_type == "ol" and paragraph_lines and start_number != 1:
+            line_list_type = ""
         if line_list_type:
             flush_paragraph()
             if not in_list:
@@ -544,28 +548,31 @@ def _render_table(lines: list[str]) -> str:
     return "".join(html_parts)
 
 
-def _get_list_type(line: str) -> str:
+def _get_list_type(line: str) -> tuple[str, int | None]:
     """Determine if a line is a list item and what type.
 
     Args:
         line: Line to check.
 
     Returns:
-        "ul" for unordered list, "ol" for ordered list, "" if not a list item.
+        Tuple of (list_type, start_number) where list_type is "ul",
+        "ol", or "", and start_number is the parsed number for ordered
+        lists (None otherwise).
     """
     stripped = line.strip()
     if not stripped:
-        return ""
+        return "", None
 
     # Unordered list: starts with - or * followed by space
     if re.match(r"^[-*]\s+", stripped):
-        return "ul"
+        return "ul", None
 
     # Ordered list: starts with number followed by . and space
-    if re.match(r"^\d+\.\s+", stripped):
-        return "ol"
+    match = re.match(r"^(\d+)\.\s+", stripped)
+    if match:
+        return "ol", int(match.group(1))
 
-    return ""
+    return "", None
 
 
 def _render_list(items: list[list[str]], list_type: str) -> str:

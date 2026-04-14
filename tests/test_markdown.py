@@ -154,6 +154,57 @@ class TestParagraphs:
         result = markdown_to_html(text)
         assert result == "Hello world"
 
+    def test_ordered_list_marker_does_not_interrupt_paragraph(self):
+        """Ordered list with start != 1 cannot interrupt per §5.3."""
+        text = (
+            "value tripling between 2025 and\n"
+            "2026. But perception gaps are massive."
+        )
+        result = markdown_to_html(text)
+        # Should be a single paragraph joined with space, not a list
+        assert "<ol" not in result
+        assert "<li>" not in result
+        assert (
+            result == "value tripling between 2025 and"
+            " 2026. But perception gaps are massive."
+        )
+
+    def test_ordered_list_start_1_interrupts_paragraph(self):
+        """Per CommonMark §5.3, ordered list with start=1 can interrupt."""
+        text = "Some text\n1. First item"
+        result = markdown_to_html(text)
+        assert "<ol>" in result
+        assert "<li>First item</li>" in result
+
+    def test_ordered_list_non_1_after_blank_line(self):
+        """Non-1 ordered list after a blank line still creates a list."""
+        text = "Some text\n\n5. Fifth item"
+        result = markdown_to_html(text)
+        assert '<ol start="5">' in result
+        assert "<li>Fifth item</li>" in result
+
+    def test_year_in_paragraph_not_list(self):
+        """Year followed by dot and space in paragraph is not a list."""
+        text = (
+            "**Consumer adoption is historic.** Generative AI reached 53%"
+            " US population\n"
+            "penetration in three years — faster than PCs or the internet."
+            " Estimated consumer\n"
+            "value: $172 billion annually, with per-user value tripling"
+            " between 2025 and\n"
+            "2026. But public-expert perception gaps are massive: 73% of"
+            " experts see positive\n"
+            "workplace impact vs. 23% of the public, and US trust in"
+            " government AI regulation\n"
+            "is the lowest globally at 31%."
+        )
+        result = markdown_to_html(text)
+        # Must be a single paragraph, not split into paragraph + list
+        assert "<ol" not in result
+        assert "<li>" not in result
+        # All lines joined with spaces
+        assert "2025 and 2026. But" in result
+
 
 class TestHardLineBreaks:
     """Tests for hard line breaks per CommonMark spec (section 6.7).
@@ -1099,14 +1150,14 @@ class TestHelperFunctions:
 
     def test_get_list_type(self):
         """Test _get_list_type function."""
-        assert _get_list_type("- Item") == "ul"
-        assert _get_list_type("* Item") == "ul"
-        assert _get_list_type("1. Item") == "ol"
-        assert _get_list_type("99. Item") == "ol"
-        assert _get_list_type("-NoSpace") == ""
-        assert _get_list_type("Regular text") == ""
-        assert _get_list_type("") == ""
-        assert _get_list_type("   ") == ""
+        assert _get_list_type("- Item") == ("ul", None)
+        assert _get_list_type("* Item") == ("ul", None)
+        assert _get_list_type("1. Item") == ("ol", 1)
+        assert _get_list_type("99. Item") == ("ol", 99)
+        assert _get_list_type("-NoSpace") == ("", None)
+        assert _get_list_type("Regular text") == ("", None)
+        assert _get_list_type("") == ("", None)
+        assert _get_list_type("   ") == ("", None)
 
     def test_render_list_empty(self):
         """Test _render_list with empty list."""
