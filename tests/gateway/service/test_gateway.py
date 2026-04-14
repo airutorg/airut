@@ -821,6 +821,12 @@ class TestStartStop:
             svc.stop()
         future.cancel.assert_called_once()
 
+    def test_stop_with_scheduler(self, email_config, tmp_path: Path) -> None:
+        svc, _ = make_service(email_config, tmp_path)
+        svc._scheduler = MagicMock()
+        svc.stop()
+        svc._scheduler.stop.assert_called_once()
+
     def test_stop_with_dashboard(self, email_config, tmp_path: Path) -> None:
         svc, _ = make_service(email_config, tmp_path)
         svc.dashboard = MagicMock()
