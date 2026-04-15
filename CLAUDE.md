@@ -55,6 +55,8 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
   replacement
 - `spec/aws-sigv4-resigning.md` — AWS SigV4/SigV4A credential masking via proxy
   re-signing
+- `spec/graphql-operation-allowlist.md` — generic GraphQL operation filtering at
+  the proxy layer
 - `spec/github-app-credential.md` — GitHub App credential support with
   proxy-managed token rotation
 - `spec/dashboard.md` — web dashboard for task monitoring

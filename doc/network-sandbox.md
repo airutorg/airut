@@ -25,6 +25,7 @@ so it works with all tools (Node.js, Go, curl, Python, git).
   - [Network Allowlist](#network-allowlist)
     - [Pattern Matching Rules](#pattern-matching-rules)
     - [HTTP Method Filtering](#http-method-filtering)
+    - [GraphQL Operation Filtering](#graphql-operation-filtering)
     - [Wildcard Host for Credential-Only Sandboxing](#wildcard-host-for-credential-only-sandboxing)
   - [Agent Self-Service Flow](#agent-self-service-flow)
 - [Masked Secrets (Token Replacement)](#masked-secrets-token-replacement)
@@ -306,6 +307,51 @@ url_prefixes:
   `url_prefixes` if you need method restrictions
 - The 403 response distinguishes method-blocked from host/path-blocked requests,
   so agents get actionable feedback
+
+#### GraphQL Operation Filtering
+
+GraphQL APIs collapse all operations into a single URL endpoint
+(`POST /graphql`), making URL-level filtering insufficient to distinguish
+between safe reads and dangerous mutations. The optional `graphql` block on URL
+prefix entries provides default-deny filtering of GraphQL operations by type
+(query, mutation, subscription) and top-level field name:
+
+```yaml
+url_prefixes:
+  - host: api.github.com
+    path: /graphql
+    methods: [POST]
+    graphql:
+      queries:
+        - "*"                          # allow all queries
+      mutations:
+        - createIssue
+        - createPullRequest
+        - updatePullRequest
+        - mergePullRequest
+      # subscriptions: omitted = blocked
+```
+
+**Rules:**
+
+- `graphql` is optional. Omitting it disables operation filtering (backwards
+  compatible)
+- Each operation type (`queries`, `mutations`, `subscriptions`) is an optional
+  list of fnmatch patterns. Omitted or empty lists block all operations of that
+  type (default-deny)
+- Pattern matching is case-sensitive (GraphQL field names are case-sensitive per
+  the GraphQL spec)
+- The same `fnmatch.fnmatch()` wildcards as host/path matching are supported:
+  `"*"` (all), `"create*"` (prefix), `"*PullRequest"` (suffix)
+- Fail-secure: parse errors, batched queries, fragment spreads at the operation
+  root, and any ambiguous structure result in a block
+- Blocked requests return HTTP 403 with `error: "graphql_operation_blocked"`
+
+For GitHub App credentials, this acts as Layer 1 in a two-layer defense. Layer 2
+([GraphQL Repository Scoping](#graphql-repository-scoping)) ensures that allowed
+mutations target only permitted repositories. See
+[spec/graphql-operation-allowlist.md](../spec/graphql-operation-allowlist.md)
+for the full specification.
 
 #### Wildcard Host for Credential-Only Sandboxing
 
@@ -646,7 +692,19 @@ short-lived installation token for scoped hosts.
 
 GitHub App installation tokens can perform certain mutations (e.g.,
 `createIssue`) on **any public repository** where issues are enabled, regardless
-of App installation scope. The proxy performs two layers of scope checking:
+of App installation scope. The proxy provides two layers of GraphQL defense:
+
+**Layer 1: Operation allowlist** (generic, via
+[`graphql` block](#graphql-operation-filtering)). Default-deny filtering that
+blocks entire classes of dangerous mutations (e.g., `deleteRepository`,
+`addComment`) before they reach credential-specific checks. Mutations that
+accept non-`repositoryId` targeting fields (e.g., `addComment` with `subjectId`)
+are simply not listed in the operation allowlist — the agent uses REST API
+equivalents where URL-level path scoping naturally restricts repository access.
+
+**Layer 2: Repository scope checking** (GitHub-specific). For mutations that
+Layer 1 allows (e.g., `createIssue`, `createPullRequest`), the proxy performs
+two scope checks:
 
 1. **`repositoryId` field check** — Parses the GraphQL query AST (via
    `graphql-core`) and scans JSON variables to extract all `repositoryId`
@@ -665,8 +723,10 @@ to prevent bypass of body-based scope checking.
 Node IDs of allowed repositories are resolved at token refresh time via
 `GET /installation/repositories`. No additional API calls are made for request
 inspection — node ID decoding is pure local computation. See
-[spec/github-app-credential.md](../spec/github-app-credential.md) for the full
-specification.
+[spec/graphql-operation-allowlist.md](../spec/graphql-operation-allowlist.md)
+for the operation allowlist specification and
+[spec/github-app-credential.md](../spec/github-app-credential.md) for the
+repository scoping specification.
 
 ### Limitations
 
@@ -756,6 +816,8 @@ When investigating connectivity problems from inside a container:
   specification
 - [spec/aws-sigv4-resigning.md](../spec/aws-sigv4-resigning.md) — AWS
   SigV4/SigV4A re-signing specification
+- [spec/graphql-operation-allowlist.md](../spec/graphql-operation-allowlist.md)
+  — GraphQL operation filtering specification
 - [spec/github-app-credential.md](../spec/github-app-credential.md) — GitHub App
   credential specification
 - [github-app-setup.md](github-app-setup.md) — GitHub App setup guide

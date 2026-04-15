@@ -59,6 +59,7 @@ from github_app import (
     generate_jwt,
     is_token_valid,
 )
+from graphql_operations import OperationVerdict, check_operations
 from graphql_scope import ScopeVerdict, check_repo_scope
 from mitmproxy import ctx, http
 
@@ -74,6 +75,7 @@ class UrlPrefixEntry(TypedDict, total=False):
     host: str
     path: str
     methods: list[str]
+    graphql: dict[str, list[str]]
 
 
 class _SigningContext(TypedDict):
@@ -195,6 +197,7 @@ class ProxyFilter:
         self.replacements: dict[str, dict[str, _JsonValue]] = {}
         self._log_file: TextIO | None = None
         self._github_app_cache: dict[str, CachedToken] = {}
+        self._last_matched_url_entry: UrlPrefixEntry | None = None
 
     def load(self, options: object) -> None:  # noqa: ARG002
         """Load configuration on startup."""
@@ -303,6 +306,9 @@ class ProxyFilter:
         if "\x00" in path:
             return False
 
+        # Reset matched entry for this check.
+        self._last_matched_url_entry = None
+
         # Check domain entries (with wildcard support)
         # Domain entries allow all methods unconditionally
         for domain in self.domains:
@@ -325,6 +331,7 @@ class ProxyFilter:
                         or not method
                         or method.upper() in (m.upper() for m in entry_methods)
                     ):
+                        self._last_matched_url_entry = entry
                         return True
 
         return False
@@ -1229,6 +1236,39 @@ class ProxyFilter:
         # Request is allowed
         flow.metadata["allowlist_action"] = "ALLOWED"
 
+        # GraphQL operation allowlist check (Layer 1).
+        matched_entry = self._last_matched_url_entry
+        if matched_entry is not None:
+            graphql_config = matched_entry.get("graphql")
+            if graphql_config is not None:
+                op_result = check_operations(
+                    flow.request.get_content(), graphql_config
+                )
+                flow.metadata["graphql_op"] = op_result.operation_tag
+                if op_result.verdict is not OperationVerdict.ALLOWED:
+                    detail = op_result.detail or ""
+                    flow.metadata["allowlist_action"] = "BLOCKED"
+                    flow.response = http.Response.make(
+                        403,
+                        json.dumps(
+                            {
+                                "error": "graphql_operation_blocked",
+                                "message": (
+                                    f"GraphQL operation "
+                                    f"'{detail}' is not in the "
+                                    f"operation allowlist. To "
+                                    f"request access, update the "
+                                    f"graphql block in "
+                                    f".airut/network-allowlist.yaml "
+                                    f"and submit a PR."
+                                ),
+                                "detail": detail,
+                            }
+                        ),
+                        {"Content-Type": "application/json"},
+                    )
+                    return
+
         # If already re-signed in requestheaders(), skip token replacement
         if flow.metadata.get("aws_resigned"):
             return
@@ -1311,6 +1351,11 @@ class ProxyFilter:
 
         # Build annotation suffix
         parts: list[str] = []
+
+        # GraphQL operation tag
+        graphql_op = flow.metadata.get("graphql_op")
+        if graphql_op:
+            parts.append(f"[graphql-op: {graphql_op}]")
 
         # Credential info (GitHub App cache status, scope tags)
         cred = flow.metadata.get("credential_info")

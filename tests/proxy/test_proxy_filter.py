@@ -32,6 +32,7 @@ from tests.proxy.vectors import (
 
 from airut._bundled.proxy.proxy_filter import (
     ProxyFilter,
+    UrlPrefixEntry,
     _decode_basic_auth,
     _encode_basic_auth,
     _match_header_pattern,
@@ -3634,3 +3635,272 @@ class TestGitHubAppGraphQLScoping:
 
         assert flow.response is None
         assert flow.request.headers["Authorization"] == "Bearer ghs_real_token"
+
+
+# ---------------------------------------------------------------------------
+# GraphQL operation allowlist (Layer 1)
+# ---------------------------------------------------------------------------
+
+
+class TestGraphqlOperationAllowlist:
+    """Tests for GraphQL operation allowlist in request()."""
+
+    _GRAPHQL_ENTRY: UrlPrefixEntry = {
+        "host": "api.github.com",
+        "path": "/graphql",
+        "methods": ["POST"],
+        "graphql": {
+            "queries": ["*"],
+            "mutations": ["createIssue", "createPullRequest"],
+            "subscriptions": [],
+        },
+    }
+
+    def _setup_filter(self) -> "ProxyFilter":
+        pf = ProxyFilter()
+        pf.url_prefixes = [self._GRAPHQL_ENTRY]
+        return pf
+
+    def test_allowed_query(self) -> None:
+        """Allowed query passes through."""
+        pf = self._setup_filter()
+        body = json.dumps({"query": "query { viewer { login } }"}).encode()
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            content=body,
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "ALLOWED"
+        assert flow.response is None
+        assert flow.metadata.get("graphql_op") == "query/viewer"
+
+    def test_allowed_mutation(self) -> None:
+        """Allowed mutation passes through."""
+        pf = self._setup_filter()
+        body = json.dumps(
+            {"query": ("mutation { createIssue(input: {}) { issue { id } } }")}
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            content=body,
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "ALLOWED"
+        assert flow.response is None
+        assert flow.metadata.get("graphql_op") == "mutation/createIssue"
+
+    def test_blocked_mutation(self) -> None:
+        """Blocked mutation gets 403."""
+        pf = self._setup_filter()
+        body = json.dumps(
+            {
+                "query": (
+                    "mutation { deleteRepository(input: {})"
+                    " { clientMutationId } }"
+                )
+            }
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            content=body,
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        resp_body = json.loads(flow.response._content)
+        assert resp_body["error"] == "graphql_operation_blocked"
+        assert resp_body["detail"] == "deleteRepository"
+
+    def test_no_graphql_config_no_filtering(self) -> None:
+        """Entries without graphql block skip operation filtering."""
+        pf = ProxyFilter()
+        pf.url_prefixes = [
+            {"host": "api.github.com", "path": "/graphql", "methods": ["POST"]}
+        ]
+        body = json.dumps(
+            {
+                "query": (
+                    "mutation { deleteRepository(input: {})"
+                    " { clientMutationId } }"
+                )
+            }
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            content=body,
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "ALLOWED"
+        assert flow.response is None
+
+    def test_domain_match_no_filtering(self) -> None:
+        """Domain-matched requests skip GraphQL filtering."""
+        pf = ProxyFilter()
+        pf.domains = ["api.github.com"]
+        body = json.dumps(
+            {
+                "query": (
+                    "mutation { deleteRepository(input: {})"
+                    " { clientMutationId } }"
+                )
+            }
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            content=body,
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "ALLOWED"
+        assert flow.response is None
+
+    def test_malformed_body_blocked(self) -> None:
+        """Malformed body gets 403 from operation check."""
+        pf = self._setup_filter()
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            content=b"not json",
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        resp_body = json.loads(flow.response._content)
+        assert resp_body["error"] == "graphql_operation_blocked"
+        assert resp_body["detail"] == "<unparseable>"
+
+    def test_batched_request_blocked(self) -> None:
+        """Batched (array) requests are blocked."""
+        pf = self._setup_filter()
+        body = json.dumps([{"query": "query { viewer { login } }"}]).encode()
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            content=body,
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+        resp_body = json.loads(flow.response._content)
+        assert resp_body["detail"] == "<batched>"
+
+    def test_graphql_op_tag_in_log(self) -> None:
+        """graphql-op tag appears in log output for allowed requests."""
+        pf = self._setup_filter()
+        body = json.dumps({"query": "query { viewer { login } }"}).encode()
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            content=body,
+            response_code=200,
+        )
+        pf.request(flow)
+        with patch.object(pf, "_log") as mock_log:
+            pf.response(flow)
+            msg = mock_log.call_args[0][0]
+            assert "[graphql-op: query/viewer]" in msg
+            assert msg.startswith("ALLOWED")
+
+    def test_graphql_op_tag_in_blocked_log(self) -> None:
+        """graphql-op tag appears in log output for blocked requests."""
+        pf = self._setup_filter()
+        body = json.dumps(
+            {
+                "query": (
+                    "mutation { deleteRepository(input: {})"
+                    " { clientMutationId } }"
+                )
+            }
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            content=body,
+        )
+        pf.request(flow)
+        with patch.object(pf, "_log_loud") as mock_loud:
+            pf.response(flow)
+            msg = mock_loud.call_args[0][0]
+            assert "[graphql-op: mutation/deleteRepository]" in msg
+            assert msg.startswith("BLOCKED")
+
+    def test_matched_url_entry_stored(self) -> None:
+        """_is_allowed stores matched URL entry for GraphQL check."""
+        pf = self._setup_filter()
+        assert pf._is_allowed("api.github.com", "/graphql", "POST")
+        assert pf._last_matched_url_entry is not None
+        assert pf._last_matched_url_entry.get("graphql") is not None
+
+    def test_matched_url_entry_none_for_domain(self) -> None:
+        """_is_allowed resets matched entry for domain matches."""
+        pf = ProxyFilter()
+        pf.domains = ["api.github.com"]
+        assert pf._is_allowed("api.github.com", "/graphql", "POST")
+        assert pf._last_matched_url_entry is None
+
+    def test_matched_url_entry_none_when_blocked(self) -> None:
+        """_is_allowed resets matched entry when request is blocked."""
+        pf = self._setup_filter()
+        assert not pf._is_allowed("blocked.com", "/api", "GET")
+        assert pf._last_matched_url_entry is None
+
+    def test_subscription_blocked(self) -> None:
+        """Subscriptions blocked by empty pattern list."""
+        pf = self._setup_filter()
+        body = json.dumps(
+            {"query": "subscription { issueUpdated { id } }"}
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            content=body,
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+        resp_body = json.loads(flow.response._content)
+        assert resp_body["detail"] == "subscription:<blocked>"
+
+    def test_operation_check_before_credential_handling(self) -> None:
+        """Operation check blocks before token replacement occurs."""
+        pf = self._setup_filter()
+        pf.replacements = {
+            "surr_token": {
+                "value": "real_token",
+                "scopes": ["api.github.com"],
+                "headers": ["Authorization"],
+            }
+        }
+        body = json.dumps(
+            {
+                "query": (
+                    "mutation { deleteRepository(input: {})"
+                    " { clientMutationId } }"
+                )
+            }
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={"Authorization": "Bearer surr_token"},
+            content=body,
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+        # Token should NOT have been replaced
+        assert flow.request.headers["Authorization"] == "Bearer surr_token"

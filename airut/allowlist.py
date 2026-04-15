@@ -32,6 +32,19 @@ class AllowlistDomain:
 
 
 @dataclass(frozen=True)
+class GraphqlOperationAllowlist:
+    """GraphQL operation allowlist for a URL pattern entry.
+
+    Each field is a tuple of fnmatch patterns. Empty tuple means no
+    operations of that type are allowed (default-deny).
+    """
+
+    queries: tuple[str, ...] = ()
+    mutations: tuple[str, ...] = ()
+    subscriptions: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class AllowlistUrlPattern:
     """A URL pattern with optional path and method restrictions.
 
@@ -42,6 +55,7 @@ class AllowlistUrlPattern:
     host: str
     path: str = ""
     methods: tuple[str, ...] = ()
+    graphql: GraphqlOperationAllowlist | None = None
 
 
 @dataclass(frozen=True)
@@ -80,11 +94,20 @@ def parse_allowlist_yaml(data: bytes) -> Allowlist:
     url_patterns: list[AllowlistUrlPattern] = []
     for entry in raw_prefixes:
         methods_raw = entry.get("methods", [])
+        graphql_raw = entry.get("graphql")
+        graphql: GraphqlOperationAllowlist | None = None
+        if graphql_raw is not None:
+            graphql = GraphqlOperationAllowlist(
+                queries=tuple(graphql_raw.get("queries", [])),
+                mutations=tuple(graphql_raw.get("mutations", [])),
+                subscriptions=tuple(graphql_raw.get("subscriptions", [])),
+            )
         url_patterns.append(
             AllowlistUrlPattern(
                 host=entry.get("host", ""),
                 path=entry.get("path", ""),
                 methods=tuple(methods_raw),
+                graphql=graphql,
             )
         )
 
@@ -112,15 +135,23 @@ def serialize_allowlist_json(allowlist: Allowlist) -> bytes:
     Returns:
         JSON bytes.
     """
-    data = {
-        "domains": [d.host for d in allowlist.domains],
-        "url_prefixes": [
-            {
-                "host": p.host,
-                "path": p.path,
-                "methods": list(p.methods),
+    prefixes: list[dict[str, object]] = []
+    for p in allowlist.url_patterns:
+        entry: dict[str, object] = {
+            "host": p.host,
+            "path": p.path,
+            "methods": list(p.methods),
+        }
+        if p.graphql is not None:
+            entry["graphql"] = {
+                "queries": list(p.graphql.queries),
+                "mutations": list(p.graphql.mutations),
+                "subscriptions": list(p.graphql.subscriptions),
             }
-            for p in allowlist.url_patterns
-        ],
+        prefixes.append(entry)
+
+    data: dict[str, object] = {
+        "domains": [d.host for d in allowlist.domains],
+        "url_prefixes": prefixes,
     }
     return json.dumps(data).encode()
