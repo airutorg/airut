@@ -19,7 +19,7 @@ class TestNetworkLogsEndpoint:
         """Test network logs page renders with log content."""
         harness.write_log(
             "=== TASK START 2026-02-03T12:34:56Z ===\n"
-            "allowed GET https://api.github.com/repos -> 200\n"
+            "ALLOWED GET https://api.github.com/repos -> 200\n"
             "BLOCKED GET https://evil.com/exfiltrate -> 403\n"
         )
 
@@ -74,14 +74,14 @@ class TestNetworkLogsEndpoint:
 
     def test_scrolls_to_end(self, harness: DashboardHarness) -> None:
         """Test network logs page scrolls to end by default."""
-        harness.write_log("allowed GET https://api.github.com -> 200\n")
+        harness.write_log("ALLOWED GET https://api.github.com -> 200\n")
 
         html = harness.get_html("/conversation/abc12345/network")
         assert "auto-scroll.js" in html
 
     def test_breadcrumb_links(self, harness: DashboardHarness) -> None:
         """Test network logs page has breadcrumb navigation."""
-        harness.write_log("allowed GET https://api.github.com -> 200\n")
+        harness.write_log("ALLOWED GET https://api.github.com -> 200\n")
 
         html = harness.get_html("/conversation/abc12345/network")
         assert 'href="/task/abc12345"' in html
@@ -104,7 +104,7 @@ class TestNetworkLogLineStyling:
     def test_blocked_class(self, harness: DashboardHarness) -> None:
         """Test BLOCKED entries have special styling class."""
         harness.write_log(
-            "allowed GET https://api.github.com -> 200\n"
+            "ALLOWED GET https://api.github.com -> 200\n"
             "BLOCKED GET https://evil.com -> 403\n"
         )
 
@@ -122,9 +122,9 @@ class TestNetworkLogLineStyling:
     def test_error_responses(self, harness: DashboardHarness) -> None:
         """Test error responses (4xx/5xx) have orange styling."""
         harness.write_log(
-            "allowed GET https://api.github.com -> 200\n"
-            "allowed GET https://api.example.com -> 404\n"
-            "allowed POST https://api.example.com/fail -> 500\n"
+            "ALLOWED GET https://api.github.com -> 200\n"
+            "ALLOWED GET https://api.example.com -> 404\n"
+            "ALLOWED POST https://api.example.com/fail -> 500\n"
         )
 
         html = harness.get_html("/conversation/abc12345/network")
@@ -134,8 +134,8 @@ class TestNetworkLogLineStyling:
     def test_3xx_not_error(self, harness: DashboardHarness) -> None:
         """Test 3xx responses are treated as success, not error."""
         harness.write_log(
-            "allowed GET https://api.example.com -> 301\n"
-            "allowed GET https://api.example.com -> 304\n"
+            "ALLOWED GET https://api.example.com -> 301\n"
+            "ALLOWED GET https://api.example.com -> 304\n"
         )
 
         html = harness.get_html("/conversation/abc12345/network")
@@ -145,8 +145,8 @@ class TestNetworkLogLineStyling:
     def test_allowed_without_status_code(
         self, harness: DashboardHarness
     ) -> None:
-        """Test allowed lines without status code are rendered as allowed."""
-        harness.write_log("allowed GET https://api.example.com\n")
+        """Test ALLOWED lines without status code are rendered as allowed."""
+        harness.write_log("ALLOWED GET https://api.example.com\n")
 
         html = harness.get_html("/conversation/abc12345/network")
         assert 'class="log-line allowed"' in html
@@ -163,9 +163,9 @@ class TestNetworkLogLineStyling:
     def test_skips_empty_lines(self, harness: DashboardHarness) -> None:
         """Test empty lines are skipped in rendering."""
         harness.write_log(
-            "allowed GET https://api.github.com -> 200\n"
+            "ALLOWED GET https://api.github.com -> 200\n"
             "\n"
-            "allowed GET https://api.example.com -> 200\n"
+            "ALLOWED GET https://api.example.com -> 200\n"
         )
 
         html = harness.get_html("/conversation/abc12345/network")
@@ -176,9 +176,9 @@ class TestNetworkLogLineStyling:
         from airut.dashboard.views.network import render_network_log_lines
 
         rendered = render_network_log_lines(
-            "allowed GET https://api.github.com -> 200\n"
+            "ALLOWED GET https://api.github.com -> 200\n"
             "\n"
-            "allowed GET https://api.example.com -> 200\n"
+            "ALLOWED GET https://api.example.com -> 200\n"
         )
         assert rendered.count('<div class="log-line') == 2
 
@@ -211,9 +211,9 @@ class TestNetworkLogStripped:
     def test_dropped_tag_in_allowed_line(
         self, harness: DashboardHarness
     ) -> None:
-        """Test [dropped: N] in allowed lines gets warning tag styling."""
+        """Test [dropped: N] in ALLOWED lines gets warning tag styling."""
         harness.write_log(
-            "allowed GET https://api.github.com -> 200 [dropped: 1]\n"
+            "ALLOWED GET https://api.github.com -> 200 [dropped: 1]\n"
         )
 
         html = harness.get_html("/conversation/abc12345/network")
@@ -223,7 +223,7 @@ class TestNetworkLogStripped:
     def test_dropped_tag_in_error_line(self, harness: DashboardHarness) -> None:
         """Test [dropped: N] in error response lines also gets styling."""
         harness.write_log(
-            "allowed GET https://api.github.com -> 401 [dropped: 1]\n"
+            "ALLOWED GET https://api.github.com -> 401 [dropped: 1]\n"
         )
 
         html = harness.get_html("/conversation/abc12345/network")
@@ -244,7 +244,7 @@ class TestNetworkLogHighlighting:
 
     def test_bold_error_status_code(self, harness: DashboardHarness) -> None:
         """Test error status codes are bold in error lines."""
-        harness.write_log("allowed GET https://api.example.com -> 500\n")
+        harness.write_log("ALLOWED GET https://api.example.com -> 500\n")
 
         html = harness.get_html("/conversation/abc12345/network")
         assert '<span class="highlight">500</span>' in html
@@ -268,7 +268,7 @@ class TestNetworkLogHighlighting:
     def test_escapes_html(self, harness: DashboardHarness) -> None:
         """Test HTML in log content is escaped."""
         harness.write_log(
-            "allowed GET https://example.com/<script>alert(1)</script> -> 200\n"
+            "ALLOWED GET https://example.com/<script>alert(1)</script> -> 200\n"
         )
 
         html = harness.get_html("/conversation/abc12345/network")
@@ -289,44 +289,44 @@ class TestNetworkLogDNS:
         assert html.count('class="log-line blocked"') == 2
         assert '<span class="highlight">BLOCKED</span>' in html
 
-    def test_dns_allowed(self, harness: DashboardHarness) -> None:
-        """Test DNS allowed lines get allowed (green) styling."""
-        harness.write_log("allowed DNS A api.github.com -> 10.199.1.100\n")
+    def test_dns_lines_plain(self, harness: DashboardHarness) -> None:
+        """Test DNS lines render as plain log lines."""
+        harness.write_log("DNS A api.github.com -> 10.199.1.100\n")
 
         html = harness.get_html("/conversation/abc12345/network")
-        assert 'class="log-line allowed"' in html
+        assert 'class="log-line">' in html
         assert 'class="log-line error"' not in html
 
     def test_mixed_dns_and_http(self, harness: DashboardHarness) -> None:
         """Test mixed DNS and HTTP log lines render correctly."""
         harness.write_log(
             "=== TASK START 2026-02-03T12:34:56Z ===\n"
-            "allowed DNS A api.github.com -> 10.199.1.100\n"
-            "BLOCKED DNS A evil.com -> NXDOMAIN\n"
-            "allowed GET https://api.github.com/repos -> 200\n"
+            "DNS A api.github.com -> 10.199.1.100\n"
+            "DNS AAAA evil.com -> NOTIMP\n"
+            "ALLOWED GET https://api.github.com/repos -> 200\n"
             "BLOCKED GET https://evil.com/exfiltrate -> 403\n"
         )
 
         html = harness.get_html("/conversation/abc12345/network")
         assert 'class="log-line task-start"' in html
-        assert html.count('class="log-line allowed"') == 2
-        assert html.count('class="log-line blocked"') == 2
+        assert html.count('class="log-line allowed"') == 1
+        assert html.count('class="log-line blocked"') == 1
 
     def test_mixed_with_error_lines(self, harness: DashboardHarness) -> None:
         """Test ERROR lines render correctly alongside other types."""
         harness.write_log(
             "=== TASK START 2026-02-03T12:34:56Z ===\n"
-            "allowed DNS A api.github.com -> 10.199.1.100\n"
-            "allowed DNS A down.example.com -> 10.199.1.100\n"
-            "allowed GET https://api.github.com/repos -> 200\n"
+            "DNS A api.github.com -> 10.199.1.100\n"
+            "DNS A down.example.com -> 10.199.1.100\n"
+            "ALLOWED GET https://api.github.com/repos -> 200\n"
             "ERROR GET https://down.example.com"
             " -> Connection failed: Name or service not known\n"
-            "BLOCKED DNS A evil.com -> NXDOMAIN\n"
+            "BLOCKED GET https://evil.com/exfiltrate -> 403\n"
         )
 
         html = harness.get_html("/conversation/abc12345/network")
         assert 'class="log-line task-start"' in html
-        assert html.count('class="log-line allowed"') == 3
+        assert html.count('class="log-line allowed"') == 1
         assert html.count('class="log-line conn-error"') == 1
         assert html.count('class="log-line blocked"') == 1
 

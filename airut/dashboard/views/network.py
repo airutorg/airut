@@ -14,7 +14,7 @@ import html
 import re
 
 
-# Pattern to extract status code from log lines: "allowed GET ... -> 200"
+# Pattern to extract status code from log lines: "ALLOWED GET ... -> 200"
 _STATUS_CODE_PATTERN = re.compile(r"-> (\d{3})(?:\s|$)")
 
 # Pattern to detect [dropped: N] suffix in log lines
@@ -88,10 +88,10 @@ def render_network_log_line(line: str) -> str:
         - BLOCKED requests: red with dark red background, BLOCKED in bold
         - ERROR lines (upstream failures): red with dark red background,
           ERROR in bold
-        - Allowed requests with error status (4xx/5xx): orange with dark orange
+        - ALLOWED requests with error status (4xx/5xx): orange with dark orange
           background, status code in bold
-        - Allowed requests with [dropped: N]: green with warning tag
-        - Allowed requests with success status (2xx/3xx): green
+        - ALLOWED requests with [dropped: N]: green with warning tag
+        - ALLOWED requests with success status (2xx/3xx): green
     """
     escaped = html.escape(line)
 
@@ -106,7 +106,7 @@ def render_network_log_line(line: str) -> str:
     elif line.startswith("ERROR"):
         highlighted = _highlight_error_prefix(escaped)
         return f'<div class="log-line conn-error">{highlighted}</div>'
-    elif line.startswith("allowed"):
+    elif line.startswith("ALLOWED"):
         has_dropped = _DROPPED_PATTERN.search(line)
         status_code = _extract_status_code(line)
         if status_code is not None and _is_error_status(status_code):

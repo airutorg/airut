@@ -2457,9 +2457,9 @@ class TestMakeNetworkLineCallback:
         callback = _make_network_line_callback()
         with patch("airut.sandbox_cli.sys") as mock_sys:
             mock_sys.stderr = MagicMock()
-            callback("allowed GET https://api.github.com/repos -> 200")
+            callback("ALLOWED GET https://api.github.com/repos -> 200")
             mock_sys.stderr.write.assert_called_once_with(
-                "[net] allowed GET https://api.github.com/repos -> 200\n"
+                "[net] ALLOWED GET https://api.github.com/repos -> 200\n"
             )
             mock_sys.stderr.flush.assert_called_once()
 

@@ -2357,7 +2357,7 @@ class TestSSELivePages:
 
         # Write some network log content
         log_path = conv_dir / "network-sandbox.log"
-        log_content = "allowed GET https://example.com -> 200\n"
+        log_content = "ALLOWED GET https://example.com -> 200\n"
         log_path.write_text(log_content)
         file_size = log_path.stat().st_size
 
@@ -2400,7 +2400,7 @@ class TestSSELivePages:
         log_path = conv_dir / "network-sandbox.log"
         log_lines = (
             "=== TASK START abc12345 ===\n"
-            "allowed GET https://api.example.com/v1/data -> 200\n"
+            "ALLOWED GET https://api.example.com/v1/data -> 200\n"
             "BLOCKED POST https://evil.example.com/exfil\n"
         )
         log_path.write_text(log_lines)
@@ -2674,7 +2674,7 @@ class TestNetworkLogPollEndpoint:
         conv_dir.mkdir()
 
         log_path = conv_dir / NETWORK_LOG_FILENAME
-        log_path.write_text("allowed GET https://example.com -> 200\n")
+        log_path.write_text("ALLOWED GET https://example.com -> 200\n")
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])
         client = Client(server._wsgi_app)
@@ -2746,7 +2746,7 @@ class TestNetworkLogPollEndpoint:
         conv_dir.mkdir()
 
         log_path = conv_dir / NETWORK_LOG_FILENAME
-        log_path.write_text("allowed GET https://example.com -> 200\n")
+        log_path.write_text("ALLOWED GET https://example.com -> 200\n")
         file_size = log_path.stat().st_size
 
         server = DashboardServer(tracker, work_dirs=lambda: [tmp_path])

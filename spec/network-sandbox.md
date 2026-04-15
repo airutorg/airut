@@ -125,10 +125,12 @@ file, providing a complete audit trail from DNS resolution through HTTP request:
 DNS A api.github.com -> 10.199.1.100
 DNS A evil.com -> 10.199.1.100
 DNS AAAA evil.com -> NOTIMP
-allowed GET https://api.github.com/repos/your-org/your-repo/pulls -> 200 [masked: 1]
+ALLOWED GET https://api.github.com/repos/your-org/your-repo/pulls -> 200 [masked: 1]
 BLOCKED GET https://evil.com/exfiltrate -> 403
 STRIPPED header 'authorization' from POST https://api.anthropic.com/v1/files (foreign credential blocked)
-allowed POST https://api.anthropic.com/v1/messages -> 200 [masked: 1] [dropped: 1]
+ALLOWED POST https://api.anthropic.com/v1/messages -> 200 [masked: 1] [dropped: 1]
+ALLOWED POST https://api.github.com/graphql -> 200 [github-app: cached, graphql-scoped] [masked: 1]
+BLOCKED POST https://api.github.com/graphql -> 403 [github-app: R_kgDORHpB6A]
 ERROR GET https://down.example.com/api -> Connection failed: Name or service not known
 ```
 
@@ -140,9 +142,12 @@ NOTIMP (for non-A queries). All A queries resolve to the proxy IP — the DNS
 responder does not perform allowlist checking or upstream DNS resolution.
 
 HTTP log lines use the format
-`{BLOCKED|allowed} {METHOD} {URL} -> {status} [masked: N] [dropped: N]` where
-`[masked: N]` is present only when masked secret tokens were replaced, and
-`[dropped: N]` is present only when foreign credential headers were stripped.
+`{ALLOWED|BLOCKED} {METHOD} {URL} -> {status}{annotations}` where annotations
+are optional bracket-delimited metadata: `[github-app: ...]` for GitHub App
+credential operations, `[masked: N]` when masked secret tokens were replaced,
+`[dropped: N]` when foreign credential headers were stripped, and
+`[region: REGION]` for AWS re-signed requests. Each HTTP request produces
+exactly one `ALLOWED` or `BLOCKED` log line (excluding DNS).
 
 STRIPPED lines indicate a credential header was removed because it contained a
 non-surrogate value on a scoped host. The format is
@@ -159,7 +164,7 @@ session. It is cleaned up automatically when conversations are pruned.
 
 Only denied requests and errors are written to the proxy container's stdout
 (which surfaces in syslog). Specifically, `BLOCKED` and `ERROR` lines are
-emitted to both stdout and the network log file, while `allowed` and `DNS` lines
+emitted to both stdout and the network log file, while `ALLOWED` and `DNS` lines
 are written to the network log file only. This keeps syslog focused on
 actionable events while the network log retains the full audit trail.
 
