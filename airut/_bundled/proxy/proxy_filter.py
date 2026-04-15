@@ -341,6 +341,44 @@ class ProxyFilter:
 
         return False, None
 
+    def _collapse_duplicate_header(
+        self,
+        flow: http.HTTPFlow,
+        header_name: str,
+    ) -> None:
+        """Collapse duplicate entries for a header to a single entry.
+
+        HTTP clients can inject duplicate headers with the same name.
+        Since ``headers[name]`` returns the **first** value, only the
+        first entry is ever inspected or replaced — additional entries
+        survive untouched.  This method keeps only the first entry and
+        removes all others, preventing attacker-injected duplicates
+        from reaching upstream.
+
+        Args:
+            flow: The HTTP flow to modify.
+            header_name: Header name to collapse (case-insensitive).
+        """
+        name_lower = header_name.lower()
+        entry_count = sum(
+            1 for h in flow.request.headers if h.lower() == name_lower
+        )
+        if entry_count <= 1:
+            return
+
+        original_case = next(
+            h for h in flow.request.headers if h.lower() == name_lower
+        )
+        value = flow.request.headers[original_case]
+        del flow.request.headers[original_case]
+        flow.request.headers[original_case] = value
+        self._log_loud(
+            f"COLLAPSED {entry_count} duplicate '{name_lower}' "
+            f"headers in {flow.request.method} "
+            f"{flow.request.pretty_url} "
+            f"(duplicate credential headers removed)"
+        )
+
     def _replace_in_header(
         self,
         header_name: str,
@@ -467,6 +505,11 @@ class ProxyFilter:
                     )
                     if has_exact:
                         strip_candidates.append((header.lower(), config))
+
+        # Collapse duplicate entries for successfully replaced credential
+        # headers to prevent attacker-injected duplicates from surviving.
+        for header_lower in replaced_headers:
+            self._collapse_duplicate_header(flow, header_lower)
 
         # Pass 2: Strip headers with foreign credentials
         dropped = 0
@@ -733,6 +776,7 @@ class ProxyFilter:
                 flow.request.headers["Authorization"] = auth_value.replace(
                     surrogate, real_token
                 )
+            self._collapse_duplicate_header(flow, "Authorization")
             flow.metadata["credential_info"] = (
                 f"github-app: {cache_status}{graphql_tag}"
             )
@@ -938,8 +982,9 @@ class ProxyFilter:
                 f"re-sign: canonical_request={repr(result.canonical_request)}"
             )
 
-        # Replace Authorization header
+        # Replace Authorization header and collapse duplicates
         flow.request.headers["Authorization"] = result.auth_header
+        self._collapse_duplicate_header(flow, "Authorization")
 
         # Replace session token if present
         if (
@@ -951,6 +996,7 @@ class ProxyFilter:
             for header_name in list(flow.request.headers.keys()):
                 if header_name.lower() == "x-amz-security-token":
                     flow.request.headers[header_name] = real_session_token
+            self._collapse_duplicate_header(flow, "x-amz-security-token")
 
         # Set up streaming for chunked requests
         if result.is_chunked:

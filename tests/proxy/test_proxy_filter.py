@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 
 from mitmproxy.http import (  # ty:ignore[unresolved-import]
     MockError,
+    MockHeaders,
     MockHTTPFlow,
     MockRequest,
     MockResponse,
@@ -760,6 +761,141 @@ class TestReplaceTokens:
         assert "Authorization" not in flow.request.headers
         # X-Request-Id matched glob only — should NOT be stripped
         assert flow.request.headers["X-Request-Id"] == "abc123"
+
+    def test_duplicate_header_collapsed_after_replacement(self) -> None:
+        """Duplicate credential headers are collapsed after replacement.
+
+        If a container sends two Authorization headers, the first contains
+        the surrogate (and gets replaced) but the second is never inspected
+        because headers[name] always returns the first value.  Without
+        collapsing, the attacker's second header survives alongside the
+        real credential.
+        """
+        pf = ProxyFilter()
+        pf.replacements = {
+            "surr": {
+                "value": "real",
+                "scopes": ["example.com"],
+                "headers": ["Authorization"],
+            }
+        }
+        flow = _flow(host="example.com")
+        flow.request.headers = MockHeaders(
+            [
+                ("Authorization", "Bearer surr"),
+                ("Authorization", "Bearer attacker_value"),
+            ]
+        )
+        replaced, dropped = pf._replace_tokens(flow)
+        assert replaced == 1
+        assert flow.request.headers["Authorization"] == "Bearer real"
+        # The duplicate must be removed — only one entry should remain
+        auth_entries = [
+            v for k, v in flow.request.headers.items() if k == "Authorization"
+        ]
+        assert auth_entries == ["Bearer real"]
+
+    def test_duplicate_header_collapse_logged(self) -> None:
+        """Collapsing duplicate credential headers is logged."""
+        pf = ProxyFilter()
+        pf.replacements = {
+            "surr": {
+                "value": "real",
+                "scopes": ["example.com"],
+                "headers": ["Authorization"],
+            }
+        }
+        flow = _flow(host="example.com")
+        flow.request.headers = MockHeaders(
+            [
+                ("Authorization", "Bearer surr"),
+                ("Authorization", "Bearer evil"),
+            ]
+        )
+        with patch.object(pf, "_log_loud") as mock_log:
+            pf._replace_tokens(flow)
+            calls = [c[0][0] for c in mock_log.call_args_list]
+            assert any(
+                "COLLAPSED" in msg and "duplicate" in msg for msg in calls
+            )
+
+    def test_duplicate_foreign_headers_all_stripped(self) -> None:
+        """Duplicate headers without surrogate are all stripped."""
+        pf = ProxyFilter()
+        pf.replacements = {
+            "surr": {
+                "value": "real",
+                "scopes": ["example.com"],
+                "headers": ["Authorization"],
+            }
+        }
+        flow = _flow(host="example.com")
+        flow.request.headers = MockHeaders(
+            [
+                ("Authorization", "Bearer attacker1"),
+                ("Authorization", "Bearer attacker2"),
+            ]
+        )
+        replaced, dropped = pf._replace_tokens(flow)
+        assert replaced == 0
+        assert dropped == 1
+        assert "Authorization" not in flow.request.headers
+
+    def test_duplicate_header_non_credential_preserved(self) -> None:
+        """Non-credential duplicate headers are not affected by collapse."""
+        pf = ProxyFilter()
+        pf.replacements = {
+            "surr": {
+                "value": "real",
+                "scopes": ["example.com"],
+                "headers": ["Authorization"],
+            }
+        }
+        flow = _flow(host="example.com")
+        flow.request.headers = MockHeaders(
+            [
+                ("Authorization", "Bearer surr"),
+                ("Authorization", "Bearer evil"),
+                ("Accept", "application/json"),
+                ("Accept", "text/html"),
+            ]
+        )
+        pf._replace_tokens(flow)
+        # Authorization collapsed to single replaced entry
+        auth_entries = [
+            v for k, v in flow.request.headers.items() if k == "Authorization"
+        ]
+        assert auth_entries == ["Bearer real"]
+        # Accept headers are untouched — not credential headers
+        accept_entries = [
+            v for k, v in flow.request.headers.items() if k == "Accept"
+        ]
+        assert accept_entries == ["application/json", "text/html"]
+
+    def test_triple_duplicate_header_collapsed(self) -> None:
+        """Three duplicate credential headers are collapsed to one."""
+        pf = ProxyFilter()
+        pf.replacements = {
+            "surr": {
+                "value": "real",
+                "scopes": ["example.com"],
+                "headers": ["Authorization"],
+            }
+        }
+        flow = _flow(host="example.com")
+        flow.request.headers = MockHeaders(
+            [
+                ("Authorization", "Bearer surr"),
+                ("Authorization", "Bearer evil1"),
+                ("Authorization", "Bearer evil2"),
+            ]
+        )
+        replaced, _dropped = pf._replace_tokens(flow)
+        assert replaced == 1
+        auth_entries = [
+            v for k, v in flow.request.headers.items() if k == "Authorization"
+        ]
+        assert auth_entries == ["Bearer real"]
 
 
 # ---------------------------------------------------------------------------
@@ -1759,6 +1895,28 @@ class TestRequestHeaders:
         assert flow.request.path == original_path
         assert flow.request.url == original_url
         assert "%3A" in flow.request.path
+
+    def test_duplicate_authorization_collapsed(self) -> None:
+        """Duplicate Authorization collapsed after AWS re-signing."""
+        pf = _pf_with_signing()
+        flow = _aws_flow()
+        # Inject a duplicate Authorization header
+        flow.request.headers = MockHeaders(
+            [
+                ("Host", "mybucket.s3.amazonaws.com"),
+                ("x-amz-date", "20260101T000000Z"),
+                ("x-amz-content-sha256", "UNSIGNED-PAYLOAD"),
+                ("Authorization", SIGV4_AUTH),
+                ("Authorization", "Bearer attacker_value"),
+            ]
+        )
+        pf.requestheaders(flow)
+        assert flow.metadata.get("aws_resigned") is True
+        auth_entries = [
+            v for k, v in flow.request.headers.items() if k == "Authorization"
+        ]
+        assert len(auth_entries) == 1
+        assert REAL_ACCESS_KEY_ID in auth_entries[0]
 
 
 # ---------------------------------------------------------------------------
@@ -3154,6 +3312,44 @@ class TestGitHubAppTokenReplacement:
         assert (
             flow.request.headers["Authorization"] == f"Basic {expected_basic}"
         )
+
+    def test_duplicate_authorization_collapsed(self) -> None:
+        """Duplicate Authorization headers are collapsed after replacement."""
+        pf = ProxyFilter()
+        pf.domains = ["api.github.com"]
+        pf.replacements = {
+            self._SURROGATE: _github_app_replacement(self._SURROGATE),
+        }
+
+        flow = _flow(
+            host="api.github.com",
+            path="/repos/org/repo",
+        )
+        flow.request.headers = MockHeaders(
+            [
+                ("Authorization", f"Bearer {self._SURROGATE}"),
+                ("Authorization", "Bearer attacker_token"),
+            ]
+        )
+
+        with (
+            patch(
+                "airut._bundled.proxy.proxy_filter.generate_jwt",
+                return_value="fake-jwt",
+            ),
+            patch(
+                "airut._bundled.proxy.proxy_filter.fetch_installation_token",
+                return_value=("ghs_real_token", 9999999999.0),
+            ),
+        ):
+            pf.requestheaders(flow)
+            pf.request(flow)
+
+        assert flow.request.headers["Authorization"] == "Bearer ghs_real_token"
+        auth_entries = [
+            v for k, v in flow.request.headers.items() if k == "Authorization"
+        ]
+        assert auth_entries == ["Bearer ghs_real_token"]
 
 
 # ---------------------------------------------------------------------------

@@ -107,7 +107,13 @@ The proxy addon (`airut/_bundled/proxy/proxy_filter.py`) performs replacement in
 1. Load replacement map from `/replacements.json` at startup
 2. **Replace pass**: For each request, check if host matches any surrogate's
    scopes. If match, replace surrogate → real value in matching headers.
-3. **Strip pass**: For any header where the surrogate was NOT found, the header
+3. **Collapse pass**: For any header that was successfully replaced, collapse
+   duplicate entries (same header name) down to the single replaced entry. HTTP
+   clients can inject duplicate headers; since `headers[name]` returns only the
+   first value, additional entries are never inspected and would otherwise
+   survive to reach upstream alongside the real credential. This also applies to
+   GitHub App token replacement and AWS SigV4 re-signing paths.
+4. **Strip pass**: For any header where the surrogate was NOT found, the header
    pattern was an **exact name** (no glob characters), and
    `allow_foreign_credentials` is false (default), the header is **removed
    entirely**. This prevents attacker-supplied credentials from being used on
@@ -115,7 +121,7 @@ The proxy addon (`airut/_bundled/proxy/proxy_filter.py`) performs replacement in
    Glob patterns like `"*"` or `"X-*"` do not trigger stripping — they mean
    "scan everywhere for the surrogate", not "every matching header is a
    credential".
-4. Log each stripped header with a `STRIPPED` line. Append `[dropped: N]` to the
+5. Log each stripped header with a `STRIPPED` line. Append `[dropped: N]` to the
    response log line (alongside `[masked: N]`) indicating how many headers were
    stripped. The dashboard renders `[dropped: N]` as a warning tag and
    `STRIPPED` lines with warning styling.
