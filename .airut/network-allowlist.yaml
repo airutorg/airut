@@ -71,6 +71,7 @@ url_prefixes:
       mutations:
         # Pull request lifecycle
         - createPullRequest
+        - closePullRequest
         - updatePullRequest
         - mergePullRequest
         - enablePullRequestAutoMerge
