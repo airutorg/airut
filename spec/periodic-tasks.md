@@ -115,6 +115,14 @@ repos:
         deliver:
           channel: email
           to: "ops-team@example.com"
+
+      disabled-task:
+        cron: "0 6 * * *"
+        enable: false
+        prompt: "This task is temporarily disabled."
+        deliver:
+          channel: email
+          to: "user@example.com"
 ```
 
 ### Schema
@@ -124,6 +132,7 @@ repos:
 | `cron`            | `str`         | (required) | 5-field cron expression                        |
 | `deliver.to`      | `str`         | (required) | Recipient address                              |
 | `deliver.channel` | `str`         | `"email"`  | Delivery channel type                          |
+| `enable`          | `bool`        | `true`     | Whether the schedule is active                 |
 | `subject`         | `str \| None` | `None`     | Override email subject (empty = schedule name) |
 | `timezone`        | `str \| None` | `None`     | IANA timezone (empty = server local time)      |
 | `prompt`          | `str \| None` | `None`     | Prompt text (mutually exclusive with trigger)  |
@@ -142,6 +151,9 @@ At config load time:
 - `cron` must be a valid 5-field expression (validated by `CronExpression`).
 - `timezone`, when set, must be a valid IANA timezone (`ZoneInfo(timezone)` must
   succeed). When absent, the server's local timezone is used.
+- `enable` defaults to `true`. When set to `false`, the schedule is skipped
+  during initialization and does not fire. The config remains in place so it can
+  be re-enabled without re-entering all fields.
 
 ## Architecture
 

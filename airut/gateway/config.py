@@ -1098,6 +1098,7 @@ class ScheduleConfig:
     Attributes:
         cron: 5-field cron expression (minute hour dom month dow).
         deliver: Delivery target for task results.
+        enable: Whether the schedule is active (default True).
         subject: Override email subject (empty = schedule name).
         timezone: IANA timezone for cron evaluation.
         prompt: Prompt text for prompt mode.
@@ -1115,6 +1116,13 @@ class ScheduleConfig:
     )
     deliver: ScheduleDelivery = field(
         metadata=meta("Delivery target for task results", Scope.REPO),
+    )
+    enable: bool = field(
+        default=True,
+        metadata=meta(
+            "Whether the schedule is active (default true)",
+            Scope.REPO,
+        ),
     )
     subject: str | None = field(
         default=None,
@@ -2010,6 +2018,8 @@ def _parse_schedule_config(
     )
 
     # Parse optional fields
+    enable_raw = _resolve(raw.get("enable"), bool)
+    enable = enable_raw if enable_raw is not None else True
     subject = _resolve(raw.get("subject"), str)
     timezone = _resolve(raw.get("timezone"), str)
     prompt = _resolve(raw.get("prompt"), str)
@@ -2023,6 +2033,7 @@ def _parse_schedule_config(
     return ScheduleConfig(
         cron=cron,
         deliver=deliver,
+        enable=enable,
         subject=subject,
         timezone=timezone,
         prompt=prompt,

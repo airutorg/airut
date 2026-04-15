@@ -1253,6 +1253,47 @@ class TestFromYaml:
         assert sched.deliver.channel == "email"
         assert sched.timezone is None
 
+    def test_schedule_enable_false_from_yaml(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """enable: false is parsed from YAML."""
+        yaml_content = (
+            _MINIMAL_YAML.format(repo_url=master_repo)
+            + "    schedules:\n"
+            + "      disabled-task:\n"
+            + "        cron: '0 9 * * 1-5'\n"
+            + "        prompt: Review PRs\n"
+            + "        enable: false\n"
+            + "        deliver:\n"
+            + "          channel: email\n"
+            + "          to: user@example.com\n"
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        config = ServerConfig.from_yaml(yaml_path).value
+        sched = config.repos["test"].schedules["disabled-task"]
+        assert sched.enable is False
+
+    def test_schedule_enable_defaults_true_from_yaml(
+        self, master_repo: Path, tmp_path: Path
+    ) -> None:
+        """Enable defaults to true when omitted in YAML."""
+        yaml_content = (
+            _MINIMAL_YAML.format(repo_url=master_repo)
+            + "    schedules:\n"
+            + "      daily-review:\n"
+            + "        cron: '0 9 * * 1-5'\n"
+            + "        prompt: Review PRs\n"
+            + "        deliver:\n"
+            + "          channel: email\n"
+            + "          to: user@example.com\n"
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        config = ServerConfig.from_yaml(yaml_path).value
+        sched = config.repos["test"].schedules["daily-review"]
+        assert sched.enable is True
+
     def test_schedule_non_dict_raises(
         self, master_repo: Path, tmp_path: Path
     ) -> None:
@@ -3907,6 +3948,27 @@ class TestScheduleConfig:
         assert config.timezone is None
         assert config.output_limit == 102400
 
+    def test_enable_defaults_to_true(self) -> None:
+        from airut.gateway.config import ScheduleConfig, ScheduleDelivery
+
+        config = ScheduleConfig(
+            cron="0 9 * * 1-5",
+            deliver=ScheduleDelivery(channel="email", to="user@example.com"),
+            prompt="test",
+        )
+        assert config.enable is True
+
+    def test_enable_set_to_false(self) -> None:
+        from airut.gateway.config import ScheduleConfig, ScheduleDelivery
+
+        config = ScheduleConfig(
+            cron="0 9 * * 1-5",
+            deliver=ScheduleDelivery(channel="email", to="user@example.com"),
+            prompt="test",
+            enable=False,
+        )
+        assert config.enable is False
+
     def test_script_mode(self) -> None:
         from airut.gateway.config import ScheduleConfig, ScheduleDelivery
 
@@ -4093,6 +4155,41 @@ class TestParseScheduleConfigFromYAML:
         }
         config = _parse_schedule_config("daily", raw, "repos.test")
         assert config.subject is None
+
+    def test_parse_enable_defaults_to_true(self) -> None:
+        from airut.gateway.config import _parse_schedule_config
+
+        raw = {
+            "cron": "0 9 * * 1-5",
+            "prompt": "test",
+            "deliver": {"channel": "email", "to": "a@b.com"},
+        }
+        config = _parse_schedule_config("daily", raw, "repos.test")
+        assert config.enable is True
+
+    def test_parse_enable_false(self) -> None:
+        from airut.gateway.config import _parse_schedule_config
+
+        raw = {
+            "cron": "0 9 * * 1-5",
+            "prompt": "test",
+            "enable": False,
+            "deliver": {"channel": "email", "to": "a@b.com"},
+        }
+        config = _parse_schedule_config("daily", raw, "repos.test")
+        assert config.enable is False
+
+    def test_parse_enable_true_explicit(self) -> None:
+        from airut.gateway.config import _parse_schedule_config
+
+        raw = {
+            "cron": "0 9 * * 1-5",
+            "prompt": "test",
+            "enable": True,
+            "deliver": {"channel": "email", "to": "a@b.com"},
+        }
+        config = _parse_schedule_config("daily", raw, "repos.test")
+        assert config.enable is True
 
     def test_parse_trigger_timeout_without_command(self) -> None:
         """trigger_timeout without trigger_command parses fine.
