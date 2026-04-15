@@ -52,6 +52,7 @@ def _flow(
     path: str = "/",
     url: str | None = None,
     headers: dict[str, str] | None = None,
+    content: bytes = b"",
     response_code: int | None = None,
     response_content: bytes = b"",
     error_msg: str | None = None,
@@ -66,6 +67,7 @@ def _flow(
         url_host=url_host,
         path=path,
         headers=headers,
+        content=content,
     )
     resp = (
         MockResponse(response_code, content=response_content)
@@ -3071,3 +3073,375 @@ class TestGitHubAppTokenReplacement:
         assert (
             flow.request.headers["Authorization"] == f"Basic {expected_basic}"
         )
+
+
+# ---------------------------------------------------------------------------
+# GitHub App GraphQL repository scoping
+# ---------------------------------------------------------------------------
+
+
+class TestGitHubAppGraphQLScoping:
+    """Tests for GraphQL repository scoping in _try_github_app()."""
+
+    _SURROGATE = "ghs_SurrogateTokenValue1234567890abcde"
+    _REPO_NODE_IDS = frozenset({"R_kgDORH34qw", "R_kgDORm2NDQ"})
+
+    def _setup_filter_with_cached_token(
+        self,
+        repo_node_ids: frozenset[str] | None = None,
+    ) -> "ProxyFilter":
+        """Create a ProxyFilter with a cached GitHub App token."""
+        import time as time_mod
+
+        from airut._bundled.proxy.github_app import CachedToken
+
+        pf = ProxyFilter()
+        pf.domains = ["api.github.com"]
+        pf.replacements = {
+            self._SURROGATE: _github_app_replacement(self._SURROGATE),
+        }
+        pf._github_app_cache[self._SURROGATE] = CachedToken(
+            token="ghs_real_token",
+            expires_at=time_mod.time() + 3600,
+            repo_node_ids=repo_node_ids
+            if repo_node_ids is not None
+            else self._REPO_NODE_IDS,
+        )
+        return pf
+
+    def test_blocks_out_of_scope_graphql_mutation(self) -> None:
+        """GraphQL mutation with out-of-scope repositoryId returns 403."""
+        pf = self._setup_filter_with_cached_token()
+
+        body = json.dumps(
+            {
+                "query": (
+                    "mutation($input: CreateIssueInput!) {"
+                    "  createIssue(input: $input) { issue { id } }"
+                    "}"
+                ),
+                "variables": {
+                    "input": {
+                        "repositoryId": "R_evil",
+                        "title": "exfil",
+                    }
+                },
+            }
+        ).encode()
+
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+            content=body,
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        resp_body = json.loads(flow.response._content)
+        assert resp_body["error"] == "graphql_repo_scope_blocked"
+        assert resp_body["detail"] == "R_evil"
+
+    def test_allows_in_scope_graphql_mutation(self) -> None:
+        """GraphQL mutation with in-scope repositoryId proceeds."""
+        pf = self._setup_filter_with_cached_token()
+
+        body = json.dumps(
+            {
+                "query": (
+                    "mutation($input: CreateIssueInput!) {"
+                    "  createIssue(input: $input) { issue { id } }"
+                    "}"
+                ),
+                "variables": {
+                    "input": {
+                        "repositoryId": "R_kgDORH34qw",
+                        "title": "legit",
+                    }
+                },
+            }
+        ).encode()
+
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+            content=body,
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is None
+        assert flow.request.headers["Authorization"] == "Bearer ghs_real_token"
+
+    def test_rest_api_skips_graphql_check(self) -> None:
+        """Non-GraphQL REST API requests skip body inspection."""
+        pf = self._setup_filter_with_cached_token()
+
+        flow = _flow(
+            host="api.github.com",
+            path="/repos/org/repo",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is None
+        assert flow.request.headers["Authorization"] == "Bearer ghs_real_token"
+
+    def test_graphql_query_no_repo_id_allowed(self) -> None:
+        """GraphQL query with no repositoryId proceeds normally."""
+        pf = self._setup_filter_with_cached_token()
+
+        body = json.dumps({"query": "query { viewer { login } }"}).encode()
+
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+            content=body,
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is None
+        assert flow.request.headers["Authorization"] == "Bearer ghs_real_token"
+
+    def test_403_body_contains_blocked_repo_id(self) -> None:
+        """403 response body contains the blocked repositoryId."""
+        pf = self._setup_filter_with_cached_token()
+
+        body = json.dumps(
+            {
+                "query": (
+                    "mutation { createIssue(input: "
+                    '{repositoryId: "R_attacker", title: "x"}'
+                    ") { issue { id } } }"
+                ),
+            }
+        ).encode()
+
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+            content=body,
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response.status_code == 403
+        resp_body = json.loads(flow.response._content)
+        assert "R_attacker" in resp_body["message"]
+        assert resp_body["detail"] == "R_attacker"
+
+    def test_repo_node_ids_populated_during_refresh(self) -> None:
+        """repo_node_ids populated during token refresh."""
+        pf = ProxyFilter()
+        pf.domains = ["api.github.com"]
+        pf.replacements = {
+            self._SURROGATE: _github_app_replacement(
+                self._SURROGATE,
+                repositories=["airut"],
+            ),
+        }
+
+        flow = _flow(
+            host="api.github.com",
+            path="/repos/org/repo",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+        )
+
+        with (
+            patch(
+                "airut._bundled.proxy.proxy_filter.generate_jwt",
+                return_value="fake-jwt",
+            ),
+            patch(
+                "airut._bundled.proxy.proxy_filter.fetch_installation_token",
+                return_value=("ghs_real", 9999999999.0),
+            ),
+            patch(
+                "airut._bundled.proxy.proxy_filter.fetch_installation_repos",
+                return_value=frozenset({"R_kgDORH34qw"}),
+            ) as mock_repos,
+        ):
+            pf.requestheaders(flow)
+            pf.request(flow)
+
+        mock_repos.assert_called_once_with(
+            "https://api.github.com",
+            "ghs_real",
+            configured_repos=["airut"],
+        )
+        cached = pf._github_app_cache[self._SURROGATE]
+        assert cached.repo_node_ids == frozenset({"R_kgDORH34qw"})
+
+    def test_malformed_graphql_returns_403(self) -> None:
+        """Malformed GraphQL body returns 403 (fail-secure)."""
+        pf = self._setup_filter_with_cached_token()
+
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+            content=b"not json",
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        resp_body = json.loads(flow.response._content)
+        assert resp_body["error"] == "graphql_repo_scope_blocked"
+        assert resp_body["detail"] == "<unparseable>"
+
+    def test_empty_repo_node_ids_blocks_graphql_with_repo_id(self) -> None:
+        """Empty node IDs block GraphQL with repositoryId."""
+        pf = self._setup_filter_with_cached_token(repo_node_ids=frozenset())
+
+        body = json.dumps(
+            {
+                "query": (
+                    "mutation($input: CreateIssueInput!) {"
+                    "  createIssue(input: $input) { issue { id } }"
+                    "}"
+                ),
+                "variables": {
+                    "input": {
+                        "repositoryId": "R_evil",
+                        "title": "exfil",
+                    }
+                },
+            }
+        ).encode()
+
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+            content=body,
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        resp_body = json.loads(flow.response._content)
+        assert resp_body["error"] == "graphql_repo_scope_blocked"
+
+    def test_empty_repo_node_ids_allows_graphql_without_repo_id(
+        self,
+    ) -> None:
+        """Empty repo_node_ids allows GraphQL queries without repositoryId."""
+        pf = self._setup_filter_with_cached_token(repo_node_ids=frozenset())
+
+        body = json.dumps({"query": "query { viewer { login } }"}).encode()
+
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+            content=body,
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is None
+        assert flow.request.headers["Authorization"] == "Bearer ghs_real_token"
+
+    def test_repo_resolution_failure_degrades_to_empty(self) -> None:
+        """fetch_installation_repos failure sets empty node IDs."""
+        pf = ProxyFilter()
+        pf.domains = ["api.github.com"]
+        pf.replacements = {
+            self._SURROGATE: _github_app_replacement(self._SURROGATE),
+        }
+
+        flow = _flow(
+            host="api.github.com",
+            path="/repos/org/repo",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+        )
+
+        with (
+            patch(
+                "airut._bundled.proxy.proxy_filter.generate_jwt",
+                return_value="fake-jwt",
+            ),
+            patch(
+                "airut._bundled.proxy.proxy_filter.fetch_installation_token",
+                return_value=("ghs_real", 9999999999.0),
+            ),
+            patch(
+                "airut._bundled.proxy.proxy_filter.fetch_installation_repos",
+                side_effect=Exception("API error"),
+            ),
+        ):
+            pf.requestheaders(flow)
+            pf.request(flow)
+
+        # REST (non-graphql) still works with token replacement
+        assert flow.request.headers["Authorization"] == "Bearer ghs_real"
+        # Node IDs are empty from failed resolution
+        cached = pf._github_app_cache[self._SURROGATE]
+        assert cached.repo_node_ids == frozenset()
+
+    def test_graphql_with_query_params_blocked(self) -> None:
+        """GraphQL requests with URL query parameters return 403."""
+        pf = self._setup_filter_with_cached_token()
+
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql?query={viewer{login}}",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        resp_body = json.loads(flow.response._content)
+        assert resp_body["error"] == "graphql_repo_scope_blocked"
+        assert resp_body["detail"] == "query-params"
+
+    def test_graphql_get_with_query_params_blocked(self) -> None:
+        """GET /graphql?query=... is blocked regardless of method."""
+        pf = self._setup_filter_with_cached_token()
+
+        flow = _flow(
+            method="GET",
+            host="api.github.com",
+            path="/graphql?query={viewer{login}}",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+
+    def test_non_graphql_path_with_query_params_unaffected(self) -> None:
+        """Non-graphql paths with query params are not rejected."""
+        pf = self._setup_filter_with_cached_token()
+
+        flow = _flow(
+            host="api.github.com",
+            path="/repos/org/repo?per_page=100",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is None
+        assert flow.request.headers["Authorization"] == "Bearer ghs_real_token"

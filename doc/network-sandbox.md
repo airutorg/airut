@@ -46,6 +46,7 @@ so it works with all tools (Node.js, Go, curl, Python, git).
   - [Solution](#solution-2)
   - [Security Properties](#security-properties-2)
   - [Comparison With Masked Secrets](#comparison-with-masked-secrets)
+  - [GraphQL Repository Scoping](#graphql-repository-scoping)
   - [Limitations](#limitations-3)
   - [When to Use](#when-to-use-1)
 - [Troubleshooting](#troubleshooting)
@@ -634,6 +635,22 @@ short-lived installation token for scoped hosts.
 | Network call from proxy  | None                     | 1 call per hour to GitHub API     |
 | Response echo risk       | High (PAT valid forever) | Low (token expires in 1 hour)     |
 | Repository creation risk | Cannot prevent           | Impossible without explicit grant |
+
+### GraphQL Repository Scoping
+
+GitHub App installation tokens can perform certain mutations (e.g.,
+`createIssue`) on **any public repository** where issues are enabled, regardless
+of App installation scope. The proxy mitigates this by parsing the GraphQL query
+AST (via `graphql-core`) and scanning the JSON variables to extract all
+`repositoryId` values, then blocking requests targeting repos outside the
+configured set with HTTP 403. Additionally, GraphQL requests with URL query
+parameters are rejected outright to prevent bypass of body-based scope checking.
+
+Node IDs of allowed repositories are resolved at token refresh time via
+`GET /installation/repositories`. No additional API calls are made for request
+inspection. See
+[spec/github-app-credential.md](../spec/github-app-credential.md) for the full
+specification.
 
 ### Limitations
 

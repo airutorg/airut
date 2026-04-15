@@ -328,6 +328,37 @@ proxy_filter.py request()
    the surrogate in the password field, and re-encodes. This follows the same
    pattern as masked secrets' `_replace_in_header()` method.
 
+## GraphQL Repository Scoping
+
+GitHub App installation tokens can perform certain mutations (e.g.,
+`createIssue`) on **any public repository**, regardless of the App's
+installation scope. To prevent data exfiltration via GraphQL mutations targeting
+out-of-scope repos, the proxy parses the GraphQL query AST (via `graphql-core`)
+and scans the JSON variables to extract all `repositoryId` values, blocking
+requests targeting repos outside the configured set.
+
+**How it works:**
+
+1. At token refresh time, the proxy calls `GET /installation/repositories` to
+   resolve configured repository names to node IDs (stored in `CachedToken`).
+2. GraphQL requests with URL query parameters are rejected outright (HTTP 403).
+   The GraphQL endpoint only accepts POST with a JSON body; query parameters
+   could bypass body-based scope checking. The `gh` CLI never uses query
+   parameters for GraphQL.
+3. For each GraphQL request (`POST /graphql`), `check_repo_scope()` extracts
+   `repositoryId` from three paths: inlined in the query AST, variable
+   references resolved against the variables dict, and variable objects scanned
+   from JSON.
+4. Any out-of-scope `repositoryId` or unparseable request results in HTTP 403.
+   Requests with no `repositoryId` or all values in scope are allowed.
+
+The check is **fail-secure**: parse failures, unresolvable variables, and
+requests checked against an empty allowed set (node ID resolution failed) all
+result in a block. The `graphql_scope.py` module is a pure function with no
+mitmproxy dependency, taking `bytes` in and returning a structured
+`ScopeResult(verdict, detail)` where `verdict` is an enum
+(`ALLOWED | OUT_OF_SCOPE | PARSE_ERROR | UNRESOLVED_VARIABLE`).
+
 ## Future Enhancements
 
 - **Token revocation on session end**: The proxy could revoke the installation

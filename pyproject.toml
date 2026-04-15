@@ -25,6 +25,7 @@ dependencies = [
 dev = [
     "aiosmtpd>=1.4.6",
     "cryptography>=46.0.6",
+    "graphql-core>=3.2.8",
     "mdformat>=1.0",
     "mdformat-frontmatter>=2",
     "mdformat-gfm>=1.0",

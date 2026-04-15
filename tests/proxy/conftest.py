@@ -63,6 +63,9 @@ def _install_mitmproxy_mock() -> None:
             self.stream = stream
             self.content = content
 
+        def get_content(self) -> bytes:
+            return self.content
+
     class _MockResponse:
         """Minimal mitmproxy Response stand-in."""
 
