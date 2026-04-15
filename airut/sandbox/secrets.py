@@ -70,8 +70,10 @@ class SigningCredential:
 
     Unlike masked secrets (simple token replacement), signing credentials
     require the proxy to re-sign requests. The sandbox generates surrogates
-    for the access key ID (and session token if present) and returns them
-    so the caller can inject them into ContainerEnv.
+    for all three credential components (access key ID, secret access key,
+    and session token if present) and returns them so the caller can inject
+    them into ContainerEnv. The real values stay exclusively in the proxy's
+    replacement map.
 
     Attributes:
         access_key_id_env_var: Env var name for the access key ID.
@@ -319,8 +321,9 @@ def prepare_secrets(
 
     For each masked secret, generates a surrogate that preserves the
     original token's format (length, charset, known prefix). For signing
-    credentials, generates surrogates for access_key_id and session_token.
-    For GitHub App credentials, generates ``ghs_``-prefixed surrogates.
+    credentials, generates surrogates for all components (access key ID,
+    secret access key, and session token). For GitHub App credentials,
+    generates ``ghs_``-prefixed surrogates.
 
     Args:
         masked_secrets: List of secrets to mask with surrogates.
@@ -356,8 +359,9 @@ def prepare_secrets(
     # Process signing credentials
     for cred in signing_credentials:
         surrogate_key_id = generate_surrogate(cred.access_key_id)
+        surrogate_secret_key = generate_surrogate(cred.secret_access_key)
         env_vars[cred.access_key_id_env_var] = surrogate_key_id
-        env_vars[cred.secret_access_key_env_var] = cred.secret_access_key
+        env_vars[cred.secret_access_key_env_var] = surrogate_secret_key
 
         surrogate_session_token: str | None = None
         if cred.session_token_env_var and cred.session_token:
