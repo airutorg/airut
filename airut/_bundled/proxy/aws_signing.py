@@ -172,7 +172,7 @@ def _uri_encode(value: str, *, encode_slash: bool = True) -> str:
         elif ch == "/" and not encode_slash:
             result.append("/")
         else:
-            result.append(f"%{ord(ch):02X}")
+            result.append("".join(f"%{b:02X}" for b in ch.encode("utf-8")))
     return "".join(result)
 
 
