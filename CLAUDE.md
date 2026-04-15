@@ -1,4 +1,4 @@
-# CLAUDE.md - Operating Instructions for Airut
+# CLAUDE.md — Operating Instructions for Airut
 
 ## Project Overview
 
