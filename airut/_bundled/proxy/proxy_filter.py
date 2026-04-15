@@ -172,6 +172,39 @@ def _match_header_pattern(pattern: str, header_name: str) -> bool:
     return pattern_lower == header_lower
 
 
+def _collect_signing_headers(headers: http.Headers) -> dict[str, str]:
+    """Collect headers for AWS SigV4 canonical request construction.
+
+    mitmproxy Headers is a multidict — the same header name can appear
+    multiple times.  AWS SigV4 requires multi-value headers to be
+    represented as a single comma-separated entry with values sorted
+    lexicographically.
+
+    The Host header is special: HTTP requires exactly one Host, and
+    comma-joining duplicate Host values produces an invalid host string.
+    This function takes only the first Host value.
+
+    Args:
+        headers: mitmproxy request headers (multidict).
+
+    Returns:
+        Dict mapping lowercased header names to their canonical values.
+    """
+    multi: dict[str, list[str]] = {}
+    first_host: str | None = None
+    for hname, hvalue in headers.items():
+        key = hname.lower()
+        if key == "host":
+            if first_host is None:
+                first_host = hvalue
+            continue
+        multi.setdefault(key, []).append(hvalue)
+    result = {k: ",".join(sorted(vs)) for k, vs in multi.items()}
+    if first_host is not None:
+        result["host"] = first_host
+    return result
+
+
 def _decode_basic_auth(auth_value: str) -> tuple[str, str] | None:
     """Decode a Basic Auth header value.
 
@@ -501,20 +534,48 @@ class ProxyFilter:
             # Get header patterns to scan (supports fnmatch, e.g., "*")
             header_patterns = config.get("headers", [])
 
-            # Scan request headers that match any pattern (case-insensitive)
+            # Scan request headers that match any pattern.
+            #
+            # mitmproxy Headers is a multidict — the same header name
+            # can appear multiple times.  We need to check ALL values
+            # for a given name, not just the first (which is what
+            # ``headers[name]`` returns).  Use ``headers.items()`` for
+            # entry-level access and deduplicate by lowercased name so
+            # each logical header is processed exactly once.
+            seen_headers: set[str] = set()
             for header in flow.request.headers:
+                hlower = header.lower()
+                if hlower in seen_headers:
+                    continue
+                seen_headers.add(hlower)
+
                 if not any(
                     _match_header_pattern(p, header) for p in header_patterns
                 ):
                     continue
 
-                current_value = flow.request.headers[header]
-                new_value, replaced = self._replace_in_header(
-                    header, current_value, surrogate, real_value
-                )
-                if replaced:
-                    flow.request.headers[header] = new_value
-                    replaced_headers.add(header.lower())
+                # Collect ALL values for this header name
+                all_values = [
+                    v
+                    for k, v in flow.request.headers.items()
+                    if k.lower() == hlower
+                ]
+
+                # Try replacement against each value; stop at first match
+                replaced_value = None
+                for val in all_values:
+                    new_val, was_replaced = self._replace_in_header(
+                        header, val, surrogate, real_value
+                    )
+                    if was_replaced:
+                        replaced_value = new_val
+                        break
+
+                if replaced_value is not None:
+                    # Write replacement into the first entry position;
+                    # _collapse_duplicate_header will remove extras later.
+                    flow.request.headers[header] = replaced_value
+                    replaced_headers.add(hlower)
                     count += 1
                 else:
                     # Only consider stripping if an exact (non-glob) header
@@ -526,7 +587,7 @@ class ProxyFilter:
                         for p in header_patterns
                     )
                     if has_exact:
-                        strip_candidates.append((header.lower(), config))
+                        strip_candidates.append((hlower, config))
 
         # Collapse duplicate entries for successfully replaced credential
         # headers to prevent attacker-injected duplicates from surviving.
@@ -880,21 +941,17 @@ class ProxyFilter:
         if "?" in url_path:
             url_path, query = url_path.split("?", 1)
 
-        # Build headers dict, ensuring host is populated.
+        # Build canonical headers dict.  _collect_signing_headers
+        # handles multi-value headers (comma-join + sort per SigV4 spec)
+        # and takes only the first Host value.
+        #
         # mitmproxy's requestheaders hook may deliver an empty Host
         # header for HTTP/2 connections; use pretty_host which is
         # always available regardless of HTTP version.
-        hdrs = dict(flow.request.headers)
-        host_val = ""
-        for k, v in hdrs.items():
-            if k.lower() == "host":
-                host_val = v
-                break
+        hdrs = _collect_signing_headers(flow.request.headers)
+        host_val = hdrs.get("host", "")
         if not host_val.strip():
-            # Remove empty Host variants, set correct value
-            for k in list(hdrs):
-                if k.lower() == "host":
-                    del hdrs[k]
+            hdrs.pop("host", None)
             hdrs["host"] = host
 
         return {
@@ -1116,7 +1173,7 @@ class ProxyFilter:
             "surrogate_session_token"
         )
 
-        headers = dict(flow.request.headers)
+        headers = _collect_signing_headers(flow.request.headers)
 
         try:
             new_query = resign_presigned_url(

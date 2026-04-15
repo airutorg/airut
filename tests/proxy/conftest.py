@@ -197,6 +197,7 @@ def _install_mitmproxy_mock() -> None:
             self.error = error
             self.metadata: dict = {}
 
+    http_mod.Headers = _MockHeaders  # ty:ignore[unresolved-attribute]
     http_mod.HTTPFlow = _MockHTTPFlow  # ty:ignore[unresolved-attribute]
     http_mod.Response = _MockResponse  # ty:ignore[unresolved-attribute]
 

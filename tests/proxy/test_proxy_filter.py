@@ -34,6 +34,7 @@ from tests.proxy.vectors import (
 from airut._bundled.proxy.proxy_filter import (
     ProxyFilter,
     UrlPrefixEntry,
+    _collect_signing_headers,
     _decode_basic_auth,
     _encode_basic_auth,
     _match_header_pattern,
@@ -146,6 +147,67 @@ class TestMatchHeaderPattern:
 
     def test_no_match(self) -> None:
         assert _match_header_pattern("Authorization", "Content-Type") is False
+
+
+class TestCollectSigningHeaders:
+    """Tests for _collect_signing_headers."""
+
+    def test_single_value_headers(self) -> None:
+        """Single-value headers are passed through with lowercased keys."""
+        headers = MockHeaders(
+            [
+                ("Host", "example.com"),
+                ("X-Amz-Date", "20260101T000000Z"),
+                ("Content-Type", "application/json"),
+            ]
+        )
+        result = _collect_signing_headers(headers)
+        assert result == {
+            "host": "example.com",
+            "x-amz-date": "20260101T000000Z",
+            "content-type": "application/json",
+        }
+
+    def test_multi_value_headers_comma_joined_sorted(self) -> None:
+        """Duplicate header names are comma-joined with values sorted."""
+        headers = MockHeaders(
+            [
+                ("Host", "example.com"),
+                ("X-Amz-Meta-Tag", "zeta"),
+                ("X-Amz-Meta-Tag", "alpha"),
+                ("X-Amz-Meta-Tag", "mu"),
+            ]
+        )
+        result = _collect_signing_headers(headers)
+        assert result["x-amz-meta-tag"] == "alpha,mu,zeta"
+
+    def test_host_not_comma_joined(self) -> None:
+        """Duplicate Host headers take only the first value."""
+        headers = MockHeaders(
+            [
+                ("Host", "real.example.com"),
+                ("Host", "evil.example.com"),
+            ]
+        )
+        result = _collect_signing_headers(headers)
+        assert result["host"] == "real.example.com"
+
+    def test_empty_headers(self) -> None:
+        """Empty headers produce empty dict."""
+        headers = MockHeaders([])
+        result = _collect_signing_headers(headers)
+        assert result == {}
+
+    def test_mixed_case_names_grouped(self) -> None:
+        """Headers with different cases of the same name are grouped."""
+        headers = MockHeaders(
+            [
+                ("X-Custom", "val1"),
+                ("x-custom", "val2"),
+            ]
+        )
+        result = _collect_signing_headers(headers)
+        assert result["x-custom"] == "val1,val2"
 
 
 class TestDecodeBasicAuth:
@@ -969,6 +1031,63 @@ class TestReplaceTokens:
         ]
         assert auth_entries == ["Bearer real"]
 
+    def test_surrogate_in_second_duplicate_found(self) -> None:
+        """Surrogate in second duplicate header entry is found and replaced.
+
+        An attacker might inject a credential before the surrogate hoping
+        it gets used instead.  The entry-level scan finds the surrogate
+        in the second entry, writes the replacement into the first entry
+        position, and collapse removes the attacker's value.
+        """
+        pf = ProxyFilter()
+        pf.replacements = {
+            "surr": {
+                "value": "real",
+                "scopes": ["example.com"],
+                "headers": ["Authorization"],
+            }
+        }
+        flow = _flow(host="example.com")
+        flow.request.headers = MockHeaders(
+            [
+                ("Authorization", "Bearer attacker_value"),
+                ("Authorization", "Bearer surr"),
+            ]
+        )
+        replaced, dropped = pf._replace_tokens(flow)
+        assert replaced == 1
+        assert dropped == 0
+        # Replacement is written and duplicates collapsed
+        auth_entries = [
+            v for k, v in flow.request.headers.items() if k == "Authorization"
+        ]
+        assert auth_entries == ["Bearer real"]
+
+    def test_surrogate_in_third_duplicate_found(self) -> None:
+        """Surrogate in third entry is found across multiple duplicates."""
+        pf = ProxyFilter()
+        pf.replacements = {
+            "surr": {
+                "value": "real",
+                "scopes": ["example.com"],
+                "headers": ["Authorization"],
+            }
+        }
+        flow = _flow(host="example.com")
+        flow.request.headers = MockHeaders(
+            [
+                ("Authorization", "Bearer evil1"),
+                ("Authorization", "Bearer evil2"),
+                ("Authorization", "Bearer surr"),
+            ]
+        )
+        replaced, _dropped = pf._replace_tokens(flow)
+        assert replaced == 1
+        auth_entries = [
+            v for k, v in flow.request.headers.items() if k == "Authorization"
+        ]
+        assert auth_entries == ["Bearer real"]
+
 
 # ---------------------------------------------------------------------------
 # ProxyFilter.request — allowlist and token replacement
@@ -1633,6 +1752,54 @@ class TestResignHeaderAuth:
         assert flow.request.path == original_path
         assert flow.request.url == original_url
         assert "%3A" in flow.request.path
+
+    def test_multi_value_headers_comma_joined_for_signing(self) -> None:
+        """Duplicate non-Host headers are comma-joined in signing context.
+
+        AWS SigV4 canonical request requires multi-value headers to be
+        represented as a single sorted comma-separated entry.
+        _collect_signing_headers handles this.
+        """
+        pf = _pf_with_signing()
+        host = "mybucket.s3.amazonaws.com"
+        # Build a SigV4 auth that includes x-amz-meta-tag in SignedHeaders
+        auth = (
+            "AWS4-HMAC-SHA256 "
+            f"Credential={SURROGATE_ACCESS_KEY_ID}"
+            "/20260101/us-east-1/s3/aws4_request, "
+            "SignedHeaders=host;x-amz-content-sha256;x-amz-date"
+            ";x-amz-meta-tag, "
+            "Signature=aa00bb11cc22dd33ee44ff5500661177"
+        )
+        flow = _aws_flow(host=host, auth=auth)
+        # Add duplicate meta headers via MockHeaders
+        flow.request.headers = MockHeaders(
+            [
+                ("Host", host),
+                ("Authorization", auth),
+                ("x-amz-date", "20260101T000000Z"),
+                ("x-amz-content-sha256", "UNSIGNED-PAYLOAD"),
+                ("x-amz-meta-tag", "zeta"),
+                ("x-amz-meta-tag", "alpha"),
+            ]
+        )
+        ctx = pf._prepare_signing_context(flow, host, auth)
+        assert ctx is not None
+        # Multi-value header must be sorted and comma-joined
+        assert ctx["headers"]["x-amz-meta-tag"] == "alpha,zeta"
+        # Host must not be comma-joined
+        assert ctx["headers"]["host"] == host
+
+    def test_empty_host_header_replaced_in_signing_context(self) -> None:
+        """Empty Host header is replaced with pretty_host for signing."""
+        pf = _pf_with_signing()
+        host = "mybucket.s3.amazonaws.com"
+        flow = _aws_flow(host=host)
+        # Simulate HTTP/2 empty Host header
+        flow.request.headers["Host"] = ""
+        ctx = pf._prepare_signing_context(flow, host, SIGV4_AUTH)
+        assert ctx is not None
+        assert ctx["headers"]["host"] == host
 
 
 # ---------------------------------------------------------------------------
