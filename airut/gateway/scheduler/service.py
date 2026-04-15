@@ -159,6 +159,9 @@ class Scheduler:
         repo_schedules: dict[str, _ResolvedSchedule] = {}
 
         for name, config in schedules.items():
+            if not config.enable:
+                logger.info("Schedule '%s/%s': disabled", repo_id, name)
+                continue
             try:
                 cron = CronExpression(config.cron)
                 tz = (

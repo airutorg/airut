@@ -72,6 +72,39 @@ class TestSchedulerInit:
         assert isinstance(resolved.cron, CronExpression)
         assert resolved.tz == ZoneInfo("UTC")
 
+    def test_build_repo_schedules_skips_disabled(self) -> None:
+        svc = _make_service()
+        scheduler = Scheduler(svc)
+
+        enabled = _make_schedule_config()
+        disabled = ScheduleConfig(
+            cron="0 9 * * 1-5",
+            deliver=ScheduleDelivery(to="user@example.com", channel="email"),
+            enable=False,
+            timezone="UTC",
+            prompt="Test prompt",
+        )
+        schedules = {"active": enabled, "inactive": disabled}
+        scheduler._build_repo_schedules("test-repo", schedules)
+
+        assert "test-repo" in scheduler._schedules
+        assert "active" in scheduler._schedules["test-repo"]
+        assert "inactive" not in scheduler._schedules["test-repo"]
+
+    def test_build_repo_schedules_all_disabled(self) -> None:
+        svc = _make_service()
+        scheduler = Scheduler(svc)
+
+        disabled = ScheduleConfig(
+            cron="0 9 * * 1-5",
+            deliver=ScheduleDelivery(to="user@example.com", channel="email"),
+            enable=False,
+            timezone="UTC",
+            prompt="Test prompt",
+        )
+        scheduler._build_repo_schedules("test-repo", {"task": disabled})
+        assert "test-repo" not in scheduler._schedules
+
     def test_build_repo_schedules_empty(self) -> None:
         svc = _make_service()
         scheduler = Scheduler(svc)

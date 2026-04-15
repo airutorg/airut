@@ -99,6 +99,7 @@ via email. The recipient can then reply to continue the conversation.
 | `cron`            | `str`         | (required) | 5-field cron expression                        |
 | `deliver.to`      | `str`         | (required) | Recipient address                              |
 | `deliver.channel` | `str`         | `"email"`  | Delivery channel type                          |
+| `enable`          | `bool`        | `true`     | Whether the schedule is active                 |
 | `subject`         | `str \| None` | `None`     | Override email subject (empty = schedule name) |
 | `timezone`        | `str \| None` | `None`     | IANA timezone (empty = server local time)      |
 | `prompt`          | `str \| None` | `None`     | Prompt text (mutually exclusive with trigger)  |
@@ -111,6 +112,9 @@ via email. The recipient can then reply to continue the conversation.
 Exactly one of `prompt` or `trigger_command` must be set. The `deliver.channel`
 must match a configured channel type in the same repo (only `"email"` is
 currently supported).
+
+Set `enable: false` to temporarily disable a schedule without removing it from
+config. When omitted, schedules are enabled by default.
 
 ## Timezone Handling
 
@@ -168,6 +172,7 @@ implementation specification.
 
 **Schedule not firing:**
 
+- Check that `enable` is not set to `false`
 - Verify the cron expression with a cron calculator
 - Check that the timezone is correct (logs show next fire times at startup)
 - Ensure the delivery channel is configured on the same repo

@@ -212,6 +212,7 @@ repos:
     #       Summarize recent changes and open issues.
     #     deliver:
     #       to: team@example.com
+    #     # enable: true
     #     # subject: Daily Report
     #     # timezone: America/New_York
     #     # model: sonnet
