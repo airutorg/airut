@@ -309,6 +309,12 @@ class ProxyFilter:
         if "\x00" in path:
             return False, None
 
+        # Reject path traversal sequences. Upstream servers normalize
+        # `..` segments, so `/allowed/../../secret` would resolve to
+        # `/secret` while fnmatch matches the allowed prefix.
+        if "/../" in path or path.endswith("/.."):
+            return False, None
+
         # Check domain entries (with wildcard support)
         # Domain entries allow all methods unconditionally
         for domain in self.domains:
