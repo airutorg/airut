@@ -1029,11 +1029,23 @@ def resign_presigned_url(
     scope_parts = scope.split("/")
     is_s3 = scope_parts[-2] == "s3" if len(scope_parts) >= 2 else False
 
+    # Replace surrogate credential with real credential in query string
+    # *before* building the canonical request.  AWS verifies the signature
+    # against a canonical request that includes the real credential.
+    real_credential = f"{real_key_id}/{scope}"
+    signing_query = query.replace(
+        f"X-Amz-Credential={urllib.parse.quote(credential, safe='')}",
+        f"X-Amz-Credential={urllib.parse.quote(real_credential, safe='')}",
+    ).replace(
+        f"X-Amz-Credential={credential}",
+        f"X-Amz-Credential={real_credential}",
+    )
+
     # Build canonical request (exclude X-Amz-Signature from query)
     creq = build_canonical_request(
         method=method,
         path=path,
-        query=query,
+        query=signing_query,
         headers=headers,
         signed_headers=signed_headers,
         payload_hash="UNSIGNED-PAYLOAD",

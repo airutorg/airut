@@ -1041,6 +1041,136 @@ class TestPresignedUrl:
         assert "AKIAIOSFODNN7EXAMPLE" in new_query
         assert "oldsig" not in new_query
 
+    def test_resign_presigned_url_canonical_uses_real_credential(self) -> None:
+        """Canonical request must use real credential, not surrogate.
+
+        AWS verifies the signature against a canonical request containing the
+        real credential.  If the surrogate credential leaks into the canonical
+        request the signature will always mismatch (fail-closed).
+        """
+        query = (
+            "X-Amz-Algorithm=AWS4-HMAC-SHA256"
+            "&X-Amz-Credential=AKIA_SURROGATE/20260101/us-east-1/s3/aws4_request"
+            "&X-Amz-Date=20260101T000000Z"
+            "&X-Amz-Expires=3600"
+            "&X-Amz-SignedHeaders=host"
+            "&X-Amz-Signature=oldsig"
+        )
+        params = parse_presigned_url_params(query)
+        assert params is not None
+
+        captured_queries: list[str] = []
+        original = build_canonical_request
+
+        def spy(
+            method: str,
+            path: str,
+            query: str,
+            headers: dict[str, str],
+            signed_headers: str,
+            payload_hash: str,
+            *,
+            is_s3: bool = False,
+            exclude_signature: bool = False,
+        ) -> str:
+            captured_queries.append(query)
+            return original(
+                method,
+                path,
+                query,
+                headers,
+                signed_headers,
+                payload_hash,
+                is_s3=is_s3,
+                exclude_signature=exclude_signature,
+            )
+
+        with patch(
+            "airut._bundled.proxy.aws_signing.build_canonical_request",
+            side_effect=spy,
+        ):
+            resign_presigned_url(
+                method="GET",
+                path="/bucket/key",
+                query=query,
+                headers={"Host": "s3.amazonaws.com"},
+                params=params,
+                real_key_id="AKIAIOSFODNN7EXAMPLE",
+                real_secret_key="secret",
+            )
+
+        assert len(captured_queries) == 1
+        canonical_q = captured_queries[0]
+        # Must contain real credential, not surrogate
+        assert "AKIAIOSFODNN7EXAMPLE" in canonical_q
+        assert "AKIA_SURROGATE" not in canonical_q
+
+    def test_resign_presigned_url_encoded_credential(self) -> None:
+        """Canonical request uses real credential when query is URL-encoded.
+
+        AWS SDKs typically URL-encode the credential value (using %2F for /),
+        so the replacement must handle both encoded and plain forms.
+        """
+        query = (
+            "X-Amz-Algorithm=AWS4-HMAC-SHA256"
+            "&X-Amz-Credential=AKIA_SURROGATE%2F20260101%2Fus-east-1%2Fs3"
+            "%2Faws4_request"
+            "&X-Amz-Date=20260101T000000Z"
+            "&X-Amz-Expires=3600"
+            "&X-Amz-SignedHeaders=host"
+            "&X-Amz-Signature=oldsig"
+        )
+        params = parse_presigned_url_params(query)
+        assert params is not None
+
+        captured_queries: list[str] = []
+        original = build_canonical_request
+
+        def spy(
+            method: str,
+            path: str,
+            query: str,
+            headers: dict[str, str],
+            signed_headers: str,
+            payload_hash: str,
+            *,
+            is_s3: bool = False,
+            exclude_signature: bool = False,
+        ) -> str:
+            captured_queries.append(query)
+            return original(
+                method,
+                path,
+                query,
+                headers,
+                signed_headers,
+                payload_hash,
+                is_s3=is_s3,
+                exclude_signature=exclude_signature,
+            )
+
+        with patch(
+            "airut._bundled.proxy.aws_signing.build_canonical_request",
+            side_effect=spy,
+        ):
+            new_query = resign_presigned_url(
+                method="GET",
+                path="/bucket/key",
+                query=query,
+                headers={"Host": "s3.amazonaws.com"},
+                params=params,
+                real_key_id="AKIAIOSFODNN7EXAMPLE",
+                real_secret_key="secret",
+            )
+
+        assert len(captured_queries) == 1
+        canonical_q = captured_queries[0]
+        assert "AKIAIOSFODNN7EXAMPLE" in canonical_q
+        assert "AKIA_SURROGATE" not in canonical_q
+        # Output query must also have real credential
+        assert "AKIAIOSFODNN7EXAMPLE" in new_query
+        assert "AKIA_SURROGATE" not in new_query
+
 
 # ---------------------------------------------------------------------------
 # Clock skew detection
