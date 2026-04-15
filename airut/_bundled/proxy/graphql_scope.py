@@ -67,6 +67,12 @@ _PARSE_ERROR = ScopeResult(ScopeVerdict.PARSE_ERROR, "<unparseable>")
 _UNRESOLVED = ScopeResult(
     ScopeVerdict.UNRESOLVED_VARIABLE, "<unresolved-variable>"
 )
+_TOO_LARGE = ScopeResult(ScopeVerdict.PARSE_ERROR, "<too-large>")
+
+# Maximum request body size for GraphQL scope checking (1 MiB).
+# Requests larger than this are blocked to prevent CPU exhaustion via
+# graphql-core parsing of very large query strings.
+_MAX_BODY_SIZE = 1024 * 1024
 
 # Fields ending in "Id" that are NOT GitHub node IDs.
 _SKIP_FIELDS = frozenset({"clientMutationId"})
@@ -212,6 +218,11 @@ def check_repo_scope(
     Returns:
         ScopeResult with verdict and optional detail.
     """
+    # Step 0: Reject oversized bodies to prevent CPU exhaustion
+    # via graphql-core parsing of very large query strings.
+    if len(request_body) > _MAX_BODY_SIZE:
+        return _TOO_LARGE
+
     # Step 1: Parse JSON body.
     try:
         body = json.loads(request_body)

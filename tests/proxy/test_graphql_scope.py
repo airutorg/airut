@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 
 from graphql_scope import (  # ty:ignore[unresolved-import]
+    _MAX_BODY_SIZE,
     ScopeResult,
     ScopeVerdict,
     check_repo_scope,
@@ -333,6 +334,18 @@ class TestParseFailures:
     def test_query_not_string(self) -> None:
         body = json.dumps({"query": 42}).encode()
         assert check_repo_scope(body, ALLOWED) == _PARSE
+
+    def test_oversized_body_blocked(self) -> None:
+        body = b"x" * (_MAX_BODY_SIZE + 1)
+        assert check_repo_scope(body, ALLOWED) == ScopeResult(
+            ScopeVerdict.PARSE_ERROR, "<too-large>"
+        )
+
+    def test_body_at_size_limit_not_blocked(self) -> None:
+        body = _body("query { viewer { login } }")
+        # Pad to exactly _MAX_BODY_SIZE — should still be processed.
+        body = body + b" " * (_MAX_BODY_SIZE - len(body))
+        assert check_repo_scope(body, ALLOWED) == _OK
 
     def test_body_is_array(self) -> None:
         body = json.dumps([{"query": "{ viewer { login } }"}]).encode()

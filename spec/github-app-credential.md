@@ -345,12 +345,16 @@ GraphQL request.
    The GraphQL endpoint only accepts POST with a JSON body; query parameters
    could bypass body-based scope checking. The `gh` CLI never uses query
    parameters for GraphQL.
-3. For each GraphQL request (`POST /graphql`), `check_repo_scope()` extracts
+3. Oversized request bodies (> 1 MiB) are rejected with a `PARSE_ERROR` verdict
+   to prevent CPU exhaustion via `graphql-core` AST parsing of very large query
+   strings. This matches the same limit applied in the GraphQL operation
+   allowlist check.
+4. For each GraphQL request (`POST /graphql`), `check_repo_scope()` extracts
    `repositoryId` from three paths: inlined in the query AST, variable
    references resolved against the variables dict, and variable objects scanned
    from JSON. The request path is percent-decoded before matching to prevent
    bypass via encoded path variants (e.g. `/%67raphql`).
-4. Any out-of-scope `repositoryId` or unparseable request results in HTTP 403.
+5. Any out-of-scope `repositoryId` or unparseable request results in HTTP 403.
    Requests with no `repositoryId` or all values in scope proceed to layer 2.
 
 **Layer 2 — node ID ownership check (defense-in-depth):**
