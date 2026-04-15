@@ -34,7 +34,11 @@ from dataclasses import dataclass
 from graphql import parse
 from graphql.language import ast as gql_ast
 from graphql.language import visitor
-from node_id import decode_repo_db_id, repo_db_ids_from_node_ids
+from node_id import (
+    decode_repo_db_id,
+    is_non_repo_node_id,
+    repo_db_ids_from_node_ids,
+)
 
 
 class ScopeVerdict(enum.Enum):
@@ -320,7 +324,14 @@ def check_repo_scope(
             # Looks like a node ID but can't be decoded — fail-secure.
             return ScopeResult(ScopeVerdict.OUT_OF_SCOPE, node_id_value)
 
-        if repo_db_id is not None and repo_db_id not in allowed_db_ids:
+        if repo_db_id is not None:
+            if repo_db_id not in allowed_db_ids:
+                return ScopeResult(ScopeVerdict.OUT_OF_SCOPE, node_id_value)
+        elif not is_non_repo_node_id(node_id_value):
+            # Value in an *Id field that isn't a known non-repo type
+            # or a decodable repo-scoped ID.  Fail-secure: block
+            # unrecognized formats so future node ID changes can't
+            # silently bypass scope checking.
             return ScopeResult(ScopeVerdict.OUT_OF_SCOPE, node_id_value)
 
     return _ALLOWED

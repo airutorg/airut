@@ -279,11 +279,13 @@ class TestNoRepositoryId:
         assert check_repo_scope(body, ALLOWED) == _OK
 
     def test_object_targeting_mutation(self) -> None:
+        # "I_123" doesn't match the node ID regex — fail-secure blocks
+        # unrecognized values in *Id fields.
         body = _body(
             'mutation { updateIssue(input: {id: "I_123",'
             ' title: "updated"}) { issue { id } } }'
         )
-        assert check_repo_scope(body, ALLOWED) == _OK
+        assert check_repo_scope(body, ALLOWED) == _oos("I_123")
 
     def test_empty_variables(self) -> None:
         body = _body("query { viewer { login } }", variables={})
@@ -601,15 +603,53 @@ class TestNodeIdClientMutationId:
 class TestNodeIdFailSecure:
     """Tests for fail-secure behavior on undecodable node IDs."""
 
-    def test_undecodable_node_id_blocked(self) -> None:
-        # Looks like a node ID (matches pattern) but payload is garbage.
+    def test_non_matching_pattern_blocked(self) -> None:
+        # "I_!!!invalid!!!" doesn't match _NODE_ID_RE (contains !).
+        # Fail-secure: unrecognized values in *Id fields are blocked.
         body = _body(
             'mutation { addComment(input: {subjectId: "I_!!!invalid!!!",'
             ' body: "hi"}) { commentEdge { node { id } } } }'
         )
-        # "I_!!!invalid!!!" does not match _NODE_ID_RE (contains !)
-        # so it's treated as a non-node-ID value and skipped.
-        assert check_repo_scope(body, ALLOWED) == _OK
+        assert check_repo_scope(body, ALLOWED) == _oos("I_!!!invalid!!!")
+
+    def test_plain_string_in_id_field_blocked(self) -> None:
+        # A plain string that doesn't look like a node ID at all.
+        body = _body(
+            'mutation { addComment(input: {subjectId: "not-a-node-id",'
+            ' body: "hi"}) { commentEdge { node { id } } } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos("not-a-node-id")
+
+    def test_uuid_in_id_field_blocked(self) -> None:
+        # A UUID in an *Id field — unrecognized format, blocked.
+        uuid = "550e8400-e29b-41d4-a716-446655440000"
+        body = _body(
+            'mutation { addComment(input: {subjectId: "'
+            + uuid
+            + '", body: "hi"}) { commentEdge { node { id } } } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(uuid)
+
+    def test_long_prefix_node_id_blocked(self) -> None:
+        # Hypothetical future format with >6 char prefix — doesn't
+        # match current regex, fail-secure blocks it.
+        bad_id = "NEWTYPE_kgDOAbcdef"
+        body = _body(
+            'mutation { addComment(input: {subjectId: "'
+            + bad_id
+            + '", body: "hi"}) { commentEdge { node { id } } } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(bad_id)
+
+    def test_lowercase_prefix_node_id_blocked(self) -> None:
+        # Hypothetical future format with lowercase prefix.
+        bad_id = "i_kgDOAbcdef"
+        body = _body(
+            'mutation { addComment(input: {subjectId: "'
+            + bad_id
+            + '", body: "hi"}) { commentEdge { node { id } } } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(bad_id)
 
     def test_valid_pattern_bad_payload_blocked(self) -> None:
         # Matches the node ID pattern but contains invalid msgpack.
@@ -688,13 +728,13 @@ class TestNodeIdCombinedLayers:
         body = _body("query { viewer { id login } }")
         assert check_repo_scope(body, ALLOWED) == _OK
 
-    def test_non_node_id_string_in_id_field_skipped(self) -> None:
-        """A short string like '123' in an *Id field is not a node ID."""
+    def test_non_node_id_string_in_id_field_blocked(self) -> None:
+        """Short string in an *Id field is unrecognized — blocked."""
         body = _body(
             'mutation { updateIssue(input: {labelableId: "123",'
             ' title: "updated"}) { issue { id } } }'
         )
-        assert check_repo_scope(body, ALLOWED) == _OK
+        assert check_repo_scope(body, ALLOWED) == _oos("123")
 
 
 # -------------------------------------------------------------------

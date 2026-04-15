@@ -15,6 +15,7 @@ from node_id import (  # ty:ignore[unresolved-import]
     _NODE_ID_RE,
     _decode_msgpack_array,
     decode_repo_db_id,
+    is_non_repo_node_id,
     repo_db_ids_from_node_ids,
 )
 
@@ -96,6 +97,45 @@ class TestNodeIdPattern:
     )
     def test_rejects_non_node_ids(self, value: str) -> None:
         assert not _NODE_ID_RE.match(value)
+
+
+# -------------------------------------------------------------------
+# is_non_repo_node_id tests
+# -------------------------------------------------------------------
+
+
+class TestIsNonRepoNodeId:
+    """Tests for identifying known non-repo-scoped node IDs."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            USER_ID,  # U_ prefix
+            ORG_ID,  # O_ prefix
+            "T_kgDOAbcdef",  # Team
+            "BOT_kgDOAbcd",  # Bot
+            "EMU_kgDOAbcd",  # EMU user
+        ],
+    )
+    def test_known_non_repo_types(self, value: str) -> None:
+        assert is_non_repo_node_id(value) is True
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "R_kgDORH34qw",  # Repo — repo-scoped
+            ISSUE_IN_SCOPE_1,  # Issue — repo-scoped
+            PR_IN_SCOPE_2,  # PR — repo-scoped
+            "not-a-node-id",  # Plain string
+            "",  # Empty
+            "12345",  # Number
+            "abc_xyz",  # Lowercase prefix
+            "TOOLONG_abcdef",  # Prefix > 6 chars
+            "550e8400-e29b-41d4-a716-446655440000",  # UUID
+        ],
+    )
+    def test_non_matching_values(self, value: str) -> None:
+        assert is_non_repo_node_id(value) is False
 
 
 # -------------------------------------------------------------------

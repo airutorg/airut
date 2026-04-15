@@ -36,6 +36,23 @@ _NODE_ID_RE = re.compile(r"^[A-Z]{1,6}_[A-Za-z0-9+/=_-]{4,}$")
 _NON_REPO_PREFIXES = frozenset({"U", "O", "T", "BOT", "EMU"})
 
 
+def is_non_repo_node_id(value: str) -> bool:
+    """Check if a value is a known non-repo-scoped GitHub node ID.
+
+    Returns ``True`` for node IDs whose type prefix is in
+    ``_NON_REPO_PREFIXES`` (users, orgs, teams, bots, EMU users).
+    Returns ``False`` for everything else — including values that don't
+    look like node IDs at all.
+
+    Used by the scope checker to distinguish "known safe to skip"
+    (non-repo-scoped) from "unrecognized format" (should be blocked).
+    """
+    if not _NODE_ID_RE.match(value):
+        return False
+    prefix = value.split("_", 1)[0]
+    return prefix in _NON_REPO_PREFIXES
+
+
 def decode_repo_db_id(node_id: str) -> int | None:
     """Extract the parent repository database ID from a node ID.
 
