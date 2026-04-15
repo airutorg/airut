@@ -80,6 +80,31 @@ class TestParseQuery:
         with pytest.raises(ValueError, match="truncated question"):
             parse_query(header + question)
 
+    def test_compression_pointer_rejected(self) -> None:
+        """Rejects DNS message compression pointers (RFC 1035 s4.1.4).
+
+        Bytes with the two high bits set (>= 0xC0) indicate a compression
+        pointer. The parser doesn't follow pointers, so it must reject them
+        to avoid reading beyond the question section.
+        """
+        header = struct.pack("!HHHHHH", 0x1234, 0x0100, 1, 0, 0, 0)
+        # Compression pointer (0xC0 0x00) instead of a normal label
+        question = b"\xc0\x00" + struct.pack("!HH", QTYPE_A, QCLASS_IN)
+        with pytest.raises(
+            ValueError, match="compression pointers not supported"
+        ):
+            parse_query(header + question)
+
+    def test_compression_pointer_after_label(self) -> None:
+        """Rejects compression pointer appearing after a normal label."""
+        header = struct.pack("!HHHHHH", 0x1234, 0x0100, 1, 0, 0, 0)
+        # "foo" label followed by a compression pointer instead of more labels
+        question = b"\x03foo\xc0\x0c" + struct.pack("!HH", QTYPE_A, QCLASS_IN)
+        with pytest.raises(
+            ValueError, match="compression pointers not supported"
+        ):
+            parse_query(header + question)
+
 
 class TestBuildAResponse:
     """Tests for build_a_response."""
