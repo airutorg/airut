@@ -41,6 +41,7 @@ class CachedToken:
 
     token: str
     expires_at: float  # Unix timestamp
+    repo_node_ids: frozenset[str] = frozenset()  # Allowed repo node IDs
 
 
 def _base64url(data: bytes) -> str:
@@ -147,6 +148,66 @@ def fetch_installation_token(
     expires_at = datetime.fromisoformat(expires_at_iso).timestamp()
 
     return token, expires_at
+
+
+def fetch_installation_repos(
+    base_url: str,
+    token: str,
+    configured_repos: list[str] | None = None,
+) -> frozenset[str]:
+    """Fetch node IDs of repositories accessible to the installation.
+
+    Calls ``GET /installation/repositories`` with pagination to collect
+    node IDs.  When ``configured_repos`` is provided, only repos whose
+    bare name matches are included.
+
+    Args:
+        base_url: GitHub API base URL (e.g., "https://api.github.com").
+        token: Installation access token (not JWT).
+        configured_repos: Optional list of bare repo names to filter by.
+            When provided, only repos matching these names are included.
+            When None, all installation repos are included.
+
+    Returns:
+        Frozenset of repository node IDs.
+    """
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    node_ids: list[str] = []
+    page = 1
+    configured_set = (
+        set(configured_repos) if configured_repos is not None else None
+    )
+
+    while True:
+        url = f"{base_url}/installation/repositories?per_page=100&page={page}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        with opener.open(req, timeout=30) as resp:
+            result = json.loads(resp.read())
+
+        repos = result.get("repositories", [])
+        for repo in repos:
+            name = repo.get("name", "")
+            node_id = repo.get("node_id", "")
+            if not node_id:
+                continue
+            if configured_set is not None:
+                if name in configured_set:
+                    node_ids.append(node_id)
+            else:
+                node_ids.append(node_id)
+
+        if len(repos) < 100:
+            break
+        page += 1
+
+    return frozenset(node_ids)
 
 
 def is_token_valid(cached: CachedToken | None) -> bool:

@@ -19,6 +19,7 @@ from airut._bundled.proxy.github_app import (
     CREDENTIAL_TYPE_GITHUB_APP,
     CachedToken,
     _base64url,
+    fetch_installation_repos,
     fetch_installation_token,
     generate_jwt,
     is_token_valid,
@@ -339,6 +340,164 @@ class TestIsTokenValid:
         assert is_token_valid(cached) is False
 
 
+class TestFetchInstallationRepos:
+    """Tests for fetch_installation_repos function."""
+
+    @staticmethod
+    def _mock_opener(pages: list[list[dict]]) -> MagicMock:
+        """Create a mock opener returning paginated responses.
+
+        Args:
+            pages: List of pages, each page is a list of repo dicts.
+        """
+        responses = []
+        for repos in pages:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = json.dumps(
+                {
+                    "total_count": sum(len(p) for p in pages),
+                    "repositories": repos,
+                }
+            ).encode()
+            mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            responses.append(mock_resp)
+
+        mock_opener = MagicMock()
+        mock_opener.open.side_effect = responses
+        return mock_opener
+
+    def test_resolves_node_ids(self) -> None:
+        """Resolves repo names to node IDs."""
+        repos = [
+            {"name": "airut", "node_id": "R_kgDORH34qw"},
+            {"name": "sandbox-action", "node_id": "R_kgDORm2NDQ"},
+        ]
+        opener = self._mock_opener([repos])
+
+        with patch(
+            "airut._bundled.proxy.github_app.urllib.request.build_opener",
+            return_value=opener,
+        ):
+            result = fetch_installation_repos(
+                "https://api.github.com", "ghs_token"
+            )
+
+        assert result == frozenset({"R_kgDORH34qw", "R_kgDORm2NDQ"})
+
+    def test_filters_by_configured_repos(self) -> None:
+        """Only includes repos matching configured_repos."""
+        repos = [
+            {"name": "airut", "node_id": "R_kgDORH34qw"},
+            {"name": "sandbox-action", "node_id": "R_kgDORm2NDQ"},
+            {"name": "website", "node_id": "R_other"},
+        ]
+        opener = self._mock_opener([repos])
+
+        with patch(
+            "airut._bundled.proxy.github_app.urllib.request.build_opener",
+            return_value=opener,
+        ):
+            result = fetch_installation_repos(
+                "https://api.github.com",
+                "ghs_token",
+                configured_repos=["airut", "sandbox-action"],
+            )
+
+        assert result == frozenset({"R_kgDORH34qw", "R_kgDORm2NDQ"})
+
+    def test_configured_repos_none_includes_all(self) -> None:
+        """All repos included when configured_repos is None."""
+        repos = [
+            {"name": "airut", "node_id": "R_kgDORH34qw"},
+            {"name": "other", "node_id": "R_other"},
+        ]
+        opener = self._mock_opener([repos])
+
+        with patch(
+            "airut._bundled.proxy.github_app.urllib.request.build_opener",
+            return_value=opener,
+        ):
+            result = fetch_installation_repos(
+                "https://api.github.com",
+                "ghs_token",
+                configured_repos=None,
+            )
+
+        assert result == frozenset({"R_kgDORH34qw", "R_other"})
+
+    def test_pagination(self) -> None:
+        """Paginates through all pages of results."""
+        page1 = [{"name": f"repo-{i}", "node_id": f"R_{i}"} for i in range(100)]
+        page2 = [
+            {"name": "repo-100", "node_id": "R_100"},
+        ]
+        opener = self._mock_opener([page1, page2])
+
+        with patch(
+            "airut._bundled.proxy.github_app.urllib.request.build_opener",
+            return_value=opener,
+        ):
+            result = fetch_installation_repos(
+                "https://api.github.com", "ghs_token"
+            )
+
+        assert len(result) == 101
+        assert "R_100" in result
+        assert opener.open.call_count == 2
+
+    def test_api_failure_raises(self) -> None:
+        """API failure propagates as exception."""
+        mock_opener = MagicMock()
+        mock_opener.open.side_effect = Exception("network error")
+
+        with (
+            patch(
+                "airut._bundled.proxy.github_app.urllib.request.build_opener",
+                return_value=mock_opener,
+            ),
+            pytest.raises(Exception, match="network error"),
+        ):
+            fetch_installation_repos("https://api.github.com", "ghs_token")
+
+    def test_configured_repo_not_in_response(self) -> None:
+        """Missing configured repo does not fail."""
+        repos = [
+            {"name": "airut", "node_id": "R_kgDORH34qw"},
+        ]
+        opener = self._mock_opener([repos])
+
+        with patch(
+            "airut._bundled.proxy.github_app.urllib.request.build_opener",
+            return_value=opener,
+        ):
+            result = fetch_installation_repos(
+                "https://api.github.com",
+                "ghs_token",
+                configured_repos=["airut", "nonexistent-repo"],
+            )
+
+        assert result == frozenset({"R_kgDORH34qw"})
+
+    def test_skips_repos_without_node_id(self) -> None:
+        """Repos without node_id are skipped."""
+        repos = [
+            {"name": "airut", "node_id": "R_kgDORH34qw"},
+            {"name": "broken", "node_id": ""},
+        ]
+        opener = self._mock_opener([repos])
+
+        with patch(
+            "airut._bundled.proxy.github_app.urllib.request.build_opener",
+            return_value=opener,
+        ):
+            result = fetch_installation_repos(
+                "https://api.github.com", "ghs_token"
+            )
+
+        assert result == frozenset({"R_kgDORH34qw"})
+
+
 class TestCachedToken:
     """Tests for CachedToken dataclass."""
 
@@ -347,3 +506,18 @@ class TestCachedToken:
         cached = CachedToken(token="ghs_abc", expires_at=1234567890.0)
         assert cached.token == "ghs_abc"
         assert cached.expires_at == 1234567890.0
+
+    def test_default_repo_node_ids(self) -> None:
+        """Default repo_node_ids is empty frozenset."""
+        cached = CachedToken(token="ghs_abc", expires_at=1234567890.0)
+        assert cached.repo_node_ids == frozenset()
+
+    def test_repo_node_ids(self) -> None:
+        """repo_node_ids stores allowed repository node IDs."""
+        ids = frozenset({"R_kgDORH34qw", "R_kgDORm2NDQ"})
+        cached = CachedToken(
+            token="ghs_abc",
+            expires_at=1234567890.0,
+            repo_node_ids=ids,
+        )
+        assert cached.repo_node_ids == ids

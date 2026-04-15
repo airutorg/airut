@@ -54,10 +54,12 @@ from aws_signing import (
 from github_app import (
     CREDENTIAL_TYPE_GITHUB_APP,
     CachedToken,
+    fetch_installation_repos,
     fetch_installation_token,
     generate_jwt,
     is_token_valid,
 )
+from graphql_scope import ScopeVerdict, check_repo_scope
 from mitmproxy import ctx, http
 
 
@@ -576,9 +578,24 @@ class ProxyFilter:
                         if repositories
                         else None,
                     )
+                    # Resolve repo node IDs for GraphQL scoping
+                    try:
+                        repo_node_ids = fetch_installation_repos(
+                            str(config["base_url"]),
+                            real_token,
+                            configured_repos=list(repositories)  # type: ignore[arg-type]
+                            if repositories
+                            else None,
+                        )
+                    except Exception as e:
+                        self._log_loud(
+                            f"GitHub App repo node ID resolution failed: {e}"
+                        )
+                        repo_node_ids = frozenset()
                     self._github_app_cache[surrogate] = CachedToken(
                         token=real_token,
                         expires_at=expires_at,
+                        repo_node_ids=repo_node_ids,
                     )
                     cache_status = "refreshed"
                 except Exception as e:
@@ -602,6 +619,84 @@ class ProxyFilter:
                     )
                     return True
 
+            # GraphQL repository scope check (fail-secure).
+            graphql_tag = ""
+            req_path = flow.request.path
+            if req_path == "/graphql" or req_path.startswith("/graphql?"):
+                # Reject requests with query parameters — the
+                # GraphQL endpoint only accepts POST with a JSON
+                # body.  Query parameters could bypass body-based
+                # scope checking.
+                if "?" in req_path:
+                    self._log_loud(
+                        f"BLOCKED {flow.request.method} "
+                        f"{flow.request.pretty_url} "
+                        f"[github-app: graphql-query-params]"
+                    )
+                    flow.response = http.Response.make(
+                        403,
+                        json.dumps(
+                            {
+                                "error": "graphql_repo_scope_blocked",
+                                "message": (
+                                    "GraphQL requests with URL query "
+                                    "parameters are not allowed. Use "
+                                    "POST with a JSON body."
+                                ),
+                                "detail": "query-params",
+                            }
+                        ),
+                        {"Content-Type": "application/json"},
+                    )
+                    return True
+
+                cached_entry = self._github_app_cache.get(surrogate)
+                repo_ids = (
+                    cached_entry.repo_node_ids
+                    if cached_entry is not None
+                    else frozenset()
+                )
+                result = check_repo_scope(
+                    flow.request.get_content(),
+                    repo_ids,
+                )
+                if result.verdict is not ScopeVerdict.ALLOWED:
+                    detail = result.detail or result.verdict.value
+                    if result.verdict is ScopeVerdict.OUT_OF_SCOPE:
+                        msg = (
+                            f"GraphQL mutation targets repository "
+                            f"outside configured scope. The "
+                            f"repositoryId {detail} is not in the "
+                            f"set of allowed repositories for this "
+                            f"GitHub App credential."
+                        )
+                    else:
+                        msg = (
+                            f"GraphQL request blocked: could not "
+                            f"verify repository scope ({detail}). "
+                            f"Only well-formed GraphQL requests are "
+                            f"allowed when repository scoping is "
+                            f"active."
+                        )
+                    self._log_loud(
+                        f"BLOCKED {flow.request.method} "
+                        f"{flow.request.pretty_url} "
+                        f"[github-app: {detail}]"
+                    )
+                    flow.response = http.Response.make(
+                        403,
+                        json.dumps(
+                            {
+                                "error": "graphql_repo_scope_blocked",
+                                "message": msg,
+                                "detail": detail,
+                            }
+                        ),
+                        {"Content-Type": "application/json"},
+                    )
+                    return True
+                graphql_tag = ", graphql-scoped"
+
             # Replace the surrogate with the real token
             if is_basic:
                 # Re-encode Basic Auth with real token in password
@@ -617,7 +712,7 @@ class ProxyFilter:
             self._log(
                 f"ALLOWED {flow.request.method} "
                 f"{flow.request.pretty_url} "
-                f"[github-app: {cache_status}]"
+                f"[github-app: {cache_status}{graphql_tag}]"
             )
             return True
 
