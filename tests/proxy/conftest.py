@@ -12,6 +12,7 @@ inside the proxy container).
 
 import sys
 import types
+from collections.abc import Iterator
 from unittest.mock import MagicMock
 
 
@@ -30,12 +31,100 @@ def _install_mitmproxy_mock() -> None:
     # Build a minimal http module with HTTPFlow and Response.make
     http_mod = types.ModuleType("mitmproxy.http")
 
-    class _MockHeaders(dict):
-        """Minimal mitmproxy Headers stand-in (dict-like)."""
+    class _MockHeaders:
+        """Minimal mitmproxy Headers stand-in (multidict-like).
+
+        Supports duplicate header names, matching real mitmproxy behavior:
+        - ``__getitem__`` returns the **first** value for a name
+        - ``__setitem__`` updates the **first** matching entry (or appends)
+        - ``__delitem__`` removes **all** entries for a name
+        - iteration yields all names **including duplicates**
+        """
+
+        def __init__(
+            self,
+            data: dict | list[tuple[str, str]] | None = None,
+        ) -> None:
+            self._entries: list[tuple[str, str]] = []
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    self._entries.append((k, v))
+            elif isinstance(data, list):
+                for k, v in data:
+                    self._entries.append((k, v))
+
+        def __getitem__(self, name: str) -> str:
+            name_lower = name.lower()
+            for k, v in self._entries:
+                if k.lower() == name_lower:
+                    return v
+            raise KeyError(name)
+
+        def __setitem__(self, name: str, value: str) -> None:
+            name_lower = name.lower()
+            for i, (k, _v) in enumerate(self._entries):
+                if k.lower() == name_lower:
+                    self._entries[i] = (k, value)
+                    return
+            self._entries.append((name, value))
+
+        def __delitem__(self, name: str) -> None:
+            name_lower = name.lower()
+            self._entries = [
+                (k, v) for k, v in self._entries if k.lower() != name_lower
+            ]
+
+        def __contains__(self, name: object) -> bool:
+            if not isinstance(name, str):
+                return False
+            name_lower = name.lower()
+            return any(k.lower() == name_lower for k, _v in self._entries)
+
+        def __iter__(self) -> Iterator[str]:
+            for k, _v in self._entries:
+                yield k
+
+        def __len__(self) -> int:
+            return len(self._entries)
+
+        def __repr__(self) -> str:
+            return f"_MockHeaders({self._entries!r})"
+
+        def keys(self) -> list[str]:
+            return [k for k, _v in self._entries]
+
+        def items(self) -> list[tuple[str, str]]:
+            return list(self._entries)
+
+        def get(self, name: str, default: str | None = None) -> str | None:
+            try:
+                return self[name]
+            except KeyError:
+                return default
+
+        def pop(self, name: str, *args: str | None) -> str | None:
+            name_lower = name.lower()
+            for i, (k, v) in enumerate(self._entries):
+                if k.lower() == name_lower:
+                    del self._entries[i]
+                    return v
+            if args:
+                return args[0]
+            raise KeyError(name)
 
         @property
         def fields(self) -> list[tuple[bytes, bytes]]:
-            return [(k.encode(), v.encode()) for k, v in self.items()]
+            return [(k.encode(), v.encode()) for k, v in self._entries]
+
+        @fields.setter
+        def fields(self, value: list[tuple[bytes, bytes]]) -> None:
+            self._entries = [
+                (
+                    k.decode() if isinstance(k, bytes) else k,
+                    v.decode() if isinstance(v, bytes) else v,
+                )
+                for k, v in value
+            ]
 
     class _MockRequest:
         """Minimal mitmproxy Request stand-in."""
@@ -59,7 +148,7 @@ def _install_mitmproxy_mock() -> None:
             self.pretty_url = url
             self.path = path
             self.port = 443
-            self.headers = _MockHeaders(headers or {})
+            self.headers = _MockHeaders(headers if headers is not None else {})
             self.stream = stream
             self.content = content
 
