@@ -29,8 +29,42 @@ url_prefixes:
     path: /repos/owner/repo*
   - host: api.github.com
     path: /graphql
-    methods: [POST]              # optional: restrict to specific HTTP methods
+    methods: [POST]
+    graphql:                     # optional: filter GraphQL operations
+      queries:
+        - "*"                    # allow all queries
+      mutations:                 # allow only specific mutations (default-deny)
+        - createPullRequest
+        - updatePullRequest
+        - mergePullRequest
+      # subscriptions: omitted = all blocked
 ```
+
+**GraphQL operation filtering:** URL prefix entries for GraphQL endpoints can
+include an optional `graphql` block that filters operations by type (query,
+mutation, subscription) and top-level field name. Omitted operation types are
+blocked (default-deny). Pattern matching uses fnmatch wildcards (`*`, `?`). See
+`doc/network-sandbox.md` for full details and
+`spec/graphql-operation-allowlist.md` for the specification.
+
+**Wildcard host:** For repositories that need broad network access but still
+want credential protection, use `host: "*"` with method restrictions:
+
+```yaml
+url_prefixes:
+  - host: "*"
+    path: ""
+    methods: [GET, HEAD]         # read-only access to all domains
+  - host: api.github.com
+    path: /graphql
+    methods: [POST]              # write access only where needed
+```
+
+This opens read access to all domains while credential masking still prevents
+exfiltration of real credentials (tokens, API keys). Repository data can still
+be exfiltrated via GET parameters, so this is only appropriate when the
+repository contains public material. See `doc/network-sandbox.md` for security
+implications.
 
 **Self-service workflow:** When the agent encounters a blocked request, it can
 edit this file and submit a PR. A human must review and merge before the change
@@ -68,6 +102,12 @@ resource_limits:                  # Container resource limits (all optional)
   timeout: 600
   memory: "4g"
 ```
+
+GitHub App credentials (`github_app_credentials`) are supported in server config
+(`airut.yaml`) but not in `sandbox.yaml`. For CI pipelines, use `masked_secrets`
+for GitHub tokens instead. See `spec/github-app-credential.md` for GitHub App
+credential details and `spec/sandbox-cli.md` for the sandbox CLI credential
+handling guide.
 
 ### `container/Dockerfile` — Container Image
 
