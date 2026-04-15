@@ -1174,6 +1174,10 @@ class ProxyFilter:
         )
 
         headers = _collect_signing_headers(flow.request.headers)
+        host_val = headers.get("host", "")
+        if not host_val.strip():
+            headers.pop("host", None)
+            headers["host"] = host
 
         try:
             new_query = resign_presigned_url(

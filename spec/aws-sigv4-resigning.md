@@ -151,7 +151,11 @@ When a SigV4 request is detected:
      presigned URL re-signing).
    - **CanonicalHeaders**: For each header in SignedHeaders, emit
      `lowercase(name):trimmed(value)\n`. Headers must be sorted by lowercase
-     name.
+     name. For headers that appear multiple times (mitmproxy Headers is a
+     multidict), values are sorted lexicographically and joined with `,` (no
+     space) to produce a single canonical value per the SigV4 spec. The `Host`
+     header is an exception: only the first value is used, since comma-joining
+     duplicate Host values produces an invalid host string.
    - **SignedHeaders**: Semicolon-separated lowercase header names (from the
      parsed Authorization header). The proxy normalizes HTTP/2 pseudo-headers:
      `:authority` is replaced with `host` and the list is re-sorted. This is

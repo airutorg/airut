@@ -202,12 +202,13 @@ class TestCollectSigningHeaders:
         """Headers with different cases of the same name are grouped."""
         headers = MockHeaders(
             [
-                ("X-Custom", "val1"),
-                ("x-custom", "val2"),
+                ("X-Custom", "banana"),
+                ("x-custom", "apple"),
             ]
         )
         result = _collect_signing_headers(headers)
-        assert result["x-custom"] == "val1,val2"
+        # Values must be sorted lexicographically per SigV4 spec
+        assert result["x-custom"] == "apple,banana"
 
 
 class TestDecodeBasicAuth:
@@ -2061,6 +2062,18 @@ class TestResignPresigned:
         ):
             result = pf._resign_presigned(flow, "mybucket.s3.amazonaws.com")
             assert result is None
+
+    def test_empty_host_header_replaced(self) -> None:
+        """Empty Host header is replaced with pretty_host for signing."""
+        pf = _pf_with_signing()
+        host = "mybucket.s3.amazonaws.com"
+        flow = self._presigned_flow(host=host)
+        # Simulate HTTP/2 empty Host header
+        flow.request.headers["Host"] = ""
+        result = pf._resign_presigned(flow, host)
+        assert result is not None
+        # The request should still succeed (host was fixed up internally)
+        assert REAL_ACCESS_KEY_ID in flow.request.url
 
 
 # ---------------------------------------------------------------------------
