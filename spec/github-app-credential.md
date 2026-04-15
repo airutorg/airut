@@ -379,15 +379,16 @@ all repo-scoped types (Issue, PullRequest, Discussion, Comment, etc.).
    that match are decoded to extract the parent repository's database ID.
 7. The allowed `R_`-prefixed repository node IDs are decoded to a set of
    database IDs. Each extracted `repo_db_id` is checked against this set.
-8. Non-repo-scoped types (`U_`, `O_`, etc.) are skipped. Values that don't match
-   the node ID pattern (UUIDs, short strings, etc.) are skipped.
+8. Known non-repo-scoped types (`U_`, `O_`, `T_`, `BOT_`, `EMU_`) are skipped.
+   All other values — including those that don't match the node ID pattern
+   (UUIDs, short strings, unrecognized formats) — are **blocked**.
 
 The check is **fail-secure**: parse failures, unresolvable variables,
-undecodable node IDs (e.g. if GitHub changes the format), and requests checked
-against an empty allowed set (node ID resolution failed) all result in a block.
-The `graphql_scope.py` module is a pure function with no mitmproxy dependency,
-taking `bytes` in and returning a structured `ScopeResult(verdict, detail)`
-where `verdict` is an enum
+undecodable node IDs, unrecognized formats (e.g. if GitHub changes the node ID
+pattern), and requests checked against an empty allowed set (node ID resolution
+failed) all result in a block. The `graphql_scope.py` module is a pure function
+with no mitmproxy dependency, taking `bytes` in and returning a structured
+`ScopeResult(verdict, detail)` where `verdict` is an enum
 (`ALLOWED | OUT_OF_SCOPE | PARSE_ERROR | UNRESOLVED_VARIABLE`).
 
 ## Future Enhancements
