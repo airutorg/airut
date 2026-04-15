@@ -800,6 +800,28 @@ class TestProxyFilterRequest:
         pf.request(flow)
         assert flow.metadata["allowlist_action"] == "BLOCKED"
 
+    def test_path_traversal_blocked(self) -> None:
+        """Paths containing `..` segments are blocked unconditionally."""
+        pf = ProxyFilter()
+        pf.url_prefixes = [
+            {"host": "api.github.com", "path": "/repos/myorg/myrepo*"}
+        ]
+        # Direct traversal
+        flow = _flow(
+            host="api.github.com",
+            path="/repos/myorg/myrepo/../../repos/evil/private",
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+
+        # Percent-encoded traversal
+        flow = _flow(
+            host="api.github.com",
+            path="/repos/myorg/myrepo/%2e%2e/%2e%2e/repos/evil/private",
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+
     def test_allowed_request(self) -> None:
         """Allowed request passes through."""
         pf = ProxyFilter()

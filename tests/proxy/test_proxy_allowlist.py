@@ -87,6 +87,12 @@ class MockNetworkAllowlist:
         if "\x00" in path:
             return False
 
+        # Reject path traversal sequences. Upstream servers normalize
+        # `..` segments, so `/allowed/../../secret` would resolve to
+        # `/secret` while fnmatch matches the allowed prefix.
+        if "/../" in path or path.endswith("/.."):
+            return False
+
         # Check domain entries (with wildcard support)
         # Domain entries allow all methods unconditionally
         for domain in self.domains:
@@ -372,6 +378,53 @@ class TestNetworkAllowlistIsAllowed:
         assert al._is_allowed("example.com", "/allowed%00/../secret") is False
         # Literal null byte also blocked
         assert al._is_allowed("example.com", "/allowed\x00foo") is False
+
+    def test_path_traversal_blocked(self) -> None:
+        """Paths containing `..` segments are rejected unconditionally.
+
+        Upstream servers normalize `..` segments, so a path like
+        `/repos/org/repo/../../repos/evil/private` resolves to
+        `/repos/evil/private` while fnmatch would match the allowed prefix.
+        """
+        al = MockNetworkAllowlist()
+        al.domains = []
+        al.url_prefixes = [
+            {"host": "api.github.com", "path": "/repos/myorg/myrepo*"}
+        ]
+
+        # Direct traversal — fnmatch would match the wildcard prefix
+        assert (
+            al._is_allowed(
+                "api.github.com",
+                "/repos/myorg/myrepo/../../repos/evil/private",
+            )
+            is False
+        )
+        # Percent-encoded traversal (unquote runs first)
+        assert (
+            al._is_allowed(
+                "api.github.com",
+                "/repos/myorg/myrepo/%2e%2e/%2e%2e/repos/evil/private",
+            )
+            is False
+        )
+        # Traversal at end of path
+        assert (
+            al._is_allowed("api.github.com", "/repos/myorg/myrepo/..") is False
+        )
+        # Normal allowed path still works
+        assert (
+            al._is_allowed("api.github.com", "/repos/myorg/myrepo/pulls")
+            is True
+        )
+        # Path segment starting with '..' is NOT traversal
+        assert (
+            al._is_allowed(
+                "api.github.com",
+                "/repos/myorg/myrepo/..hidden",
+            )
+            is True
+        )
 
 
 class TestMethodFiltering:
