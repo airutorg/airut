@@ -109,6 +109,8 @@ def parse_query(data: bytes) -> tuple[str, int, int, int]:
         if length == 0:
             pos += 1
             break
+        if length >= 0xC0:
+            raise ValueError("compression pointers not supported")
         pos += 1
         labels.append(
             data[pos : pos + length].decode("ascii", errors="replace")
