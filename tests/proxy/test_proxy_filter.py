@@ -3573,3 +3573,64 @@ class TestGitHubAppGraphQLScoping:
         resp_body = json.loads(flow.response._content)
         assert resp_body["error"] == "graphql_repo_scope_blocked"
         assert resp_body["detail"] == "query-params"
+
+    def test_node_id_scope_blocks_out_of_scope_subject_id(self) -> None:
+        """Node ID ownership check blocks subjectId targeting wrong repo."""
+        pf = self._setup_filter_with_cached_token()
+
+        # I_kwDOO5rJ/84AAYaf has repo_db_id=999999999 (not in scope)
+        body = json.dumps(
+            {
+                "query": (
+                    "mutation { addComment(input: "
+                    '{subjectId: "I_kwDOO5rJ/84AAYaf", '
+                    'body: "exfil"}) '
+                    "{ commentEdge { node { id } } } }"
+                ),
+            }
+        ).encode()
+
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+            content=body,
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        resp_body = json.loads(flow.response._content)
+        assert resp_body["error"] == "graphql_repo_scope_blocked"
+        assert resp_body["detail"] == "I_kwDOO5rJ/84AAYaf"
+
+    def test_node_id_scope_allows_in_scope_subject_id(self) -> None:
+        """Node ID ownership check allows subjectId in allowed repo."""
+        pf = self._setup_filter_with_cached_token()
+
+        # I_kwDORH34q80wOQ has repo_db_id=1149106347 (R_kgDORH34qw)
+        body = json.dumps(
+            {
+                "query": (
+                    "mutation { addComment(input: "
+                    '{subjectId: "I_kwDORH34q80wOQ", '
+                    'body: "legit"}) '
+                    "{ commentEdge { node { id } } } }"
+                ),
+            }
+        ).encode()
+
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+            content=body,
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is None
+        assert flow.request.headers["Authorization"] == "Bearer ghs_real_token"

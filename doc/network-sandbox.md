@@ -646,15 +646,25 @@ short-lived installation token for scoped hosts.
 
 GitHub App installation tokens can perform certain mutations (e.g.,
 `createIssue`) on **any public repository** where issues are enabled, regardless
-of App installation scope. The proxy mitigates this by parsing the GraphQL query
-AST (via `graphql-core`) and scanning the JSON variables to extract all
-`repositoryId` values, then blocking requests targeting repos outside the
-configured set with HTTP 403. Additionally, GraphQL requests with URL query
-parameters are rejected outright to prevent bypass of body-based scope checking.
+of App installation scope. The proxy performs two layers of scope checking:
+
+1. **`repositoryId` field check** — Parses the GraphQL query AST (via
+   `graphql-core`) and scans JSON variables to extract all `repositoryId`
+   values, blocking requests targeting repos outside the configured set with
+   HTTP 403.
+2. **Node ID ownership check** — Extracts values from all `*Id`/`*Ids`-suffixed
+   input fields and arguments (`subjectId`, `pullRequestId`, `labelIds`, etc.),
+   including list values and recursively nested variable objects, decodes GitHub
+   node IDs to extract the embedded parent repository database ID, and verifies
+   ownership against the allowed repository set. This catches mutations that
+   target repo-scoped objects without an explicit `repositoryId` field.
+
+Additionally, GraphQL requests with URL query parameters are rejected outright
+to prevent bypass of body-based scope checking.
 
 Node IDs of allowed repositories are resolved at token refresh time via
 `GET /installation/repositories`. No additional API calls are made for request
-inspection. See
+inspection — node ID decoding is pure local computation. See
 [spec/github-app-credential.md](../spec/github-app-credential.md) for the full
 specification.
 

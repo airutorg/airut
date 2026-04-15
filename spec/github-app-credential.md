@@ -334,11 +334,10 @@ proxy_filter.py request()
 GitHub App installation tokens can perform certain mutations (e.g.,
 `createIssue`) on **any public repository**, regardless of the App's
 installation scope. To prevent data exfiltration via GraphQL mutations targeting
-out-of-scope repos, the proxy parses the GraphQL query AST (via `graphql-core`)
-and scans the JSON variables to extract all `repositoryId` values, blocking
-requests targeting repos outside the configured set.
+out-of-scope repos, the proxy performs two layers of scope checking on every
+GraphQL request.
 
-**How it works:**
+**Layer 1 — `repositoryId` field check (string match):**
 
 1. At token refresh time, the proxy calls `GET /installation/repositories` to
    resolve configured repository names to node IDs (stored in `CachedToken`).
@@ -352,13 +351,39 @@ requests targeting repos outside the configured set.
    from JSON. The request path is percent-decoded before matching to prevent
    bypass via encoded path variants (e.g. `/%67raphql`).
 4. Any out-of-scope `repositoryId` or unparseable request results in HTTP 403.
-   Requests with no `repositoryId` or all values in scope are allowed.
+   Requests with no `repositoryId` or all values in scope proceed to layer 2.
 
-The check is **fail-secure**: parse failures, unresolvable variables, and
-requests checked against an empty allowed set (node ID resolution failed) all
-result in a block. The `graphql_scope.py` module is a pure function with no
-mitmproxy dependency, taking `bytes` in and returning a structured
-`ScopeResult(verdict, detail)` where `verdict` is an enum
+**Layer 2 — node ID ownership check (defense-in-depth):**
+
+Many GitHub GraphQL mutations accept node ID fields other than `repositoryId`
+that implicitly target repositories: `subjectId` (for `addComment`),
+`pullRequestId`, `issueId`, `discussionId`, bare `id`, etc. Layer 2 catches
+these by decoding the GitHub node ID format to extract the embedded parent
+repository database ID.
+
+GitHub's new-format node IDs encode
+`TYPE_PREFIX + "_" + base64(msgpack([0, repo_db_id, ...]))`. The `node_id`
+module decodes the msgpack payload and extracts the `repo_db_id` at index 1 for
+all repo-scoped types (Issue, PullRequest, Discussion, Comment, etc.).
+
+5. `check_repo_scope()` collects all string values from `*Id`-suffixed and
+   `*Ids`-suffixed input fields, bare `id` fields, and list values in the query
+   AST and variables (excluding `clientMutationId`). Both input object fields
+   and top-level mutation arguments are checked. Variable objects are scanned
+   recursively to catch nested input structures.
+6. Each collected value is checked against the GitHub node ID pattern. Values
+   that match are decoded to extract the parent repository's database ID.
+7. The allowed `R_`-prefixed repository node IDs are decoded to a set of
+   database IDs. Each extracted `repo_db_id` is checked against this set.
+8. Non-repo-scoped types (`U_`, `O_`, etc.) are skipped. Values that don't match
+   the node ID pattern (UUIDs, short strings, etc.) are skipped.
+
+The check is **fail-secure**: parse failures, unresolvable variables,
+undecodable node IDs (e.g. if GitHub changes the format), and requests checked
+against an empty allowed set (node ID resolution failed) all result in a block.
+The `graphql_scope.py` module is a pure function with no mitmproxy dependency,
+taking `bytes` in and returning a structured `ScopeResult(verdict, detail)`
+where `verdict` is an enum
 (`ALLOWED | OUT_OF_SCOPE | PARSE_ERROR | UNRESOLVED_VARIABLE`).
 
 ## Future Enhancements
