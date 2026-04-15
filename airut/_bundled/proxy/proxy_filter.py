@@ -624,7 +624,12 @@ class ProxyFilter:
 
             # GraphQL repository scope check (fail-secure).
             graphql_tag = ""
-            req_path = flow.request.path
+            # Normalize percent-encoding so that e.g. ``/%67raphql``
+            # is treated the same as ``/graphql``.  This mirrors the
+            # ``unquote()`` call in ``_is_allowed()`` and prevents
+            # scope bypass via encoded paths.  Null bytes are already
+            # rejected by ``_is_allowed()`` before we reach this point.
+            req_path = unquote(flow.request.path)
             if req_path == "/graphql" or req_path.startswith("/graphql?"):
                 # Reject requests with query parameters — the
                 # GraphQL endpoint only accepts POST with a JSON

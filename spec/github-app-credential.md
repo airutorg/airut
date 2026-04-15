@@ -349,7 +349,8 @@ requests targeting repos outside the configured set.
 3. For each GraphQL request (`POST /graphql`), `check_repo_scope()` extracts
    `repositoryId` from three paths: inlined in the query AST, variable
    references resolved against the variables dict, and variable objects scanned
-   from JSON.
+   from JSON. The request path is percent-decoded before matching to prevent
+   bypass via encoded path variants (e.g. `/%67raphql`).
 4. Any out-of-scope `repositoryId` or unparseable request results in HTTP 403.
    Requests with no `repositoryId` or all values in scope are allowed.
 

@@ -3509,3 +3509,67 @@ class TestGitHubAppGraphQLScoping:
 
         assert flow.response is None
         assert flow.request.headers["Authorization"] == "Bearer ghs_real_token"
+
+    def test_percent_encoded_graphql_path_still_scoped(self) -> None:
+        """Percent-encoded /graphql path must still trigger scope check.
+
+        Regression test: a request to ``/%67raphql`` (percent-encoded 'g')
+        must be treated identically to ``/graphql`` for scope checking.
+        Without path normalization, the scope check was skipped because
+        the raw path didn't match the ``/graphql`` string comparison,
+        allowing out-of-scope mutations to pass through.
+        """
+        pf = self._setup_filter_with_cached_token()
+
+        body = json.dumps(
+            {
+                "query": (
+                    "mutation($input: CreateIssueInput!) {"
+                    "  createIssue(input: $input) { issue { id } }"
+                    "}"
+                ),
+                "variables": {
+                    "input": {
+                        "repositoryId": "R_evil",
+                        "title": "exfil",
+                    }
+                },
+            }
+        ).encode()
+
+        # %67 = 'g', so /%67raphql decodes to /graphql
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/%67raphql",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+            content=body,
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        resp_body = json.loads(flow.response._content)
+        assert resp_body["error"] == "graphql_repo_scope_blocked"
+        assert resp_body["detail"] == "R_evil"
+
+    def test_percent_encoded_graphql_query_params_blocked(self) -> None:
+        """Percent-encoded /graphql with query params is still blocked."""
+        pf = self._setup_filter_with_cached_token()
+
+        # %67 = 'g'
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/%67raphql?query={viewer{login}}",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        resp_body = json.loads(flow.response._content)
+        assert resp_body["error"] == "graphql_repo_scope_blocked"
+        assert resp_body["detail"] == "query-params"
