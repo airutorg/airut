@@ -861,3 +861,134 @@ class TestArgumentLevelIds:
             + '", content: THUMBS_UP) { reaction { id } } }'
         )
         assert check_repo_scope(body, ALLOWED) == _oos(ISSUE_EVIL)
+
+
+# -------------------------------------------------------------------
+# List-of-dict variable recursion
+# -------------------------------------------------------------------
+
+
+class TestListOfDictVariables:
+    """Tests that list-of-dict variables are recursed into."""
+
+    def test_repo_id_in_list_of_dicts_out_of_scope(self) -> None:
+        """RepositoryId inside a list of input objects must be caught."""
+        body = _body(
+            "mutation($inputs: [CreateIssueInput!]!) {"
+            "  doThing(inputs: $inputs) { id }"
+            "}",
+            variables={
+                "inputs": [
+                    {
+                        "repositoryId": "R_evil",
+                        "title": "sneaky",
+                    }
+                ]
+            },
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos("R_evil")
+
+    def test_repo_id_in_list_of_dicts_in_scope(self) -> None:
+        body = _body(
+            "mutation($inputs: [CreateIssueInput!]!) {"
+            "  doThing(inputs: $inputs) { id }"
+            "}",
+            variables={
+                "inputs": [
+                    {
+                        "repositoryId": "R_kgDORH34qw",
+                        "title": "ok",
+                    },
+                    {
+                        "repositoryId": "R_kgDORm2NDQ",
+                        "title": "also ok",
+                    },
+                ]
+            },
+        )
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+    def test_repo_id_in_list_of_dicts_mixed(self) -> None:
+        body = _body(
+            "mutation($inputs: [CreateIssueInput!]!) {"
+            "  doThing(inputs: $inputs) { id }"
+            "}",
+            variables={
+                "inputs": [
+                    {
+                        "repositoryId": "R_kgDORH34qw",
+                        "title": "good",
+                    },
+                    {
+                        "repositoryId": "R_evil",
+                        "title": "bad",
+                    },
+                ]
+            },
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos("R_evil")
+
+    def test_node_id_in_list_of_dicts_out_of_scope(self) -> None:
+        """SubjectId inside a list of input objects must be caught."""
+        body = _body(
+            "mutation($inputs: [AddCommentInput!]!) {"
+            "  doThing(inputs: $inputs) { id }"
+            "}",
+            variables={
+                "inputs": [
+                    {
+                        "subjectId": ISSUE_EVIL,
+                        "body": "sneaky",
+                    }
+                ]
+            },
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(ISSUE_EVIL)
+
+    def test_node_id_in_list_of_dicts_in_scope(self) -> None:
+        body = _body(
+            "mutation($inputs: [AddCommentInput!]!) {"
+            "  doThing(inputs: $inputs) { id }"
+            "}",
+            variables={
+                "inputs": [
+                    {
+                        "subjectId": ISSUE_IN_SCOPE,
+                        "body": "ok",
+                    },
+                    {
+                        "subjectId": PR_IN_SCOPE,
+                        "body": "also ok",
+                    },
+                ]
+            },
+        )
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+    def test_nested_list_of_dicts_in_dict(self) -> None:
+        """List of dicts nested inside a dict variable."""
+        body = _body(
+            "mutation($input: BatchInput!) {  doBatch(input: $input) { id }}",
+            variables={
+                "input": {
+                    "items": [
+                        {"repositoryId": "R_evil"},
+                    ]
+                }
+            },
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos("R_evil")
+
+    def test_nested_list_node_ids_in_dict(self) -> None:
+        """Node IDs in list-of-dicts nested inside a dict variable."""
+        body = _body(
+            "mutation($input: BatchInput!) {  doBatch(input: $input) { id }}",
+            variables={
+                "input": {
+                    "comments": [
+                        {"subjectId": ISSUE_EVIL, "body": "hi"},
+                    ]
+                }
+            },
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(ISSUE_EVIL)

@@ -156,6 +156,10 @@ def _collect_repo_ids_from_variables(
             out.append(value)
         elif isinstance(value, dict):
             _collect_repo_ids_from_variables(value, out)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    _collect_repo_ids_from_variables(item, out)
 
 
 def _collect_node_ids_from_variables(
@@ -179,6 +183,10 @@ def _collect_node_ids_from_variables(
                         out.append(item)
         elif isinstance(value, dict):
             _collect_node_ids_from_variables(value, out)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    _collect_node_ids_from_variables(item, out)
 
 
 def check_repo_scope(
