@@ -28,18 +28,24 @@ classic PAT + dedicated machine user approach.
 | ---------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------- |
 | **Token lifetime**           | Months to years (or never expires)                                    | 1 hour (installation tokens, auto-rotated by proxy)            |
 | **Repository creation**      | Cannot prevent -- classic PATs inherently allow repo creation via API | Impossible unless explicitly granted `Administration: write`   |
+| **Public repo mutations**    | No protection -- agent can create issues on any public repo           | Blocked by proxy-level GraphQL repository scoping              |
 | **Permission granularity**   | Coarse (`repo` scope grants broad access)                             | Fine-grained per-permission (Contents, PRs, Issues separately) |
 | **Workflow file protection** | Must manually omit `workflow` scope; easy to miss                     | Simply don't grant `Workflows` permission -- clean separation  |
 | **Dedicated user needed**    | Yes -- consumes a seat, requires separate account management          | No -- app has its own bot identity, no seat consumed           |
 | **Response echo risk**       | High -- leaked PAT provides persistent access                         | Low -- leaked installation token expires in 1 hour             |
 | **Rate limits**              | 5,000 requests/hour (fixed)                                           | 5,000-12,500 requests/hour (scales with org size)              |
 
-**Key motivation:** Classic PATs cannot limit repository creation. Even with the
-network allowlist restricting which hosts the agent can reach, a compromised
-agent could create public repositories under the dedicated user's account via
-the GraphQL endpoint and leak information through repository names or
-descriptions. GitHub Apps eliminate this risk entirely -- they cannot create
-repositories unless explicitly granted `Administration: write` permission.
+**Key motivation:** Classic PATs provide no protection against data exfiltration
+via public repositories. A compromised agent can create public repositories
+under the dedicated user's account and leak information through repository names
+or descriptions. Beyond repository creation, PATs can also perform GraphQL
+mutations (e.g., `createIssue`, `addComment`) on **any public repository** — the
+proxy performs simple string replacement and does not inspect request bodies, so
+there is no mechanism to restrict which repositories the agent targets. GitHub
+Apps eliminate both risks: they cannot create repositories without explicit
+`Administration: write` permission, and the proxy enforces
+[GraphQL repository scoping](network-sandbox.md#graphql-repository-scoping) that
+blocks mutations targeting repositories outside the configured set.
 
 ## Prerequisites
 
@@ -242,6 +248,7 @@ github.com, use the Client ID (`Iv23li...`).
 | Token lifetime                | Months to years                       | 1 hour (auto-rotated)                         |
 | Dedicated user needed         | Yes (consumes a seat)                 | No (app has bot identity)                     |
 | Repository creation risk      | Cannot prevent                        | Impossible without explicit permission        |
+| Public repo mutation risk     | No protection                         | Blocked by GraphQL repository scoping         |
 | Workflow file protection      | Omit `workflow` scope (error-prone)   | Don't grant `Workflows` permission (explicit) |
 | Fine-grained scoping          | Not viable with classic PATs          | Per-permission, per-repository                |
 | Response echo risk            | High (long-lived token)               | Low (1-hour expiry)                           |
