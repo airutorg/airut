@@ -44,6 +44,8 @@ For high-level documentation, see [doc/](../doc/).
   proxy-level token replacement
 - [aws-sigv4-resigning.md](aws-sigv4-resigning.md) — AWS SigV4/SigV4A credential
   masking via proxy re-signing
+- [graphql-operation-allowlist.md](graphql-operation-allowlist.md) — Generic
+  GraphQL operation filtering at the proxy layer
 - [github-app-credential.md](github-app-credential.md) — GitHub App credential
   support with proxy-managed token rotation
 

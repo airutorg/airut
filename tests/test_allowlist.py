@@ -14,6 +14,7 @@ from airut.allowlist import (
     Allowlist,
     AllowlistDomain,
     AllowlistUrlPattern,
+    GraphqlOperationAllowlist,
     parse_allowlist_yaml,
     serialize_allowlist_json,
 )
@@ -255,3 +256,209 @@ url_prefixes:
         assert data["url_prefixes"][1]["host"] == "api.github.com"
         assert data["url_prefixes"][1]["path"] == "/repos/org*"
         assert data["url_prefixes"][1]["methods"] == []
+
+
+# -------------------------------------------------------------------
+# GraphqlOperationAllowlist
+# -------------------------------------------------------------------
+
+
+class TestGraphqlOperationAllowlist:
+    """Tests for GraphqlOperationAllowlist dataclass."""
+
+    def test_defaults(self) -> None:
+        g = GraphqlOperationAllowlist()
+        assert g.queries == ()
+        assert g.mutations == ()
+        assert g.subscriptions == ()
+
+    def test_all_fields(self) -> None:
+        g = GraphqlOperationAllowlist(
+            queries=("*",),
+            mutations=("createIssue", "update*"),
+            subscriptions=(),
+        )
+        assert g.queries == ("*",)
+        assert g.mutations == ("createIssue", "update*")
+        assert g.subscriptions == ()
+
+    def test_frozen(self) -> None:
+        g = GraphqlOperationAllowlist()
+        with pytest.raises(AttributeError):
+            g.queries = ()  # ty:ignore[invalid-assignment]
+
+
+class TestAllowlistUrlPatternGraphql:
+    """Tests for AllowlistUrlPattern with graphql field."""
+
+    def test_graphql_none_by_default(self) -> None:
+        p = AllowlistUrlPattern(host="api.github.com")
+        assert p.graphql is None
+
+    def test_graphql_set(self) -> None:
+        g = GraphqlOperationAllowlist(
+            queries=("*",), mutations=("createIssue",)
+        )
+        p = AllowlistUrlPattern(
+            host="api.github.com",
+            path="/graphql",
+            methods=("POST",),
+            graphql=g,
+        )
+        assert p.graphql is not None
+        assert p.graphql.queries == ("*",)
+        assert p.graphql.mutations == ("createIssue",)
+        assert p.graphql.subscriptions == ()
+
+
+class TestParseAllowlistYamlGraphql:
+    """Tests for parsing graphql blocks in YAML."""
+
+    def test_graphql_block(self) -> None:
+        yaml_data = b"""\
+url_prefixes:
+  - host: api.github.com
+    path: /graphql
+    methods: [POST]
+    graphql:
+      queries:
+        - "*"
+      mutations:
+        - createIssue
+        - createPullRequest
+"""
+        al = parse_allowlist_yaml(yaml_data)
+        assert len(al.url_patterns) == 1
+        p = al.url_patterns[0]
+        assert p.graphql is not None
+        assert p.graphql.queries == ("*",)
+        assert p.graphql.mutations == ("createIssue", "createPullRequest")
+        assert p.graphql.subscriptions == ()
+
+    def test_no_graphql_block(self) -> None:
+        yaml_data = b"""\
+url_prefixes:
+  - host: api.github.com
+    path: /graphql
+    methods: [POST]
+"""
+        al = parse_allowlist_yaml(yaml_data)
+        assert al.url_patterns[0].graphql is None
+
+    def test_graphql_missing_operation_types(self) -> None:
+        """Omitted operation types default to empty tuples."""
+        yaml_data = b"""\
+url_prefixes:
+  - host: api.github.com
+    path: /graphql
+    methods: [POST]
+    graphql:
+      queries:
+        - "*"
+"""
+        al = parse_allowlist_yaml(yaml_data)
+        p = al.url_patterns[0]
+        assert p.graphql is not None
+        assert p.graphql.queries == ("*",)
+        assert p.graphql.mutations == ()
+        assert p.graphql.subscriptions == ()
+
+    def test_graphql_empty_dict(self) -> None:
+        """Empty graphql block creates allowlist with all empty tuples."""
+        yaml_data = b"""\
+url_prefixes:
+  - host: api.github.com
+    path: /graphql
+    graphql: {}
+"""
+        al = parse_allowlist_yaml(yaml_data)
+        p = al.url_patterns[0]
+        assert p.graphql is not None
+        assert p.graphql.queries == ()
+        assert p.graphql.mutations == ()
+        assert p.graphql.subscriptions == ()
+
+    def test_mixed_entries_with_and_without_graphql(self) -> None:
+        """Entries with and without graphql coexist."""
+        yaml_data = b"""\
+url_prefixes:
+  - host: api.github.com
+    path: /graphql
+    methods: [POST]
+    graphql:
+      queries: ["*"]
+  - host: pypi.org
+    path: ""
+    methods: [GET, HEAD]
+"""
+        al = parse_allowlist_yaml(yaml_data)
+        assert al.url_patterns[0].graphql is not None
+        assert al.url_patterns[1].graphql is None
+
+
+class TestSerializeAllowlistJsonGraphql:
+    """Tests for serializing graphql blocks to JSON."""
+
+    def test_graphql_serialized(self) -> None:
+        g = GraphqlOperationAllowlist(
+            queries=("*",),
+            mutations=("createIssue",),
+            subscriptions=(),
+        )
+        al = Allowlist(
+            domains=(),
+            url_patterns=(
+                AllowlistUrlPattern(
+                    host="api.github.com",
+                    path="/graphql",
+                    methods=("POST",),
+                    graphql=g,
+                ),
+            ),
+        )
+        data = json.loads(serialize_allowlist_json(al))
+        entry = data["url_prefixes"][0]
+        assert entry["graphql"] == {
+            "queries": ["*"],
+            "mutations": ["createIssue"],
+            "subscriptions": [],
+        }
+
+    def test_no_graphql_not_serialized(self) -> None:
+        al = Allowlist(
+            domains=(),
+            url_patterns=(
+                AllowlistUrlPattern(
+                    host="api.github.com",
+                    path="/graphql",
+                    methods=("POST",),
+                ),
+            ),
+        )
+        data = json.loads(serialize_allowlist_json(al))
+        entry = data["url_prefixes"][0]
+        assert "graphql" not in entry
+
+    def test_graphql_round_trip(self) -> None:
+        """YAML -> parse -> serialize -> JSON round trip preserves graphql."""
+        yaml_data = b"""\
+url_prefixes:
+  - host: api.github.com
+    path: /graphql
+    methods: [POST]
+    graphql:
+      queries:
+        - "*"
+      mutations:
+        - createIssue
+        - updatePullRequest
+      subscriptions: []
+"""
+        al = parse_allowlist_yaml(yaml_data)
+        data = json.loads(serialize_allowlist_json(al))
+        entry = data["url_prefixes"][0]
+        assert entry["graphql"] == {
+            "queries": ["*"],
+            "mutations": ["createIssue", "updatePullRequest"],
+            "subscriptions": [],
+        }
