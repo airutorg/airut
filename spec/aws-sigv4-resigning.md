@@ -399,12 +399,17 @@ The proxy checks query parameters when no `Authorization` header is present:
 #### Re-signing Process
 
 1. Parse `X-Amz-Credential` to extract surrogate key ID and scope
-2. Reconstruct the canonical request (same as header-based, but
-   `X-Amz-Signature` is excluded from the canonical query string)
-3. Compute the new signature with the real credentials
-4. Replace `X-Amz-Credential` (surrogate key ID → real key ID)
-5. Replace `X-Amz-Signature` with the new signature
+2. Replace `X-Amz-Credential` in the query string with the real key ID (keeping
+   the scope unchanged)
+3. Reconstruct the canonical request from the updated query string
+   (`X-Amz-Signature` is excluded from the canonical query string)
+4. Compute the new signature with the real credentials
+5. Replace `X-Amz-Signature` with the new signature in the output query
 6. Replace `X-Amz-Security-Token` if present
+
+The credential must be replaced **before** building the canonical request
+because AWS verifies the signature against a canonical request containing the
+real credential.
 
 This requires modifying query parameters, not just headers. The proxy must
 reconstruct the URL with updated parameters.
