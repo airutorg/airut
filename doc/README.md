@@ -62,8 +62,8 @@ Named "Airut" (Finnish: herald/messenger).
   and best practices
 - [Periodic tasks](periodic-tasks.md) — Cron-triggered scheduled tasks with
   email delivery
-- [Testing](testing.md) — Test strategy, coverage enforcement, and config
-  migration testing
+- [Testing](testing.md) — Test strategy, coverage enforcement, config migration
+  testing, and CI workflows
 
 ## Implementation Specifications
 
