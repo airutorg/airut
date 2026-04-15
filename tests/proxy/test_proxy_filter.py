@@ -354,49 +354,52 @@ class TestProxyFilterLog:
 
 
 class TestProxyFilterIsAllowed:
-    """Tests for ProxyFilter._is_allowed."""
+    """Tests for ProxyFilter._is_allowed (returns tuple)."""
 
     def test_domain_match(self) -> None:
         pf = ProxyFilter()
         pf.domains = ["api.github.com"]
-        assert pf._is_allowed("api.github.com", "/any") is True
-        assert pf._is_allowed("other.com", "/any") is False
+        assert pf._is_allowed("api.github.com", "/any") == (True, None)
+        assert pf._is_allowed("other.com", "/any")[0] is False
 
     def test_domain_wildcard(self) -> None:
         pf = ProxyFilter()
         pf.domains = ["*.github.com"]
-        assert pf._is_allowed("api.github.com", "/") is True
-        assert pf._is_allowed("github.com", "/") is False
+        assert pf._is_allowed("api.github.com", "/") == (True, None)
+        assert pf._is_allowed("github.com", "/")[0] is False
 
     def test_url_prefix_host_and_path(self) -> None:
         pf = ProxyFilter()
-        pf.url_prefixes = [{"host": "api.github.com", "path": "/graphql"}]
-        assert pf._is_allowed("api.github.com", "/graphql") is True
-        assert pf._is_allowed("api.github.com", "/other") is False
+        entry: UrlPrefixEntry = {"host": "api.github.com", "path": "/graphql"}
+        pf.url_prefixes = [entry]
+        allowed, matched = pf._is_allowed("api.github.com", "/graphql")
+        assert allowed is True
+        assert matched is entry
+        assert pf._is_allowed("api.github.com", "/other")[0] is False
 
     def test_url_prefix_empty_path(self) -> None:
         pf = ProxyFilter()
         pf.url_prefixes = [{"host": "api.github.com", "path": ""}]
-        assert pf._is_allowed("api.github.com", "/any/path") is True
+        assert pf._is_allowed("api.github.com", "/any/path")[0] is True
 
     def test_url_prefix_method_filter(self) -> None:
         pf = ProxyFilter()
         pf.url_prefixes = [
             {"host": "api.github.com", "path": "/api", "methods": ["GET"]}
         ]
-        assert pf._is_allowed("api.github.com", "/api", "GET") is True
-        assert pf._is_allowed("api.github.com", "/api", "POST") is False
+        assert pf._is_allowed("api.github.com", "/api", "GET")[0] is True
+        assert pf._is_allowed("api.github.com", "/api", "POST")[0] is False
 
     def test_url_prefix_empty_methods_allows_all(self) -> None:
         pf = ProxyFilter()
         pf.url_prefixes = [
             {"host": "api.github.com", "path": "/api", "methods": []}
         ]
-        assert pf._is_allowed("api.github.com", "/api", "POST") is True
+        assert pf._is_allowed("api.github.com", "/api", "POST")[0] is True
 
     def test_nothing_allowed(self) -> None:
         pf = ProxyFilter()
-        assert pf._is_allowed("any.com", "/") is False
+        assert pf._is_allowed("any.com", "/") == (False, None)
 
 
 # ---------------------------------------------------------------------------
@@ -3838,25 +3841,28 @@ class TestGraphqlOperationAllowlist:
             assert "[graphql-op: mutation/deleteRepository]" in msg
             assert msg.startswith("BLOCKED")
 
-    def test_matched_url_entry_stored(self) -> None:
-        """_is_allowed stores matched URL entry for GraphQL check."""
+    def test_matched_url_entry_returned(self) -> None:
+        """_is_allowed returns matched URL entry for GraphQL check."""
         pf = self._setup_filter()
-        assert pf._is_allowed("api.github.com", "/graphql", "POST")
-        assert pf._last_matched_url_entry is not None
-        assert pf._last_matched_url_entry.get("graphql") is not None
+        allowed, entry = pf._is_allowed("api.github.com", "/graphql", "POST")
+        assert allowed
+        assert entry is not None
+        assert entry.get("graphql") is not None
 
     def test_matched_url_entry_none_for_domain(self) -> None:
-        """_is_allowed resets matched entry for domain matches."""
+        """_is_allowed returns None entry for domain matches."""
         pf = ProxyFilter()
         pf.domains = ["api.github.com"]
-        assert pf._is_allowed("api.github.com", "/graphql", "POST")
-        assert pf._last_matched_url_entry is None
+        allowed, entry = pf._is_allowed("api.github.com", "/graphql", "POST")
+        assert allowed
+        assert entry is None
 
     def test_matched_url_entry_none_when_blocked(self) -> None:
-        """_is_allowed resets matched entry when request is blocked."""
+        """_is_allowed returns None entry when request is blocked."""
         pf = self._setup_filter()
-        assert not pf._is_allowed("blocked.com", "/api", "GET")
-        assert pf._last_matched_url_entry is None
+        allowed, entry = pf._is_allowed("blocked.com", "/api", "GET")
+        assert not allowed
+        assert entry is None
 
     def test_subscription_blocked(self) -> None:
         """Subscriptions blocked by empty pattern list."""
@@ -3904,3 +3910,165 @@ class TestGraphqlOperationAllowlist:
         assert flow.metadata["allowlist_action"] == "BLOCKED"
         # Token should NOT have been replaced
         assert flow.request.headers["Authorization"] == "Bearer surr_token"
+
+
+# ---------------------------------------------------------------------------
+# H1/H2: GraphQL credential deferral in requestheaders()
+# ---------------------------------------------------------------------------
+
+
+class TestGraphqlCredentialDeferral:
+    """Tests for credential deferral when URL entry has graphql config.
+
+    Covers H1 (per-flow matched_url_entry instead of shared state) and
+    H2 (defer credential injection until GraphQL checks complete).
+    """
+
+    _GRAPHQL_ENTRY: UrlPrefixEntry = {
+        "host": "api.github.com",
+        "path": "/graphql",
+        "methods": ["POST"],
+        "graphql": {
+            "queries": ["*"],
+            "mutations": ["createIssue"],
+        },
+    }
+
+    @staticmethod
+    def _github_scoped_signing() -> dict:
+        """Signing replacement with scopes matching api.github.com."""
+        r = dict(SIGNING_REPLACEMENT)
+        r["scopes"] = ["api.github.com"]
+        return r
+
+    def test_requestheaders_defers_for_graphql_entry(self) -> None:
+        """requestheaders() skips re-signing for graphql entries."""
+        pf = ProxyFilter()
+        pf.url_prefixes = [self._GRAPHQL_ENTRY]
+        pf.replacements = {
+            SURROGATE_ACCESS_KEY_ID: self._github_scoped_signing(),
+        }
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={
+                "Authorization": SIGV4_AUTH,
+                "x-amz-date": "20260101T000000Z",
+                "x-amz-content-sha256": "UNSIGNED-PAYLOAD",
+            },
+        )
+        pf.requestheaders(flow)
+        # Re-signing should NOT have happened
+        assert not flow.metadata.get("aws_resigned")
+        # But the matched entry should be in metadata
+        assert flow.metadata.get("matched_url_entry") is not None
+
+    def test_request_signs_after_graphql_check(self) -> None:
+        """request() performs AWS re-signing after GraphQL check.
+
+        When requestheaders() deferred signing for a graphql entry,
+        request() re-signs after the operation allowlist passes.
+        """
+        pf = ProxyFilter()
+        pf.url_prefixes = [self._GRAPHQL_ENTRY]
+        pf.replacements = {
+            SURROGATE_ACCESS_KEY_ID: self._github_scoped_signing(),
+        }
+        body = json.dumps(
+            {"query": "mutation { createIssue(input: {}) { id } }"}
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={
+                "Authorization": SIGV4_AUTH,
+                "x-amz-date": "20260101T000000Z",
+                "x-amz-content-sha256": "UNSIGNED-PAYLOAD",
+            },
+            content=body,
+        )
+        pf.requestheaders(flow)
+        assert not flow.metadata.get("aws_resigned")
+        pf.request(flow)
+        # Now signing should have completed
+        assert flow.metadata.get("aws_resigned") is True
+        assert flow.metadata.get("masked_count") == 1
+        auth = flow.request.headers["Authorization"]
+        assert REAL_ACCESS_KEY_ID in auth
+
+    def test_blocked_graphql_no_signing(self) -> None:
+        """Blocked GraphQL operation does NOT inject real credentials.
+
+        This is the critical H2 security property: when the GraphQL
+        operation check blocks a request, real AWS credentials must
+        not appear in the flow's headers.
+        """
+        pf = ProxyFilter()
+        pf.url_prefixes = [self._GRAPHQL_ENTRY]
+        pf.replacements = {
+            SURROGATE_ACCESS_KEY_ID: self._github_scoped_signing(),
+        }
+        body = json.dumps(
+            {
+                "query": (
+                    "mutation { deleteRepository(input: {})"
+                    " { clientMutationId } }"
+                )
+            }
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={
+                "Authorization": SIGV4_AUTH,
+                "x-amz-date": "20260101T000000Z",
+                "x-amz-content-sha256": "UNSIGNED-PAYLOAD",
+            },
+            content=body,
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+        assert not flow.metadata.get("aws_resigned")
+        auth = flow.request.headers["Authorization"]
+        assert REAL_ACCESS_KEY_ID not in auth
+
+    def test_matched_entry_per_flow_not_shared(self) -> None:
+        """Each flow gets its own matched_url_entry (H1 fix).
+
+        Two flows with different matched entries must each have the
+        correct entry in their own flow.metadata, not a shared value.
+        """
+        pf = ProxyFilter()
+        non_graphql: UrlPrefixEntry = {
+            "host": "pypi.org",
+            "path": "/simple/*",
+        }
+        pf.url_prefixes = [self._GRAPHQL_ENTRY, non_graphql]
+
+        flow1 = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            content=b'{"query":"{ viewer { login } }"}',
+        )
+        flow2 = _flow(
+            method="GET",
+            host="pypi.org",
+            path="/simple/requests",
+        )
+
+        # Process flow1 then flow2 — each must have its own entry
+        pf.request(flow1)
+        pf.request(flow2)
+
+        entry1 = flow1.metadata.get("matched_url_entry")
+        entry2 = flow2.metadata.get("matched_url_entry")
+        assert entry1 is not None
+        assert entry2 is not None
+        assert entry1 is not entry2
+        assert entry1.get("graphql") is not None
+        assert entry2.get("graphql") is None

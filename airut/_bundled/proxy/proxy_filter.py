@@ -197,7 +197,6 @@ class ProxyFilter:
         self.replacements: dict[str, dict[str, _JsonValue]] = {}
         self._log_file: TextIO | None = None
         self._github_app_cache: dict[str, CachedToken] = {}
-        self._last_matched_url_entry: UrlPrefixEntry | None = None
 
     def load(self, options: object) -> None:  # noqa: ARG002
         """Load configuration on startup."""
@@ -279,7 +278,9 @@ class ProxyFilter:
         ctx.log.warn(message)
         self._log(message)
 
-    def _is_allowed(self, host: str, path: str, method: str = "") -> bool:
+    def _is_allowed(
+        self, host: str, path: str, method: str = ""
+    ) -> tuple[bool, UrlPrefixEntry | None]:
         """Check if a host+path+method combination is allowed.
 
         Uses fnmatch-style pattern matching for both domains and paths.
@@ -295,7 +296,9 @@ class ProxyFilter:
             method: HTTP method (e.g. "GET", "POST"). Empty means any.
 
         Returns:
-            True if the request is allowed, False otherwise.
+            Tuple of (allowed, matched_entry). matched_entry is the
+            matching UrlPrefixEntry, or None for domain matches and
+            blocked requests.
         """
         # Decode percent-encoded characters before matching to prevent
         # bypass via encoding differences between proxy and upstream.
@@ -304,16 +307,13 @@ class ProxyFilter:
         # Reject null bytes which can cause path truncation mismatches
         # between the proxy's fnmatch and C-based upstream servers.
         if "\x00" in path:
-            return False
-
-        # Reset matched entry for this check.
-        self._last_matched_url_entry = None
+            return False, None
 
         # Check domain entries (with wildcard support)
         # Domain entries allow all methods unconditionally
         for domain in self.domains:
             if _match_pattern(domain, host):
-                return True
+                return True, None
 
         # Check URL pattern entries
         for entry in self.url_prefixes:
@@ -331,10 +331,9 @@ class ProxyFilter:
                         or not method
                         or method.upper() in (m.upper() for m in entry_methods)
                     ):
-                        self._last_matched_url_entry = entry
-                        return True
+                        return True, entry
 
-        return False
+        return False, None
 
     def _replace_in_header(
         self,
@@ -636,8 +635,16 @@ class ProxyFilter:
             # ``unquote()`` call in ``_is_allowed()`` and prevents
             # scope bypass via encoded paths.  Null bytes are already
             # rejected by ``_is_allowed()`` before we reach this point.
+            #
+            # Decode first (mirroring _is_allowed), then split off
+            # the query string.  A ``%3F`` in the raw path decodes
+            # to ``?`` and is treated as a query delimiter, which is
+            # fail-secure: the request hits the query-params block
+            # below.  This replaces the old fragile
+            # ``startswith("/graphql?")`` with exact path matching.
             req_path = unquote(flow.request.path)
-            if req_path == "/graphql" or req_path.startswith("/graphql?"):
+            path_without_query = req_path.split("?", 1)[0]
+            if path_without_query == "/graphql":
                 # Reject requests with query parameters — the
                 # GraphQL endpoint only accepts POST with a JSON
                 # body.  Query parameters could bypass body-based
@@ -1168,8 +1175,23 @@ class ProxyFilter:
         path = flow.request.path
         method = flow.request.method
 
-        if not self._is_allowed(host, path, method):
+        allowed, matched_entry = self._is_allowed(host, path, method)
+        if not allowed:
             return  # Will be blocked in request() hook
+
+        # Store matched entry in flow metadata (per-flow, not shared
+        # state) so request() can use it for GraphQL checks.
+        flow.metadata["matched_url_entry"] = matched_entry
+
+        # Defer credential injection when the matched entry has a
+        # graphql config.  GraphQL operation and repo scope checks run
+        # in request() and must complete before real credentials are
+        # injected into the flow.
+        if (
+            matched_entry is not None
+            and matched_entry.get("graphql") is not None
+        ):
+            return
 
         # Try AWS re-signing
         result = self._try_resign_aws(flow)
@@ -1198,13 +1220,14 @@ class ProxyFilter:
         path = flow.request.path
         method = flow.request.method
 
-        if not self._is_allowed(host, path, method):
+        allowed, matched_entry = self._is_allowed(host, path, method)
+        if not allowed:
             # Block the request — logged centrally in response()
             flow.metadata["allowlist_action"] = "BLOCKED"
 
             # Distinguish method-blocked from host/path-blocked for
             # actionable agent feedback
-            if self._is_allowed(host, path):
+            if self._is_allowed(host, path)[0]:
                 message = (
                     f"Method {method} is not allowed for this URL. "
                     "To request access, add the method to the entry's "
@@ -1237,7 +1260,9 @@ class ProxyFilter:
         flow.metadata["allowlist_action"] = "ALLOWED"
 
         # GraphQL operation allowlist check (Layer 1).
-        matched_entry = self._last_matched_url_entry
+        # Use matched_entry from _is_allowed() (per-flow, not shared).
+        # Also update flow metadata for downstream consumers.
+        flow.metadata["matched_url_entry"] = matched_entry
         if matched_entry is not None:
             graphql_config = matched_entry.get("graphql")
             if graphql_config is not None:
@@ -1273,10 +1298,26 @@ class ProxyFilter:
         if flow.metadata.get("aws_resigned"):
             return
 
-        # Handle deferred re-signing (non-S3: body hash needed)
+        # AWS re-signing: handle deferred signing from requestheaders()
+        # or attempt fresh signing (for requests where requestheaders()
+        # deferred credential injection, e.g. for GraphQL entries).
         deferred = flow.metadata.pop("aws_deferred_resign", None)
+        if deferred is None:
+            # No prior deferral — try signing now (returns None quickly
+            # for non-AWS requests).
+            resign = self._try_resign_aws(flow)
+            if resign is not None:
+                # _try_resign_aws may itself defer when the request
+                # lacks x-amz-content-sha256; pop the new context.
+                deferred = flow.metadata.pop("aws_deferred_resign", None)
+                if deferred is None:
+                    # Immediate signing completed
+                    flow.metadata["aws_resigned"] = True
+                    flow.metadata["masked_count"] = 1
+                    return
+
         if deferred is not None:
-            # Compute sha256 of actual body
+            # Compute sha256 of actual body for deferred signing
             body = getattr(flow.request, "content", b"") or b""
             if isinstance(body, str):
                 body = body.encode("utf-8")
