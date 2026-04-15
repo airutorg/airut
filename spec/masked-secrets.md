@@ -107,13 +107,18 @@ The proxy addon (`airut/_bundled/proxy/proxy_filter.py`) performs replacement in
 
 1. Load replacement map from `/replacements.json` at startup
 2. **Replace pass**: For each request, check if host matches any surrogate's
-   scopes. If match, replace surrogate → real value in matching headers.
+   scopes. If match, scan **all header entries** for matching header names
+   (mitmproxy Headers is a multidict where the same name can appear multiple
+   times). For each logical header name, collect all values and try replacement
+   against each — this ensures the surrogate is found regardless of which
+   duplicate entry contains it. On match, write the replaced value into the
+   first entry position.
 3. **Collapse pass**: For any header that was successfully replaced, collapse
    duplicate entries (same header name) down to the single replaced entry. HTTP
-   clients can inject duplicate headers; since `headers[name]` returns only the
-   first value, additional entries are never inspected and would otherwise
-   survive to reach upstream alongside the real credential. This also applies to
-   GitHub App token replacement and AWS SigV4 re-signing paths.
+   clients can inject duplicate headers; entry-level scanning in the replace
+   pass finds the surrogate regardless of position, and collapsing removes any
+   attacker-injected entries. This also applies to GitHub App token replacement
+   and AWS SigV4 re-signing paths.
 4. **Strip pass**: For any header where the surrogate was NOT found, the header
    pattern was an **exact name** (no glob characters), and
    `allow_foreign_credentials` is false (default), the header is **removed
