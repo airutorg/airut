@@ -132,6 +132,8 @@ Airut configuration.
 
 - Short-lived tokens (1 hour, auto-rotated by proxy) instead of long-lived PATs
 - Cannot create repositories (eliminates a data exfiltration vector)
+- GraphQL repository scoping blocks mutations on out-of-scope public
+  repositories (classic PATs have no such protection)
 - Granular permissions (e.g., `Contents` without `Workflows`)
 - No dedicated user account needed (no seat consumed)
 
@@ -165,11 +167,16 @@ dedicated machine user account (e.g., `your-org-airut-bot`) with a classic PAT.
    [masked secret](network-sandbox.md#masked-secrets-token-replacement) to
    prevent exfiltration)
 
-**Limitation:** Classic PATs cannot prevent repository creation. Even with the
-network allowlist restricting which hosts the agent can push to, the agent could
-create public repositories via the GraphQL endpoint and leak limited information
-through repository names or descriptions. GitHub Apps eliminate this risk
-entirely.
+**Limitation:** Classic PATs provide no protection against data exfiltration via
+public repositories. The agent could create public repositories and leak
+information through names or descriptions. More broadly, a PAT can perform
+GraphQL mutations (e.g., `createIssue`, `addComment`) on **any accessible public
+repository** — the proxy performs simple string replacement without inspecting
+request bodies, so there is no mechanism to restrict which repositories the
+agent targets. GitHub Apps eliminate both risks: no repository creation without
+explicit permission, and proxy-level
+[GraphQL repository scoping](network-sandbox.md#graphql-repository-scoping)
+blocks mutations targeting out-of-scope repositories.
 
 The server's own git credentials (for fetching mirrors) can use a separate
 account or the same bot account with read access.

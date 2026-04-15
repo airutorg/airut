@@ -375,11 +375,13 @@ Both channels can coexist — include both `email:` and `slack:` blocks under th
 same repo. See [slack-setup.md](slack-setup.md) for the full Slack setup guide.
 
 For GitHub API access, prefer `github_app_credentials` (short-lived tokens,
-automatic rotation) over `masked_secrets` with a classic PAT. See
-[github-app-setup.md](github-app-setup.md) for the full setup guide. For other
-credentials that should only be usable with specific services, use
-`masked_secrets`. For AWS credentials, use `signing_credentials`. See
-[network-sandbox.md](network-sandbox.md) for details on all credential types.
+automatic rotation, GraphQL repository scoping) over `masked_secrets` with a
+classic PAT — masked secrets provide no protection against exfiltration via
+public repository mutations. See [github-app-setup.md](github-app-setup.md) for
+the full setup guide. For other credentials that should only be usable with
+specific services, use `masked_secrets`. For AWS credentials, use
+`signing_credentials`. See [network-sandbox.md](network-sandbox.md) for details
+on all credential types.
 
 Add secrets to `~/.config/airut/.env`:
 

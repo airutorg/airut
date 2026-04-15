@@ -443,9 +443,14 @@ to work with arbitrary hosts.
 
 **For GitHub tokens specifically**, prefer
 [`github_app_credentials`](#github-app-credentials-proxy-managed-token-rotation)
-over `masked_secrets` with a classic PAT. GitHub App credentials provide
-short-lived tokens that mitigate the response echo risk and eliminate repository
-creation as an exfiltration vector.
+over `masked_secrets` with a classic PAT. Masked secrets provide no protection
+against data exfiltration via public repositories — the proxy performs simple
+string replacement without inspecting request bodies, so a compromised agent can
+use a PAT to create issues, comments, or other mutations on any accessible
+public repository. GitHub App credentials eliminate this risk through
+short-lived tokens, fine-grained permissions (no repository creation), and
+[GraphQL repository scoping](#graphql-repository-scoping) that blocks mutations
+targeting out-of-scope repositories.
 
 See [spec/masked-secrets.md](../spec/masked-secrets.md) for the full
 specification (surrogate format, replacement map, proxy addon details).
@@ -626,15 +631,16 @@ short-lived installation token for scoped hosts.
 
 ### Comparison With Masked Secrets
 
-| Aspect                   | Masked Secret (PAT)      | GitHub App Credential             |
-| ------------------------ | ------------------------ | --------------------------------- |
-| Token lifetime           | Months/years (or never)  | 1 hour                            |
-| Token rotation           | None (static value)      | Automatic (proxy-managed)         |
-| Real token in container  | Never (surrogate)        | Never (surrogate)                 |
-| Proxy complexity         | Stateless string replace | Stateful (cache + HTTP refresh)   |
-| Network call from proxy  | None                     | 1 call per hour to GitHub API     |
-| Response echo risk       | High (PAT valid forever) | Low (token expires in 1 hour)     |
-| Repository creation risk | Cannot prevent           | Impossible without explicit grant |
+| Aspect                    | Masked Secret (PAT)      | GitHub App Credential             |
+| ------------------------- | ------------------------ | --------------------------------- |
+| Token lifetime            | Months/years (or never)  | 1 hour                            |
+| Token rotation            | None (static value)      | Automatic (proxy-managed)         |
+| Real token in container   | Never (surrogate)        | Never (surrogate)                 |
+| Proxy complexity          | Stateless string replace | Stateful (cache + HTTP refresh)   |
+| Network call from proxy   | None                     | 1 call per hour to GitHub API     |
+| Response echo risk        | High (PAT valid forever) | Low (token expires in 1 hour)     |
+| Repository creation risk  | Cannot prevent           | Impossible without explicit grant |
+| Public repo mutation risk | No protection            | Blocked by GraphQL repo scoping   |
 
 ### GraphQL Repository Scoping
 
@@ -666,9 +672,14 @@ specification.
 ### When to Use
 
 For GitHub API access, prefer `github_app_credentials` over `masked_secrets`
-with a classic PAT. The short-lived tokens mitigate the response echo risk, and
-the fine-grained permissions eliminate repository creation as a data
-exfiltration vector.
+with a classic PAT. The short-lived tokens mitigate the response echo risk, the
+fine-grained permissions eliminate repository creation as an exfiltration
+vector, and [GraphQL repository scoping](#graphql-repository-scoping) blocks
+mutations targeting out-of-scope public repositories. Masked secrets provide no
+protection against public repository mutations — the proxy performs simple
+string replacement without inspecting request bodies, so a compromised agent can
+use a PAT to create issues or comments on any public repository as an
+exfiltration channel.
 
 Use `masked_secrets` for non-GitHub tokens (e.g., other API keys) and
 `signing_credentials` for AWS credentials.

@@ -313,6 +313,11 @@ container -- the surrogate never changes.
   additional tokens (that requires JWT authentication with the private key)
 - **No repository creation**: GitHub Apps cannot create repositories unless
   explicitly granted `Administration: write`
+- **GraphQL repository scoping**: The proxy parses GraphQL request bodies and
+  blocks mutations targeting repositories outside the configured set. This
+  protection is exclusive to GitHub App credentials — masked secrets perform
+  simple string replacement without inspecting request bodies, leaving PATs
+  unrestricted against public repository mutations
 - **Scope enforcement**: Same as masked secrets -- proxy only replaces for
   matching hosts, foreign credentials are stripped
 
@@ -470,11 +475,16 @@ legitimate from malicious use of authorized channels.
    scoped hosts. A compromised container can still act within the boundaries of
    what the credentials and scopes allow (e.g., make API calls to scoped hosts),
    but cannot extract the real credentials. For GitHub access specifically,
-   `github_app_credentials` are preferred — even if a token is leaked via
-   response echo, it expires in 1 hour. The ability to act is bound to the
-   container's lifetime and the proxy's enforcement — once the container stops,
-   or if the attacker tries to use the credentials from outside, they are
-   useless. This is the strongest mitigation for credential exfiltration.
+   `github_app_credentials` are strongly preferred over `masked_secrets` with a
+   classic PAT. Beyond short-lived tokens (1-hour expiry vs. months/years),
+   GitHub App credentials provide
+   [GraphQL repository scoping](network-sandbox.md#graphql-repository-scoping)
+   that blocks mutations targeting out-of-scope public repositories. Masked
+   secrets provide **no such protection** — the proxy performs simple string
+   replacement without inspecting request bodies, so a PAT can be used to create
+   issues, comments, or other mutations on any accessible public repository as
+   an exfiltration channel. This is the strongest mitigation for credential
+   exfiltration.
 2. **Scope credentials to minimum** — A token that can only push to one repo
    limits exfiltration to that repo
 3. **Review agent outputs** — PRs, commits, and channel replies are human review
