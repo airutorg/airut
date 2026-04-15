@@ -255,10 +255,11 @@ class TestPrepareSecrets:
         assert surrogate_key.startswith("AKIA")
         assert surrogate_key != "AKIAIOSFODNN7EXAMPLE"
 
-        # Secret access key is passed through as-is
-        assert (
-            result.env_vars["AWS_SECRET_ACCESS_KEY"]
-            == "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        # Secret access key gets a surrogate (real value stays in proxy only)
+        surrogate_secret = result.env_vars["AWS_SECRET_ACCESS_KEY"]
+        assert surrogate_secret != "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+        assert len(surrogate_secret) == len(
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
         )
 
         # Verify replacement map has signing credential entry
@@ -296,6 +297,11 @@ class TestPrepareSecrets:
 
         surrogate_key = result.env_vars["AWS_ACCESS_KEY_ID"]
         assert surrogate_key.startswith("ASIA")
+
+        # Secret access key is surrogated
+        surrogate_secret = result.env_vars["AWS_SECRET_ACCESS_KEY"]
+        assert surrogate_secret != "tempSecretKey"
+        assert len(surrogate_secret) == len("tempSecretKey")
 
         # Session token surrogate has fixed length
         session_surrogate = result.env_vars["AWS_SESSION_TOKEN"]
@@ -700,6 +706,7 @@ class TestPrepareSecretsGitHubApp:
         assert result.env_vars["GH_TOKEN"].startswith("ghs_")
         assert result.env_vars["API_KEY"].startswith("sk-ant-")
         assert result.env_vars["AWS_ACCESS_KEY_ID"].startswith("AKIA")
+        assert result.env_vars["AWS_SECRET_ACCESS_KEY"] != "secret"
         assert len(result.replacements.to_dict()) == 3
 
     def test_backwards_compatible_without_github_app(self) -> None:
