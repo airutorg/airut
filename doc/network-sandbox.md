@@ -275,6 +275,7 @@ Both domains and paths support fnmatch-style wildcards (`*` and `?`):
 
 **Key principles:**
 
+- Domain/host matching is **case-insensitive** per RFC 4343
 - No implicit prefix matching — use explicit `*` for prefix behavior
 - `*.example.com` does NOT match `example.com` (requires subdomain)
 - No path normalization — `/api` and `/api/` are different patterns

@@ -16,8 +16,9 @@ the server config, alongside regular `secrets`. For the full field reference
 (types, defaults, examples), see
 [`config/airut.example.yaml`](../config/airut.example.yaml).
 
-Both `scopes` and `headers` use fnmatch pattern matching. Header matching is
-**case-insensitive** per RFC 7230 (e.g., `"Authorization"` matches
+Both `scopes` and `headers` use fnmatch pattern matching. Scope matching is
+**case-insensitive** per RFC 4343 (DNS hostnames are case-insensitive). Header
+matching is **case-insensitive** per RFC 7230 (e.g., `"Authorization"` matches
 `authorization`, `AUTHORIZATION`, etc.). Common header patterns:
 
 - `"Authorization"` — match a specific header
