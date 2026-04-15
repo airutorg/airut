@@ -65,6 +65,30 @@ url_prefixes:
   - host: api.github.com
     path: /graphql
     methods: [POST]
+    graphql:
+      queries:
+        - "*"
+      mutations:
+        # Pull request lifecycle
+        - createPullRequest
+        - updatePullRequest
+        - mergePullRequest
+        - enablePullRequestAutoMerge
+        - disablePullRequestAutoMerge
+        - markPullRequestReadyForReview
+        - convertPullRequestToDraft
+        # Code review
+        - addPullRequestReview
+        - submitPullRequestReview
+        - requestReviews
+        - resolveReviewThread
+        - unresolveReviewThread
+        # Git refs (branch management)
+        - createRef
+        - updateRef
+        - deleteRef
+        # Commits
+        - createCommitOnBranch
   - host: uploads.github.com
     path: /repos/airutorg/airut*
     methods: [POST]
