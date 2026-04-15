@@ -875,7 +875,7 @@ class TestSSENetworkLogStream:
         tracker.set_authenticating("t1")
         tracker.set_executing("t1")
         log_path = tmp_path / "network-sandbox.log"
-        log_path.write_text("allowed GET https://api.github.com -> 200\n")
+        log_path.write_text("ALLOWED GET https://api.github.com -> 200\n")
         network_log = NetworkLog(log_path)
 
         gen = sse_network_log_stream(
@@ -950,7 +950,7 @@ class TestSSENetworkLogStream:
         next(gen)
 
         # Write log content while stream is running
-        log_path.write_text("allowed GET https://api.github.com -> 200\n")
+        log_path.write_text("ALLOWED GET https://api.github.com -> 200\n")
 
         # Next poll should pick up the new lines as HTML
         event = next(gen)

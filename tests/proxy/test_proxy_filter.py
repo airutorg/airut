@@ -802,7 +802,7 @@ class TestProxyFilterRequest:
         pf.domains = ["example.com"]
         flow = _flow(host="example.com")
         pf.request(flow)
-        assert flow.metadata["allowlist_action"] == "allowed"
+        assert flow.metadata["allowlist_action"] == "ALLOWED"
         assert flow.metadata["masked_count"] == 0
 
     def test_allowed_with_replacement(self) -> None:
@@ -852,30 +852,35 @@ class TestProxyFilterRequest:
 class TestProxyFilterResponse:
     """Tests for ProxyFilter.response() hook."""
 
-    def test_blocked_not_logged(self) -> None:
-        """Blocked requests are not logged in response."""
+    def test_blocked_logged_via_log_loud(self) -> None:
+        """Blocked requests are logged via _log_loud in response."""
         pf = ProxyFilter()
         flow = _flow(response_code=403)
         flow.metadata["allowlist_action"] = "BLOCKED"
-        with patch.object(pf, "_log") as mock_log:
+        with patch.object(pf, "_log_loud") as mock_loud:
             pf.response(flow)
-            mock_log.assert_not_called()
+            mock_loud.assert_called_once()
+            msg = mock_loud.call_args[0][0]
+            assert msg.startswith("BLOCKED")
+            assert "403" in msg
 
     def test_allowed_logged(self) -> None:
         """Allowed requests are logged with status code."""
         pf = ProxyFilter()
         flow = _flow(response_code=200)
-        flow.metadata["allowlist_action"] = "allowed"
+        flow.metadata["allowlist_action"] = "ALLOWED"
         with patch.object(pf, "_log") as mock_log:
             pf.response(flow)
             mock_log.assert_called_once()
-            assert "200" in mock_log.call_args[0][0]
+            msg = mock_log.call_args[0][0]
+            assert msg.startswith("ALLOWED")
+            assert "200" in msg
 
     def test_masked_suffix(self) -> None:
         """Masked count is included in log."""
         pf = ProxyFilter()
         flow = _flow(response_code=200)
-        flow.metadata["allowlist_action"] = "allowed"
+        flow.metadata["allowlist_action"] = "ALLOWED"
         flow.metadata["masked_count"] = 2
         with patch.object(pf, "_log") as mock_log:
             pf.response(flow)
@@ -885,7 +890,7 @@ class TestProxyFilterResponse:
         """Dropped count is included in log."""
         pf = ProxyFilter()
         flow = _flow(response_code=200)
-        flow.metadata["allowlist_action"] = "allowed"
+        flow.metadata["allowlist_action"] = "ALLOWED"
         flow.metadata["dropped_count"] = 1
         with patch.object(pf, "_log") as mock_log:
             pf.response(flow)
@@ -895,7 +900,7 @@ class TestProxyFilterResponse:
         """Both masked and dropped counts appear in log."""
         pf = ProxyFilter()
         flow = _flow(response_code=200)
-        flow.metadata["allowlist_action"] = "allowed"
+        flow.metadata["allowlist_action"] = "ALLOWED"
         flow.metadata["masked_count"] = 1
         flow.metadata["dropped_count"] = 2
         with patch.object(pf, "_log") as mock_log:
@@ -908,10 +913,49 @@ class TestProxyFilterResponse:
         """Handles flow with no response (shows ?)."""
         pf = ProxyFilter()
         flow = _flow()
-        flow.metadata["allowlist_action"] = "allowed"
+        flow.metadata["allowlist_action"] = "ALLOWED"
         with patch.object(pf, "_log") as mock_log:
             pf.response(flow)
             assert "?" in mock_log.call_args[0][0]
+
+    def test_credential_info_suffix(self) -> None:
+        """Credential info annotation appears in log line."""
+        pf = ProxyFilter()
+        flow = _flow(response_code=200)
+        flow.metadata["allowlist_action"] = "ALLOWED"
+        flow.metadata["credential_info"] = "github-app: cached, graphql-scoped"
+        flow.metadata["masked_count"] = 1
+        with patch.object(pf, "_log") as mock_log:
+            pf.response(flow)
+            msg = mock_log.call_args[0][0]
+            assert "[github-app: cached, graphql-scoped]" in msg
+            assert "[masked: 1]" in msg
+            assert msg.startswith("ALLOWED")
+
+    def test_blocked_with_credential_info(self) -> None:
+        """BLOCKED log includes credential info annotation."""
+        pf = ProxyFilter()
+        flow = _flow(response_code=403)
+        flow.metadata["allowlist_action"] = "BLOCKED"
+        flow.metadata["credential_info"] = "github-app: R_evil"
+        with patch.object(pf, "_log_loud") as mock_loud:
+            pf.response(flow)
+            msg = mock_loud.call_args[0][0]
+            assert msg.startswith("BLOCKED")
+            assert "[github-app: R_evil]" in msg
+            assert "403" in msg
+
+    def test_no_action_skips_logging(self) -> None:
+        """Flows without allowlist_action are not logged."""
+        pf = ProxyFilter()
+        flow = _flow(response_code=200)
+        with (
+            patch.object(pf, "_log") as mock_log,
+            patch.object(pf, "_log_loud") as mock_loud,
+        ):
+            pf.response(flow)
+            mock_log.assert_not_called()
+            mock_loud.assert_not_called()
 
     @patch("airut._bundled.proxy.proxy_filter.DEBUG_SIGNING", True)
     def test_aws_error_body_logged_on_4xx(self) -> None:
@@ -919,7 +963,7 @@ class TestProxyFilterResponse:
         body = b'{"message":"AccessDeniedException"}'
         pf = ProxyFilter()
         flow = _flow(response_code=403, response_content=body)
-        flow.metadata["allowlist_action"] = "allowed"
+        flow.metadata["allowlist_action"] = "ALLOWED"
         flow.metadata["aws_resigned"] = True
         with patch.object(pf, "_log") as mock_log:
             pf.response(flow)
@@ -932,7 +976,7 @@ class TestProxyFilterResponse:
         body = b'{"message":"AccessDeniedException"}'
         pf = ProxyFilter()
         flow = _flow(response_code=403, response_content=body)
-        flow.metadata["allowlist_action"] = "allowed"
+        flow.metadata["allowlist_action"] = "ALLOWED"
         flow.metadata["aws_resigned"] = True
         with patch.object(pf, "_log") as mock_log:
             pf.response(flow)
@@ -944,7 +988,7 @@ class TestProxyFilterResponse:
         """AWS re-signed requests don't log body on success."""
         pf = ProxyFilter()
         flow = _flow(response_code=200, response_content=b"ok")
-        flow.metadata["allowlist_action"] = "allowed"
+        flow.metadata["allowlist_action"] = "ALLOWED"
         flow.metadata["aws_resigned"] = True
         with patch.object(pf, "_log") as mock_log:
             pf.response(flow)
@@ -956,7 +1000,7 @@ class TestProxyFilterResponse:
         """Non-AWS requests don't log error body."""
         pf = ProxyFilter()
         flow = _flow(response_code=500, response_content=b"error")
-        flow.metadata["allowlist_action"] = "allowed"
+        flow.metadata["allowlist_action"] = "ALLOWED"
         with patch.object(pf, "_log") as mock_log:
             pf.response(flow)
             calls = [c[0][0] for c in mock_log.call_args_list]
@@ -968,7 +1012,7 @@ class TestProxyFilterResponse:
         body = b"X" * 8000
         pf = ProxyFilter()
         flow = _flow(response_code=403, response_content=body)
-        flow.metadata["allowlist_action"] = "allowed"
+        flow.metadata["allowlist_action"] = "ALLOWED"
         flow.metadata["aws_resigned"] = True
         with patch.object(pf, "_log") as mock_log:
             pf.response(flow)
@@ -984,7 +1028,7 @@ class TestProxyFilterResponse:
         """Empty response body is not logged."""
         pf = ProxyFilter()
         flow = _flow(response_code=403, response_content=b"")
-        flow.metadata["allowlist_action"] = "allowed"
+        flow.metadata["allowlist_action"] = "ALLOWED"
         flow.metadata["aws_resigned"] = True
         with patch.object(pf, "_log") as mock_log:
             pf.response(flow)
@@ -997,7 +1041,7 @@ class TestProxyFilterResponse:
         body = b"\xff\xfe\x00\x01"  # Invalid UTF-8 bytes
         pf = ProxyFilter()
         flow = _flow(response_code=403, response_content=body)
-        flow.metadata["allowlist_action"] = "allowed"
+        flow.metadata["allowlist_action"] = "ALLOWED"
         flow.metadata["aws_resigned"] = True
         with patch.object(pf, "_log") as mock_log:
             pf.response(flow)
@@ -1013,11 +1057,10 @@ class TestProxyFilterResponse:
 class TestProxyFilterError:
     """Tests for ProxyFilter.error() hook."""
 
-    def test_blocked_not_logged(self) -> None:
-        """Blocked requests' errors are not logged."""
+    def test_no_action_not_logged(self) -> None:
+        """Requests with no allowlist_action are not logged."""
         pf = ProxyFilter()
         flow = _flow(error_msg="connection failed")
-        flow.metadata["allowlist_action"] = "BLOCKED"
         with patch.object(pf, "_log_loud") as mock_log:
             pf.error(flow)
             mock_log.assert_not_called()
@@ -1026,18 +1069,28 @@ class TestProxyFilterError:
         """Allowed requests' errors are logged to stdout."""
         pf = ProxyFilter()
         flow = _flow(error_msg="connection refused")
-        flow.metadata["allowlist_action"] = "allowed"
+        flow.metadata["allowlist_action"] = "ALLOWED"
         with patch.object(pf, "_log_loud") as mock_log:
             pf.error(flow)
             mock_log.assert_called_once()
             assert "connection refused" in mock_log.call_args[0][0]
+
+    def test_blocked_error_logged(self) -> None:
+        """Blocked requests' errors are also logged."""
+        pf = ProxyFilter()
+        flow = _flow(error_msg="connection reset")
+        flow.metadata["allowlist_action"] = "BLOCKED"
+        with patch.object(pf, "_log_loud") as mock_log:
+            pf.error(flow)
+            mock_log.assert_called_once()
+            assert "connection reset" in mock_log.call_args[0][0]
 
     def test_no_error_object(self) -> None:
         """Handles flow with no error object."""
         pf = ProxyFilter()
         flow = _flow()
         flow.error = None
-        flow.metadata["allowlist_action"] = "allowed"
+        flow.metadata["allowlist_action"] = "ALLOWED"
         with patch.object(pf, "_log_loud") as mock_log:
             pf.error(flow)
             assert "unknown error" in mock_log.call_args[0][0]
@@ -2251,7 +2304,7 @@ class TestRequestAwsSkip:
         flow.metadata["aws_resigned"] = True
         # Set allowlist so request passes
         pf.request(flow)
-        assert flow.metadata.get("allowlist_action") == "allowed"
+        assert flow.metadata.get("allowlist_action") == "ALLOWED"
 
 
 # ---------------------------------------------------------------------------
@@ -2359,7 +2412,7 @@ class TestWebSocketUpgrade:
             headers=self._ws_headers("ws.example.com"),
         )
         pf.request(flow)
-        assert flow.metadata["allowlist_action"] == "allowed"
+        assert flow.metadata["allowlist_action"] == "ALLOWED"
         assert flow.response is None
 
     def test_websocket_allowed_by_url_prefix(self) -> None:
@@ -2373,7 +2426,7 @@ class TestWebSocketUpgrade:
             headers=self._ws_headers("api.example.com"),
         )
         pf.request(flow)
-        assert flow.metadata["allowlist_action"] == "allowed"
+        assert flow.metadata["allowlist_action"] == "ALLOWED"
 
     def test_websocket_blocked_wrong_path(self) -> None:
         """WebSocket upgrade to wrong path on allowlisted host is blocked."""
@@ -2416,7 +2469,7 @@ class TestWebSocketUpgrade:
             headers=self._ws_headers("ws.example.com"),
         )
         pf.request(flow)
-        assert flow.metadata["allowlist_action"] == "allowed"
+        assert flow.metadata["allowlist_action"] == "ALLOWED"
 
     def test_websocket_token_replacement(self) -> None:
         """Token replacement works on WebSocket upgrade requests."""
@@ -2438,7 +2491,7 @@ class TestWebSocketUpgrade:
             headers=headers,
         )
         pf.request(flow)
-        assert flow.metadata["allowlist_action"] == "allowed"
+        assert flow.metadata["allowlist_action"] == "ALLOWED"
         assert flow.metadata["masked_count"] == 1
         assert flow.request.headers["Authorization"] == "Bearer real_token"
 
@@ -2455,7 +2508,7 @@ class TestResponseAwsRegion:
         """Region is appended to log when aws_region is set."""
         pf = ProxyFilter()
         flow = _flow(response_code=200)
-        flow.metadata["allowlist_action"] = "allowed"
+        flow.metadata["allowlist_action"] = "ALLOWED"
         flow.metadata["masked_count"] = 1
         flow.metadata["aws_region"] = "us-west-2"
         with patch.object(pf, "_log") as mock_log:
@@ -2587,7 +2640,7 @@ class TestHostHeaderMismatch:
         )
         pf.request(flow)
         assert flow.response is None
-        assert flow.metadata["allowlist_action"] == "allowed"
+        assert flow.metadata["allowlist_action"] == "ALLOWED"
 
     def test_default_host_match(self) -> None:
         """When url_host is not set, host and pretty_host match."""
@@ -2596,7 +2649,7 @@ class TestHostHeaderMismatch:
         flow = _flow(host="pypi.org", path="/simple/")
         pf.request(flow)
         assert flow.response is None
-        assert flow.metadata["allowlist_action"] == "allowed"
+        assert flow.metadata["allowlist_action"] == "ALLOWED"
 
     def test_mismatch_logged(self) -> None:
         """Host mismatch is logged via _log_loud."""
@@ -2643,7 +2696,7 @@ class TestHostHeaderMismatch:
         pf.request(flow)
         # Should NOT be blocked as mismatch (case-insensitive match)
         assert flow.response is None
-        assert flow.metadata["allowlist_action"] == "allowed"
+        assert flow.metadata["allowlist_action"] == "ALLOWED"
 
     def test_both_hosts_disallowed_mismatch_takes_priority(self) -> None:
         """When both hosts are disallowed, mismatch error takes priority."""
@@ -2831,6 +2884,8 @@ class TestGitHubAppTokenReplacement:
         assert flow.response.status_code == 502
         body = json.loads(flow.response._content)
         assert body["error"] == "github_app_token_refresh_failed"
+        assert flow.metadata["credential_info"] == "github-app: refresh-failed"
+        assert flow.metadata.get("masked_count", 0) == 0
 
     def test_scope_mismatch_skips_replacement(self) -> None:
         """No replacement when host doesn't match scopes."""
@@ -3144,6 +3199,10 @@ class TestGitHubAppGraphQLScoping:
         resp_body = json.loads(flow.response._content)
         assert resp_body["error"] == "graphql_repo_scope_blocked"
         assert resp_body["detail"] == "R_evil"
+        # Scope block overrides allowlist_action and stores credential info
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+        assert flow.metadata["credential_info"] == "github-app: R_evil"
+        assert flow.metadata.get("masked_count", 0) == 0
 
     def test_allows_in_scope_graphql_mutation(self) -> None:
         """GraphQL mutation with in-scope repositoryId proceeds."""
@@ -3177,6 +3236,9 @@ class TestGitHubAppGraphQLScoping:
 
         assert flow.response is None
         assert flow.request.headers["Authorization"] == "Bearer ghs_real_token"
+        # Credential info includes graphql-scoped tag
+        assert "graphql-scoped" in flow.metadata.get("credential_info", "")
+        assert flow.metadata["masked_count"] == 1
 
     def test_rest_api_skips_graphql_check(self) -> None:
         """Non-GraphQL REST API requests skip body inspection."""
@@ -3414,6 +3476,8 @@ class TestGitHubAppGraphQLScoping:
         resp_body = json.loads(flow.response._content)
         assert resp_body["error"] == "graphql_repo_scope_blocked"
         assert resp_body["detail"] == "query-params"
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+        assert flow.metadata.get("masked_count", 0) == 0
 
     def test_graphql_get_with_query_params_blocked(self) -> None:
         """GET /graphql?query=... is blocked regardless of method."""

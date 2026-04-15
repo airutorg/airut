@@ -724,47 +724,47 @@ def _write_network_log(conv_dir: Path) -> None:
     The proxy emits lines in the format:
         DNS A <host> -> <ip>
         DNS AAAA <host> -> NOTIMP
-        allowed <METHOD> <url> -> <status> [masked: N]
-        ALLOWED <METHOD> <url> [github-app: refreshed|cached]
-        BLOCKED <METHOD> <url> -> <status>
+        ALLOWED <METHOD> <url> -> <status> [annotations...]
+        BLOCKED <METHOD> <url> -> <status> [annotations...]
+
+    Annotations include [github-app: ...], [masked: N], [dropped: N],
+    [region: REGION].
     """
     # fmt: off
     lines = [
         "DNS A api.anthropic.com -> 10.199.10.100",
         "DNS AAAA api.anthropic.com -> NOTIMP",
-        "allowed POST https://api.anthropic.com/v1/messages?beta=true -> 200 [masked: 1]",  # noqa: E501
-        "allowed POST https://api.anthropic.com/api/event_logging/batch -> 200",
-        "allowed POST https://api.anthropic.com/v1/messages?beta=true -> 200 [masked: 1]",  # noqa: E501
+        "ALLOWED POST https://api.anthropic.com/v1/messages?beta=true -> 200 [masked: 1]",  # noqa: E501
+        "ALLOWED POST https://api.anthropic.com/api/event_logging/batch -> 200",
+        "ALLOWED POST https://api.anthropic.com/v1/messages?beta=true -> 200 [masked: 1]",  # noqa: E501
         "DNS A github.com -> 10.199.10.100",
         "DNS AAAA github.com -> NOTIMP",
-        "allowed GET https://github.com/acme/backend.git/info/refs?service=git-upload-pack -> 200",  # noqa: E501
-        "allowed POST https://github.com/acme/backend.git/git-upload-pack -> 200",  # noqa: E501
-        "allowed POST https://api.anthropic.com/v1/messages?beta=true -> 200 [masked: 1]",  # noqa: E501
-        "allowed POST https://api.anthropic.com/api/event_logging/batch -> 200",
-        "allowed POST https://api.anthropic.com/v1/messages?beta=true -> 200 [masked: 1]",  # noqa: E501
+        "ALLOWED GET https://github.com/acme/backend.git/info/refs?service=git-upload-pack -> 200",  # noqa: E501
+        "ALLOWED POST https://github.com/acme/backend.git/git-upload-pack -> 200",  # noqa: E501
+        "ALLOWED POST https://api.anthropic.com/v1/messages?beta=true -> 200 [masked: 1]",  # noqa: E501
+        "ALLOWED POST https://api.anthropic.com/api/event_logging/batch -> 200",
+        "ALLOWED POST https://api.anthropic.com/v1/messages?beta=true -> 200 [masked: 1]",  # noqa: E501
         "DNS A api.github.com -> 10.199.10.100",
         "DNS AAAA api.github.com -> NOTIMP",
-        "allowed GET https://api.github.com/repos/acme/backend/contents/src/auth/session.py -> 200",  # noqa: E501
-        "allowed GET https://api.github.com/repos/acme/backend/pulls -> 200",
+        "ALLOWED GET https://api.github.com/repos/acme/backend/contents/src/auth/session.py -> 200",  # noqa: E501
+        "ALLOWED GET https://api.github.com/repos/acme/backend/pulls -> 200",
         "BLOCKED GET https://evil.example.com/exfiltrate -> 403",
-        "allowed POST https://api.anthropic.com/v1/messages?beta=true -> 200 [masked: 1]",  # noqa: E501
-        "allowed GET https://api.github.com/repos/acme/backend/git/refs -> 200",
-        "allowed POST https://api.anthropic.com/v1/messages?beta=true -> 200 [masked: 1]",  # noqa: E501
-        "allowed GET https://api.github.com/repos/acme/backend/contents/session_v2.py -> 404",  # noqa: E501
-        "allowed POST https://api.anthropic.com/v1/messages?beta=true -> 200 [masked: 1]",  # noqa: E501
+        "ALLOWED POST https://api.anthropic.com/v1/messages?beta=true -> 200 [masked: 1]",  # noqa: E501
+        "ALLOWED GET https://api.github.com/repos/acme/backend/git/refs -> 200",
+        "ALLOWED POST https://api.anthropic.com/v1/messages?beta=true -> 200 [masked: 1]",  # noqa: E501
+        "ALLOWED GET https://api.github.com/repos/acme/backend/contents/session_v2.py -> 404",  # noqa: E501
+        "ALLOWED POST https://api.anthropic.com/v1/messages?beta=true -> 200 [masked: 1]",  # noqa: E501
         "BLOCKED POST https://webhook.site/callback -> 403",
-        "allowed POST https://api.anthropic.com/api/event_logging/batch -> 200",
+        "ALLOWED POST https://api.anthropic.com/api/event_logging/batch -> 200",
         "DNS A github.com -> 10.199.10.100",
         "DNS AAAA github.com -> NOTIMP",
-        "allowed GET https://github.com/acme/backend.git/info/refs?service=git-receive-pack -> 401",  # noqa: E501
-        "ALLOWED GET https://github.com/acme/backend.git/info/refs?service=git-receive-pack [github-app: refreshed]",  # noqa: E501
-        "allowed GET https://github.com/acme/backend.git/info/refs?service=git-receive-pack -> 200 [masked: 1]",  # noqa: E501
-        "ALLOWED POST https://github.com/acme/backend.git/git-receive-pack [github-app: cached]",  # noqa: E501
-        "allowed POST https://github.com/acme/backend.git/git-receive-pack -> 200 [masked: 1]",  # noqa: E501
-        "allowed POST https://api.anthropic.com/v1/messages?beta=true -> 200 [masked: 1]",  # noqa: E501
+        "ALLOWED GET https://github.com/acme/backend.git/info/refs?service=git-receive-pack -> 401",  # noqa: E501
+        "ALLOWED GET https://github.com/acme/backend.git/info/refs?service=git-receive-pack -> 200 [github-app: refreshed] [masked: 1]",  # noqa: E501
+        "ALLOWED POST https://github.com/acme/backend.git/git-receive-pack -> 200 [github-app: cached] [masked: 1]",  # noqa: E501
+        "ALLOWED POST https://api.anthropic.com/v1/messages?beta=true -> 200 [masked: 1]",  # noqa: E501
         "DNS A pypi.org -> 10.199.10.100",
         "DNS AAAA pypi.org -> NOTIMP",
-        "allowed GET https://pypi.org/simple/pytest/ -> 200",
+        "ALLOWED GET https://pypi.org/simple/pytest/ -> 200",
     ]
     # fmt: on
     log_path = conv_dir / "network-sandbox.log"

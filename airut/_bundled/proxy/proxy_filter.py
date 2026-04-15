@@ -604,6 +604,9 @@ class ProxyFilter:
                         f"{flow.request.method} "
                         f"{flow.request.pretty_url}: {e}"
                     )
+                    flow.metadata["credential_info"] = (
+                        "github-app: refresh-failed"
+                    )
                     flow.response = http.Response.make(
                         502,
                         json.dumps(
@@ -628,10 +631,9 @@ class ProxyFilter:
                 # body.  Query parameters could bypass body-based
                 # scope checking.
                 if "?" in req_path:
-                    self._log_loud(
-                        f"BLOCKED {flow.request.method} "
-                        f"{flow.request.pretty_url} "
-                        f"[github-app: graphql-query-params]"
+                    flow.metadata["allowlist_action"] = "BLOCKED"
+                    flow.metadata["credential_info"] = (
+                        "github-app: graphql-query-params"
                     )
                     flow.response = http.Response.make(
                         403,
@@ -678,11 +680,8 @@ class ProxyFilter:
                             f"allowed when repository scoping is "
                             f"active."
                         )
-                    self._log_loud(
-                        f"BLOCKED {flow.request.method} "
-                        f"{flow.request.pretty_url} "
-                        f"[github-app: {detail}]"
-                    )
+                    flow.metadata["allowlist_action"] = "BLOCKED"
+                    flow.metadata["credential_info"] = f"github-app: {detail}"
                     flow.response = http.Response.make(
                         403,
                         json.dumps(
@@ -709,10 +708,8 @@ class ProxyFilter:
                 flow.request.headers["Authorization"] = auth_value.replace(
                     surrogate, real_token
                 )
-            self._log(
-                f"ALLOWED {flow.request.method} "
-                f"{flow.request.pretty_url} "
-                f"[github-app: {cache_status}{graphql_tag}]"
+            flow.metadata["credential_info"] = (
+                f"github-app: {cache_status}{graphql_tag}"
             )
             return True
 
@@ -1190,10 +1187,8 @@ class ProxyFilter:
         method = flow.request.method
 
         if not self._is_allowed(host, path, method):
-            # Block the request
+            # Block the request — logged centrally in response()
             flow.metadata["allowlist_action"] = "BLOCKED"
-            url = flow.request.pretty_url
-            self._log_loud(f"BLOCKED {method} {url} -> 403")
 
             # Distinguish method-blocked from host/path-blocked for
             # actionable agent feedback
@@ -1227,7 +1222,7 @@ class ProxyFilter:
             return
 
         # Request is allowed
-        flow.metadata["allowlist_action"] = "allowed"
+        flow.metadata["allowlist_action"] = "ALLOWED"
 
         # If already re-signed in requestheaders(), skip token replacement
         if flow.metadata.get("aws_resigned"):
@@ -1250,7 +1245,10 @@ class ProxyFilter:
 
         # Try GitHub App token replacement before general token masking
         if self._try_github_app(flow):
-            flow.metadata["masked_count"] = 1
+            # Only count as masked if the token was actually replaced
+            # and forwarded upstream (not blocked or failed refresh)
+            if flow.response is None:
+                flow.metadata["masked_count"] = 1
             return
 
         replaced, dropped = self._replace_tokens(flow)
@@ -1282,28 +1280,60 @@ class ProxyFilter:
             return data
 
     def response(self, flow: http.HTTPFlow) -> None:
-        """Log allowed requests with their response status."""
-        if flow.metadata.get("allowlist_action") != "allowed":
+        """Emit one access-decision log line per request.
+
+        Centralises all ``ALLOWED`` / ``BLOCKED`` logging so that every
+        HTTP request (excluding DNS) produces exactly one log line with
+        a consistent format::
+
+            {ALLOWED|BLOCKED} {METHOD} {URL} -> {STATUS}{annotations}
+
+        Annotations are optional bracket-delimited metadata appended
+        after the status code (e.g. ``[github-app: cached]``,
+        ``[masked: 1]``, ``[dropped: 1]``, ``[region: us-west-2]``).
+
+        ``ALLOWED`` lines are written to the network log file only.
+        ``BLOCKED`` lines are written to both stdout (syslog) and
+        the network log file.
+        """
+        action = flow.metadata.get("allowlist_action")
+        if action is None:
             return
 
         code = flow.response.status_code if flow.response else "?"
         url = flow.request.pretty_url
+        method = flow.request.method
 
-        # Append masking info if tokens were replaced
+        # Build annotation suffix
+        parts: list[str] = []
+
+        # Credential info (GitHub App cache status, scope tags)
+        cred = flow.metadata.get("credential_info")
+        if cred:
+            parts.append(f"[{cred}]")
+
+        # Token replacement count
         masked = flow.metadata.get("masked_count", 0)
-        suffix = f" [masked: {masked}]" if masked else ""
+        if masked:
+            parts.append(f"[masked: {masked}]")
 
-        # Append dropped info if foreign credential headers were stripped
+        # Foreign credential headers stripped
         dropped = flow.metadata.get("dropped_count", 0)
         if dropped:
-            suffix += f" [dropped: {dropped}]"
+            parts.append(f"[dropped: {dropped}]")
 
-        # Append region info for AWS re-signed requests
+        # AWS region
         region = flow.metadata.get("aws_region")
         if region:
-            suffix += f" [region: {region}]"
+            parts.append(f"[region: {region}]")
 
-        self._log(f"allowed {flow.request.method} {url} -> {code}{suffix}")
+        suffix = (" " + " ".join(parts)) if parts else ""
+        line = f"{action} {method} {url} -> {code}{suffix}"
+
+        if action == "BLOCKED":
+            self._log_loud(line)
+        else:
+            self._log(line)
 
         # Log response body for failed AWS re-signed requests when
         # DEBUG_SIGNING is enabled.  Reveals the specific AWS error
@@ -1331,7 +1361,7 @@ class ProxyFilter:
 
     def error(self, flow: http.HTTPFlow) -> None:
         """Log upstream connection errors (e.g. DNS resolution failure)."""
-        if flow.metadata.get("allowlist_action") != "allowed":
+        if flow.metadata.get("allowlist_action") not in ("ALLOWED", "BLOCKED"):
             return
 
         url = flow.request.pretty_url
