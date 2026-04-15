@@ -18,6 +18,18 @@ from graphql_scope import (  # ty:ignore[unresolved-import]
 
 ALLOWED = frozenset({"R_kgDORH34qw", "R_kgDORm2NDQ"})
 
+# Synthetic node IDs for node ID ownership tests.
+# R_kgDORH34qw decodes to repo_db_id 1149106347
+# R_kgDORm2NDQ decodes to repo_db_id 1181584653
+ISSUE_IN_SCOPE = "I_kwDORH34q80wOQ"  # repo_db_id = 1149106347
+PR_IN_SCOPE = "PR_kwDORm2NDc4AAQky"  # repo_db_id = 1181584653
+COMMENT_IN_SCOPE = "IC_kwDORH34q80rZw"  # repo_db_id = 1149106347
+DISCUSSION_IN_SCOPE = "D_kwDORm2NDc1Wzg"  # repo_db_id = 1181584653
+ISSUE_EVIL = "I_kwDOO5rJ/84AAYaf"  # repo_db_id = 999999999
+PR_EVIL = "PR_kwDOO5rJ/84AAVs4"  # repo_db_id = 999999999
+COMMENT_EVIL = "IC_kwDOO5rJ/84AAS/R"  # repo_db_id = 999999999
+USER_ID = "U_kgDOAAjmPw"  # non-repo-scoped
+
 # Shorthand for expected results used across many tests.
 _OK = ScopeResult(ScopeVerdict.ALLOWED)
 _PARSE = ScopeResult(ScopeVerdict.PARSE_ERROR, "<unparseable>")
@@ -371,3 +383,468 @@ class TestFalsePositiveResistance:
         )
         body = json.dumps({"query": query}).encode()
         assert check_repo_scope(body, ALLOWED) == _OK
+
+
+# -------------------------------------------------------------------
+# Node ID ownership check (layer 2)
+# -------------------------------------------------------------------
+
+
+class TestNodeIdOwnership:
+    """Tests for *Id field node ID ownership checking."""
+
+    def test_subject_id_in_scope(self) -> None:
+        body = _body(
+            'mutation { addComment(input: {subjectId: "'
+            + ISSUE_IN_SCOPE
+            + '", body: "hi"}) { commentEdge { node { id } } } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+    def test_subject_id_out_of_scope(self) -> None:
+        body = _body(
+            'mutation { addComment(input: {subjectId: "'
+            + ISSUE_EVIL
+            + '", body: "hi"}) { commentEdge { node { id } } } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(ISSUE_EVIL)
+
+    def test_pull_request_id_in_scope(self) -> None:
+        body = _body(
+            'mutation { closePullRequest(input: {pullRequestId: "'
+            + PR_IN_SCOPE
+            + '"}) { pullRequest { id } } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+    def test_pull_request_id_out_of_scope(self) -> None:
+        body = _body(
+            'mutation { closePullRequest(input: {pullRequestId: "'
+            + PR_EVIL
+            + '"}) { pullRequest { id } } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(PR_EVIL)
+
+    def test_issue_id_in_scope(self) -> None:
+        body = _body(
+            'mutation { closeIssue(input: {issueId: "'
+            + ISSUE_IN_SCOPE
+            + '"}) { issue { id } } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+    def test_issue_id_out_of_scope(self) -> None:
+        body = _body(
+            'mutation { closeIssue(input: {issueId: "'
+            + ISSUE_EVIL
+            + '"}) { issue { id } } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(ISSUE_EVIL)
+
+    def test_discussion_id_in_scope(self) -> None:
+        body = _body(
+            'mutation { addDiscussionComment(input: {discussionId: "'
+            + DISCUSSION_IN_SCOPE
+            + '", body: "hi"}) { comment { id } } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+    def test_comment_id_out_of_scope(self) -> None:
+        body = _body(
+            'mutation { deleteIssueComment(input: {id: "'
+            + COMMENT_EVIL
+            + '"}) { clientMutationId } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(COMMENT_EVIL)
+
+    def test_multiple_node_ids_all_in_scope(self) -> None:
+        body = _body(
+            "mutation {"
+            '  a: addComment(input: {subjectId: "'
+            + ISSUE_IN_SCOPE
+            + '", body: "a"}) { commentEdge { node { id } } }'
+            '  b: closePullRequest(input: {pullRequestId: "'
+            + PR_IN_SCOPE
+            + '"}) { pullRequest { id } }'
+            "}"
+        )
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+    def test_multiple_node_ids_one_evil(self) -> None:
+        body = _body(
+            "mutation {"
+            '  a: addComment(input: {subjectId: "'
+            + ISSUE_IN_SCOPE
+            + '", body: "a"}) { commentEdge { node { id } } }'
+            '  b: closePullRequest(input: {pullRequestId: "'
+            + PR_EVIL
+            + '"}) { pullRequest { id } }'
+            "}"
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(PR_EVIL)
+
+
+class TestNodeIdVariables:
+    """Tests for node ID checking via variable references."""
+
+    def test_var_ref_in_scope(self) -> None:
+        body = _body(
+            "mutation($sid: ID!) {"
+            '  addComment(input: {subjectId: $sid, body: "hi"})'
+            "    { commentEdge { node { id } } }"
+            "}",
+            variables={"sid": ISSUE_IN_SCOPE},
+        )
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+    def test_var_ref_out_of_scope(self) -> None:
+        body = _body(
+            "mutation($sid: ID!) {"
+            '  addComment(input: {subjectId: $sid, body: "hi"})'
+            "    { commentEdge { node { id } } }"
+            "}",
+            variables={"sid": ISSUE_EVIL},
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(ISSUE_EVIL)
+
+    def test_var_ref_unresolved(self) -> None:
+        body = _body(
+            "mutation($sid: ID!) {"
+            '  addComment(input: {subjectId: $sid, body: "hi"})'
+            "    { commentEdge { node { id } } }"
+            "}",
+            variables={},
+        )
+        assert check_repo_scope(body, ALLOWED) == _UNRESOLVED
+
+    def test_var_object_in_scope(self) -> None:
+        body = _body(
+            "mutation($input: AddCommentInput!) {"
+            "  addComment(input: $input)"
+            "    { commentEdge { node { id } } }"
+            "}",
+            variables={
+                "input": {
+                    "subjectId": ISSUE_IN_SCOPE,
+                    "body": "hello",
+                }
+            },
+        )
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+    def test_var_object_out_of_scope(self) -> None:
+        body = _body(
+            "mutation($input: AddCommentInput!) {"
+            "  addComment(input: $input)"
+            "    { commentEdge { node { id } } }"
+            "}",
+            variables={
+                "input": {
+                    "subjectId": ISSUE_EVIL,
+                    "body": "hello",
+                }
+            },
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(ISSUE_EVIL)
+
+
+class TestNodeIdNonRepoScoped:
+    """Tests that non-repo-scoped node IDs are allowed through."""
+
+    def test_user_id_allowed(self) -> None:
+        body = _body(
+            'mutation { followUser(input: {userId: "'
+            + USER_ID
+            + '"}) { user { login } } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+
+class TestNodeIdClientMutationId:
+    """Tests that clientMutationId is not checked."""
+
+    def test_client_mutation_id_not_checked(self) -> None:
+        body = _body(
+            'mutation { closeIssue(input: {issueId: "'
+            + ISSUE_IN_SCOPE
+            + '", clientMutationId: "EVIL_notANodeId1234"}'
+            ") { issue { id } } }"
+        )
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+    def test_client_mutation_id_with_node_id_format(self) -> None:
+        # clientMutationId happens to look like a node ID — should
+        # still be skipped.
+        body = _body(
+            'mutation { closeIssue(input: {issueId: "'
+            + ISSUE_IN_SCOPE
+            + '", clientMutationId: "'
+            + ISSUE_EVIL
+            + '"}) { issue { id } } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+
+class TestNodeIdFailSecure:
+    """Tests for fail-secure behavior on undecodable node IDs."""
+
+    def test_undecodable_node_id_blocked(self) -> None:
+        # Looks like a node ID (matches pattern) but payload is garbage.
+        body = _body(
+            'mutation { addComment(input: {subjectId: "I_!!!invalid!!!",'
+            ' body: "hi"}) { commentEdge { node { id } } } }'
+        )
+        # "I_!!!invalid!!!" does not match _NODE_ID_RE (contains !)
+        # so it's treated as a non-node-ID value and skipped.
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+    def test_valid_pattern_bad_payload_blocked(self) -> None:
+        # Matches the node ID pattern but contains invalid msgpack.
+        import base64
+
+        bad_payload = (
+            base64.b64encode(b"\x80\x00\x00\x00").rstrip(b"=").decode()
+        )
+        bad_id = f"I_{bad_payload}"
+        body = _body(
+            'mutation { addComment(input: {subjectId: "'
+            + bad_id
+            + '", body: "hi"}) { commentEdge { node { id } } } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(bad_id)
+
+
+class TestNodeIdBadAllowedSet:
+    """Tests for when allowed R_ IDs themselves can't be decoded."""
+
+    def test_undecodable_allowed_r_ids_returns_parse_error(self) -> None:
+        import base64 as b64
+
+        bad_payload = b64.b64encode(b"\x80\x00\x00\x00").rstrip(b"=").decode()
+        bad_allowed = frozenset({f"R_{bad_payload}"})
+        body = _body(
+            'mutation { addComment(input: {subjectId: "'
+            + ISSUE_IN_SCOPE
+            + '", body: "hi"}) { commentEdge { node { id } } } }'
+        )
+        assert check_repo_scope(body, bad_allowed) == _PARSE
+
+
+class TestNodeIdCombinedLayers:
+    """Tests for both layers working together."""
+
+    def test_repo_id_and_subject_id_both_in_scope(self) -> None:
+        body = _body(
+            "mutation {"
+            '  createIssue(input: {repositoryId: "R_kgDORH34qw",'
+            '    title: "a"}) { issue { id } }'
+            '  addComment(input: {subjectId: "'
+            + ISSUE_IN_SCOPE
+            + '", body: "b"}) { commentEdge { node { id } } }'
+            "}"
+        )
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+    def test_repo_id_in_scope_but_subject_id_evil(self) -> None:
+        body = _body(
+            "mutation {"
+            '  createIssue(input: {repositoryId: "R_kgDORH34qw",'
+            '    title: "a"}) { issue { id } }'
+            '  addComment(input: {subjectId: "'
+            + ISSUE_EVIL
+            + '", body: "b"}) { commentEdge { node { id } } }'
+            "}"
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(ISSUE_EVIL)
+
+    def test_repo_id_evil_caught_before_node_id_check(self) -> None:
+        body = _body(
+            "mutation {"
+            '  createIssue(input: {repositoryId: "R_evil",'
+            '    title: "a"}) { issue { id } }'
+            '  addComment(input: {subjectId: "'
+            + ISSUE_IN_SCOPE
+            + '", body: "b"}) { commentEdge { node { id } } }'
+            "}"
+        )
+        # Layer 1 catches the bad repositoryId before layer 2 runs.
+        assert check_repo_scope(body, ALLOWED) == _oos("R_evil")
+
+    def test_query_with_id_in_selection_set_allowed(self) -> None:
+        """Field named 'id' in selection set is not an input field."""
+        body = _body("query { viewer { id login } }")
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+    def test_non_node_id_string_in_id_field_skipped(self) -> None:
+        """A short string like '123' in an *Id field is not a node ID."""
+        body = _body(
+            'mutation { updateIssue(input: {labelableId: "123",'
+            ' title: "updated"}) { issue { id } } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+
+# -------------------------------------------------------------------
+# Nested variable objects (MEDIUM-1 fix)
+# -------------------------------------------------------------------
+
+
+class TestNestedVariableObjects:
+    """Tests that deeply nested variable objects are scanned."""
+
+    def test_nested_repo_id_out_of_scope(self) -> None:
+        body = _body(
+            "mutation($input: SomeInput!) {  doThing(input: $input) { id }}",
+            variables={
+                "input": {
+                    "nested": {
+                        "repositoryId": "R_evil",
+                    }
+                }
+            },
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos("R_evil")
+
+    def test_nested_node_id_out_of_scope(self) -> None:
+        body = _body(
+            "mutation($input: SomeInput!) {  doThing(input: $input) { id }}",
+            variables={
+                "input": {
+                    "nested": {
+                        "subjectId": ISSUE_EVIL,
+                    }
+                }
+            },
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(ISSUE_EVIL)
+
+    def test_deeply_nested_node_id_in_scope(self) -> None:
+        body = _body(
+            "mutation($input: SomeInput!) {  doThing(input: $input) { id }}",
+            variables={
+                "input": {
+                    "level1": {
+                        "level2": {
+                            "subjectId": ISSUE_IN_SCOPE,
+                        }
+                    }
+                }
+            },
+        )
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+
+# -------------------------------------------------------------------
+# Plural *Ids fields (MEDIUM-2 fix)
+# -------------------------------------------------------------------
+
+
+class TestPluralIdFields:
+    """Tests for plural *Ids fields (e.g., labelIds, assigneeIds)."""
+
+    def test_label_ids_inlined_in_scope(self) -> None:
+        body = _body(
+            'mutation { addLabelsToLabelable(input: {labelableId: "'
+            + ISSUE_IN_SCOPE
+            + '", labelIds: ["'
+            + COMMENT_IN_SCOPE
+            + '"]}) { labelable { labels { totalCount } } } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+    def test_label_ids_inlined_out_of_scope(self) -> None:
+        body = _body(
+            'mutation { addLabelsToLabelable(input: {labelableId: "'
+            + ISSUE_IN_SCOPE
+            + '", labelIds: ["'
+            + COMMENT_EVIL
+            + '"]}) { labelable { labels { totalCount } } } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(COMMENT_EVIL)
+
+    def test_ids_via_variable_list(self) -> None:
+        body = _body(
+            "mutation($ids: [ID!]!) {"
+            '  addLabelsToLabelable(input: {labelableId: "'
+            + ISSUE_IN_SCOPE
+            + '", labelIds: $ids})'
+            "    { labelable { labels { totalCount } } }"
+            "}",
+            variables={"ids": [COMMENT_EVIL]},
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(COMMENT_EVIL)
+
+    def test_ids_in_variable_object(self) -> None:
+        body = _body(
+            "mutation($input: AddLabelsInput!) {"
+            "  addLabelsToLabelable(input: $input)"
+            "    { labelable { labels { totalCount } } }"
+            "}",
+            variables={
+                "input": {
+                    "labelableId": ISSUE_IN_SCOPE,
+                    "labelIds": [COMMENT_EVIL],
+                }
+            },
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(COMMENT_EVIL)
+
+    def test_ids_list_with_var_ref_out_of_scope(self) -> None:
+        body = _body(
+            "mutation($evil: ID!) {"
+            '  addLabelsToLabelable(input: {labelableId: "'
+            + ISSUE_IN_SCOPE
+            + '", labelIds: [$evil]})'
+            "    { labelable { labels { totalCount } } }"
+            "}",
+            variables={"evil": COMMENT_EVIL},
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(COMMENT_EVIL)
+
+    def test_ids_in_variable_object_all_in_scope(self) -> None:
+        body = _body(
+            "mutation($input: AddLabelsInput!) {"
+            "  addLabelsToLabelable(input: $input)"
+            "    { labelable { labels { totalCount } } }"
+            "}",
+            variables={
+                "input": {
+                    "labelableId": ISSUE_IN_SCOPE,
+                    "labelIds": [COMMENT_IN_SCOPE, DISCUSSION_IN_SCOPE],
+                }
+            },
+        )
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+
+# -------------------------------------------------------------------
+# Argument-level id fields (MEDIUM-3 fix)
+# -------------------------------------------------------------------
+
+
+class TestArgumentLevelIds:
+    """Tests for id/node ID fields as direct mutation arguments."""
+
+    def test_argument_id_out_of_scope(self) -> None:
+        body = _body(
+            'mutation { deleteNode(id: "'
+            + ISSUE_EVIL
+            + '") { clientMutationId } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(ISSUE_EVIL)
+
+    def test_argument_id_in_scope(self) -> None:
+        body = _body(
+            'mutation { deleteNode(id: "'
+            + ISSUE_IN_SCOPE
+            + '") { clientMutationId } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _OK
+
+    def test_argument_subject_id_out_of_scope(self) -> None:
+        body = _body(
+            'mutation { addReaction(subjectId: "'
+            + ISSUE_EVIL
+            + '", content: THUMBS_UP) { reaction { id } } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos(ISSUE_EVIL)
