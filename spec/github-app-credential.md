@@ -296,16 +296,17 @@ proxy_filter.py request()
 
 ## Comparison With Masked Secrets
 
-| Aspect                   | Masked Secret (PAT)      | GitHub App Credential             |
-| ------------------------ | ------------------------ | --------------------------------- |
-| Token lifetime           | Months/years (or never)  | 1 hour                            |
-| Token rotation           | None (static value)      | Automatic (proxy-managed)         |
-| Private key in container | N/A                      | Never                             |
-| Real token in container  | Never (surrogate)        | Never (surrogate)                 |
-| Proxy complexity         | Stateless string replace | Stateful (cache + HTTP refresh)   |
-| Network call from proxy  | None                     | 1 call per hour to GitHub API     |
-| Response echo risk       | High (PAT valid forever) | Low (token expires in 1 hour)     |
-| GitHub rate limits       | 5,000/hr (PAT)           | 5,000-12,500/hr (scales with org) |
+| Aspect                    | Masked Secret (PAT)      | GitHub App Credential             |
+| ------------------------- | ------------------------ | --------------------------------- |
+| Token lifetime            | Months/years (or never)  | 1 hour                            |
+| Token rotation            | None (static value)      | Automatic (proxy-managed)         |
+| Private key in container  | N/A                      | Never                             |
+| Real token in container   | Never (surrogate)        | Never (surrogate)                 |
+| Proxy complexity          | Stateless string replace | Stateful (cache + HTTP refresh)   |
+| Network call from proxy   | None                     | 1 call per hour to GitHub API     |
+| Response echo risk        | High (PAT valid forever) | Low (token expires in 1 hour)     |
+| Public repo mutation risk | No protection            | Blocked by GraphQL repo scoping   |
+| GitHub rate limits        | 5,000/hr (PAT)           | 5,000-12,500/hr (scales with org) |
 
 ## Design Decisions
 
