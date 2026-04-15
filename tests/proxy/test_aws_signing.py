@@ -71,6 +71,32 @@ class TestUriEncode:
         """Hex digits in encoding are uppercase."""
         assert _uri_encode("@") == "%40"
 
+    def test_multibyte_utf8(self) -> None:
+        """Multi-byte UTF-8 encodes as byte sequence, not code point.
+
+        '你' (U+4F60) encodes to UTF-8 bytes E4 BD A0, so the correct
+        percent-encoding is %E4%BD%A0, not %4F60.
+        """
+        assert _uri_encode("你") == "%E4%BD%A0"
+
+    def test_two_byte_utf8(self) -> None:
+        """Two-byte UTF-8 character encodes correctly.
+
+        '£' (U+00A3) encodes to UTF-8 bytes C2 A3.
+        """
+        assert _uri_encode("£") == "%C2%A3"
+
+    def test_four_byte_utf8(self) -> None:
+        """Four-byte UTF-8 character (emoji) encodes correctly.
+
+        '😀' (U+1F600) encodes to UTF-8 bytes F0 9F 98 80.
+        """
+        assert _uri_encode("😀") == "%F0%9F%98%80"
+
+    def test_mixed_ascii_and_multibyte(self) -> None:
+        """Mixed ASCII and multi-byte characters encode correctly."""
+        assert _uri_encode("key-你好") == "key-%E4%BD%A0%E5%A5%BD"
+
 
 # ---------------------------------------------------------------------------
 # Canonical URI
