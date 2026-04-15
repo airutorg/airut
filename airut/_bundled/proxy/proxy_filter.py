@@ -129,6 +129,28 @@ def _match_pattern(pattern: str, value: str) -> bool:
     return pattern == value
 
 
+def _match_host_pattern(pattern: str, hostname: str) -> bool:
+    """Match hostname against pattern, case-insensitively.
+
+    DNS hostnames are case-insensitive per RFC 4343. This function performs
+    case-insensitive matching for both exact matches and fnmatch patterns.
+
+    Args:
+        pattern: Pattern to match against
+            (e.g., "api.github.com", "*.github.com").
+        hostname: Hostname from request (may be any case).
+
+    Returns:
+        True if hostname matches pattern case-insensitively.
+    """
+    pattern_lower = pattern.lower()
+    hostname_lower = hostname.lower()
+
+    if "*" in pattern_lower or "?" in pattern_lower:
+        return fnmatch.fnmatch(hostname_lower, pattern_lower)
+    return pattern_lower == hostname_lower
+
+
 def _match_header_pattern(pattern: str, header_name: str) -> bool:
     """Match header name against pattern, case-insensitively.
 
@@ -318,7 +340,7 @@ class ProxyFilter:
         # Check domain entries (with wildcard support)
         # Domain entries allow all methods unconditionally
         for domain in self.domains:
-            if _match_pattern(domain, host):
+            if _match_host_pattern(domain, host):
                 return True, None
 
         # Check URL pattern entries
@@ -327,7 +349,7 @@ class ProxyFilter:
             entry_path = entry.get("path", "")
             entry_methods: list[str] = entry.get("methods", [])
 
-            if _match_pattern(entry_host, host):
+            if _match_host_pattern(entry_host, host):
                 # Empty path means allow all paths on this host
                 if not entry_path or _match_pattern(entry_path, path):
                     # Empty methods means allow all methods.
@@ -473,7 +495,7 @@ class ProxyFilter:
             real_value = config.get("value", "")
 
             # Check if host matches any scope pattern
-            if not any(_match_pattern(scope, host) for scope in scopes):
+            if not any(_match_host_pattern(scope, host) for scope in scopes):
                 continue
 
             # Get header patterns to scan (supports fnmatch, e.g., "*")
@@ -604,7 +626,7 @@ class ProxyFilter:
 
             # Verify host matches scopes
             scopes = config.get("scopes", [])
-            if not any(_match_pattern(scope, host) for scope in scopes):
+            if not any(_match_host_pattern(scope, host) for scope in scopes):
                 continue
 
             # Found a matching GitHub App credential — get a real token
@@ -788,7 +810,7 @@ class ProxyFilter:
                 continue
 
             scopes = config.get("scopes", [])
-            if not any(_match_pattern(scope, host) for scope in scopes):
+            if not any(_match_host_pattern(scope, host) for scope in scopes):
                 continue
 
             if config.get("allow_foreign_credentials", False):
@@ -837,7 +859,7 @@ class ProxyFilter:
 
         # Verify host matches scopes
         scopes = config.get("scopes", [])
-        if not any(_match_pattern(scope, host) for scope in scopes):
+        if not any(_match_host_pattern(scope, host) for scope in scopes):
             return None
 
         # Check clock skew
@@ -1084,7 +1106,7 @@ class ProxyFilter:
 
         # Verify host matches scopes
         scopes = config.get("scopes", [])
-        if not any(_match_pattern(scope, host) for scope in scopes):
+        if not any(_match_host_pattern(scope, host) for scope in scopes):
             return None
 
         real_key_id: str = config["access_key_id"]

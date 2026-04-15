@@ -34,6 +34,31 @@ def _match_pattern(pattern: str, value: str) -> bool:
     return pattern == value
 
 
+def _match_host_pattern(pattern: str, hostname: str) -> bool:
+    """Match hostname against pattern, case-insensitively.
+
+    This is a copy of the function from airut/_bundled/proxy/proxy_filter.py
+    for testing purposes (to avoid mitmproxy import dependencies).
+
+    DNS hostnames are case-insensitive per RFC 4343. This function performs
+    case-insensitive matching for both exact matches and fnmatch patterns.
+
+    Args:
+        pattern: Pattern to match against
+            (e.g., "api.github.com", "*.github.com").
+        hostname: Hostname from request (may be any case).
+
+    Returns:
+        True if hostname matches pattern case-insensitively.
+    """
+    pattern_lower = pattern.lower()
+    hostname_lower = hostname.lower()
+
+    if "*" in pattern_lower or "?" in pattern_lower:
+        return fnmatch.fnmatch(hostname_lower, pattern_lower)
+    return pattern_lower == hostname_lower
+
+
 def _match_header_pattern(pattern: str, header_name: str) -> bool:
     """Match header name against pattern, case-insensitively.
 
@@ -96,7 +121,7 @@ class MockNetworkAllowlist:
         # Check domain entries (with wildcard support)
         # Domain entries allow all methods unconditionally
         for domain in self.domains:
-            if _match_pattern(domain, host):
+            if _match_host_pattern(domain, host):
                 return True
 
         # Check URL pattern entries
@@ -105,7 +130,7 @@ class MockNetworkAllowlist:
             entry_path = entry.get("path", "")
             entry_methods = entry.get("methods", [])
 
-            if _match_pattern(entry_host, host):
+            if _match_host_pattern(entry_host, host):
                 # Empty path means allow all paths on this host
                 if not entry_path or _match_pattern(entry_path, path):
                     # Empty methods means allow all methods.
@@ -205,6 +230,67 @@ class TestMatchPattern:
         assert _match_pattern("*", "foo/bar/baz") is True
 
 
+class TestMatchHostPattern:
+    """Tests for _match_host_pattern (case-insensitive DNS matching)."""
+
+    # --- Exact matching (case-insensitive) ---
+
+    def test_exact_match_same_case(self) -> None:
+        """Exact domain match with same case."""
+        assert _match_host_pattern("api.github.com", "api.github.com") is True
+
+    def test_exact_match_uppercase_hostname(self) -> None:
+        """Uppercase hostname matches lowercase pattern."""
+        assert _match_host_pattern("api.github.com", "API.GITHUB.COM") is True
+
+    def test_exact_match_uppercase_pattern(self) -> None:
+        """Uppercase pattern matches lowercase hostname."""
+        assert _match_host_pattern("API.GITHUB.COM", "api.github.com") is True
+
+    def test_exact_match_mixed_case(self) -> None:
+        """Mixed case in both pattern and hostname."""
+        assert _match_host_pattern("Api.GitHub.Com", "api.github.com") is True
+        assert _match_host_pattern("api.github.com", "Api.GitHub.Com") is True
+
+    def test_exact_match_different_domain(self) -> None:
+        """Different domains don't match regardless of case."""
+        assert (
+            _match_host_pattern("api.github.com", "UPLOADS.GITHUB.COM") is False
+        )
+
+    # --- Wildcard * matching (case-insensitive) ---
+
+    def test_wildcard_subdomain_case_insensitive(self) -> None:
+        """*.domain matches subdomains case-insensitively."""
+        assert _match_host_pattern("*.github.com", "API.GITHUB.COM") is True
+        assert _match_host_pattern("*.GITHUB.COM", "api.github.com") is True
+        assert _match_host_pattern("*.GitHub.Com", "Uploads.GitHub.Com") is True
+
+    def test_wildcard_subdomain_no_apex_case_insensitive(self) -> None:
+        """*.domain does NOT match apex domain regardless of case."""
+        assert _match_host_pattern("*.github.com", "GITHUB.COM") is False
+        assert _match_host_pattern("*.GITHUB.COM", "github.com") is False
+
+    # --- Wildcard ? matching (case-insensitive) ---
+
+    def test_question_mark_case_insensitive(self) -> None:
+        """? matches one character case-insensitively."""
+        assert _match_host_pattern("api?.github.com", "API1.GITHUB.COM") is True
+        assert _match_host_pattern("API?.GITHUB.COM", "api1.github.com") is True
+
+    # --- Edge cases ---
+
+    def test_empty_pattern(self) -> None:
+        """Empty pattern matches only empty value."""
+        assert _match_host_pattern("", "") is True
+        assert _match_host_pattern("", "anything") is False
+
+    def test_asterisk_only(self) -> None:
+        """Single * matches anything regardless of case."""
+        assert _match_host_pattern("*", "API.GITHUB.COM") is True
+        assert _match_host_pattern("*", "anything") is True
+
+
 class TestNetworkAllowlistIsAllowed:
     """Tests for NetworkAllowlist._is_allowed method."""
 
@@ -228,6 +314,34 @@ class TestNetworkAllowlistIsAllowed:
         assert al._is_allowed("api.github.com", "/any") is True
         assert al._is_allowed("uploads.github.com", "/any") is True
         assert al._is_allowed("github.com", "/any") is False
+
+    def test_domain_case_insensitive(self) -> None:
+        """Domain matching is case-insensitive per RFC 4343."""
+        al = MockNetworkAllowlist()
+        al.domains = ["api.github.com"]
+        al.url_prefixes = []
+
+        assert al._is_allowed("API.GITHUB.COM", "/any") is True
+        assert al._is_allowed("Api.GitHub.Com", "/any") is True
+        assert al._is_allowed("api.github.com", "/any") is True
+
+    def test_domain_wildcard_case_insensitive(self) -> None:
+        """Wildcard domain matching is case-insensitive per RFC 4343."""
+        al = MockNetworkAllowlist()
+        al.domains = ["*.github.com"]
+        al.url_prefixes = []
+
+        assert al._is_allowed("API.GITHUB.COM", "/any") is True
+        assert al._is_allowed("Uploads.GitHub.Com", "/any") is True
+
+    def test_url_prefix_host_case_insensitive(self) -> None:
+        """URL prefix host matching is case-insensitive per RFC 4343."""
+        al = MockNetworkAllowlist()
+        al.domains = []
+        al.url_prefixes = [{"host": "api.github.com", "path": "/graphql"}]
+
+        assert al._is_allowed("API.GITHUB.COM", "/graphql") is True
+        assert al._is_allowed("Api.GitHub.Com", "/graphql") is True
 
     def test_url_prefix_exact_host_and_path(self) -> None:
         """URL prefix with exact host and path."""

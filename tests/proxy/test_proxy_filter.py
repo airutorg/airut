@@ -37,6 +37,7 @@ from airut._bundled.proxy.proxy_filter import (
     _decode_basic_auth,
     _encode_basic_auth,
     _match_header_pattern,
+    _match_host_pattern,
     _match_pattern,
 )
 
@@ -101,6 +102,35 @@ class TestMatchPattern:
     def test_wildcard_question(self) -> None:
         assert _match_pattern("api?.com", "api1.com") is True
         assert _match_pattern("api?.com", "api12.com") is False
+
+
+class TestMatchHostPattern:
+    """Tests for _match_host_pattern (case-insensitive per RFC 4343)."""
+
+    def test_exact_match_same_case(self) -> None:
+        assert _match_host_pattern("api.github.com", "api.github.com") is True
+
+    def test_exact_match_uppercase_hostname(self) -> None:
+        assert _match_host_pattern("api.github.com", "API.GITHUB.COM") is True
+
+    def test_exact_match_uppercase_pattern(self) -> None:
+        assert _match_host_pattern("API.GITHUB.COM", "api.github.com") is True
+
+    def test_exact_match_mixed_case(self) -> None:
+        assert _match_host_pattern("Api.GitHub.Com", "api.github.com") is True
+
+    def test_exact_no_match(self) -> None:
+        assert _match_host_pattern("api.github.com", "other.com") is False
+
+    def test_wildcard_star_case_insensitive(self) -> None:
+        assert _match_host_pattern("*.github.com", "API.GITHUB.COM") is True
+        assert _match_host_pattern("*.GITHUB.COM", "api.github.com") is True
+        assert _match_host_pattern("*.github.com", "GITHUB.COM") is False
+
+    def test_wildcard_question_case_insensitive(self) -> None:
+        assert _match_host_pattern("api?.com", "API1.COM") is True
+        assert _match_host_pattern("API?.COM", "api1.com") is True
+        assert _match_host_pattern("api?.com", "API12.COM") is False
 
 
 class TestMatchHeaderPattern:
@@ -402,6 +432,29 @@ class TestProxyFilterIsAllowed:
         pf = ProxyFilter()
         assert pf._is_allowed("any.com", "/") == (False, None)
 
+    def test_domain_case_insensitive(self) -> None:
+        """Domain matching is case-insensitive per RFC 4343."""
+        pf = ProxyFilter()
+        pf.domains = ["api.github.com"]
+        assert pf._is_allowed("API.GITHUB.COM", "/any") == (True, None)
+        assert pf._is_allowed("Api.GitHub.Com", "/any") == (True, None)
+
+    def test_domain_wildcard_case_insensitive(self) -> None:
+        """Wildcard domain matching is case-insensitive per RFC 4343."""
+        pf = ProxyFilter()
+        pf.domains = ["*.github.com"]
+        assert pf._is_allowed("API.GITHUB.COM", "/")[0] is True
+        assert pf._is_allowed("Uploads.GitHub.Com", "/")[0] is True
+
+    def test_url_prefix_host_case_insensitive(self) -> None:
+        """URL prefix host matching is case-insensitive per RFC 4343."""
+        pf = ProxyFilter()
+        entry: UrlPrefixEntry = {"host": "api.github.com", "path": "/graphql"}
+        pf.url_prefixes = [entry]
+        allowed, matched = pf._is_allowed("API.GITHUB.COM", "/graphql")
+        assert allowed is True
+        assert matched is entry
+
 
 # ---------------------------------------------------------------------------
 # ProxyFilter._replace_in_header
@@ -496,6 +549,25 @@ class TestReplaceTokens:
             headers={"Authorization": "Bearer surr"},
         )
         assert pf._replace_tokens(flow) == (0, 0)
+
+    def test_scope_case_insensitive(self) -> None:
+        """Scope matching is case-insensitive per RFC 4343."""
+        pf = ProxyFilter()
+        pf.replacements = {
+            "surr": {
+                "value": "real",
+                "scopes": ["example.com"],
+                "headers": ["Authorization"],
+            }
+        }
+        flow = _flow(
+            host="EXAMPLE.COM",
+            headers={"Authorization": "Bearer surr"},
+        )
+        replaced, dropped = pf._replace_tokens(flow)
+        assert replaced == 1
+        assert dropped == 0
+        assert flow.request.headers["Authorization"] == "Bearer real"
 
     def test_header_pattern_mismatch(self) -> None:
         pf = ProxyFilter()
