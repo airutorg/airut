@@ -1010,7 +1010,10 @@ class TestHandlerErrorPaths:
         harness.client.get("/config")
 
         class FailingSource:
-            def save(self, data: object) -> None:
+            def load(self) -> dict[str, Any]:
+                return {}
+
+            def save(self, data: dict[str, Any]) -> None:
                 raise OSError("disk full")
 
         harness.server._config_handlers._get_config_source = lambda: (
