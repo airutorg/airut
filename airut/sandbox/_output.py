@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from airut._json_types import JsonValue
+from airut.claude_output.extract import select_reply_from_texts
 from airut.claude_output.types import (
     _KNOWN_USAGE_KEYS,
     EventType,
@@ -72,9 +73,10 @@ class ExecutionAccumulator:
         # after the main result)
         self._results: list[_ResultData] = []
 
-        # Last assistant text parts (for response_text in single-result
-        # case), all assistant text blocks (for error_summary fallback)
-        self._last_assistant_texts: list[str] = []
+        # Joined text per assistant event (for response_text in the
+        # single-result case), all assistant text blocks (for
+        # error_summary fallback)
+        self._assistant_text_events: list[str] = []
         self._all_assistant_texts: list[str] = []
 
         # Web tool counts
@@ -193,10 +195,10 @@ class ExecutionAccumulator:
         text_parts = [
             block.text
             for block in event.content_blocks
-            if isinstance(block, TextBlock)
+            if isinstance(block, TextBlock) and block.text
         ]
         if text_parts:
-            self._last_assistant_texts = text_parts
+            self._assistant_text_events.append("\n\n".join(text_parts))
         for text in text_parts:
             stripped = text.strip()
             if stripped:
@@ -259,18 +261,19 @@ class ExecutionAccumulator:
         """Build response text from accumulated data.
 
         When multiple result events exist (background tasks completing
-        after the main result), concatenates all result texts.  For a
-        single result, prefers the last assistant event's text blocks
-        and falls back to the result event.
+        after the main result), concatenates all result texts.
+        Otherwise selects an assistant text event via
+        :func:`select_reply_from_texts` and falls back to the result
+        event.
         """
         if len(self._results) > 1:
             texts = [r.result_text for r in self._results if r.result_text]
             if texts:
                 return "\n\n".join(texts)
 
-        # Single result (or none): try last assistant text first
-        if self._last_assistant_texts:
-            return "\n\n".join(self._last_assistant_texts)
+        reply = select_reply_from_texts(self._assistant_text_events)
+        if reply is not None:
+            return reply
 
         # Fall back to result event text
         if self._results and self._results[-1].result_text:

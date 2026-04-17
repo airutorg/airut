@@ -85,13 +85,29 @@ def extract_result_summary(events: list[StreamEvent]) -> ResultSummary | None:
     )
 
 
+_SUBSTANTIVE_LOOKBACK_WINDOW = 5
+"""How many recent assistant text events to scan when looking
+for a substantive reply that preceded a short closing remark."""
+
+_SUBSTANTIVE_RATIO = 4.0
+"""An earlier assistant text is treated as the real reply when it
+is at least this many times longer than the final text event."""
+
+
 def extract_response_text(events: list[StreamEvent]) -> str:
     """Extract Claude's response text from events.
 
     When multiple result events exist (caused by background tasks
     completing after the main result), concatenates all result texts
-    in order.  For a single result, prefers the last assistant event's
-    text blocks and falls back to the result event.
+    in order.
+
+    Otherwise an assistant text event is selected via
+    :func:`select_reply_from_texts` — typically the last one, with a
+    heuristic that pulls in a recent substantially-longer text when
+    the final event looks like a short coda.
+
+    Falls back to the result event's text if no assistant text is
+    present.
 
     This function always receives events from a single container
     execution, so all result events belong to the same task.
@@ -114,18 +130,9 @@ def extract_response_text(events: list[StreamEvent]) -> str:
         if result_texts:
             return "\n\n".join(result_texts)
 
-    # Single result (or none): try last assistant event first
-    for event in reversed(events):
-        if event.event_type != EventType.ASSISTANT:
-            continue
-
-        text_parts = [
-            block.text
-            for block in event.content_blocks
-            if isinstance(block, TextBlock)
-        ]
-        if text_parts:
-            return "\n\n".join(text_parts)
+    assistant_text = select_reply_from_texts(_assistant_text_events(events))
+    if assistant_text is not None:
+        return assistant_text
 
     # Fall back to result event
     for event in reversed(events):
@@ -137,6 +144,65 @@ def extract_response_text(events: list[StreamEvent]) -> str:
             return text
 
     return "No output received from Claude."
+
+
+def _assistant_text_events(events: list[StreamEvent]) -> list[str]:
+    """Return joined text for each assistant event that has text."""
+    result: list[str] = []
+    for event in events:
+        if event.event_type != EventType.ASSISTANT:
+            continue
+        parts = [
+            block.text
+            for block in event.content_blocks
+            if isinstance(block, TextBlock) and block.text
+        ]
+        if parts:
+            result.append("\n\n".join(parts))
+    return result
+
+
+def select_reply_from_texts(texts: list[str]) -> str | None:
+    """Pick the user-facing reply from per-event assistant texts.
+
+    Defaults to the last element. If any event within the last
+    :data:`_SUBSTANTIVE_LOOKBACK_WINDOW` entries is at least
+    :data:`_SUBSTANTIVE_RATIO` times longer than the final one, the
+    latest such event anchors the reply: it and every text after it
+    are concatenated. This catches the pattern where the model emits
+    the real reply alongside a tool_use and then closes with a short
+    coda after tool calls complete — otherwise only the coda would
+    reach the user. Anchoring on the *latest* substantive event
+    minimises reach-back into mid-task narration.
+
+    Args:
+        texts: One joined-text string per assistant event that had
+            any text content.  Empty-text events are expected to be
+            filtered out before this call.
+
+    Returns:
+        The selected reply, or ``None`` when *texts* is empty.
+    """
+    if not texts:
+        return None
+
+    last_text = texts[-1]
+    last_len = len(last_text)
+    if last_len == 0 or len(texts) == 1:
+        return last_text
+
+    last_idx = len(texts) - 1
+    window_start = max(0, last_idx - (_SUBSTANTIVE_LOOKBACK_WINDOW - 1))
+    threshold = _SUBSTANTIVE_RATIO * last_len
+    anchor_idx: int | None = None
+    for idx in range(window_start, last_idx):
+        if len(texts[idx]) >= threshold:
+            anchor_idx = idx
+
+    if anchor_idx is None:
+        return last_text
+
+    return "\n\n".join(texts[anchor_idx:])
 
 
 def _extract_result_text(event: StreamEvent) -> str:

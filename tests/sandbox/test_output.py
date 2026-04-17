@@ -299,6 +299,49 @@ class TestBuildResult:
         assert summary_lines[0] == "Error line 5"
         assert summary_lines[-1] == "Error line 14"
 
+    def test_substantive_earlier_reply_preserved_over_coda(self) -> None:
+        """A long earlier assistant text is prepended to a short coda.
+
+        Mirrors the production failure mode where the model emits the
+        real reply alongside a tool_use and then, after tool calls
+        return, closes with a short confirmation. Without this, the
+        user would only see the coda in the email.
+        """
+        long_text = "x" * 800
+        stdout = (
+            '{"type": "assistant", "message": {"content": '
+            f'[{{"type": "text", "text": "{long_text}"}}]}}}}\n'
+            '{"type": "assistant", "message": {"content": '
+            '[{"type": "tool_use", "id": "t1", "name": "Bash", '
+            '"input": {}}]}}\n'
+            '{"type": "assistant", "message": {"content": '
+            '[{"type": "text", "text": "Short coda."}]}}\n'
+            '{"type": "result", "subtype": "success", "session_id": "s1", '
+            '"result": "Short coda.", "duration_ms": 100, '
+            '"total_cost_usd": 0.0, "num_turns": 1, "is_error": false, '
+            '"usage": {}}\n'
+        )
+        result = _feed_and_build(stdout=stdout)
+        assert long_text in result.response_text
+        assert "Short coda." in result.response_text
+        assert result.response_text.index(
+            long_text
+        ) < result.response_text.index("Short coda.")
+
+    def test_similar_sized_texts_return_only_last(self) -> None:
+        """When last text is within 4x of earlier texts, only last is used."""
+        stdout = (
+            '{"type": "assistant", "message": {"content": '
+            f'[{{"type": "text", "text": "{"a" * 600}"}}]}}}}\n'
+            '{"type": "assistant", "message": {"content": '
+            f'[{{"type": "text", "text": "{"b" * 400}"}}]}}}}\n'
+            '{"type": "result", "subtype": "success", "session_id": "s1", '
+            '"result": "", "duration_ms": 100, "total_cost_usd": 0.0, '
+            '"num_turns": 1, "is_error": false, "usage": {}}\n'
+        )
+        result = _feed_and_build(stdout=stdout)
+        assert result.response_text == "b" * 400
+
     def test_multiple_result_events(self) -> None:
         """Handles multiple result events (background tasks)."""
         stdout = (
