@@ -72,6 +72,7 @@ url_prefixes:
         # Pull request lifecycle
         - createPullRequest
         - closePullRequest
+        - reopenPullRequest
         - updatePullRequest
         - mergePullRequest
         - enablePullRequestAutoMerge
