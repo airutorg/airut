@@ -53,7 +53,7 @@ def _mock_proxy_infra(tmp_path: Path):
     # returns tmp_path/storage/repo_id instead of ~/.local/state/airut/repo_id
     storage_root = tmp_path / "storage"
     storage_root.mkdir(exist_ok=True)
-    # Mock ClaudeBinaryCache to avoid real HTTP requests to GCS
+    # Mock ClaudeBinaryCache to avoid real HTTP requests to the CDN
     mock_cache = MagicMock()
     mock_cache.ensure.return_value = (Path("/fake/claude"), "1.0.0")
     mock_cache.resolve_version.return_value = "1.0.0"

@@ -20,7 +20,6 @@ import pytest
 from airut.sandbox.claude_binary import (
     CLAUDE_BINARY_CONTAINER_PATH,
     DOWNLOADS_BASE,
-    GCS_BUCKET,
     ClaudeBinaryCache,
     ClaudeBinaryError,
     _extract_checksum,
@@ -70,12 +69,8 @@ class TestConstants:
         assert CLAUDE_BINARY_CONTAINER_PATH == "/opt/claude/claude"
 
     def test_downloads_base(self) -> None:
-        """Primary CDN URL is downloads.claude.ai."""
+        """CDN URL is downloads.claude.ai."""
         assert "downloads.claude.ai" in DOWNLOADS_BASE
-
-    def test_gcs_bucket(self) -> None:
-        """Fallback GCS bucket URL."""
-        assert "storage.googleapis.com" in GCS_BUCKET
 
 
 # -------------------------------------------------------------------
@@ -84,10 +79,10 @@ class TestConstants:
 
 
 class TestOpenReleaseUrl:
-    """Tests for _open_release_url() CDN-with-fallback."""
+    """Tests for _open_release_url()."""
 
-    def test_primary_succeeds(self) -> None:
-        """Returns response from CDN on first try."""
+    def test_cdn_succeeds(self) -> None:
+        """Returns response from CDN."""
         resp = _url_response(b"data")
 
         with patch(_URLOPEN_WITH_RETRY) as mock_fetch:
@@ -99,31 +94,13 @@ class TestOpenReleaseUrl:
         url = mock_fetch.call_args[0][0]
         assert url.startswith(DOWNLOADS_BASE)
 
-    def test_fallback_on_primary_failure(self) -> None:
-        """Falls back to GCS when CDN fails."""
-        resp = _url_response(b"data")
-
-        with patch(_URLOPEN_WITH_RETRY) as mock_fetch:
-            mock_fetch.side_effect = [URLError("cdn down"), resp]
-            result = _open_release_url("latest")
-
-        assert result is resp
-        assert mock_fetch.call_count == 2
-        first_url = mock_fetch.call_args_list[0][0][0]
-        second_url = mock_fetch.call_args_list[1][0][0]
-        assert first_url.startswith(DOWNLOADS_BASE)
-        assert second_url.startswith(GCS_BUCKET)
-
-    def test_all_sources_fail(self) -> None:
-        """Raises URLError when all sources fail."""
+    def test_cdn_failure_propagates(self) -> None:
+        """Raises URLError when CDN fails."""
         with (
             patch(_URLOPEN_WITH_RETRY) as mock_fetch,
-            pytest.raises(URLError, match="gcs also down"),
+            pytest.raises(URLError, match="cdn down"),
         ):
-            mock_fetch.side_effect = [
-                URLError("cdn down"),
-                URLError("gcs also down"),
-            ]
+            mock_fetch.side_effect = URLError("cdn down")
             _open_release_url("latest")
 
     def test_timeout_passed_through(self) -> None:

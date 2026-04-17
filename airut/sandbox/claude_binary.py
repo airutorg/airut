@@ -19,9 +19,9 @@ Cache layout::
 Version resolution:
 
 - ``"latest"`` and ``"stable"`` are resolved via the release
-  distribution CDN (``downloads.claude.ai``), falling back to the
-  GCS bucket.  The resolved version string is cached with a TTL
-  to avoid network calls on every task startup.
+  distribution CDN (``downloads.claude.ai``).  The resolved version
+  string is cached with a TTL to avoid network calls on every task
+  startup.
 - Explicit semver versions (e.g. ``"1.0.33"``) are used directly.
 
 Thread Safety:
@@ -52,17 +52,8 @@ from airut.http import urlopen_with_retry
 logger = logging.getLogger(__name__)
 
 
-#: Primary CDN URL for Claude Code releases.
+#: CDN URL for Claude Code releases.
 DOWNLOADS_BASE = "https://downloads.claude.ai/claude-code-releases"
-
-#: GCS bucket URL for Claude Code releases (fallback).
-GCS_BUCKET = (
-    "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad"
-    "-8dfa-d59b1c096819/claude-code-releases"
-)
-
-#: Ordered base URLs for release artifacts (CDN first, GCS fallback).
-_RELEASE_BASES = [DOWNLOADS_BASE, GCS_BUCKET]
 
 #: Container path where the binary is bind-mounted.
 CLAUDE_BINARY_CONTAINER_PATH = "/opt/claude/claude"
@@ -136,44 +127,31 @@ def _open_release_url(
     timeout: int = 30,
     max_retries: int = 3,
 ) -> http.client.HTTPResponse:
-    """Fetch a release artifact, trying CDN first with GCS fallback.
-
-    Each source is attempted with exponential-backoff retry for
-    transient failures (connection errors, timeouts, 5xx responses)
-    before falling back to the next source.
+    """Fetch a release artifact from the CDN with retries.
 
     Args:
         path: Relative path within the releases directory
             (e.g. ``latest``, ``1.0.0/manifest.json``).
         timeout: Per-request timeout in seconds.
-        max_retries: Retry attempts per source for transient failures.
+        max_retries: Retry attempts for transient failures
+            (connection errors, timeouts, 5xx responses).
 
     Returns:
         HTTP response (usable as context manager).
 
     Raises:
-        urllib.error.URLError: If all sources fail.
+        urllib.error.URLError: If the CDN is unreachable.
     """
-    last_error: urllib.error.URLError | None = None
-    for base in _RELEASE_BASES:
-        url = f"{base}/{path}"
-        try:
-            return urlopen_with_retry(
-                url, timeout=timeout, max_retries=max_retries
-            )
-        except urllib.error.URLError as e:
-            logger.debug("Fetch failed for %s: %s", url, e)
-            last_error = e
-    assert last_error is not None
-    raise last_error
+    return urlopen_with_retry(
+        f"{DOWNLOADS_BASE}/{path}", timeout=timeout, max_retries=max_retries
+    )
 
 
 class ClaudeBinaryCache:
     """Thread-safe cache for Claude Code binaries.
 
-    Downloads binaries from ``downloads.claude.ai`` (with GCS fallback),
-    verifies SHA-256 checksums from the manifest, and caches them on
-    disk.
+    Downloads binaries from ``downloads.claude.ai``, verifies SHA-256
+    checksums from the manifest, and caches them on disk.
 
     Args:
         cache_dir: Root directory for cached binaries.
