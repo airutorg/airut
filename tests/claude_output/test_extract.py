@@ -301,6 +301,83 @@ class TestExtractResponseText:
         )
         assert extract_response_text(events) == "The real response"
 
+    def test_substantive_earlier_text_included_before_coda(self) -> None:
+        """A substantially longer earlier text is prepended to the coda.
+
+        Models sometimes emit the user-facing reply alongside a
+        tool_use and then, after the tool call returns, emit a short
+        closing remark. The response should include both so the user
+        doesn't lose the real reply.
+        """
+        long_text = "x" * 800
+        events = _parse(
+            _make_assistant_text_event(long_text),
+            _make_assistant_text_event("Short coda."),
+            _make_result_event(result="Short coda."),
+        )
+        result = extract_response_text(events)
+        assert long_text in result
+        assert "Short coda." in result
+        assert result.index(long_text) < result.index("Short coda.")
+
+    def test_similar_sized_earlier_text_not_included(self) -> None:
+        """An earlier text within 4x of the last is not pulled in.
+
+        This keeps the default behavior unchanged when the last text
+        is itself substantial — we only trigger when the last text
+        looks like a short coda relative to an earlier one.
+        """
+        events = _parse(
+            _make_assistant_text_event("a" * 600),
+            _make_assistant_text_event("b" * 400),
+            _make_result_event(),
+        )
+        result = extract_response_text(events)
+        assert result == "b" * 400
+
+    def test_substantive_text_outside_window_not_included(self) -> None:
+        """Substantive text far back in history is ignored.
+
+        The lookback window caps how far back we search, so long
+        mid-task narration from earlier in a long session stays out
+        of the response.
+        """
+        long_early = "x" * 2000
+        events = _parse(
+            _make_assistant_text_event(long_early),
+            # Several short texts push long_early out of the window
+            _make_assistant_text_event("noise 1"),
+            _make_assistant_text_event("noise 2"),
+            _make_assistant_text_event("noise 3"),
+            _make_assistant_text_event("noise 4"),
+            _make_assistant_text_event("final"),
+            _make_result_event(result="final"),
+        )
+        result = extract_response_text(events)
+        assert long_early not in result
+        assert result == "final"
+
+    def test_latest_substantive_chosen_over_earliest(self) -> None:
+        """When multiple substantive texts exist, the latest is the anchor.
+
+        This minimises the risk of including mid-task narration that
+        preceded the real reply.
+        """
+        preamble = "p" * 1000
+        reply = "r" * 900
+        events = _parse(
+            _make_assistant_text_event(preamble),
+            _make_assistant_text_event("tiny interstitial"),
+            _make_assistant_text_event(reply),
+            _make_assistant_text_event("Coda."),
+            _make_result_event(result="Coda."),
+        )
+        result = extract_response_text(events)
+        assert reply in result
+        assert "Coda." in result
+        assert preamble not in result
+        assert "tiny interstitial" not in result
+
 
 class TestExtractErrorSummary:
     def test_empty_events(self) -> None:
