@@ -2,7 +2,11 @@ FROM ubuntu:24.04
 
 # Install system dependencies and GitHub CLI in a single layer.
 # Merging these avoids a redundant apt-get update and reduces image layers.
-RUN apt-get update \
+# Switch apt sources to the Azure Ubuntu mirror to avoid throttling from the
+# default archive CDN when images are built in CI (e.g. sandbox-action).
+RUN sed -i 's/archive.ubuntu.com/azure.archive.ubuntu.com/g' /etc/apt/sources.list.d/ubuntu.sources \
+    && sed -i 's/security.ubuntu.com/azure.archive.ubuntu.com/g' /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get update \
     && apt-get install -y \
         curl \
         git \
