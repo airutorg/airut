@@ -716,24 +716,28 @@ class ProxyFilter:
                         if repositories
                         else None,
                     )
-                    # Resolve repo node IDs for GraphQL scoping
+                    # Resolve repo node IDs and full names for GraphQL scoping
                     try:
-                        repo_node_ids = fetch_installation_repos(
-                            str(config["base_url"]),
-                            real_token,
-                            configured_repos=list(repositories)  # type: ignore[arg-type]
-                            if repositories
-                            else None,
+                        repo_node_ids, repo_full_names = (
+                            fetch_installation_repos(
+                                str(config["base_url"]),
+                                real_token,
+                                configured_repos=list(repositories)  # type: ignore[arg-type]
+                                if repositories
+                                else None,
+                            )
                         )
                     except Exception as e:
                         self._log_loud(
                             f"GitHub App repo node ID resolution failed: {e}"
                         )
                         repo_node_ids = frozenset()
+                        repo_full_names = frozenset()
                     self._github_app_cache[surrogate] = CachedToken(
                         token=real_token,
                         expires_at=expires_at,
                         repo_node_ids=repo_node_ids,
+                        repo_full_names=repo_full_names,
                     )
                     cache_status = "refreshed"
                 except Exception as e:
@@ -809,9 +813,15 @@ class ProxyFilter:
                     if cached_entry is not None
                     else frozenset()
                 )
+                repo_full_names = (
+                    cached_entry.repo_full_names
+                    if cached_entry is not None
+                    else frozenset()
+                )
                 result = check_repo_scope(
                     flow.request.get_content(),
                     repo_ids,
+                    repo_full_names,
                 )
                 if result.verdict is not ScopeVerdict.ALLOWED:
                     detail = result.detail or result.verdict.value

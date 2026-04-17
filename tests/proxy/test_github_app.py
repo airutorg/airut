@@ -368,10 +368,18 @@ class TestFetchInstallationRepos:
         return mock_opener
 
     def test_resolves_node_ids(self) -> None:
-        """Resolves repo names to node IDs."""
+        """Resolves repo names to node IDs and owner/name full names."""
         repos = [
-            {"name": "airut", "node_id": "R_kgDORH34qw"},
-            {"name": "sandbox-action", "node_id": "R_kgDORm2NDQ"},
+            {
+                "name": "airut",
+                "full_name": "airutorg/airut",
+                "node_id": "R_kgDORH34qw",
+            },
+            {
+                "name": "sandbox-action",
+                "full_name": "airutorg/sandbox-action",
+                "node_id": "R_kgDORm2NDQ",
+            },
         ]
         opener = self._mock_opener([repos])
 
@@ -379,18 +387,33 @@ class TestFetchInstallationRepos:
             "airut._bundled.proxy.github_app.urllib.request.build_opener",
             return_value=opener,
         ):
-            result = fetch_installation_repos(
+            node_ids, full_names = fetch_installation_repos(
                 "https://api.github.com", "ghs_token"
             )
 
-        assert result == frozenset({"R_kgDORH34qw", "R_kgDORm2NDQ"})
+        assert node_ids == frozenset({"R_kgDORH34qw", "R_kgDORm2NDQ"})
+        assert full_names == frozenset(
+            {"airutorg/airut", "airutorg/sandbox-action"}
+        )
 
     def test_filters_by_configured_repos(self) -> None:
         """Only includes repos matching configured_repos."""
         repos = [
-            {"name": "airut", "node_id": "R_kgDORH34qw"},
-            {"name": "sandbox-action", "node_id": "R_kgDORm2NDQ"},
-            {"name": "website", "node_id": "R_other"},
+            {
+                "name": "airut",
+                "full_name": "airutorg/airut",
+                "node_id": "R_kgDORH34qw",
+            },
+            {
+                "name": "sandbox-action",
+                "full_name": "airutorg/sandbox-action",
+                "node_id": "R_kgDORm2NDQ",
+            },
+            {
+                "name": "website",
+                "full_name": "airutorg/website",
+                "node_id": "R_other",
+            },
         ]
         opener = self._mock_opener([repos])
 
@@ -398,19 +421,30 @@ class TestFetchInstallationRepos:
             "airut._bundled.proxy.github_app.urllib.request.build_opener",
             return_value=opener,
         ):
-            result = fetch_installation_repos(
+            node_ids, full_names = fetch_installation_repos(
                 "https://api.github.com",
                 "ghs_token",
                 configured_repos=["airut", "sandbox-action"],
             )
 
-        assert result == frozenset({"R_kgDORH34qw", "R_kgDORm2NDQ"})
+        assert node_ids == frozenset({"R_kgDORH34qw", "R_kgDORm2NDQ"})
+        assert full_names == frozenset(
+            {"airutorg/airut", "airutorg/sandbox-action"}
+        )
 
     def test_configured_repos_none_includes_all(self) -> None:
         """All repos included when configured_repos is None."""
         repos = [
-            {"name": "airut", "node_id": "R_kgDORH34qw"},
-            {"name": "other", "node_id": "R_other"},
+            {
+                "name": "airut",
+                "full_name": "airutorg/airut",
+                "node_id": "R_kgDORH34qw",
+            },
+            {
+                "name": "other",
+                "full_name": "otherorg/other",
+                "node_id": "R_other",
+            },
         ]
         opener = self._mock_opener([repos])
 
@@ -418,19 +452,31 @@ class TestFetchInstallationRepos:
             "airut._bundled.proxy.github_app.urllib.request.build_opener",
             return_value=opener,
         ):
-            result = fetch_installation_repos(
+            node_ids, full_names = fetch_installation_repos(
                 "https://api.github.com",
                 "ghs_token",
                 configured_repos=None,
             )
 
-        assert result == frozenset({"R_kgDORH34qw", "R_other"})
+        assert node_ids == frozenset({"R_kgDORH34qw", "R_other"})
+        assert full_names == frozenset({"airutorg/airut", "otherorg/other"})
 
     def test_pagination(self) -> None:
         """Paginates through all pages of results."""
-        page1 = [{"name": f"repo-{i}", "node_id": f"R_{i}"} for i in range(100)]
+        page1 = [
+            {
+                "name": f"repo-{i}",
+                "full_name": f"airutorg/repo-{i}",
+                "node_id": f"R_{i}",
+            }
+            for i in range(100)
+        ]
         page2 = [
-            {"name": "repo-100", "node_id": "R_100"},
+            {
+                "name": "repo-100",
+                "full_name": "airutorg/repo-100",
+                "node_id": "R_100",
+            },
         ]
         opener = self._mock_opener([page1, page2])
 
@@ -438,12 +484,13 @@ class TestFetchInstallationRepos:
             "airut._bundled.proxy.github_app.urllib.request.build_opener",
             return_value=opener,
         ):
-            result = fetch_installation_repos(
+            node_ids, full_names = fetch_installation_repos(
                 "https://api.github.com", "ghs_token"
             )
 
-        assert len(result) == 101
-        assert "R_100" in result
+        assert len(node_ids) == 101
+        assert "R_100" in node_ids
+        assert "airutorg/repo-100" in full_names
         assert opener.open.call_count == 2
 
     def test_api_failure_raises(self) -> None:
@@ -463,7 +510,11 @@ class TestFetchInstallationRepos:
     def test_configured_repo_not_in_response(self) -> None:
         """Missing configured repo does not fail."""
         repos = [
-            {"name": "airut", "node_id": "R_kgDORH34qw"},
+            {
+                "name": "airut",
+                "full_name": "airutorg/airut",
+                "node_id": "R_kgDORH34qw",
+            },
         ]
         opener = self._mock_opener([repos])
 
@@ -471,19 +522,24 @@ class TestFetchInstallationRepos:
             "airut._bundled.proxy.github_app.urllib.request.build_opener",
             return_value=opener,
         ):
-            result = fetch_installation_repos(
+            node_ids, full_names = fetch_installation_repos(
                 "https://api.github.com",
                 "ghs_token",
                 configured_repos=["airut", "nonexistent-repo"],
             )
 
-        assert result == frozenset({"R_kgDORH34qw"})
+        assert node_ids == frozenset({"R_kgDORH34qw"})
+        assert full_names == frozenset({"airutorg/airut"})
 
     def test_skips_repos_without_node_id(self) -> None:
         """Repos without node_id are skipped."""
         repos = [
-            {"name": "airut", "node_id": "R_kgDORH34qw"},
-            {"name": "broken", "node_id": ""},
+            {
+                "name": "airut",
+                "full_name": "airutorg/airut",
+                "node_id": "R_kgDORH34qw",
+            },
+            {"name": "broken", "full_name": "airutorg/broken", "node_id": ""},
         ]
         opener = self._mock_opener([repos])
 
@@ -491,11 +547,59 @@ class TestFetchInstallationRepos:
             "airut._bundled.proxy.github_app.urllib.request.build_opener",
             return_value=opener,
         ):
-            result = fetch_installation_repos(
+            node_ids, full_names = fetch_installation_repos(
                 "https://api.github.com", "ghs_token"
             )
 
-        assert result == frozenset({"R_kgDORH34qw"})
+        assert node_ids == frozenset({"R_kgDORH34qw"})
+        assert full_names == frozenset({"airutorg/airut"})
+
+    def test_skips_repos_without_full_name(self) -> None:
+        """Repos without full_name are skipped."""
+        repos = [
+            {
+                "name": "airut",
+                "full_name": "airutorg/airut",
+                "node_id": "R_kgDORH34qw",
+            },
+            {"name": "broken", "full_name": "", "node_id": "R_broken"},
+        ]
+        opener = self._mock_opener([repos])
+
+        with patch(
+            "airut._bundled.proxy.github_app.urllib.request.build_opener",
+            return_value=opener,
+        ):
+            node_ids, full_names = fetch_installation_repos(
+                "https://api.github.com", "ghs_token"
+            )
+
+        assert node_ids == frozenset({"R_kgDORH34qw"})
+        assert full_names == frozenset({"airutorg/airut"})
+
+    def test_full_names_returned_as_is(self) -> None:
+        """Full names are returned as GitHub provides them.
+
+        Case normalization is handled by ``check_repo_scope()``.
+        """
+        repos = [
+            {
+                "name": "airut",
+                "full_name": "AirutOrg/Airut",
+                "node_id": "R_kgDORH34qw",
+            },
+        ]
+        opener = self._mock_opener([repos])
+
+        with patch(
+            "airut._bundled.proxy.github_app.urllib.request.build_opener",
+            return_value=opener,
+        ):
+            _, full_names = fetch_installation_repos(
+                "https://api.github.com", "ghs_token"
+            )
+
+        assert full_names == frozenset({"AirutOrg/Airut"})
 
 
 class TestCachedToken:
@@ -521,3 +625,18 @@ class TestCachedToken:
             repo_node_ids=ids,
         )
         assert cached.repo_node_ids == ids
+
+    def test_default_repo_full_names(self) -> None:
+        """Default repo_full_names is empty frozenset."""
+        cached = CachedToken(token="ghs_abc", expires_at=1234567890.0)
+        assert cached.repo_full_names == frozenset()
+
+    def test_repo_full_names(self) -> None:
+        """repo_full_names stores allowed owner/name full names."""
+        names = frozenset({"airutorg/airut", "airutorg/sandbox-action"})
+        cached = CachedToken(
+            token="ghs_abc",
+            expires_at=1234567890.0,
+            repo_full_names=names,
+        )
+        assert cached.repo_full_names == names

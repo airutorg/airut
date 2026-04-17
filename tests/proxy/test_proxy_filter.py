@@ -3614,10 +3614,12 @@ class TestGitHubAppGraphQLScoping:
 
     _SURROGATE = "ghs_SurrogateTokenValue1234567890abcde"
     _REPO_NODE_IDS = frozenset({"R_kgDORH34qw", "R_kgDORm2NDQ"})
+    _REPO_FULL_NAMES = frozenset({"airutorg/airut", "airutorg/sandbox-action"})
 
     def _setup_filter_with_cached_token(
         self,
         repo_node_ids: frozenset[str] | None = None,
+        repo_full_names: frozenset[str] | None = None,
     ) -> "ProxyFilter":
         """Create a ProxyFilter with a cached GitHub App token."""
         import time as time_mod
@@ -3635,6 +3637,9 @@ class TestGitHubAppGraphQLScoping:
             repo_node_ids=repo_node_ids
             if repo_node_ids is not None
             else self._REPO_NODE_IDS,
+            repo_full_names=repo_full_names
+            if repo_full_names is not None
+            else self._REPO_FULL_NAMES,
         )
         return pf
 
@@ -3805,7 +3810,10 @@ class TestGitHubAppGraphQLScoping:
             ),
             patch(
                 "airut._bundled.proxy.proxy_filter.fetch_installation_repos",
-                return_value=frozenset({"R_kgDORH34qw"}),
+                return_value=(
+                    frozenset({"R_kgDORH34qw"}),
+                    frozenset({"airutorg/airut"}),
+                ),
             ) as mock_repos,
         ):
             pf.requestheaders(flow)
@@ -3818,6 +3826,7 @@ class TestGitHubAppGraphQLScoping:
         )
         cached = pf._github_app_cache[self._SURROGATE]
         assert cached.repo_node_ids == frozenset({"R_kgDORH34qw"})
+        assert cached.repo_full_names == frozenset({"airutorg/airut"})
 
     def test_malformed_graphql_returns_403(self) -> None:
         """Malformed GraphQL body returns 403 (fail-secure)."""
@@ -3928,9 +3937,108 @@ class TestGitHubAppGraphQLScoping:
 
         # REST (non-graphql) still works with token replacement
         assert flow.request.headers["Authorization"] == "Bearer ghs_real"
-        # Node IDs are empty from failed resolution
+        # Node IDs and full names are empty from failed resolution
         cached = pf._github_app_cache[self._SURROGATE]
         assert cached.repo_node_ids == frozenset()
+        assert cached.repo_full_names == frozenset()
+
+    def test_blocks_out_of_scope_repo_name_with_owner(self) -> None:
+        """CreateCommitOnBranch targeting an out-of-scope repo is blocked."""
+        pf = self._setup_filter_with_cached_token()
+
+        body = json.dumps(
+            {
+                "query": (
+                    "mutation { createCommitOnBranch(input: "
+                    "{branch: {repositoryNameWithOwner: "
+                    '"evilorg/target", branchName: "main"},'
+                    ' message: {headline: "x"},'
+                    ' expectedHeadOid: "deadbeef"})'
+                    " { commit { oid } } }"
+                )
+            }
+        ).encode()
+
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+            content=body,
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        resp_body = json.loads(flow.response._content)
+        assert resp_body["error"] == "graphql_repo_scope_blocked"
+        assert resp_body["detail"] == "evilorg/target"
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+
+    def test_allows_in_scope_repo_name_with_owner(self) -> None:
+        """CreateCommitOnBranch targeting an in-scope repo is allowed."""
+        pf = self._setup_filter_with_cached_token()
+
+        body = json.dumps(
+            {
+                "query": (
+                    "mutation { createCommitOnBranch(input: "
+                    "{branch: {repositoryNameWithOwner: "
+                    '"airutorg/airut", branchName: "main"},'
+                    ' message: {headline: "x"},'
+                    ' expectedHeadOid: "deadbeef"})'
+                    " { commit { oid } } }"
+                )
+            }
+        ).encode()
+
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+            content=body,
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is None
+        assert flow.request.headers["Authorization"] == "Bearer ghs_real_token"
+
+    def test_empty_repo_full_names_blocks_create_commit_on_branch(
+        self,
+    ) -> None:
+        """Empty full_names blocks any repositoryNameWithOwner value."""
+        pf = self._setup_filter_with_cached_token(repo_full_names=frozenset())
+
+        body = json.dumps(
+            {
+                "query": (
+                    "mutation { createCommitOnBranch(input: "
+                    "{branch: {repositoryNameWithOwner: "
+                    '"airutorg/airut", branchName: "main"},'
+                    ' message: {headline: "x"},'
+                    ' expectedHeadOid: "deadbeef"})'
+                    " { commit { oid } } }"
+                )
+            }
+        ).encode()
+
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+            content=body,
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        resp_body = json.loads(flow.response._content)
+        assert resp_body["detail"] == "airutorg/airut"
 
     def test_graphql_with_query_params_blocked(self) -> None:
         """GraphQL requests with URL query parameters return 403."""

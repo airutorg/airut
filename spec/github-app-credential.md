@@ -334,13 +334,15 @@ proxy_filter.py request()
 GitHub App installation tokens can perform certain mutations (e.g.,
 `createIssue`) on **any public repository**, regardless of the App's
 installation scope. To prevent data exfiltration via GraphQL mutations targeting
-out-of-scope repos, the proxy performs two layers of scope checking on every
+out-of-scope repos, the proxy performs three layers of scope checking on every
 GraphQL request.
 
 **Layer 1 — `repositoryId` field check (string match):**
 
 1. At token refresh time, the proxy calls `GET /installation/repositories` to
-   resolve configured repository names to node IDs (stored in `CachedToken`).
+   resolve configured repositories to both node IDs and `owner/name` full names
+   (both stored in `CachedToken` as `repo_node_ids` and `repo_full_names`). Full
+   names are lowercased for case-insensitive matching.
 2. GraphQL requests with URL query parameters are rejected outright (HTTP 403).
    The GraphQL endpoint only accepts POST with a JSON body; query parameters
    could bypass body-based scope checking. The `gh` CLI never uses query
@@ -357,11 +359,22 @@ GraphQL request.
 5. Any out-of-scope `repositoryId` or unparseable request results in HTTP 403.
    Requests with no `repositoryId` or all values in scope proceed to layer 2.
 
-**Layer 2 — node ID ownership check (defense-in-depth):**
+**Layer 2 — `repositoryNameWithOwner` field check (string match):**
+
+Some mutations target a repository by its `owner/name` string instead of by node
+ID. `createCommitOnBranch` is the motivating example: its
+`branch.repositoryNameWithOwner` input field bypasses any `*Id` extraction.
+`check_repo_scope()` also collects every `repositoryNameWithOwner` value (from
+the same three paths as Layer 1) and matches it case-insensitively against the
+installation's `owner/name` full names. An empty `allowed_repo_full_names` set
+blocks any `repositoryNameWithOwner` value encountered — fail-secure when repo
+resolution fails. Requests that clear layers 1 and 2 proceed to layer 3.
+
+**Layer 3 — node ID ownership check (defense-in-depth):**
 
 Many GitHub GraphQL mutations accept node ID fields other than `repositoryId`
 that implicitly target repositories: `subjectId` (for `addComment`),
-`pullRequestId`, `issueId`, `discussionId`, bare `id`, etc. Layer 2 catches
+`pullRequestId`, `issueId`, `discussionId`, bare `id`, etc. Layer 3 catches
 these by decoding the GitHub node ID format to extract the embedded parent
 repository database ID.
 
