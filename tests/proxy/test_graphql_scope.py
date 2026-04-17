@@ -18,6 +18,7 @@ from graphql_scope import (  # ty:ignore[unresolved-import]
 
 
 ALLOWED = frozenset({"R_kgDORH34qw", "R_kgDORm2NDQ"})
+ALLOWED_NAMES = frozenset({"airutorg/airut", "airutorg/sandbox-action"})
 
 # Synthetic node IDs for node ID ownership tests.
 # R_kgDORH34qw decodes to repo_db_id 1149106347
@@ -735,6 +736,194 @@ class TestNodeIdCombinedLayers:
             ' title: "updated"}) { issue { id } } }'
         )
         assert check_repo_scope(body, ALLOWED) == _oos("123")
+
+
+# -------------------------------------------------------------------
+# repositoryNameWithOwner field (pentest fix)
+# -------------------------------------------------------------------
+
+
+class TestRepositoryNameWithOwner:
+    """Tests for the ``repositoryNameWithOwner`` string field.
+
+    Used by mutations like ``createCommitOnBranch`` which target a
+    repository by ``owner/name`` instead of by node ID.  Without this
+    check, an in-scope surrogate token could bypass repo scoping.
+    """
+
+    def test_create_commit_on_branch_in_scope(self) -> None:
+        body = _body(
+            "mutation { createCommitOnBranch(input: "
+            '{branch: {repositoryNameWithOwner: "airutorg/airut",'
+            ' branchName: "main"},'
+            ' message: {headline: "x"}, expectedHeadOid: "deadbeef"})'
+            " { commit { oid } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _OK
+
+    def test_create_commit_on_branch_out_of_scope(self) -> None:
+        body = _body(
+            "mutation { createCommitOnBranch(input: "
+            '{branch: {repositoryNameWithOwner: "evilorg/target",'
+            ' branchName: "main"},'
+            ' message: {headline: "x"}, expectedHeadOid: "deadbeef"})'
+            " { commit { oid } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "evilorg/target"
+        )
+
+    def test_repo_name_via_variable_in_scope(self) -> None:
+        body = _body(
+            "mutation($nwo: String!) {"
+            "  createCommitOnBranch(input: {"
+            '    branch: {repositoryNameWithOwner: $nwo, branchName: "m"},'
+            '    message: {headline: "x"}, expectedHeadOid: "abc"'
+            "  }) { commit { oid } }"
+            "}",
+            variables={"nwo": "airutorg/sandbox-action"},
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _OK
+
+    def test_repo_name_via_variable_out_of_scope(self) -> None:
+        body = _body(
+            "mutation($nwo: String!) {"
+            "  createCommitOnBranch(input: {"
+            '    branch: {repositoryNameWithOwner: $nwo, branchName: "m"},'
+            '    message: {headline: "x"}, expectedHeadOid: "abc"'
+            "  }) { commit { oid } }"
+            "}",
+            variables={"nwo": "evilorg/target"},
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "evilorg/target"
+        )
+
+    def test_repo_name_via_variable_unresolved(self) -> None:
+        body = _body(
+            "mutation($nwo: String!) {"
+            "  createCommitOnBranch(input: {"
+            '    branch: {repositoryNameWithOwner: $nwo, branchName: "m"},'
+            '    message: {headline: "x"}, expectedHeadOid: "abc"'
+            "  }) { commit { oid } }"
+            "}",
+            variables={},
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _UNRESOLVED
+
+    def test_repo_name_in_variable_object_out_of_scope(self) -> None:
+        body = _body(
+            "mutation($input: CreateCommitOnBranchInput!) {"
+            "  createCommitOnBranch(input: $input) { commit { oid } }"
+            "}",
+            variables={
+                "input": {
+                    "branch": {
+                        "repositoryNameWithOwner": "evilorg/target",
+                        "branchName": "main",
+                    },
+                    "message": {"headline": "x"},
+                    "expectedHeadOid": "abc",
+                }
+            },
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "evilorg/target"
+        )
+
+    def test_repo_name_in_variable_object_in_scope(self) -> None:
+        body = _body(
+            "mutation($input: CreateCommitOnBranchInput!) {"
+            "  createCommitOnBranch(input: $input) { commit { oid } }"
+            "}",
+            variables={
+                "input": {
+                    "branch": {
+                        "repositoryNameWithOwner": "airutorg/airut",
+                        "branchName": "main",
+                    },
+                    "message": {"headline": "x"},
+                    "expectedHeadOid": "abc",
+                }
+            },
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _OK
+
+    def test_repo_name_empty_allowed_set_blocks(self) -> None:
+        """Empty allowed_repo_full_names set blocks any repo name."""
+        body = _body(
+            "mutation { createCommitOnBranch(input: "
+            '{branch: {repositoryNameWithOwner: "airutorg/airut",'
+            ' branchName: "main"},'
+            ' message: {headline: "x"}, expectedHeadOid: "deadbeef"})'
+            " { commit { oid } } }"
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos("airutorg/airut")
+
+    def test_repo_name_case_insensitive_match(self) -> None:
+        """GitHub owner/name are case-insensitive — match both ways."""
+        body = _body(
+            "mutation { createCommitOnBranch(input: "
+            '{branch: {repositoryNameWithOwner: "AIRUTORG/AIRUT",'
+            ' branchName: "main"},'
+            ' message: {headline: "x"}, expectedHeadOid: "deadbeef"})'
+            " { commit { oid } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _OK
+
+    def test_layer2_runs_when_layer1_passes(self) -> None:
+        """Out-of-scope repo name blocks even with in-scope repositoryId.
+
+        Regression for the motivating pentest vector: if Layer 1 is
+        short-circuited by an in-scope ``repositoryId``, Layer 2 must
+        still catch an out-of-scope ``repositoryNameWithOwner``.
+        """
+        body = _body(
+            "mutation {"
+            '  a: createIssue(input: {repositoryId: "R_kgDORH34qw",'
+            '    title: "t"}) { issue { id } }'
+            "  b: createCommitOnBranch(input: "
+            '    {branch: {repositoryNameWithOwner: "evilorg/target",'
+            '     branchName: "main"},'
+            '     message: {headline: "x"}, expectedHeadOid: "abc"})'
+            "     { commit { oid } }"
+            "}"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "evilorg/target"
+        )
+
+    def test_repo_name_as_top_level_argument(self) -> None:
+        """RepositoryNameWithOwner as a top-level argument is checked."""
+        body = _body(
+            'mutation { someOp(repositoryNameWithOwner: "evilorg/target")'
+            " { ok } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "evilorg/target"
+        )
+
+    def test_repo_name_in_list_of_dicts_out_of_scope(self) -> None:
+        body = _body(
+            "mutation($input: BatchInput!) {  doBatch(input: $input) { id }}",
+            variables={
+                "input": {
+                    "branches": [
+                        {
+                            "repositoryNameWithOwner": "airutorg/airut",
+                            "branchName": "main",
+                        },
+                        {
+                            "repositoryNameWithOwner": "evilorg/target",
+                            "branchName": "main",
+                        },
+                    ]
+                }
+            },
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "evilorg/target"
+        )
 
 
 # -------------------------------------------------------------------

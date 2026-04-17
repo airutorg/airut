@@ -6,13 +6,19 @@
 """GraphQL repository scope checking for GitHub App credentials.
 
 Parses GitHub GraphQL requests to extract repository-targeting values
-and checks them against allowed repositories.  Two layers of checking:
+and checks them against allowed repositories.  Three layers of checking:
 
 1. **repositoryId field check** — extracts ``repositoryId`` values
    (inlined, variable-referenced, or in variable objects) and checks
    them against the allowed set of repository node IDs (string match).
 
-2. **Node ID ownership check** — extracts values from all other
+2. **repositoryNameWithOwner field check** — extracts
+   ``repositoryNameWithOwner`` string values (e.g. used by
+   ``createCommitOnBranch.branch.repositoryNameWithOwner``) and checks
+   them against the allowed set of ``owner/name`` repository full
+   names, case-insensitively.
+
+3. **Node ID ownership check** — extracts values from all other
    ``*Id``/``*Ids``-suffixed input fields and arguments (including
    list values and recursively nested variable objects), decodes
    GitHub node IDs to extract the embedded parent repository database
@@ -98,10 +104,12 @@ def _is_id_field(name: str) -> bool:
 class _IdFieldFinder(visitor.Visitor):
     """AST visitor that collects ID field values from input arguments.
 
-    Collects two categories:
+    Collects three categories:
 
     - **repo_***: values from ``repositoryId`` fields (for the primary
-      string-match check).
+      string-match check against node IDs).
+    - **repo_name_***: values from ``repositoryNameWithOwner`` string
+      fields (for the ``owner/name`` string-match check).
     - **node_id_***: values from all other ``*Id``/``*Ids``-suffixed
       fields (for the node ID ownership check).
 
@@ -117,6 +125,9 @@ class _IdFieldFinder(visitor.Visitor):
         # Primary: repositoryId values
         self.repo_inlined: list[str] = []
         self.repo_var_refs: list[str] = []
+        # Primary: repositoryNameWithOwner values
+        self.repo_name_inlined: list[str] = []
+        self.repo_name_var_refs: list[str] = []
         # Defense-in-depth: other *Id field values
         self.node_id_inlined: list[str] = []
         self.node_id_var_refs: list[str] = []
@@ -128,6 +139,11 @@ class _IdFieldFinder(visitor.Visitor):
                 self.repo_inlined.append(value.value)
             elif isinstance(value, gql_ast.VariableNode):
                 self.repo_var_refs.append(value.name.value)
+        elif name == "repositoryNameWithOwner":
+            if isinstance(value, gql_ast.StringValueNode):
+                self.repo_name_inlined.append(value.value)
+            elif isinstance(value, gql_ast.VariableNode):
+                self.repo_name_var_refs.append(value.name.value)
         elif _is_id_field(name):
             if isinstance(value, gql_ast.StringValueNode):
                 self.node_id_inlined.append(value.value)
@@ -166,6 +182,21 @@ def _collect_repo_ids_from_variables(
                     _collect_repo_ids_from_variables(item, out)
 
 
+def _collect_repo_names_from_variables(
+    obj: dict[str, object], out: list[str]
+) -> None:
+    """Recursively collect ``repositoryNameWithOwner`` values from a dict."""
+    for key, value in obj.items():
+        if key == "repositoryNameWithOwner" and isinstance(value, str):
+            out.append(value)
+        elif isinstance(value, dict):
+            _collect_repo_names_from_variables(value, out)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    _collect_repo_names_from_variables(item, out)
+
+
 def _collect_node_ids_from_variables(
     obj: dict[str, object], out: list[str]
 ) -> None:
@@ -196,10 +227,11 @@ def _collect_node_ids_from_variables(
 def check_repo_scope(
     request_body: bytes,
     allowed_repo_ids: frozenset[str],
+    allowed_repo_full_names: frozenset[str] = frozenset(),
 ) -> ScopeResult:
     """Check if a GraphQL request targets only allowed repositories.
 
-    Performs two layers of scope checking:
+    Performs three layers of scope checking:
 
     **Layer 1 — repositoryId field check:**
 
@@ -212,7 +244,14 @@ def check_repo_scope(
     3. **Variable objects**: ``variables.*.repositoryId`` — scanned
        from the JSON variables dict directly.
 
-    **Layer 2 — node ID ownership check:**
+    **Layer 2 — repositoryNameWithOwner field check:**
+
+    Extracts ``repositoryNameWithOwner`` string values (used by
+    mutations like ``createCommitOnBranch`` to target a repository by
+    ``owner/name``) from the same three paths as Layer 1 and checks
+    them against ``allowed_repo_full_names`` case-insensitively.
+
+    **Layer 3 — node ID ownership check:**
 
     Extracts values from all ``*Id``-suffixed input fields (excluding
     ``clientMutationId``), decodes GitHub node IDs to extract the
@@ -226,6 +265,10 @@ def check_repo_scope(
     Args:
         request_body: Raw HTTP request body bytes.
         allowed_repo_ids: Set of allowed GitHub repository node IDs.
+        allowed_repo_full_names: Set of allowed ``owner/name``
+            repository full names.  Matching is case-insensitive.
+            An empty set blocks any ``repositoryNameWithOwner``
+            value encountered.
 
     Returns:
         ScopeResult with verdict and optional detail.
@@ -288,7 +331,29 @@ def check_repo_scope(
             return ScopeResult(ScopeVerdict.OUT_OF_SCOPE, repo_id)
 
     # ------------------------------------------------------------------
-    # Layer 2: Node ID ownership check (decode + db ID match)
+    # Layer 2: repositoryNameWithOwner check (case-insensitive match)
+    # ------------------------------------------------------------------
+    collected_names: list[str] = list(finder.repo_name_inlined)
+
+    for var_name in finder.repo_name_var_refs:
+        if var_name not in variables:
+            return _UNRESOLVED
+        value = variables[var_name]
+        if isinstance(value, str):
+            collected_names.append(value)
+
+    _collect_repo_names_from_variables(variables, collected_names)
+
+    if collected_names:
+        allowed_names_lower = frozenset(
+            n.lower() for n in allowed_repo_full_names
+        )
+        for name in collected_names:
+            if name.lower() not in allowed_names_lower:
+                return ScopeResult(ScopeVerdict.OUT_OF_SCOPE, name)
+
+    # ------------------------------------------------------------------
+    # Layer 3: Node ID ownership check (decode + db ID match)
     # ------------------------------------------------------------------
     node_id_values: list[str] = list(finder.node_id_inlined)
 

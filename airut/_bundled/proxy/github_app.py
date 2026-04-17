@@ -42,6 +42,9 @@ class CachedToken:
     token: str
     expires_at: float  # Unix timestamp
     repo_node_ids: frozenset[str] = frozenset()  # Allowed repo node IDs
+    # Allowed ``owner/name`` full names, matched case-insensitively
+    # by the GraphQL scope checker.
+    repo_full_names: frozenset[str] = frozenset()
 
 
 def _base64url(data: bytes) -> str:
@@ -154,12 +157,13 @@ def fetch_installation_repos(
     base_url: str,
     token: str,
     configured_repos: list[str] | None = None,
-) -> frozenset[str]:
-    """Fetch node IDs of repositories accessible to the installation.
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Fetch node IDs and ``owner/name`` full names of installation repos.
 
     Calls ``GET /installation/repositories`` with pagination to collect
-    node IDs.  When ``configured_repos`` is provided, only repos whose
-    bare name matches are included.
+    repositories accessible to the installation.  When
+    ``configured_repos`` is provided, only repos whose bare name
+    matches are included.
 
     Args:
         base_url: GitHub API base URL (e.g., "https://api.github.com").
@@ -169,10 +173,14 @@ def fetch_installation_repos(
             When None, all installation repos are included.
 
     Returns:
-        Frozenset of repository node IDs.
+        Tuple of ``(node_ids, full_names)`` where ``full_names`` are
+        ``owner/name`` strings as returned by GitHub.  Entries missing
+        either value are skipped.  ``check_repo_scope()`` handles
+        case normalization at match time.
     """
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     node_ids: list[str] = []
+    full_names: list[str] = []
     page = 1
     configured_set = (
         set(configured_repos) if configured_repos is not None else None
@@ -195,19 +203,19 @@ def fetch_installation_repos(
         for repo in repos:
             name = repo.get("name", "")
             node_id = repo.get("node_id", "")
-            if not node_id:
+            full_name = repo.get("full_name", "")
+            if not node_id or not full_name:
                 continue
-            if configured_set is not None:
-                if name in configured_set:
-                    node_ids.append(node_id)
-            else:
-                node_ids.append(node_id)
+            if configured_set is not None and name not in configured_set:
+                continue
+            node_ids.append(node_id)
+            full_names.append(full_name)
 
         if len(repos) < 100:
             break
         page += 1
 
-    return frozenset(node_ids)
+    return frozenset(node_ids), frozenset(full_names)
 
 
 def is_token_valid(cached: CachedToken | None) -> bool:
