@@ -12,11 +12,11 @@ download failures at runtime.
 
 Checks:
     1. claude.ai/install.sh redirects to a bootstrap script on a
-       known host (downloads.claude.ai CDN or GCS bucket).
+       known host (``downloads.claude.ai``).
     2. The bootstrap script uses a compatible release URL, manifest
        path pattern, and binary path pattern.
     3. The ``latest`` channel resolves to a valid semver version
-       on both ``downloads.claude.ai`` (primary) and GCS (fallback).
+       on ``downloads.claude.ai``.
     4. The manifest for that version is valid JSON with the expected
        structure and our ``_extract_checksum()`` parses it correctly.
     5. The manifest includes checksums for all Linux platforms that
@@ -35,7 +35,6 @@ import pytest
 
 from airut.sandbox.claude_binary import (
     DOWNLOADS_BASE,
-    GCS_BUCKET,
     _extract_checksum,
 )
 
@@ -88,36 +87,24 @@ def _request_with_retry(
         "localhost",
         "claude.ai",
         "downloads.claude.ai",
-        "storage.googleapis.com",
     ]
 )
 class TestInstallScriptCompat:
     """Verify upstream install.sh is compatible with ClaudeBinaryCache."""
 
     # Known hosts that claude.ai/install.sh may redirect to.
-    _KNOWN_BOOTSTRAP_HOSTS = frozenset(
-        {
-            "storage.googleapis.com",
-            "downloads.claude.ai",
-        }
-    )
+    _KNOWN_BOOTSTRAP_HOSTS = frozenset({"downloads.claude.ai"})
 
     # -- fixtures --------------------------------------------------------
 
     @pytest.fixture(scope="class")
     def bootstrap_script(self) -> str:
-        """Fetch the bootstrap script from the primary CDN.
-
-        Falls back to GCS if the CDN is unreachable, matching the
-        fallback behavior of ``_open_release_url``.
-        """
-        for base in [DOWNLOADS_BASE, GCS_BUCKET]:
-            url = f"{base}/bootstrap.sh"
-            with httpx.Client(timeout=_HTTP_TIMEOUT) as c:
-                resp = _request_with_retry(c, "GET", url)
-                if resp.is_success:
-                    return resp.text
-        pytest.fail("bootstrap.sh unreachable on both CDN and GCS")
+        """Fetch the bootstrap script from the CDN."""
+        url = f"{DOWNLOADS_BASE}/bootstrap.sh"
+        with httpx.Client(timeout=_HTTP_TIMEOUT) as c:
+            resp = _request_with_retry(c, "GET", url)
+            resp.raise_for_status()
+            return resp.text
 
     @pytest.fixture(scope="class")
     def latest_version(self) -> str:
@@ -162,13 +149,6 @@ class TestInstallScriptCompat:
                     "not look like a bootstrap script"
                 )
 
-    def test_bootstrap_contains_gcs_bucket(self, bootstrap_script: str) -> None:
-        """Bootstrap script references the GCS bucket URL."""
-        bucket_uuid = "86c565f3-f756-42ad-8dfa-d59b1c096819"
-        assert bucket_uuid in bootstrap_script, (
-            "Bootstrap script does not contain expected GCS bucket UUID"
-        )
-
     def test_bootstrap_manifest_pattern(self, bootstrap_script: str) -> None:
         """Bootstrap fetches manifest.json."""
         assert "manifest.json" in bootstrap_script, (
@@ -193,17 +173,6 @@ class TestInstallScriptCompat:
     def test_latest_channel_resolves(self, latest_version: str) -> None:
         """The latest channel returns a valid semver version."""
         assert re.match(r"^\d+\.\d+\.\d+", latest_version)
-
-    def test_latest_channel_consistent(self, latest_version: str) -> None:
-        """CDN and GCS return the same latest version."""
-        url = f"{GCS_BUCKET}/latest"
-        with httpx.Client(timeout=_HTTP_TIMEOUT) as c:
-            resp = _request_with_retry(c, "GET", url)
-            resp.raise_for_status()
-            gcs_version = resp.text.strip()
-        assert latest_version == gcs_version, (
-            f"CDN latest ({latest_version}) != GCS latest ({gcs_version})"
-        )
 
     def test_manifest_parseable_by_extract_checksum(
         self, manifest_json: str

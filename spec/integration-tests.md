@@ -32,7 +32,7 @@ Tests run as part of the CI workflow (`.github/workflows/ci.yml`) via
 uv run scripts/ci.py --workflow integration
 
 # Run directly
-uv run pytest tests/integration/ -v --allow-hosts=127.0.0.1,localhost,claude.ai,downloads.claude.ai,storage.googleapis.com
+uv run pytest tests/integration/ -v --allow-hosts=127.0.0.1,localhost,claude.ai,downloads.claude.ai
 ```
 
 ## Test Coverage
@@ -57,5 +57,4 @@ Gateway tests cover:
 - **Install script compatibility**: Validates that the upstream
   `claude.ai/install.sh` structure matches `ClaudeBinaryCache` assumptions
   (release URL, manifest format, platform strings, binary URL pattern). Requires
-  external network access to `claude.ai`, `downloads.claude.ai`, and
-  `storage.googleapis.com`.
+  external network access to `claude.ai` and `downloads.claude.ai`.
