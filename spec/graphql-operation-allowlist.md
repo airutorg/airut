@@ -264,26 +264,35 @@ POST /graphql with GitHub App surrogate token
            │ operation allowed
            ▼
 ┌─────────────────────────────────────┐
-│  Layer 2: Repository ID Scoping     │  github-app-credential spec
-│  (graphql_scope.py — unchanged)     │
+│  Layer 2: Repository Scope Checks   │  github-app-credential spec
+│  (graphql_scope.py — four sub-layers)│
 │                                     │  "Does this target an allowed repo?"
-│  GitHub-specific                    │  Extracts repositoryId from AST + variables
-│  Checks only repositoryId field     │  Blocks out-of-scope repo targeting
+│  GitHub-specific                    │  Catches repository(owner, name)
+│                                     │  selections, repositoryId fields,
+│                                     │  repositoryNameWithOwner fields, and
+│                                     │  *Id ownership via node-ID decoding
 └──────────┬──────────────────────────┘
            │ repo in scope
            ▼
       Forward request with real token
 ```
 
-**Layer 1 eliminates the residual risk in Layer 2.** Mutations that accept
+**Layer 1 narrows Layer 2's surface area.** Mutations that accept
 non-`repositoryId` targeting fields (e.g., `addComment` with `subjectId`,
-`closeIssue` with `issueId`) are simply not listed in the operation allowlist.
-The agent uses REST API equivalents for these operations, where URL-level path
-scoping naturally restricts which repositories are accessible.
+`closeIssue` with `issueId`) can be excluded from the operation allowlist
+entirely so the agent uses REST API equivalents, where URL-level path scoping
+naturally restricts which repositories are accessible.
 
-**Layer 2 remains valuable** for mutations that Layer 1 allows. Mutations like
-`createIssue` and `createPullRequest` accept `repositoryId`, and Layer 2 ensures
-they can only target repositories in the configured set.
+**Layer 2 remains essential** for any operations Layer 1 allows. The
+`repository(owner, name)` sub-layer catches the read path used by
+`Query.repository` (invisible to any `*Id`/`Name` field extraction); the
+`repositoryId` and `repositoryNameWithOwner` sub-layers catch mutations like
+`createIssue`, `createPullRequest`, and `createCommitOnBranch`; the node-ID
+ownership sub-layer is defense-in-depth for any other repo-scoped node IDs that
+slip through.
+
+See [`github-app-credential.md`](github-app-credential.md) for the full
+sub-layer breakdown.
 
 ## Error Responses
 

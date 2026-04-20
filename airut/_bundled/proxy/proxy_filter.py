@@ -827,11 +827,10 @@ class ProxyFilter:
                     detail = result.detail or result.verdict.value
                     if result.verdict is ScopeVerdict.OUT_OF_SCOPE:
                         msg = (
-                            f"GraphQL mutation targets repository "
-                            f"outside configured scope. The "
-                            f"repositoryId {detail} is not in the "
-                            f"set of allowed repositories for this "
-                            f"GitHub App credential."
+                            f"GraphQL request targets repository "
+                            f"outside configured scope: {detail} is "
+                            f"not in the set of allowed repositories "
+                            f"for this GitHub App credential."
                         )
                     else:
                         msg = (

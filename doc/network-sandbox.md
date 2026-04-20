@@ -703,15 +703,27 @@ accept non-`repositoryId` targeting fields (e.g., `addComment` with `subjectId`)
 are simply not listed in the operation allowlist — the agent uses REST API
 equivalents where URL-level path scoping naturally restricts repository access.
 
-**Layer 2: Repository scope checking** (GitHub-specific). For mutations that
-Layer 1 allows (e.g., `createIssue`, `createPullRequest`), the proxy performs
-two scope checks:
+**Layer 2: Repository scope checking** (GitHub-specific). For requests that
+Layer 1 allows (queries reading repo data, mutations like `createIssue` /
+`createPullRequest`), the proxy performs four scope checks:
 
-1. **`repositoryId` field check** — Parses the GraphQL query AST (via
+1. **`repository(owner, name)` field selection check** — Catches GitHub's
+   `Query.repository(owner, name)` and the chained
+   `organization(login).repository(name)`,
+   `repositoryOwner(login).repository(name)`, and `user(login).repository(name)`
+   paths that address a repo via plain `String!` arguments. Combines
+   `owner/name` and matches case-insensitively against the allowed full names.
+   Selections with no resolvable parent `login` (e.g. `viewer.repository(name)`)
+   are fail-secure blocked.
+2. **`repositoryId` field check** — Parses the GraphQL query AST (via
    `graphql-core`) and scans JSON variables to extract all `repositoryId`
    values, blocking requests targeting repos outside the configured set with
    HTTP 403.
-2. **Node ID ownership check** — Extracts values from all `*Id`/`*Ids`-suffixed
+3. **`repositoryNameWithOwner` field check** — Catches mutations like
+   `createCommitOnBranch` whose `branch.repositoryNameWithOwner` input field
+   bypasses any `*Id` extraction. Matches case-insensitively against the
+   installation's allowed `owner/name` set.
+4. **Node ID ownership check** — Extracts values from all `*Id`/`*Ids`-suffixed
    input fields and arguments (`subjectId`, `pullRequestId`, `labelIds`, etc.),
    including list values and recursively nested variable objects, decodes GitHub
    node IDs to extract the embedded parent repository database ID, and verifies
