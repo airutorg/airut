@@ -4217,6 +4217,70 @@ class TestGitHubAppGraphQLScoping:
         assert flow.response is None
         assert flow.request.headers["Authorization"] == "Bearer ghs_real_token"
 
+    def test_blocks_repository_query_for_out_of_scope_repo(self) -> None:
+        """Query.repository(owner, name) on an out-of-scope repo is blocked.
+
+        Regression for the GraphQL query scope asymmetry pentest finding:
+        ``Query.repository(owner, name)`` addresses repos via plain
+        ``String!`` arguments, invisible to the ``*Id`` / ``Name``
+        extractors that catch mutations.  Without Layer 0, an in-scope
+        surrogate could read any repo the installation token is
+        authorized to see.
+        """
+        pf = self._setup_filter_with_cached_token()
+
+        body = json.dumps(
+            {
+                "query": (
+                    '{ repository(owner: "airutorg", name: "website")'
+                    " { description isPrivate } }"
+                )
+            }
+        ).encode()
+
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+            content=body,
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        resp_body = json.loads(flow.response._content)
+        assert resp_body["error"] == "graphql_repo_scope_blocked"
+        assert resp_body["detail"] == "airutorg/website"
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+
+    def test_allows_repository_query_for_in_scope_repo(self) -> None:
+        """Query.repository(owner, name) on an in-scope repo is allowed."""
+        pf = self._setup_filter_with_cached_token()
+
+        body = json.dumps(
+            {
+                "query": (
+                    '{ repository(owner: "airutorg", name: "airut")'
+                    " { description } }"
+                )
+            }
+        ).encode()
+
+        flow = _flow(
+            method="POST",
+            host="api.github.com",
+            path="/graphql",
+            headers={"Authorization": f"Bearer {self._SURROGATE}"},
+            content=body,
+        )
+        pf.requestheaders(flow)
+        pf.request(flow)
+
+        assert flow.response is None
+        assert flow.request.headers["Authorization"] == "Bearer ghs_real_token"
+
 
 # ---------------------------------------------------------------------------
 # GraphQL operation allowlist (Layer 1)

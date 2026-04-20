@@ -6,7 +6,18 @@
 """GraphQL repository scope checking for GitHub App credentials.
 
 Parses GitHub GraphQL requests to extract repository-targeting values
-and checks them against allowed repositories.  Three layers of checking:
+and checks them against allowed repositories.  Four layers of checking:
+
+0. **repository(owner, name) field selection check** — catches
+   GitHub's ``Query.repository(owner, name)`` and the chained
+   ``organization(login).repository(name)`` /
+   ``repositoryOwner(login).repository(name)`` /
+   ``user(login).repository(name)`` paths that address a repository
+   via plain ``String!`` arguments (no ``*Id``/``Name`` field).
+   Combines ``owner/name`` and matches against the allowed full names
+   case-insensitively.  Without this check, an in-scope GitHub App
+   surrogate token can read **any** repository the underlying
+   installation token is authorized to see.
 
 1. **repositoryId field check** — extracts ``repositoryId`` values
    (inlined, variable-referenced, or in variable objects) and checks
@@ -88,6 +99,43 @@ _MAX_BODY_SIZE = 1024 * 1024
 _SKIP_FIELDS = frozenset({"clientMutationId"})
 
 
+class _StringResolution(enum.Enum):
+    """Non-string outcomes of :func:`_resolve_string_value`.
+
+    ``UNRESOLVED`` means the value referenced a variable that wasn't
+    bound in the request's ``variables`` dict.  ``MALFORMED`` means
+    the AST node was an unsupported kind (e.g. ``IntValueNode``) or
+    the bound variable's value wasn't a string.
+    """
+
+    UNRESOLVED = "unresolved"
+    MALFORMED = "malformed"
+
+
+def _resolve_string_value(
+    value: gql_ast.ValueNode, variables: dict[str, object]
+) -> str | _StringResolution:
+    """Resolve an AST value or variable reference to a string.
+
+    Returns the literal string for ``StringValueNode``, the bound
+    variable's string value for ``VariableNode``,
+    :attr:`_StringResolution.UNRESOLVED` if the variable isn't bound,
+    or :attr:`_StringResolution.MALFORMED` for any other shape (wrong
+    AST node kind, non-string variable value).
+    """
+    if isinstance(value, gql_ast.StringValueNode):
+        return value.value
+    if isinstance(value, gql_ast.VariableNode):
+        var_name = value.name.value
+        if var_name not in variables:
+            return _StringResolution.UNRESOLVED
+        bound = variables[var_name]
+        if isinstance(bound, str):
+            return bound
+        return _StringResolution.MALFORMED
+    return _StringResolution.MALFORMED
+
+
 def _is_id_field(name: str) -> bool:
     """Check if a field name could contain a GitHub node ID.
 
@@ -101,11 +149,52 @@ def _is_id_field(name: str) -> bool:
     return name == "id" or name.endswith("Id") or name.endswith("Ids")
 
 
+@dataclass(frozen=True)
+class _RepoFieldRef:
+    """A ``repository(owner, name)`` field selection awaiting resolution.
+
+    ``owner`` is ``None`` when no parent ``login`` argument could be
+    located — e.g. ``viewer.repository(name)`` or a bare
+    ``repository(name)`` at the document root — and the reference
+    fail-secure blocks during resolution.
+    """
+
+    owner: gql_ast.ValueNode | None
+    name: gql_ast.ValueNode
+
+
+def _find_parent_login_arg(
+    ancestors: list[gql_ast.Node],
+) -> gql_ast.ValueNode | None:
+    """Find the immediate parent FieldNode and return its ``login`` arg.
+
+    GitHub's chained repository accessors —
+    ``organization(login)``, ``repositoryOwner(login)``,
+    ``user(login)`` — all expose ``login`` as a direct argument.  This
+    helper walks the visitor's ``ancestors`` list backwards to the
+    *immediate* parent ``FieldNode`` and returns its ``login``
+    argument value, or ``None`` if no parent ``FieldNode`` is
+    reachable or the immediate parent has no ``login`` argument.  We
+    deliberately do not look past the immediate parent: if it lacks a
+    ``login`` arg, a more-distant ancestor's ``login`` could refer to
+    a different entity, so we fail-secure rather than guess.
+    """
+    for ancestor in reversed(ancestors):
+        if isinstance(ancestor, gql_ast.FieldNode):
+            for arg in ancestor.arguments or ():
+                if arg.name.value == "login":
+                    return arg.value
+            return None
+    return None
+
+
 class _IdFieldFinder(visitor.Visitor):
     """AST visitor that collects ID field values from input arguments.
 
-    Collects three categories:
+    Collects four categories:
 
+    - **repo_field_refs**: ``repository(owner, name)`` field
+      selections (Layer 0).
     - **repo_***: values from ``repositoryId`` fields (for the primary
       string-match check against node IDs).
     - **repo_name_***: values from ``repositoryNameWithOwner`` string
@@ -122,6 +211,8 @@ class _IdFieldFinder(visitor.Visitor):
 
     def __init__(self) -> None:
         super().__init__()
+        # Layer 0: repository(owner, name) field selections
+        self.repo_field_refs: list[_RepoFieldRef] = []
         # Primary: repositoryId values
         self.repo_inlined: list[str] = []
         self.repo_var_refs: list[str] = []
@@ -165,6 +256,36 @@ class _IdFieldFinder(visitor.Visitor):
         self, node: gql_ast.ArgumentNode, *_args: object
     ) -> None:
         self._collect_id_value(node.name.value, node.value)
+
+    def enter_field(
+        self,
+        node: gql_ast.FieldNode,
+        _key: object,
+        _parent: object,
+        _path: object,
+        ancestors: list[gql_ast.Node],
+    ) -> None:
+        """Collect ``repository(owner, name)`` field selections.
+
+        Selections without a ``name`` argument are ignored: ``Commit``,
+        ``Ref`` and several other GitHub types expose ``repository`` as
+        an argument-less output field that cannot itself address a
+        new repository.
+        """
+        if node.name.value != "repository":
+            return
+        owner_val: gql_ast.ValueNode | None = None
+        name_val: gql_ast.ValueNode | None = None
+        for arg in node.arguments or ():
+            if arg.name.value == "owner":
+                owner_val = arg.value
+            elif arg.name.value == "name":
+                name_val = arg.value
+        if name_val is None:
+            return
+        if owner_val is None:
+            owner_val = _find_parent_login_arg(ancestors)
+        self.repo_field_refs.append(_RepoFieldRef(owner_val, name_val))
 
 
 def _collect_repo_ids_from_variables(
@@ -231,7 +352,18 @@ def check_repo_scope(
 ) -> ScopeResult:
     """Check if a GraphQL request targets only allowed repositories.
 
-    Performs three layers of scope checking:
+    Performs four layers of scope checking:
+
+    **Layer 0 — repository(owner, name) field selection check:**
+
+    Extracts ``Query.repository(owner, name)`` selections and the
+    chained ``organization(login).repository(name)`` /
+    ``repositoryOwner(login).repository(name)`` /
+    ``user(login).repository(name)`` shapes that address a repository
+    via plain ``String!`` arguments.  Combines ``owner/name`` and
+    matches case-insensitively against ``allowed_repo_full_names``.
+    A ``repository(name)`` selection without a resolvable parent
+    ``login`` is fail-secure blocked.
 
     **Layer 1 — repositoryId field check:**
 
@@ -307,6 +439,30 @@ def check_repo_scope(
     finder = _IdFieldFinder()
     visitor.visit(document, finder)
 
+    allowed_names_lower = frozenset(n.lower() for n in allowed_repo_full_names)
+
+    # ------------------------------------------------------------------
+    # Layer 0: repository(owner, name) field selection check
+    # ------------------------------------------------------------------
+    for ref in finder.repo_field_refs:
+        name_str = _resolve_string_value(ref.name, variables)
+        if name_str is _StringResolution.UNRESOLVED:
+            return _UNRESOLVED
+        if name_str is _StringResolution.MALFORMED:
+            return _PARSE_ERROR
+        if ref.owner is None:
+            return ScopeResult(
+                ScopeVerdict.OUT_OF_SCOPE, f"<unknown>/{name_str}"
+            )
+        owner_str = _resolve_string_value(ref.owner, variables)
+        if owner_str is _StringResolution.UNRESOLVED:
+            return _UNRESOLVED
+        if owner_str is _StringResolution.MALFORMED:
+            return _PARSE_ERROR
+        full_name = f"{owner_str}/{name_str}"
+        if full_name.lower() not in allowed_names_lower:
+            return ScopeResult(ScopeVerdict.OUT_OF_SCOPE, full_name)
+
     # ------------------------------------------------------------------
     # Layer 1: repositoryId field check (string match)
     # ------------------------------------------------------------------
@@ -344,13 +500,9 @@ def check_repo_scope(
 
     _collect_repo_names_from_variables(variables, collected_names)
 
-    if collected_names:
-        allowed_names_lower = frozenset(
-            n.lower() for n in allowed_repo_full_names
-        )
-        for name in collected_names:
-            if name.lower() not in allowed_names_lower:
-                return ScopeResult(ScopeVerdict.OUT_OF_SCOPE, name)
+    for name in collected_names:
+        if name.lower() not in allowed_names_lower:
+            return ScopeResult(ScopeVerdict.OUT_OF_SCOPE, name)
 
     # ------------------------------------------------------------------
     # Layer 3: Node ID ownership check (decode + db ID match)

@@ -333,9 +333,33 @@ proxy_filter.py request()
 
 GitHub App installation tokens can perform certain mutations (e.g.,
 `createIssue`) on **any public repository**, regardless of the App's
-installation scope. To prevent data exfiltration via GraphQL mutations targeting
-out-of-scope repos, the proxy performs three layers of scope checking on every
-GraphQL request.
+installation scope. They can additionally **read** any repository the underlying
+installation token is authorized to see (which on github.com includes every
+public repository) via the `Query.repository(owner, name)` selection — this
+entry point is invisible to any `*Id`/`Name` field extraction. To prevent data
+exfiltration via either of these vectors, the proxy performs four layers of
+scope checking on every GraphQL request.
+
+**Layer 0 — `repository(owner, name)` field selection check (string match):**
+
+GitHub's `Query.repository(owner, name)` and the chained
+`organization(login).repository(name)`,
+`repositoryOwner(login).repository(name)`, and `user(login).repository(name)`
+paths address a repository via plain `String!` arguments. `check_repo_scope()`
+walks the AST for any field named `repository`, extracts the `owner` argument
+from the field itself or — when omitted — the immediate parent `Field` node's
+`login` argument, combines them with the `name` argument, and matches the
+resulting `owner/name` against `allowed_repo_full_names` case-insensitively.
+Selections without a resolvable parent `login` — `viewer.repository(name)`, or a
+`repository(name)` selection inside a named fragment spread (the visitor cannot
+walk past the spread site into the fragment definition) — are fail-secure
+blocked. Requests that clear layer 0 proceed to layer 1.
+
+A `repository` field selection **without** a `name` argument is left unchecked:
+`Commit`, `Ref`, `Branch`, and several other GitHub types expose `repository` as
+an argument-less output field that returns the already-targeted repository. Such
+selections cannot themselves address a new repo and are gated by the surrounding
+selection's own scope checks.
 
 **Layer 1 — `repositoryId` field check (string match):**
 
@@ -403,6 +427,33 @@ failed) all result in a block. The `graphql_scope.py` module is a pure function
 with no mitmproxy dependency, taking `bytes` in and returning a structured
 `ScopeResult(verdict, detail)` where `verdict` is an enum
 (`ALLOWED | OUT_OF_SCOPE | PARSE_ERROR | UNRESOLVED_VARIABLE`).
+
+### Known Residual Risks
+
+Layer 0–3 catch every shape that addresses a single repository by node ID,
+`owner/name`, or chained `owner.repository(name)` selection. The following
+GraphQL shapes can still surface out-of-scope repositories under a permissive
+operation allowlist (e.g. `queries: ["*"]`) and are mitigated **only** by the
+operation allowlist (Layer 1 of `spec/graphql-operation-allowlist.md`):
+
+- **Repository connections** — `organization(login).repositories`,
+  `user(login).repositories`, `viewer.repositories`, `Repository.parent`,
+  `Repository.forks`, `Repository.mirrorSourceRepository`,
+  `Repository.templateRepository`. These return repositories without taking an
+  `owner`/`name` argument the proxy can match on.
+- **`Query.nodes(ids: [...])` bulk lookup** — Layer 3 catches the singular
+  `node(id:)` because `_is_id_field("id")` matches; the plural `nodes(ids:)`
+  uses a lowercase `ids` argument that does not match the `Id`/`Ids`-suffixed
+  field pattern.
+- **`Query.resource(url:)`** — global URL resolver that can return a Repository
+  (or any other node) by GitHub.com URL.
+- **`Query.search(type: REPOSITORY)`** — full-text repository search.
+
+The agent's GraphQL allowlist must therefore enumerate the specific query fields
+it needs (e.g. `viewer`, `repository`) rather than allow `"*"` once any of these
+fields become reachable; expanding `_is_id_field` to also catch the lowercase
+`ids` argument would close the `nodes(ids:)` gap as a defense-in-depth
+follow-up.
 
 ## Future Enhancements
 

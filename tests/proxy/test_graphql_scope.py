@@ -1221,3 +1221,271 @@ class TestListOfDictVariables:
             },
         )
         assert check_repo_scope(body, ALLOWED) == _oos(ISSUE_EVIL)
+
+
+# -------------------------------------------------------------------
+# Layer 0: Query.repository(owner, name) field selection
+# -------------------------------------------------------------------
+
+
+class TestRepositoryFieldSelection:
+    """Tests for the ``repository(owner, name)`` field selection.
+
+    GitHub's GraphQL ``Query.repository(owner, name)`` and the chained
+    ``organization(login).repository(name)`` /
+    ``repositoryOwner(login).repository(name)`` /
+    ``user(login).repository(name)`` paths address a repository via
+    plain ``String!`` arguments instead of via any ``*Id`` or
+    ``repositoryNameWithOwner`` field.  Without this check, an
+    in-scope GitHub App surrogate token can read **any** repository
+    the underlying installation token is authorized to see (including
+    any public repository on github.com).
+
+    Regression for the pentest finding "GraphQL query scope asymmetry".
+    """
+
+    def test_query_repository_in_scope(self) -> None:
+        body = _body(
+            '{ repository(owner: "airutorg", name: "airut") { description } }'
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _OK
+
+    def test_query_repository_out_of_scope(self) -> None:
+        body = _body(
+            '{ repository(owner: "airutorg", name: "website")'
+            " { description isPrivate } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "airutorg/website"
+        )
+
+    def test_query_repository_case_insensitive(self) -> None:
+        body = _body(
+            '{ repository(owner: "AIRUTORG", name: "AIRUT") { description } }'
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _OK
+
+    def test_query_repository_via_variables(self) -> None:
+        body = _body(
+            "query($o: String!, $n: String!)"
+            " { repository(owner: $o, name: $n) { description } }",
+            variables={"o": "airutorg", "n": "website"},
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "airutorg/website"
+        )
+
+    def test_query_repository_var_unresolved(self) -> None:
+        body = _body(
+            "query($o: String!, $n: String!)"
+            " { repository(owner: $o, name: $n) { description } }",
+            variables={"o": "airutorg"},
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _UNRESOLVED
+
+    def test_query_repository_var_wrong_type(self) -> None:
+        body = _body(
+            "query($o: String!, $n: String!)"
+            " { repository(owner: $o, name: $n) { description } }",
+            variables={"o": 42, "n": "airut"},
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _PARSE
+
+    def test_query_repository_aliased(self) -> None:
+        """Field aliases must not bypass the check."""
+        body = _body(
+            'query { mine: repository(owner: "airutorg", name: "website")'
+            " { description } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "airutorg/website"
+        )
+
+    def test_organization_repository_in_scope(self) -> None:
+        body = _body(
+            '{ organization(login: "airutorg")'
+            ' { repository(name: "airut") { description } } }'
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _OK
+
+    def test_organization_repository_out_of_scope(self) -> None:
+        body = _body(
+            '{ organization(login: "airutorg")'
+            ' { repository(name: "website") { description } } }'
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "airutorg/website"
+        )
+
+    def test_repository_owner_repository_out_of_scope(self) -> None:
+        body = _body(
+            '{ repositoryOwner(login: "airutorg")'
+            ' { repository(name: "website") { description } } }'
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "airutorg/website"
+        )
+
+    def test_user_repository_out_of_scope(self) -> None:
+        body = _body(
+            '{ user(login: "evilperson")'
+            ' { repository(name: "secret") { description } } }'
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "evilperson/secret"
+        )
+
+    def test_chained_repository_via_variable_login_in_scope(self) -> None:
+        body = _body(
+            "query($login: String!, $name: String!)"
+            " { organization(login: $login)"
+            "   { repository(name: $name) { description } } }",
+            variables={"login": "airutorg", "name": "sandbox-action"},
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _OK
+
+    def test_viewer_repository_blocked(self) -> None:
+        """``viewer.repository(name)`` has no resolvable owner — block."""
+        body = _body(
+            '{ viewer { repository(name: "website") { description } } }'
+        )
+        result = check_repo_scope(body, ALLOWED, ALLOWED_NAMES)
+        assert result.verdict is ScopeVerdict.OUT_OF_SCOPE
+        assert "website" in (result.detail or "")
+
+    def test_repository_no_name_arg_ignored(self) -> None:
+        """``repository`` field without a ``name`` arg is ignored."""
+        # Some schemas have ``repository`` as an output field with no
+        # selector arguments.  Without ``name`` we have nothing to
+        # check — leave it to other layers / the operation allowlist.
+        body = _body(
+            "mutation { createCommitOnBranch(input: {branch: "
+            '{repositoryNameWithOwner: "airutorg/airut", '
+            'branchName: "main"}, message: {headline: "x"}, '
+            'expectedHeadOid: "abc"}) '
+            "{ commit { repository { name } } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _OK
+
+    def test_layer0_runs_after_inscope_repo_id(self) -> None:
+        """Out-of-scope repository(...) blocks even with in-scope IDs.
+
+        Regression: Layer 1 short-circuit must not prevent Layer 0
+        from catching an out-of-scope ``repository(owner, name)``
+        sub-selection in the same query.
+        """
+        body = _body(
+            "mutation {"
+            '  a: createIssue(input: {repositoryId: "R_kgDORH34qw",'
+            '    title: "t"}) { issue { id } }'
+            '  b: repository(owner: "airutorg", name: "website")'
+            "    { description }"
+            "}"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "airutorg/website"
+        )
+
+    def test_empty_allowed_names_blocks(self) -> None:
+        """Empty allowed_repo_full_names blocks any repository(...)."""
+        body = _body(
+            '{ repository(owner: "airutorg", name: "airut") { description } }'
+        )
+        assert check_repo_scope(body, ALLOWED) == _oos("airutorg/airut")
+
+    def test_repository_no_owner_no_parent_login_blocked(self) -> None:
+        """``repository(name: ...)`` at root with no parent login blocks."""
+        body = _body('{ repository(name: "airut") { description } }')
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<unknown>/airut"
+        )
+
+    def test_repository_owner_inline_int_value(self) -> None:
+        """Inline non-string owner is fail-secure parse error."""
+        body = _body('{ repository(owner: 42, name: "airut") { description } }')
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _PARSE
+
+    def test_repository_name_inline_int_value(self) -> None:
+        """Inline non-string name is fail-secure parse error."""
+        body = _body(
+            '{ repository(owner: "airutorg", name: 42) { description } }'
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _PARSE
+
+    def test_repository_name_var_wrong_type(self) -> None:
+        """Variable bound to non-string name is fail-secure parse error."""
+        body = _body(
+            'query($n: String!) { repository(owner: "airutorg", '
+            "name: $n) { description } }",
+            variables={"n": 42},
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _PARSE
+
+    def test_repository_owner_var_unresolved(self) -> None:
+        """Owner-only unresolved variable returns UNRESOLVED."""
+        body = _body(
+            "query($o: String!) { repository(owner: $o, "
+            'name: "airut") { description } }',
+            variables={},
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _UNRESOLVED
+
+    def test_two_repository_selections_one_out_of_scope(self) -> None:
+        """Two ``repository(...)`` selections — out-of-scope one wins."""
+        body = _body(
+            "{"
+            '  good: repository(owner: "airutorg", name: "airut")'
+            "    { description }"
+            '  evil: repository(owner: "airutorg", name: "website")'
+            "    { description }"
+            "}"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "airutorg/website"
+        )
+
+    def test_inline_fragment_under_organization_in_scope(self) -> None:
+        """Inline fragment under ``organization`` resolves parent login."""
+        body = _body(
+            '{ organization(login: "airutorg") {'
+            "  ... on Organization {"
+            '    repository(name: "airut") { description }'
+            "  }"
+            "} }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _OK
+
+    def test_inline_fragment_under_organization_out_of_scope(self) -> None:
+        body = _body(
+            '{ organization(login: "airutorg") {'
+            "  ... on Organization {"
+            '    repository(name: "website") { description }'
+            "  }"
+            "} }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "airutorg/website"
+        )
+
+    def test_named_fragment_spread_blocks_unresolvable_owner(self) -> None:
+        """Named fragment spreads break the parent-login chain.
+
+        The visitor walks ``ancestors`` from the spread site, not into
+        the fragment definition.  A ``repository(name)`` selection
+        inside a named fragment therefore has no resolvable parent
+        ``login`` even when the spread is inside an in-scope
+        ``organization(login: ...)``.  Locked in as fail-secure to
+        prevent a future "helpfully resolve fragment definitions"
+        change from silently introducing a bypass.
+        """
+        body = _body(
+            '{ organization(login: "airutorg") {'
+            "  ...RepoBits"
+            "} }"
+            "fragment RepoBits on Organization {"
+            '  repository(name: "website") { description }'
+            "}"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<unknown>/website"
+        )
