@@ -57,14 +57,7 @@ events = [
             reply = slack_env.slack_server.wait_for_sent(
                 predicate=lambda m: (
                     m.method == "chat_postMessage"
-                    and (
-                        "created report" in m.kwargs.get("text", "").lower()
-                        or any(
-                            "created report" in b.get("text", "").lower()
-                            for b in m.kwargs.get("blocks", [])
-                            if isinstance(b, dict)
-                        )
-                    )
+                    and m.contains("created report")
                 ),
                 timeout=30.0,
             )
@@ -121,14 +114,7 @@ events = [
             reply = slack_env.slack_server.wait_for_sent(
                 predicate=lambda m: (
                     m.method == "chat_postMessage"
-                    and (
-                        "created multiple" in m.kwargs.get("text", "").lower()
-                        or any(
-                            "created multiple" in b.get("text", "").lower()
-                            for b in m.kwargs.get("blocks", [])
-                            if isinstance(b, dict)
-                        )
-                    )
+                    and m.contains("created multiple")
                 ),
                 timeout=30.0,
             )

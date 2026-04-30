@@ -67,15 +67,7 @@ class TestSlackConversationResume:
             # Wait for first reply
             reply1 = slack_env.slack_server.wait_for_sent(
                 predicate=lambda m: (
-                    m.method == "chat_postMessage"
-                    and (
-                        "first task" in m.kwargs.get("text", "").lower()
-                        or any(
-                            "first task" in b.get("text", "").lower()
-                            for b in m.kwargs.get("blocks", [])
-                            if isinstance(b, dict)
-                        )
-                    )
+                    m.method == "chat_postMessage" and m.contains("first task")
                 ),
                 timeout=30.0,
             )
@@ -120,15 +112,7 @@ class TestSlackConversationResume:
 
             reply2 = slack_env.slack_server.wait_for_sent(
                 predicate=lambda m: (
-                    m.method == "chat_postMessage"
-                    and (
-                        "second task" in m.kwargs.get("text", "").lower()
-                        or any(
-                            "second task" in b.get("text", "").lower()
-                            for b in m.kwargs.get("blocks", [])
-                            if isinstance(b, dict)
-                        )
-                    )
+                    m.method == "chat_postMessage" and m.contains("second task")
                 ),
                 timeout=30.0,
             )

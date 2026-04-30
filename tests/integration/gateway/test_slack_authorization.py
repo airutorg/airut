@@ -216,16 +216,7 @@ events = [
                     reply = env.slack_server.wait_for_sent(
                         predicate=lambda m: (
                             m.method == "chat_postMessage"
-                            and (
-                                "authorized reply"
-                                in m.kwargs.get("text", "").lower()
-                                or any(
-                                    "authorized reply"
-                                    in b.get("text", "").lower()
-                                    for b in m.kwargs.get("blocks", [])
-                                    if isinstance(b, dict)
-                                )
-                            )
+                            and m.contains("authorized reply")
                         ),
                         timeout=30.0,
                     )

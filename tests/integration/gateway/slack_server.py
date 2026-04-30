@@ -55,6 +55,32 @@ class SentSlackMessage:
     kwargs: dict[str, JsonValue | bytes]
     """Keyword arguments passed to the API method."""
 
+    def text(self) -> str:
+        """Return the ``text`` kwarg as a string (``""`` if missing)."""
+        val = self.kwargs.get("text", "")
+        return val if isinstance(val, str) else ""
+
+    def blocks(self) -> list[JsonDict]:
+        """Return the ``blocks`` kwarg as a list of dict blocks."""
+        val = self.kwargs.get("blocks", [])
+        if not isinstance(val, list):
+            return []
+        return [b for b in val if isinstance(b, dict)]
+
+    def contains(self, needle: str) -> bool:
+        """Case-insensitive substring search in ``text`` and ``blocks``."""
+        needle_lower = needle.lower()
+        if needle_lower in self.text().lower():
+            return True
+        for b in self.blocks():
+            block_text = b.get("text", "")
+            if (
+                isinstance(block_text, str)
+                and needle_lower in block_text.lower()
+            ):
+                return True
+        return False
+
 
 @dataclass
 class RegisteredUser:
@@ -373,9 +399,7 @@ class TestSlackServer:
         }
 
         if files:
-            # list[JsonDict] is list[JsonValue] which is JsonValue; ty
-            # cannot resolve recursive type alias subtyping.
-            payload["files"] = files  # ty:ignore[invalid-assignment]
+            payload["files"] = files
 
         display_title = text[:60].split("\n")[0] if text else ""
 

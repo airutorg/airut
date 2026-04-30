@@ -57,10 +57,7 @@ sys.exit(1)
             error_msg = slack_env.slack_server.wait_for_sent(
                 predicate=lambda m: (
                     m.method == "chat_postMessage"
-                    and (
-                        "error" in m.kwargs.get("text", "").lower()
-                        or "failed" in m.kwargs.get("text", "").lower()
-                    )
+                    and (m.contains("error") or m.contains("failed"))
                 ),
                 timeout=30.0,
             )
@@ -102,9 +99,8 @@ events = [
             response = slack_env.slack_server.wait_for_sent(
                 predicate=lambda m: (
                     m.method == "chat_postMessage"
-                    and m.kwargs.get("text", "") != ""
-                    and "started working"
-                    not in m.kwargs.get("text", "").lower()
+                    and m.text() != ""
+                    and not m.contains("started working")
                 ),
                 timeout=30.0,
             )

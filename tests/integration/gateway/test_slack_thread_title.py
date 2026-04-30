@@ -54,15 +54,7 @@ events = [
             # Wait for reply
             reply = slack_env.slack_server.wait_for_sent(
                 predicate=lambda m: (
-                    m.method == "chat_postMessage"
-                    and (
-                        "title test" in m.kwargs.get("text", "").lower()
-                        or any(
-                            "title test" in b.get("text", "").lower()
-                            for b in m.kwargs.get("blocks", [])
-                            if isinstance(b, dict)
-                        )
-                    )
+                    m.method == "chat_postMessage" and m.contains("title test")
                 ),
                 timeout=30.0,
             )

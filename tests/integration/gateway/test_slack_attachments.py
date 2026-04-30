@@ -88,14 +88,7 @@ events = [
                 reply = slack_env.slack_server.wait_for_sent(
                     predicate=lambda m: (
                         m.method == "chat_postMessage"
-                        and (
-                            "got file" in m.kwargs.get("text", "").lower()
-                            or any(
-                                "got file" in b.get("text", "").lower()
-                                for b in m.kwargs.get("blocks", [])
-                                if isinstance(b, dict)
-                            )
-                        )
+                        and m.contains("got file")
                     ),
                     timeout=30.0,
                 )
