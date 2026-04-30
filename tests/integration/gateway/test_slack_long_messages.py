@@ -53,15 +53,7 @@ events = [
 
             reply = slack_env.slack_server.wait_for_sent(
                 predicate=lambda m: (
-                    m.method == "chat_postMessage"
-                    and (
-                        "short reply" in m.kwargs.get("text", "").lower()
-                        or any(
-                            "short reply" in b.get("text", "").lower()
-                            for b in m.kwargs.get("blocks", [])
-                            if isinstance(b, dict)
-                        )
-                    )
+                    m.method == "chat_postMessage" and m.contains("short reply")
                 ),
                 timeout=30.0,
             )
@@ -115,8 +107,7 @@ events = [
                     m.method == "files_upload_v2"
                     or (
                         m.method == "chat_postMessage"
-                        and "started working"
-                        not in m.kwargs.get("text", "").lower()
+                        and not m.contains("started working")
                     )
                 ),
                 timeout=30.0,

@@ -62,7 +62,7 @@ class TestSlackNewConversation:
             ack = slack_env.slack_server.wait_for_sent(
                 predicate=lambda m: (
                     m.method == "chat_postMessage"
-                    and "started working" in m.kwargs.get("text", "").lower()
+                    and m.contains("started working")
                 ),
                 timeout=15.0,
             )
@@ -73,14 +73,7 @@ class TestSlackNewConversation:
                 predicate=lambda m: (
                     m.method == "chat_postMessage"
                     and m is not ack
-                    and (
-                        "completed" in m.kwargs.get("text", "").lower()
-                        or any(
-                            "completed" in b.get("text", "").lower()
-                            for b in m.kwargs.get("blocks", [])
-                            if isinstance(b, dict)
-                        )
-                    )
+                    and m.contains("completed")
                 ),
                 timeout=30.0,
             )
@@ -117,15 +110,7 @@ class TestSlackNewConversation:
             # Wait for reply (means execution finished)
             reply = slack_env.slack_server.wait_for_sent(
                 predicate=lambda m: (
-                    m.method == "chat_postMessage"
-                    and (
-                        "completed" in m.kwargs.get("text", "").lower()
-                        or any(
-                            "completed" in b.get("text", "").lower()
-                            for b in m.kwargs.get("blocks", [])
-                            if isinstance(b, dict)
-                        )
-                    )
+                    m.method == "chat_postMessage" and m.contains("completed")
                 ),
                 timeout=30.0,
             )
@@ -175,15 +160,7 @@ class TestSlackNewConversation:
             # Wait for reply
             slack_env.slack_server.wait_for_sent(
                 predicate=lambda m: (
-                    m.method == "chat_postMessage"
-                    and (
-                        "completed" in m.kwargs.get("text", "").lower()
-                        or any(
-                            "completed" in b.get("text", "").lower()
-                            for b in m.kwargs.get("blocks", [])
-                            if isinstance(b, dict)
-                        )
-                    )
+                    m.method == "chat_postMessage" and m.contains("completed")
                 ),
                 timeout=30.0,
             )

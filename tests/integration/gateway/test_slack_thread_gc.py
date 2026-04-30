@@ -57,15 +57,7 @@ class TestSlackThreadGC:
             # Wait for reply
             reply = slack_env.slack_server.wait_for_sent(
                 predicate=lambda m: (
-                    m.method == "chat_postMessage"
-                    and (
-                        "gc test" in m.kwargs.get("text", "").lower()
-                        or any(
-                            "gc test" in b.get("text", "").lower()
-                            for b in m.kwargs.get("blocks", [])
-                            if isinstance(b, dict)
-                        )
-                    )
+                    m.method == "chat_postMessage" and m.contains("gc test")
                 ),
                 timeout=30.0,
             )
@@ -119,15 +111,7 @@ class TestSlackThreadGC:
 
             reply = slack_env.slack_server.wait_for_sent(
                 predicate=lambda m: (
-                    m.method == "chat_postMessage"
-                    and (
-                        "gc test" in m.kwargs.get("text", "").lower()
-                        or any(
-                            "gc test" in b.get("text", "").lower()
-                            for b in m.kwargs.get("blocks", [])
-                            if isinstance(b, dict)
-                        )
-                    )
+                    m.method == "chat_postMessage" and m.contains("gc test")
                 ),
                 timeout=30.0,
             )
