@@ -637,6 +637,89 @@ def test_extract_attachments_path_traversal_slash_only(tmp_path: Path) -> None:
     assert len(filenames) == 0
 
 
+def test_extract_attachments_rfc2047_encoded_filename(tmp_path: Path) -> None:
+    """Test that RFC 2047 encoded-word filenames are decoded.
+
+    Some email clients (e.g. Outlook) encode non-ASCII attachment filenames
+    using RFC 2047 encoded-words like ``=?UTF-8?Q?K=C3=A4ytt=C3=B6tili.csv?=``
+    in the Content-Disposition filename parameter. ``Message.get_filename()``
+    returns these raw, so we must decode them ourselves.
+    """
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+
+    msg = MIMEMultipart()
+    text_part = MIMEText("Body text")
+    msg.attach(text_part)
+
+    attachment = MIMEText("Finnish content")
+    # Q-encoded UTF-8 for "Käyttötili.csv"
+    attachment.add_header(
+        "Content-Disposition",
+        "attachment",
+        filename="=?UTF-8?Q?K=C3=A4ytt=C3=B6tili.csv?=",
+    )
+    msg.attach(attachment)
+
+    filenames = extract_attachments(msg, inbox_dir)
+
+    assert filenames == ["Käyttötili.csv"]
+    saved_file = inbox_dir / "Käyttötili.csv"
+    assert saved_file.exists()
+    assert saved_file.read_text() == "Finnish content"
+
+
+def test_extract_attachments_rfc2047_base64_filename(tmp_path: Path) -> None:
+    """Test that RFC 2047 base64 encoded-word filenames are decoded."""
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+
+    msg = MIMEMultipart()
+    text_part = MIMEText("Body text")
+    msg.attach(text_part)
+
+    attachment = MIMEText("content")
+    # Base64 encoded UTF-8 for "résumé.pdf"
+    attachment.add_header(
+        "Content-Disposition",
+        "attachment",
+        filename="=?UTF-8?B?csOpc3Vtw6kucGRm?=",
+    )
+    msg.attach(attachment)
+
+    filenames = extract_attachments(msg, inbox_dir)
+
+    assert filenames == ["résumé.pdf"]
+    assert (inbox_dir / "résumé.pdf").exists()
+
+
+def test_extract_attachments_rfc2047_filename_with_path_traversal(
+    tmp_path: Path,
+) -> None:
+    """Test that path traversal in encoded filenames is sanitized."""
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+
+    msg = MIMEMultipart()
+    text_part = MIMEText("Body text")
+    msg.attach(text_part)
+
+    attachment = MIMEText("malicious")
+    # Q-encoded UTF-8 for "../evil.csv"
+    attachment.add_header(
+        "Content-Disposition",
+        "attachment",
+        filename="=?UTF-8?Q?..=2F..=2Fevil.csv?=",
+    )
+    msg.attach(attachment)
+
+    filenames = extract_attachments(msg, inbox_dir)
+
+    assert filenames == ["evil.csv"]
+    assert (inbox_dir / "evil.csv").exists()
+    assert not (tmp_path / "evil.csv").exists()
+
+
 def test_collect_outbox_files_with_files(tmp_path: Path) -> None:
     """Test collecting files from outbox directory."""
     outbox_dir = tmp_path / "outbox"

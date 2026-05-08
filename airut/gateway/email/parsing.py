@@ -57,7 +57,17 @@ def decode_subject(message: Message) -> str:
     if not raw:
         return ""
 
-    parts = decode_header(raw)
+    return _decode_rfc2047(raw, joiner=" ")
+
+
+def _decode_rfc2047(value: str, joiner: str = "") -> str:
+    """Decode an RFC 2047 encoded-word string.
+
+    Uses ``email.header.decode_header`` and joins the resulting parts with
+    ``joiner`` (a space for header-like fields, empty for filenames where the
+    encoded-word is the entire value).
+    """
+    parts = decode_header(value)
     decoded_parts: list[str] = []
     for data, charset in parts:
         if isinstance(data, bytes):
@@ -66,7 +76,7 @@ def decode_subject(message: Message) -> str:
             )
         else:
             decoded_parts.append(data)
-    return " ".join(decoded_parts)
+    return joiner.join(decoded_parts)
 
 
 def extract_conversation_id(subject: str) -> str | None:
@@ -273,6 +283,10 @@ def extract_attachments(
             if part.get_content_disposition() == "attachment":
                 filename = part.get_filename()
                 if filename:
+                    # Some clients (e.g. Outlook) emit RFC 2047 encoded-words
+                    # in the filename parameter; get_filename() returns them
+                    # raw, so decode them here.
+                    filename = _decode_rfc2047(filename)
                     # Sanitize to prevent path traversal (e.g. "../../evil")
                     filename = Path(filename).name
                     if not filename or filename in (".", ".."):
