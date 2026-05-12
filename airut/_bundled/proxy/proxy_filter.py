@@ -364,6 +364,15 @@ class ProxyFilter:
         if "\x00" in path:
             return False, None
 
+        # Reject backslashes in paths. Some upstream routers (notably
+        # GitHub's) normalize ``\`` to ``/`` before resolving ``..``
+        # segments, so ``/repos/org/repo\..\other`` reaches upstream as
+        # ``/repos/org/other`` while fnmatch sees a single segment that
+        # matches ``/repos/org/repo*``. Backslash is not a valid pchar
+        # per RFC 3986, so rejecting it outright is fail-secure.
+        if "\\" in path:
+            return False, None
+
         # Reject path traversal sequences. Upstream servers normalize
         # `..` segments, so `/allowed/../../secret` would resolve to
         # `/secret` while fnmatch matches the allowed prefix.

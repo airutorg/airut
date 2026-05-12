@@ -1150,6 +1150,34 @@ class TestProxyFilterRequest:
         pf.request(flow)
         assert flow.metadata["allowlist_action"] == "BLOCKED"
 
+    def test_backslash_traversal_blocked(self) -> None:
+        r"""Paths containing backslashes are blocked unconditionally.
+
+        Some upstream routers (notably GitHub's) normalize ``\`` to ``/``
+        before resolving ``..`` segments, so ``/repos/myorg/myrepo\..\other``
+        reaches upstream as ``/repos/myorg/other`` while fnmatch sees one
+        segment that matches ``/repos/myorg/myrepo*``.
+        """
+        pf = ProxyFilter()
+        pf.url_prefixes = [
+            {"host": "api.github.com", "path": "/repos/myorg/myrepo*"}
+        ]
+        # Literal backslash traversal
+        flow = _flow(
+            host="api.github.com",
+            path="/repos/myorg/myrepo\\..\\evil",
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+
+        # Percent-encoded backslash traversal
+        flow = _flow(
+            host="api.github.com",
+            path="/repos/myorg/myrepo%5C..%5Cevil",
+        )
+        pf.request(flow)
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+
     def test_allowed_request(self) -> None:
         """Allowed request passes through."""
         pf = ProxyFilter()

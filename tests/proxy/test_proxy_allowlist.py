@@ -112,6 +112,15 @@ class MockNetworkAllowlist:
         if "\x00" in path:
             return False
 
+        # Reject backslashes in paths. Some upstream routers (notably
+        # GitHub's) normalize ``\`` to ``/`` before resolving ``..``
+        # segments, so ``/repos/org/repo\..\other`` reaches upstream as
+        # ``/repos/org/other`` while fnmatch sees a single segment that
+        # matches ``/repos/org/repo*``. Backslash is not a valid pchar
+        # per RFC 3986, so rejecting it outright is fail-secure.
+        if "\\" in path:
+            return False
+
         # Reject path traversal sequences. Upstream servers normalize
         # `..` segments, so `/allowed/../../secret` would resolve to
         # `/secret` while fnmatch matches the allowed prefix.
@@ -538,6 +547,53 @@ class TestNetworkAllowlistIsAllowed:
                 "/repos/myorg/myrepo/..hidden",
             )
             is True
+        )
+
+    def test_backslash_traversal_blocked(self) -> None:
+        r"""Paths containing backslashes are rejected unconditionally.
+
+        Some upstream routers (notably GitHub's) normalize ``\`` to ``/``
+        before resolving ``..`` segments, so ``/repos/myorg/myrepo\..\evil``
+        reaches upstream as ``/repos/myorg/evil`` while fnmatch sees a
+        single path segment matching ``/repos/myorg/myrepo*``.
+        """
+        al = MockNetworkAllowlist()
+        al.domains = []
+        al.url_prefixes = [
+            {"host": "api.github.com", "path": "/repos/myorg/myrepo*"}
+        ]
+
+        # Backslash traversal — fnmatch would match the wildcard prefix
+        assert (
+            al._is_allowed(
+                "api.github.com",
+                "/repos/myorg/myrepo\\..\\evil",
+            )
+            is False
+        )
+        # Percent-encoded backslash traversal
+        assert (
+            al._is_allowed(
+                "api.github.com",
+                "/repos/myorg/myrepo%5C..%5Cevil",
+            )
+            is False
+        )
+        # Mixed-slash traversal still blocked
+        assert (
+            al._is_allowed(
+                "api.github.com",
+                "/repos/myorg/myrepo\\../evil",
+            )
+            is False
+        )
+        # Lone backslash anywhere in path is blocked
+        assert (
+            al._is_allowed(
+                "api.github.com",
+                "/repos/myorg/myrepo\\foo",
+            )
+            is False
         )
 
 
