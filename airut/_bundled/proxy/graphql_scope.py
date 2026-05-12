@@ -6,18 +6,29 @@
 """GraphQL repository scope checking for GitHub App credentials.
 
 Parses GitHub GraphQL requests to extract repository-targeting values
-and checks them against allowed repositories.  Four layers of checking:
+and checks them against allowed repositories.  Five layers of
+checking:
 
-0. **repository(owner, name) field selection check** — catches
-   GitHub's ``Query.repository(owner, name)`` and the chained
-   ``organization(login).repository(name)`` /
-   ``repositoryOwner(login).repository(name)`` /
-   ``user(login).repository(name)`` paths that address a repository
-   via plain ``String!`` arguments (no ``*Id``/``Name`` field).
-   Combines ``owner/name`` and matches against the allowed full names
-   case-insensitively.  Without this check, an in-scope GitHub App
-   surrogate token can read **any** repository the underlying
-   installation token is authorized to see.
+0a. **repository(owner, name) field selection check** — catches
+    GitHub's ``Query.repository(owner, name)`` and the chained
+    ``organization(login).repository(name)`` /
+    ``repositoryOwner(login).repository(name)`` /
+    ``user(login).repository(name)`` paths that address a repository
+    via plain ``String!`` arguments (no ``*Id``/``Name`` field).
+    Combines ``owner/name`` and matches against the allowed full
+    names case-insensitively.  Without this check, an in-scope
+    GitHub App surrogate token can read **any** repository the
+    underlying installation token is authorized to see.
+
+0b. **Multi-repo enumeration field check** — fail-secure blocks the
+    plural ``repositories`` connection
+    (``organization.repositories``, ``user.repositories``,
+    ``viewer.repositories``, ``repositoryOwner.repositories``) and
+    ``Query.search``.  Both shapes return repositories — or
+    repo-scoped objects whose parent repository isn't bound by any
+    scopeable argument — outside the scope of every other layer, so
+    an in-scope surrogate token could otherwise enumerate every
+    repository the installation can see.
 
 1. **repositoryId field check** — extracts ``repositoryId`` values
    (inlined, variable-referenced, or in variable objects) and checks
@@ -36,7 +47,8 @@ and checks them against allowed repositories.  Four layers of checking:
    ID, and checks ownership against the allowed repositories.  This
    catches mutations like ``addComment(input: {subjectId: ...})``
    that target repo-scoped objects without an explicit
-   ``repositoryId`` field.
+   ``repositoryId`` field.  Also covers ``Query.nodes(ids: [...])``
+   bulk lookup via the lowercase ``ids`` argument.
 
 Uses graphql-core for AST parsing. Only installed inside the proxy
 container (not a main airut runtime dependency).
@@ -98,6 +110,26 @@ _MAX_BODY_SIZE = 1024 * 1024
 # Fields ending in "Id" that are NOT GitHub node IDs.
 _SKIP_FIELDS = frozenset({"clientMutationId"})
 
+# Field names whose selection enumerates multiple repositories without
+# taking an ``owner``/``name`` argument the proxy can match against
+# ``allowed_repo_full_names``.  ``repositories`` covers the
+# ``Organization.repositories`` / ``User.repositories`` /
+# ``RepositoryOwner.repositories`` / ``Viewer.repositories`` connections
+# and any other plural connection that returns repository data without a
+# scopeable selector.  ``forks`` covers ``Repository.forks`` — a
+# ``RepositoryConnection`` that enumerates child fork repositories from
+# an already-validated repository selection.  ``search`` covers
+# ``Query.search`` for any type (``REPOSITORY`` enumerates repos
+# directly; ``ISSUE``/``DISCUSSION`` enumerate repo-scoped objects whose
+# parent repository isn't bound by any argument the proxy can see).
+# Selections of these fields are fail-secure blocked.
+_MULTI_REPO_ENUM_FIELDS = frozenset({"repositories", "forks", "search"})
+
+# Identifier field names that match exactly.  Anything ending in the
+# camelCase ``Id``/``Ids`` suffix is also treated as an ID-bearing
+# field; see :func:`_is_id_field`.
+_BARE_ID_FIELDS = frozenset({"id", "ID", "ids", "IDS"})
+
 
 class _StringResolution(enum.Enum):
     """Non-string outcomes of :func:`_resolve_string_value`.
@@ -139,14 +171,29 @@ def _resolve_string_value(
 def _is_id_field(name: str) -> bool:
     """Check if a field name could contain a GitHub node ID.
 
-    Matches ``id``, any name ending with ``Id`` (e.g., ``subjectId``,
-    ``pullRequestId``) or ``Ids`` (e.g., ``labelIds``,
-    ``assigneeIds``), excluding known non-node-ID fields like
-    ``clientMutationId``.
+    Matches:
+
+    - Bare ``id`` / ``ids`` (lower- or uppercase) — covers
+      ``Query.node(id:)`` and ``Query.nodes(ids:)``.  The lowercase
+      ``ids`` variant is the canonical GitHub schema spelling for
+      bulk node lookup.
+    - camelCase suffixes ``...Id`` / ``...Ids`` — covers
+      ``subjectId``, ``pullRequestId``, ``labelIds``, etc.
+
+    Excludes known non-node-ID fields like ``clientMutationId``.
+
+    Why not a full case-insensitive suffix match: ``endswith("id")``
+    would over-match Git Object ID fields (``expectedHeadOid``,
+    ``oid``, ``afterOid``) whose values are SHA-1 hashes and not
+    GitHub node IDs.  Matching only the canonical bare names plus the
+    camelCase ``Id``/``Ids`` suffix preserves the original intent
+    while closing the ``ids`` (lowercase) gap.
     """
     if name in _SKIP_FIELDS:
         return False
-    return name == "id" or name.endswith("Id") or name.endswith("Ids")
+    if name in _BARE_ID_FIELDS:
+        return True
+    return name.endswith("Id") or name.endswith("Ids")
 
 
 @dataclass(frozen=True)
@@ -213,6 +260,8 @@ class _IdFieldFinder(visitor.Visitor):
         super().__init__()
         # Layer 0: repository(owner, name) field selections
         self.repo_field_refs: list[_RepoFieldRef] = []
+        # Layer 0b: multi-repo enumeration field name (first one wins)
+        self.multi_repo_enum_field: str | None = None
         # Primary: repositoryId values
         self.repo_inlined: list[str] = []
         self.repo_var_refs: list[str] = []
@@ -265,14 +314,37 @@ class _IdFieldFinder(visitor.Visitor):
         _path: object,
         ancestors: list[gql_ast.Node],
     ) -> None:
-        """Collect ``repository(owner, name)`` field selections.
+        """Collect repo-targeting field selections.
 
-        Selections without a ``name`` argument are ignored: ``Commit``,
-        ``Ref`` and several other GitHub types expose ``repository`` as
-        an argument-less output field that cannot itself address a
-        new repository.
+        Two categories are collected here:
+
+        - ``repository(owner, name)`` field selections (Layer 0).
+          Selections without a ``name`` argument are ignored:
+          ``Commit``, ``Ref`` and several other GitHub types expose
+          ``repository`` as an argument-less output field that cannot
+          itself address a new repository.
+        - Multi-repo enumeration field selections (Layer 0b) — the
+          plural ``repositories`` connection and ``search`` — which
+          return repositories (or repo-scoped objects) outside of any
+          scopeable ``owner``/``name`` argument and must be
+          fail-secure blocked.  The bare ``repositories`` output field
+          (no arguments) is skipped: it is not a connection and has no
+          enumeration semantics.
         """
-        if node.name.value != "repository":
+        field_name = node.name.value
+        if field_name in _MULTI_REPO_ENUM_FIELDS:
+            # ``search`` always blocks (no argument-less form exists on
+            # GitHub's ``Query.search``).  ``repositories``/``forks``
+            # only block when invoked as a connection (i.e. with
+            # arguments like ``first:``/``last:``) — a bare
+            # argument-less ``repositories`` field belongs to an
+            # unrelated schema and has no enumeration semantics.
+            if self.multi_repo_enum_field is None and (
+                field_name == "search" or node.arguments
+            ):
+                self.multi_repo_enum_field = field_name
+            return
+        if field_name != "repository":
             return
         owner_val: gql_ast.ValueNode | None = None
         name_val: gql_ast.ValueNode | None = None
@@ -352,9 +424,9 @@ def check_repo_scope(
 ) -> ScopeResult:
     """Check if a GraphQL request targets only allowed repositories.
 
-    Performs four layers of scope checking:
+    Performs five layers of scope checking:
 
-    **Layer 0 — repository(owner, name) field selection check:**
+    **Layer 0a — repository(owner, name) field selection check:**
 
     Extracts ``Query.repository(owner, name)`` selections and the
     chained ``organization(login).repository(name)`` /
@@ -364,6 +436,14 @@ def check_repo_scope(
     matches case-insensitively against ``allowed_repo_full_names``.
     A ``repository(name)`` selection without a resolvable parent
     ``login`` is fail-secure blocked.
+
+    **Layer 0b — multi-repo enumeration field check:**
+
+    Fail-secure blocks any selection of the plural ``repositories``
+    connection (with arguments — the bare argument-less form is an
+    unrelated output field) or ``Query.search``.  Both return
+    repositories or repo-scoped objects whose parent repository is
+    not bound by any scopeable argument.
 
     **Layer 1 — repositoryId field check:**
 
@@ -438,6 +518,22 @@ def check_repo_scope(
     # Step 3: Walk the AST.
     finder = _IdFieldFinder()
     visitor.visit(document, finder)
+
+    # ------------------------------------------------------------------
+    # Layer 0b: multi-repo enumeration field check (fail-secure block)
+    # ------------------------------------------------------------------
+    # ``repositories`` (plural connection on Organization/User/Viewer/
+    # RepositoryOwner) and ``search`` return repositories or
+    # repo-scoped objects without any ``owner``/``name`` argument the
+    # proxy can match against the allowed set.  Block these outright
+    # so an in-scope surrogate token cannot enumerate repositories the
+    # underlying installation token can see.  Runs before all other
+    # layers so the detail is preserved.
+    if finder.multi_repo_enum_field is not None:
+        return ScopeResult(
+            ScopeVerdict.OUT_OF_SCOPE,
+            f"<multi-repo:{finder.multi_repo_enum_field}>",
+        )
 
     allowed_names_lower = frozenset(n.lower() for n in allowed_repo_full_names)
 

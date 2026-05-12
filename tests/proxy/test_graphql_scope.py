@@ -13,6 +13,7 @@ from graphql_scope import (  # ty:ignore[unresolved-import]
     _MAX_BODY_SIZE,
     ScopeResult,
     ScopeVerdict,
+    _is_id_field,
     check_repo_scope,
 )
 
@@ -1489,3 +1490,250 @@ class TestRepositoryFieldSelection:
         assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
             "<unknown>/website"
         )
+
+
+# -------------------------------------------------------------------
+# Multi-repo enumeration (pentest Finding 1)
+# -------------------------------------------------------------------
+
+
+class TestMultiRepoEnumeration:
+    """Tests that multi-repo enumeration fields are fail-secure blocked.
+
+    GraphQL connections like ``organization(login).repositories``,
+    ``user(login).repositories``, ``viewer.repositories`` and
+    ``Query.search(type: REPOSITORY)`` return repositories without
+    taking an ``owner``/``name`` argument the proxy can match against
+    ``allowed_repo_full_names``.  Layer 0 only catches the singular
+    ``repository(owner, name)`` field, so these plural traversals
+    previously bypassed every layer of repo scope checking and let an
+    in-scope surrogate token enumerate (and read) any repository the
+    installation token could see.
+
+    Regression for the pentest finding "GraphQL repository scope check
+    is bypassed by ``organization(login).repositories.nodes`` (and
+    similar plural traversals)".
+    """
+
+    def test_organization_repositories_blocked(self) -> None:
+        body = _body(
+            '{ organization(login: "airutorg")'
+            " { repositories(first: 5) { nodes { nameWithOwner } } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<multi-repo:repositories>"
+        )
+
+    def test_user_repositories_blocked(self) -> None:
+        body = _body(
+            '{ user(login: "octocat")'
+            " { repositories(first: 5) { nodes { nameWithOwner } } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<multi-repo:repositories>"
+        )
+
+    def test_viewer_repositories_blocked(self) -> None:
+        body = _body(
+            "{ viewer { repositories(first: 5) { nodes { nameWithOwner } } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<multi-repo:repositories>"
+        )
+
+    def test_repository_owner_repositories_blocked(self) -> None:
+        body = _body(
+            '{ repositoryOwner(login: "airutorg")'
+            " { repositories(first: 5) { nodes { nameWithOwner } } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<multi-repo:repositories>"
+        )
+
+    def test_pentest_finding_one_payload_blocked(self) -> None:
+        """The exact GraphQL payload from the pentest report is blocked."""
+        body = _body(
+            "query {"
+            '  organization(login: "airutorg") {'
+            "    repositories(first: 5) {"
+            "      nodes {"
+            "        nameWithOwner"
+            '        object(expression: "HEAD~5:public/canary.txt")'
+            "          { ... on Blob { text } }"
+            "        pullRequest(number: 40) { body files(first:5)"
+            "          { nodes { path } } }"
+            "        defaultBranchRef { target { ... on Commit"
+            "          { history(first:50) { nodes { messageBody }}}}}"
+            "      }"
+            "    }"
+            "  }"
+            "}"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<multi-repo:repositories>"
+        )
+
+    def test_repositories_blocked_even_with_inscope_repository(self) -> None:
+        """Plural connection blocks alongside an in-scope ``repository``."""
+        body = _body(
+            "{"
+            '  in_scope: repository(owner: "airutorg", name: "airut")'
+            "    { description }"
+            '  evil: organization(login: "airutorg")'
+            "    { repositories(first: 5) { nodes { nameWithOwner } } }"
+            "}"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<multi-repo:repositories>"
+        )
+
+    def test_repository_forks_blocked(self) -> None:
+        """``Repository.forks`` is a RepositoryConnection — enumerates forks."""
+        body = _body(
+            '{ repository(owner: "airutorg", name: "airut")'
+            " { forks(first: 5) { nodes { nameWithOwner } } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<multi-repo:forks>"
+        )
+
+    def test_search_blocked(self) -> None:
+        body = _body(
+            'query { search(query: "org:airutorg", type: REPOSITORY, first: 5)'
+            " { nodes { ... on Repository { nameWithOwner } } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<multi-repo:search>"
+        )
+
+    def test_search_aliased_blocked(self) -> None:
+        """Aliases must not bypass the search block."""
+        body = _body(
+            'query { hits: search(query: "test", type: ISSUE, first: 5)'
+            " { nodes { ... on Issue { title } } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<multi-repo:search>"
+        )
+
+    def test_repositories_argumentless_not_blocked(self) -> None:
+        """``repositories`` with no arguments is not a connection.
+
+        Some unrelated schemas may expose a field named ``repositories``
+        without the standard connection arguments.  GitHub's connection
+        always takes pagination args (``first``/``last``); a bare
+        ``repositories`` selection has no enumeration semantics and must
+        not trigger the block.  This keeps the check focused on the
+        documented attack surface.
+        """
+        # No arguments — not the GitHub connection shape.
+        body = _body("query { something { repositories { name } } }")
+        # No repository-targeting values at all -> ALLOWED.
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _OK
+
+
+# -------------------------------------------------------------------
+# Case-insensitive ID field matching (pentest Finding 2)
+# -------------------------------------------------------------------
+
+
+class TestIdFieldCaseInsensitive:
+    """Tests that ``_is_id_field`` recognises the lowercase ``ids`` form.
+
+    GitHub's GraphQL schema uses lowercase ``ids`` for
+    ``Query.nodes(ids: [ID!]!)``.  Before the fix, case-sensitive
+    ``endswith("Ids")`` missed this argument and let an arbitrary node
+    ID slip past Layer 3.  Regression for the pentest finding
+    "``_is_id_field()`` case-sensitivity lets ``nodes(ids: [...])``
+    skip Layer-3 node-ownership checks".
+    """
+
+    def test_is_id_field_lowercase_ids(self) -> None:
+        assert _is_id_field("ids") is True
+
+    def test_is_id_field_lowercase_id(self) -> None:
+        assert _is_id_field("id") is True
+
+    def test_is_id_field_uppercase_id(self) -> None:
+        assert _is_id_field("ID") is True
+
+    def test_is_id_field_uppercase_ids(self) -> None:
+        assert _is_id_field("IDS") is True
+
+    def test_is_id_field_camel_id_unchanged(self) -> None:
+        assert _is_id_field("subjectId") is True
+        assert _is_id_field("labelIds") is True
+
+    def test_is_id_field_client_mutation_id_still_skipped(self) -> None:
+        assert _is_id_field("clientMutationId") is False
+
+    def test_is_id_field_git_oid_not_matched(self) -> None:
+        """Git Object ID fields must not be treated as node IDs."""
+        # SHA-1 commit hashes, not GitHub node IDs.  A full
+        # case-insensitive ``endswith("id")`` match would over-match
+        # these and break mutations like ``createCommitOnBranch`` whose
+        # ``expectedHeadOid`` is a Git OID, not a node ID.
+        assert _is_id_field("oid") is False
+        assert _is_id_field("expectedHeadOid") is False
+        assert _is_id_field("afterOid") is False
+        assert _is_id_field("headRefOid") is False
+        assert _is_id_field("baseRefOid") is False
+        assert _is_id_field("beforeOid") is False
+
+    def test_nodes_ids_out_of_scope_repo_blocked(self) -> None:
+        """``nodes(ids: [...])`` with an out-of-scope repo node ID is blocked.
+
+        Pentest demonstrated this with a bare repo node ID returning
+        ``Albert152/programm`` — the proxy must fail-secure block it.
+        """
+        body = _body(
+            'query { nodes(ids: ["' + PR_EVIL + '"])'
+            " { ... on PullRequest { title } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(PR_EVIL)
+
+    def test_nodes_ids_in_scope_repo_allowed(self) -> None:
+        body = _body(
+            'query { nodes(ids: ["' + PR_IN_SCOPE + '"])'
+            " { ... on PullRequest { title } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _OK
+
+    def test_nodes_ids_mixed_one_evil_blocked(self) -> None:
+        body = _body(
+            'query { nodes(ids: ["'
+            + PR_IN_SCOPE
+            + '", "'
+            + PR_EVIL
+            + '"]) { ... on PullRequest { title } } }'
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(PR_EVIL)
+
+    def test_nodes_ids_arbitrary_node_id_failsecure_blocked(self) -> None:
+        """Pentest exact payload: arbitrary node ID is fail-secure blocked."""
+        arbitrary_node_id = "MDEwOlJlcG9zaXRvcnkxMjM0NTY3ODk="
+        body = _body(
+            'query { nodes(ids: ["'
+            + arbitrary_node_id
+            + '"]) { ... on Repository { nameWithOwner } } }'
+        )
+        result = check_repo_scope(body, ALLOWED, ALLOWED_NAMES)
+        assert result.verdict is ScopeVerdict.OUT_OF_SCOPE
+        assert result.detail == arbitrary_node_id
+
+    def test_nodes_ids_via_variable_list_evil_blocked(self) -> None:
+        body = _body(
+            "query($ids: [ID!]!) {"
+            "  nodes(ids: $ids) { ... on PullRequest { title } }"
+            "}",
+            variables={"ids": [PR_EVIL]},
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(PR_EVIL)
+
+    def test_variable_object_lowercase_ids_field_blocked(self) -> None:
+        """Lowercase ``ids`` inside a variable object is collected."""
+        body = _body(
+            "mutation($input: SomeInput!) { doThing(input: $input) { id } }",
+            variables={"input": {"ids": [PR_EVIL]}},
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(PR_EVIL)

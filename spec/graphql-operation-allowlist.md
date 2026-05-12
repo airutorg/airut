@@ -265,10 +265,12 @@ POST /graphql with GitHub App surrogate token
            ▼
 ┌─────────────────────────────────────┐
 │  Layer 2: Repository Scope Checks   │  github-app-credential spec
-│  (graphql_scope.py — four sub-layers)│
+│  (graphql_scope.py — five sub-layers)│
 │                                     │  "Does this target an allowed repo?"
 │  GitHub-specific                    │  Catches repository(owner, name)
-│                                     │  selections, repositoryId fields,
+│                                     │  selections, the plural repositories
+│                                     │  connection + search (fail-secure),
+│                                     │  repositoryId fields,
 │                                     │  repositoryNameWithOwner fields, and
 │                                     │  *Id ownership via node-ID decoding
 └──────────┬──────────────────────────┘
