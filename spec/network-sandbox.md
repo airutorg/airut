@@ -55,9 +55,11 @@ an unnecessary code path and simplifies security reasoning.
 
 **Path validation (defense-in-depth).** Before matching, `_is_allowed()` decodes
 percent-encoded characters (`%2F` → `/`), rejects null bytes (which can cause
-path truncation mismatches with C-based upstream servers), and rejects path
-traversal sequences (`/../`, trailing `/..`) that upstream servers would
-normalize, potentially bypassing prefix-based allowlist rules.
+path truncation mismatches with C-based upstream servers), rejects backslashes
+(which some upstream routers normalize to `/` before resolving `..`, allowing a
+single fnmatch-matching segment to reach upstream as a traversal sequence), and
+rejects path traversal sequences (`/../`, trailing `/..`) that upstream servers
+would normalize, potentially bypassing prefix-based allowlist rules.
 
 Note: Non-existent domains will appear to resolve from within the container.
 This is by design — the DNS responder intentionally avoids upstream DNS
