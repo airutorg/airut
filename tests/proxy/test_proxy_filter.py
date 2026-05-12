@@ -12,6 +12,7 @@ reimplemented copies.
 """
 
 import json
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -31,14 +32,16 @@ from tests.proxy.vectors import (
     SURROGATE_ACCESS_KEY_ID,
 )
 
+from airut._bundled.proxy.host_match import (
+    UrlPrefixEntry,
+    match_host_pattern,
+)
 from airut._bundled.proxy.proxy_filter import (
     ProxyFilter,
-    UrlPrefixEntry,
     _collect_signing_headers,
     _decode_basic_auth,
     _encode_basic_auth,
     _match_header_pattern,
-    _match_host_pattern,
     _match_pattern,
 )
 
@@ -106,32 +109,32 @@ class TestMatchPattern:
 
 
 class TestMatchHostPattern:
-    """Tests for _match_host_pattern (case-insensitive per RFC 4343)."""
+    """Tests for match_host_pattern (case-insensitive per RFC 4343)."""
 
     def test_exact_match_same_case(self) -> None:
-        assert _match_host_pattern("api.github.com", "api.github.com") is True
+        assert match_host_pattern("api.github.com", "api.github.com") is True
 
     def test_exact_match_uppercase_hostname(self) -> None:
-        assert _match_host_pattern("api.github.com", "API.GITHUB.COM") is True
+        assert match_host_pattern("api.github.com", "API.GITHUB.COM") is True
 
     def test_exact_match_uppercase_pattern(self) -> None:
-        assert _match_host_pattern("API.GITHUB.COM", "api.github.com") is True
+        assert match_host_pattern("API.GITHUB.COM", "api.github.com") is True
 
     def test_exact_match_mixed_case(self) -> None:
-        assert _match_host_pattern("Api.GitHub.Com", "api.github.com") is True
+        assert match_host_pattern("Api.GitHub.Com", "api.github.com") is True
 
     def test_exact_no_match(self) -> None:
-        assert _match_host_pattern("api.github.com", "other.com") is False
+        assert match_host_pattern("api.github.com", "other.com") is False
 
     def test_wildcard_star_case_insensitive(self) -> None:
-        assert _match_host_pattern("*.github.com", "API.GITHUB.COM") is True
-        assert _match_host_pattern("*.GITHUB.COM", "api.github.com") is True
-        assert _match_host_pattern("*.github.com", "GITHUB.COM") is False
+        assert match_host_pattern("*.github.com", "API.GITHUB.COM") is True
+        assert match_host_pattern("*.GITHUB.COM", "api.github.com") is True
+        assert match_host_pattern("*.github.com", "GITHUB.COM") is False
 
     def test_wildcard_question_case_insensitive(self) -> None:
-        assert _match_host_pattern("api?.com", "API1.COM") is True
-        assert _match_host_pattern("API?.COM", "api1.com") is True
-        assert _match_host_pattern("api?.com", "API12.COM") is False
+        assert match_host_pattern("api?.com", "API1.COM") is True
+        assert match_host_pattern("API?.COM", "api1.com") is True
+        assert match_host_pattern("api?.com", "API12.COM") is False
 
 
 class TestMatchHeaderPattern:
@@ -4742,3 +4745,378 @@ class TestGraphqlCredentialDeferral:
         assert entry1 is not entry2
         assert entry1.get("graphql") is not None
         assert entry2.get("graphql") is None
+
+
+# ---------------------------------------------------------------------------
+# ProxyFilter — Anthropic tool-domain trimming
+# ---------------------------------------------------------------------------
+
+
+class TestProxyFilterToolDomainTrim:
+    """End-to-end tests for the Anthropic /v1/messages* tool-config trim."""
+
+    _MESSAGES_ENTRY: UrlPrefixEntry = {
+        "host": "api.anthropic.com",
+        "path": "/v1/messages*",
+        "methods": ["POST"],
+    }
+
+    def _filter(self) -> ProxyFilter:
+        pf = ProxyFilter()
+        pf.url_prefixes = [
+            self._MESSAGES_ENTRY,
+            # Provide a single path-open entry so host_get_open has
+            # something to permit.
+            {
+                "host": "pypi.org",
+                "path": "",
+                "methods": ["GET", "HEAD"],
+            },
+        ]
+        return pf
+
+    def test_is_anthropic_messages_request_matches_messages(self) -> None:
+        assert (
+            ProxyFilter._is_anthropic_messages_request(
+                "api.anthropic.com", "/v1/messages"
+            )
+            is True
+        )
+
+    def test_is_anthropic_messages_request_matches_batches(self) -> None:
+        # /v1/messages/batches is a real Anthropic endpoint nested under
+        # the Messages API that also carries tools.
+        assert (
+            ProxyFilter._is_anthropic_messages_request(
+                "api.anthropic.com", "/v1/messages/batches"
+            )
+            is True
+        )
+
+    def test_is_anthropic_messages_request_matches_query_string(self) -> None:
+        assert (
+            ProxyFilter._is_anthropic_messages_request(
+                "api.anthropic.com", "/v1/messages?stream=true"
+            )
+            is True
+        )
+
+    def test_is_anthropic_messages_request_case_insensitive_host(self) -> None:
+        assert (
+            ProxyFilter._is_anthropic_messages_request(
+                "API.ANTHROPIC.COM", "/v1/messages"
+            )
+            is True
+        )
+
+    def test_is_anthropic_messages_request_rejects_other_host(self) -> None:
+        assert (
+            ProxyFilter._is_anthropic_messages_request(
+                "api.example.com", "/v1/messages"
+            )
+            is False
+        )
+
+    def test_is_anthropic_messages_request_rejects_other_path(self) -> None:
+        assert (
+            ProxyFilter._is_anthropic_messages_request(
+                "api.anthropic.com", "/v1/files"
+            )
+            is False
+        )
+
+    def test_is_anthropic_messages_request_rejects_lookalike_path(self) -> None:
+        # /v1/messages_legacy must not be treated as a Messages API call
+        # — startswith("/v1/messages") would accept it without a
+        # boundary check.
+        assert (
+            ProxyFilter._is_anthropic_messages_request(
+                "api.anthropic.com", "/v1/messages_legacy"
+            )
+            is False
+        )
+
+    def test_host_get_open_uses_loaded_allowlist(self) -> None:
+        pf = self._filter()
+        assert pf._host_get_open("pypi.org") is True
+        assert pf._host_get_open("airut.org") is False
+
+    def test_request_with_no_tools_passes_through(self) -> None:
+        pf = self._filter()
+        body = json.dumps(
+            {"model": "claude", "messages": [{"role": "user", "content": "hi"}]}
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.anthropic.com",
+            path="/v1/messages",
+            content=body,
+        )
+        pf.request(flow)
+        assert flow.response is None
+        assert flow.metadata["allowlist_action"] == "ALLOWED"
+        # Body untouched.
+        assert flow.request.content == body
+        assert "tool_trim" not in flow.metadata
+        assert "tool_config" not in flow.metadata
+
+    def test_request_with_disallowed_domain_trims(self) -> None:
+        pf = self._filter()
+        body = json.dumps(
+            {
+                "model": "claude",
+                "tools": [
+                    {
+                        "type": "web_fetch_20250910",
+                        "allowed_domains": ["airut.org"],
+                    }
+                ],
+                "messages": [{"role": "user", "content": "x"}],
+            }
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.anthropic.com",
+            path="/v1/messages",
+            content=body,
+        )
+        pf.request(flow)
+        assert flow.response is None
+        assert flow.metadata["allowlist_action"] == "ALLOWED"
+        new = json.loads(flow.request.content)
+        assert new["tools"][0]["allowed_domains"] == []
+        # Log annotation is recorded for the response() emit.
+        assert "tool_trim" in flow.metadata
+        assert "web_fetch_20250910" in flow.metadata["tool_trim"]
+        assert "airut.org" in flow.metadata["tool_trim"]
+
+    def test_request_blocked_domains_returns_403(self) -> None:
+        pf = self._filter()
+        body = json.dumps(
+            {
+                "tools": [
+                    {
+                        "type": "web_fetch_20250910",
+                        "blocked_domains": ["evil.example"],
+                    }
+                ],
+            }
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.anthropic.com",
+            path="/v1/messages",
+            content=body,
+        )
+        pf.request(flow)
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        resp = json.loads(flow.response._content)
+        assert resp["error"] == "blocklist_tool_config_unsupported"
+        assert resp["detail"] == "web_fetch_20250910"
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+        assert "tool_config" in flow.metadata
+
+    def test_request_wildcard_returns_403(self) -> None:
+        pf = self._filter()
+        body = json.dumps(
+            {
+                "tools": [
+                    {
+                        "type": "web_fetch_20250910",
+                        "allowed_domains": ["*.example.com"],
+                    }
+                ],
+            }
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.anthropic.com",
+            path="/v1/messages",
+            content=body,
+        )
+        pf.request(flow)
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        resp = json.loads(flow.response._content)
+        assert resp["error"] == "wildcard_tool_domain_unsupported"
+
+    def test_trim_does_not_apply_to_other_anthropic_paths(self) -> None:
+        """The trim only fires on /v1/messages paths."""
+        pf = ProxyFilter()
+        # Other Anthropic endpoints accept POST but carry no tools field;
+        # the trim must NOT fire here.
+        pf.url_prefixes = [
+            {
+                "host": "api.anthropic.com",
+                "path": "/api/oauth/*",
+                "methods": ["GET", "POST"],
+            }
+        ]
+        body = json.dumps(
+            {
+                "tools": [
+                    {
+                        "type": "web_fetch_20250910",
+                        "blocked_domains": ["evil.example"],
+                    }
+                ]
+            }
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.anthropic.com",
+            path="/api/oauth/token",
+            content=body,
+        )
+        pf.request(flow)
+        # Should be ALLOWED, no trim, no 403.
+        assert flow.metadata["allowlist_action"] == "ALLOWED"
+        assert flow.response is None
+        assert flow.request.content == body
+
+    def test_trim_fires_when_broader_allowlist_entry_matches(self) -> None:
+        """A broader allowlist entry (``/v1/*``) must not disable the trim.
+
+        The gating is intentionally based on the incoming request, not on
+        the matched allowlist entry's path string. This regression test
+        catches the case where a user has reconfigured the allowlist with
+        a less specific Anthropic entry — the trim must still fire.
+        """
+        pf = ProxyFilter()
+        pf.url_prefixes = [
+            # Broader entry than the default /v1/messages* — should
+            # still trigger the trim for the actual /v1/messages call.
+            {
+                "host": "api.anthropic.com",
+                "path": "/v1/*",
+                "methods": ["POST"],
+            }
+        ]
+        body = json.dumps(
+            {
+                "tools": [
+                    {
+                        "type": "web_fetch_20250910",
+                        "blocked_domains": ["evil.example"],
+                    }
+                ]
+            }
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.anthropic.com",
+            path="/v1/messages",
+            content=body,
+        )
+        pf.request(flow)
+        # Must be 403'd by the trim, not silently passed through.
+        assert flow.response is not None
+        assert flow.response.status_code == 403
+        assert flow.metadata["allowlist_action"] == "BLOCKED"
+
+    def test_trim_handles_recursion_bomb(self) -> None:
+        """Deeply nested JSON must not cause unfiltered pass-through.
+
+        Earlier versions used recursive descent in ``_walk_for_tools``;
+        a ~12 KB adversarial body could trigger ``RecursionError`` and
+        the exception would propagate out of the proxy hook, leaving
+        the original (un-trimmed) body to reach upstream. The iterative
+        walk eliminates this class of bypass.
+        """
+        pf = self._filter()
+        nesting = 2000
+        body = b'{"a":' * nesting + b"null" + b"}" * nesting
+        flow = _flow(
+            method="POST",
+            host="api.anthropic.com",
+            path="/v1/messages",
+            content=body,
+        )
+        original_limit = sys.getrecursionlimit()
+        sys.setrecursionlimit(1500)
+        try:
+            pf.request(flow)
+        finally:
+            sys.setrecursionlimit(original_limit)
+        # No covered tools in the body — should be ALLOWED and quiet.
+        assert flow.metadata["allowlist_action"] == "ALLOWED"
+        assert flow.response is None
+
+    def test_trim_treats_tool_type_case_insensitively(self) -> None:
+        """``Web_Fetch_20250910`` must still match the covered prefix.
+
+        Anthropic's tool types are lowercase today, but the threat model
+        is "agent has full control of the tools array" and "we assume
+        Anthropic enforces nothing helpful". A case-variant must not
+        bypass the trim.
+        """
+        pf = self._filter()
+        body = json.dumps(
+            {
+                "tools": [
+                    {
+                        "type": "Web_Fetch_20250910",
+                        "allowed_domains": ["airut.org"],
+                    }
+                ]
+            }
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.anthropic.com",
+            path="/v1/messages",
+            content=body,
+        )
+        pf.request(flow)
+        assert flow.response is None
+        assert flow.metadata["allowlist_action"] == "ALLOWED"
+        new = json.loads(flow.request.content)
+        assert new["tools"][0]["allowed_domains"] == []
+
+    def test_response_log_includes_tool_trim_annotation(
+        self, tmp_path: Path
+    ) -> None:
+        """`response()` writes `[tool-trim: ...]` to the access log."""
+        log_path = tmp_path / "test.log"
+        pf = self._filter()
+        pf._log_file = open(log_path, "w")
+        try:
+            flow = _flow(
+                method="POST",
+                host="api.anthropic.com",
+                path="/v1/messages",
+                response_code=200,
+            )
+            flow.metadata["allowlist_action"] = "ALLOWED"
+            flow.metadata["tool_trim"] = (
+                "web_fetch_20250910: dropped 1 of 1 domains: airut.org"
+            )
+            pf.response(flow)
+        finally:
+            pf._log_file.close()
+        content = log_path.read_text()
+        assert "[tool-trim: web_fetch_20250910" in content
+        assert "airut.org" in content
+
+    def test_response_log_includes_tool_config_annotation(
+        self, tmp_path: Path
+    ) -> None:
+        """`response()` writes `[tool-config: ...]` for BLOCKED rule 1/2."""
+        log_path = tmp_path / "test.log"
+        pf = self._filter()
+        pf._log_file = open(log_path, "w")
+        try:
+            flow = _flow(
+                method="POST",
+                host="api.anthropic.com",
+                path="/v1/messages",
+                response_code=403,
+            )
+            flow.metadata["allowlist_action"] = "BLOCKED"
+            flow.metadata["tool_config"] = "web_fetch_20250910: wildcard"
+            pf.response(flow)
+        finally:
+            pf._log_file.close()
+        content = log_path.read_text()
+        assert "[tool-config: web_fetch_20250910: wildcard]" in content

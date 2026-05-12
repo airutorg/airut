@@ -57,6 +57,8 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
   re-signing
 - `spec/graphql-operation-allowlist.md` — generic GraphQL operation filtering at
   the proxy layer
+- `spec/anthropic-tool-domain-trim.md` — proxy-side trimming of Anthropic
+  server-side-tool `allowed_domains` to the airut network allowlist
 - `spec/github-app-credential.md` — GitHub App credential support with
   proxy-managed token rotation
 - `spec/dashboard.md` — web dashboard for task monitoring

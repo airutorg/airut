@@ -61,21 +61,18 @@ from github_app import (
 )
 from graphql_operations import OperationVerdict, check_operations
 from graphql_scope import ScopeVerdict, check_repo_scope
+from host_match import UrlPrefixEntry, match_host_pattern
 from mitmproxy import ctx, http
+from tool_domains import (
+    ToolConfigVerdict,
+    check_and_trim_tools,
+    host_get_open,
+)
 
 
 type _JsonValue = (
     str | int | float | bool | None | list[_JsonValue] | dict[str, _JsonValue]
 )
-
-
-class UrlPrefixEntry(TypedDict, total=False):
-    """A single entry in the url_prefixes allowlist."""
-
-    host: str
-    path: str
-    methods: list[str]
-    graphql: dict[str, list[str]]
 
 
 class _SigningContext(TypedDict):
@@ -127,28 +124,6 @@ def _match_pattern(pattern: str, value: str) -> bool:
     if "*" in pattern or "?" in pattern:
         return fnmatch.fnmatch(value, pattern)
     return pattern == value
-
-
-def _match_host_pattern(pattern: str, hostname: str) -> bool:
-    """Match hostname against pattern, case-insensitively.
-
-    DNS hostnames are case-insensitive per RFC 4343. This function performs
-    case-insensitive matching for both exact matches and fnmatch patterns.
-
-    Args:
-        pattern: Pattern to match against
-            (e.g., "api.github.com", "*.github.com").
-        hostname: Hostname from request (may be any case).
-
-    Returns:
-        True if hostname matches pattern case-insensitively.
-    """
-    pattern_lower = pattern.lower()
-    hostname_lower = hostname.lower()
-
-    if "*" in pattern_lower or "?" in pattern_lower:
-        return fnmatch.fnmatch(hostname_lower, pattern_lower)
-    return pattern_lower == hostname_lower
 
 
 def _match_header_pattern(pattern: str, header_name: str) -> bool:
@@ -382,7 +357,7 @@ class ProxyFilter:
         # Check domain entries (with wildcard support)
         # Domain entries allow all methods unconditionally
         for domain in self.domains:
-            if _match_host_pattern(domain, host):
+            if match_host_pattern(domain, host):
                 return True, None
 
         # Check URL pattern entries
@@ -391,7 +366,7 @@ class ProxyFilter:
             entry_path = entry.get("path", "")
             entry_methods: list[str] = entry.get("methods", [])
 
-            if _match_host_pattern(entry_host, host):
+            if match_host_pattern(entry_host, host):
                 # Empty path means allow all paths on this host
                 if not entry_path or _match_pattern(entry_path, path):
                     # Empty methods means allow all methods.
@@ -404,6 +379,85 @@ class ProxyFilter:
                         return True, entry
 
         return False, None
+
+    def _host_get_open(self, host: str) -> bool:
+        """Predicate used by tool-domain trimming.
+
+        Wraps :func:`tool_domains.host_get_open` with the proxy's
+        loaded allowlist so the trim sees the same configuration as
+        ``_is_allowed``.
+        """
+        return host_get_open(host, self.domains, self.url_prefixes)
+
+    @staticmethod
+    def _is_anthropic_messages_request(host: str, path: str) -> bool:
+        """Return True if a request targets the Anthropic Messages API.
+
+        Gates on the **incoming request** (host + path), not on the
+        shape of the matched allowlist entry. A user who configures a
+        broader Anthropic allowlist entry (``/v1/*`` or omits ``path``)
+        must not silently disable the tool-domain trim.
+
+        Matches ``api.anthropic.com`` for any path beginning with
+        ``/v1/messages`` followed by end-of-path, ``/``, or ``?``. This
+        covers ``/v1/messages``, ``/v1/messages/batches``,
+        ``/v1/messages/count_tokens``, and ``/v1/messages?...`` while
+        excluding accidental matches like ``/v1/messages_legacy``.
+        Other Anthropic paths (``oauth/*``, ``event_logging/*``, etc.)
+        carry no ``tools`` field and do not need parsing.
+        """
+        if host.lower() != "api.anthropic.com":
+            return False
+        if path == "/v1/messages":
+            return True
+        return path.startswith("/v1/messages/") or path.startswith(
+            "/v1/messages?"
+        )
+
+    def _apply_tool_domain_trim(self, flow: http.HTTPFlow) -> bool:
+        """Run the Anthropic tool-domain trim on the request body.
+
+        Parses the JSON body, trims each covered tool's
+        ``allowed_domains`` to the intersection with the airut network
+        allowlist, and rewrites the body in place. Rejects requests
+        that use ``blocked_domains`` or wildcard entries.
+
+        Returns:
+            True if the request was blocked (caller must stop processing
+            it). False if the body was either passed through unchanged
+            or rewritten in place — the caller continues normally.
+        """
+        result = check_and_trim_tools(
+            flow.request.get_content(),
+            self._host_get_open,
+        )
+
+        if result.verdict is ToolConfigVerdict.UNCHANGED:
+            return False
+
+        if result.verdict is ToolConfigVerdict.REWRITTEN:
+            assert result.body is not None
+            flow.request.content = result.body
+            if result.log_tag:
+                flow.metadata["tool_trim"] = result.log_tag
+            return False
+
+        assert result.verdict is ToolConfigVerdict.BLOCKED
+        flow.metadata["allowlist_action"] = "BLOCKED"
+        if result.log_tag:
+            flow.metadata["tool_config"] = result.log_tag
+        flow.response = http.Response.make(
+            403,
+            json.dumps(
+                {
+                    "error": result.error,
+                    "message": result.message,
+                    "detail": result.detail,
+                }
+            ),
+            {"Content-Type": "application/json"},
+        )
+        return True
 
     def _collapse_duplicate_header(
         self,
@@ -537,7 +591,7 @@ class ProxyFilter:
             real_value = config.get("value", "")
 
             # Check if host matches any scope pattern
-            if not any(_match_host_pattern(scope, host) for scope in scopes):
+            if not any(match_host_pattern(scope, host) for scope in scopes):
                 continue
 
             # Get header patterns to scan (supports fnmatch, e.g., "*")
@@ -696,7 +750,7 @@ class ProxyFilter:
 
             # Verify host matches scopes
             scopes = config.get("scopes", [])
-            if not any(_match_host_pattern(scope, host) for scope in scopes):
+            if not any(match_host_pattern(scope, host) for scope in scopes):
                 continue
 
             # Found a matching GitHub App credential — get a real token
@@ -889,7 +943,7 @@ class ProxyFilter:
                 continue
 
             scopes = config.get("scopes", [])
-            if not any(_match_host_pattern(scope, host) for scope in scopes):
+            if not any(match_host_pattern(scope, host) for scope in scopes):
                 continue
 
             if config.get("allow_foreign_credentials", False):
@@ -938,7 +992,7 @@ class ProxyFilter:
 
         # Verify host matches scopes
         scopes = config.get("scopes", [])
-        if not any(_match_host_pattern(scope, host) for scope in scopes):
+        if not any(match_host_pattern(scope, host) for scope in scopes):
             return None
 
         # Check clock skew
@@ -1181,7 +1235,7 @@ class ProxyFilter:
 
         # Verify host matches scopes
         scopes = config.get("scopes", [])
-        if not any(_match_host_pattern(scope, host) for scope in scopes):
+        if not any(match_host_pattern(scope, host) for scope in scopes):
             return None
 
         real_key_id: str = config["access_key_id"]
@@ -1447,6 +1501,18 @@ class ProxyFilter:
                     )
                     return
 
+        # Anthropic server-side-tool domain trimming. Applies to any
+        # request that reaches the Anthropic Messages API after passing
+        # the URL allowlist (see spec/anthropic-tool-domain-trim.md).
+        # Gated on the incoming host/path, not on the allowlist entry
+        # shape — a broader allowlist configuration must not silently
+        # disable the trim. Prevents agents from using web_fetch /
+        # web_search etc. to read URLs the network allowlist would
+        # otherwise deny.
+        if self._is_anthropic_messages_request(host, path):
+            if self._apply_tool_domain_trim(flow):
+                return
+
         # If already re-signed in requestheaders(), skip token replacement
         if flow.metadata.get("aws_resigned"):
             return
@@ -1550,6 +1616,16 @@ class ProxyFilter:
         graphql_op = flow.metadata.get("graphql_op")
         if graphql_op:
             parts.append(f"[graphql-op: {graphql_op}]")
+
+        # Anthropic tool-config (BLOCKED on rule 1 or 2)
+        tool_config = flow.metadata.get("tool_config")
+        if tool_config:
+            parts.append(f"[tool-config: {tool_config}]")
+
+        # Anthropic tool-trim (ALLOWED with rewritten allowed_domains)
+        tool_trim = flow.metadata.get("tool_trim")
+        if tool_trim:
+            parts.append(f"[tool-trim: {tool_trim}]")
 
         # Credential info (GitHub App cache status, scope tags)
         cred = flow.metadata.get("credential_info")
