@@ -68,16 +68,18 @@ attacker-controlled nameservers). The proxy handles all access control.
 
 ## Components
 
-| Component                                  | Purpose                                               |
-| ------------------------------------------ | ----------------------------------------------------- |
-| `.airut/network-allowlist.yaml`            | Allowlist configuration (domains + URLs + methods)    |
-| `airut/_bundled/proxy/proxy.dockerfile`    | Proxy container image (slim + mitmproxy)              |
-| `airut/_bundled/proxy/proxy-entrypoint.sh` | Starts DNS responder + mitmproxy in regular mode      |
-| `airut/_bundled/proxy/dns_responder.py`    | DNS server: returns proxy IP for all A queries        |
-| `airut/_bundled/proxy/proxy_filter.py`     | mitmproxy addon: allowlist, token masking, re-signing |
-| `airut/_bundled/proxy/aws_signing.py`      | AWS SigV4/SigV4A request re-signing                   |
-| `airut/sandbox/_network.py`                | Podman args for sandbox integration (--dns, CA cert)  |
-| `airut/sandbox/_proxy.py`                  | Per-task proxy lifecycle management                   |
+| Component                                  | Purpose                                                |
+| ------------------------------------------ | ------------------------------------------------------ |
+| `.airut/network-allowlist.yaml`            | Allowlist configuration (domains + URLs + methods)     |
+| `airut/_bundled/proxy/proxy.dockerfile`    | Proxy container image (slim + mitmproxy)               |
+| `airut/_bundled/proxy/proxy-entrypoint.sh` | Starts DNS responder + mitmproxy in regular mode       |
+| `airut/_bundled/proxy/dns_responder.py`    | DNS server: returns proxy IP for all A queries         |
+| `airut/_bundled/proxy/proxy_filter.py`     | mitmproxy addon: allowlist, token masking, re-signing  |
+| `airut/_bundled/proxy/aws_signing.py`      | AWS SigV4/SigV4A request re-signing                    |
+| `airut/_bundled/proxy/host_match.py`       | Shared host-pattern matching + UrlPrefixEntry typedict |
+| `airut/_bundled/proxy/tool_domains.py`     | Anthropic server-side-tool domain trimming             |
+| `airut/sandbox/_network.py`                | Podman args for sandbox integration (--dns, CA cert)   |
+| `airut/sandbox/_proxy.py`                  | Per-task proxy lifecycle management                    |
 
 ## Proxy Lifecycle
 
@@ -153,9 +155,12 @@ HTTP log lines use the format
 `{ALLOWED|BLOCKED} {METHOD} {URL} -> {status}{annotations}` where annotations
 are optional bracket-delimited metadata: `[github-app: ...]` for GitHub App
 credential operations, `[masked: N]` when masked secret tokens were replaced,
-`[dropped: N]` when foreign credential headers were stripped, and
-`[region: REGION]` for AWS re-signed requests. Each HTTP request produces
-exactly one `ALLOWED` or `BLOCKED` log line (excluding DNS).
+`[dropped: N]` when foreign credential headers were stripped, `[tool-trim: ...]`
+when an Anthropic `/v1/messages*` body had its server-side tool
+`allowed_domains` trimmed, `[tool-config: ...]` when the same body was 403'd for
+`blocked_domains` / wildcard misuse, and `[region: REGION]` for AWS re-signed
+requests. Each HTTP request produces exactly one `ALLOWED` or `BLOCKED` log line
+(excluding DNS).
 
 STRIPPED lines indicate a credential header was removed because it contained a
 non-surrogate value on a scoped host. The format is
