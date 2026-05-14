@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast, overload
 
-from airut._json_types import JsonDict
+from airut._json_types import JsonDict, JsonValue
 from airut.config.schema import Scope, meta
 from airut.gateway.channel import ChannelConfig
 from airut.logging import SecretFilter
@@ -407,9 +407,11 @@ class GitHubAppEntry:
         if self.allow_foreign_credentials:
             d["allow_foreign_credentials"] = True
         if self.permissions is not None:
-            d["permissions"] = dict(self.permissions)
+            perms: dict[str, JsonValue] = dict(self.permissions)
+            d["permissions"] = perms
         if self.repositories is not None:
-            d["repositories"] = list(self.repositories)
+            repos: list[JsonValue] = list(self.repositories)
+            d["repositories"] = repos
         return d
 
 

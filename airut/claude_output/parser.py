@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 
-from airut._json_types import JsonDict
+from airut._json_types import JsonDict, JsonValue
 from airut.claude_output.types import (
     ContentBlock,
     EventType,
@@ -191,18 +191,36 @@ def _extract_content_blocks(
             if isinstance(text, str):
                 blocks.append(TextBlock(text=text))
         elif block_type == "tool_use":
+            tool_id_raw = block.get("id", "")
+            tool_name_raw = block.get("name", "")
+            tool_input_raw = block.get("input", {})
             blocks.append(
                 ToolUseBlock(
-                    tool_id=block.get("id", ""),
-                    tool_name=block.get("name", ""),
-                    tool_input=block.get("input", {}),
+                    tool_id=tool_id_raw if isinstance(tool_id_raw, str) else "",
+                    tool_name=(
+                        tool_name_raw if isinstance(tool_name_raw, str) else ""
+                    ),
+                    tool_input=(
+                        tool_input_raw
+                        if isinstance(tool_input_raw, dict)
+                        else {}
+                    ),
                 )
             )
         elif block_type == "tool_result":
+            tool_use_id_raw = block.get("tool_use_id", "")
+            content_raw = block.get("content", "")
+            content: str | list[JsonValue] = (
+                content_raw if isinstance(content_raw, str | list) else ""
+            )
             blocks.append(
                 ToolResultBlock(
-                    tool_id=block.get("tool_use_id", ""),
-                    content=block.get("content", ""),
+                    tool_id=(
+                        tool_use_id_raw
+                        if isinstance(tool_use_id_raw, str)
+                        else ""
+                    ),
+                    content=content,
                     is_error=bool(block.get("is_error", False)),
                 )
             )

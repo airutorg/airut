@@ -221,13 +221,16 @@ def _extract_result_text(event: StreamEvent) -> str:
         return result
     if isinstance(result, dict):
         content_blocks = result.get("content", [])
-        text_parts = [
-            block["text"]
-            for block in content_blocks
-            if isinstance(block, dict) and block.get("type") == "text"
-        ]
-        if text_parts:
-            return "\n\n".join(text_parts)
+        if isinstance(content_blocks, list):
+            text_parts = [
+                block["text"]
+                for block in content_blocks
+                if isinstance(block, dict)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+            ]
+            if text_parts:
+                return "\n\n".join(str(part) for part in text_parts)
     return ""
 
 

@@ -55,7 +55,7 @@ class ToolResultBlock:
     """A tool execution result block from a user message."""
 
     tool_id: str
-    content: str | list[dict[str, JsonValue]]
+    content: str | list[JsonValue]
     is_error: bool
 
 

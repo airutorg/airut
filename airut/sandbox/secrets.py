@@ -17,7 +17,7 @@ from __future__ import annotations
 import secrets as secrets_module
 from dataclasses import dataclass, field
 
-from airut._json_types import JsonDict
+from airut._json_types import JsonDict, JsonValue
 
 
 # Known token prefixes to preserve during surrogate generation.
@@ -194,9 +194,11 @@ class _GitHubAppEntry:
         if self.allow_foreign_credentials:
             d["allow_foreign_credentials"] = True
         if self.permissions is not None:
-            d["permissions"] = dict(self.permissions)
+            perms: dict[str, JsonValue] = dict(self.permissions)
+            d["permissions"] = perms
         if self.repositories is not None:
-            d["repositories"] = list(self.repositories)
+            repos: list[JsonValue] = list(self.repositories)
+            d["repositories"] = repos
         return d
 
 

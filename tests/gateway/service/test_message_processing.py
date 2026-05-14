@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from airut._json_types import JsonValue
 from airut.claude_output.types import Usage
 from airut.dashboard.tracker import CompletionReason
 from airut.gateway.channel import ChannelSendError, ParsedMessage
@@ -114,7 +115,7 @@ class TestMakeTodoCallback:
 
         callback = _make_todo_callback(tracker, "abc12345")
 
-        todos_raw = [
+        todos_raw: list[JsonValue] = [
             {"content": "Run tests", "status": "in_progress"},
             {"content": "Fix bugs", "status": "pending"},
         ]
@@ -213,7 +214,7 @@ class TestMakeTodoCallback:
             tracker, "abc12345", plan_streamer=mock_streamer
         )
 
-        todos_raw = [
+        todos_raw: list[JsonValue] = [
             {"content": "Run tests", "status": "in_progress"},
         ]
         event = StreamEvent(
@@ -253,7 +254,9 @@ class TestMakeTodoCallback:
 
         callback = _make_todo_callback(tracker, "abc12345")
 
-        todos_raw = [{"content": "Run tests", "status": "pending"}]
+        todos_raw: list[JsonValue] = [
+            {"content": "Run tests", "status": "pending"}
+        ]
         event = StreamEvent(
             event_type=EventType.ASSISTANT,
             subtype="",
