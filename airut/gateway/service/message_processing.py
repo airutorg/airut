@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC
 from typing import TYPE_CHECKING
@@ -102,6 +102,24 @@ class SandboxTaskResult:
 # ── Helpers ────────────────────────────────────────────────────────────
 
 
+def _todo_from_dict(
+    t: Mapping[str, object],
+    status_map: Mapping[str, TodoStatus],
+) -> TodoItem:
+    """Build a TodoItem from a raw TodoWrite dict, coercing string fields."""
+    content = t.get("content", "")
+    content_str = content if isinstance(content, str) else ""
+    status = t.get("status", "")
+    status_str = status if isinstance(status, str) else ""
+    active = t.get("activeForm", content_str)
+    active_str = active if isinstance(active, str) else content_str
+    return TodoItem(
+        content=content_str,
+        status=status_map.get(status_str, TodoStatus.PENDING),
+        active_form=active_str,
+    )
+
+
 def _make_todo_callback(
     tracker: TaskTracker,
     task_id: str,
@@ -132,17 +150,7 @@ def _make_todo_callback(
                 raw = block.tool_input.get("todos")
                 if isinstance(raw, list):
                     items = [
-                        TodoItem(
-                            content=t.get("content", ""),
-                            status=status_map.get(
-                                t.get("status", ""),
-                                TodoStatus.PENDING,
-                            ),
-                            active_form=t.get(
-                                "activeForm",
-                                t.get("content", ""),
-                            ),
-                        )
+                        _todo_from_dict(t, status_map)
                         for t in raw
                         if isinstance(t, dict)
                     ]

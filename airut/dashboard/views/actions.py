@@ -635,9 +635,7 @@ def _render_tool_todowrite(tool_input: JsonDict) -> str:
         HTML detail string.
     """
     raw_todos = tool_input.get("todos", [])
-    todos = (
-        cast(list[JsonValue], raw_todos) if isinstance(raw_todos, list) else []
-    )
+    todos: list[JsonValue] = raw_todos if isinstance(raw_todos, list) else []
     items: list[str] = []
     for t in todos:
         if isinstance(t, dict):

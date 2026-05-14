@@ -382,7 +382,7 @@ class TestSlackServer:
         text: str,
         channel_id: str = "D_TEST_DM",
         thread_ts: str | None = None,
-        files: list[JsonDict] | None = None,
+        files: list[JsonValue] | None = None,
     ) -> None:
         """Simulate a Slack user message event.
 

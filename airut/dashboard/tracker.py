@@ -22,7 +22,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
 
-from airut._json_types import JsonDict
+from airut._json_types import JsonDict, JsonValue
 from airut.dashboard.versioned import VersionClock, Versioned
 
 
@@ -116,7 +116,7 @@ class TodoItem:
     status: TodoStatus
     active_form: str = ""
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> JsonDict:
         """Serialize to a JSON-compatible dict.
 
         Returns:
@@ -397,7 +397,8 @@ class TaskState:
             "total_duration": self.total_duration(),
         }
         if self.todos is not None:
-            result["todos"] = [t.to_dict() for t in self.todos]
+            todos: list[JsonValue] = [t.to_dict() for t in self.todos]
+            result["todos"] = todos
         return result
 
 

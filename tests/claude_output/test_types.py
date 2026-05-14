@@ -59,9 +59,7 @@ class TestToolResultBlock:
         assert block.is_error is False
 
     def test_list_content(self) -> None:
-        content: list[dict[str, JsonValue]] = [
-            {"type": "text", "text": "result"}
-        ]
+        content: list[JsonValue] = [{"type": "text", "text": "result"}]
         block = ToolResultBlock(tool_id="t1", content=content, is_error=True)
         assert block.content == content
         assert block.is_error is True

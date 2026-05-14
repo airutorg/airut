@@ -672,10 +672,13 @@ def _get_active_task_counts() -> tuple[int, int] | None:
     authenticating = tasks.get("authenticating", 0)
     pending = tasks.get("pending", 0)
 
-    # Validate all four fields uniformly.
-    for value in (executing, queued, authenticating, pending):
-        if not isinstance(value, int):
-            return None
+    if not (
+        isinstance(executing, int)
+        and isinstance(queued, int)
+        and isinstance(authenticating, int)
+        and isinstance(pending, int)
+    ):
+        return None
 
     # Count all non-completed statuses as active.
     running = executing + authenticating
