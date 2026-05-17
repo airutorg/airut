@@ -102,6 +102,12 @@ The license check resolves the transitive closure of runtime dependencies (via
 ensures the license audit covers exactly what ships in a production install,
 without being affected by dev tooling licenses.
 
+The `uv-secure` vulnerability scans query the PyPI JSON API for each dependency
+and are sensitive to transient upstream errors. Steps that depend on external
+services may declare bounded retries on non-timeout failures; the
+vulnerability-scan steps opt into this. Timeouts are never retried — they remain
+treated as bugs per the timeout handling rules below.
+
 #### `integration` group
 
 | Step              | Command                                                   |

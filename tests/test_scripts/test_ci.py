@@ -291,6 +291,96 @@ class TestRunStep:
             call_kwargs = mock_run.call_args[1]
             assert call_kwargs["timeout"] == 300.0
 
+    def test_retry_succeeds_after_failure(self) -> None:
+        """Retries flaky failures and returns success when retry passes."""
+        step = Step(
+            name="Vulnerability scan",
+            command="flaky",
+            workflow="security",
+            retries=2,
+        )
+        with (
+            patch("scripts.ci.subprocess.run") as mock_run,
+            patch("scripts.ci.time.sleep") as mock_sleep,
+        ):
+            mock_run.side_effect = [
+                MagicMock(returncode=1, stdout="boom", stderr=""),
+                MagicMock(returncode=0, stdout="", stderr=""),
+            ]
+            success, output = run_step(
+                step, fix_mode=False, verbose=False, step_timeout=300
+            )
+            assert success is True
+            assert output == ""
+            assert mock_run.call_count == 2
+            assert mock_sleep.call_count == 1
+
+    def test_retry_exhausts_and_fails(self) -> None:
+        """Retries exhaust and the last failure output is returned."""
+        step = Step(
+            name="Vulnerability scan",
+            command="flaky",
+            workflow="security",
+            retries=2,
+        )
+        with (
+            patch("scripts.ci.subprocess.run") as mock_run,
+            patch("scripts.ci.time.sleep") as mock_sleep,
+        ):
+            mock_run.side_effect = [
+                MagicMock(returncode=1, stdout="first", stderr=""),
+                MagicMock(returncode=1, stdout="second", stderr=""),
+                MagicMock(returncode=1, stdout="third", stderr=""),
+            ]
+            success, output = run_step(
+                step, fix_mode=False, verbose=False, step_timeout=300
+            )
+            assert success is False
+            assert "third" in output
+            assert mock_run.call_count == 3
+            # Sleep between attempts, but not after the final one.
+            assert mock_sleep.call_count == 2
+
+    def test_no_retry_on_timeout(self) -> None:
+        """Timeouts are never retried even if retries is configured."""
+        step = Step(
+            name="Vulnerability scan",
+            command="hang",
+            workflow="security",
+            retries=2,
+        )
+        with (
+            patch("scripts.ci.subprocess.run") as mock_run,
+            patch("scripts.ci.time.sleep") as mock_sleep,
+        ):
+            mock_run.side_effect = subprocess.TimeoutExpired(
+                cmd="hang", timeout=300
+            )
+            success, output = run_step(
+                step, fix_mode=False, verbose=False, step_timeout=300
+            )
+            assert success is False
+            assert "STEP TIMEOUT" in output
+            assert mock_run.call_count == 1
+            assert mock_sleep.call_count == 0
+
+    def test_no_retry_when_retries_zero(self) -> None:
+        """Steps with retries=0 do not retry on failure."""
+        step = Step(name="Test", command="false", workflow="code")
+        with (
+            patch("scripts.ci.subprocess.run") as mock_run,
+            patch("scripts.ci.time.sleep") as mock_sleep,
+        ):
+            mock_run.return_value = MagicMock(
+                returncode=1, stdout="fail", stderr=""
+            )
+            success, _ = run_step(
+                step, fix_mode=False, verbose=False, step_timeout=300
+            )
+            assert success is False
+            assert mock_run.call_count == 1
+            assert mock_sleep.call_count == 0
+
 
 class TestFormatOverallTimeoutMessage:
     """Tests for _format_overall_timeout_message function."""
