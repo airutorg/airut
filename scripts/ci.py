@@ -55,6 +55,10 @@ class Step:
     command: str
     workflow: str
     fix_command: str | None = None
+    # Number of additional retry attempts after the first failure. Only used
+    # for steps that depend on external services (e.g. PyPI) where transient
+    # API errors are observable. Timeouts are never retried.
+    retries: int = 0
 
 
 # CI steps — the single source of truth for all checks.
@@ -121,6 +125,7 @@ STEPS: list[Step] = [
         name="Vulnerability scan",
         command="uv run uv-secure uv.lock --config pyproject.toml",
         workflow="security",
+        retries=2,
     ),
     Step(
         name="Proxy vulnerability scan",
@@ -129,6 +134,7 @@ STEPS: list[Step] = [
             " --config airut/_bundled/proxy/pyproject.toml"
         ),
         workflow="security",
+        retries=2,
     ),
     Step(
         name="Screenshots vulnerability scan",
@@ -137,6 +143,7 @@ STEPS: list[Step] = [
             " --config screenshots/pyproject.toml"
         ),
         workflow="security",
+        retries=2,
     ),
     Step(
         name="Proxy requirements.txt drift check",
@@ -189,7 +196,7 @@ def run_step(
     step_timeout: int,
     deadline: float | None = None,
 ) -> tuple[bool, str]:
-    """Run a single CI step.
+    """Run a single CI step, retrying transient failures if configured.
 
     Args:
         step: The step to run
@@ -202,6 +209,32 @@ def run_step(
 
     Returns:
         Tuple of (success, output_to_display)
+    """
+    final_attempt = step.retries
+    for attempt in range(final_attempt + 1):
+        success, output, was_timeout = _run_step_once(
+            step, fix_mode, verbose, step_timeout, deadline
+        )
+        if success or was_timeout or attempt == final_attempt:
+            break
+        # Brief pause before retry to let transient external errors clear.
+        time.sleep(1.0)
+    return success, output
+
+
+def _run_step_once(
+    step: Step,
+    fix_mode: bool,
+    verbose: bool,
+    step_timeout: int,
+    deadline: float | None,
+) -> tuple[bool, str, bool]:
+    """Run a single attempt of a CI step.
+
+    Returns:
+        Tuple of (success, output_to_display, was_timeout). was_timeout is
+        True when the subprocess hit the step timeout; callers must not retry
+        in that case (timeouts are bugs, not transient failures).
     """
     # Determine which command to run
     if fix_mode and step.fix_command:
@@ -259,7 +292,7 @@ def run_step(
             f"Override once:   ci.py --step-timeout {step_timeout * 2}\n"
             "Disable:         ci.py --step-timeout 0"
         )
-        return False, error_msg
+        return False, error_msg, True
 
     output = result.stdout + result.stderr
 
@@ -267,18 +300,18 @@ def run_step(
     if step.name == "Worktree clean check":
         if result.stdout.strip():
             # There are uncommitted changes
-            return False, f"Uncommitted changes:\n{result.stdout}"
-        return True, ""
+            return False, f"Uncommitted changes:\n{result.stdout}", False
+        return True, "", False
 
     if result.returncode == 0:
-        return True, output if verbose else ""
+        return True, output if verbose else "", False
 
     # On failure, return last N lines
     lines = output.strip().split("\n")
     if len(lines) > FAILURE_OUTPUT_LINES:
         truncated = lines[-FAILURE_OUTPUT_LINES:]
-        return False, "\n".join(truncated)
-    return False, output
+        return False, "\n".join(truncated), False
+    return False, output, False
 
 
 def _format_overall_timeout_message(elapsed: float, timeout: int) -> str:
@@ -302,7 +335,7 @@ def _format_overall_timeout_message(elapsed: float, timeout: int) -> str:
         "3. ONLY after thorough investigation confirms that total execution\n"
         "   time has legitimately and consistently increased (new tests,\n"
         "   heavier checks), update DEFAULT_TIMEOUT_SECONDS in ci.py.\n"
-        "   Set it to the measured time + 50%% buffer.\n"
+        "   Set it to the measured time + 50% buffer.\n"
         "\n"
         f"Current default: --timeout {timeout}\n"
         f"Override once:   ci.py --timeout {timeout * 2}\n"
