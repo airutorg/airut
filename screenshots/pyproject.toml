@@ -12,4 +12,6 @@ dependencies = [
 airut = { path = "..", editable = true }
 
 [tool.uv-secure.vulnerability_criteria]
-ignore_vulnerabilities = []
+ignore_vulnerabilities = [
+    "PYSEC-2025-183",  # PyJWT — disputed advisory, no fix version available (2026-05)
+]
