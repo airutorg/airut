@@ -126,8 +126,3 @@ MPL;
 Mozilla Public License
 """
 partial-match = true
-
-[tool.uv-secure.vulnerability_criteria]
-ignore_vulnerabilities = [
-    "PYSEC-2025-183",  # PyJWT — disputed advisory, no fix version available (2026-05)
-]
