@@ -77,6 +77,7 @@ attacker-controlled nameservers). The proxy handles all access control.
 | `airut/_bundled/proxy/proxy_filter.py`     | mitmproxy addon: allowlist, token masking, re-signing  |
 | `airut/_bundled/proxy/aws_signing.py`      | AWS SigV4/SigV4A request re-signing                    |
 | `airut/_bundled/proxy/host_match.py`       | Shared host-pattern matching + UrlPrefixEntry typedict |
+| `airut/_bundled/proxy/request_filter.py`   | Request-body filter pipeline (PASS/REWRITE/BLOCK)      |
 | `airut/_bundled/proxy/tool_domains.py`     | Anthropic server-side-tool domain trimming             |
 | `airut/sandbox/_network.py`                | Podman args for sandbox integration (--dns, CA cert)   |
 | `airut/sandbox/_proxy.py`                  | Per-task proxy lifecycle management                    |
@@ -102,14 +103,14 @@ The proxy is managed by `ProxyManager` in `airut/sandbox/_proxy.py`:
 
 ## Resource Scoping
 
-| Resource                             | Scope   | Created                  | Destroyed           |
-| ------------------------------------ | ------- | ------------------------ | ------------------- |
-| Egress network (`airut-egress`)      | Gateway | `startup()`              | `shutdown()`        |
-| Proxy image (`airut-proxy`)          | Gateway | `startup()`              | Never (cached)      |
-| CA certificate                       | Gateway | `startup()` (if missing) | Never               |
-| Internal network (`airut-conv-{id}`) | Task    | `start_task_proxy()`     | `stop_task_proxy()` |
-| Proxy container (`airut-proxy-{id}`) | Task    | `start_task_proxy()`     | `stop_task_proxy()` |
-| Network log (`network-sandbox.log`)  | Task    | `start_task_proxy()`     | Session pruning     |
+| Resource                             | Scope   | Created                  | Destroyed       |
+| ------------------------------------ | ------- | ------------------------ | --------------- |
+| Egress network (`airut-egress`)      | Gateway | `startup()`              | `shutdown()`    |
+| Proxy image (`airut-proxy`)          | Gateway | `startup()`              | Never (cached)  |
+| CA certificate                       | Gateway | `startup()` (if missing) | Never           |
+| Internal network (`airut-conv-{id}`) | Task    | `start_proxy()`          | `stop_proxy()`  |
+| Proxy container (`airut-proxy-{id}`) | Task    | `start_proxy()`          | `stop_proxy()`  |
+| Network log (`network-sandbox.log`)  | Task    | `start_proxy()`          | Session pruning |
 
 ## CA Certificate Trust
 

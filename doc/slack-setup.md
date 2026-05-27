@@ -175,7 +175,7 @@ via live config reload (the channel restarts once any in-flight task completes).
    root directory.
    ```
 4. You should see:
-   - A status indicator ("is getting ready...")
+   - A status indicator ("is working on this...") while Airut prepares the run
    - An acknowledgment message with a dashboard link (if configured)
    - A reply with the file listing
    - A thread title set from your message

@@ -314,15 +314,22 @@ specification.
 The Slack channel (`gateway/slack/`) implements `ChannelAdapter` as
 `SlackChannelAdapter`, wrapping the Slack-specific components:
 
-- **SlackChannelListener** — Socket Mode WebSocket connection via Bolt SDK
+- **SlackChannelListener** — Socket Mode WebSocket connection via Bolt SDK;
+  handles the DM surface (Assistant middleware) and the channel surface
+  (`app_mention` + `message` handlers with allowlist, dedup, and a
+  sticky-thread/mention pre-filter)
 - **SlackAuthorizer** — Authorization rule evaluation with cached user/group
   data
+- **MentionResolver** — Resolves inbound Slack mention tokens to display names
+  and rewrites outbound `@name`/`#name`/`@group` back to Slack references
+- **SlackMrkdwnRenderer** — Converts CommonMark to Slack `mrkdwn`
 - **SlackThreadStore** — Persistent mapping between Slack threads and Airut
   conversation IDs
 
-**Slack uses Agents & AI Apps mode**, which replaces the standard bot DM
-interface with a Chat tab and History tab. Every interaction is automatically
-threaded — each thread maps to one Airut conversation.
+**Slack uses Agents & AI Apps mode** for DMs, which replaces the standard bot DM
+interface with a Chat tab and History tab. It also engages in public/private
+channels when `@`-mentioned. Every interaction is threaded — each thread maps to
+one Airut conversation.
 
 **Slack request flow** (channel-specific detail within the generic flow above):
 
@@ -330,34 +337,48 @@ threaded — each thread maps to one Airut conversation.
 Socket Mode WebSocket
     │
     ▼
-SlackChannelListener (Bolt SDK event handler)
+SlackChannelListener (Bolt SDK event handlers)
     │
-    ├──▶ assistant_thread_started → send greeting
+    ├──▶ DM surface (Assistant middleware):
+    │      ├─ assistant_thread_started → greeting + "is getting ready..." status
+    │      └─ user_message → dispatch to worker thread
     │
-    ├──▶ user_message → dispatch to worker thread
+    ├──▶ Channel surface (app_mention + message):
+    │      ├─ drop bot-authored / subtyped events
+    │      ├─ channel allowlist + (channel, ts) dedup
+    │      └─ engage on @-mention or in a sticky (already-engaged) thread
     │
     ▼
 SlackChannelAdapter.authenticate_and_parse()
     │
     ├──▶ SlackAuthorizer (baseline checks + rule evaluation)
     │
-    ├──▶ Extract message body and file metadata from event
+    ├──▶ Channel: add :eyes: ack reaction once authorized
+    │
+    ├──▶ Resolve inbound mention tokens; on a mid-thread mention, replay
+    │     prior thread context via conversations.replies (≤200 messages)
     │
     ├──▶ Look up conversation ID from thread store, or generate new
     │
     ▼
     ... (generic flow: ConversationManager → Sandbox → Task) ...
     │
+    ├──▶ report_phase(): set "is working on this..." status during the prep
+    │     window (DM); clear it before the run; swap the channel :eyes: ack to
+    │     :white_check_mark: / :x: on completion
+    │
     ▼
 SlackChannelAdapter.send_reply()
     │
-    ├──▶ Render Markdown to Slack mrkdwn (tables → code blocks, em-dash rules)
+    ├──▶ Render Markdown to Slack mrkdwn (tables → code blocks, em-dash rules),
+    │     rewriting outbound mentions against the thread's candidate set
     │
-    ├──▶ Split long messages, post via the text parameter (mrkdwn)
+    ├──▶ Split long messages, post via the text parameter; upload a
+    │     response.md file when a body splits into more than five chunks
     │
     ├──▶ Upload files from /outbox
     │
-    ├──▶ Set thread title from conversation topic
+    ├──▶ Set thread title from the first message (DM only; skipped in channels)
     │
     ▼
 Done (thread mapping persisted for future messages)

@@ -105,7 +105,7 @@ and MCP definitions declare `type: "mcp"`, neither of which is touched.
 `host_get_open(host, domains, url_prefixes) -> bool` returns true iff the airut
 allowlist contains an entry that
 
-1. matches `host` via the existing `_match_host_pattern`,
+1. matches `host` via the existing `match_host_pattern`,
 2. has no path restriction (`path == ""` or absent), and
 3. has either an empty / absent `methods` list (any method) or includes `"GET"`
    in `methods`.
