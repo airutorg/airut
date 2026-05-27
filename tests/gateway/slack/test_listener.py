@@ -532,7 +532,7 @@ class TestAppMentionHandler:
             {
                 "type": "app_mention",
                 "user": "U1",
-                "subtype": "bot_message",
+                "subtype": "message_changed",
                 "text": "<@UBOT> help",
                 "channel": "C1",
                 "ts": "T1",
