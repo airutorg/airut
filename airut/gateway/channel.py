@@ -132,6 +132,26 @@ class ParsedMessage:
         """Readable sender for attribution, falling back to the canonical id."""
         return self.sender_display or self.sender
 
+    def coalesce(self, other: ParsedMessage) -> None:
+        """Merge a newly-arrived message into this pending survivor.
+
+        Called by the gateway when ``other`` arrives for a conversation
+        that already has a pending follow-up (``self``).  On the first
+        merge the entry list is seeded with this message so the rendered
+        prompt attributes every part of the burst; ``other`` is then
+        appended.  Each entry is ``(sender_display, received_at, body)``.
+
+        Subclasses extend this to merge channel-specific acknowledgement
+        state (e.g. Slack reaction targets).
+        """
+        if not self.coalesced_entries:
+            self.coalesced_entries.append(
+                (self.display_sender, self.received_at, self.body)
+            )
+        self.coalesced_entries.append(
+            (other.display_sender, other.received_at, other.body)
+        )
+
 
 @dataclass
 class RawMessage[ContentT]:
@@ -264,10 +284,15 @@ class TaskPhase(Enum):
     Attributes:
         PREPARING: Conversation is being created or resumed (pre-run).
         RUNNING: The sandbox run has started.
+        COMPLETED: The task finished successfully.
+        FAILED: The task ended in an error (timeout, execution failure,
+            or an internal error).
     """
 
     PREPARING = "preparing"
     RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 class ChannelAdapter(Protocol):

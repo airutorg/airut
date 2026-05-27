@@ -92,8 +92,13 @@ class SlackParsedMessage(ParsedMessage):
     slack_file_urls: list[tuple[str, str]] = field(default_factory=list)
     """List of ``(filename, download_url)`` for deferred download."""
 
-    triggering_message_ts: str = ""
-    """ts of the message that arrived, used for the ``:eyes:`` reaction."""
+    acknowledged_message_ts: list[str] = field(default_factory=list)
+    """ts of every channel message that received an ``:eyes:`` reaction.
+
+    Seeded with the triggering message at parse time and extended on each
+    coalesced follow-up, so the terminal reaction swap (``:eyes:`` →
+    ``:white_check_mark:`` / ``:x:``) covers the whole burst.  Empty for
+    DMs, which acknowledge via the thread status instead."""
 
     is_channel: bool = False
     """Whether this arrived in a channel (vs a DM).
@@ -105,6 +110,12 @@ class SlackParsedMessage(ParsedMessage):
 
     The triggering sender, any authors seen in replayed thread history, and
     members of user groups named in the authorization rules."""
+
+    def coalesce(self, other: ParsedMessage) -> None:
+        """Merge a follow-up, also accumulating its reaction targets."""
+        super().coalesce(other)
+        if isinstance(other, SlackParsedMessage):
+            self.acknowledged_message_ts.extend(other.acknowledged_message_ts)
 
 
 class SlackChannelAdapter(ChannelAdapter):
@@ -319,7 +330,7 @@ class SlackChannelAdapter(ChannelAdapter):
             slack_channel_id=channel_id,
             slack_thread_ts=thread_ts,
             slack_file_urls=slack_file_urls,
-            triggering_message_ts=message_ts,
+            acknowledged_message_ts=[message_ts] if is_channel else [],
             is_channel=is_channel,
             mention_candidate_ids=_dedup_preserving_order(candidate_ids),
         )
@@ -338,14 +349,27 @@ class SlackChannelAdapter(ChannelAdapter):
             )
         return self._resolver
 
-    def _add_reaction(self, channel_id: str, message_ts: str) -> None:
-        """Add the ``:eyes:`` acknowledgement reaction (non-fatal)."""
+    def _add_reaction(
+        self, channel_id: str, message_ts: str, name: str = "eyes"
+    ) -> None:
+        """Add a reaction to a message (non-fatal)."""
         try:
             self._client.reactions_add(
-                channel=channel_id, timestamp=message_ts, name="eyes"
+                channel=channel_id, timestamp=message_ts, name=name
             )
         except SlackApiError as e:
             logger.warning("Failed to add Slack reaction (non-fatal): %s", e)
+
+    def _remove_reaction(
+        self, channel_id: str, message_ts: str, name: str
+    ) -> None:
+        """Remove a reaction from a message (non-fatal)."""
+        try:
+            self._client.reactions_remove(
+                channel=channel_id, timestamp=message_ts, name=name
+            )
+        except SlackApiError as e:
+            logger.warning("Failed to remove Slack reaction (non-fatal): %s", e)
 
     def _replay_history(
         self,
@@ -546,24 +570,45 @@ class SlackChannelAdapter(ChannelAdapter):
             )
 
     def report_phase(self, parsed: ParsedMessage, phase: TaskPhase) -> None:
-        """Surface the lifecycle phase via the thread loading status.
+        """Surface the lifecycle phase appropriately for the surface.
 
-        Slack locks the thread composer while a status is active, so we
-        show it only during ``PREPARING`` and clear it on ``RUNNING`` —
-        keeping the composer free for follow-ups during the run.
+        Channels acknowledge via reactions on the triggering message(s):
+        an ``:eyes:`` while in flight, swapped to ``:white_check_mark:`` on
+        success or ``:x:`` on failure when the task finishes.
+
+        DMs use the thread loading status instead.  Slack locks the
+        composer while a status is active, so we show it only during
+        ``PREPARING`` and clear it on ``RUNNING`` — keeping the composer
+        free for follow-ups during the run.
         """
         if not isinstance(parsed, SlackParsedMessage):
             raise TypeError(
                 f"Expected SlackParsedMessage, got {type(parsed).__name__}"
             )
         # assistant.threads.setStatus is a DM-only (Agents & AI Apps) API.
-        # In channels the :eyes: reaction is the acknowledgement instead.
+        # In channels the reaction lifecycle is the acknowledgement instead.
         if parsed.is_channel:
+            if phase is TaskPhase.COMPLETED:
+                self._finalize_reactions(parsed, "white_check_mark")
+            elif phase is TaskPhase.FAILED:
+                self._finalize_reactions(parsed, "x")
             return
         if phase is TaskPhase.PREPARING:
             self._set_status(parsed, "is working on this...")
         elif phase is TaskPhase.RUNNING:
             self._set_status(parsed, "")
+
+    def _finalize_reactions(
+        self, parsed: SlackParsedMessage, name: str
+    ) -> None:
+        """Swap the ``:eyes:`` ack for a terminal reaction on each message.
+
+        Covers every message folded into the executed task (the trigger
+        plus any coalesced follow-ups), so a burst clears as a unit.
+        """
+        for message_ts in parsed.acknowledged_message_ts:
+            self._remove_reaction(parsed.slack_channel_id, message_ts, "eyes")
+            self._add_reaction(parsed.slack_channel_id, message_ts, name)
 
     def _set_status(self, parsed: SlackParsedMessage, status: str) -> None:
         """Set (or clear, when empty) the assistant thread status."""

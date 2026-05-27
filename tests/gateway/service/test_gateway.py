@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from airut.gateway.channel import ParsedMessage
+from airut.gateway.channel import ParsedMessage, TaskPhase
 from airut.gateway.service import GatewayService, main
 from airut.gateway.service.gateway import PendingMessage
 
@@ -346,6 +346,10 @@ class TestProcessMessageWorker:
         svc.tracker.complete_task.assert_called_once_with(
             "new-123", CompletionReason.SUCCESS, ""
         )
+        # Success surfaces the COMPLETED phase so channels swap their ack.
+        handler.adapters["email"].report_phase.assert_called_once_with(
+            mock_parsed, TaskPhase.COMPLETED
+        )
 
     def test_existing_conversation_uses_lock(
         self, email_config, tmp_path: Path
@@ -417,6 +421,10 @@ class TestProcessMessageWorker:
             )
         svc.tracker.complete_task.assert_called_once_with(
             "temp-123", CompletionReason.EXECUTION_FAILED, ""
+        )
+        # A non-success outcome surfaces the FAILED phase.
+        handler.adapters["email"].report_phase.assert_called_once_with(
+            mock_parsed, TaskPhase.FAILED
         )
 
     def test_none_conv_id_uses_task_id(

@@ -91,11 +91,13 @@ User posts top-level message: "@airut please look at this bug"
   -> Bot adds :eyes: reaction (instant ack)
   -> Bot maps (channel_id, message.ts) to a new Airut conversation
   -> Bot replies in thread with result
+  -> Bot swaps :eyes: for :white_check_mark: (success) or :x: (failure)
 
 User replies in the same thread (no mention required)
   -> message.channels event with thread_ts matching the engaged thread
   -> Bot adds :eyes: reaction
   -> Resumes the Airut conversation
+  -> On completion, swaps :eyes: for :white_check_mark: / :x:
 
 User mentions bot inside an existing thread that bot has not joined
   -> app_mention with thread_ts pointing at an older root message
@@ -230,11 +232,19 @@ the composer for the duration of the run. The Slack-specific text and the
 locking behaviour both live in the adapter. A coalesced message never reaches
 the gateway's phase-reporting path, so it never re-locks the composer.
 
-Statuses are a DM-only API. In a channel the adapter instead adds a `:eyes:`
-reaction to the triggering message, giving an instant acknowledgement that
-survives in the thread's history; `report_phase` is a no-op for channel
-messages. The reaction is non-fatal — if the API call fails (missing permission,
-message deleted) the adapter logs a warning and continues.
+Statuses are a DM-only API. In a channel the adapter instead drives a reaction
+lifecycle on the triggering message: a `:eyes:` reaction on arrival (instant
+acknowledgement that survives in the thread's history), swapped on completion
+for `:white_check_mark:` (success) or `:x:` (failure). For channel messages
+`report_phase` ignores `PREPARING`/`RUNNING` (no status to set) and acts only on
+the terminal `COMPLETED`/`FAILED` phases. Every reaction call is non-fatal — if
+the API fails (missing permission, message deleted) the adapter logs a warning
+and continues.
+
+The completion swap covers the **whole coalesced burst**: each arriving channel
+message is acknowledged with its own `:eyes:` and its timestamp is accumulated
+on the surviving pending message, so when the merged task finishes every
+constituent message has its `:eyes:` replaced.
 
 If preparation fails before `RUNNING`, the status is cleared implicitly by the
 error notification: prep-failure paths post via `send_error()`, and Slack clears
@@ -259,7 +269,9 @@ the request immediately, then works asynchronously and replies when done.
    follow-up messages can be sent and are coalesced into the active
    conversation.
 3. **Reply.** The complete response is converted to Slack `mrkdwn` and posted to
-   the thread via `chat.postMessage` using the `text` parameter.
+   the thread via `chat.postMessage` using the `text` parameter. In a channel
+   the in-flight `:eyes:` reaction is then swapped for `:white_check_mark:`
+   (success) or `:x:` (failure) on every message the task consumed.
 
 This avoids the complexity of streaming action blocks back to Slack and keeps
 the interaction model consistent with the email channel. The dashboard provides
@@ -727,18 +739,18 @@ user enabled (always online).
 
 **Required scopes (bot token):**
 
-| Scope               | Purpose                                                       |
-| ------------------- | ------------------------------------------------------------- |
-| `assistant:write`   | Thread titles, status indicators (DM-only)                    |
-| `chat:write`        | Send messages                                                 |
-| `im:history`        | Read DM history (for thread context)                          |
-| `users:read`        | User info for authorization and display-name resolution       |
-| `files:read`        | Read user-uploaded files                                      |
-| `files:write`       | Upload outbox files to threads                                |
-| `app_mentions:read` | Receive `app_mention` events in channels                      |
-| `channels:history`  | Read public-channel thread history (`conversations.replies`)  |
-| `groups:history`    | Read private-channel thread history (`conversations.replies`) |
-| `reactions:write`   | Add `:eyes:` acknowledgement reaction on channel messages     |
+| Scope               | Purpose                                                                              |
+| ------------------- | ------------------------------------------------------------------------------------ |
+| `assistant:write`   | Thread titles, status indicators (DM-only)                                           |
+| `chat:write`        | Send messages                                                                        |
+| `im:history`        | Read DM history (for thread context)                                                 |
+| `users:read`        | User info for authorization and display-name resolution                              |
+| `files:read`        | Read user-uploaded files                                                             |
+| `files:write`       | Upload outbox files to threads                                                       |
+| `app_mentions:read` | Receive `app_mention` events in channels                                             |
+| `channels:history`  | Read public-channel thread history (`conversations.replies`)                         |
+| `groups:history`    | Read private-channel thread history (`conversations.replies`)                        |
+| `reactions:write`   | Add/remove channel acknowledgement reactions (`:eyes:` → `:white_check_mark:`/`:x:`) |
 
 **Optional scopes:**
 
@@ -793,7 +805,7 @@ dispatches on the channel config type to construct the right adapter.
 | `authenticate_and_parse()` | Check authorization via the authorizer; make the engagement decision; replay mid-thread history via `conversations.replies`; resolve inbound mention tokens; in a channel add the `:eyes:` reaction                                   |
 | `save_attachments()`       | Download files listed on the parsed message using the bot token (gated to Slack file hosts), save to `inbox_dir`                                                                                                                      |
 | `send_acknowledgment()`    | Register the thread mapping and post the "I've started" confirmation (with optional dashboard link)                                                                                                                                   |
-| `report_phase()`           | DM only: `PREPARING` → set loading status, `RUNNING` → clear it. No-op in channels                                                                                                                                                    |
+| `report_phase()`           | DM: `PREPARING` → set loading status, `RUNNING` → clear it. Channel: `COMPLETED`/`FAILED` → swap `:eyes:` for `:white_check_mark:`/`:x:` on every acknowledged message; `PREPARING`/`RUNNING` are ignored                             |
 | `send_reply()`             | Render Markdown → `mrkdwn`, apply outbound mention rewriting against the per-thread candidate set, post via the `text` parameter (splitting/file-upload past the size limit), upload outbox files, and set the thread title (DM only) |
 | `send_error()`             | Post error text to the thread                                                                                                                                                                                                         |
 
@@ -832,11 +844,15 @@ with the adapter so mention tokens can be recognised without re-resolving.
 The Slack adapter's parsed-message type extends `ParsedMessage` with the state
 needed for reply threading and deferred work: the channel ID and thread
 timestamp, the list of `(filename, url)` pairs for deferred attachment download,
-the triggering message timestamp (for the `:eyes:` reaction and dedup), an
-`is_channel` flag (gates the DM-only `setStatus`/`setTitle` calls), and the set
-of user IDs eligible for outbound `@`-mention rewriting (sender, replayed thread
-authors, configured user-group members). The core sees a `ParsedMessage`; the
-adapter downcasts to access these fields when sending replies.
+the list of acknowledged message timestamps (seeded with the triggering message
+and extended on each coalesced follow-up, so the completion swap covers the
+whole burst), an `is_channel` flag (gates the DM-only `setStatus`/`setTitle`
+calls), and the set of user IDs eligible for outbound `@`-mention rewriting
+(sender, replayed thread authors, configured user-group members). Coalescing is
+polymorphic: the adapter's `coalesce()` override extends the
+acknowledged-timestamp list on top of the base entry merge. The core sees a
+`ParsedMessage`; the adapter downcasts to access these fields when sending
+replies.
 
 ### Thread-to-Conversation Store
 

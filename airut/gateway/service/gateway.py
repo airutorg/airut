@@ -53,6 +53,7 @@ from airut.gateway.channel import (
     ChannelAdapter,
     ParsedMessage,
     RawMessage,
+    TaskPhase,
 )
 from airut.gateway.config import (
     GlobalConfig,
@@ -1361,7 +1362,7 @@ class GatewayService:
                             # A follow-up is already pending: merge this
                             # message into it and complete this task as
                             # COALESCED, linking back to the survivor.
-                            self._coalesce_into(existing, parsed)
+                            existing.parsed.coalesce(parsed)
                             self.tracker.update_task_display_title(
                                 existing.task_id,
                                 parsed.display_title or "(no subject)",
@@ -1438,32 +1439,6 @@ class GatewayService:
                 # drain is a no-op (no pending messages exist).
                 if conv_id:
                     self._drain_pending(conv_id)
-
-    def _coalesce_into(
-        self, pending: PendingMessage, parsed: ParsedMessage
-    ) -> None:
-        """Merge a newly-arrived message into an existing pending one.
-
-        Must be called with ``_pending_messages_lock`` held.  On the
-        first merge the entry list is seeded with the original pending
-        message so the rendered prompt attributes every part of the
-        burst; the new message is then appended.  Each entry is
-        ``(sender_display, received_at, body)``.
-
-        Args:
-            pending: The existing pending message to merge into.
-            parsed: The newly-arrived message being coalesced.
-        """
-        entries = pending.parsed.coalesced_entries
-        if not entries:
-            entries.append(
-                (
-                    pending.parsed.display_sender,
-                    pending.parsed.received_at,
-                    pending.parsed.body,
-                )
-            )
-        entries.append((parsed.display_sender, parsed.received_at, parsed.body))
 
     def _drain_pending(self, conv_id: str) -> None:
         """Submit the pending message for a conversation, if any.
@@ -1566,6 +1541,17 @@ class GatewayService:
             repo_id = repo_handler.config.repo_id
             self._check_pending_repo_reload(repo_id)
             self._check_pending_server_reload()
+
+            # Surface the terminal outcome so channels can swap their
+            # in-flight acknowledgement (e.g. Slack :eyes: → :white_check_mark:
+            # on success, :x: on failure).  Done after completion/drain so a
+            # slow channel API call never blocks them.
+            adapter.report_phase(
+                parsed,
+                TaskPhase.COMPLETED
+                if reason is CompletionReason.SUCCESS
+                else TaskPhase.FAILED,
+            )
 
     def _process_pending_message(self, pending: PendingMessage) -> None:
         """Execute a previously-authenticated pending message.
