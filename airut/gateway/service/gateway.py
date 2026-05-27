@@ -106,16 +106,12 @@ class PendingMessage:
     re-authentication.  Messages that arrive while this one is pending
     coalesce into ``parsed.coalesced_entries`` rather than queueing
     separately.
-
-    ``arrival_time`` is the wall-clock time this message was enqueued; it
-    seeds the first entry's timestamp when coalescing begins.
     """
 
     parsed: ParsedMessage
     task_id: str
     repo_handler: RepoHandler
     adapter: ChannelAdapter
-    arrival_time: float
 
 
 def capture_version_info() -> tuple[VersionInfo, GitVersionInfo]:
@@ -1325,6 +1321,7 @@ class GatewayService:
             # Authenticate and parse through the channel adapter.
             # AuthenticationError carries sender/reason for dashboard.
             parsed = adapter.authenticate_and_parse(raw_message)
+            parsed.received_at = time.time()
 
             # Update task title from "(authenticating)" to real title.
             # parsed.sender is the verified identity returned by
@@ -1388,7 +1385,6 @@ class GatewayService:
                                 task_id=task_id,
                                 repo_handler=repo_handler,
                                 adapter=adapter,
-                                arrival_time=time.time(),
                             )
                             self.tracker.set_pending(task_id)
                             logger.info(
@@ -1452,7 +1448,7 @@ class GatewayService:
         first merge the entry list is seeded with the original pending
         message so the rendered prompt attributes every part of the
         burst; the new message is then appended.  Each entry is
-        ``(sender, arrival_timestamp, body)``.
+        ``(sender_display, received_at, body)``.
 
         Args:
             pending: The existing pending message to merge into.
@@ -1462,12 +1458,12 @@ class GatewayService:
         if not entries:
             entries.append(
                 (
-                    pending.parsed.sender,
-                    pending.arrival_time,
+                    pending.parsed.display_sender,
+                    pending.parsed.received_at,
                     pending.parsed.body,
                 )
             )
-        entries.append((parsed.sender, time.time(), parsed.body))
+        entries.append((parsed.display_sender, parsed.received_at, parsed.body))
 
     def _drain_pending(self, conv_id: str) -> None:
         """Submit the pending message for a conversation, if any.

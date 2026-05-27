@@ -680,6 +680,17 @@ cache (from `users.info` calls) stores display names alongside role data; the
 dashboard can display the cached display name when available, falling back to
 the raw user ID.
 
+The `sender_display` field (also inherited from `ParsedMessage`) is set for
+prompt attribution by resolving the user ID against that same cache:
+`DisplayName <U12345678>`, or just the user ID when no profile is cached. The
+`authorize()` call earlier in `authenticate_and_parse()` warms the cache, so
+this resolution is a cache hit with no extra Slack API request. The bracketed ID
+is a bare `<U12345678>`, **not** `<@U12345678>`, so the resolved ID is never
+itself live-mention syntax. The display-name half is user-controlled and is not
+sanitized here (consistent with the message body, which is also trusted from an
+authorized sender); echo-safety is provided by the outbound mrkdwn renderer,
+which escapes `<`/`>`/`&` so any mention markup Claude reproduces is inert.
+
 The `display_title` field is set from the first message text (truncated to ~60
 chars) for dashboard display. The `channel_context` field is set to the
 Slack-specific system prompt described in the Channel Context section above.
@@ -787,6 +798,8 @@ The existing `TaskState` already stores all needed fields:
   email subject)
 - `sender`: Set to the Slack user ID (canonical identifier — email uses the
   sender email address)
+- `sender_display`: Set to `DisplayName <U123>` resolved from the user cache
+  (email uses the raw `From` header) — used for the prompt attribution header
 - `repo_id`: Set from the server config (same as email)
 - `model`: Set from the server config per-repo `model` (Slack has no model
   selection UX)

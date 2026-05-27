@@ -102,15 +102,35 @@ class ParsedMessage:
     and is included in channel_context.  Empty for resumed conversations
     and for channels that have no concept of a subject (e.g. Slack)."""
 
+    sender_display: str = ""
+    """Human-readable sender identity for prompt attribution.
+
+    Channel-formatted: email uses the raw ``From`` header (name + address),
+    Slack resolves the user ID to ``DisplayName <U123>``.  Distinct from
+    ``sender``, which stays the canonical trust anchor.  Falls back to
+    ``sender`` when unset."""
+
+    received_at: float = 0.0
+    """Wall-clock receipt time (epoch seconds), stamped by the gateway.
+
+    Used to render the per-message timestamp in the prompt header so a lone
+    (non-coalesced) message carries a real arrival time, not compose time."""
+
     coalesced_entries: list[tuple[str, float, str]] = field(
         default_factory=list
     )
-    """Coalesced burst messages as ``(sender, arrival_timestamp, body)`` tuples.
+    """Coalesced messages as ``(sender_display, received_at, body)`` tuples.
 
     Populated by the gateway when several messages arrive for a conversation
     while it is busy: they merge into the single pending follow-up instead of
     queueing separately.  Each tuple is one message in arrival order.  An empty
-    list means no coalescing happened — consumers use ``body`` verbatim."""
+    list means no coalescing happened — the renderer synthesizes a single entry
+    from ``sender_display``/``received_at``/``body``."""
+
+    @property
+    def display_sender(self) -> str:
+        """Readable sender for attribution, falling back to the canonical id."""
+        return self.sender_display or self.sender
 
 
 @dataclass

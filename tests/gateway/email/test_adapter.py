@@ -110,10 +110,22 @@ class TestAuthenticateAndParse:
         assert result is not None
         assert isinstance(result, EmailParsedMessage)
         assert result.sender == "user@example.com"
+        # Email uses the raw From header (name + address) for attribution.
+        assert result.sender_display == "user@example.com"
         assert result.body == "Do something"
         assert result.conversation_id is None
         assert result.original_message_id == "<msg1@example.com>"
         assert result._raw_message is msg.content
+
+    def test_sender_display_preserves_from_display_name(self) -> None:
+        adapter, auth, authz, _ = _make_adapter()
+        auth.authenticate.return_value = "user@example.com"
+        authz.is_authorized.return_value = True
+        msg = _make_raw_message(sender="Pyry Haulos <user@example.com>")
+
+        result = adapter.authenticate_and_parse(msg)
+
+        assert result.sender_display == "Pyry Haulos <user@example.com>"
 
     def test_unauthenticated_raises(self) -> None:
         from airut.gateway.channel import AuthenticationError

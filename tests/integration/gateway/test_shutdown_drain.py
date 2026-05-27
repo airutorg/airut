@@ -314,7 +314,6 @@ class TestDrainAfterPoolShutdown:
             task_id=task_id,
             repo_handler=repo_handler,
             adapter=repo_handler.adapters["email"],
-            arrival_time=1000.0,
         )
         service._pending_messages[conv_id] = pending
 

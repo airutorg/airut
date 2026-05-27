@@ -242,6 +242,7 @@ class EmailChannelAdapter(ChannelAdapter):
 
         return EmailParsedMessage(
             sender=sender,
+            sender_display=sender,
             body=clean_body,
             conversation_id=conv_id,
             model_hint=model_hint,

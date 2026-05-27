@@ -214,15 +214,19 @@ def build_recovery_prompt(
 
 
 def compose_message_body(parsed: ParsedMessage) -> str:
-    """Compose the user message body, expanding any coalesced burst.
+    """Compose the user message body with a per-message attribution header.
 
-    When several messages coalesced into this one while the conversation
-    was busy, ``parsed.coalesced_entries`` holds a
-    ``(sender, arrival_timestamp, body)`` tuple per message in arrival
-    order.  They are rendered with a ``[<sender> <HH:MM:SS>]`` header per
-    entry so Claude can attribute each part of the burst.  An empty list
-    means no coalescing happened, so ``parsed.body`` is used verbatim and
-    the prompt looks identical to the non-coalesced flow.
+    Every message is rendered with a ``[<sender> <timestamp>]`` header so
+    Claude can attribute it — useful in shared Slack threads where several
+    people post into one conversation.  When messages coalesced into this one
+    while the conversation was busy, ``parsed.coalesced_entries`` holds a
+    ``(sender_display, received_at, body)`` tuple per message in arrival
+    order.  An empty list means no coalescing happened, so a single entry is
+    synthesized from the message's own ``sender_display``/``received_at``/
+    ``body`` — identical in shape to a coalesced entry.
+
+    The timestamp is rendered as ``YYYY-MM-DD HH:MM:SS UTC`` (the gateway
+    operates in UTC, so ``%Z`` always reads ``UTC``).
 
     Args:
         parsed: The parsed message, possibly carrying coalesced entries.
@@ -230,12 +234,15 @@ def compose_message_body(parsed: ParsedMessage) -> str:
     Returns:
         The composed body to send to Claude.
     """
-    if not parsed.coalesced_entries:
-        return parsed.body
+    entries = parsed.coalesced_entries or [
+        (parsed.display_sender, parsed.received_at, parsed.body)
+    ]
 
     parts: list[str] = []
-    for sender, timestamp, body in parsed.coalesced_entries:
-        stamp = datetime.fromtimestamp(timestamp, tz=UTC).strftime("%H:%M:%S")
+    for sender, timestamp, body in entries:
+        stamp = datetime.fromtimestamp(timestamp, tz=UTC).strftime(
+            "%Y-%m-%d %H:%M:%S %Z"
+        )
         parts.append(f"[{sender} {stamp}]\n{body}")
     return "\n\n".join(parts)
 

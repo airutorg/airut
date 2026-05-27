@@ -240,13 +240,13 @@ class TestProcessMessageWorker:
             body="first body",
             conversation_id="aabb1122",
             model_hint=None,
+            received_at=1000.0,
         )
         existing = PendingMessage(
             parsed=existing_parsed,
             task_id="pending-1",
             repo_handler=handler,
             adapter=handler.adapters["email"],
-            arrival_time=1000.0,
         )
         svc._pending_messages["aabb1122"] = existing
 
@@ -282,8 +282,8 @@ class TestProcessMessageWorker:
             "first body",
             "second body",
         ]
-        # The first entry's timestamp is the original message's enqueue
-        # time (PendingMessage.arrival_time), not the merge time.
+        # The first entry's timestamp is the original message's receipt
+        # time (ParsedMessage.received_at), not the merge time.
         assert entries[0][1] == 1000.0
         # The survivor's display title tracks the latest message.
         svc.tracker.update_task_display_title.assert_called_with(
@@ -635,7 +635,6 @@ class TestDrainPending:
             task_id="conv1",
             repo_handler=handler,
             adapter=handler.adapters["email"],
-            arrival_time=1000.0,
         )
         svc._pending_messages["conv1"] = pending
 
@@ -663,7 +662,6 @@ class TestDrainPending:
             task_id="pending-task-1",
             repo_handler=handler,
             adapter=handler.adapters["email"],
-            arrival_time=1000.0,
         )
         svc._pending_messages["conv1"] = pending
 
@@ -691,7 +689,6 @@ class TestProcessPendingMessage:
             task_id="task-1",
             repo_handler=handler,
             adapter=handler.adapters["email"],
-            arrival_time=1000.0,
         )
 
         with patch(
@@ -719,7 +716,6 @@ class TestProcessPendingMessage:
             task_id="task-2",
             repo_handler=handler,
             adapter=handler.adapters["email"],
-            arrival_time=1000.0,
         )
 
         with patch(
@@ -747,7 +743,6 @@ class TestProcessPendingMessage:
             task_id="task-3",
             repo_handler=handler,
             adapter=handler.adapters["email"],
-            arrival_time=1000.0,
         )
 
         with patch(
@@ -772,7 +767,6 @@ class TestProcessPendingMessage:
             task_id="task-4",
             repo_handler=handler,
             adapter=handler.adapters["email"],
-            arrival_time=1000.0,
         )
 
         with patch(
@@ -799,7 +793,6 @@ class TestProcessPendingMessage:
             task_id="task-5",
             repo_handler=handler,
             adapter=handler.adapters["email"],
-            arrival_time=1000.0,
         )
 
         with (
