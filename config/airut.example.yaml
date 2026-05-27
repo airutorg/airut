@@ -246,3 +246,8 @@ repos:
       #   # - user_group: engineering
       #   # Or restrict to specific users:
       #   # - user_id: U12345678
+
+      # Channel IDs the bot may engage in (empty = any invited channel)
+      # allowed_channels:
+      #   - C0123456789
+      #   - C9876543210

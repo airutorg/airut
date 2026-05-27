@@ -88,6 +88,10 @@ class SlackAuthorizer:
         self._workspace_team_id = workspace_team_id
         self._lock = threading.Lock()
 
+        # Bot's own user ID, resolved lazily from the same auth.test call
+        # that resolves the workspace team ID.
+        self._bot_user_id: str | None = None
+
         # User info cache: user_id -> _CacheEntry[UserInfo]
         self._user_cache: dict[str, _CacheEntry[UserInfo]] = {}
 
@@ -257,6 +261,25 @@ class SlackAuthorizer:
             )
         return channels.get(name)
 
+    def candidate_group_member_ids(self) -> set[str]:
+        """Return user IDs of members of every configured ``user_group`` rule.
+
+        Used to seed the outbound mention-rewriting candidate set so the bot
+        can ``@``-mention authorized group members even when they have not
+        posted in the current thread.  Reuses the cached group-membership
+        data; groups that fail to resolve contribute nothing.
+
+        Returns:
+            Union of member user IDs across all ``user_group`` rules.
+        """
+        members: set[str] = set()
+        for rule in self._rules:
+            if "user_group" in rule:
+                group_id = self._resolve_group_id(str(rule["user_group"]))
+                if group_id is not None:
+                    members |= self._get_group_members(group_id)
+        return members
+
     def _get_user_info(self, user_id: str) -> UserInfo | None:
         """Fetch user info with TTL cache.
 
@@ -305,25 +328,56 @@ class SlackAuthorizer:
             logger.warning("Failed to fetch user info for %s: %s", user_id, e)
             return None
 
+    def get_bot_user_id(self) -> str | None:
+        """Return the bot's own Slack user ID, resolving lazily.
+
+        Shares the single ``auth.test`` call with workspace team-ID
+        resolution.  Used by the listener (mention pre-filter) and the
+        adapter (stripping the bot's own mention from invocations).
+
+        Returns:
+            The bot user ID, or None if ``auth.test`` has not yet
+            succeeded.
+        """
+        _, bot_user_id = self._resolve_identity()
+        return bot_user_id
+
     def _get_workspace_team_id(self) -> str | None:
         """Get the workspace team ID, resolving lazily via auth.test.
 
         Returns:
             Workspace team ID or None if the API call fails.
         """
+        team_id, _ = self._resolve_identity()
+        return team_id
+
+    def _resolve_identity(self) -> tuple[str | None, str | None]:
+        """Resolve workspace team ID and bot user ID via one auth.test.
+
+        Cached after the first success; failures leave both unset so a
+        later call retries.
+
+        Returns:
+            ``(team_id, bot_user_id)``; either element is None if
+            ``auth.test`` has not yet succeeded.
+        """
         with self._lock:
             if self._workspace_team_id is not None:
-                return self._workspace_team_id
+                return self._workspace_team_id, self._bot_user_id
 
         try:
             resp = self._client.auth_test()
             team_id = resp.get("team_id", "")
+            bot_user_id = resp.get("user_id", "") or None
             with self._lock:
                 self._workspace_team_id = team_id
-            return team_id
+                self._bot_user_id = bot_user_id
+            return team_id, bot_user_id
         except SlackApiError as e:
-            logger.warning("Failed to resolve workspace team_id: %s", e)
-            return None
+            logger.warning(
+                "Failed to resolve Slack identity (auth.test): %s", e
+            )
+            return None, None
 
     def _is_in_group(self, user_id: str, group_handle: str) -> bool:
         """Check if a user is a member of a user group.

@@ -1,7 +1,8 @@
 # Slack Channel
 
 Slack as a messaging channel for Airut, enabling users to interact with Claude
-Code through Slack DMs using Slack's Agents & AI Apps platform.
+Code through Slack — both 1:1 DMs (via Slack's Agents & AI Apps platform) and
+`@`-mention-driven engagement in public and private channels.
 
 This spec assumes the protocol-agnostic gateway
 ([gateway-architecture.md](gateway-architecture.md)) is implemented. The Slack
@@ -11,7 +12,7 @@ repo are supported — see [multi-repo.md](multi-repo.md).
 
 ## Interaction Model
 
-### Agents & AI Apps Mode
+### Agents & AI Apps Mode (DMs)
 
 The Slack app uses Slack's **Agents & AI Apps** feature, which replaces the
 standard bot DM Messages tab with two purpose-built tabs:
@@ -33,14 +34,28 @@ level, creating ambiguity about which conversation a message belongs to. The bot
 would need to constantly redirect users into threads, adding friction. Agents &
 AI Apps mode eliminates this by making threads the only interaction surface.
 
-### Why Not Channel-Only
+### Channel Mode
 
-Channel @mentions are natural for quick one-off questions but poor for
-multi-turn conversations. Threads in busy channels get buried, and the
-notification model doesn't match long-running tasks. Channel @mentions could be
-supported as a future extension but are not part of the initial implementation.
+In channel mode, the bot lives in workspace channels (public or private) like
+any other member. Engagement is `@`-mention driven so the bot does not
+participate in unrelated conversation:
+
+- The bot starts treating a thread as an Airut conversation the first time a
+  message in that thread `@`-mentions the bot. The mention may be the top-level
+  message of a brand-new thread, or a reply inside an existing thread that the
+  bot has not yet joined.
+- Once engaged, every subsequent message in that thread is treated as additional
+  input — no further `@`-mention required. This makes the bot feel like a
+  participant rather than a command-line tool.
+- The bot ignores messages in threads it has not been invited to via mention.
+- The bot ignores its own messages and messages from bot users.
+
+This complements rather than replaces the DM surface — both can be active for
+the same repo simultaneously.
 
 ### Conversation Lifecycle
+
+**DM (Agents & AI Apps) flow:**
 
 ```
 User opens Airut in Slack (top bar icon or split-view)
@@ -62,28 +77,126 @@ User opens Airut in Slack (top bar icon or split-view)
     -> Continues existing Airut conversation
 ```
 
+**Channel flow:**
+
+```
+User invites bot to a channel via /invite @airut
+  -> No Airut state created until first mention
+
+User posts top-level message: "@airut please look at this bug"
+  -> app_mention event (also delivered as message.channels)
+  -> Bot adds :eyes: reaction (instant ack)
+  -> Bot maps (channel_id, message.ts) to a new Airut conversation
+  -> Bot replies in thread with result
+
+User replies in the same thread (no mention required)
+  -> message.channels event with thread_ts matching the engaged thread
+  -> Bot adds :eyes: reaction
+  -> Resumes the Airut conversation
+
+User mentions bot inside an existing thread that bot has not joined
+  -> app_mention with thread_ts pointing at an older root message
+  -> Bot fetches conversations.replies to read prior thread history
+  -> Bot creates an Airut conversation rooted on that thread_ts
+  -> Prior thread messages are formatted into the initial prompt
+  -> Bot replies in thread with result
+
+User talks in a channel without @-mentioning the bot
+  -> Event delivered but dropped: thread is not in the mapping store
+     and the message text contains no <@BOT_USER_ID> token
+```
+
 ### Conversation Identity
 
-Each Slack thread maps to one Airut conversation:
+Each Slack thread maps to one Airut conversation. The same scheme covers both
+the DM and channel surfaces:
 
-| Slack concept                           | Airut concept       |
-| --------------------------------------- | ------------------- |
-| `channel_id` (DM channel) + `thread_ts` | Conversation ID     |
-| New thread (via Chat tab)               | New conversation    |
-| Message in existing thread              | Resume conversation |
+| Slack concept                                 | Airut concept       |
+| --------------------------------------------- | ------------------- |
+| `channel_id` (DM or channel) + `thread_ts`    | Conversation ID     |
+| New DM thread (via Chat tab)                  | New conversation    |
+| New channel thread rooted on an `app_mention` | New conversation    |
+| Message in an existing thread that bot joined | Resume conversation |
 
 The adapter maintains a mapping between `(channel_id, thread_ts)` and Airut
-conversation IDs. This mapping is persisted as a JSON file in the repo's state
-directory (`{STATE_DIR}/slack_threads.json`) so it survives service restarts.
-This matches the email adapter's file-based approach — simple, no external
-dependencies, and the data is small (one entry per conversation).
+conversation IDs, persisted as a JSON file in the repo's state directory so it
+survives service restarts. This matches the email adapter's file-based approach
+— simple, no external dependencies, and the data is small (one entry per
+conversation). The schema is the same for DM and channel surfaces; the channel
+ID's prefix (`D` for DM, `C`/`G` for public/private channels) is incidental to
+lookup.
+
+### Channel Engagement Rule
+
+For each non-DM message, the adapter decides whether to engage:
+
+1. If the message is from a bot user or from the Airut bot itself: drop.
+2. If `(channel_id, thread_ts)` (using `message.ts` for top-level messages)
+   resolves to a known conversation: engage. This is the "sticky thread" path
+   that lets follow-ups land without re-mention.
+3. Else if the message text contains the bot's `<@BOT_USER_ID>` token: engage,
+   replaying thread history if the mention is mid-thread (next section).
+4. Else: drop silently.
+
+DM (`message.im`) events bypass step 3 entirely — every DM is by definition
+addressed to the bot. The bot's own user ID is resolved once at startup. The
+mention token is matched as a literal substring so the `<@BOT_USER_ID|airut>`
+form (used when a display name is available) also matches.
+
+A single channel mention is delivered as both an `app_mention` and a
+`message.channels`/`message.groups` event. The listener deduplicates on
+`(channel_id, ts)` so the message is processed exactly once.
+
+### Thread History Replay
+
+When the bot is mentioned mid-thread for the first time, it fetches the prior
+messages with `conversations.replies(channel, ts=thread_ts)` and folds them into
+the initial prompt so Claude has the same context as a human reading the thread.
+Subsequent messages in the now-engaged thread arrive one at a time and do not
+require replay.
+
+The replayed history is rendered as a preamble appended to `channel_context`:
+
+```
+The user invited you into an existing Slack thread.  The messages
+below are the conversation that preceded the invocation, in order.
+Use them as background; the invocation that triggered you is the
+attributed message that follows this preamble.
+
+[<display name 1>]: <message body>
+[<display name 2>]: <message body>
+...
+[<display name N>]: <message body>
+```
+
+The invocation itself is **not** repeated in the preamble: it is delivered
+through the normal user-message path with its per-message
+`[<sender> <timestamp>]` attribution header (see
+[gateway-architecture.md](gateway-architecture.md)), which doubles as the seam
+between background and invocation. The triggering message (matched by `ts`) and
+non-human messages (bot posts, join/leave subtypes) are dropped from the
+preamble.
+
+Display names come from the authorizer's user cache; missing entries fall back
+to the raw user ID. Inbound mention tokens inside the replayed bodies are
+resolved through the same path as the invocation message so Claude sees
+human-readable names rather than opaque IDs (see
+[Person Identification](#person-identification)).
+
+History replay is bounded to the most recent **200 messages** in the thread;
+older messages are summarized as `[N earlier messages omitted]` to keep the
+prompt size predictable. In practice channel threads almost never exceed this;
+it is a safety bound rather than a tuning parameter.
 
 ### Thread Titles
 
-The adapter sets a thread title (visible in the History tab) after the first
-successful reply. The title is derived from the user's first message (truncated)
-or from the conversation topic if Claude provides one. This helps users find and
-resume past conversations.
+On the DM surface the adapter sets a thread title (visible in the History tab)
+after the first successful reply, derived from the user's first message
+(truncated). This helps users find and resume past conversations.
+
+In channels the title is **not** set — `assistant.threads.setTitle` is a DM-only
+(Agents & AI Apps) API. Channel threads are discovered by their root message,
+which is sufficient context for human readers.
 
 ### Status Indicators
 
@@ -94,67 +207,62 @@ therefore prevent the user from sending follow-up messages — defeating message
 coalescing, which exists precisely to absorb a burst of messages sent during a
 busy conversation.
 
-To avoid this, the gateway does not manage statuses directly. Instead it reports
+To avoid this, the gateway does not manage statuses directly. It reports
 **lifecycle phases** to the adapter via
-`ChannelAdapter.report_phase(parsed, phase)` (where `phase` is a `TaskPhase`),
-and each adapter decides how to surface them. This keeps channel-specific
-presentation policy — including Slack's composer-locking quirk — out of the
-channel-agnostic gateway. `process_message` emits:
+`ChannelAdapter.report_phase(parsed, phase)`, and each adapter decides how to
+surface them. This keeps channel-specific presentation policy — including
+Slack's composer-locking quirk — out of the channel-agnostic gateway. The
+gateway emits:
 
 - `TaskPhase.PREPARING` at the start, before conversation creation/resume.
 - `TaskPhase.RUNNING` immediately before the sandbox run begins.
 
-The Slack adapter maps these to a status scoped to the **preparation window
-only**: `PREPARING` calls
-`assistant.threads.setStatus("is working on this...")`, and `RUNNING` calls
-`assistant.threads.setStatus("")`, which clears the indicator and unlocks the
-composer for the duration of the run. The Slack-specific text and the locking
-behaviour both live in the adapter.
+The Slack adapter scopes the loading status to the **preparation window only**:
+`PREPARING` sets `"is working on this..."` and `RUNNING` clears it, unlocking
+the composer for the duration of the run. The Slack-specific text and the
+locking behaviour both live in the adapter. A coalesced message never reaches
+the gateway's phase-reporting path, so it never re-locks the composer.
 
-The listener's `user_message` handler does **not** report or set a status —
-doing so per-message would lock the composer for the entire run and for every
-coalesced burst message (a coalesced message never reaches `process_message`, so
-it never reports a phase). For new conversations, `send_acknowledgment()` also
-posts to the thread, which independently clears the status. Email ignores all
-phases (no live status indicator). New phases are added to `TaskPhase` only when
-a gateway call site actually emits them.
+Statuses are a DM-only API. In a channel the adapter instead adds a `:eyes:`
+reaction to the triggering message, giving an instant acknowledgement that
+survives in the thread's history; `report_phase` is a no-op for channel
+messages. The reaction is non-fatal — if the API call fails (missing permission,
+message deleted) the adapter logs a warning and continues.
 
-If preparation fails before `RUNNING` is reported, the status is cleared
-implicitly by the error notification: every prep-failure path posts via
-`send_error()`, and Slack clears an active status on the next thread post. So
-there is no explicit clear on the error path — but note this depends on
-`send_error()` posting to the thread. (If that post also fails, e.g. Slack is
-unreachable, the status cannot be cleared anyway.)
+If preparation fails before `RUNNING`, the status is cleared implicitly by the
+error notification: prep-failure paths post via `send_error()`, and Slack clears
+an active status on the next thread post. (If that post also fails because Slack
+is unreachable, the status cannot be cleared anyway.)
 
 ### Asynchronous Execution Model
 
 Slack follows the same async model as the email channel: the bot acknowledges
 the request immediately, then works asynchronously and replies when done.
 
-1. **Acknowledgment**: During conversation prep the adapter shows a loading
-   status (see [Status Indicators](#status-indicators)), then clears it before
-   the run starts so the composer stays unlocked. For new conversations,
-   `send_acknowledgment()` posts a message to the thread: "I've started working
-   on this and will reply shortly." If a dashboard URL is configured, the
-   message includes a link to track progress. This message is always sent (not
-   just when dashboard is configured) because these requests take a long time
-   and a short confirmation sets the right expectation.
-2. **Execution**: Claude Code runs in a container via the sandbox. No streaming
+1. **Acknowledgment.** During prep the adapter shows a loading status (DM) or
+   adds a `:eyes:` reaction (channel); see
+   [Status Indicators](#status-indicators). For new conversations it also posts
+   "I've started working on this and will reply shortly" to the thread, with a
+   dashboard link if one is configured. The threaded message is posted only on
+   the first message that triggers a fresh execution, whereas the `:eyes:`
+   reaction is added per arriving message — so a coalesced channel message still
+   gets a reaction but does not produce a second "I've started" post.
+2. **Execution.** Claude Code runs in a container via the sandbox. No streaming
    of intermediate output to Slack. The composer is unlocked during the run, so
    follow-up messages can be sent and are coalesced into the active
    conversation.
-3. **Reply**: The complete response is converted to Slack `mrkdwn` and posted to
+3. **Reply.** The complete response is converted to Slack `mrkdwn` and posted to
    the thread via `chat.postMessage` using the `text` parameter.
 
-This avoids complexity from streaming action blocks back to Slack and keeps the
-interaction model consistent with the email channel. The dashboard provides
+This avoids the complexity of streaming action blocks back to Slack and keeps
+the interaction model consistent with the email channel. The dashboard provides
 real-time progress visibility for users who want it.
 
 ### Channel Context (System Prompt)
 
 The `channel_context` field on `ParsedMessage` is prepended to the user's
-message as instructions for Claude. The Slack adapter uses the same structure as
-the email adapter but adapted for the Slack interaction model:
+message as instructions for Claude. The Slack adapter mirrors the email channel
+context, with "Slack" replacing "email" references:
 
 ```
 User is interacting with this session via Slack and will receive your
@@ -169,9 +277,8 @@ ExitPlanMode) do not work over Slack. If you need clarification, include
 questions in your response text and the user will reply via Slack.
 ```
 
-The Slack channel context mirrors the email channel context, with "Slack"
-replacing "email" references. Both channels use the same async execution model
-where interactive tools (AskUserQuestion, plan mode) are unavailable.
+Both channels use the same async execution model where interactive tools
+(AskUserQuestion, plan mode) are unavailable.
 
 ### Message Formatting
 
@@ -182,12 +289,6 @@ server-side translation — historically a source of bugs around bare URLs,
 adjacent emphasis, and headings — the adapter performs an **explicit,
 source-of-truth conversion** from CommonMark to `mrkdwn` and sends the result
 via the plain `text` parameter (no `blocks` payload).
-
-The conversion lives in `SlackMrkdwnRenderer` (`airut/gateway/slack/mrkdwn.py`),
-a `mistune.BaseRenderer` subclass modeled on the `EmailRenderer` in
-`airut/markdown.py`. It is the single point of truth for output conversion and
-replaces the former `sanitize.py` module entirely. The public entry point is
-`render_mrkdwn(text)`.
 
 Mapping rules:
 
@@ -209,107 +310,166 @@ Mapping rules:
 | `<`, `>`, `&`           | Escaped to `&lt;` / `&gt;` / `&amp;`      |
 | `- [ ]` / `- [x]`       | `• ☐ …` / `• ☑ …`                         |
 
-Tables are pre-processed into column-aligned fenced code blocks (the
-table-alignment helpers moved from `sanitize.py` into the renderer); Slack does
-not render Markdown tables, so monospace alignment is the best available
-presentation. Escaping of the literal `<`, `>`, and `&` characters that `mrkdwn`
-reserves happens as a final pass on text nodes only — link URLs and code spans
-pass through unescaped so the `<…>` link syntax survives.
+Slack does not render Markdown tables, so tables are pre-processed into
+column-aligned fenced code blocks (monospace alignment is the best available
+presentation). Escaping of the literal `<`, `>`, and `&` characters that
+`mrkdwn` reserves happens as a final pass on text nodes only — link URLs and
+code spans pass through unescaped so the `<…>` link syntax survives.
+
+After `mrkdwn` rendering, replies additionally pass through outbound mention
+rewriting, which converts unambiguous `@displayname`, `#channelname`, and
+`@groupname` tokens to their Slack reference forms so they render as real
+mentions. See [Person Identification](#person-identification).
 
 ### Message Size Limits
 
-A `mrkdwn` `text` message accepts up to **40,000 characters** — roughly triple
-the old `markdown`-block ceiling — so most responses ship as a single message.
-For longer responses:
+A `mrkdwn` `text` message accepts up to **40,000 characters**, so most responses
+ship as a single message. For longer responses:
 
-1. **Primary strategy**: A body within 40,000 characters is sent as a single
-   `chat.postMessage` via the `text` parameter.
-2. **Secondary strategy**: A larger body is split at paragraph boundaries (then
-   line boundaries, then hard-sliced if a single line exceeds the ceiling) into
-   multiple in-thread messages, so no chunk exceeds 40,000 characters.
-3. **Fallback**: A body that splits into more than five chunks is uploaded as a
-   `response.md` file attachment in the thread.
+1. A body within 40,000 characters is sent as a single `chat.postMessage`.
+2. A larger body is split at paragraph boundaries (then line boundaries, then
+   hard-sliced if a single line exceeds the ceiling) into multiple in-thread
+   messages, so no chunk exceeds 40,000 characters.
+3. A body that splits into more than five chunks is uploaded as a `response.md`
+   file attachment in the thread.
 
 ### Task Progress Display
 
 Claude's `TodoWrite` tool emits task progress during execution. The Slack
 channel displays this progress in the user's thread in real time by posting a
-message and updating it in place via `chat.postMessage` / `chat.update`.
+message and updating it in place. Only `TodoWrite` events trigger updates —
+individual tool-use events (Read, Bash, etc.) are not streamed — which keeps the
+display focused on the plan overview and avoids rate limiting from
+high-frequency tool calls.
 
-Only `TodoWrite` events trigger message updates — individual tool use events
-(Read, Bash, etc.) are not streamed to Slack. This keeps the progress display
-focused on the plan overview and avoids rate limiting from high-frequency tool
-calls.
-
-**Architecture**: The `PlanStreamer` protocol in `channel.py` defines the
-channel-agnostic interface with two methods: `update(items)` for `TodoWrite`
-events and `finalize()` for completion. `SlackPlanStreamer` implements it by
-posting a `mrkdwn`-formatted message with emoji status indicators and updating
-it via `chat.update`. The email adapter returns `None` from
+The `PlanStreamer` protocol in `channel.py` defines the channel-agnostic
+interface: `update(items)` for `TodoWrite` events and `finalize()` for
+completion. The Slack implementation posts a `mrkdwn`-formatted message with
+emoji status indicators (`⚪` pending, `🔄` in-progress, `✅` completed) and
+updates it via `chat.update`. The email adapter returns `None` from
 `create_plan_streamer()` (email has no progress display equivalent).
 
-**Why not chat streaming**: Slack's `chat.startStream` / `appendStream` /
-`chat.stopStream` API with `task_display_mode="plan"` was initially used but
-abandoned because: (1) plan blocks / task cards don't render on mobile Slack
-clients, (2) streams require keepalive timers to prevent server-side idle
-expiry, adding fragile complexity, and (3) `chat.update` gives full control over
-message formatting with standard `mrkdwn` that renders consistently everywhere.
+Behavioural contract:
 
-**Lifecycle**:
+- The message is posted **lazily** on the first `update()` — if Claude never
+  uses `TodoWrite`, no progress message is created.
+- Rapid updates are **debounced** so only the latest state is sent, preventing
+  rate limiting when Claude emits many `TodoWrite` calls in quick succession.
+- The plan message is a **separate** message in the thread, posted before the
+  final reply.
+- All progress posts/updates are **non-fatal** (logged as warnings). Losing plan
+  updates is acceptable; the final reply and dashboard are unaffected.
 
-1. `process_message()` calls `adapter.create_plan_streamer(parsed)` before
-   execution. For Slack, this returns a `SlackPlanStreamer`; for email, `None`.
-2. The `PlanStreamer` is passed to `_make_todo_callback()`, which forwards
-   `TodoWrite` events to `plan_streamer.update(items)`.
-3. The message is posted **lazily** on the first `update()` call — if Claude
-   never uses `TodoWrite`, no progress message is created.
-4. After execution completes (success, failure, or exception),
-   `plan_streamer.finalize()` flushes any pending debounced update.
+Slack's `chat.startStream` / `appendStream` / `chat.stopStream` API with
+`task_display_mode="plan"` was considered but rejected because (1) plan blocks /
+task cards don't render on mobile Slack clients, (2) streams require keepalive
+timers to prevent server-side idle expiry, adding fragile complexity, and (3)
+`chat.update` gives full control over formatting with standard `mrkdwn` that
+renders consistently everywhere.
 
-**Rendering**: Each `TodoItem` is rendered as a `mrkdwn` line with an emoji
-prefix:
+### Person Identification
 
-- `TodoStatus.PENDING` → `⚪` (white circle)
-- `TodoStatus.IN_PROGRESS` → `🔄` (arrows counterclockwise)
-- `TodoStatus.COMPLETED` → `✅` (white check mark)
+Channel conversations involve more than the bot and a single user. Claude needs
+to know *who* is talking and *whom* they refer to in order to respond
+intelligibly ("Alice asked X, Bob then suggested Y"), and the bot's own replies
+need to render `@mentions` and `#channel-links` correctly so they land like a
+normal Slack message.
 
-The message uses `section` blocks with `mrkdwn` text type, which renders
-consistently on both desktop and mobile Slack clients. Using blocks (rather than
-plain `text`) avoids the "(edited)" indicator that Slack shows on text-only
-message updates.
+Two operations cover this, applied to every Slack message (DM and channel):
 
-**Block size limits**: A single Slack `section` block supports up to 3000
-characters. For long todo lists, the rendered text is split across multiple
-`section` blocks at line boundaries via `_build_blocks()`.
+- **Inbound resolution** converts Slack mention tokens in incoming message
+  bodies (and replayed thread history) into human-readable strings before they
+  are folded into the prompt.
+- **Outbound rewriting** converts unambiguous `@name`, `#name`, and `@group`
+  tokens in replies back into Slack mention syntax after the CommonMark →
+  `mrkdwn` render.
 
-**Debouncing**: Rapid `update()` calls (within 1 second) are coalesced — only
-the latest state is sent. This prevents rate limiting when Claude emits many
-`TodoWrite` calls in quick succession. The debounced state is stored in
-`_last_text` and flushed by `finalize()`.
+Resolution reuses the authorizer's user and user-group caches (no extra
+`users.info` traffic) plus a lazily populated channel name → ID cache. For a DM
+the outbound candidate set is just the sender, so rewriting stays conservative
+there.
 
-**Error handling**: All `chat.postMessage` and `chat.update` failures are
-non-fatal (logged as warnings). Losing plan updates is acceptable; the final
-reply and dashboard remain unaffected. If the initial `chat.postMessage` fails,
-`finalize()` does not retry — it only flushes updates for messages that were
-successfully posted.
+#### Inbound mention resolution
 
-**Separate message**: The plan message is a distinct message in the thread,
-separate from the final reply. It appears before the reply and shows progress as
-Claude works.
+| Slack token                              | Rendered as                                                                                                |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `<@U12345>`                              | `@<display name>`                                                                                          |
+| `<@U12345\|alice>`                       | `@<display name>` (display name preferred over the link label so the prompt is consistent across messages) |
+| `<#C12345\|general>`                     | `#general`                                                                                                 |
+| `<!subteam^S98765\|engineering>`         | `@engineering`                                                                                             |
+| `<!channel>` / `<!here>` / `<!everyone>` | `@channel` / `@here` / `@everyone` (kept literal, never rewritten back outbound)                           |
+| Bare URL inside `<https://…>`            | `https://…`                                                                                                |
+
+When the bot's own ID appears in the invocation message it is removed entirely
+(it is redundant context for Claude), but it is preserved in replayed history
+(where it carries information about whether the bot was previously addressed).
+
+#### Outbound mention rewriting
+
+The output is scanned for `@token` and `#token`, and each is matched against a
+per-thread candidate set:
+
+1. **Candidate set.** The lookup table is composed of the triggering message's
+   sender, every distinct author seen in the replayed thread history, and every
+   member of any user group named in the repo's authorization rules (e.g.
+   `user_group: engineering`). This keeps rewriting conservative — the bot will
+   not silently `@mention` a workspace member who has never been part of the
+   thread.
+
+   **Limitation.** Deployments that authorize via `workspace_members: true` (the
+   default for most installs) have no `user_group` rule, so the candidate set is
+   just the participants of the current thread. A name Claude writes referring
+   to a workspace member who has never posted in the thread falls through to
+   "zero matches" and renders as plain text rather than a Slack ping. This is
+   acceptable — the alternative (loading every workspace member) would require
+   expensive `users.list` calls and would still be ambiguous for common names.
+   Claude can be instructed to emit raw `<@USERID>` tokens when an explicit ping
+   is required and the user ID is known; the renderer leaves those alone.
+
+2. **Match.** For each token, look for an exact (case-insensitive) match against
+   the candidate set's `display_name`, then `real_name`, then `name` (Slack
+   handle), in that order. Bot users are excluded.
+
+3. **Resolve.** One match → rewrite to the appropriate Slack token (`<@U…>`,
+   `<#C…|name>`, `<!subteam^S…|handle>`). Zero matches → leave the literal
+   `@token` alone (plain text, no notification). More than one match → leave
+   alone (ambiguous).
+
+Broadcast tokens (`@channel`, `@here`, `@everyone`) and the bot's own ID are
+**never** rewritten outbound, regardless of authorization. The first prevents
+accidental noisy pings; the second avoids the bot pinging itself.
+
+The token grammar for outbound scanning is conservative: `@` or `#` must be at a
+word boundary, the name body is `[A-Za-z0-9._-]+`, and the following character
+must be a word boundary. This avoids rewriting tokens inside URLs, email
+addresses, or code spans; code spans and fenced code blocks are excluded
+entirely.
+
+#### Display name in `ParsedMessage`
+
+The `sender` field is set to the raw Slack user ID (the dashboard resolves it
+through the authorizer's cache). The human-readable display name is carried
+separately in `sender_display` (`DisplayName <U123>`) and embedded in the
+rendered prompt via the per-message attribution header (see
+[gateway-architecture.md](gateway-architecture.md)) so Claude sees the human
+name without calling a tool. The bracketed ID is a bare `<U12345678>`, **not**
+`<@U12345678>`, so the resolved ID is never itself live-mention syntax. The
+display-name half is user-controlled and is trusted from an authorized sender
+(consistent with the message body); echo-safety comes from the outbound `mrkdwn`
+renderer, which escapes `<`/`>`/`&` so any mention markup Claude reproduces is
+inert.
 
 ### File Handling
 
-**Inbound** (user -> bot): Users can attach files in the Slack DM. The adapter
-downloads them via the Slack API (`files` array in the event payload, fetched
-using the bot token) and saves to the conversation's `inbox/` directory via the
-`save_attachments()` method. File metadata (URLs, names) is extracted during
-`authenticate_and_parse()` and retained on the `SlackParsedMessage` for deferred
-download in `save_attachments()`, matching the email adapter's two-phase
-pattern.
+**Inbound** (user → bot): Users can attach files in a Slack DM or channel
+message. The adapter extracts file metadata during parsing and downloads the
+files via the Slack API (using the bot token) into the conversation's `inbox/`
+directory, matching the email adapter's two-phase pattern. Downloads are gated
+to known Slack file-hosting hosts so the bot token is never sent to an arbitrary
+URL appearing in an event payload.
 
-**Outbound** (bot -> user): Files from `outbox/` are uploaded to the thread via
-Slack's `files_upload_v2` method (which handles the upload URL and completion
-internally).
+**Outbound** (bot → user): Files from `outbox/` are uploaded to the thread via
+Slack's `files_upload_v2` method.
 
 ## Authorization Model
 
@@ -319,6 +479,42 @@ internally).
 - Deny by default — at least one rule must match
 - Exclude guests and external users automatically
 - Support both broad (workspace-wide) and narrow (group/user) policies
+- For channel mode, also allow operators to restrict *which channels* the bot
+  will engage in, even when invited
+
+### Channel Allowlist
+
+In addition to per-user rules, the Slack config accepts an optional
+`allowed_channels` list of channel IDs. When present and non-empty, the adapter
+only engages in those channels:
+
+```yaml
+slack:
+  allowed_channels:
+    - C0123456789 # #engineering
+    - C9876543210 # #incident-bridge
+```
+
+- Channels are referenced by **ID**, not name. Channel names can change; IDs are
+  stable, which is why Slack itself recommends IDs for durable references. The
+  trade-off is discoverability: an ID like `C0123456789` is opaque, so operators
+  must look it up (e.g. a channel's *Copy link* in Slack, or the API). The
+  dashboard config editor exposes `allowed_channels` as an editable list but
+  does not provide a channel picker.
+- When `allowed_channels` is unset or empty, the bot engages in any channel it
+  has been invited to (the "Slack membership is the gate" model). This keeps
+  small deployments simple.
+- Filtering happens at the listener boundary before authorization runs: an event
+  for a non-allowed channel is dropped silently (no `:eyes:` reaction, no
+  rejection message). This avoids leaking the bot's presence to a channel where
+  it should be inert.
+- DM events (`message.im` and assistant thread events) bypass the allowlist
+  entirely — a DM's channel ID is unique per `(user, bot)` pair and is already
+  gated by the `authorized` rules.
+
+This is a defence-in-depth layer over Slack channel membership, not a
+replacement: removing the bot from a channel still stops events at the Slack
+side.
 
 ### Authorization Rules
 
@@ -349,83 +545,57 @@ slack:
     - user_id: U22222222
 ```
 
-### `workspace_members` Rule
+#### `workspace_members`
 
-Grants access to all full workspace members when set to `true`. Setting
-`workspace_members: false` has no effect (the rule never matches and is silently
-skipped); config parsing logs a warning in this case.
+Grants access to all full workspace members when set to `true`. Setting it to
+`false` has no effect (the rule never matches and is silently skipped; config
+parsing logs a warning). The adapter resolves the sender via `users.info` and
+requires: not a multi-channel guest (`is_restricted`), not a single-channel
+guest (`is_ultra_restricted`), not a bot, and a matching workspace `team_id`
+(not an external Slack Connect user).
 
-At runtime, the adapter calls `users.info` on the sender and checks:
+Slack's Agents & AI Apps mode additionally **natively blocks guest users** from
+apps with this feature enabled — a platform-level enforcement that complements
+the application-level check.
 
-- `is_restricted == false` (not a multi-channel guest)
-- `is_ultra_restricted == false` (not a single-channel guest)
-- `is_bot == false` (not a bot)
-- `team_id` matches the workspace (not an external Slack Connect user)
-
-This is a single API call per message. Results should be cached with a
-reasonable TTL (e.g., 5 minutes) since user roles change infrequently.
-
-Additionally, Slack's Agents & AI Apps mode **natively blocks guest users** from
-accessing apps with this feature enabled. This is a platform-level enforcement
-that complements our application-level check.
-
-### `user_group` Rule
+#### `user_group`
 
 Grants access to members of a Slack user group (the groups behind handles like
-`@engineering`). The adapter resolves group membership via
-`usergroups.users.list` at startup and refreshes periodically (e.g., every 5
-minutes). Authorization checks membership in the cached set.
+`@engineering`). Group membership is resolved via `usergroups.users.list` and
+group names to IDs via `usergroups.list`; if a configured group name doesn't
+exist, the service logs a warning but continues. Requires the `usergroups:read`
+scope.
 
-Scope required: `usergroups:read`.
+#### `user_id`
 
-Group names are resolved to group IDs via `usergroups.list` at startup. If a
-configured group name doesn't exist, the service logs a warning but continues
-(other rules may still grant access).
-
-### `user_id` Rule
-
-Grants access to a specific Slack user by ID. This is the most explicit form and
-serves as a fallback when workspace-level or group-level rules are too broad.
-User IDs are stable across name changes and can be found in Slack user profiles.
+Grants access to a specific Slack user by ID — the most explicit form, a
+fallback when workspace- or group-level rules are too broad. User IDs are stable
+across name changes.
 
 ### Baseline Checks (Always Applied)
 
-Regardless of which rule matches, the adapter always rejects:
-
-- Bot users (`is_bot == true`)
-- External users (`team_id` mismatch)
-- Deactivated users (`deleted == true`)
-
-These checks prevent accidental access even if a broad rule like
+Regardless of which rule matches, the adapter always rejects bot users
+(`is_bot`), external users (`team_id` mismatch), and deactivated users
+(`deleted`). These prevent accidental access even if a broad rule like
 `workspace_members: true` is configured.
 
 ### Request Authentication (Socket Mode)
 
-Slack provides two mechanisms for verifying that events originate from Slack:
+Slack offers two mechanisms for verifying that events originate from Slack:
+signing-secret verification (HTTP mode) and a pre-authenticated WebSocket
+(Socket Mode). Airut uses **Socket Mode exclusively**: the app initiates an
+outbound WebSocket connection using an app-level token (`xapp-...`), verified
+during the `apps.connections.open` handshake. Once connected, all events arrive
+over this authenticated channel — no per-event signature verification is needed,
+and the Bolt SDK skips signature checks in Socket Mode.
 
-1. **Signing secret verification** (HTTP mode): Each request includes an
-   `x-slack-signature` header — an HMAC-SHA256 of the request body using the
-   app's signing secret. The app verifies this signature to confirm
-   authenticity. This is required when receiving events via HTTP endpoints.
-
-2. **Pre-authenticated WebSocket** (Socket Mode): The app initiates an outbound
-   WebSocket connection using an app-level token (`xapp-...`). The token is
-   verified during the `apps.connections.open` call that generates a dynamic
-   WebSocket URL. Once connected, all events arrive over this authenticated
-   channel — no per-event signature verification is needed.
-
-Since Airut uses **Socket Mode exclusively**, signing secret verification is not
-required. The Bolt SDK's `RequestVerification` middleware explicitly skips
-signature checks when running in Socket Mode (the `_can_skip` method returns
-`True`). The security boundary is the app-level token: anyone with the token can
-establish a WebSocket connection and receive events. This token must be
-protected with the same care as any other credential (stored via `!env`,
-registered with `SecretFilter`).
-
-The `user` field in Socket Mode events is guaranteed by Slack to be the actual
-sender — there is no equivalent of email spoofing. The only authorization
-concern is whether the authenticated user is *allowed* to use the bot, which is
-handled by the authorization rules described above.
+The security boundary is the app-level token: anyone with the token can
+establish a connection and receive events, so it must be protected like any
+other credential (stored via `!env`, registered with `SecretFilter`). The `user`
+field in Socket Mode events is guaranteed by Slack to be the actual sender —
+there is no equivalent of email spoofing. The only authorization concern is
+whether the authenticated user is *allowed* to use the bot, handled by the rules
+above.
 
 ## Security Considerations
 
@@ -447,59 +617,53 @@ handled by the authorization rules described above.
 The Slack app requires two tokens, both scoped per repo (each repo has its own
 Slack app, matching the email model of one mailbox per repo):
 
-- **Bot token** (`xoxb-...`): Acts as the app. Used for all API calls
-  (`chat.postMessage`, `users.info`, etc.). Stored in server config under
+- **Bot token** (`xoxb-...`): acts as the app for all API calls. Stored under
   `slack.bot_token`.
-- **App-level token** (`xapp-...`): Used for Socket Mode WebSocket connections.
-  Stored in server config under `slack.app_token`.
+- **App-level token** (`xapp-...`): used for Socket Mode connections. Stored
+  under `slack.app_token`.
 
-Both tokens support `!env` tags for environment variable resolution (recommended
-for secrets) but can also be specified as inline strings in the config file.
-They are registered with `SecretFilter` for log redaction, matching the email
-adapter's handling of credentials.
+Both support `!env` tags for environment-variable resolution and are registered
+with `SecretFilter` for log redaction, matching the email adapter's handling of
+credentials.
 
 ### Network Model
 
-The Slack channel uses **Socket Mode exclusively** — the service initiates an
-outbound WebSocket connection to Slack's servers. This is compatible with
-Airut's typical deployment behind a firewall: no inbound HTTP endpoint, no
-public DNS, no TLS certificates needed. The Bolt SDK's `SocketModeHandler`
-manages the WebSocket lifecycle including automatic reconnection.
+Socket Mode means the service initiates an outbound WebSocket connection to
+Slack's servers — compatible with Airut's typical deployment behind a firewall:
+no inbound HTTP endpoint, no public DNS, no TLS certificates needed. The Bolt
+SDK manages the WebSocket lifecycle including automatic reconnection.
 
 ### Rate Limiting
 
-The adapter must respect Slack's rate limits:
-
-- Message posting: ~1 message/second/channel
-- `users.info`: Tier 4 (~100+ requests/minute)
-- `usergroups.users.list`: Tier 2 (~20 requests/minute)
-
-Caching user info and group membership is the primary mitigation. The adapter
-should not make API calls in hot paths that can be served from cache.
+The adapter must respect Slack's rate limits (message posting ~1/second/channel;
+`users.info` Tier 4; `usergroups.users.list` Tier 2). Caching user info and
+group membership is the primary mitigation — the adapter does not make API calls
+in hot paths that can be served from cache.
 
 ### Workspace Isolation
 
 A single Airut deployment may serve multiple repos, each with its own Slack app
-(different bot token). Alternatively, a single Slack app could serve multiple
-repos, with channel or thread routing determining which repo handles a message.
-
-The initial implementation supports **one Slack app per repo** (matching the
-email model of one mailbox per repo). Multi-repo routing through a single Slack
+(different bot token). Airut supports **one Slack app per repo**, matching the
+email model of one mailbox per repo. Multi-repo routing through a single Slack
 app is a future consideration.
 
 ## Configuration
 
 ### Server Config (per-repo)
 
-Slack config is a per-repo block, parallel to `email:`. A repo can have both
-`email:` and `slack:` active simultaneously (see
-[multi-repo.md](multi-repo.md)). The `slack:` block lives under `repos.<name>`.
-For the full field reference (tokens, authorization rules, examples), see
+Slack config is a per-repo block, parallel to `email:`, living under
+`repos.<name>`. A repo can have both `email:` and `slack:` active simultaneously
+(see [multi-repo.md](multi-repo.md)); a Slack-only repo omits the `email:`
+block. At least one channel must be present per repo. For the full field
+reference (tokens, authorization rules, `allowed_channels`, examples), see
 [`config/airut.example.yaml`](../config/airut.example.yaml).
 
-A Slack-only repo omits the `email:` block entirely. At least one channel must
-be present per repo. See [multi-repo.md](multi-repo.md) for the full
-multi-channel data model.
+The config exposes:
+
+- `bot_token` / `app_token` — required credentials (see Credential Management).
+- `authorized` — the authorization rules; at least one is required.
+- `allowed_channels` — optional channel-ID allowlist (see
+  [Channel Allowlist](#channel-allowlist)).
 
 ### Slack App Setup
 
@@ -523,391 +687,185 @@ The icon is available at `https://airut.org/assets/logo-square-white-bg.png`.
 
 The manifest configures:
 
-**Required features:**
-
-- Agents & AI Apps toggle: enabled
-- Socket Mode: enabled
-- Bot user: enabled, always online
+**Required features:** Agents & AI Apps toggle enabled, Socket Mode enabled, bot
+user enabled (always online).
 
 **Required scopes (bot token):**
 
-| Scope             | Purpose                                       |
-| ----------------- | --------------------------------------------- |
-| `assistant:write` | Thread titles, status indicators (auto-added) |
-| `chat:write`      | Send messages                                 |
-| `im:history`      | Read DM history (for thread context)          |
-| `users:read`      | User info for authorization                   |
-| `files:read`      | Read user-uploaded files                      |
-| `files:write`     | Upload outbox files to threads                |
+| Scope               | Purpose                                                       |
+| ------------------- | ------------------------------------------------------------- |
+| `assistant:write`   | Thread titles, status indicators (DM-only)                    |
+| `chat:write`        | Send messages                                                 |
+| `im:history`        | Read DM history (for thread context)                          |
+| `users:read`        | User info for authorization and display-name resolution       |
+| `files:read`        | Read user-uploaded files                                      |
+| `files:write`       | Upload outbox files to threads                                |
+| `app_mentions:read` | Receive `app_mention` events in channels                      |
+| `channels:history`  | Read public-channel thread history (`conversations.replies`)  |
+| `groups:history`    | Read private-channel thread history (`conversations.replies`) |
+| `reactions:write`   | Add `:eyes:` acknowledgement reaction on channel messages     |
 
 **Optional scopes:**
 
-| Scope             | Purpose                                            |
-| ----------------- | -------------------------------------------------- |
-| `usergroups:read` | Required only if `user_group` rules are configured |
+| Scope             | Purpose                                                                            |
+| ----------------- | ---------------------------------------------------------------------------------- |
+| `usergroups:read` | Required for `user_group` rules and outbound `@group` rewriting                    |
+| `channels:read`   | Required for outbound `#channel` rewriting and dashboard channel-ID lookup by name |
 
-Note: `im:read` is **not** required. All DM references (channel IDs, thread
-timestamps) arrive via Socket Mode events, and no API method in the
-implementation queries DM metadata. `im:history` is included for thread context
-access but `im:read` adds no value.
+The four channel scopes (`app_mentions:read`, `channels:history`,
+`groups:history`, `reactions:write`) back channel mode; DM-only deployments can
+omit them without affecting DM operation. `im:read` is **not** required — all DM
+references arrive via Socket Mode events and no API method queries DM metadata.
 
 **Required event subscriptions (bot events):**
 
-| Event                              | Purpose                   |
-| ---------------------------------- | ------------------------- |
-| `assistant_thread_started`         | New conversation started  |
-| `assistant_thread_context_changed` | User switched channels    |
-| `message.im`                       | User message in DM thread |
+| Event                              | Purpose                                               |
+| ---------------------------------- | ----------------------------------------------------- |
+| `assistant_thread_started`         | New conversation started (DM)                         |
+| `assistant_thread_context_changed` | User switched channels (Agents & AI Apps, DM only)    |
+| `message.im`                       | User message in DM thread                             |
+| `app_mention`                      | Bot was `@`-mentioned in a channel                    |
+| `message.channels`                 | Follow-up messages in engaged public-channel threads  |
+| `message.groups`                   | Follow-up messages in engaged private-channel threads |
 
-## Implementation
+`app_mention` is required even though the same message is also delivered as
+`message.channels`/`message.groups`: it is the canonical engagement signal Slack
+recommends. The listener deduplicates the two deliveries on `(channel_id, ts)`
+(see [Channel Engagement Rule](#channel-engagement-rule)).
+
+## Architecture
 
 ### Protocol Alignment
 
-The Slack channel implements the three channel protocols defined in
+The Slack channel implements the three channel protocols from
 `gateway/channel.py`:
 
-- **`ChannelConfig`** — `SlackChannelConfig` provides `channel_type` and
-  `channel_info` for dashboard display.
-- **`ChannelListener`** — `SlackChannelListener` implements `start(submit)`,
-  `stop()`, and `status` using the Bolt SDK's Socket Mode handler.
-- **`ChannelAdapter`** — `SlackChannelAdapter` implements all eight adapter
-  methods (`listener` property + six message handling methods +
-  `create_plan_streamer`).
+- **`ChannelConfig`** — provides `channel_type` (`"slack"`) and `channel_info`
+  for dashboard display.
+- **`ChannelListener`** — wraps the Bolt SDK's Socket Mode handler to implement
+  `start(submit)`, `stop()`, and `status`.
+- **`ChannelAdapter`** — implements the message-handling methods (see the table
+  below) plus the `listener` property and `create_plan_streamer`.
 
-`RepoHandler` remains fully channel-agnostic, calling `adapter.listener.start()`
-/ `adapter.listener.stop()` with no channel-specific code paths.
+`RepoHandler` remains fully channel-agnostic, driving the listener through the
+protocol interfaces with no channel-specific code paths. The adapter factory
+dispatches on the channel config type to construct the right adapter.
 
-### File Structure
+### Adapter Method Contract
 
-```
-airut/gateway/slack/
-+-- __init__.py
-+-- adapter.py         # SlackChannelAdapter (implements ChannelAdapter)
-+-- config.py          # SlackChannelConfig (implements ChannelConfig)
-+-- listener.py        # SlackChannelListener (implements ChannelListener)
-+-- authorizer.py      # Authorization rule evaluation + user info cache
-+-- plan_streamer.py   # SlackPlanStreamer (implements PlanStreamer)
-+-- thread_store.py    # Thread-to-conversation mapping persistence
-```
+| `ChannelAdapter` method    | Slack behaviour                                                                                                                                                                                                                       |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `authenticate_and_parse()` | Check authorization via the authorizer; make the engagement decision; replay mid-thread history via `conversations.replies`; resolve inbound mention tokens; in a channel add the `:eyes:` reaction                                   |
+| `save_attachments()`       | Download files listed on the parsed message using the bot token (gated to Slack file hosts), save to `inbox_dir`                                                                                                                      |
+| `send_acknowledgment()`    | Register the thread mapping and post the "I've started" confirmation (with optional dashboard link)                                                                                                                                   |
+| `report_phase()`           | DM only: `PREPARING` → set loading status, `RUNNING` → clear it. No-op in channels                                                                                                                                                    |
+| `send_reply()`             | Render Markdown → `mrkdwn`, apply outbound mention rewriting against the per-thread candidate set, post via the `text` parameter (splitting/file-upload past the size limit), upload outbox files, and set the thread title (DM only) |
+| `send_error()`             | Post error text to the thread                                                                                                                                                                                                         |
 
-### `SlackChannelConfig`
+### Listener
 
-Frozen dataclass implementing `ChannelConfig`, parallel to `EmailChannelConfig`:
+The listener wraps the Bolt `App` and `SocketModeHandler`. Unlike the email
+listener, which manages its own polling/IDLE loop, it delegates event dispatch
+to the Bolt Socket Mode event loop. `SocketModeHandler.connect()` is
+**non-blocking** — it starts the WebSocket in a background thread and returns
+immediately — so the listener starts without blocking the calling thread, and
+the handler manages automatic reconnection internally.
 
-```python
-@dataclass(frozen=True)
-class SlackChannelConfig(ChannelConfig):
-    """Slack channel configuration."""
+It wires two sets of handlers:
 
-    bot_token: str
-    app_token: str
-    authorized: tuple[dict[str, str | bool], ...] = ()
+- **Agents & AI Apps middleware (DMs):** `thread_started` (greeting),
+  `thread_context_changed` (logged), and `user_message` (wraps the event in a
+  `RawMessage` and submits it to the worker pool). Authentication happens in the
+  worker thread, not in the event handler.
+- **Direct channel handlers:** `app_mention` is the primary engagement signal;
+  `message.channels`/`message.groups` are submitted only when the thread is
+  already engaged or the body mentions the bot. The membership check is done
+  inline against the in-memory thread store (no API call) so noisy channels do
+  not flood the worker pool. The listener also drops events for channels outside
+  `allowed_channels` before any submit, and deduplicates the
+  `app_mention`/`message.*` double-delivery on `(channel_id, ts)` via a bounded
+  LRU (256 entries, oldest-first eviction, no time-based expiry).
 
-    def __post_init__(self) -> None:
-        SecretFilter.register_secret(self.bot_token)
-        SecretFilter.register_secret(self.app_token)
-        if not isinstance(self.authorized, tuple):
-            object.__setattr__(self, "authorized", tuple(self.authorized))
-        if not self.authorized:
-            raise ValueError("At least one authorization rule is required")
+The bot's own user ID is resolved once at startup (via `auth.test`) and shared
+with the adapter so mention tokens can be recognised without re-resolving.
 
-    @property
-    def channel_type(self) -> str:
-        return "slack"
+### Parsed Message
 
-    @property
-    def channel_info(self) -> str:
-        return "Slack (Socket Mode)"
-```
+The Slack adapter's parsed-message type extends `ParsedMessage` with the state
+needed for reply threading and deferred work: the channel ID and thread
+timestamp, the list of `(filename, url)` pairs for deferred attachment download,
+the triggering message timestamp (for the `:eyes:` reaction and dedup), an
+`is_channel` flag (gates the DM-only `setStatus`/`setTitle` calls), and the set
+of user IDs eligible for outbound `@`-mention rewriting (sender, replayed thread
+authors, configured user-group members). The core sees a `ParsedMessage`; the
+adapter downcasts to access these fields when sending replies.
 
-### `SlackChannelListener`
+### Thread-to-Conversation Store
 
-Implements `ChannelListener` by wrapping the Bolt SDK's `App` and
-`SocketModeHandler`. This is the key difference from the email listener: the
-email listener manages its own polling/IDLE loop in a thread, while the Slack
-listener delegates event dispatch to the Bolt SDK's Socket Mode event loop.
-
-```python
-class SlackChannelListener:
-    """Socket Mode listener implementing ChannelListener protocol."""
-
-    def __init__(
-        self,
-        config: SlackChannelConfig,
-        *,
-        app: App | None = None,
-        handler: SocketModeHandler | None = None,
-    ) -> None:
-        self._app = app or App(token=config.bot_token)
-        self._handler = handler or SocketModeHandler(
-            self._app, config.app_token
-        )
-        self._status = ChannelStatus(health=ChannelHealth.STARTING)
-        self._started = False
-
-    def start(self, submit: Callable[[RawMessage[Any]], bool]) -> None:
-        if self._started:
-            return
-        self._submit = submit
-        self._register_handlers()
-        self._install_connection_listeners()
-        self._handler.connect()
-        self._started = True
-        self._status = ChannelStatus(health=ChannelHealth.CONNECTED)
-
-    def stop(self) -> None:
-        self._handler.close()
-        self._status = ChannelStatus(
-            health=ChannelHealth.FAILED, message="stopped"
-        )
-
-    @property
-    def status(self) -> ChannelStatus:
-        return self._status
-```
-
-Key detail: `SocketModeHandler.connect()` is **non-blocking** — it starts the
-WebSocket connection in a background thread and returns immediately. This allows
-`RepoHandler.start_listener()` to start the Slack listener without blocking,
-unlike `handler.start()` which blocks the calling thread. The handler manages
-automatic reconnection internally.
-
-The listener registers event handlers via the Bolt SDK's `Assistant` middleware:
-
-- `thread_started` — sends a greeting message.
-- `thread_context_changed` — logged but no action needed.
-- `user_message` — wraps the event payload in `RawMessage[dict]` and calls the
-  `submit` callback, which feeds into the same worker thread pool as email
-  messages. Authentication happens in the worker thread, not in the Socket Mode
-  event handler.
-
-### Connection to ChannelAdapter Interface
-
-The `SlackChannelAdapter` implements all `ChannelAdapter` methods from
-`gateway/channel.py`:
-
-| ChannelAdapter method      | Slack implementation                                                                                                                                                                         |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `listener` (property)      | Returns the `SlackChannelListener` instance                                                                                                                                                  |
-| `authenticate_and_parse()` | Check authorization rules via `SlackAuthorizer`, extract body and file metadata from event payload, resolve conversation ID from thread mapping                                              |
-| `save_attachments()`       | Download files listed in `SlackParsedMessage.slack_file_urls` using bot token, save to `inbox_dir`                                                                                           |
-| `send_acknowledgment()`    | Register thread mapping, `chat.postMessage` with confirmation text and optional dashboard link                                                                                               |
-| `report_phase()`           | `PREPARING` → `assistant.threads.setStatus("is working on this...")`; `RUNNING` → `assistant.threads.setStatus("")` (clears it, unlocking the composer for follow-ups)                       |
-| `send_reply()`             | Convert Markdown to `mrkdwn` via `render_mrkdwn()`, split if >40K chars (file upload beyond five chunks), `chat.postMessage` via the `text` parameter, upload outbox files, set thread title |
-| `send_error()`             | `chat.postMessage` with error text in thread                                                                                                                                                 |
-
-### `SlackParsedMessage`
-
-Subclass of `ParsedMessage` carrying Slack-specific state for reply threading
-and deferred file download:
-
-```python
-@dataclass
-class SlackParsedMessage(ParsedMessage):
-    """Slack-specific parsed message."""
-
-    slack_channel_id: str  # DM channel (D-prefixed)
-    slack_thread_ts: str  # Thread timestamp
-    slack_file_urls: list[tuple[str, str]] = field(default_factory=list)
-    # List of (filename, download_url) for deferred download in save_attachments()
-```
-
-The `sender` field (inherited from `ParsedMessage`) is set to the Slack user ID
-(e.g., `U12345678`) as the canonical identifier. The authorizer's user info
-cache (from `users.info` calls) stores display names alongside role data; the
-dashboard can display the cached display name when available, falling back to
-the raw user ID.
-
-The `sender_display` field (also inherited from `ParsedMessage`) is set for
-prompt attribution by resolving the user ID against that same cache:
-`DisplayName <U12345678>`, or just the user ID when no profile is cached. The
-`authorize()` call earlier in `authenticate_and_parse()` warms the cache, so
-this resolution is a cache hit with no extra Slack API request. The bracketed ID
-is a bare `<U12345678>`, **not** `<@U12345678>`, so the resolved ID is never
-itself live-mention syntax. The display-name half is user-controlled and is not
-sanitized here (consistent with the message body, which is also trusted from an
-authorized sender); echo-safety is provided by the outbound mrkdwn renderer,
-which escapes `<`/`>`/`&` so any mention markup Claude reproduces is inert.
-
-The `display_title` field is set from the first message text (truncated to ~60
-chars) for dashboard display. The `channel_context` field is set to the
-Slack-specific system prompt described in the Channel Context section above.
-
-The core sees a `ParsedMessage`; the `SlackChannelAdapter` downcasts to access
-Slack-specific fields when sending replies.
-
-### Thread-to-Conversation Mapping
-
-The `SlackThreadStore` manages the mapping between Slack threads and Airut
-conversation IDs:
-
-```python
-class SlackThreadStore:
-    """File-backed thread-to-conversation mapping."""
-
-    def __init__(self, state_dir: Path) -> None:
-        self._path = state_dir / "slack_threads.json"
-        self._lock = threading.Lock()
-        self._data: dict[str, str] = {}  # "channel_id:thread_ts" -> conv_id
-        self._load()
-
-    def get_conversation_id(
-        self, channel_id: str, thread_ts: str
-    ) -> str | None:
-        """Look up Airut conversation ID for a Slack thread."""
-
-    def register(self, channel_id: str, thread_ts: str, conv_id: str) -> None:
-        """Register a new thread-to-conversation mapping and persist."""
-
-    def retain_only(self, active_conversation_ids: set[str]) -> int:
-        """Remove entries whose conversation ID is not in the active set."""
-```
-
-The store uses a simple JSON file in the repo's state directory, matching the
-email adapter's file-based persistence pattern. The file is small (one entry per
-conversation) and loaded into memory at startup.
-
-**Pruning.** The garbage collector calls
-`ChannelAdapter.cleanup_conversations()` after each per-repo sweep, passing the
-set of surviving conversation IDs. The Slack adapter delegates to
-`SlackThreadStore.retain_only()`, which removes any thread mapping whose
-conversation ID is not in the active set and persists the result. This keeps the
-thread store in sync with the conversation directory without the store needing
-to know about conversation lifecycle directly.
-
-### Adapter Factory Integration
-
-The `adapter_factory.py` dispatches on channel config type. With multi-channel
-support, `create_adapters()` returns a dict of channel type to adapter:
-
-```python
-def create_adapters(config: RepoServerConfig) -> dict[str, ChannelAdapter]:
-    from airut.gateway.config import EmailChannelConfig
-    from airut.gateway.email.adapter import EmailChannelAdapter
-    from airut.gateway.slack.adapter import SlackChannelAdapter
-    from airut.gateway.slack.config import SlackChannelConfig
-
-    adapters: dict[str, ChannelAdapter] = {}
-    for channel_type, channel_config in config.channels.items():
-        if isinstance(channel_config, EmailChannelConfig):
-            adapters[channel_type] = EmailChannelAdapter.from_config(
-                channel_config, repo_id=config.repo_id
-            )
-        elif isinstance(channel_config, SlackChannelConfig):
-            adapters[channel_type] = SlackChannelAdapter.from_config(
-                channel_config, repo_id=config.repo_id
-            )
-        else:
-            raise ValueError(
-                f"Unknown channel config type: {type(channel_config).__name__}"
-            )
-    return adapters
-```
-
-**No changes to `RepoHandler`** are needed for the Slack channel itself.
-`RepoHandler` is fully channel-agnostic — it uses `adapter.listener.start()`,
-`adapter.listener.stop()`, and `adapter.listener.status` through the protocol
-interfaces. The multi-channel refactoring (iterating over multiple adapters) is
-a separate concern handled in [multi-repo.md](multi-repo.md).
+A file-backed store maps `channel_id:thread_ts` keys to Airut conversation IDs,
+persisted as a small JSON file in the repo's state directory and loaded into
+memory at startup (matching the email adapter's persistence pattern). It
+supports lookup, registration, and retention-based pruning: the garbage
+collector calls `ChannelAdapter.cleanup_conversations()` after each per-repo
+sweep with the set of surviving conversation IDs, and the store removes any
+mapping whose conversation ID is not in that set. This keeps the store in sync
+with the conversation directory without it needing to know about conversation
+lifecycle directly.
 
 ### Authorizer
 
-The `SlackAuthorizer` evaluates authorization rules with cached Slack API data:
-
-- **User info cache**: `users.info` results cached with 5-minute TTL.
-  Thread-safe with locking. Stores `UserInfo` dataclass with `is_bot`,
-  `is_restricted`, `is_ultra_restricted`, `team_id`, `deleted`, and
-  `display_name` fields.
-- **Group membership cache**: `usergroups.users.list` results cached with
-  5-minute TTL per group. Group handle-to-ID resolution done once lazily via
-  `usergroups.list`. Stale cache fallback: if group member fetch fails, returns
-  stale cache rather than failing.
-- **Baseline checks**: Always rejects bots, deactivated users, and external
-  users (team_id mismatch) before evaluating rules.
-- **Rule evaluation**: Iterates rules in order, first match wins.
+The authorizer evaluates authorization rules against cached Slack API data: a
+`users.info` cache (5-minute TTL, thread-safe) storing role flags, `team_id`,
+and display name; and a `usergroups.users.list` membership cache (5-minute TTL
+per group, with group handle-to-ID resolution done lazily), which falls back to
+stale data rather than failing if a refresh errors. Baseline checks run before
+rule evaluation; rules are evaluated in order, first match wins. The same caches
+back display-name resolution and the outbound mention candidate set, so those
+paths add no extra Slack API traffic.
 
 ### Dashboard Integration
 
-Slack conversations appear in the dashboard identically to email conversations.
-The existing `TaskState` already stores all needed fields:
+Slack conversations appear in the dashboard identically to email conversations —
+no dashboard code changes are needed. The dashboard works with `TaskState` and
+`ConversationMetadata`, neither of which contains channel-specific fields;
+`sender` carries the Slack user ID and `sender_display` the resolved
+`DisplayName <U123>`. With multi-channel ([multi-repo.md](multi-repo.md)) the
+dashboard gains per-channel health info, independent of the Slack implementation
+itself.
 
-- `conversation_id`: Set from the Airut conversation ID (same as email)
-- `display_title`: Set from the user's first message (truncated — email uses the
-  email subject)
-- `sender`: Set to the Slack user ID (canonical identifier — email uses the
-  sender email address)
-- `sender_display`: Set to `DisplayName <U123>` resolved from the user cache
-  (email uses the raw `From` header) — used for the prompt attribution header
-- `repo_id`: Set from the server config (same as email)
-- `model`: Set from the server config per-repo `model` (Slack has no model
-  selection UX)
+### Dependencies
 
-No dashboard code changes are needed. The dashboard is already channel-agnostic
-— it works with `TaskState` and `ConversationMetadata`, neither of which
-contains channel-specific fields. Slack conversations will appear in the same
-task list, actions viewer, and conversation detail pages as email conversations.
+`slack-bolt` (which bundles `slack-sdk`) is a required core dependency rather
+than an optional extra. This avoids conditional imports, test-time module
+patching, and type/coverage exclusions; the ~2MB install cost is negligible.
+Deployments that don't use Slack simply omit the `slack:` block — the dependency
+is present but dormant. All Slack modules are fully type-checked and included in
+coverage, like the rest of the codebase.
 
-With multi-channel ([multi-repo.md](multi-repo.md)), the dashboard's `RepoState`
-gains per-channel health info via `ChannelInfo` objects. This is independent of
-the Slack implementation itself.
+### Testing
 
-### Bolt SDK Dependencies
-
-New dependency: `slack-bolt>=1.20` (includes `slack-sdk`). Added as a core
-dependency in `pyproject.toml`:
-
-```toml
-[project]
-dependencies = [
-    # ... existing deps ...
-    "slack-bolt>=1.20",
-]
-```
-
-Making `slack-bolt` a required dependency (rather than an optional extra)
-simplifies the codebase: no conditional imports, no `sys.modules` patching in
-tests, no `ty` exclusions, and no runtime import scanning exceptions. The
-package adds ~2MB to the install, which is negligible compared to the existing
-dependency tree. Deployments that don't use Slack simply don't configure a
-`slack:` block — the dependency is present but dormant.
-
-The Slack modules must be fully type-checked (no `ty` exclusions) and included
-in coverage reporting. The earlier implementation attempt excluded
-`airut/gateway/slack/` from type checking — this is not acceptable. All Slack
-code follows the same quality standards as the rest of the codebase.
-
-### Testing Strategy
-
-Slack tests follow the same patterns as email tests. Since `slack-bolt` is a
-core dependency, no special import handling is needed:
-
-- **Unit tests**: Each module (`SlackChannelConfig`, `SlackAuthorizer`,
-  `SlackThreadStore`, `SlackChannelAdapter`, `SlackChannelListener`) has
-  dedicated test files with mocked Slack API calls (mock `WebClient`, mock
-  `SocketModeHandler`).
-- **Adapter integration**: Create `SlackChannelAdapter` directly with mock
-  dependencies (mock authorizer, mock WebClient, real thread store), bypassing
-  `from_config()` to control the test environment.
-- **Listener tests**: Mock the Bolt `App` and `SocketModeHandler` to test event
-  handler registration and submit callback wiring without needing a real Slack
-  connection.
+Slack tests follow the same patterns as email tests, mocking the Slack
+`WebClient` and `SocketModeHandler` so no real connection is needed: per-module
+unit tests, adapter tests that construct the adapter directly with mocked
+dependencies and a real thread store, and listener tests that verify handler
+registration and submit-callback wiring.
 
 ## Open Items
 
-Work remaining after the initial Slack channel implementation:
+Future considerations beyond the current design:
 
-- **Suggested prompts**: Configurable prompts shown when opening the Chat tab
-  (`set_suggested_prompts()` in the `thread_started` handler). Requires adding
-  `slack.suggested_prompts` to config parsing.
-- **Model selection**: Email uses subaddressing (`airut+opus@`); Slack currently
-  uses the repo default model. Could add command prefix or prompt-based
+- **Suggested prompts**: configurable prompts shown when opening the Chat tab,
+  via `set_suggested_prompts()` in the `thread_started` handler.
+- **Model selection**: email uses subaddressing (`airut+opus@`); Slack currently
+  uses the repo default model. Could add a command prefix or prompt-based
   selection.
-- **Channel @mentions**: Support `@mention` in channels for one-shot requests
-  (requires `app_mention` event, `app_mentions:read` + `channels:history`
-  scopes).
-- **Response streaming**: Stream final response as it generates via the
-  streaming API.
-- **Multi-repo routing**: Single Slack app serving multiple repos with
+- **Response streaming**: stream the final response as it generates.
+- **Multi-repo routing**: a single Slack app serving multiple repos with
   thread-level routing.
-- **Canvas integration**: Use Slack Canvases for long-form output exceeding
+- **Canvas integration**: use Slack Canvases for long-form output exceeding
   message size limits.
+- **Per-channel author overrides**: let `allowed_channels` take a richer shape
+  (e.g. `{id: C123, authorized: [...]}`) so a channel can have a narrower set of
+  authorized users than the repo's global rules.
+- **Edited messages**: currently treated as new messages; could update the
+  prompt in place when an edit lands during the coalescing window.

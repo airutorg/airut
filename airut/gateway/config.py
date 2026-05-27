@@ -1981,10 +1981,29 @@ def _parse_slack_channel_config(
                 )
             authorized.append({key: resolved})
 
+    # Optional channel allowlist (channel mode).  Empty/absent means the
+    # bot engages in any channel it has been invited to.
+    raw_allowed = slack.get("allowed_channels")
+    allowed_channels: tuple[str, ...] = ()
+    if raw_allowed is not None:
+        if not isinstance(raw_allowed, list):
+            raise ConfigError(f"{prefix}.slack.allowed_channels must be a list")
+        channels: list[str] = []
+        for i, channel in enumerate(raw_allowed):
+            resolved = raw_resolve(cast(YamlValue, channel))
+            if not isinstance(resolved, str) or not resolved:
+                raise ConfigError(
+                    f"{prefix}.slack.allowed_channels[{i}] must be a "
+                    f"non-empty channel ID string"
+                )
+            channels.append(resolved)
+        allowed_channels = tuple(channels)
+
     return SlackChannelConfig(
         bot_token=bot_token,
         app_token=app_token,
         authorized=tuple(authorized),
+        allowed_channels=allowed_channels,
     )
 
 

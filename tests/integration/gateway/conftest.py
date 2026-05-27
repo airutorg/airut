@@ -358,7 +358,9 @@ def _create_slack_adapter_factory(
                     ssl_check_enabled=False,
                 )
                 listener = SlackChannelListener(
-                    config=channel_config,
+                    channel_config,
+                    thread_store,
+                    authorizer,
                     app=app,
                     handler=cast("Any", slack_server.handler),
                 )

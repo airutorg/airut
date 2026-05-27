@@ -23,7 +23,11 @@
         "users:read",
         "files:read",
         "files:write",
-        "usergroups:read"
+        "usergroups:read",
+        "app_mentions:read",
+        "channels:history",
+        "groups:history",
+        "reactions:write"
       ]
     }
   },
@@ -32,7 +36,10 @@
       "bot_events": [
         "assistant_thread_started",
         "assistant_thread_context_changed",
-        "message.im"
+        "message.im",
+        "app_mention",
+        "message.channels",
+        "message.groups"
       ]
     },
     "interactivity": {

@@ -13,6 +13,8 @@ interface.
 from __future__ import annotations
 
 import logging
+import threading
+from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -33,10 +35,17 @@ from airut.gateway.channel import (
     ChannelStatus,
     RawMessage,
 )
+from airut.gateway.slack.authorizer import SlackAuthorizer
 from airut.gateway.slack.config import SlackChannelConfig
+from airut.gateway.slack.thread_store import SlackThreadStore
 
 
 logger = logging.getLogger(__name__)
+
+#: Maximum number of recently-seen ``(channel, ts)`` keys retained for
+#: deduplicating the ``app_mention`` / ``message`` double-delivery of a
+#: single channel mention.
+_DEDUP_CAPACITY = 256
 
 
 class SlackChannelListener(ChannelListener):
@@ -52,6 +61,11 @@ class SlackChannelListener(ChannelListener):
 
     Args:
         config: Slack channel configuration.
+        thread_store: Thread-to-conversation mapping, consulted on the
+            event-handler thread to decide whether a channel follow-up
+            belongs to an engaged thread (the "sticky thread" rule).
+        authorizer: Authorizer, used here only to resolve the bot's own
+            user ID for the ``@``-mention engagement check.
         app: Optional pre-built Bolt ``App`` (for testing).
         handler: Optional pre-built ``SocketModeHandler`` (for testing).
     """
@@ -59,10 +73,15 @@ class SlackChannelListener(ChannelListener):
     def __init__(
         self,
         config: SlackChannelConfig,
+        thread_store: SlackThreadStore,
+        authorizer: SlackAuthorizer,
+        *,
         app: App | None = None,
         handler: SocketModeHandler | None = None,
     ) -> None:
         self._config = config
+        self._thread_store = thread_store
+        self._authorizer = authorizer
         self._app = app or App(token=config.bot_token)
         self._handler = handler or SocketModeHandler(
             self._app, config.app_token
@@ -70,6 +89,9 @@ class SlackChannelListener(ChannelListener):
         self._status = ChannelStatus(health=ChannelHealth.STARTING)
         self._submit: Callable[[RawMessage[JsonDict]], bool] | None = None
         self._started = False
+        # Ordered set of recently-seen (channel, ts) keys for dedup.
+        self._seen_events: OrderedDict[tuple[str, str], None] = OrderedDict()
+        self._dedup_lock = threading.Lock()
 
     def start(self, submit: Callable[[RawMessage[Any]], bool]) -> None:
         """Connect Socket Mode and start receiving events.
@@ -85,6 +107,13 @@ class SlackChannelListener(ChannelListener):
             logger.warning("Slack listener already started, ignoring")
             return
         self._submit = submit
+        # Warm the bot user ID so channel @-mention detection works from
+        # the first event.  Resolution is cached on the authorizer.
+        if self._authorizer.get_bot_user_id() is None:
+            logger.warning(
+                "Could not resolve bot user ID; channel @-mention "
+                "engagement is disabled until auth.test succeeds"
+            )
         self._register_handlers()
         self._install_connection_listeners()
         self._handler.connect()
@@ -248,5 +277,120 @@ class SlackChannelListener(ChannelListener):
                     "Failed to submit Slack message from %s", user_id
                 )
 
-        # Register the Assistant middleware with the Bolt app
+        # Register the Assistant middleware with the Bolt app (DM surface).
         self._app.assistant(assistant)
+
+        # Channel surface: app_mention is the canonical engagement signal;
+        # message.channels / message.groups carry follow-ups (and a
+        # duplicate copy of each mention, deduplicated below).
+        self._app.event("app_mention")(self._on_app_mention)
+        self._app.event("message")(self._on_channel_message)
+
+    def _on_app_mention(self, event: JsonDict) -> None:
+        """Handle an ``app_mention`` event (channel engagement trigger).
+
+        A mention is always an engagement signal, so the only gates are
+        the channel allowlist and dedup (the same mention also arrives as
+        a ``message.channels`` / ``message.groups`` event).
+        """
+        channel = cast(str, event.get("channel", ""))
+        ts = cast(str, event.get("ts", ""))
+        if not self._channel_allowed(channel):
+            return
+        if not self._claim_event(channel, ts):
+            return
+        self._submit_channel_event(event)
+
+    def _on_channel_message(self, event: JsonDict) -> None:
+        """Handle a ``message`` event in a public or private channel.
+
+        DMs (``channel_type == "im"``) are handled by the Assistant
+        middleware and skipped here.  Subtyped messages (edits, joins,
+        bot posts) and bot-authored messages are ignored.  A message is
+        submitted only when it lands in an already-engaged thread (the
+        sticky-thread rule) or it ``@``-mentions the bot.
+        """
+        channel_type = cast(str, event.get("channel_type", ""))
+        if channel_type not in ("channel", "group"):
+            return
+        if event.get("subtype") or event.get("bot_id"):
+            return
+
+        channel = cast(str, event.get("channel", ""))
+        ts = cast(str, event.get("ts", ""))
+        text = cast(str, event.get("text", ""))
+        # Top-level messages have no thread_ts; their own ts roots a thread.
+        thread_ts = cast(str, event.get("thread_ts", "")) or ts
+
+        if not self._channel_allowed(channel):
+            return
+
+        engaged = (
+            self._thread_store.get_conversation_id(channel, thread_ts)
+            is not None
+        )
+        if not engaged and not self._has_bot_mention(text):
+            return
+
+        if not self._claim_event(channel, ts):
+            return
+        self._submit_channel_event(event)
+
+    def _submit_channel_event(self, event: JsonDict) -> None:
+        """Wrap a channel event in a ``RawMessage`` and submit it."""
+        assert self._submit is not None
+        user_id = cast(str, event.get("user", ""))
+        text = cast(str, event.get("text", ""))
+        channel = cast(str, event.get("channel", ""))
+        display_title = text[:60].split("\n")[0] if text else ""
+
+        raw: RawMessage[JsonDict] = RawMessage(
+            sender=user_id,
+            content=event,
+            display_title=display_title,
+        )
+        logger.info(
+            "Slack channel message from %s in %s (ts %s)",
+            user_id,
+            channel,
+            event.get("ts", ""),
+        )
+        try:
+            self._submit(raw)
+        except Exception:
+            logger.exception(
+                "Failed to submit Slack channel message from %s", user_id
+            )
+
+    def _channel_allowed(self, channel: str) -> bool:
+        """Return whether *channel* passes the optional channel allowlist."""
+        allowed = self._config.allowed_channels
+        return not allowed or channel in allowed
+
+    def _has_bot_mention(self, text: str) -> bool:
+        """Return whether *text* contains the bot's ``<@BOT_USER_ID>`` token.
+
+        Matches both the bare ``<@U…>`` form and the ``<@U…|label>`` form
+        Slack uses when a display name is available.
+        """
+        bot_id = self._authorizer.get_bot_user_id()
+        if not bot_id:
+            return False
+        return f"<@{bot_id}>" in text or f"<@{bot_id}|" in text
+
+    def _claim_event(self, channel: str, ts: str) -> bool:
+        """Claim a ``(channel, ts)`` event for processing, deduplicating.
+
+        Returns True the first time a key is seen and False thereafter,
+        so the duplicate ``app_mention`` / ``message`` delivery of one
+        mention is processed exactly once.  Retains the most recent
+        :data:`_DEDUP_CAPACITY` keys.
+        """
+        key = (channel, ts)
+        with self._dedup_lock:
+            if key in self._seen_events:
+                return False
+            self._seen_events[key] = None
+            if len(self._seen_events) > _DEDUP_CAPACITY:
+                self._seen_events.popitem(last=False)
+            return True

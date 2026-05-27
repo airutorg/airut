@@ -34,6 +34,7 @@ from airut.gateway.channel import (
 from airut.gateway.slack.authorizer import SlackAuthorizer
 from airut.gateway.slack.config import SlackChannelConfig
 from airut.gateway.slack.listener import SlackChannelListener
+from airut.gateway.slack.mention_resolver import MentionResolver
 from airut.gateway.slack.mrkdwn import render_mrkdwn
 from airut.gateway.slack.plan_streamer import SlackPlanStreamer
 from airut.gateway.slack.thread_store import SlackThreadStore
@@ -49,6 +50,15 @@ _MAX_SPLIT_MESSAGES = 5
 
 #: Maximum length for thread title.
 _MAX_TITLE_LENGTH = 60
+
+#: Most recent thread messages folded into the prompt on mid-thread
+#: engagement; older messages are summarized as an omitted-count line.
+_HISTORY_REPLAY_LIMIT = 200
+
+#: Hard cap on messages fetched while paginating ``conversations.replies``,
+#: bounding work for pathologically long threads before trimming to
+#: :data:`_HISTORY_REPLAY_LIMIT`.
+_HISTORY_FETCH_CAP = 1000
 
 #: Maximum attachment download size (100 MB).
 _MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
@@ -74,13 +84,27 @@ class SlackParsedMessage(ParsedMessage):
     """
 
     slack_channel_id: str = ""
-    """DM channel ID (``D``-prefixed)."""
+    """DM channel ID (``D``-prefixed) or channel ID (``C``/``G``-prefixed)."""
 
     slack_thread_ts: str = ""
-    """Thread timestamp for reply threading."""
+    """Thread timestamp for reply threading (the engaged thread root)."""
 
     slack_file_urls: list[tuple[str, str]] = field(default_factory=list)
     """List of ``(filename, download_url)`` for deferred download."""
+
+    triggering_message_ts: str = ""
+    """ts of the message that arrived, used for the ``:eyes:`` reaction."""
+
+    is_channel: bool = False
+    """Whether this arrived in a channel (vs a DM).
+
+    Gates the DM-only ``assistant.threads`` status and title APIs."""
+
+    mention_candidate_ids: list[str] = field(default_factory=list)
+    """User IDs eligible for outbound ``@``-mention rewriting in the reply.
+
+    The triggering sender, any authors seen in replayed thread history, and
+    members of user groups named in the authorization rules."""
 
 
 class SlackChannelAdapter(ChannelAdapter):
@@ -106,6 +130,7 @@ class SlackChannelAdapter(ChannelAdapter):
         self._thread_store = thread_store
         self._listener = slack_listener
         self._repo_id = repo_id
+        self._resolver: MentionResolver | None = None
 
     @classmethod
     def from_config(
@@ -126,7 +151,7 @@ class SlackChannelAdapter(ChannelAdapter):
         authorizer = SlackAuthorizer(client=client, rules=config.authorized)
         state_dir = get_storage_dir(repo_id)
         thread_store = SlackThreadStore(state_dir)
-        listener = SlackChannelListener(config)
+        listener = SlackChannelListener(config, thread_store, authorizer)
 
         return cls(
             config=config,
@@ -190,7 +215,22 @@ class SlackChannelAdapter(ChannelAdapter):
         user_id = cast(str, payload.get("user", ""))
         text = cast(str, payload.get("text", ""))
         channel_id = cast(str, payload.get("channel", ""))
-        thread_ts = cast(str, payload.get("thread_ts", ""))
+        message_ts = cast(str, payload.get("ts", ""))
+        raw_thread_ts = cast(str, payload.get("thread_ts", ""))
+
+        # A channel arrives either as an ``app_mention`` event (no
+        # channel_type) or a ``message`` event with channel_type
+        # channel/group; DMs are message.im (channel_type "im").
+        event_type = cast(str, payload.get("type", ""))
+        channel_type = cast(str, payload.get("channel_type", ""))
+        is_channel = event_type == "app_mention" or channel_type in (
+            "channel",
+            "group",
+        )
+
+        # The engaged thread root: a top-level channel mention has no
+        # thread_ts, so its own ts roots the thread.
+        thread_ts = raw_thread_ts or message_ts
 
         # Authorize via rules
         authorized, reason = self._authorizer.authorize(user_id)
@@ -203,10 +243,37 @@ class SlackChannelAdapter(ChannelAdapter):
             )
             raise AuthenticationError(sender=user_id, reason=reason)
 
+        # Instant acknowledgement for channels: a :eyes: reaction on the
+        # triggering message.  Added here (post-authorization, per arriving
+        # message) so coalesced follow-ups are acknowledged too and an
+        # unauthorized mention never gets a reaction.
+        if is_channel:
+            self._add_reaction(channel_id, message_ts)
+
         # Look up existing conversation from thread mapping
         conversation_id = self._thread_store.get_conversation_id(
             channel_id, thread_ts
         )
+
+        resolver = self._get_resolver()
+
+        # Mid-thread engagement: the bot was mentioned inside an existing
+        # thread it has not joined.  Replay the prior messages so Claude
+        # has the same context a human reading the thread would.
+        channel_context = self.channel_context()
+        candidate_ids: list[str] = [user_id]
+        if is_channel and conversation_id is None and raw_thread_ts:
+            preamble, history_authors = self._replay_history(
+                channel_id, thread_ts, message_ts, resolver
+            )
+            if preamble:
+                channel_context = f"{channel_context}\n\n{preamble}"
+            candidate_ids.extend(history_authors)
+        candidate_ids.extend(self._authorizer.candidate_group_member_ids())
+
+        # Resolve inbound mention tokens so Claude sees human-readable names.
+        # The bot's own mention is stripped from the invocation (redundant).
+        body = resolver.resolve_in(text, strip_bot_mention=True)
 
         # Extract file metadata for deferred download
         slack_file_urls: list[tuple[str, str]] = []
@@ -221,7 +288,7 @@ class SlackChannelAdapter(ChannelAdapter):
                 slack_file_urls.append((name, url))
 
         # Build display title
-        display_title = text[:_MAX_TITLE_LENGTH].split("\n")[0] if text else ""
+        display_title = body[:_MAX_TITLE_LENGTH].split("\n")[0] if body else ""
 
         # Resolve the user ID to a readable name for prompt attribution.
         # The authorize() call above warmed the user cache, so this is a
@@ -234,18 +301,144 @@ class SlackChannelAdapter(ChannelAdapter):
         name = self._authorizer.get_display_name(user_id)
         sender_display = f"{name} <{user_id}>" if name != user_id else user_id
 
+        # A bare channel mention can strip to an empty body; mark it so the
+        # gateway's empty-body guard lets the engagement proceed (the thread
+        # context, if any, carries the intent).  ``subject`` is otherwise
+        # unused by the Slack path.
+        subject = "Slack channel message" if is_channel and not body else ""
+
         return SlackParsedMessage(
             sender=user_id,
             sender_display=sender_display,
-            body=text,
+            body=body,
             conversation_id=conversation_id,
             model_hint=None,
             display_title=display_title or "(no message)",
-            channel_context=self.channel_context(),
+            channel_context=channel_context,
+            subject=subject,
             slack_channel_id=channel_id,
             slack_thread_ts=thread_ts,
             slack_file_urls=slack_file_urls,
+            triggering_message_ts=message_ts,
+            is_channel=is_channel,
+            mention_candidate_ids=_dedup_preserving_order(candidate_ids),
         )
+
+    def _get_resolver(self) -> MentionResolver:
+        """Return the mention resolver, building it once lazily.
+
+        Deferred until first use so the bot user ID (resolved via
+        ``auth.test``) is available — by the time a message is parsed,
+        ``authorize()`` has warmed that cache.
+        """
+        if self._resolver is None:
+            self._resolver = MentionResolver(
+                self._authorizer,
+                bot_user_id=self._authorizer.get_bot_user_id(),
+            )
+        return self._resolver
+
+    def _add_reaction(self, channel_id: str, message_ts: str) -> None:
+        """Add the ``:eyes:`` acknowledgement reaction (non-fatal)."""
+        try:
+            self._client.reactions_add(
+                channel=channel_id, timestamp=message_ts, name="eyes"
+            )
+        except SlackApiError as e:
+            logger.warning("Failed to add Slack reaction (non-fatal): %s", e)
+
+    def _replay_history(
+        self,
+        channel_id: str,
+        thread_ts: str,
+        triggering_ts: str,
+        resolver: MentionResolver,
+    ) -> tuple[str, list[str]]:
+        """Fetch prior thread messages and render them as a prompt preamble.
+
+        Reads the thread via ``conversations.replies`` (paginated, bounded
+        by :data:`_HISTORY_FETCH_CAP`), drops the triggering message and
+        non-human messages, keeps the most recent
+        :data:`_HISTORY_REPLAY_LIMIT`, and renders each as
+        ``[<display name>]: <resolved body>``.  The invocation itself is
+        delivered separately via the attributed message body, so it is not
+        repeated here.
+
+        Args:
+            channel_id: Channel the thread lives in.
+            thread_ts: Root timestamp of the thread.
+            triggering_ts: ts of the invocation message (excluded).
+            resolver: Mention resolver for inbound token resolution.
+
+        Returns:
+            ``(preamble, author_ids)`` — the preamble is empty when no
+            prior messages exist; ``author_ids`` lists the distinct human
+            authors for the outbound mention candidate set.
+        """
+        messages = self._fetch_thread_messages(channel_id, thread_ts)
+
+        history = [
+            m
+            for m in messages
+            if m.get("ts") != triggering_ts
+            and m.get("user")
+            and not m.get("subtype")
+            and not m.get("bot_id")
+        ]
+        if not history:
+            return "", []
+
+        omitted = len(history) - _HISTORY_REPLAY_LIMIT
+        if omitted > 0:
+            history = history[-_HISTORY_REPLAY_LIMIT:]
+
+        lines: list[str] = [
+            "The user invited you into an existing Slack thread.  The "
+            "messages below are the conversation that preceded the "
+            "invocation, in order.  Use them as background; the invocation "
+            "that triggered you is the attributed message that follows this "
+            "preamble."
+        ]
+        if omitted > 0:
+            lines.append(f"[{omitted} earlier messages omitted]")
+
+        author_ids: list[str] = []
+        for message in history:
+            author = cast(str, message.get("user", ""))
+            author_ids.append(author)
+            display = self._authorizer.get_display_name(author)
+            resolved = resolver.resolve_in(
+                cast(str, message.get("text", "")), strip_bot_mention=False
+            )
+            lines.append(f"[{display}]: {resolved}")
+
+        return "\n".join(lines), author_ids
+
+    def _fetch_thread_messages(
+        self, channel_id: str, thread_ts: str
+    ) -> list[JsonDict]:
+        """Page through ``conversations.replies`` up to the fetch cap."""
+        messages: list[JsonDict] = []
+        cursor: str | None = None
+        try:
+            while True:
+                resp = self._client.conversations_replies(
+                    channel=channel_id,
+                    ts=thread_ts,
+                    limit=200,
+                    cursor=cursor,
+                )
+                messages.extend(cast(list[JsonDict], resp.get("messages", [])))
+                cursor = resp.get("response_metadata", {}).get("next_cursor")
+                if not cursor or len(messages) >= _HISTORY_FETCH_CAP:
+                    break
+        except SlackApiError as e:
+            logger.warning(
+                "Failed to fetch Slack thread history for %s: %s",
+                thread_ts,
+                e,
+            )
+        return messages
 
     def save_attachments(
         self, parsed: ParsedMessage, inbox_dir: Path
@@ -363,6 +556,10 @@ class SlackChannelAdapter(ChannelAdapter):
             raise TypeError(
                 f"Expected SlackParsedMessage, got {type(parsed).__name__}"
             )
+        # assistant.threads.setStatus is a DM-only (Agents & AI Apps) API.
+        # In channels the :eyes: reaction is the acknowledgement instead.
+        if parsed.is_channel:
+            return
         if phase is TaskPhase.PREPARING:
             self._set_status(parsed, "is working on this...")
         elif phase is TaskPhase.RUNNING:
@@ -401,6 +598,16 @@ class SlackChannelAdapter(ChannelAdapter):
         # Convert Markdown to Slack mrkdwn for rendering
         body = render_mrkdwn(body)
 
+        # Rewrite unambiguous @name / #name / @group tokens into Slack
+        # reference syntax against this thread's candidate set so they
+        # render as real mentions.
+        candidates = [
+            info
+            for cid in parsed.mention_candidate_ids
+            if (info := self._authorizer.get_user_info(cid)) is not None
+        ]
+        body = self._get_resolver().rewrite_out(body, candidates)
+
         # Send message(s)
         try:
             _send_long_message(
@@ -428,9 +635,11 @@ class SlackChannelAdapter(ChannelAdapter):
                         "Failed to upload file %s: %s", filepath.name, e
                     )
 
-        # Set thread title from first message
+        # Set thread title from first message.  assistant.threads.setTitle
+        # is a DM-only (Agents & AI Apps) API; channel threads are
+        # discovered by their root message, so it is skipped there.
         title = parsed.display_title[:_MAX_TITLE_LENGTH]
-        if title:
+        if title and not parsed.is_channel:
             try:
                 self._client.assistant_threads_setTitle(
                     channel_id=parsed.slack_channel_id,
@@ -493,6 +702,11 @@ class SlackChannelAdapter(ChannelAdapter):
                 self._repo_id,
                 removed,
             )
+
+
+def _dedup_preserving_order(ids: list[str]) -> list[str]:
+    """Return *ids* with duplicates removed, keeping first-seen order."""
+    return list(dict.fromkeys(ids))
 
 
 def _is_slack_file_url(url: str) -> bool:

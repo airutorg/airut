@@ -10,16 +10,45 @@ from unittest.mock import MagicMock, patch
 
 from slack_bolt import App
 
+from airut._json_types import JsonDict, JsonValue
 from airut.gateway.channel import ChannelHealth, RawMessage
+from airut.gateway.slack.authorizer import SlackAuthorizer
 from airut.gateway.slack.config import SlackChannelConfig
 from airut.gateway.slack.listener import SlackChannelListener
+from airut.gateway.slack.thread_store import SlackThreadStore
 
 
-def _make_config() -> SlackChannelConfig:
+def _make_config(
+    *, allowed_channels: tuple[str, ...] = ()
+) -> SlackChannelConfig:
     return SlackChannelConfig(
         bot_token="xoxb-test-token",
         app_token="xapp-test-token",
         authorized=({"workspace_members": True},),
+        allowed_channels=allowed_channels,
+    )
+
+
+def _make_listener(
+    *,
+    config: SlackChannelConfig | None = None,
+    app: App | MagicMock | None = None,
+    handler: MagicMock | None = None,
+    thread_store: MagicMock | None = None,
+    authorizer: MagicMock | None = None,
+) -> SlackChannelListener:
+    if thread_store is None:
+        thread_store = MagicMock(spec=SlackThreadStore)
+        thread_store.get_conversation_id.return_value = None
+    if authorizer is None:
+        authorizer = MagicMock(spec=SlackAuthorizer)
+        authorizer.get_bot_user_id.return_value = "UBOT"
+    return SlackChannelListener(
+        config or _make_config(),
+        thread_store,
+        authorizer,
+        app=app if app is not None else MagicMock(),
+        handler=handler if handler is not None else MagicMock(),
     )
 
 
@@ -29,19 +58,13 @@ class TestSlackChannelListener:
             patch("airut.gateway.slack.listener.App"),
             patch("airut.gateway.slack.listener.SocketModeHandler"),
         ):
-            listener = SlackChannelListener(
-                _make_config(),
-                app=MagicMock(),
-                handler=MagicMock(),
-            )
+            listener = _make_listener()
         assert listener.status.health == ChannelHealth.STARTING
 
     def test_start_connects_and_sets_connected(self) -> None:
         app = MagicMock()
         handler = MagicMock()
-        listener = SlackChannelListener(
-            _make_config(), app=app, handler=handler
-        )
+        listener = _make_listener(app=app, handler=handler)
         submit = MagicMock()
 
         with patch("airut.gateway.slack.listener.Assistant"):
@@ -52,9 +75,7 @@ class TestSlackChannelListener:
 
     def test_stop_closes_handler(self) -> None:
         handler = MagicMock()
-        listener = SlackChannelListener(
-            _make_config(), app=MagicMock(), handler=handler
-        )
+        listener = _make_listener(handler=handler)
         with patch("airut.gateway.slack.listener.Assistant"):
             listener.start(MagicMock())
 
@@ -67,9 +88,7 @@ class TestSlackChannelListener:
     def test_handlers_registered_on_start(self) -> None:
         app = MagicMock()
         handler = MagicMock()
-        listener = SlackChannelListener(
-            _make_config(), app=app, handler=handler
-        )
+        listener = _make_listener(app=app, handler=handler)
 
         with patch(
             "airut.gateway.slack.listener.Assistant"
@@ -88,9 +107,7 @@ class TestSlackChannelListener:
         """Verify user_message handler wraps payload in RawMessage."""
         app = MagicMock()
         handler = MagicMock()
-        listener = SlackChannelListener(
-            _make_config(), app=app, handler=handler
-        )
+        listener = _make_listener(app=app, handler=handler)
 
         submit = MagicMock(return_value=True)
         with patch(
@@ -128,9 +145,7 @@ class TestSlackChannelListener:
         """
         app = MagicMock()
         handler = MagicMock()
-        listener = SlackChannelListener(
-            _make_config(), app=app, handler=handler
-        )
+        listener = _make_listener(app=app, handler=handler)
 
         with patch(
             "airut.gateway.slack.listener.Assistant"
@@ -148,9 +163,7 @@ class TestSlackChannelListener:
         """Verify thread_started handler sets status and says greeting."""
         app = MagicMock()
         handler = MagicMock()
-        listener = SlackChannelListener(
-            _make_config(), app=app, handler=handler
-        )
+        listener = _make_listener(app=app, handler=handler)
         with patch(
             "airut.gateway.slack.listener.Assistant"
         ) as mock_assistant_cls:
@@ -179,9 +192,7 @@ class TestSlackChannelListener:
         """Verify thread_context_changed handler runs without error."""
         app = MagicMock()
         handler = MagicMock()
-        listener = SlackChannelListener(
-            _make_config(), app=app, handler=handler
-        )
+        listener = _make_listener(app=app, handler=handler)
         with patch(
             "airut.gateway.slack.listener.Assistant"
         ) as mock_assistant_cls:
@@ -201,9 +212,7 @@ class TestSlackChannelListener:
         """Submit exceptions in user_message are caught and logged."""
         app = MagicMock()
         handler = MagicMock()
-        listener = SlackChannelListener(
-            _make_config(), app=app, handler=handler
-        )
+        listener = _make_listener(app=app, handler=handler)
 
         submit = MagicMock(side_effect=RuntimeError("submit failed"))
         with patch(
@@ -231,9 +240,7 @@ class TestDoubleStartGuard:
         """Calling start() twice does not register handlers twice."""
         app = MagicMock()
         handler = MagicMock()
-        listener = SlackChannelListener(
-            _make_config(), app=app, handler=handler
-        )
+        listener = _make_listener(app=app, handler=handler)
 
         submit = MagicMock()
         with patch("airut.gateway.slack.listener.Assistant"):
@@ -249,9 +256,7 @@ class TestConnectionHealthListeners:
         """WebSocket close callback sets status to DEGRADED."""
         app = MagicMock()
         handler = MagicMock()
-        listener = SlackChannelListener(
-            _make_config(), app=app, handler=handler
-        )
+        listener = _make_listener(app=app, handler=handler)
 
         with patch("airut.gateway.slack.listener.Assistant"):
             listener.start(MagicMock())
@@ -268,9 +273,7 @@ class TestConnectionHealthListeners:
         """WebSocket error callback sets status to DEGRADED."""
         app = MagicMock()
         handler = MagicMock()
-        listener = SlackChannelListener(
-            _make_config(), app=app, handler=handler
-        )
+        listener = _make_listener(app=app, handler=handler)
 
         with patch("airut.gateway.slack.listener.Assistant"):
             listener.start(MagicMock())
@@ -284,9 +287,7 @@ class TestConnectionHealthListeners:
         """Status recovers to CONNECTED when a message arrives after close."""
         app = MagicMock()
         handler = MagicMock()
-        listener = SlackChannelListener(
-            _make_config(), app=app, handler=handler
-        )
+        listener = _make_listener(app=app, handler=handler)
 
         with patch("airut.gateway.slack.listener.Assistant"):
             listener.start(MagicMock())
@@ -305,9 +306,7 @@ class TestConnectionHealthListeners:
         """Status recovers to CONNECTED when a message arrives after error."""
         app = MagicMock()
         handler = MagicMock()
-        listener = SlackChannelListener(
-            _make_config(), app=app, handler=handler
-        )
+        listener = _make_listener(app=app, handler=handler)
 
         with patch("airut.gateway.slack.listener.Assistant"):
             listener.start(MagicMock())
@@ -322,9 +321,7 @@ class TestConnectionHealthListeners:
         """Message callback is a no-op when already CONNECTED."""
         app = MagicMock()
         handler = MagicMock()
-        listener = SlackChannelListener(
-            _make_config(), app=app, handler=handler
-        )
+        listener = _make_listener(app=app, handler=handler)
 
         with patch("airut.gateway.slack.listener.Assistant"):
             listener.start(MagicMock())
@@ -339,11 +336,7 @@ class TestConnectionHealthListeners:
         handler = MagicMock()
         # Remove client attribute so getattr returns None
         del handler.client
-        listener = SlackChannelListener(
-            _make_config(),
-            app=MagicMock(),
-            handler=handler,
-        )
+        listener = _make_listener(handler=handler)
 
         with patch("airut.gateway.slack.listener.Assistant"):
             with patch("airut.gateway.slack.listener.logger") as mock_logger:
@@ -358,11 +351,7 @@ class TestConnectionHealthListeners:
         """Logs warning when client lacks on_close_listeners."""
         handler = MagicMock()
         del handler.client.on_close_listeners
-        listener = SlackChannelListener(
-            _make_config(),
-            app=MagicMock(),
-            handler=handler,
-        )
+        listener = _make_listener(handler=handler)
 
         with patch("airut.gateway.slack.listener.Assistant"):
             with patch("airut.gateway.slack.listener.logger") as mock_logger:
@@ -377,11 +366,7 @@ class TestConnectionHealthListeners:
         """Logs warning when client lacks on_error_listeners."""
         handler = MagicMock()
         del handler.client.on_error_listeners
-        listener = SlackChannelListener(
-            _make_config(),
-            app=MagicMock(),
-            handler=handler,
-        )
+        listener = _make_listener(handler=handler)
 
         with patch("airut.gateway.slack.listener.Assistant"):
             with patch("airut.gateway.slack.listener.logger") as mock_logger:
@@ -396,11 +381,7 @@ class TestConnectionHealthListeners:
         """Logs warning when client lacks on_message_listeners."""
         handler = MagicMock()
         del handler.client.on_message_listeners
-        listener = SlackChannelListener(
-            _make_config(),
-            app=MagicMock(),
-            handler=handler,
-        )
+        listener = _make_listener(handler=handler)
 
         with patch("airut.gateway.slack.listener.Assistant"):
             with patch("airut.gateway.slack.listener.logger") as mock_logger:
@@ -434,9 +415,7 @@ class TestHandlerRegistrationWithRealApp:
             token_verification_enabled=False,
         )
         handler = MagicMock()
-        listener = SlackChannelListener(
-            _make_config(), app=app, handler=handler
-        )
+        listener = _make_listener(app=app, handler=handler)
 
         submit = MagicMock()
         # This should NOT raise AttributeError
@@ -444,3 +423,208 @@ class TestHandlerRegistrationWithRealApp:
 
         handler.connect.assert_called_once()
         assert listener.status.health == ChannelHealth.CONNECTED
+
+
+class TestChannelEventRegistration:
+    def test_channel_event_handlers_registered(self) -> None:
+        app = MagicMock()
+        listener = _make_listener(app=app, handler=MagicMock())
+        with patch("airut.gateway.slack.listener.Assistant"):
+            listener.start(MagicMock())
+        registered = [c.args[0] for c in app.event.call_args_list]
+        assert "app_mention" in registered
+        assert "message" in registered
+
+    def test_start_warns_when_bot_id_unresolved(self) -> None:
+        authorizer = MagicMock(spec=SlackAuthorizer)
+        authorizer.get_bot_user_id.return_value = None
+        listener = _make_listener(
+            app=MagicMock(), handler=MagicMock(), authorizer=authorizer
+        )
+        with patch("airut.gateway.slack.listener.Assistant"):
+            with patch("airut.gateway.slack.listener.logger") as mock_logger:
+                listener.start(MagicMock())
+        assert any(
+            "Could not resolve bot user ID" in str(c.args[0])
+            for c in mock_logger.warning.call_args_list
+        )
+
+
+class TestAppMentionHandler:
+    def _listener(
+        self,
+        *,
+        allowed_channels: tuple[str, ...] = (),
+        bot_user_id: str | None = "UBOT",
+    ) -> tuple[SlackChannelListener, MagicMock]:
+        authorizer = MagicMock(spec=SlackAuthorizer)
+        authorizer.get_bot_user_id.return_value = bot_user_id
+        thread_store = MagicMock(spec=SlackThreadStore)
+        thread_store.get_conversation_id.return_value = None
+        listener = _make_listener(
+            config=_make_config(allowed_channels=allowed_channels),
+            thread_store=thread_store,
+            authorizer=authorizer,
+        )
+        submit = MagicMock(return_value=True)
+        listener._submit = submit
+        return listener, submit
+
+    def test_app_mention_submits(self) -> None:
+        listener, submit = self._listener()
+        listener._on_app_mention(
+            {
+                "type": "app_mention",
+                "user": "U1",
+                "text": "<@UBOT> help",
+                "channel": "C1",
+                "ts": "T1",
+            }
+        )
+        submit.assert_called_once()
+        raw: RawMessage = submit.call_args[0][0]
+        assert raw.sender == "U1"
+        assert raw.content["channel"] == "C1"
+
+    def test_app_mention_dedup(self) -> None:
+        listener, submit = self._listener()
+        event: JsonDict = {
+            "user": "U1",
+            "text": "x",
+            "channel": "C1",
+            "ts": "T1",
+        }
+        listener._on_app_mention(event)
+        listener._on_app_mention(event)
+        submit.assert_called_once()
+
+    def test_app_mention_allowlist_blocks(self) -> None:
+        listener, submit = self._listener(allowed_channels=("C9",))
+        listener._on_app_mention(
+            {"user": "U1", "text": "x", "channel": "C1", "ts": "T1"}
+        )
+        submit.assert_not_called()
+
+    def test_app_mention_allowlist_permits(self) -> None:
+        listener, submit = self._listener(allowed_channels=("C1",))
+        listener._on_app_mention(
+            {"user": "U1", "text": "x", "channel": "C1", "ts": "T1"}
+        )
+        submit.assert_called_once()
+
+
+class TestChannelMessageHandler:
+    def _listener(
+        self,
+        *,
+        allowed_channels: tuple[str, ...] = (),
+        sticky_conv: str | None = None,
+        bot_user_id: str | None = "UBOT",
+    ) -> tuple[SlackChannelListener, MagicMock, MagicMock]:
+        authorizer = MagicMock(spec=SlackAuthorizer)
+        authorizer.get_bot_user_id.return_value = bot_user_id
+        thread_store = MagicMock(spec=SlackThreadStore)
+        thread_store.get_conversation_id.return_value = sticky_conv
+        listener = _make_listener(
+            config=_make_config(allowed_channels=allowed_channels),
+            thread_store=thread_store,
+            authorizer=authorizer,
+        )
+        submit = MagicMock(return_value=True)
+        listener._submit = submit
+        return listener, submit, thread_store
+
+    def _event(self, **overrides: JsonValue) -> JsonDict:
+        event: JsonDict = {
+            "type": "message",
+            "channel_type": "channel",
+            "user": "U1",
+            "text": "hello",
+            "channel": "C1",
+            "ts": "T2",
+            "thread_ts": "T1",
+        }
+        event.update(overrides)
+        return event
+
+    def test_dm_channel_type_skipped(self) -> None:
+        listener, submit, _ = self._listener(sticky_conv="conv1")
+        listener._on_channel_message(self._event(channel_type="im"))
+        submit.assert_not_called()
+
+    def test_subtype_skipped(self) -> None:
+        listener, submit, _ = self._listener(sticky_conv="conv1")
+        listener._on_channel_message(self._event(subtype="message_changed"))
+        submit.assert_not_called()
+
+    def test_bot_message_skipped(self) -> None:
+        listener, submit, _ = self._listener(sticky_conv="conv1")
+        listener._on_channel_message(self._event(bot_id="B1"))
+        submit.assert_not_called()
+
+    def test_sticky_thread_submits_without_mention(self) -> None:
+        listener, submit, store = self._listener(sticky_conv="conv1")
+        listener._on_channel_message(self._event(text="no mention here"))
+        submit.assert_called_once()
+        store.get_conversation_id.assert_called_with("C1", "T1")
+
+    def test_mention_submits_when_not_sticky(self) -> None:
+        listener, submit, _ = self._listener(sticky_conv=None)
+        listener._on_channel_message(self._event(text="<@UBOT> hi"))
+        submit.assert_called_once()
+
+    def test_no_engagement_dropped(self) -> None:
+        listener, submit, _ = self._listener(sticky_conv=None)
+        listener._on_channel_message(self._event(text="just chatting"))
+        submit.assert_not_called()
+
+    def test_top_level_uses_ts_for_thread_lookup(self) -> None:
+        listener, submit, store = self._listener(sticky_conv="conv1")
+        event = self._event(text="follow up")
+        del event["thread_ts"]
+        listener._on_channel_message(event)
+        store.get_conversation_id.assert_called_with("C1", "T2")
+        submit.assert_called_once()
+
+    def test_dedup_against_app_mention(self) -> None:
+        listener, submit, _ = self._listener(sticky_conv=None)
+        listener._on_app_mention(
+            {"user": "U1", "text": "<@UBOT> hi", "channel": "C1", "ts": "T2"}
+        )
+        listener._on_channel_message(self._event(text="<@UBOT> hi"))
+        submit.assert_called_once()
+
+    def test_pipe_form_mention_matches(self) -> None:
+        listener, submit, _ = self._listener(sticky_conv=None)
+        listener._on_channel_message(self._event(text="hey <@UBOT|airut> go"))
+        submit.assert_called_once()
+
+    def test_allowlist_blocks_channel_message(self) -> None:
+        listener, submit, _ = self._listener(
+            allowed_channels=("C9",), sticky_conv="conv1"
+        )
+        listener._on_channel_message(self._event())
+        submit.assert_not_called()
+
+    def test_no_bot_id_disables_mention_engagement(self) -> None:
+        listener, submit, _ = self._listener(sticky_conv=None, bot_user_id=None)
+        listener._on_channel_message(self._event(text="<@UBOT> hi"))
+        submit.assert_not_called()
+
+    def test_submit_exception_handled(self) -> None:
+        listener, submit, _ = self._listener(sticky_conv="conv1")
+        submit.side_effect = RuntimeError("boom")
+        # Should not raise.
+        listener._on_channel_message(self._event(text="hi"))
+
+    def test_dedup_evicts_oldest_over_capacity(self) -> None:
+        from airut.gateway.slack.listener import _DEDUP_CAPACITY
+
+        listener, _, _ = self._listener()
+        # Fill the dedup set beyond capacity; the first key is evicted and
+        # can be claimed again.
+        assert listener._claim_event("C1", "first") is True
+        for i in range(_DEDUP_CAPACITY):
+            listener._claim_event("C1", f"k{i}")
+        assert len(listener._seen_events) == _DEDUP_CAPACITY
+        assert listener._claim_event("C1", "first") is True
