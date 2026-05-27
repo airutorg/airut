@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from airut.gateway.channel import ChannelSendError, RawMessage
+from airut.gateway.channel import ChannelSendError, RawMessage, TaskPhase
 from airut.gateway.config import (
     EmailAccountConfig,
     EmailAuthConfig,
@@ -365,6 +365,25 @@ class TestSendAcknowledgment:
 
         # Should not raise
         adapter.send_acknowledgment(parsed, "conv1", "sonnet", None)
+
+
+class TestReportPhase:
+    def test_phases_are_noops(self) -> None:
+        adapter, _, _, responder = _make_adapter()
+        parsed = EmailParsedMessage(
+            sender="user@example.com",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            original_message_id="<msg1@ex.com>",
+            decoded_subject="Test",
+        )
+
+        # Email has no live status indicator: every phase is a no-op and
+        # must not send anything.
+        adapter.report_phase(parsed, TaskPhase.PREPARING)
+        adapter.report_phase(parsed, TaskPhase.RUNNING)
+        responder.send_reply.assert_not_called()
 
 
 class TestSendReply:

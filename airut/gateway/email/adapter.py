@@ -23,6 +23,7 @@ from airut.gateway.channel import (
     ParsedMessage,
     PlanStreamer,
     RawMessage,
+    TaskPhase,
 )
 from airut.gateway.config import EmailChannelConfig
 from airut.gateway.email.channel_listener import EmailChannelListener
@@ -324,6 +325,9 @@ class EmailChannelAdapter(ChannelAdapter):
             )
         except SMTPSendError as e:
             logger.warning("Failed to send acknowledgment (non-fatal): %s", e)
+
+    def report_phase(self, parsed: ParsedMessage, phase: TaskPhase) -> None:
+        """No-op: email has no live status indicator."""
 
     def send_reply(
         self,

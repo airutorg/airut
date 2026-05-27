@@ -158,6 +158,22 @@ class FakeWebClient:
         resp.data = {"ok": True}
         return resp
 
+    # -- assistant_threads_setStatus ------------------------------------
+
+    def assistant_threads_setStatus(  # noqa: N802
+        self, **kwargs: JsonValue | bytes
+    ) -> MagicMock:
+        """Record a setStatus call."""
+        self._server._record_sent(
+            SentSlackMessage(
+                method="assistant_threads_setStatus",
+                kwargs=kwargs,
+            )
+        )
+        resp = MagicMock()
+        resp.data = {"ok": True}
+        return resp
+
     # -- users.info -----------------------------------------------------
 
     def users_info(self, **kwargs: JsonValue | bytes) -> JsonDict:

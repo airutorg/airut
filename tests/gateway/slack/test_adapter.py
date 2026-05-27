@@ -16,6 +16,7 @@ from airut.gateway.channel import (
     AuthenticationError,
     ChannelSendError,
     RawMessage,
+    TaskPhase,
 )
 from airut.gateway.slack.adapter import (
     _MAX_SPLIT_MESSAGES,
@@ -336,6 +337,78 @@ class TestSendAcknowledgment:
 
         # Should not raise
         adapter.send_acknowledgment(parsed, "conv1", "sonnet", None)
+
+
+class TestReportPhase:
+    def test_preparing_sets_loading_indicator(self, tmp_path: Path) -> None:
+        adapter, client, _, _ = _make_adapter(tmp_path)
+        parsed = SlackParsedMessage(
+            sender="U123",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="D456",
+            slack_thread_ts="ts1",
+        )
+
+        adapter.report_phase(parsed, TaskPhase.PREPARING)
+
+        client.assistant_threads_setStatus.assert_called_once_with(
+            channel_id="D456",
+            thread_ts="ts1",
+            status="is working on this...",
+        )
+
+    def test_running_clears_status(self, tmp_path: Path) -> None:
+        adapter, client, _, _ = _make_adapter(tmp_path)
+        parsed = SlackParsedMessage(
+            sender="U123",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="D456",
+            slack_thread_ts="ts1",
+        )
+
+        adapter.report_phase(parsed, TaskPhase.RUNNING)
+
+        client.assistant_threads_setStatus.assert_called_once_with(
+            channel_id="D456",
+            thread_ts="ts1",
+            status="",
+        )
+
+    def test_api_failure_non_fatal(self, tmp_path: Path) -> None:
+        adapter, client, _, _ = _make_adapter(tmp_path)
+        client.assistant_threads_setStatus.side_effect = SlackApiError(
+            message="error",
+            response=MagicMock(status_code=500, data={}),
+        )
+        parsed = SlackParsedMessage(
+            sender="U123",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="D456",
+            slack_thread_ts="ts1",
+        )
+
+        # Should not raise
+        adapter.report_phase(parsed, TaskPhase.PREPARING)
+        adapter.report_phase(parsed, TaskPhase.RUNNING)
+
+    def test_type_error(self, tmp_path: Path) -> None:
+        adapter, _, _, _ = _make_adapter(tmp_path)
+        from airut.gateway.channel import ParsedMessage
+
+        wrong = ParsedMessage(
+            sender="U123",
+            body="t",
+            conversation_id=None,
+            model_hint=None,
+        )
+        with pytest.raises(TypeError, match="SlackParsedMessage"):
+            adapter.report_phase(wrong, TaskPhase.PREPARING)
 
 
 class TestSendReply:

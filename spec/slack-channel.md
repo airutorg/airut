@@ -48,8 +48,9 @@ User opens Airut in Slack (top bar icon or split-view)
   -> Bot shows greeting
   -> User sends a message
     -> message.im event with thread_ts
-    -> Bot sets status: "is working on this..."
     -> Bot maps thread to Airut conversation (new or resumed)
+    -> Bot sets status "is working on this..." during prep, clears it
+       before the run starts (composer unlocks for follow-ups)
     -> Sandbox executes Claude Code
     -> Bot replies in thread with result
     -> Bot sets thread title from conversation topic
@@ -86,28 +87,64 @@ resume past conversations.
 
 ### Status Indicators
 
-While a task is executing, the adapter calls `assistant.threads.setStatus` to
-show progress (e.g., "is working on this..."). The status clears automatically
-when the bot sends its reply.
+Slack locks the thread composer (disables the send button) while an assistant
+loading status is active, releasing it only when the app next posts to the
+thread. A long-lived "is working on this..." status held for the whole run would
+therefore prevent the user from sending follow-up messages — defeating message
+coalescing, which exists precisely to absorb a burst of messages sent during a
+busy conversation.
+
+To avoid this, the gateway does not manage statuses directly. Instead it reports
+**lifecycle phases** to the adapter via
+`ChannelAdapter.report_phase(parsed, phase)` (where `phase` is a `TaskPhase`),
+and each adapter decides how to surface them. This keeps channel-specific
+presentation policy — including Slack's composer-locking quirk — out of the
+channel-agnostic gateway. `process_message` emits:
+
+- `TaskPhase.PREPARING` at the start, before conversation creation/resume.
+- `TaskPhase.RUNNING` immediately before the sandbox run begins.
+
+The Slack adapter maps these to a status scoped to the **preparation window
+only**: `PREPARING` calls
+`assistant.threads.setStatus("is working on this...")`, and `RUNNING` calls
+`assistant.threads.setStatus("")`, which clears the indicator and unlocks the
+composer for the duration of the run. The Slack-specific text and the locking
+behaviour both live in the adapter.
+
+The listener's `user_message` handler does **not** report or set a status —
+doing so per-message would lock the composer for the entire run and for every
+coalesced burst message (a coalesced message never reaches `process_message`, so
+it never reports a phase). For new conversations, `send_acknowledgment()` also
+posts to the thread, which independently clears the status. Email ignores all
+phases (no live status indicator). New phases are added to `TaskPhase` only when
+a gateway call site actually emits them.
+
+If preparation fails before `RUNNING` is reported, the status is cleared
+implicitly by the error notification: every prep-failure path posts via
+`send_error()`, and Slack clears an active status on the next thread post. So
+there is no explicit clear on the error path — but note this depends on
+`send_error()` posting to the thread. (If that post also fails, e.g. Slack is
+unreachable, the status cannot be cleared anyway.)
 
 ### Asynchronous Execution Model
 
 Slack follows the same async model as the email channel: the bot acknowledges
 the request immediately, then works asynchronously and replies when done.
 
-1. **Acknowledgment**: When a message is received, the listener's `user_message`
-   handler calls `set_status("is working on this...")` to show a loading
-   indicator immediately (before dispatching to the worker thread). Later,
+1. **Acknowledgment**: During conversation prep the adapter shows a loading
+   status (see [Status Indicators](#status-indicators)), then clears it before
+   the run starts so the composer stays unlocked. For new conversations,
    `send_acknowledgment()` posts a message to the thread: "I've started working
    on this and will reply shortly." If a dashboard URL is configured, the
    message includes a link to track progress. This message is always sent (not
    just when dashboard is configured) because these requests take a long time
    and a short confirmation sets the right expectation.
 2. **Execution**: Claude Code runs in a container via the sandbox. No streaming
-   of intermediate output to Slack.
+   of intermediate output to Slack. The composer is unlocked during the run, so
+   follow-up messages can be sent and are coalesced into the active
+   conversation.
 3. **Reply**: The complete response is converted to Slack `mrkdwn` and posted to
-   the thread via `chat.postMessage` using the `text` parameter. The status
-   indicator clears automatically when the reply is sent.
+   the thread via `chat.postMessage` using the `text` parameter.
 
 This avoids complexity from streaming action blocks back to Slack and keeps the
 interaction model consistent with the email channel. The dashboard provides
@@ -654,7 +691,8 @@ The `SlackChannelAdapter` implements all `ChannelAdapter` methods from
 | `listener` (property)      | Returns the `SlackChannelListener` instance                                                                                                                                                  |
 | `authenticate_and_parse()` | Check authorization rules via `SlackAuthorizer`, extract body and file metadata from event payload, resolve conversation ID from thread mapping                                              |
 | `save_attachments()`       | Download files listed in `SlackParsedMessage.slack_file_urls` using bot token, save to `inbox_dir`                                                                                           |
-| `send_acknowledgment()`    | Register thread mapping, `chat.postMessage` with confirmation text and optional dashboard link (status is set by the listener before dispatch)                                               |
+| `send_acknowledgment()`    | Register thread mapping, `chat.postMessage` with confirmation text and optional dashboard link                                                                                               |
+| `report_phase()`           | `PREPARING` → `assistant.threads.setStatus("is working on this...")`; `RUNNING` → `assistant.threads.setStatus("")` (clears it, unlocking the composer for follow-ups)                       |
 | `send_reply()`             | Convert Markdown to `mrkdwn` via `render_mrkdwn()`, split if >40K chars (file upload beyond five chunks), `chat.postMessage` via the `text` parameter, upload outbox files, set thread title |
 | `send_error()`             | `chat.postMessage` with error text in thread                                                                                                                                                 |
 
