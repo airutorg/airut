@@ -1221,6 +1221,53 @@ class TestProcessMessage:
         # Should include last response
         assert "I created the PR." in second_call[0][0]
 
+    def test_recovery_task_receives_claude_binary_path(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """Recovery retry must bind-mount the Claude binary.
+
+        Regression: the fresh-session retry created after a context
+        compaction failure must receive the same claude_binary_path as
+        the initial task. Without it, the binary is never mounted and
+        the container dies trying to exec /opt/claude/claude (exit 127).
+        """
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+
+        handler.conversation_manager.exists.return_value = True
+        handler.conversation_manager.resume_existing.return_value = (
+            tmp_path / "repo"
+        )
+        mock_cs.get_session_id_for_resume.return_value = "old-session-id"
+        mock_cs.get_last_successful_response.return_value = "Prior work."
+
+        mock_task1 = MagicMock()
+        mock_task1.execute = AsyncMock(
+            return_value=_make_failure_result(
+                outcome=Outcome.PROMPT_TOO_LONG,
+            )
+        )
+        mock_task1.event_log = MagicMock()
+        mock_task2 = MagicMock()
+        mock_task2.execute = AsyncMock(return_value=_make_success_result())
+        mock_task2.event_log = MagicMock()
+        svc.sandbox.create_task.side_effect = [mock_task1, mock_task2]
+
+        parsed = _make_parsed_message(
+            body="Continue please", conversation_id="aabb1122"
+        )
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+
+        assert svc.sandbox.create_task.call_count == 2
+        first_call, recovery_call = svc.sandbox.create_task.call_args_list
+        expected = Path("/fake/claude")
+        assert first_call[1]["claude_binary_path"] == expected
+        assert recovery_call[1]["claude_binary_path"] == expected
+
     def test_prompt_too_long_no_retry_without_session_id(
         self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
