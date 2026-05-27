@@ -422,9 +422,14 @@ per-thread candidate set:
    to a workspace member who has never posted in the thread falls through to
    "zero matches" and renders as plain text rather than a Slack ping. This is
    acceptable — the alternative (loading every workspace member) would require
-   expensive `users.list` calls and would still be ambiguous for common names.
-   Claude can be instructed to emit raw `<@USERID>` tokens when an explicit ping
-   is required and the user ID is known; the renderer leaves those alone.
+   expensive `users.list` calls and would still be ambiguous for common names. A
+   live mention is only produced by a bare `@name` token (written outside code
+   spans) that resolves against the candidate set. Hand-writing a raw
+   `<@USERID>` token does **not** work: the `mrkdwn` renderer escapes `<`/`>`
+   for echo-safety before the rewriter runs (see
+   [Display name in `ParsedMessage`](#display-name-in-parsedmessage)), so the
+   token becomes inert text. There is currently no supported way to ping a
+   workspace member who is absent from the candidate set.
 
 2. **Match.** For each token, look for an exact (case-insensitive) match against
    the candidate set's `display_name`, then `real_name`, then `name` (Slack
