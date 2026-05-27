@@ -203,11 +203,10 @@ pops the pending entry; a message arriving between the pop and the popped task's
 transition to EXECUTING simply creates a fresh pending entry, because
 `has_active_task(conv_id)` still returns true.
 
-`MAX_PENDING_PER_CONVERSATION`, `CompletionReason.REJECTED`, and the adapters'
-`send_rejection()` method are removed in the same change that introduces
-coalescing. With at-most-one pending per conversation by construction, the cap
-is unreachable and the rejection path is dead, so the code is deleted rather
-than retained "in case."
+There is no queue cap and no rejection path: with at-most-one pending message
+per conversation by construction, a per-conversation cap would be unreachable
+and a rejection completion reason would be dead. A follow-up to a busy
+conversation always coalesces; it is never dropped.
 
 Pending messages skip authentication (already verified at receive time).
 
