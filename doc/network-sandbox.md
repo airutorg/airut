@@ -26,6 +26,7 @@ so it works with all tools (Node.js, Go, curl, Python, git).
     - [Pattern Matching Rules](#pattern-matching-rules)
     - [HTTP Method Filtering](#http-method-filtering)
     - [GraphQL Operation Filtering](#graphql-operation-filtering)
+    - [Anthropic Server-Side Tool Trimming](#anthropic-server-side-tool-trimming)
     - [Wildcard Host for Credential-Only Sandboxing](#wildcard-host-for-credential-only-sandboxing)
   - [Agent Self-Service Flow](#agent-self-service-flow)
 - [Masked Secrets (Token Replacement)](#masked-secrets-token-replacement)
@@ -353,6 +354,33 @@ For GitHub App credentials, this acts as Layer 1 in a two-layer defense. Layer 2
 mutations target only permitted repositories. See
 [spec/graphql-operation-allowlist.md](../spec/graphql-operation-allowlist.md)
 for the full specification.
+
+#### Anthropic Server-Side Tool Trimming
+
+Anthropic's Messages API exposes server-side tools (`web_fetch_*`,
+`web_search_*`, `computer_*`, `bash_*`, `code_execution_*`) that fetch arbitrary
+URLs **from Anthropic's egress** and return the response body in the API result.
+Without mitigation, an agent inside the sandbox can use these tools to read URLs
+the airut allowlist denies — Anthropic does the fetch, not the container, so the
+network proxy never sees it.
+
+The proxy parses every `/v1/messages*` POST body and:
+
+- Trims each covered tool's `allowed_domains` to the intersection of the
+  agent-declared list and the set of hosts the airut allowlist already permits
+  for unconstrained HTTP `GET` access (i.e. entries with `path: ""` and either
+  no methods restriction or `GET` in `methods`).
+- Rejects (403) any covered tool entry that uses `blocked_domains` (cannot be
+  reconciled with a positive allowlist) or any wildcard / glob-shaped entry in
+  `allowed_domains`.
+- Injects `allowed_domains: []` (default-deny) when a covered entry declares
+  neither field — closes the door on any future Anthropic default that fails
+  open.
+
+The trim applies automatically; no configuration is required. See
+[spec/anthropic-tool-domain-trim.md](../spec/anthropic-tool-domain-trim.md) for
+the full specification, including the list of covered tool types and the
+maintenance hooks for when Anthropic ships a new server-side fetcher.
 
 #### Wildcard Host for Credential-Only Sandboxing
 

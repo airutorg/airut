@@ -46,6 +46,8 @@ For high-level documentation, see [doc/](../doc/).
   masking via proxy re-signing
 - [graphql-operation-allowlist.md](graphql-operation-allowlist.md) — Generic
   GraphQL operation filtering at the proxy layer
+- [anthropic-tool-domain-trim.md](anthropic-tool-domain-trim.md) — Trimming
+  Anthropic server-side-tool `allowed_domains` to the airut allowlist
 - [github-app-credential.md](github-app-credential.md) — GitHub App credential
   support with proxy-managed token rotation
 
