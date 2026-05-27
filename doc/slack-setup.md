@@ -253,20 +253,20 @@ authorized:
 
 The app manifest includes these bot token scopes:
 
-| Scope               | Purpose                                                                                        |
-| ------------------- | ---------------------------------------------------------------------------------------------- |
-| `assistant:write`   | Thread titles, status indicators (DM-only, auto-added)                                         |
-| `chat:write`        | Send messages and replies in threads                                                           |
-| `im:history`        | Read DM history for thread context                                                             |
-| `users:read`        | User info for authorization and display-name resolution                                        |
-| `files:read`        | Read files uploaded by users                                                                   |
-| `files:write`       | Upload outbox files to threads                                                                 |
-| `app_mentions:read` | Receive `app_mention` events in channels                                                       |
-| `channels:history`  | Read public-channel thread history                                                             |
-| `groups:history`    | Read private-channel thread history                                                            |
-| `reactions:write`   | Add `:eyes:` acknowledgement reaction in channels                                              |
-| `usergroups:read`   | User group membership (for `user_group` rules and outbound `@group` rewriting)                 |
-| `channels:read`     | Outbound `#channel` rewriting and dashboard channel-ID lookup by name (optional, add manually) |
+| Scope               | Purpose                                                                                         |
+| ------------------- | ----------------------------------------------------------------------------------------------- |
+| `assistant:write`   | Thread titles, status indicators (DM-only, auto-added)                                          |
+| `chat:write`        | Send messages and replies in threads                                                            |
+| `im:history`        | Read DM history for thread context                                                              |
+| `users:read`        | User info for authorization and display-name resolution                                         |
+| `files:read`        | Read files uploaded by users                                                                    |
+| `files:write`       | Upload outbox files to threads                                                                  |
+| `app_mentions:read` | Receive `app_mention` events in channels                                                        |
+| `channels:history`  | Read public-channel thread history                                                              |
+| `groups:history`    | Read private-channel thread history                                                             |
+| `reactions:write`   | Channel acknowledgement reactions (`:eyes:` while working → `:heavy_check_mark:`/`:x:` on done) |
+| `usergroups:read`   | User group membership (for `user_group` rules and outbound `@group` rewriting)                  |
+| `channels:read`     | Outbound `#channel` rewriting and dashboard channel-ID lookup by name (optional, add manually)  |
 
 The `usergroups:read` scope is only needed if you use `user_group` authorization
 rules or rely on outbound `@group` mention rewriting. If you only use

@@ -1150,7 +1150,6 @@ class TestChannelEngagement:
         assert result.slack_channel_id == "C1"
         # Top-level mention: the message ts roots the thread.
         assert result.slack_thread_ts == "T1"
-        assert result.triggering_message_ts == "T1"
         # Bot mention stripped from the invocation body.
         assert result.body == "do the thing"
         assert result.mention_candidate_ids == ["U1"]
@@ -1158,6 +1157,8 @@ class TestChannelEngagement:
         client.reactions_add.assert_called_once_with(
             channel="C1", timestamp="T1", name="eyes"
         )
+        # The acked ts is recorded for the later terminal-reaction swap.
+        assert result.acknowledged_message_ts == ["T1"]
         # No replay for a brand-new top-level thread.
         client.conversations_replies.assert_not_called()
 
@@ -1198,6 +1199,8 @@ class TestChannelEngagement:
 
         assert result.is_channel is False
         client.reactions_add.assert_not_called()
+        # DMs acknowledge via the thread status, so no reaction to track.
+        assert result.acknowledged_message_ts == []
 
     def test_reaction_failure_non_fatal(self, tmp_path: Path) -> None:
         adapter, client, authorizer, _ = _make_adapter(tmp_path)
@@ -1387,6 +1390,157 @@ class TestChannelReportPhase:
         adapter.report_phase(parsed, TaskPhase.RUNNING)
 
         client.assistant_threads_setStatus.assert_not_called()
+
+    def test_completed_swaps_eyes_for_checkmark(self, tmp_path: Path) -> None:
+        adapter, client, _, _ = _make_adapter(tmp_path)
+        parsed = SlackParsedMessage(
+            sender="U1",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="C1",
+            slack_thread_ts="T1",
+            is_channel=True,
+            acknowledged_message_ts=["T1"],
+        )
+
+        adapter.report_phase(parsed, TaskPhase.COMPLETED)
+
+        client.reactions_remove.assert_called_once_with(
+            channel="C1", timestamp="T1", name="eyes"
+        )
+        client.reactions_add.assert_called_once_with(
+            channel="C1", timestamp="T1", name="heavy_check_mark"
+        )
+
+    def test_failed_swaps_eyes_for_x(self, tmp_path: Path) -> None:
+        adapter, client, _, _ = _make_adapter(tmp_path)
+        parsed = SlackParsedMessage(
+            sender="U1",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="C1",
+            slack_thread_ts="T1",
+            is_channel=True,
+            acknowledged_message_ts=["T1"],
+        )
+
+        adapter.report_phase(parsed, TaskPhase.FAILED)
+
+        client.reactions_remove.assert_called_once_with(
+            channel="C1", timestamp="T1", name="eyes"
+        )
+        client.reactions_add.assert_called_once_with(
+            channel="C1", timestamp="T1", name="x"
+        )
+
+    def test_swaps_every_coalesced_message(self, tmp_path: Path) -> None:
+        adapter, client, _, _ = _make_adapter(tmp_path)
+        parsed = SlackParsedMessage(
+            sender="U1",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="C1",
+            slack_thread_ts="T1",
+            is_channel=True,
+            acknowledged_message_ts=["T1", "T2", "T3"],
+        )
+
+        adapter.report_phase(parsed, TaskPhase.COMPLETED)
+
+        assert client.reactions_remove.call_count == 3
+        assert client.reactions_add.call_count == 3
+        added = {
+            c.kwargs["timestamp"] for c in client.reactions_add.call_args_list
+        }
+        assert added == {"T1", "T2", "T3"}
+
+    def test_terminal_reaction_failure_non_fatal(self, tmp_path: Path) -> None:
+        adapter, client, _, _ = _make_adapter(tmp_path)
+        client.reactions_remove.side_effect = SlackApiError(
+            message="no", response=MagicMock(status_code=500, data={})
+        )
+        client.reactions_add.side_effect = SlackApiError(
+            message="no", response=MagicMock(status_code=500, data={})
+        )
+        parsed = SlackParsedMessage(
+            sender="U1",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="C1",
+            slack_thread_ts="T1",
+            is_channel=True,
+            acknowledged_message_ts=["T1"],
+        )
+
+        # Should not raise.
+        adapter.report_phase(parsed, TaskPhase.COMPLETED)
+
+    def test_dm_completion_does_not_react(self, tmp_path: Path) -> None:
+        adapter, client, _, _ = _make_adapter(tmp_path)
+        parsed = SlackParsedMessage(
+            sender="U1",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="D1",
+            slack_thread_ts="T1",
+            is_channel=False,
+        )
+
+        adapter.report_phase(parsed, TaskPhase.COMPLETED)
+        adapter.report_phase(parsed, TaskPhase.FAILED)
+
+        client.reactions_remove.assert_not_called()
+        client.reactions_add.assert_not_called()
+
+
+class TestSlackParsedMessageCoalesce:
+    def _msg(self, body: str, acked: list[str]) -> SlackParsedMessage:
+        return SlackParsedMessage(
+            sender="U1",
+            body=body,
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="C1",
+            is_channel=True,
+            acknowledged_message_ts=acked,
+        )
+
+    def test_merges_acknowledged_ts(self) -> None:
+        survivor = self._msg("first", ["T1"])
+        survivor.coalesce(self._msg("second", ["T2"]))
+
+        # Both reaction targets are accumulated for the terminal swap.
+        assert survivor.acknowledged_message_ts == ["T1", "T2"]
+        # Base merge still records both messages in arrival order.
+        assert [b for _, _, b in survivor.coalesced_entries] == [
+            "first",
+            "second",
+        ]
+
+    def test_non_slack_other_leaves_acked_ts(self) -> None:
+        from airut.gateway.channel import ParsedMessage
+
+        survivor = self._msg("first", ["T1"])
+        survivor.coalesce(
+            ParsedMessage(
+                sender="x",
+                body="plain",
+                conversation_id=None,
+                model_hint=None,
+            )
+        )
+
+        # Nothing Slack-specific to merge; acked list is untouched.
+        assert survivor.acknowledged_message_ts == ["T1"]
+        assert [b for _, _, b in survivor.coalesced_entries] == [
+            "first",
+            "plain",
+        ]
 
 
 class TestChannelSendReply:
