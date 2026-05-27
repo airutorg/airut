@@ -578,6 +578,7 @@ def run_in_sandbox(
             ),
             network_sandbox=network_sandbox,
             resource_limits=resource_limits,
+            claude_binary_path=claude_binary_path,
         )
 
         conversation_store.set_pending_request(conversation_id, recovery_prompt)
