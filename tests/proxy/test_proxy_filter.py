@@ -4350,7 +4350,7 @@ class TestGraphqlOperationAllowlist:
         pf.request(flow)
         assert flow.metadata["allowlist_action"] == "ALLOWED"
         assert flow.response is None
-        assert flow.metadata.get("graphql_op") == "query/viewer"
+        assert flow.metadata.get("filter_tags") == ["graphql-op: query/viewer"]
 
     def test_allowed_mutation(self) -> None:
         """Allowed mutation passes through."""
@@ -4367,7 +4367,9 @@ class TestGraphqlOperationAllowlist:
         pf.request(flow)
         assert flow.metadata["allowlist_action"] == "ALLOWED"
         assert flow.response is None
-        assert flow.metadata.get("graphql_op") == "mutation/createIssue"
+        assert flow.metadata.get("filter_tags") == [
+            "graphql-op: mutation/createIssue"
+        ]
 
     def test_blocked_mutation(self) -> None:
         """Blocked mutation gets 403."""
@@ -4775,67 +4777,6 @@ class TestProxyFilterToolDomainTrim:
         ]
         return pf
 
-    def test_is_anthropic_messages_request_matches_messages(self) -> None:
-        assert (
-            ProxyFilter._is_anthropic_messages_request(
-                "api.anthropic.com", "/v1/messages"
-            )
-            is True
-        )
-
-    def test_is_anthropic_messages_request_matches_batches(self) -> None:
-        # /v1/messages/batches is a real Anthropic endpoint nested under
-        # the Messages API that also carries tools.
-        assert (
-            ProxyFilter._is_anthropic_messages_request(
-                "api.anthropic.com", "/v1/messages/batches"
-            )
-            is True
-        )
-
-    def test_is_anthropic_messages_request_matches_query_string(self) -> None:
-        assert (
-            ProxyFilter._is_anthropic_messages_request(
-                "api.anthropic.com", "/v1/messages?stream=true"
-            )
-            is True
-        )
-
-    def test_is_anthropic_messages_request_case_insensitive_host(self) -> None:
-        assert (
-            ProxyFilter._is_anthropic_messages_request(
-                "API.ANTHROPIC.COM", "/v1/messages"
-            )
-            is True
-        )
-
-    def test_is_anthropic_messages_request_rejects_other_host(self) -> None:
-        assert (
-            ProxyFilter._is_anthropic_messages_request(
-                "api.example.com", "/v1/messages"
-            )
-            is False
-        )
-
-    def test_is_anthropic_messages_request_rejects_other_path(self) -> None:
-        assert (
-            ProxyFilter._is_anthropic_messages_request(
-                "api.anthropic.com", "/v1/files"
-            )
-            is False
-        )
-
-    def test_is_anthropic_messages_request_rejects_lookalike_path(self) -> None:
-        # /v1/messages_legacy must not be treated as a Messages API call
-        # — startswith("/v1/messages") would accept it without a
-        # boundary check.
-        assert (
-            ProxyFilter._is_anthropic_messages_request(
-                "api.anthropic.com", "/v1/messages_legacy"
-            )
-            is False
-        )
-
     def test_host_get_open_uses_loaded_allowlist(self) -> None:
         pf = self._filter()
         assert pf._host_get_open("pypi.org") is True
@@ -4857,8 +4798,7 @@ class TestProxyFilterToolDomainTrim:
         assert flow.metadata["allowlist_action"] == "ALLOWED"
         # Body untouched.
         assert flow.request.content == body
-        assert "tool_trim" not in flow.metadata
-        assert "tool_config" not in flow.metadata
+        assert "filter_tags" not in flow.metadata
 
     def test_request_with_disallowed_domain_trims(self) -> None:
         pf = self._filter()
@@ -4886,9 +4826,11 @@ class TestProxyFilterToolDomainTrim:
         new = json.loads(flow.request.content)
         assert new["tools"][0]["allowed_domains"] == []
         # Log annotation is recorded for the response() emit.
-        assert "tool_trim" in flow.metadata
-        assert "web_fetch_20250910" in flow.metadata["tool_trim"]
-        assert "airut.org" in flow.metadata["tool_trim"]
+        tags = flow.metadata["filter_tags"]
+        assert len(tags) == 1
+        assert tags[0].startswith("tool-domains: ")
+        assert "web_fetch_20250910" in tags[0]
+        assert "airut.org" in tags[0]
 
     def test_request_blocked_domains_returns_403(self) -> None:
         pf = self._filter()
@@ -4915,7 +4857,8 @@ class TestProxyFilterToolDomainTrim:
         assert resp["error"] == "blocklist_tool_config_unsupported"
         assert resp["detail"] == "web_fetch_20250910"
         assert flow.metadata["allowlist_action"] == "BLOCKED"
-        assert "tool_config" in flow.metadata
+        tags = flow.metadata["filter_tags"]
+        assert tags == ["tool-domains: web_fetch_20250910: blocked-domains"]
 
     def test_request_wildcard_returns_403(self) -> None:
         pf = self._filter()
@@ -5074,10 +5017,10 @@ class TestProxyFilterToolDomainTrim:
         new = json.loads(flow.request.content)
         assert new["tools"][0]["allowed_domains"] == []
 
-    def test_response_log_includes_tool_trim_annotation(
+    def test_response_log_includes_tool_domains_rewrite_annotation(
         self, tmp_path: Path
     ) -> None:
-        """`response()` writes `[tool-trim: ...]` to the access log."""
+        """`response()` writes the tool-domains annotation to the log."""
         log_path = tmp_path / "test.log"
         pf = self._filter()
         pf._log_file = open(log_path, "w")
@@ -5089,20 +5032,21 @@ class TestProxyFilterToolDomainTrim:
                 response_code=200,
             )
             flow.metadata["allowlist_action"] = "ALLOWED"
-            flow.metadata["tool_trim"] = (
-                "web_fetch_20250910: dropped 1 of 1 domains: airut.org"
-            )
+            flow.metadata["filter_tags"] = [
+                "tool-domains: web_fetch_20250910: "
+                "dropped 1 of 1 domains: airut.org"
+            ]
             pf.response(flow)
         finally:
             pf._log_file.close()
         content = log_path.read_text()
-        assert "[tool-trim: web_fetch_20250910" in content
+        assert "[tool-domains: web_fetch_20250910" in content
         assert "airut.org" in content
 
-    def test_response_log_includes_tool_config_annotation(
+    def test_response_log_includes_tool_domains_block_annotation(
         self, tmp_path: Path
     ) -> None:
-        """`response()` writes `[tool-config: ...]` for BLOCKED rule 1/2."""
+        """`response()` writes the tool-domains annotation for BLOCKED."""
         log_path = tmp_path / "test.log"
         pf = self._filter()
         pf._log_file = open(log_path, "w")
@@ -5114,9 +5058,11 @@ class TestProxyFilterToolDomainTrim:
                 response_code=403,
             )
             flow.metadata["allowlist_action"] = "BLOCKED"
-            flow.metadata["tool_config"] = "web_fetch_20250910: wildcard"
+            flow.metadata["filter_tags"] = [
+                "tool-domains: web_fetch_20250910: wildcard"
+            ]
             pf.response(flow)
         finally:
             pf._log_file.close()
         content = log_path.read_text()
-        assert "[tool-config: web_fetch_20250910: wildcard]" in content
+        assert "[tool-domains: web_fetch_20250910: wildcard]" in content

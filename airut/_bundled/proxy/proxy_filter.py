@@ -59,15 +59,12 @@ from github_app import (
     generate_jwt,
     is_token_valid,
 )
-from graphql_operations import OperationVerdict, check_operations
+from graphql_operations import GraphQLOperationFilter
 from graphql_scope import ScopeVerdict, check_repo_scope
 from host_match import UrlPrefixEntry, match_host_pattern
 from mitmproxy import ctx, http
-from tool_domains import (
-    ToolConfigVerdict,
-    check_and_trim_tools,
-    host_get_open,
-)
+from request_filter import FilterAction, FilterRequest, RequestBodyFilter
+from tool_domains import ToolDomainFilter, host_get_open
 
 
 type _JsonValue = (
@@ -227,6 +224,18 @@ class ProxyFilter:
         self.replacements: dict[str, dict[str, _JsonValue]] = {}
         self._log_file: TextIO | None = None
         self._github_app_cache: dict[str, CachedToken] = {}
+
+        # Ordered request-body filter pipeline. Each filter gates itself
+        # on the request and inspects / rewrites / rejects the body; the
+        # pipeline (``_run_body_filters``) translates the result into a
+        # pass-through, body rewrite, or 403. Credential transformation
+        # (AWS re-signing, GitHub App, token masking) is a separate
+        # concern and is not part of this list. See
+        # spec/request-body-filters.md.
+        self._body_filters: list[RequestBodyFilter] = [
+            GraphQLOperationFilter(),
+            ToolDomainFilter(self._host_get_open),
+        ]
 
     def load(self, options: object) -> None:  # noqa: ARG002
         """Load configuration on startup."""
@@ -390,74 +399,69 @@ class ProxyFilter:
         return host_get_open(host, self.domains, self.url_prefixes)
 
     @staticmethod
-    def _is_anthropic_messages_request(host: str, path: str) -> bool:
-        """Return True if a request targets the Anthropic Messages API.
+    def _add_filter_tag(flow: http.HTTPFlow, name: str, log_tag: str) -> None:
+        """Append a request-body filter's log annotation to the flow.
 
-        Gates on the **incoming request** (host + path), not on the
-        shape of the matched allowlist entry. A user who configures a
-        broader Anthropic allowlist entry (``/v1/*`` or omits ``path``)
-        must not silently disable the tool-domain trim.
-
-        Matches ``api.anthropic.com`` for any path beginning with
-        ``/v1/messages`` followed by end-of-path, ``/``, or ``?``. This
-        covers ``/v1/messages``, ``/v1/messages/batches``,
-        ``/v1/messages/count_tokens``, and ``/v1/messages?...`` while
-        excluding accidental matches like ``/v1/messages_legacy``.
-        Other Anthropic paths (``oauth/*``, ``event_logging/*``, etc.)
-        carry no ``tools`` field and do not need parsing.
+        ``response()`` emits each entry as ``[{name}: {log_tag}]`` on the
+        access-decision line, in filter-execution order.
         """
-        if host.lower() != "api.anthropic.com":
-            return False
-        if path == "/v1/messages":
-            return True
-        return path.startswith("/v1/messages/") or path.startswith(
-            "/v1/messages?"
-        )
+        flow.metadata.setdefault("filter_tags", []).append(f"{name}: {log_tag}")
 
-    def _apply_tool_domain_trim(self, flow: http.HTTPFlow) -> bool:
-        """Run the Anthropic tool-domain trim on the request body.
+    def _run_body_filters(
+        self,
+        flow: http.HTTPFlow,
+        host: str,
+        path: str,
+        matched_entry: UrlPrefixEntry | None,
+    ) -> bool:
+        """Run the request-body filter pipeline against an allowed request.
 
-        Parses the JSON body, trims each covered tool's
-        ``allowed_domains`` to the intersection with the airut network
-        allowlist, and rewrites the body in place. Rejects requests
-        that use ``blocked_domains`` or wildcard entries.
+        Each registered filter that :meth:`~RequestBodyFilter.matches`
+        the request inspects the (possibly already-rewritten) body and
+        returns a :class:`FilterResult`. The pipeline applies it:
+        ``PASS`` continues, ``REWRITE`` swaps the request body in place,
+        ``BLOCK`` sets a 403 and stops.
 
         Returns:
-            True if the request was blocked (caller must stop processing
-            it). False if the body was either passed through unchanged
-            or rewritten in place — the caller continues normally.
+            True if a filter blocked the request (caller must stop
+            processing it). False otherwise.
         """
-        result = check_and_trim_tools(
-            flow.request.get_content(),
-            self._host_get_open,
-        )
+        req = FilterRequest(host=host, path=path, matched_entry=matched_entry)
 
-        if result.verdict is ToolConfigVerdict.UNCHANGED:
-            return False
+        for body_filter in self._body_filters:
+            if not body_filter.matches(req):
+                continue
 
-        if result.verdict is ToolConfigVerdict.REWRITTEN:
-            assert result.body is not None
-            flow.request.content = result.body
+            body = flow.request.get_content() or b""
+            result = body_filter.apply(req, body)
+
             if result.log_tag:
-                flow.metadata["tool_trim"] = result.log_tag
-            return False
+                self._add_filter_tag(flow, body_filter.name, result.log_tag)
 
-        assert result.verdict is ToolConfigVerdict.BLOCKED
-        flow.metadata["allowlist_action"] = "BLOCKED"
-        if result.log_tag:
-            flow.metadata["tool_config"] = result.log_tag
-        flow.response = http.Response.make(
-            403,
-            json.dumps(
-                {
-                    "error": result.error,
-                    "message": result.message,
-                    "detail": result.detail,
-                }
-            ),
-            {"Content-Type": "application/json"},
-        )
-        return True
+            if result.action is FilterAction.PASS:
+                continue
+
+            if result.action is FilterAction.REWRITE:
+                assert result.body is not None
+                flow.request.content = result.body
+                continue
+
+            assert result.action is FilterAction.BLOCK
+            flow.metadata["allowlist_action"] = "BLOCKED"
+            flow.response = http.Response.make(
+                403,
+                json.dumps(
+                    {
+                        "error": result.error,
+                        "message": result.message,
+                        "detail": result.detail,
+                    }
+                ),
+                {"Content-Type": "application/json"},
+            )
+            return True
+
+        return False
 
     def _collapse_duplicate_header(
         self,
@@ -1466,52 +1470,16 @@ class ProxyFilter:
         # Request is allowed
         flow.metadata["allowlist_action"] = "ALLOWED"
 
-        # GraphQL operation allowlist check (Layer 1).
-        # Use matched_entry from _is_allowed() (per-flow, not shared).
-        # Also update flow metadata for downstream consumers.
+        # Stash the matched entry for downstream consumers (per-flow,
+        # not shared state).
         flow.metadata["matched_url_entry"] = matched_entry
-        if matched_entry is not None:
-            graphql_config = matched_entry.get("graphql")
-            if graphql_config is not None:
-                op_result = check_operations(
-                    flow.request.get_content(), graphql_config
-                )
-                flow.metadata["graphql_op"] = op_result.operation_tag
-                if op_result.verdict is not OperationVerdict.ALLOWED:
-                    detail = op_result.detail or ""
-                    flow.metadata["allowlist_action"] = "BLOCKED"
-                    flow.response = http.Response.make(
-                        403,
-                        json.dumps(
-                            {
-                                "error": "graphql_operation_blocked",
-                                "message": (
-                                    f"GraphQL operation "
-                                    f"'{detail}' is not in the "
-                                    f"operation allowlist. To "
-                                    f"request access, update the "
-                                    f"graphql block in "
-                                    f".airut/network-allowlist.yaml "
-                                    f"and submit a PR."
-                                ),
-                                "detail": detail,
-                            }
-                        ),
-                        {"Content-Type": "application/json"},
-                    )
-                    return
 
-        # Anthropic server-side-tool domain trimming. Applies to any
-        # request that reaches the Anthropic Messages API after passing
-        # the URL allowlist (see spec/anthropic-tool-domain-trim.md).
-        # Gated on the incoming host/path, not on the allowlist entry
-        # shape — a broader allowlist configuration must not silently
-        # disable the trim. Prevents agents from using web_fetch /
-        # web_search etc. to read URLs the network allowlist would
-        # otherwise deny.
-        if self._is_anthropic_messages_request(host, path):
-            if self._apply_tool_domain_trim(flow):
-                return
+        # Run the request-body filter pipeline (GraphQL operation
+        # allowlist, Anthropic tool-domain trim, …). Each filter gates
+        # itself on the request and may pass, rewrite the body, or block
+        # with a 403. See spec/request-body-filters.md.
+        if self._run_body_filters(flow, host, path, matched_entry):
+            return
 
         # If already re-signed in requestheaders(), skip token replacement
         if flow.metadata.get("aws_resigned"):
@@ -1612,20 +1580,10 @@ class ProxyFilter:
         # Build annotation suffix
         parts: list[str] = []
 
-        # GraphQL operation tag
-        graphql_op = flow.metadata.get("graphql_op")
-        if graphql_op:
-            parts.append(f"[graphql-op: {graphql_op}]")
-
-        # Anthropic tool-config (BLOCKED on rule 1 or 2)
-        tool_config = flow.metadata.get("tool_config")
-        if tool_config:
-            parts.append(f"[tool-config: {tool_config}]")
-
-        # Anthropic tool-trim (ALLOWED with rewritten allowed_domains)
-        tool_trim = flow.metadata.get("tool_trim")
-        if tool_trim:
-            parts.append(f"[tool-trim: {tool_trim}]")
+        # Request-body filter annotations (graphql-op, tool-domains, …),
+        # in filter-execution order. Set by _run_body_filters.
+        for tag in flow.metadata.get("filter_tags", []):
+            parts.append(f"[{tag}]")
 
         # Credential info (GitHub App cache status, scope tags)
         cred = flow.metadata.get("credential_info")

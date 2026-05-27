@@ -155,12 +155,11 @@ HTTP log lines use the format
 `{ALLOWED|BLOCKED} {METHOD} {URL} -> {status}{annotations}` where annotations
 are optional bracket-delimited metadata: `[github-app: ...]` for GitHub App
 credential operations, `[masked: N]` when masked secret tokens were replaced,
-`[dropped: N]` when foreign credential headers were stripped, `[tool-trim: ...]`
-when an Anthropic `/v1/messages*` body had its server-side tool
-`allowed_domains` trimmed, `[tool-config: ...]` when the same body was 403'd for
-`blocked_domains` / wildcard misuse, and `[region: REGION]` for AWS re-signed
-requests. Each HTTP request produces exactly one `ALLOWED` or `BLOCKED` log line
-(excluding DNS).
+`[dropped: N]` when foreign credential headers were stripped, request-body
+filter tags such as `[graphql-op: ...]` and `[tool-domains: ...]` (see
+[request-body-filters.md](request-body-filters.md)), and `[region: REGION]` for
+AWS re-signed requests. Each HTTP request produces exactly one `ALLOWED` or
+`BLOCKED` log line (excluding DNS).
 
 STRIPPED lines indicate a credential header was removed because it contained a
 non-surrogate value on a scoped host. The format is

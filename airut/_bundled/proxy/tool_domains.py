@@ -35,6 +35,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from host_match import UrlPrefixEntry, match_host_pattern
+from request_filter import FilterRequest, FilterResult
 
 
 type _JsonValue = (
@@ -352,3 +353,64 @@ def check_and_trim_tools(
         body=new_body,
         log_tag="; ".join(annotations),
     )
+
+
+def is_anthropic_messages_request(host: str, path: str) -> bool:
+    """Return True if a request targets the Anthropic Messages API.
+
+    Gates on the **incoming request** (host + path), not on the shape of
+    the matched allowlist entry. A user who configures a broader
+    Anthropic allowlist entry (``/v1/*`` or omits ``path``) must not
+    silently disable the tool-domain trim.
+
+    Matches ``api.anthropic.com`` for any path beginning with
+    ``/v1/messages`` followed by end-of-path, ``/``, or ``?``. This
+    covers ``/v1/messages``, ``/v1/messages/batches``,
+    ``/v1/messages/count_tokens``, and ``/v1/messages?...`` while
+    excluding accidental matches like ``/v1/messages_legacy``. Other
+    Anthropic paths (``oauth/*``, ``event_logging/*``, etc.) carry no
+    ``tools`` field and do not need parsing.
+    """
+    if host.lower() != "api.anthropic.com":
+        return False
+    if path == "/v1/messages":
+        return True
+    return path.startswith("/v1/messages/") or path.startswith("/v1/messages?")
+
+
+class ToolDomainFilter:
+    """Request-body filter wrapping :func:`check_and_trim_tools`.
+
+    Applies unconditionally to every ``api.anthropic.com /v1/messages*``
+    request (see :func:`is_anthropic_messages_request`), independent of
+    which allowlist entry matched. ``host_get_open_fn`` is the proxy's
+    live predicate for "host is allowlisted for unconstrained GET".
+    """
+
+    name = "tool-domains"
+
+    def __init__(self, host_get_open_fn: Callable[[str], bool]) -> None:
+        self._host_get_open = host_get_open_fn
+
+    def matches(self, req: FilterRequest) -> bool:
+        return is_anthropic_messages_request(req.host, req.path)
+
+    def apply(self, req: FilterRequest, body: bytes) -> FilterResult:
+        result = check_and_trim_tools(body, self._host_get_open)
+
+        if result.verdict is ToolConfigVerdict.UNCHANGED:
+            return FilterResult.passthrough()
+
+        if result.verdict is ToolConfigVerdict.REWRITTEN:
+            assert result.body is not None
+            return FilterResult.rewrite(result.body, log_tag=result.log_tag)
+
+        assert result.verdict is ToolConfigVerdict.BLOCKED
+        assert result.error is not None
+        assert result.message is not None
+        return FilterResult.block(
+            error=result.error,
+            message=result.message,
+            detail=result.detail,
+            log_tag=result.log_tag,
+        )
