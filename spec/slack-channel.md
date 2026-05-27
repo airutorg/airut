@@ -105,9 +105,9 @@ the request immediately, then works asynchronously and replies when done.
    and a short confirmation sets the right expectation.
 2. **Execution**: Claude Code runs in a container via the sandbox. No streaming
    of intermediate output to Slack.
-3. **Reply**: The complete response is posted to the thread via
-   `chat.postMessage` with Block Kit `markdown` blocks. The status indicator
-   clears automatically when the reply is sent.
+3. **Reply**: The complete response is converted to Slack `mrkdwn` and posted to
+   the thread via `chat.postMessage` using the `text` parameter. The status
+   indicator clears automatically when the reply is sent.
 
 This avoids complexity from streaming action blocks back to Slack and keeps the
 interaction model consistent with the email channel. The dashboard provides
@@ -138,92 +138,60 @@ where interactive tools (AskUserQuestion, plan mode) are unavailable.
 
 ### Message Formatting
 
-Slack's Block Kit includes a **`markdown` block type** (`"type": "markdown"`)
-designed specifically for AI apps. This block accepts standard Markdown and
-Slack translates it into properly rendered Slack formatting. This is significant
-because Claude's output is standard Markdown — no format conversion is needed
-(unlike the email channel which converts Markdown to HTML).
+Claude emits standard Markdown, but Slack renders its own `mrkdwn` syntax
+(`*bold*`, `_italic_`, `<url|text>` links, `•` bullets, no headings). Rather
+than ship Markdown through Slack's Block Kit `markdown` block and rely on its
+server-side translation — historically a source of bugs around bare URLs,
+adjacent emphasis, and headings — the adapter performs an **explicit,
+source-of-truth conversion** from CommonMark to `mrkdwn` and sends the result
+via the plain `text` parameter (no `blocks` payload).
 
-The adapter sends replies via `chat.postMessage` using a `blocks` payload
-containing one or more `markdown` blocks:
+The conversion lives in `SlackMrkdwnRenderer` (`airut/gateway/slack/mrkdwn.py`),
+a `mistune.BaseRenderer` subclass modeled on the `EmailRenderer` in
+`airut/markdown.py`. It is the single point of truth for output conversion and
+replaces the former `sanitize.py` module entirely. The public entry point is
+`render_mrkdwn(text)`.
 
-```json
-{
-  "channel": "D12345678",
-  "thread_ts": "1234567890.123456",
-  "blocks": [
-    {
-      "type": "markdown",
-      "text": "**Here is the response**\n\nStandard markdown content..."
-    }
-  ]
-}
-```
+Mapping rules:
 
-Supported standard Markdown in the `markdown` block:
+| Markdown                | mrkdwn                                    |
+| ----------------------- | ----------------------------------------- |
+| `**bold**`              | `*bold*`                                  |
+| `*italic*` / `_italic_` | `_italic_`                                |
+| `~~strike~~`            | `~strike~`                                |
+| `# H1` … `###### H6`    | `*<text>*` on its own line (no headings)  |
+| `[text](url)`           | `<url\|text>`                             |
+| Bare URL                | `<url>`                                   |
+| `` `code` ``            | `` `code` `` (unchanged)                  |
+| Fenced \`\`\`\` `lang ` | ```` ``` ``` ```` (language hint dropped) |
+| Unordered list          | `• <item>`, nested with leading spaces    |
+| Ordered list            | `<n>. <item>`                             |
+| `> quote`               | `> quote` (unchanged)                     |
+| Markdown table          | Aligned fenced code block                 |
+| `---` / `***` / `___`   | `———` (Unicode em-dash line)              |
+| `<`, `>`, `&`           | Escaped to `&lt;` / `&gt;` / `&amp;`      |
+| `- [ ]` / `- [x]`       | `• ☐ …` / `• ☑ …`                         |
 
-- Headings, bold, italic, strikethrough
-- Ordered and unordered lists
-- Blockquotes
-- Code blocks (without syntax highlighting)
-- Links and images
-
-Not supported: tables, horizontal rules, syntax highlighting, task lists.
-
-Note that a single `markdown` block may result in multiple blocks after Slack's
-translation step.
-
-**Markdown sanitization**: The adapter sanitizes unsupported Markdown features
-before sending via `_sanitize_for_slack()` in `send_reply()`. This applies the
-following transformations in order:
-
-1. **Tables** → fenced code blocks. Markdown table patterns (lines with `|`
-   separators and a header-divider row of `|---|`) are wrapped in ```` ``` ````
-   blocks to preserve alignment as monospaced plain text.
-2. **Code fence language hints** → stripped. A fence like ```` ```python ````
-   becomes plain ```` ``` ```` since Slack does not support syntax highlighting
-   and would render the language tag as visible text.
-3. **Horizontal rules** → em-dash separator (`———`). Rules (`---`, `***`, `___`)
-   are replaced with a Unicode em-dash line. Rules inside fenced code blocks are
-   preserved.
-4. **Bare URLs** → explicit Markdown links. Bare `https://…` and `http://…` URLs
-   are wrapped in `[url](url)` syntax so Slack's renderer treats them as
-   explicit links rather than auto-detecting them, which can produce garbled
-   output when URLs appear adjacent to bold or other formatting. URLs inside
-   fenced code blocks, inline code spans, and existing Markdown links are
-   preserved.
-
-Task lists (`- [ ]`, `- [x]`) degrade gracefully — the checkbox syntax appears
-as literal text within a list item, which is readable without conversion.
+Tables are pre-processed into column-aligned fenced code blocks (the
+table-alignment helpers moved from `sanitize.py` into the renderer); Slack does
+not render Markdown tables, so monospace alignment is the best available
+presentation. Escaping of the literal `<`, `>`, and `&` characters that `mrkdwn`
+reserves happens as a final pass on text nodes only — link URLs and code spans
+pass through unescaped so the `<…>` link syntax survives.
 
 ### Message Size Limits
 
-A single `markdown` block accepts up to **12,000 characters**. A message can
-contain up to **50 blocks**, though in practice the total payload limit means
-the effective ceiling is around **~13,000 characters** across all blocks in a
-single message.
+A `mrkdwn` `text` message accepts up to **40,000 characters** — roughly triple
+the old `markdown`-block ceiling — so most responses ship as a single message.
+For longer responses:
 
-For Claude responses that exceed the single-block limit:
-
-1. **Primary strategy**: Split into multiple `markdown` blocks within a single
-   message, breaking at natural boundaries (paragraph breaks, code block
-   boundaries). This keeps the response as one message in the thread.
-2. **Secondary strategy**: If the response exceeds ~13K characters total, split
-   into multiple messages in the same thread.
-3. **Fallback**: For extremely long responses, upload as a text/markdown file
-   attachment in the thread.
-
-### Block Validation Fallback
-
-Slack's `markdown` block type may reject certain content with an
-`invalid_blocks` error even when the content is within size limits. When this
-happens, the adapter retries the message as plain text (using the `text`
-parameter with no `blocks` payload). Plain-text messages support up to 40,000
-characters and use Slack's mrkdwn formatting, which covers most common Markdown
-constructs. Content beyond 40,000 characters is truncated by Slack, which is
-acceptable compared to a complete delivery failure. This fallback applies to
-every `chat.postMessage` call in the message delivery pipeline (single-message,
-multi-message split, etc.).
+1. **Primary strategy**: A body within 40,000 characters is sent as a single
+   `chat.postMessage` via the `text` parameter.
+2. **Secondary strategy**: A larger body is split at paragraph boundaries (then
+   line boundaries, then hard-sliced if a single line exceeds the ceiling) into
+   multiple in-thread messages, so no chunk exceeds 40,000 characters.
+3. **Fallback**: A body that splits into more than five chunks is uploaded as a
+   `response.md` file attachment in the thread.
 
 ### Task Progress Display
 
@@ -681,15 +649,15 @@ The listener registers event handlers via the Bolt SDK's `Assistant` middleware:
 The `SlackChannelAdapter` implements all `ChannelAdapter` methods from
 `gateway/channel.py`:
 
-| ChannelAdapter method      | Slack implementation                                                                                                                                                                  |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `listener` (property)      | Returns the `SlackChannelListener` instance                                                                                                                                           |
-| `authenticate_and_parse()` | Check authorization rules via `SlackAuthorizer`, extract body and file metadata from event payload, resolve conversation ID from thread mapping                                       |
-| `save_attachments()`       | Download files listed in `SlackParsedMessage.slack_file_urls` using bot token, save to `inbox_dir`                                                                                    |
-| `send_acknowledgment()`    | Register thread mapping, `chat.postMessage` with confirmation text and optional dashboard link (status is set by the listener before dispatch)                                        |
-| `send_reply()`             | Sanitize unsupported Markdown (tables, code fence languages, horizontal rules), split if >12K chars, `chat.postMessage` with `markdown` blocks, upload outbox files, set thread title |
-| `send_error()`             | `chat.postMessage` with error text in thread                                                                                                                                          |
-| `send_rejection()`         | `chat.postMessage` with rejection reason in thread, with optional dashboard link                                                                                                      |
+| ChannelAdapter method      | Slack implementation                                                                                                                                                                         |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `listener` (property)      | Returns the `SlackChannelListener` instance                                                                                                                                                  |
+| `authenticate_and_parse()` | Check authorization rules via `SlackAuthorizer`, extract body and file metadata from event payload, resolve conversation ID from thread mapping                                              |
+| `save_attachments()`       | Download files listed in `SlackParsedMessage.slack_file_urls` using bot token, save to `inbox_dir`                                                                                           |
+| `send_acknowledgment()`    | Register thread mapping, `chat.postMessage` with confirmation text and optional dashboard link (status is set by the listener before dispatch)                                               |
+| `send_reply()`             | Convert Markdown to `mrkdwn` via `render_mrkdwn()`, split if >40K chars (file upload beyond five chunks), `chat.postMessage` via the `text` parameter, upload outbox files, set thread title |
+| `send_error()`             | `chat.postMessage` with error text in thread                                                                                                                                                 |
+| `send_rejection()`         | `chat.postMessage` with rejection reason in thread, with optional dashboard link                                                                                                             |
 
 ### `SlackParsedMessage`
 

@@ -33,21 +33,18 @@ from airut.gateway.channel import (
 from airut.gateway.slack.authorizer import SlackAuthorizer
 from airut.gateway.slack.config import SlackChannelConfig
 from airut.gateway.slack.listener import SlackChannelListener
+from airut.gateway.slack.mrkdwn import render_mrkdwn
 from airut.gateway.slack.plan_streamer import SlackPlanStreamer
-from airut.gateway.slack.sanitize import sanitize_for_slack
 from airut.gateway.slack.thread_store import SlackThreadStore
 
 
 logger = logging.getLogger(__name__)
 
-#: Maximum characters in a single Slack ``markdown`` block.
-_MAX_BLOCK_CHARS = 12000
-
-#: Maximum total characters before splitting into multiple messages.
-_MAX_MESSAGE_CHARS = 13000
-
-#: Maximum characters for a plain-text (no blocks) message before truncation.
+#: Maximum characters in a single ``mrkdwn`` ``text`` message.
 _MAX_TEXT_CHARS = 40000
+
+#: Maximum number of split messages before falling back to a file upload.
+_MAX_SPLIT_MESSAGES = 5
 
 #: Maximum length for thread title.
 _MAX_TITLE_LENGTH = 60
@@ -361,8 +358,8 @@ class SlackChannelAdapter(ChannelAdapter):
         if usage_footer:
             body = f"{response_text}\n\n_{usage_footer}_"
 
-        # Sanitize Markdown for Slack rendering
-        body = sanitize_for_slack(body)
+        # Convert Markdown to Slack mrkdwn for rendering
+        body = render_mrkdwn(body)
 
         # Send message(s)
         try:
@@ -507,98 +504,53 @@ def _is_slack_file_url(url: str) -> bool:
     return parsed.scheme == "https" and parsed.hostname in _SLACK_FILE_HOSTS
 
 
-def _split_blocks(text: str) -> list[str]:
-    """Split text into chunks suitable for ``markdown`` blocks.
+def _split_message(text: str) -> list[str]:
+    """Split ``mrkdwn`` text into chunks within the ``text`` ceiling.
 
-    Splits at paragraph boundaries first, then at line boundaries
-    if a paragraph exceeds the block limit.
+    Splits at paragraph boundaries first, then at line boundaries when a
+    single paragraph exceeds :data:`_MAX_TEXT_CHARS`, and finally hard-slices
+    a single line that is itself longer than the ceiling so no chunk ever
+    exceeds it (avoiding silent truncation by Slack).
 
     Args:
-        text: Full response text.
+        text: Full ``mrkdwn`` body, longer than :data:`_MAX_TEXT_CHARS`.
 
     Returns:
-        List of text chunks, each within ``_MAX_BLOCK_CHARS``.
+        List of chunks, each at most :data:`_MAX_TEXT_CHARS` characters.
     """
-    if len(text) <= _MAX_BLOCK_CHARS:
-        return [text]
-
-    blocks: list[str] = []
+    chunks: list[str] = []
     current = ""
 
     for paragraph in text.split("\n\n"):
         candidate = f"{current}\n\n{paragraph}" if current else paragraph
-        if len(candidate) <= _MAX_BLOCK_CHARS:
+        if len(candidate) <= _MAX_TEXT_CHARS:
             current = candidate
-        else:
+            continue
+        if current:
+            chunks.append(current)
+            current = ""
+        if len(paragraph) <= _MAX_TEXT_CHARS:
+            current = paragraph
+            continue
+        # Single paragraph exceeds the ceiling: split at line boundaries.
+        for line in paragraph.split("\n"):
+            candidate = f"{current}\n{line}" if current else line
+            if len(candidate) <= _MAX_TEXT_CHARS:
+                current = candidate
+                continue
             if current:
-                blocks.append(current)
-            # If single paragraph exceeds limit, split by lines
-            if len(paragraph) > _MAX_BLOCK_CHARS:
-                lines = paragraph.split("\n")
+                chunks.append(current)
                 current = ""
-                for line in lines:
-                    candidate = f"{current}\n{line}" if current else line
-                    if len(candidate) <= _MAX_BLOCK_CHARS:
-                        current = candidate
-                    else:
-                        if current:
-                            blocks.append(current)
-                        current = line[:_MAX_BLOCK_CHARS] + "\n[truncated]"
-            else:
-                current = paragraph
+            # Single line exceeds the ceiling: hard-slice it.
+            while len(line) > _MAX_TEXT_CHARS:
+                chunks.append(line[:_MAX_TEXT_CHARS])
+                line = line[_MAX_TEXT_CHARS:]
+            current = line
 
     if current:
-        blocks.append(current)
+        chunks.append(current)
 
-    return blocks
-
-
-def _is_invalid_blocks(error: SlackApiError) -> bool:
-    """Check whether a Slack API error is an ``invalid_blocks`` rejection."""
-    resp = error.response
-    return isinstance(resp, dict) and resp.get("error") == "invalid_blocks"
-
-
-def _post_with_fallback(
-    client: WebClient,
-    channel: str,
-    thread_ts: str,
-    text: str,
-    blocks: list[dict[str, str]],
-) -> None:
-    """Post a message with ``markdown`` blocks, falling back to plain text.
-
-    If Slack rejects the blocks payload with ``invalid_blocks``, retry the
-    same message as plain text (mrkdwn) without blocks.  Plain-text messages
-    support up to 40 000 characters; content beyond that is truncated by
-    Slack, which is an acceptable degradation compared to a complete failure.
-
-    Args:
-        client: Slack ``WebClient``.
-        channel: Channel ID.
-        thread_ts: Thread timestamp.
-        text: Plain-text body (used as mrkdwn fallback).
-        blocks: Block Kit ``markdown`` blocks to try first.
-    """
-    try:
-        client.chat_postMessage(
-            channel=channel,
-            thread_ts=thread_ts,
-            blocks=blocks,
-            text=text[:200],  # fallback text for notifications
-        )
-    except SlackApiError as exc:
-        if not _is_invalid_blocks(exc):
-            raise
-        logger.warning(
-            "Slack rejected blocks payload (invalid_blocks), "
-            "retrying as plain text"
-        )
-        client.chat_postMessage(
-            channel=channel,
-            thread_ts=thread_ts,
-            text=text[:_MAX_TEXT_CHARS],
-        )
+    return chunks
 
 
 def _send_long_message(
@@ -607,53 +559,30 @@ def _send_long_message(
     thread_ts: str,
     text: str,
 ) -> None:
-    """Send a potentially long message, splitting as needed.
+    """Send a ``mrkdwn`` reply, splitting or uploading as needed.
 
     Strategy:
-    1. Split into multiple ``markdown`` blocks within one message.
-    2. If total exceeds ~13K chars, split into multiple messages.
-    3. If extremely long, upload as file attachment.
-
-    Each ``chat.postMessage`` call uses :func:`_post_with_fallback` so that
-    an ``invalid_blocks`` error triggers a plain-text retry rather than a
-    hard failure.
+    1. Bodies within :data:`_MAX_TEXT_CHARS` ship as a single
+       ``chat.postMessage`` via the ``text`` parameter.
+    2. Larger bodies split at paragraph (then line) boundaries into
+       multiple in-thread messages.
+    3. Bodies that split into more than :data:`_MAX_SPLIT_MESSAGES` chunks
+       fall back to an uploaded ``response.md`` file.
 
     Args:
         client: Slack ``WebClient``.
         channel: Channel ID.
         thread_ts: Thread timestamp.
-        text: Full response text.
+        text: Full ``mrkdwn`` body.
     """
-    blocks = _split_blocks(text)
+    chunks = [text] if len(text) <= _MAX_TEXT_CHARS else _split_message(text)
 
-    if len(text) <= _MAX_MESSAGE_CHARS:
-        # Single message with multiple blocks
-        block_kit = [{"type": "markdown", "text": block} for block in blocks]
-        _post_with_fallback(client, channel, thread_ts, text, block_kit)
-    elif len(text) <= _MAX_MESSAGE_CHARS * 5:
-        # Multiple messages
-        message_blocks: list[list[tuple[str, dict[str, str]]]] = []
-        current_message: list[tuple[str, dict[str, str]]] = []
-        current_length = 0
-
-        for block in blocks:
-            if current_length + len(block) > _MAX_MESSAGE_CHARS:
-                if current_message:
-                    message_blocks.append(current_message)
-                current_message = []
-                current_length = 0
-            current_message.append((block, {"type": "markdown", "text": block}))
-            current_length += len(block)
-
-        if current_message:
-            message_blocks.append(current_message)
-
-        for msg_entries in message_blocks:
-            plain = "\n\n".join(raw for raw, _ in msg_entries)
-            kit = [blk for _, blk in msg_entries]
-            _post_with_fallback(client, channel, thread_ts, plain, kit)
+    if len(chunks) <= _MAX_SPLIT_MESSAGES:
+        for chunk in chunks:
+            client.chat_postMessage(
+                channel=channel, thread_ts=thread_ts, text=chunk
+            )
     else:
-        # Fallback: upload as file
         client.files_upload_v2(
             channel=channel,
             thread_ts=thread_ts,
