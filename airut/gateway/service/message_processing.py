@@ -47,6 +47,7 @@ from airut.gateway.channel import (
     ChannelSendError,
     ParsedMessage,
     PlanStreamer,
+    TaskPhase,
 )
 from airut.gateway.config import ReplacementMap
 from airut.gateway.conversation import GitCloneError
@@ -784,6 +785,16 @@ def process_message(
     prompt = parsed.body
 
     try:
+        # Report lifecycle phases so the adapter can surface progress.
+        # On Slack, PREPARING shows a loading status (which locks the
+        # composer) and RUNNING (below) clears it, so follow-ups can flow
+        # and coalesce during the run.  If prep fails before RUNNING, the
+        # except handlers below call adapter.send_error(), whose thread
+        # post clears the Slack status — so there is no explicit clear on
+        # the error path.  (If even that post fails, e.g. Slack is down,
+        # the status can't be cleared anyway.)
+        adapter.report_phase(parsed, TaskPhase.PREPARING)
+
         # ── Conversation management ──
 
         if is_new:
@@ -897,6 +908,10 @@ def process_message(
         prompt = f"{channel_context}\n\n{user_body}"
 
         # ── Execute in sandbox ──
+
+        # The run is starting: on Slack this clears the prep status so the
+        # composer unlocks for follow-up messages during the run.
+        adapter.report_phase(parsed, TaskPhase.RUNNING)
 
         plan_streamer = adapter.create_plan_streamer(parsed)
         todo_callback = _make_todo_callback(

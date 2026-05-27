@@ -254,6 +254,22 @@ class ChannelListener(Protocol):
         ...
 
 
+class TaskPhase(Enum):
+    """Lifecycle phase of a message as the gateway processes it.
+
+    Reported to the channel adapter via ``ChannelAdapter.report_phase``
+    so it can surface progress in a channel-appropriate way. Only phases
+    the gateway actually emits are defined; add more as call sites appear.
+
+    Attributes:
+        PREPARING: Conversation is being created or resumed (pre-run).
+        RUNNING: The sandbox run has started.
+    """
+
+    PREPARING = "preparing"
+    RUNNING = "running"
+
+
 class ChannelAdapter(Protocol):
     """Interface for channel-specific message handling.
 
@@ -329,6 +345,21 @@ class ChannelAdapter(Protocol):
         dashboard_url: str | None,
     ) -> None:
         """Send a 'working on it' notification to the user."""
+        ...
+
+    def report_phase(self, parsed: ParsedMessage, phase: TaskPhase) -> None:
+        """Notify the adapter that the task entered a lifecycle phase.
+
+        The gateway reports phase transitions as it processes a message;
+        each adapter decides how (or whether) to surface them. This keeps
+        channel-specific presentation policy out of the gateway.
+
+        For example, the Slack adapter shows a loading status during
+        ``PREPARING`` and clears it on ``RUNNING`` (Slack locks the thread
+        composer while a status is active, so scoping it to the prep
+        window keeps the composer free for follow-ups during the run).
+        Adapters ignore phases they do not act on; email ignores all.
+        """
         ...
 
     def send_reply(

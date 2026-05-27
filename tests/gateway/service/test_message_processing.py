@@ -7,14 +7,14 @@
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
 from airut._json_types import JsonValue
 from airut.claude_output.types import Usage
 from airut.dashboard.tracker import CompletionReason
-from airut.gateway.channel import ChannelSendError, ParsedMessage
+from airut.gateway.channel import ChannelSendError, ParsedMessage, TaskPhase
 from airut.gateway.config import RepoServerConfig
 from airut.gateway.service import build_recovery_prompt
 from airut.gateway.service.message_processing import (
@@ -481,6 +481,46 @@ class TestProcessMessage:
         assert reason == CompletionReason.SUCCESS
         assert conv_id == "conv1"
         adapter.send_reply.assert_called_once()
+
+    def test_phases_reported_prep_then_run_before_execute(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """PREPARING is reported during prep, RUNNING before the run.
+
+        On Slack this scopes the composer lock to the prep window so
+        follow-up messages can flow (and coalesce) during the run.
+        """
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        parsed = _make_parsed_message(body="Do something")
+
+        manager = MagicMock()
+        manager.attach_mock(adapter.report_phase, "report_phase")
+        manager.attach_mock(svc._mock_task.execute, "execute")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+
+        assert adapter.report_phase.call_args_list == [
+            call(parsed, TaskPhase.PREPARING),
+            call(parsed, TaskPhase.RUNNING),
+        ]
+
+        # RUNNING is reported before the sandbox run executes. Each
+        # mock_calls entry is (name, args, kwargs); for report_phase the
+        # phase is the second positional arg (c[1][1]).
+        sequence = [
+            c[1][1] if c[0] == "report_phase" else "execute"
+            for c in manager.mock_calls
+            if c[0] in ("report_phase", "execute")
+        ]
+        assert (
+            sequence.index(TaskPhase.PREPARING)
+            < sequence.index(TaskPhase.RUNNING)
+            < sequence.index("execute")
+        )
 
     def test_coalesced_entries_composed_into_prompt(
         self, email_config: RepoServerConfig, tmp_path: Path

@@ -29,6 +29,7 @@ from airut.gateway.channel import (
     ParsedMessage,
     PlanStreamer,
     RawMessage,
+    TaskPhase,
 )
 from airut.gateway.slack.authorizer import SlackAuthorizer
 from airut.gateway.slack.config import SlackChannelConfig
@@ -350,6 +351,33 @@ class SlackChannelAdapter(ChannelAdapter):
             logger.warning(
                 "Failed to send Slack acknowledgment (non-fatal): %s", e
             )
+
+    def report_phase(self, parsed: ParsedMessage, phase: TaskPhase) -> None:
+        """Surface the lifecycle phase via the thread loading status.
+
+        Slack locks the thread composer while a status is active, so we
+        show it only during ``PREPARING`` and clear it on ``RUNNING`` —
+        keeping the composer free for follow-ups during the run.
+        """
+        if not isinstance(parsed, SlackParsedMessage):
+            raise TypeError(
+                f"Expected SlackParsedMessage, got {type(parsed).__name__}"
+            )
+        if phase is TaskPhase.PREPARING:
+            self._set_status(parsed, "is working on this...")
+        elif phase is TaskPhase.RUNNING:
+            self._set_status(parsed, "")
+
+    def _set_status(self, parsed: SlackParsedMessage, status: str) -> None:
+        """Set (or clear, when empty) the assistant thread status."""
+        try:
+            self._client.assistant_threads_setStatus(
+                channel_id=parsed.slack_channel_id,
+                thread_ts=parsed.slack_thread_ts,
+                status=status,
+            )
+        except SlackApiError as e:
+            logger.warning("Failed to set Slack status (non-fatal): %s", e)
 
     def send_reply(
         self,

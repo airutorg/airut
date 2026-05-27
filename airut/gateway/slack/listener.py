@@ -206,13 +206,19 @@ class SlackChannelListener(ChannelListener):
         @assistant.user_message
         def handle_user_message(
             payload: JsonDict,
-            set_status: SetStatus,
         ) -> None:
             """Handle user message in a thread.
 
             Wraps the event payload in a ``RawMessage`` and calls the
             submit callback.  Authentication happens in the worker
             thread, not here.
+
+            The loading status is intentionally not set here: the
+            adapter surfaces it from the lifecycle phases the gateway
+            reports (see ``ChannelAdapter.report_phase``), scoped to the
+            prep window.  Setting it per-message would lock the Slack
+            composer for the whole run and for coalesced bursts,
+            preventing follow-ups.
             """
             user_id = cast(str, payload.get("user", ""))
             text = cast(str, payload.get("text", ""))
@@ -221,8 +227,6 @@ class SlackChannelListener(ChannelListener):
 
             # Build display title from first line of message
             display_title = text[:60].split("\n")[0] if text else ""
-
-            set_status("is working on this...")
 
             raw: RawMessage[JsonDict] = RawMessage(
                 sender=user_id,

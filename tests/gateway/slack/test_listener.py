@@ -5,6 +5,7 @@
 
 """Tests for SlackChannelListener."""
 
+import inspect
 from unittest.mock import MagicMock, patch
 
 from slack_bolt import App
@@ -106,13 +107,11 @@ class TestSlackChannelListener:
             "channel": "D456",
             "thread_ts": "1234567890.123456",
         }
-        set_status = MagicMock()
-
         # Extract the function passed to the decorator
         user_msg_call = user_msg_decorator.call_args
         assert user_msg_call is not None
         actual_handler = user_msg_call[0][0]
-        actual_handler(payload=payload, set_status=set_status)
+        actual_handler(payload=payload)
 
         # Verify submit was called with a RawMessage
         submit.assert_called_once()
@@ -120,6 +119,30 @@ class TestSlackChannelListener:
         assert raw.sender == "U123"
         assert raw.content == payload
         assert "Hello bot" in raw.display_title
+
+    def test_user_message_handler_does_not_set_status(self) -> None:
+        """Status is managed during prep, not set per inbound message.
+
+        Setting it per-message would lock the Slack composer for the
+        whole run (and for coalesced bursts), blocking follow-ups.
+        """
+        app = MagicMock()
+        handler = MagicMock()
+        listener = SlackChannelListener(
+            _make_config(), app=app, handler=handler
+        )
+
+        with patch(
+            "airut.gateway.slack.listener.Assistant"
+        ) as mock_assistant_cls:
+            mock_assistant = mock_assistant_cls.return_value
+            listener.start(MagicMock(return_value=True))
+
+        user_msg_call = mock_assistant.user_message.call_args
+        assert user_msg_call is not None
+        actual_handler = user_msg_call[0][0]
+        params = inspect.signature(actual_handler).parameters
+        assert "set_status" not in params
 
     def test_thread_started_handler(self) -> None:
         """Verify thread_started handler sets status and says greeting."""
@@ -200,7 +223,7 @@ class TestSlackChannelListener:
             "thread_ts": "ts1",
         }
         # Should not raise
-        handler_fn(payload=payload, set_status=MagicMock())
+        handler_fn(payload=payload)
 
 
 class TestDoubleStartGuard:
