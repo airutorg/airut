@@ -508,16 +508,15 @@ def _split_message(text: str) -> list[str]:
     """Split ``mrkdwn`` text into chunks within the ``text`` ceiling.
 
     Splits at paragraph boundaries first, then at line boundaries when a
-    single paragraph exceeds :data:`_MAX_TEXT_CHARS`.  A single line longer
-    than the ceiling is emitted as its own chunk (Slack truncates it); such
-    lines do not occur in practice.
+    single paragraph exceeds :data:`_MAX_TEXT_CHARS`, and finally hard-slices
+    a single line that is itself longer than the ceiling so no chunk ever
+    exceeds it (avoiding silent truncation by Slack).
 
     Args:
         text: Full ``mrkdwn`` body, longer than :data:`_MAX_TEXT_CHARS`.
 
     Returns:
-        List of chunks, each at most :data:`_MAX_TEXT_CHARS` characters
-        (apart from a pathological single over-long line).
+        List of chunks, each at most :data:`_MAX_TEXT_CHARS` characters.
     """
     chunks: list[str] = []
     current = ""
@@ -538,10 +537,15 @@ def _split_message(text: str) -> list[str]:
             candidate = f"{current}\n{line}" if current else line
             if len(candidate) <= _MAX_TEXT_CHARS:
                 current = candidate
-            else:
-                if current:
-                    chunks.append(current)
-                current = line
+                continue
+            if current:
+                chunks.append(current)
+                current = ""
+            # Single line exceeds the ceiling: hard-slice it.
+            while len(line) > _MAX_TEXT_CHARS:
+                chunks.append(line[:_MAX_TEXT_CHARS])
+                line = line[_MAX_TEXT_CHARS:]
+            current = line
 
     if current:
         chunks.append(current)
@@ -562,8 +566,8 @@ def _send_long_message(
        ``chat.postMessage`` via the ``text`` parameter.
     2. Larger bodies split at paragraph (then line) boundaries into
        multiple in-thread messages.
-    3. Bodies beyond :data:`_MAX_SPLIT_MESSAGES` messages' worth fall back
-       to an uploaded ``response.md`` file.
+    3. Bodies that split into more than :data:`_MAX_SPLIT_MESSAGES` chunks
+       fall back to an uploaded ``response.md`` file.
 
     Args:
         client: Slack ``WebClient``.
@@ -571,10 +575,10 @@ def _send_long_message(
         thread_ts: Thread timestamp.
         text: Full ``mrkdwn`` body.
     """
-    if len(text) <= _MAX_TEXT_CHARS:
-        client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=text)
-    elif len(text) <= _MAX_TEXT_CHARS * _MAX_SPLIT_MESSAGES:
-        for chunk in _split_message(text):
+    chunks = [text] if len(text) <= _MAX_TEXT_CHARS else _split_message(text)
+
+    if len(chunks) <= _MAX_SPLIT_MESSAGES:
+        for chunk in chunks:
             client.chat_postMessage(
                 channel=channel, thread_ts=thread_ts, text=chunk
             )

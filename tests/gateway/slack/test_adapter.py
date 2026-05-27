@@ -18,6 +18,8 @@ from airut.gateway.channel import (
     RawMessage,
 )
 from airut.gateway.slack.adapter import (
+    _MAX_SPLIT_MESSAGES,
+    _MAX_TEXT_CHARS,
     SlackChannelAdapter,
     SlackParsedMessage,
     _is_slack_file_url,
@@ -583,6 +585,15 @@ class TestSplitMessage:
         for chunk in chunks:
             assert len(chunk) <= 40000
 
+    def test_single_long_line_hard_sliced(self) -> None:
+        # A single line longer than the ceiling is sliced without loss.
+        text = "X" * 90000
+        chunks = _split_message(text)
+        assert len(chunks) == 3
+        for chunk in chunks:
+            assert len(chunk) <= 40000
+        assert "".join(chunks) == text
+
 
 class TestSendLongMessage:
     def test_short_text_single_message(self) -> None:
@@ -602,6 +613,17 @@ class TestSendLongMessage:
         assert client.chat_postMessage.call_count > 1
         for call in client.chat_postMessage.call_args_list:
             assert "blocks" not in call[1]
+
+    def test_medium_text_at_most_five_messages(self) -> None:
+        """A sub-200K body needing >5 chunks uploads rather than posting."""
+        client = MagicMock(spec=WebClient)
+        # Six ~30K paragraphs (total ~180K) each flush into their own chunk.
+        paragraphs = ["X" * 30001 for _ in range(6)]
+        text = "\n\n".join(paragraphs)
+        assert len(text) < _MAX_TEXT_CHARS * _MAX_SPLIT_MESSAGES
+        _send_long_message(client, "C123", "ts1", text)
+        client.files_upload_v2.assert_called_once()
+        client.chat_postMessage.assert_not_called()
 
     def test_very_long_text_uploaded_as_file(self) -> None:
         """Text beyond five messages' worth is uploaded as a file."""
