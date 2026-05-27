@@ -48,7 +48,10 @@ participate in unrelated conversation:
   input — no further `@`-mention required. This makes the bot feel like a
   participant rather than a command-line tool.
 - The bot ignores messages in threads it has not been invited to via mention.
-- The bot ignores its own messages and messages from bot users.
+- The bot ignores its own messages and messages from bot users. This is what
+  stops two Airut instances sharing a channel from `@`-mentioning each other
+  into an unbounded back-and-forth, and is enforced at two independent layers
+  (see [Bot Messages Are Never Accepted](#bot-messages-are-never-accepted)).
 
 This complements rather than replaces the DM surface — both can be active for
 the same repo simultaneously.
@@ -130,7 +133,11 @@ lookup.
 
 For each non-DM message, the adapter decides whether to engage:
 
-1. If the message is from a bot user or from the Airut bot itself: drop.
+1. If the event carries a `subtype` or a `bot_id` (a bot-authored message,
+   including the Airut bot's own posts): drop. This guard is applied identically
+   in both channel handlers — `app_mention` and `message.channels`/`.groups` —
+   so a bot that `@`-mentions Airut cannot trigger a run. See
+   [Bot Messages Are Never Accepted](#bot-messages-are-never-accepted).
 2. If `(channel_id, thread_ts)` (using `message.ts` for top-level messages)
    resolves to a known conversation: engage. This is the "sticky thread" path
    that lets follow-ups land without re-mention.
@@ -579,10 +586,33 @@ across name changes.
 
 ### Baseline Checks (Always Applied)
 
-Regardless of which rule matches, the adapter always rejects bot users
+Regardless of which rule matches, the authorizer always rejects bot users
 (`is_bot`), external users (`team_id` mismatch), and deactivated users
 (`deleted`). These prevent accidental access even if a broad rule like
 `workspace_members: true` is configured.
+
+### Bot Messages Are Never Accepted
+
+Messages authored by a bot — any other Slack app, an incoming webhook, or
+another Airut instance — are never accepted, on **any** surface (DM,
+`app_mention`, or `message.channels`/`.groups`). The motivating hazard is an
+unbounded loop: if two Airut bots share a channel and one could be triggered by
+the other's posts, a single mention could ping-pong between them indefinitely.
+
+This is enforced at two independent layers:
+
+1. **Listener guard (cheap, early).** Both channel handlers drop events carrying
+   a `subtype` or `bot_id` before any work is queued — no `:eyes:` reaction, no
+   worker task, no API call, no dedup slot consumed. A bot post that
+   `@`-mentions Airut arrives as an `app_mention` (and a `message.*` duplicate);
+   both are dropped here.
+2. **Authorizer baseline (defense in depth).** Even if an event reached the
+   worker, the authorizer rejects any sender whose Slack profile has `is_bot`
+   set (see [Baseline Checks](#baseline-checks-always-applied)). This covers the
+   DM surface and backstops the listener guard.
+
+Bots carry `bot_id` even when they post under an associated bot *user*, so the
+listener guard does not depend on resolving that user via `users.info`.
 
 ### Request Authentication (Socket Mode)
 
@@ -784,12 +814,15 @@ It wires two sets of handlers:
   worker thread, not in the event handler.
 - **Direct channel handlers:** `app_mention` is the primary engagement signal;
   `message.channels`/`message.groups` are submitted only when the thread is
-  already engaged or the body mentions the bot. The membership check is done
-  inline against the in-memory thread store (no API call) so noisy channels do
-  not flood the worker pool. The listener also drops events for channels outside
-  `allowed_channels` before any submit, and deduplicates the
-  `app_mention`/`message.*` double-delivery on `(channel_id, ts)` via a bounded
-  LRU (256 entries, oldest-first eviction, no time-based expiry).
+  already engaged or the body mentions the bot. Both handlers first drop events
+  carrying a `subtype` or `bot_id`, so bot-authored mentions never trigger a run
+  (see [Bot Messages Are Never Accepted](#bot-messages-are-never-accepted)). The
+  membership check is done inline against the in-memory thread store (no API
+  call) so noisy channels do not flood the worker pool. The listener also drops
+  events for channels outside `allowed_channels` before any submit, and
+  deduplicates the `app_mention`/`message.*` double-delivery on
+  `(channel_id, ts)` via a bounded LRU (256 entries, oldest-first eviction, no
+  time-based expiry).
 
 The bot's own user ID is resolved once at startup (via `auth.test`) and shared
 with the adapter so mention tokens can be recognised without re-resolving.

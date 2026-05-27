@@ -289,10 +289,16 @@ class SlackChannelListener(ChannelListener):
     def _on_app_mention(self, event: JsonDict) -> None:
         """Handle an ``app_mention`` event (channel engagement trigger).
 
-        A mention is always an engagement signal, so the only gates are
-        the channel allowlist and dedup (the same mention also arrives as
-        a ``message.channels`` / ``message.groups`` event).
+        Subtyped messages and bot-authored mentions are ignored: a bot
+        that ``@``-mentions Airut must never trigger a run, otherwise two
+        Airut instances sharing a channel could mention each other into an
+        unbounded back-and-forth.  A genuine mention is always an
+        engagement signal, so the remaining gates are the channel
+        allowlist and dedup (the same mention also arrives as a
+        ``message.channels`` / ``message.groups`` event).
         """
+        if event.get("subtype") or event.get("bot_id"):
+            return
         channel = cast(str, event.get("channel", ""))
         ts = cast(str, event.get("ts", ""))
         if not self._channel_allowed(channel):
