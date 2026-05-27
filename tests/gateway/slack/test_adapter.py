@@ -1410,7 +1410,7 @@ class TestChannelReportPhase:
             channel="C1", timestamp="T1", name="eyes"
         )
         client.reactions_add.assert_called_once_with(
-            channel="C1", timestamp="T1", name="heavy_check_mark"
+            channel="C1", timestamp="T1", name="white_check_mark"
         )
 
     def test_failed_swaps_eyes_for_x(self, tmp_path: Path) -> None:

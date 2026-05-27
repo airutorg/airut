@@ -264,7 +264,7 @@ The app manifest includes these bot token scopes:
 | `app_mentions:read` | Receive `app_mention` events in channels                                                        |
 | `channels:history`  | Read public-channel thread history                                                              |
 | `groups:history`    | Read private-channel thread history                                                             |
-| `reactions:write`   | Channel acknowledgement reactions (`:eyes:` while working → `:heavy_check_mark:`/`:x:` on done) |
+| `reactions:write`   | Channel acknowledgement reactions (`:eyes:` while working → `:white_check_mark:`/`:x:` on done) |
 | `usergroups:read`   | User group membership (for `user_group` rules and outbound `@group` rewriting)                  |
 | `channels:read`     | Outbound `#channel` rewriting and dashboard channel-ID lookup by name (optional, add manually)  |
 

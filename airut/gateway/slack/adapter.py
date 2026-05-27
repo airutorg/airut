@@ -97,7 +97,7 @@ class SlackParsedMessage(ParsedMessage):
 
     Seeded with the triggering message at parse time and extended on each
     coalesced follow-up, so the terminal reaction swap (``:eyes:`` →
-    ``:heavy_check_mark:`` / ``:x:``) covers the whole burst.  Empty for
+    ``:white_check_mark:`` / ``:x:``) covers the whole burst.  Empty for
     DMs, which acknowledge via the thread status instead."""
 
     is_channel: bool = False
@@ -573,7 +573,7 @@ class SlackChannelAdapter(ChannelAdapter):
         """Surface the lifecycle phase appropriately for the surface.
 
         Channels acknowledge via reactions on the triggering message(s):
-        an ``:eyes:`` while in flight, swapped to ``:heavy_check_mark:`` on
+        an ``:eyes:`` while in flight, swapped to ``:white_check_mark:`` on
         success or ``:x:`` on failure when the task finishes.
 
         DMs use the thread loading status instead.  Slack locks the
@@ -589,7 +589,7 @@ class SlackChannelAdapter(ChannelAdapter):
         # In channels the reaction lifecycle is the acknowledgement instead.
         if parsed.is_channel:
             if phase is TaskPhase.COMPLETED:
-                self._finalize_reactions(parsed, "heavy_check_mark")
+                self._finalize_reactions(parsed, "white_check_mark")
             elif phase is TaskPhase.FAILED:
                 self._finalize_reactions(parsed, "x")
             return

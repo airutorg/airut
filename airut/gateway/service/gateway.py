@@ -1543,7 +1543,7 @@ class GatewayService:
             self._check_pending_server_reload()
 
             # Surface the terminal outcome so channels can swap their
-            # in-flight acknowledgement (e.g. Slack :eyes: → :heavy_check_mark:
+            # in-flight acknowledgement (e.g. Slack :eyes: → :white_check_mark:
             # on success, :x: on failure).  Done after completion/drain so a
             # slow channel API call never blocks them.
             adapter.report_phase(

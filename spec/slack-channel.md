@@ -91,13 +91,13 @@ User posts top-level message: "@airut please look at this bug"
   -> Bot adds :eyes: reaction (instant ack)
   -> Bot maps (channel_id, message.ts) to a new Airut conversation
   -> Bot replies in thread with result
-  -> Bot swaps :eyes: for :heavy_check_mark: (success) or :x: (failure)
+  -> Bot swaps :eyes: for :white_check_mark: (success) or :x: (failure)
 
 User replies in the same thread (no mention required)
   -> message.channels event with thread_ts matching the engaged thread
   -> Bot adds :eyes: reaction
   -> Resumes the Airut conversation
-  -> On completion, swaps :eyes: for :heavy_check_mark: / :x:
+  -> On completion, swaps :eyes: for :white_check_mark: / :x:
 
 User mentions bot inside an existing thread that bot has not joined
   -> app_mention with thread_ts pointing at an older root message
@@ -235,7 +235,7 @@ the gateway's phase-reporting path, so it never re-locks the composer.
 Statuses are a DM-only API. In a channel the adapter instead drives a reaction
 lifecycle on the triggering message: a `:eyes:` reaction on arrival (instant
 acknowledgement that survives in the thread's history), swapped on completion
-for `:heavy_check_mark:` (success) or `:x:` (failure). For channel messages
+for `:white_check_mark:` (success) or `:x:` (failure). For channel messages
 `report_phase` ignores `PREPARING`/`RUNNING` (no status to set) and acts only on
 the terminal `COMPLETED`/`FAILED` phases. Every reaction call is non-fatal — if
 the API fails (missing permission, message deleted) the adapter logs a warning
@@ -270,7 +270,7 @@ the request immediately, then works asynchronously and replies when done.
    conversation.
 3. **Reply.** The complete response is converted to Slack `mrkdwn` and posted to
    the thread via `chat.postMessage` using the `text` parameter. In a channel
-   the in-flight `:eyes:` reaction is then swapped for `:heavy_check_mark:`
+   the in-flight `:eyes:` reaction is then swapped for `:white_check_mark:`
    (success) or `:x:` (failure) on every message the task consumed.
 
 This avoids the complexity of streaming action blocks back to Slack and keeps
@@ -750,7 +750,7 @@ user enabled (always online).
 | `app_mentions:read` | Receive `app_mention` events in channels                                             |
 | `channels:history`  | Read public-channel thread history (`conversations.replies`)                         |
 | `groups:history`    | Read private-channel thread history (`conversations.replies`)                        |
-| `reactions:write`   | Add/remove channel acknowledgement reactions (`:eyes:` → `:heavy_check_mark:`/`:x:`) |
+| `reactions:write`   | Add/remove channel acknowledgement reactions (`:eyes:` → `:white_check_mark:`/`:x:`) |
 
 **Optional scopes:**
 
@@ -805,7 +805,7 @@ dispatches on the channel config type to construct the right adapter.
 | `authenticate_and_parse()` | Check authorization via the authorizer; make the engagement decision; replay mid-thread history via `conversations.replies`; resolve inbound mention tokens; in a channel add the `:eyes:` reaction                                   |
 | `save_attachments()`       | Download files listed on the parsed message using the bot token (gated to Slack file hosts), save to `inbox_dir`                                                                                                                      |
 | `send_acknowledgment()`    | Register the thread mapping and post the "I've started" confirmation (with optional dashboard link)                                                                                                                                   |
-| `report_phase()`           | DM: `PREPARING` → set loading status, `RUNNING` → clear it. Channel: `COMPLETED`/`FAILED` → swap `:eyes:` for `:heavy_check_mark:`/`:x:` on every acknowledged message; `PREPARING`/`RUNNING` are ignored                             |
+| `report_phase()`           | DM: `PREPARING` → set loading status, `RUNNING` → clear it. Channel: `COMPLETED`/`FAILED` → swap `:eyes:` for `:white_check_mark:`/`:x:` on every acknowledged message; `PREPARING`/`RUNNING` are ignored                             |
 | `send_reply()`             | Render Markdown → `mrkdwn`, apply outbound mention rewriting against the per-thread candidate set, post via the `text` parameter (splitting/file-upload past the size limit), upload outbox files, and set the thread title (DM only) |
 | `send_error()`             | Post error text to the thread                                                                                                                                                                                                         |
 
