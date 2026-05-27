@@ -211,6 +211,22 @@ class TestRewriteOutUsers:
         candidates = [_user("U1", display_name="Alice")]
         assert resolver.rewrite_out("ping @alice", candidates) == "ping <@U1>"
 
+    def test_trailing_period_excluded_from_name(self) -> None:
+        resolver = _resolver(_mock_client())
+        candidates = [_user("U1", display_name="Alice")]
+        assert (
+            resolver.rewrite_out("thanks @Alice.", candidates)
+            == "thanks <@U1>."
+        )
+
+    def test_internal_dot_preserved_in_name(self) -> None:
+        resolver = _resolver(_mock_client())
+        candidates = [_user("U1", display_name="", name="first.last")]
+        assert (
+            resolver.rewrite_out("ping @first.last!", candidates)
+            == "ping <@U1>!"
+        )
+
     def test_match_falls_through_to_real_name(self) -> None:
         resolver = _resolver(_mock_client())
         candidates = [_user("U1", display_name="ali", real_name="Alexa")]

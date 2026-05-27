@@ -31,9 +31,12 @@ _INBOUND_TOKEN_RE = re.compile(r"<([^>]+)>")
 
 #: Matches an outbound ``@name`` / ``#name`` token at a word boundary.  The
 #: leading sigil must not follow a word character or URL/email punctuation
-#: (so ``user@host`` and ``path#frag`` are not rewritten); the name body is
-#: greedy, so the trailing boundary is implicit.
-_OUTBOUND_TOKEN_RE = re.compile(r"(?<![\w./@#-])([@#])([A-Za-z0-9._-]+)")
+#: (so ``user@host`` and ``path#frag`` are not rewritten).  The name body may
+#: contain ``.``/``-`` internally but must end in an alphanumeric/underscore so
+#: trailing sentence punctuation (e.g. the period in ``@alice.``) is excluded.
+_OUTBOUND_TOKEN_RE = re.compile(
+    r"(?<![\w./@#-])([@#])([A-Za-z0-9._-]*[A-Za-z0-9_])"
+)
 
 
 def _match_user(
@@ -67,6 +70,8 @@ def _match_user(
         if len(unique_ids) == 1:
             return matches[0], False
         if len(unique_ids) > 1:
+            # Multiple candidates share this field value: the reference is
+            # ambiguous and a lower-priority field cannot disambiguate it.
             return None, True
     return None, False
 
