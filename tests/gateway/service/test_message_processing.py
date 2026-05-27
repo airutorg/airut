@@ -34,6 +34,8 @@ from .conftest import make_service, update_global, update_repo
 def _make_parsed_message(
     *,
     sender: str = "user@example.com",
+    sender_display: str = "",
+    received_at: float = 0.0,
     body: str = "Hello",
     conversation_id: str | None = None,
     model_hint: str | None = None,
@@ -43,6 +45,8 @@ def _make_parsed_message(
     """Build a ParsedMessage for testing."""
     return ParsedMessage(
         sender=sender,
+        sender_display=sender_display,
+        received_at=received_at,
         body=body,
         conversation_id=conversation_id,
         model_hint=model_hint,
@@ -93,22 +97,41 @@ def _make_failure_result(
 
 
 class TestComposeMessageBody:
-    """Tests for compose_message_body (coalesced burst rendering)."""
+    """Tests for compose_message_body (per-message attribution header)."""
 
-    def test_empty_entries_returns_body_verbatim(self) -> None:
-        """No coalescing — the body is used unchanged."""
-        parsed = _make_parsed_message(body="just this")
-        assert compose_message_body(parsed) == "just this"
+    def test_single_message_gets_header(self) -> None:
+        """A lone message is rendered as a one-entry burst with a header."""
+        parsed = _make_parsed_message(
+            sender_display="Alice <alice@example.com>",
+            received_at=0.0,
+            body="just this",
+        )
+        assert compose_message_body(parsed) == (
+            "[Alice <alice@example.com> 1970-01-01 00:00:00 UTC]\njust this"
+        )
+
+    def test_single_message_falls_back_to_sender(self) -> None:
+        """When sender_display is unset, the canonical sender is used."""
+        parsed = _make_parsed_message(
+            sender="user@example.com",
+            sender_display="",
+            received_at=0.0,
+            body="hi",
+        )
+        assert compose_message_body(parsed) == (
+            "[user@example.com 1970-01-01 00:00:00 UTC]\nhi"
+        )
 
     def test_entries_rendered_with_headers(self) -> None:
-        """Coalesced entries get a [sender HH:MM:SS] header each."""
+        """Coalesced entries get a [sender YYYY-MM-DD HH:MM:SS UTC] header."""
         parsed = _make_parsed_message(body="ignored")
         parsed.coalesced_entries = [
             ("alice", 0.0, "hello"),
             ("bob", 0.0, "world"),
         ]
         assert compose_message_body(parsed) == (
-            "[alice 00:00:00]\nhello\n\n[bob 00:00:00]\nworld"
+            "[alice 1970-01-01 00:00:00 UTC]\nhello\n\n"
+            "[bob 1970-01-01 00:00:00 UTC]\nworld"
         )
 
 

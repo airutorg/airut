@@ -90,16 +90,30 @@ class TestAuthenticateAndParse:
     def test_successful_parse(self, tmp_path: Path) -> None:
         adapter, _, authorizer, _ = _make_adapter(tmp_path)
         authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.return_value = "Pyry Haulos"
         msg = _make_raw_message(text="Do something")
 
         result = adapter.authenticate_and_parse(msg)
 
         assert isinstance(result, SlackParsedMessage)
         assert result.sender == "U123"
+        # Resolved name plus the bare user ID (inert, not a live mention).
+        assert result.sender_display == "Pyry Haulos <U123>"
         assert result.body == "Do something"
         assert result.conversation_id is None
         assert result.slack_channel_id == "D456"
         assert result.slack_thread_ts == "1234567890.123456"
+
+    def test_sender_display_falls_back_to_user_id(self, tmp_path: Path) -> None:
+        adapter, _, authorizer, _ = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        # No cached profile: get_display_name returns the raw user ID.
+        authorizer.get_display_name.return_value = "U123"
+        msg = _make_raw_message(text="Do something")
+
+        result = adapter.authenticate_and_parse(msg)
+
+        assert result.sender_display == "U123"
 
     def test_unauthorized_raises(self, tmp_path: Path) -> None:
         adapter, _, authorizer, _ = _make_adapter(tmp_path)

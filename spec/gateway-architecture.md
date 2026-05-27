@@ -25,12 +25,17 @@ protocol handling (email IMAP/SMTP, Slack Socket Mode, etc.) via types in
 `gateway/channel.py`:
 
 - **`ParsedMessage`** — Protocol-agnostic dataclass produced by the channel
-  adapter after authentication and parsing. Contains sender, body,
-  conversation_id, model_hint, attachments, display_title, channel_context, and
-  subject. The `subject` field carries the email subject line (or equivalent)
-  for new conversations; it is included in `channel_context` so Claude sees it
-  in the prompt. When a new-conversation email has a subject but an empty body,
-  the subject alone drives the task — the empty body is allowed.
+  adapter after authentication and parsing. Contains sender, sender_display,
+  received_at, body, conversation_id, model_hint, attachments, display_title,
+  channel_context, and subject. `sender` is the canonical trust anchor (email
+  address / Slack user ID); `sender_display` is the human-readable attribution
+  string (email `From` header / resolved Slack `DisplayName <U123>`), exposed
+  via the `display_sender` property which falls back to `sender`. `received_at`
+  is the gateway-stamped receipt time used for the prompt header timestamp. The
+  `subject` field carries the email subject line (or equivalent) for new
+  conversations; it is included in `channel_context` so Claude sees it in the
+  prompt. When a new-conversation email has a subject but an empty body, the
+  subject alone drives the task — the empty body is allowed.
 - **`AuthenticationError`** — Exception raised by `authenticate_and_parse()`
   when authentication or authorization fails. Carries `sender` (raw sender
   identity for dashboard visibility) and `reason` (human-readable rejection
@@ -169,19 +174,27 @@ the busy window.
   PENDING and stays PENDING until the active task completes and
   `_drain_pending()` picks it up.
 - **Subsequent** arriving messages during the same busy window merge their body,
-  sender, and arrival timestamp into the existing `PendingMessage`'s
+  `sender_display`, and receipt timestamp into the existing `PendingMessage`'s
   `coalesced_entries` field (a `list[tuple[str, float, str]]` on the base
   `ParsedMessage` dataclass, so the gateway stays channel-agnostic). Their
   tracker tasks transition QUEUED → AUTHENTICATING → COMPLETED with
   `CompletionReason.COALESCED`; the completion `detail` field records the
   pending `task_id` they merged into.
-- When `_drain_pending()` runs, the prompt body is composed from
-  `coalesced_entries` if non-empty, otherwise from `parsed.body` as before. The
-  format is `[<sender> <HH:MM:SS>]\n<body>` per entry, separated by blank lines.
-  No coalescing leaves `coalesced_entries` empty (the merge seeds the original
-  message only on the *second* arrival, so the list is never length one), so a
-  single-message follow-up uses `parsed.body` verbatim and looks identical to
-  the pre-coalescing world.
+
+Every message — coalesced or not — is rendered with a per-message attribution
+header so Claude can attribute it, which matters in shared Slack threads where
+several people post into one conversation. `compose_message_body()` emits
+`[<sender> <timestamp>]\n<body>` per entry, separated by blank lines:
+
+- `<sender>` is `ParsedMessage.sender_display` (falling back to the canonical
+  `sender`): email uses the raw `From` header (name + address); Slack resolves
+  the user ID to `DisplayName <U123>` (a bare `<U123>`, not `<@U123>`, so it
+  cannot render as a live mention if echoed back).
+- `<timestamp>` is rendered `YYYY-MM-DD HH:MM:SS UTC` from each message's
+  `received_at` (epoch seconds, stamped by the gateway at receive time).
+- When `coalesced_entries` is empty (no coalescing), the renderer synthesizes a
+  single entry from the message's own `sender_display`/`received_at`/`body`, so
+  a lone message gets the same header shape as a coalesced burst.
 
 The "busy window" is exactly the period during which a `PendingMessage` for the
 conversation exists in `_pending_messages[conv_id]` or an EXECUTING task for it
@@ -223,11 +236,13 @@ GatewayService._process_message_worker()  [worker thread]:
     -> (slack: workspace/group/user authorization + event payload extraction)
     -> raises AuthenticationError on failure:
        tracker.complete_task(task_id, AUTH_FAILED/UNAUTHORIZED) → COMPLETED
+  -> parsed.received_at = time.time()  (stamps receipt time for attribution)
   -> tracker.update_task_display_title(task_id, authenticated_sender=...)
   -> tracker.set_conversation_id(task_id, conv_id)
   -> If conversation already active (has_active_task):
      -> If a PendingMessage already exists for this conversation:
-        -> Merge body/sender/timestamp into pending.parsed.coalesced_entries
+        -> Merge body/sender_display/received_at into
+           pending.parsed.coalesced_entries
         -> tracker.complete_task(task_id, COALESCED, detail=<pending_task_id>)
      -> Else (no pending yet):
         -> Enqueue PendingMessage, tracker.set_pending(task_id) → PENDING
@@ -729,14 +744,16 @@ itself holds at most one `PendingMessage` per conversation.
    free the worker thread. The pending task's `conversation_id` is set so it
    appears in the dashboard alongside the executing task.
 4. If active and a `PendingMessage` already exists: merge the new message's
-   body/sender/arrival timestamp into `pending.parsed.coalesced_entries`,
+   body/`sender_display`/`received_at` into `pending.parsed.coalesced_entries`,
    transition the new tracker task to COMPLETED with
    `CompletionReason.COALESCED` (and a `detail` pointing at the pending task ID
    for dashboard linking), free the worker thread. No new `PendingMessage` is
    created.
 5. On completion: `_drain_pending()` pops the single pending entry (if any) and
-   submits it. `_process_pending_message` composes the prompt body from
-   `coalesced_entries` when present.
+   submits it. `_process_pending_message` composes the prompt body via
+   `compose_message_body()`, which renders the per-message attribution header
+   (from `coalesced_entries` when present, otherwise a single synthesized
+   entry).
 
 This avoids blocking worker threads on conversation locks. With explicit
 queuing, worker slots are only consumed during actual execution, not while

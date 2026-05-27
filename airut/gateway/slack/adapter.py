@@ -222,8 +222,20 @@ class SlackChannelAdapter(ChannelAdapter):
         # Build display title
         display_title = text[:_MAX_TITLE_LENGTH].split("\n")[0] if text else ""
 
+        # Resolve the user ID to a readable name for prompt attribution.
+        # The authorize() call above warmed the user cache, so this is a
+        # cache hit (no extra Slack API request).  The ID is rendered as a
+        # bare ``<U123>`` rather than ``<@U123>`` so the resolved ID is never
+        # itself live-mention syntax.  The name half is user-controlled and
+        # not sanitized here (consistent with the message body); the outbound
+        # mrkdwn renderer escapes ``<``/``>`` so anything Claude echoes is
+        # inert regardless.
+        name = self._authorizer.get_display_name(user_id)
+        sender_display = f"{name} <{user_id}>" if name != user_id else user_id
+
         return SlackParsedMessage(
             sender=user_id,
+            sender_display=sender_display,
             body=text,
             conversation_id=conversation_id,
             model_hint=None,
