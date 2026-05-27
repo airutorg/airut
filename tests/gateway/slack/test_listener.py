@@ -512,6 +512,34 @@ class TestAppMentionHandler:
         )
         submit.assert_called_once()
 
+    def test_app_mention_bot_id_skipped(self) -> None:
+        listener, submit = self._listener()
+        listener._on_app_mention(
+            {
+                "type": "app_mention",
+                "user": "U1",
+                "bot_id": "B1",
+                "text": "<@UBOT> help",
+                "channel": "C1",
+                "ts": "T1",
+            }
+        )
+        submit.assert_not_called()
+
+    def test_app_mention_subtype_skipped(self) -> None:
+        listener, submit = self._listener()
+        listener._on_app_mention(
+            {
+                "type": "app_mention",
+                "user": "U1",
+                "subtype": "message_changed",
+                "text": "<@UBOT> help",
+                "channel": "C1",
+                "ts": "T1",
+            }
+        )
+        submit.assert_not_called()
+
 
 class TestChannelMessageHandler:
     def _listener(
