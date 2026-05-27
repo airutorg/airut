@@ -549,81 +549,6 @@ class TestSendError:
         adapter.send_error(parsed, "conv1", "error msg")
 
 
-class TestSendRejection:
-    def test_sends_rejection_without_dashboard(self) -> None:
-        adapter, _, _, responder = _make_adapter()
-        parsed = EmailParsedMessage(
-            sender="user@example.com",
-            body="body",
-            conversation_id=None,
-            model_hint=None,
-            original_message_id="<msg1@ex.com>",
-            decoded_subject="Test",
-        )
-
-        adapter.send_rejection(parsed, "conv1", "duplicate", None)
-        responder.send_reply.assert_called_once()
-        call_kw = responder.send_reply.call_args[1]
-        assert "duplicate" in call_kw["body"]
-        assert "conv1" in call_kw["body"]
-
-    def test_sends_rejection_with_dashboard(self) -> None:
-        adapter, _, _, responder = _make_adapter()
-        parsed = EmailParsedMessage(
-            sender="user@example.com",
-            body="body",
-            conversation_id=None,
-            model_hint=None,
-            original_message_id="<msg1@ex.com>",
-            decoded_subject="Test",
-        )
-
-        adapter.send_rejection(
-            parsed,
-            "conv1",
-            "busy",
-            "https://dash.example.com",
-        )
-        call_kw = responder.send_reply.call_args[1]
-        assert "dash.example.com/conversation/conv1" in call_kw["body"]
-        assert "dash.example.com/conversation/conv1" in call_kw["html_body"]
-
-    def test_smtp_failure_non_fatal(self) -> None:
-        adapter, _, _, responder = _make_adapter()
-        responder.send_reply.side_effect = SMTPSendError("fail")
-        parsed = EmailParsedMessage(
-            sender="user@example.com",
-            body="body",
-            conversation_id=None,
-            model_hint=None,
-            decoded_subject="Test",
-        )
-
-        # Should not raise
-        adapter.send_rejection(parsed, "conv1", "reason", None)
-
-    def test_html_escapes_reason(self) -> None:
-        adapter, _, _, responder = _make_adapter()
-        parsed = EmailParsedMessage(
-            sender="user@example.com",
-            body="body",
-            conversation_id=None,
-            model_hint=None,
-            original_message_id="<msg1@ex.com>",
-            decoded_subject="Test",
-        )
-
-        adapter.send_rejection(
-            parsed,
-            "conv1",
-            "<script>alert('xss')</script>",
-            None,
-        )
-        call_kw = responder.send_reply.call_args[1]
-        assert "<script>" not in call_kw["html_body"]
-        assert "&lt;script&gt;" in call_kw["html_body"]
-
-
 class TestStructuredMessageId:
     """Tests for structured Message-ID generation on all reply types."""
 
@@ -639,23 +564,6 @@ class TestStructuredMessageId:
         )
 
         adapter.send_acknowledgment(parsed, "aabb1122", "sonnet", None)
-        call_kw = responder.send_reply.call_args[1]
-        mid = call_kw["message_id"]
-        assert mid.startswith("<airut.aabb1122.")
-        assert "@example.com>" in mid
-
-    def test_rejection_has_structured_id(self) -> None:
-        adapter, _, _, responder = _make_adapter()
-        parsed = EmailParsedMessage(
-            sender="user@example.com",
-            body="body",
-            conversation_id=None,
-            model_hint=None,
-            original_message_id="<msg1@ex.com>",
-            decoded_subject="Test",
-        )
-
-        adapter.send_rejection(parsed, "aabb1122", "Busy", None)
         call_kw = responder.send_reply.call_args[1]
         mid = call_kw["message_id"]
         assert mid.startswith("<airut.aabb1122.")

@@ -35,9 +35,12 @@
             {% if task.succeeded %}
                 {% set status_class = 'success' %}
                 {% set icon = '&#x2713;' %}
-            {% elif task.completion_reason and task.completion_reason.value in ['auth_failed', 'unauthorized', 'rejected'] %}
+            {% elif task.completion_reason and task.completion_reason.value in ['auth_failed', 'unauthorized'] %}
                 {% set status_class = 'failed' %}
                 {% set icon = '&#x2298;' %}
+            {% elif task.completion_reason and task.completion_reason.value == 'coalesced' %}
+                {% set status_class = 'coalesced' %}
+                {% set icon = '&#x21B3;' %}
             {% else %}
                 {% set status_class = 'failed' %}
                 {% set icon = '&#x2717;' %}

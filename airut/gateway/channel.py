@@ -102,6 +102,16 @@ class ParsedMessage:
     and is included in channel_context.  Empty for resumed conversations
     and for channels that have no concept of a subject (e.g. Slack)."""
 
+    coalesced_entries: list[tuple[str, float, str]] = field(
+        default_factory=list
+    )
+    """Coalesced burst messages as ``(sender, arrival_timestamp, body)`` tuples.
+
+    Populated by the gateway when several messages arrive for a conversation
+    while it is busy: they merge into the single pending follow-up instead of
+    queueing separately.  Each tuple is one message in arrival order.  An empty
+    list means no coalescing happened — consumers use ``body`` verbatim."""
+
 
 @dataclass
 class RawMessage[ContentT]:
@@ -319,20 +329,6 @@ class ChannelAdapter(Protocol):
         error_message: str,
     ) -> None:
         """Send an error notification to the user."""
-        ...
-
-    def send_rejection(
-        self,
-        parsed: ParsedMessage,
-        conversation_id: str,
-        reason: str,
-        dashboard_url: str | None,
-    ) -> None:
-        """Send a rejection notification when a message cannot be processed.
-
-        Called when the per-conversation pending queue is full and the
-        message cannot be accepted.
-        """
         ...
 
     def create_plan_streamer(

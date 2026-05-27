@@ -421,35 +421,6 @@ class SlackChannelAdapter(ChannelAdapter):
         except SlackApiError as e:
             logger.error("Failed to send Slack error message: %s", e)
 
-    def send_rejection(
-        self,
-        parsed: ParsedMessage,
-        conversation_id: str,
-        reason: str,
-        dashboard_url: str | None,
-    ) -> None:
-        """Send rejection notification to the Slack thread."""
-        if not isinstance(parsed, SlackParsedMessage):
-            raise TypeError(
-                f"Expected SlackParsedMessage, got {type(parsed).__name__}"
-            )
-
-        text = f"Your message could not be processed.\n\nReason: {reason}"
-        if dashboard_url:
-            task_url = f"{dashboard_url}/conversation/{conversation_id}"
-            text += f"\n\nConversation: {task_url}"
-        else:
-            text += f"\n\nConversation ID: {conversation_id}"
-
-        try:
-            self._client.chat_postMessage(
-                channel=parsed.slack_channel_id,
-                thread_ts=parsed.slack_thread_ts,
-                text=text,
-            )
-        except SlackApiError as e:
-            logger.warning("Failed to send Slack rejection (non-fatal): %s", e)
-
     def create_plan_streamer(
         self, parsed: ParsedMessage
     ) -> PlanStreamer | None:

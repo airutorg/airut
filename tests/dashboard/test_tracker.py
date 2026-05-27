@@ -1055,7 +1055,7 @@ class TestCompletionReason:
         assert CompletionReason.TIMEOUT.value == "timeout"
         assert CompletionReason.CHANNEL_ERROR.value == "channel_error"
         assert CompletionReason.INTERNAL_ERROR.value == "internal_error"
-        assert CompletionReason.REJECTED.value == "rejected"
+        assert CompletionReason.COALESCED.value == "coalesced"
 
 
 class TestDiskTaskId:

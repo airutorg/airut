@@ -24,7 +24,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from airut.allowlist import parse_allowlist_yaml
@@ -213,6 +213,33 @@ def build_recovery_prompt(
     return "\n".join(parts)
 
 
+def compose_message_body(parsed: ParsedMessage) -> str:
+    """Compose the user message body, expanding any coalesced burst.
+
+    When several messages coalesced into this one while the conversation
+    was busy, ``parsed.coalesced_entries`` holds a
+    ``(sender, arrival_timestamp, body)`` tuple per message in arrival
+    order.  They are rendered with a ``[<sender> <HH:MM:SS>]`` header per
+    entry so Claude can attribute each part of the burst.  An empty list
+    means no coalescing happened, so ``parsed.body`` is used verbatim and
+    the prompt looks identical to the non-coalesced flow.
+
+    Args:
+        parsed: The parsed message, possibly carrying coalesced entries.
+
+    Returns:
+        The composed body to send to Claude.
+    """
+    if not parsed.coalesced_entries:
+        return parsed.body
+
+    parts: list[str] = []
+    for sender, timestamp, body in parsed.coalesced_entries:
+        stamp = datetime.fromtimestamp(timestamp, tz=UTC).strftime("%H:%M:%S")
+        parts.append(f"[{sender} {stamp}]\n{body}")
+    return "\n\n".join(parts)
+
+
 def build_image(
     service: GatewayService,
     mirror: GitMirrorCache,
@@ -296,8 +323,6 @@ def _build_reply_summary(
     Returns:
         ReplySummary ready for ConversationStore.
     """
-    from datetime import datetime
-
     return ReplySummary(
         session_id=result.session_id,
         timestamp=datetime.now(tz=UTC).isoformat(),
@@ -860,7 +885,9 @@ def process_message(
 
         # ── Build prompt ──
 
-        prompt = f"{channel_context}\n\n{parsed.body}"
+        # Expand coalesced burst messages (no-op when none coalesced).
+        user_body = compose_message_body(parsed)
+        prompt = f"{channel_context}\n\n{user_body}"
 
         # ── Execute in sandbox ──
 
@@ -879,7 +906,7 @@ def process_message(
             conversation_id=conv_id,
             on_event=todo_callback,
             channel_context=channel_context,
-            user_body=parsed.body,
+            user_body=user_body,
         )
 
         conv_id = sandbox_result.conversation_id
@@ -987,8 +1014,6 @@ def process_message(
         adapter.send_error(parsed, conv_id, error_msg)
         if conv_id and conversation_store:
             try:
-                from datetime import datetime
-
                 from airut.claude_output.types import Usage
 
                 reply = ReplySummary(

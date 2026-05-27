@@ -38,6 +38,15 @@
             </div>
         </div>
 
+        {% if task.completion_reason and task.completion_reason.value == 'coalesced' and task.completion_detail %}
+        <div class="field">
+            <div class="field-label">Coalesced Into</div>
+            <div class="field-value">
+                <a href="/task/{{ task.completion_detail }}">{{ task.completion_detail }}</a>
+            </div>
+        </div>
+        {% endif %}
+
         <div id="task-actions" {% if is_active %}sse-swap="task-actions" hx-swap="innerHTML"{% endif %}>
             {% include "components/action_buttons.html" %}
         </div>

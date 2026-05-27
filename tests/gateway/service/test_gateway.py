@@ -5,7 +5,6 @@
 
 """Tests for gateway module (GatewayService orchestration)."""
 
-import collections
 import concurrent.futures
 import os
 import threading
@@ -13,6 +12,7 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from airut.gateway.channel import ParsedMessage
 from airut.gateway.service import GatewayService, main
 from airut.gateway.service.gateway import PendingMessage
 
@@ -220,11 +220,107 @@ class TestProcessMessageWorker:
             msg, "task-1", handler, handler.adapters["email"]
         )
 
-        # Should queue, not reject
-        handler.adapters["email"].send_rejection.assert_not_called()
+        # Should queue as a single pending entry.
         svc.tracker.set_pending.assert_called_once()
         # Task should NOT be completed (stays PENDING until drained)
         svc.tracker.complete_task.assert_not_called()
+        # A single pending entry now exists for the conversation.
+        assert "aabb1122" in svc._pending_messages
+
+    def test_coalesces_into_existing_pending(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """A second message coalesces into the already-pending one."""
+        from airut.dashboard.tracker import CompletionReason
+
+        svc, handler = make_service(email_config, tmp_path)
+
+        existing_parsed = ParsedMessage(
+            sender="first@test.local",
+            body="first body",
+            conversation_id="aabb1122",
+            model_hint=None,
+        )
+        existing = PendingMessage(
+            parsed=existing_parsed,
+            task_id="pending-1",
+            repo_handler=handler,
+            adapter=handler.adapters["email"],
+            arrival_time=1000.0,
+        )
+        svc._pending_messages["aabb1122"] = existing
+
+        second = ParsedMessage(
+            sender="second@test.local",
+            body="second body",
+            conversation_id="aabb1122",
+            model_hint=None,
+            display_title="Second",
+        )
+        handler.adapters["email"].authenticate_and_parse.return_value = second
+        svc.tracker.has_active_task.return_value = True
+
+        msg = make_message()
+        svc._process_message_worker(
+            msg, "task-2", handler, handler.adapters["email"]
+        )
+
+        # No new pending entry — the existing one is reused.
+        assert svc._pending_messages["aabb1122"] is existing
+        svc.tracker.set_pending.assert_not_called()
+        # Coalesced task completes with COALESCED, detail = survivor id.
+        svc.tracker.complete_task.assert_called_once_with(
+            "task-2", CompletionReason.COALESCED, "pending-1"
+        )
+        # The survivor now carries both messages in arrival order.
+        entries = existing.parsed.coalesced_entries
+        assert [sender for sender, _, _ in entries] == [
+            "first@test.local",
+            "second@test.local",
+        ]
+        assert [body for _, _, body in entries] == [
+            "first body",
+            "second body",
+        ]
+        # The first entry's timestamp is the original message's enqueue
+        # time (PendingMessage.arrival_time), not the merge time.
+        assert entries[0][1] == 1000.0
+        # The survivor's display title tracks the latest message.
+        svc.tracker.update_task_display_title.assert_called_with(
+            "pending-1", "Second"
+        )
+
+    def test_unexpected_error_after_conv_id_drains_pending(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """An error raised after conv_id is assigned still drains pending.
+
+        The finally block completes the failed task and drains any
+        messages queued behind the conversation so they are not stranded.
+        """
+        from airut.dashboard.tracker import CompletionReason
+
+        svc, handler = make_service(email_config, tmp_path)
+        mock_parsed = MagicMock(
+            conversation_id="aabb1122",
+            display_title="Test",
+            sender="user@test.local",
+        )
+        handler.adapters[
+            "email"
+        ].authenticate_and_parse.return_value = mock_parsed
+        # Fail inside the queueing block, after conv_id is assigned.
+        svc.tracker.has_active_task.side_effect = RuntimeError("boom")
+
+        with patch.object(svc, "_drain_pending") as mock_drain:
+            svc._process_message_worker(
+                make_message(), "task-err", handler, handler.adapters["email"]
+            )
+
+        svc.tracker.complete_task.assert_called_once_with(
+            "task-err", CompletionReason.INTERNAL_ERROR, ""
+        )
+        mock_drain.assert_called_once_with("aabb1122")
 
     def test_new_conversation(self, email_config, tmp_path: Path) -> None:
         from airut.dashboard.tracker import CompletionReason
@@ -539,8 +635,9 @@ class TestDrainPending:
             task_id="conv1",
             repo_handler=handler,
             adapter=handler.adapters["email"],
+            arrival_time=1000.0,
         )
-        svc._pending_messages["conv1"] = collections.deque([pending])
+        svc._pending_messages["conv1"] = pending
 
         svc._drain_pending("conv1")
 
@@ -548,7 +645,7 @@ class TestDrainPending:
             svc._process_pending_message, pending
         )
         assert mock_future in svc._pending_futures
-        # Queue should be cleaned up (empty deque removed)
+        # Pending entry should be popped after draining
         assert "conv1" not in svc._pending_messages
 
     def test_no_executor_pool_marks_internal_error(
@@ -566,8 +663,9 @@ class TestDrainPending:
             task_id="pending-task-1",
             repo_handler=handler,
             adapter=handler.adapters["email"],
+            arrival_time=1000.0,
         )
-        svc._pending_messages["conv1"] = collections.deque([pending])
+        svc._pending_messages["conv1"] = pending
 
         svc._drain_pending("conv1")
 
@@ -576,40 +674,6 @@ class TestDrainPending:
             CompletionReason.INTERNAL_ERROR,
             "executor pool shut down",
         )
-
-    def test_drains_one_leaves_rest(self, email_config, tmp_path: Path) -> None:
-        """_drain_pending pops only the first message, leaving others."""
-        svc, handler = make_service(email_config, tmp_path)
-        mock_pool = MagicMock()
-        mock_future = MagicMock()
-        mock_pool.submit.return_value = mock_future
-        svc._executor_pool = mock_pool
-
-        parsed1 = MagicMock(conversation_id="conv1")
-        parsed2 = MagicMock(conversation_id="conv1")
-        pending1 = PendingMessage(
-            parsed=parsed1,
-            task_id="task-1",
-            repo_handler=handler,
-            adapter=handler.adapters["email"],
-        )
-        pending2 = PendingMessage(
-            parsed=parsed2,
-            task_id="task-2",
-            repo_handler=handler,
-            adapter=handler.adapters["email"],
-        )
-        svc._pending_messages["conv1"] = collections.deque([pending1, pending2])
-
-        svc._drain_pending("conv1")
-
-        # Only first pending should be submitted
-        mock_pool.submit.assert_called_once_with(
-            svc._process_pending_message, pending1
-        )
-        # Second message should still be in the queue
-        assert len(svc._pending_messages["conv1"]) == 1
-        assert svc._pending_messages["conv1"][0] is pending2
 
 
 class TestProcessPendingMessage:
@@ -627,6 +691,7 @@ class TestProcessPendingMessage:
             task_id="task-1",
             repo_handler=handler,
             adapter=handler.adapters["email"],
+            arrival_time=1000.0,
         )
 
         with patch(
@@ -654,6 +719,7 @@ class TestProcessPendingMessage:
             task_id="task-2",
             repo_handler=handler,
             adapter=handler.adapters["email"],
+            arrival_time=1000.0,
         )
 
         with patch(
@@ -681,6 +747,7 @@ class TestProcessPendingMessage:
             task_id="task-3",
             repo_handler=handler,
             adapter=handler.adapters["email"],
+            arrival_time=1000.0,
         )
 
         with patch(
@@ -705,6 +772,7 @@ class TestProcessPendingMessage:
             task_id="task-4",
             repo_handler=handler,
             adapter=handler.adapters["email"],
+            arrival_time=1000.0,
         )
 
         with patch(
@@ -731,6 +799,7 @@ class TestProcessPendingMessage:
             task_id="task-5",
             repo_handler=handler,
             adapter=handler.adapters["email"],
+            arrival_time=1000.0,
         )
 
         with (

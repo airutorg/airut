@@ -1037,13 +1037,9 @@ class TestCheckPendingServerReloadEdgeCases:
                 return_value=False,
             ),
         ):
-            import collections
-
             from airut.gateway.service.gateway import PendingMessage
 
-            svc._pending_messages["test-conv"] = collections.deque(
-                [MagicMock(spec=PendingMessage)]
-            )
+            svc._pending_messages["test-conv"] = MagicMock(spec=PendingMessage)
             svc._check_pending_server_reload()
 
         assert svc._pending_server_config is not None
@@ -1159,8 +1155,6 @@ class TestTryImmediateServerReload:
 
     def test_skips_when_pending_messages(self, tmp_path: Path) -> None:
         """No immediate reload when messages are pending."""
-        import collections
-
         svc = _make_service(tmp_path)
         svc._pending_server_config = svc.config
 
@@ -1174,8 +1168,8 @@ class TestTryImmediateServerReload:
         ):
             pass
 
-        # Add pending messages outside the lock
-        svc._pending_messages["conv"] = collections.deque([MagicMock()])
+        # Add a pending message outside the lock
+        svc._pending_messages["conv"] = MagicMock()
 
         with patch.object(
             TaskTracker,

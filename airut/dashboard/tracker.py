@@ -26,10 +26,6 @@ from airut._json_types import JsonDict, JsonValue
 from airut.dashboard.versioned import VersionClock, Versioned
 
 
-# Maximum number of pending messages queued per conversation.
-MAX_PENDING_PER_CONVERSATION = 3
-
-
 class TaskStatus(Enum):
     """Task lifecycle status.
 
@@ -59,7 +55,7 @@ class CompletionReason(Enum):
     TIMEOUT = "timeout"
     CHANNEL_ERROR = "channel_error"
     INTERNAL_ERROR = "internal_error"
-    REJECTED = "rejected"
+    COALESCED = "coalesced"
 
 
 class RepoStatus(Enum):

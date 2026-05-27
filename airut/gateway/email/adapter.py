@@ -11,7 +11,6 @@ authentication, MIME parsing, and SMTP reply delivery.
 
 from __future__ import annotations
 
-import html as html_module
 import logging
 from dataclasses import dataclass, field
 from email.message import Message
@@ -427,77 +426,6 @@ class EmailChannelAdapter(ChannelAdapter):
             )
         except SMTPSendError as e:
             logger.error("Failed to send error reply: %s", e)
-
-    def send_rejection(
-        self,
-        parsed: ParsedMessage,
-        conversation_id: str,
-        reason: str,
-        dashboard_url: str | None,
-    ) -> None:
-        """Send rejection reply when a message cannot be processed."""
-        assert isinstance(parsed, EmailParsedMessage)
-
-        subject, references_list = self._build_reply_headers(
-            parsed, conversation_id
-        )
-
-        escaped_reason = html_module.escape(reason)
-
-        if dashboard_url:
-            task_url = f"{dashboard_url}/conversation/{conversation_id}"
-            body = (
-                "Your message could not be processed.\n"
-                "\n"
-                f"Reason: {reason}\n"
-                "\n"
-                f"Conversation ID: {conversation_id} ({task_url})"
-            )
-            html_body = (
-                "Your message could not be processed."
-                "<br><br>"
-                f"Reason: {escaped_reason}"
-                "<br><br>"
-                f'Conversation ID: <a href="{task_url}">'
-                f"{conversation_id}</a>"
-            )
-        else:
-            body = (
-                "Your message could not be processed.\n"
-                "\n"
-                f"Reason: {reason}\n"
-                "\n"
-                f"Conversation ID: {conversation_id}"
-            )
-            html_body = (
-                "Your message could not be processed."
-                "<br><br>"
-                f"Reason: {escaped_reason}"
-                "<br><br>"
-                f"Conversation ID: {conversation_id}"
-            )
-
-        outgoing_message_id = generate_message_id(
-            conversation_id, self._config.account.from_address
-        )
-
-        try:
-            self._responder.send_reply(
-                to=parsed.sender,
-                subject=subject,
-                body=body,
-                in_reply_to=parsed.original_message_id,
-                references=references_list,
-                html_body=html_body,
-                message_id=outgoing_message_id,
-            )
-            logger.info(
-                "Sent rejection reply to %s for conversation %s",
-                parsed.sender,
-                conversation_id,
-            )
-        except SMTPSendError as e:
-            logger.warning("Failed to send rejection reply (non-fatal): %s", e)
 
     def send_new_message(
         self,

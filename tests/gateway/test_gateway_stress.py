@@ -257,7 +257,6 @@ class TestDuplicateRejectionStress:
         )
 
         # New behavior: messages for active conversations are queued
-        handler.adapters["email"].send_rejection.assert_not_called()
         task = svc.tracker.get_task(temp_id)
         assert task is not None
         assert task.status == TaskStatus.PENDING
@@ -294,7 +293,6 @@ class TestDuplicateRejectionStress:
         )
 
         # New behavior: messages for active conversations are queued
-        handler.adapters["email"].send_rejection.assert_not_called()
         task = svc.tracker.get_task(temp_id)
         assert task is not None
         assert task.status == TaskStatus.PENDING
@@ -340,7 +338,10 @@ class TestDuplicateRejectionStress:
                 handler.adapters["email"],
             )
 
-        handler.adapters["email"].send_rejection.assert_not_called()
+        # Completed prior task does not block — the message executes.
+        task = svc.tracker.get_task(temp_id)
+        assert task is not None
+        assert task.succeeded is True
 
     def test_no_conv_id_never_triggers_duplicate_check(
         self, email_config, tmp_path: Path
@@ -375,7 +376,10 @@ class TestDuplicateRejectionStress:
                 handler.adapters["email"],
             )
 
-        handler.adapters["email"].send_rejection.assert_not_called()
+        # New conversations skip the busy-check and execute immediately.
+        task = svc.tracker.get_task(temp_id)
+        assert task is not None
+        assert task.succeeded is True
 
 
 # ===================================================================
@@ -1037,74 +1041,71 @@ class TestWorkerEdgeCases:
 
 
 # ===================================================================
-# Queue full rejection
+# Message coalescing
 # ===================================================================
 
 
-class TestQueueFullRejection:
-    """Test that queue full causes rejection when MAX_PENDING is reached."""
+class TestCoalescing:
+    """Bursts to a busy conversation coalesce into one pending follow-up."""
 
-    def test_queue_full_sends_rejection(
+    def test_burst_coalesces_into_single_pending(
         self, email_config, tmp_path: Path
     ) -> None:
-        """When queue has MAX_PENDING_PER_CONVERSATION messages, reject."""
-        from airut.dashboard.tracker import MAX_PENDING_PER_CONVERSATION
+        """Many messages during the busy window merge into one entry.
 
+        The first follow-up becomes the single ``PendingMessage``; later
+        arrivals complete as ``COALESCED`` (linking back to it) and merge
+        their bodies into the survivor in arrival order.
+        """
         svc, handler = _make_gateway_real_tracker(email_config, tmp_path)
-        update_global(svc, dashboard_base_url="https://dash.example.com")
 
-        conv_id = "queue-full-conv"
-        # Create an active task for this conversation
+        conv_id = "burst-conv"
+        # An active task occupies the conversation for the whole burst.
         svc.tracker.add_task("active-task", "Active task", repo_id="test")
         svc.tracker.set_conversation_id("active-task", conv_id)
         svc.tracker.set_authenticating("active-task")
         svc.tracker.set_executing("active-task")
 
-        # Fill the pending queue to MAX_PENDING_PER_CONVERSATION
-        import collections
-
-        from airut.gateway.service.gateway import PendingMessage
-
-        queue = collections.deque()
-        for i in range(MAX_PENDING_PER_CONVERSATION):
-            queue.append(
-                PendingMessage(
-                    parsed=MagicMock(conversation_id=conv_id),
-                    task_id=f"pending-{i}",
-                    repo_handler=handler,
-                    adapter=handler.adapters["email"],
-                )
+        def deliver(task_id: str, body: str, title: str) -> None:
+            parsed = ParsedMessage(
+                sender="user@example.com",
+                body=body,
+                conversation_id=conv_id,
+                model_hint=None,
+                display_title=title,
             )
-        svc._pending_messages[conv_id] = queue
+            handler.adapters[
+                "email"
+            ].authenticate_and_parse.return_value = parsed
+            svc.tracker.add_task(task_id, "(authenticating)", repo_id="test")
+            svc._process_message_worker(
+                RawMessage(sender="test", content=None),
+                task_id,
+                handler,
+                handler.adapters["email"],
+            )
 
-        # Now send one more message — should be rejected
-        parsed = ParsedMessage(
-            sender="user@example.com",
-            body="One too many",
-            conversation_id=conv_id,
-            model_hint=None,
-            display_title="Overflow message",
-        )
-        handler.adapters["email"].authenticate_and_parse.return_value = parsed
+        deliver("follow-1", "first", "First")
+        deliver("follow-2", "second", "Second")
+        deliver("follow-3", "third", "Third")
 
-        temp_id = "new-overflow"
-        svc.tracker.add_task(temp_id, "(authenticating)", repo_id="test")
-        svc._process_message_worker(
-            RawMessage(sender="test", content=None),
-            temp_id,
-            handler,
-            handler.adapters["email"],
-        )
+        # Exactly one pending entry survives — the first follow-up.
+        assert list(svc._pending_messages.keys()) == [conv_id]
+        pending = svc._pending_messages[conv_id]
+        assert pending.task_id == "follow-1"
+        assert svc.tracker.get_task("follow-1").status == TaskStatus.PENDING
 
-        # Should have called send_rejection
-        handler.adapters["email"].send_rejection.assert_called_once()
-        call_args = handler.adapters["email"].send_rejection.call_args
-        assert call_args[0][0] is parsed
-        assert call_args[0][1] == conv_id
-        assert "Too many messages queued" in call_args[0][2]
-        assert call_args[0][3] == "https://dash.example.com"
+        # Later arrivals are COMPLETED as COALESCED, linking to the survivor.
+        for tid in ("follow-2", "follow-3"):
+            task = svc.tracker.get_task(tid)
+            assert task is not None
+            assert task.status == TaskStatus.COMPLETED
+            assert task.completion_reason == CompletionReason.COALESCED
+            assert task.completion_detail == "follow-1"
 
-        # The overflow task should be completed as REJECTED
-        task = svc.tracker.get_task(temp_id)
-        assert task is not None
-        assert task.status == TaskStatus.COMPLETED
+        # The survivor carries all three bodies in arrival order.
+        bodies = [body for _, _, body in pending.parsed.coalesced_entries]
+        assert bodies == ["first", "second", "third"]
+
+        # The survivor's display title tracks the latest coalesced message.
+        assert svc.tracker.get_task("follow-1").display_title == "Third"

@@ -1,5 +1,13 @@
 {# Task status badge — expects: task (TaskState), is_active (bool) #}
-{% set success_class = 'success' if task.succeeded else ('failed' if task.status.value == 'completed' else '') %}
+{% if task.succeeded %}
+    {% set success_class = 'success' %}
+{% elif task.status.value == 'completed' and task.completion_reason and task.completion_reason.value == 'coalesced' %}
+    {% set success_class = 'coalesced' %}
+{% elif task.status.value == 'completed' %}
+    {% set success_class = 'failed' %}
+{% else %}
+    {% set success_class = '' %}
+{% endif %}
 {% set status_display = task.status.value.replace('_', ' ').upper() %}
 {% set success_text = '' %}
 {% if task.status.value == 'completed' %}

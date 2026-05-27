@@ -1483,9 +1483,6 @@ class TestDuplicateMessageRejection:
             sample_email_message, task_id, handler, handler.adapters["email"]
         )
 
-        # Message should be queued, not rejected
-        mock_adapter.send_rejection.assert_not_called()
-
         # New task stays PENDING — waiting for _drain_pending to pick it up
         task = service.tracker.get_task(task_id)
         assert task is not None
@@ -1613,9 +1610,6 @@ class TestDuplicateMessageRejection:
                 handler.adapters["email"],
             )
 
-        # Should NOT reject — no active task for this conv_id
-        mock_adapter.send_rejection.assert_not_called()
-
         # New task should be completed successfully
         task = service.tracker.get_task(task_id)
         assert task is not None
@@ -1669,154 +1663,10 @@ class TestDuplicateMessageRejection:
                 handler.adapters["email"],
             )
 
-        # Should NOT reject — new conversation has no conv_id
-        mock_adapter.send_rejection.assert_not_called()
-
         # Task should be completed successfully with the new conv_id
         task = service.tracker.get_task(task_id)
         assert task is not None
         assert task.succeeded is True
-
-
-class TestRejectionReply:
-    """Tests for adapter.send_rejection method."""
-
-    def test_send_rejection_includes_conv_id(
-        self,
-        email_config: RepoServerConfig,
-        email_channel: EmailChannelConfig,
-        sample_email_message,
-    ) -> None:
-        """Test rejection reply includes conversation ID in subject."""
-        from unittest.mock import MagicMock
-
-        from airut.gateway.email.adapter import (
-            EmailChannelAdapter,
-            EmailParsedMessage,
-        )
-
-        responder = MagicMock()
-        adapter = EmailChannelAdapter(
-            config=email_channel,
-            authenticator=MagicMock(),
-            authorizer=MagicMock(),
-            responder=responder,
-            repo_id="test",
-        )
-
-        parsed = EmailParsedMessage(
-            sender=email_channel.auth.authorized_senders[0],
-            body="Original request",
-            conversation_id=None,
-            model_hint=None,
-            original_message_id="<reject123@example.com>",
-            decoded_subject="Original request",
-        )
-
-        conv_id = "def45678"
-        reason = "Task already in progress"
-
-        adapter.send_rejection(parsed, conv_id, reason, None)
-
-        responder.send_reply.assert_called_once()
-        call_kwargs = responder.send_reply.call_args[1]
-        assert f"[ID:{conv_id}]" in call_kwargs["subject"]
-        assert "could not be processed" in call_kwargs["body"]
-        assert reason in call_kwargs["body"]
-        assert conv_id in call_kwargs["body"]
-
-    def test_send_rejection_includes_dashboard_link(
-        self, master_repo: Path, tmp_path: Path, sample_email_message
-    ) -> None:
-        """Test rejection reply includes dashboard link when configured."""
-        from unittest.mock import MagicMock
-
-        from airut.gateway.config import (
-            EmailAccountConfig,
-            EmailAuthConfig,
-            ImapConfig,
-            SmtpConfig,
-        )
-        from airut.gateway.email.adapter import (
-            EmailChannelAdapter,
-            EmailParsedMessage,
-        )
-
-        responder = MagicMock()
-        email_channel_config = EmailChannelConfig(
-            account=EmailAccountConfig(
-                username="test@example.com",
-                from_address="Test Service <test@example.com>",
-                password="test_password",
-            ),
-            imap=ImapConfig(server="imap.example.com", port=993),
-            smtp=SmtpConfig(server="smtp.example.com", port=587),
-            auth=EmailAuthConfig(
-                authorized_senders=["authorized@example.com"],
-                trusted_authserv_id="mx.example.com",
-            ),
-        )
-        adapter = EmailChannelAdapter(
-            config=email_channel_config,
-            authenticator=MagicMock(),
-            authorizer=MagicMock(),
-            responder=responder,
-            repo_id="test",
-        )
-
-        parsed = EmailParsedMessage(
-            sender="authorized@example.com",
-            body="Request",
-            conversation_id=None,
-            model_hint=None,
-            decoded_subject="Request",
-        )
-
-        conv_id = "link1234"
-        dashboard_url = "https://dashboard.example.com"
-        adapter.send_rejection(parsed, conv_id, "Test reason", dashboard_url)
-
-        call_kwargs = responder.send_reply.call_args[1]
-        expected_url = f"https://dashboard.example.com/conversation/{conv_id}"
-        assert expected_url in call_kwargs["body"]
-        assert conv_id in call_kwargs["body"]
-        expected_link = f'<a href="{expected_url}">{conv_id}</a>'
-        assert expected_link in call_kwargs["html_body"]
-
-    def test_send_rejection_smtp_failure_non_fatal(
-        self,
-        email_config: RepoServerConfig,
-        email_channel: EmailChannelConfig,
-        sample_email_message,
-    ) -> None:
-        """Test rejection SMTP failure doesn't raise exception."""
-        from unittest.mock import MagicMock
-
-        from airut.gateway.email.adapter import (
-            EmailChannelAdapter,
-            EmailParsedMessage,
-        )
-
-        responder = MagicMock()
-        responder.send_reply.side_effect = SMTPSendError("Send failed")
-        adapter = EmailChannelAdapter(
-            config=email_channel,
-            authenticator=MagicMock(),
-            authorizer=MagicMock(),
-            responder=responder,
-            repo_id="test",
-        )
-
-        parsed = EmailParsedMessage(
-            sender=email_channel.auth.authorized_senders[0],
-            body="Request",
-            conversation_id=None,
-            model_hint=None,
-            decoded_subject="Test",
-        )
-
-        # Should not raise
-        adapter.send_rejection(parsed, "conv123", "Test reason", None)
 
 
 class TestConversationResumeTaskTracking:

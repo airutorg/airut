@@ -282,8 +282,6 @@ class TestDrainAfterPoolShutdown:
         ``if not self._executor_pool`` and completes the pending task
         with INTERNAL_ERROR.
         """
-        import collections
-
         from airut.gateway.service.gateway import PendingMessage
 
         service = integration_env.create_service()
@@ -316,8 +314,9 @@ class TestDrainAfterPoolShutdown:
             task_id=task_id,
             repo_handler=repo_handler,
             adapter=repo_handler.adapters["email"],
+            arrival_time=1000.0,
         )
-        service._pending_messages[conv_id] = collections.deque([pending])
+        service._pending_messages[conv_id] = pending
 
         # Ensure pool is None (not started)
         assert service._executor_pool is None

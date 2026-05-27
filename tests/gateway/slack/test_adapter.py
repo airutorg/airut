@@ -456,65 +456,6 @@ class TestSendError:
         adapter.send_error(parsed, "conv1", "error msg")
 
 
-class TestSendRejection:
-    def test_sends_rejection(self, tmp_path: Path) -> None:
-        adapter, client, _, _ = _make_adapter(tmp_path)
-        parsed = SlackParsedMessage(
-            sender="U123",
-            body="body",
-            conversation_id=None,
-            model_hint=None,
-            slack_channel_id="D456",
-            slack_thread_ts="ts1",
-        )
-
-        adapter.send_rejection(parsed, "conv1", "queue full", None)
-
-        client.chat_postMessage.assert_called_once()
-        call_kw = client.chat_postMessage.call_args[1]
-        assert "queue full" in call_kw["text"]
-        assert "conv1" in call_kw["text"]
-
-    def test_sends_rejection_with_dashboard(self, tmp_path: Path) -> None:
-        adapter, client, _, _ = _make_adapter(tmp_path)
-        parsed = SlackParsedMessage(
-            sender="U123",
-            body="body",
-            conversation_id=None,
-            model_hint=None,
-            slack_channel_id="D456",
-            slack_thread_ts="ts1",
-        )
-
-        adapter.send_rejection(
-            parsed, "conv1", "busy", "https://dash.example.com"
-        )
-        call_kw = client.chat_postMessage.call_args[1]
-        text = call_kw["text"]
-        assert "https://dash.example.com/conversation/conv1" in text
-        # Bare URL, no mrkdwn link syntax (Slack auto-links bare URLs)
-        assert "<" not in text
-        assert ">" not in text
-
-    def test_api_failure_non_fatal(self, tmp_path: Path) -> None:
-        adapter, client, _, _ = _make_adapter(tmp_path)
-        client.chat_postMessage.side_effect = SlackApiError(
-            message="error",
-            response=MagicMock(status_code=500, data={}),
-        )
-        parsed = SlackParsedMessage(
-            sender="U123",
-            body="body",
-            conversation_id=None,
-            model_hint=None,
-            slack_channel_id="D456",
-            slack_thread_ts="ts1",
-        )
-
-        # Should not raise
-        adapter.send_rejection(parsed, "conv1", "reason", None)
-
-
 class TestListenerProperty:
     def test_exposes_listener(self, tmp_path: Path) -> None:
         listener = MagicMock()
@@ -854,19 +795,6 @@ class TestTypeCheckErrors:
         )
         with pytest.raises(TypeError, match="SlackParsedMessage"):
             adapter.send_error(wrong, "c1", "err")
-
-    def test_send_rejection_type_error(self, tmp_path: Path) -> None:
-        adapter, _, _, _ = _make_adapter(tmp_path)
-        from airut.gateway.channel import ParsedMessage
-
-        wrong = ParsedMessage(
-            sender="U123",
-            body="t",
-            conversation_id=None,
-            model_hint=None,
-        )
-        with pytest.raises(TypeError, match="SlackParsedMessage"):
-            adapter.send_rejection(wrong, "c1", "reason", None)
 
 
 class TestChannelContext:
