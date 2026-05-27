@@ -589,3 +589,89 @@ class TestResolveChannelId:
         authorizer._channel_ids.expires_at = 0
         assert authorizer.resolve_channel_id("general") == "C1"
         assert client.conversations_list.call_count == 2
+
+
+class TestBotUserId:
+    def test_resolves_from_auth_test(self) -> None:
+        client = _mock_client()
+        client.auth_test.return_value = {
+            "team_id": "T001",
+            "user_id": "UBOT",
+        }
+        authorizer = SlackAuthorizer(
+            client=client, rules=[{"workspace_members": True}]
+        )
+        assert authorizer.get_bot_user_id() == "UBOT"
+
+    def test_shares_single_auth_test_with_team_id(self) -> None:
+        client = _mock_client()
+        client.users_info.return_value = _user_info_response()
+        client.auth_test.return_value = {
+            "team_id": "T001",
+            "user_id": "UBOT",
+        }
+        authorizer = SlackAuthorizer(
+            client=client, rules=[{"workspace_members": True}]
+        )
+        authorizer.authorize("U123")
+        assert authorizer.get_bot_user_id() == "UBOT"
+        # One auth.test call serves both team-ID and bot-ID resolution.
+        assert client.auth_test.call_count == 1
+
+    def test_none_when_auth_test_fails(self) -> None:
+        client = _mock_client()
+        client.auth_test.side_effect = SlackApiError(
+            message="error", response=MagicMock(status_code=500, data={})
+        )
+        authorizer = SlackAuthorizer(
+            client=client, rules=[{"workspace_members": True}]
+        )
+        assert authorizer.get_bot_user_id() is None
+
+    def test_none_when_user_id_absent(self) -> None:
+        client = _mock_client()
+        client.auth_test.return_value = {"team_id": "T001"}
+        authorizer = SlackAuthorizer(
+            client=client, rules=[{"workspace_members": True}]
+        )
+        assert authorizer.get_bot_user_id() is None
+
+
+class TestCandidateGroupMembers:
+    def test_unions_configured_group_members(self) -> None:
+        client = _mock_client()
+        client.auth_test.return_value = {"team_id": "T001"}
+        client.usergroups_list.return_value = {
+            "usergroups": [
+                {"handle": "engineering", "id": "G001"},
+                {"handle": "design", "id": "G002"},
+            ]
+        }
+        client.usergroups_users_list.side_effect = lambda usergroup: {
+            "G001": {"users": ["U1", "U2"]},
+            "G002": {"users": ["U2", "U3"]},
+        }[usergroup]
+
+        authorizer = SlackAuthorizer(
+            client=client,
+            rules=[
+                {"user_group": "engineering"},
+                {"user_group": "design"},
+            ],
+        )
+        assert authorizer.candidate_group_member_ids() == {"U1", "U2", "U3"}
+
+    def test_empty_when_no_group_rules(self) -> None:
+        client = _mock_client()
+        authorizer = SlackAuthorizer(
+            client=client, rules=[{"workspace_members": True}]
+        )
+        assert authorizer.candidate_group_member_ids() == set()
+
+    def test_skips_unresolvable_group(self) -> None:
+        client = _mock_client()
+        client.usergroups_list.return_value = {"usergroups": []}
+        authorizer = SlackAuthorizer(
+            client=client, rules=[{"user_group": "ghost"}]
+        )
+        assert authorizer.candidate_group_member_ids() == set()

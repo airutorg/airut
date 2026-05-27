@@ -28,7 +28,7 @@ from airut.gateway.slack.adapter import (
     _split_message,
     _upload_file,
 )
-from airut.gateway.slack.authorizer import SlackAuthorizer
+from airut.gateway.slack.authorizer import SlackAuthorizer, UserInfo
 from airut.gateway.slack.config import SlackChannelConfig
 from airut.gateway.slack.thread_store import SlackThreadStore
 
@@ -53,6 +53,9 @@ def _make_adapter(
     client = MagicMock(spec=WebClient)
     client.token = config.bot_token
     authorizer = MagicMock(spec=SlackAuthorizer)
+    authorizer.get_bot_user_id.return_value = "UBOT"
+    authorizer.candidate_group_member_ids.return_value = set()
+    authorizer.get_user_info.return_value = None
     thread_store = SlackThreadStore(tmp_path)
     adapter = SlackChannelAdapter(
         config=config,
@@ -582,7 +585,9 @@ class TestFromConfig:
         mock_client.assert_called_once_with(token=config.bot_token)
         mock_auth.assert_called_once()
         mock_store.assert_called_once()
-        mock_listener.assert_called_once_with(config)
+        mock_listener.assert_called_once_with(
+            config, mock_store.return_value, mock_auth.return_value
+        )
         assert adapter.listener is mock_listener.return_value
 
 
@@ -1107,3 +1112,337 @@ class TestSaveAttachmentsUrlValidation:
         mock_urlopen.assert_called_once()
         assert (inbox / "good.txt").read_bytes() == b"good data"
         assert not (inbox / "evil.txt").exists()
+
+
+def _channel_raw(
+    *,
+    user: str = "U1",
+    text: str = "<@UBOT> do the thing",
+    channel: str = "C1",
+    ts: str = "T1",
+    thread_ts: str | None = None,
+    event_type: str = "app_mention",
+    channel_type: str | None = None,
+) -> RawMessage:
+    payload: dict = {
+        "type": event_type,
+        "user": user,
+        "text": text,
+        "channel": channel,
+        "ts": ts,
+    }
+    if thread_ts is not None:
+        payload["thread_ts"] = thread_ts
+    if channel_type is not None:
+        payload["channel_type"] = channel_type
+    return RawMessage(sender=user, content=payload, display_title=text[:60])
+
+
+class TestChannelEngagement:
+    def test_top_level_mention_parse(self, tmp_path: Path) -> None:
+        adapter, client, authorizer, _ = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.return_value = "Alice"
+
+        result = adapter.authenticate_and_parse(_channel_raw())
+
+        assert result.is_channel is True
+        assert result.slack_channel_id == "C1"
+        # Top-level mention: the message ts roots the thread.
+        assert result.slack_thread_ts == "T1"
+        assert result.triggering_message_ts == "T1"
+        # Bot mention stripped from the invocation body.
+        assert result.body == "do the thing"
+        assert result.mention_candidate_ids == ["U1"]
+        # :eyes: reaction acknowledges the triggering message.
+        client.reactions_add.assert_called_once_with(
+            channel="C1", timestamp="T1", name="eyes"
+        )
+        # No replay for a brand-new top-level thread.
+        client.conversations_replies.assert_not_called()
+
+    def test_message_event_is_channel(self, tmp_path: Path) -> None:
+        adapter, _, authorizer, store = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.return_value = "Alice"
+        store.register("C1", "T1", "conv1")
+
+        result = adapter.authenticate_and_parse(
+            _channel_raw(
+                event_type="message",
+                channel_type="channel",
+                text="follow up",
+                ts="T2",
+                thread_ts="T1",
+            )
+        )
+
+        assert result.is_channel is True
+        assert result.conversation_id == "conv1"
+        assert result.slack_thread_ts == "T1"
+
+    def test_dm_is_not_channel(self, tmp_path: Path) -> None:
+        adapter, client, authorizer, _ = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.return_value = "Alice"
+
+        result = adapter.authenticate_and_parse(
+            _channel_raw(
+                event_type="message",
+                channel_type="im",
+                channel="D1",
+                text="hi",
+                thread_ts="T1",
+            )
+        )
+
+        assert result.is_channel is False
+        client.reactions_add.assert_not_called()
+
+    def test_reaction_failure_non_fatal(self, tmp_path: Path) -> None:
+        adapter, client, authorizer, _ = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.return_value = "Alice"
+        client.reactions_add.side_effect = SlackApiError(
+            message="no", response=MagicMock(status_code=500, data={})
+        )
+
+        # Should not raise.
+        result = adapter.authenticate_and_parse(_channel_raw())
+        assert result.is_channel is True
+
+    def test_bare_mention_sets_subject_sentinel(self, tmp_path: Path) -> None:
+        adapter, _, authorizer, _ = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.return_value = "Alice"
+
+        result = adapter.authenticate_and_parse(_channel_raw(text="<@UBOT>"))
+
+        assert result.body == ""
+        assert result.subject == "Slack channel message"
+
+    def test_group_members_in_candidates(self, tmp_path: Path) -> None:
+        adapter, _, authorizer, _ = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.return_value = "Alice"
+        authorizer.candidate_group_member_ids.return_value = {"U2", "U3"}
+
+        result = adapter.authenticate_and_parse(_channel_raw())
+
+        assert result.mention_candidate_ids[0] == "U1"
+        assert set(result.mention_candidate_ids) == {"U1", "U2", "U3"}
+
+
+class TestMidThreadReplay:
+    def test_replay_folds_history(self, tmp_path: Path) -> None:
+        adapter, client, authorizer, _ = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.side_effect = lambda uid: {
+            "U1": "Alice",
+            "U2": "Bob",
+        }.get(uid, uid)
+        client.conversations_replies.return_value = {
+            "messages": [
+                {"ts": "T0", "user": "U2", "text": "the earlier question"},
+                {"ts": "T1", "user": "U1", "text": "<@UBOT> please help"},
+            ],
+            "response_metadata": {},
+        }
+
+        result = adapter.authenticate_and_parse(
+            _channel_raw(text="<@UBOT> please help", ts="T1", thread_ts="T0")
+        )
+
+        # Mid-thread: the engaged thread is the existing root.
+        assert result.slack_thread_ts == "T0"
+        assert "existing Slack thread" in result.channel_context
+        assert "[Bob]: the earlier question" in result.channel_context
+        assert result.body == "please help"
+        # Replay author joins the outbound candidate set.
+        assert "U2" in result.mention_candidate_ids
+        # The invocation message itself is not repeated in the preamble.
+        assert result.channel_context.count("please help") == 0
+
+    def test_replay_excludes_bots_and_subtypes(self, tmp_path: Path) -> None:
+        adapter, client, authorizer, _ = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.side_effect = lambda uid: uid
+        client.conversations_replies.return_value = {
+            "messages": [
+                {"ts": "T0", "user": "U2", "text": "human msg"},
+                {"ts": "Tb", "bot_id": "B1", "text": "bot noise"},
+                {"ts": "Tj", "user": "U9", "subtype": "channel_join"},
+                {"ts": "T1", "user": "U1", "text": "<@UBOT> help"},
+            ],
+            "response_metadata": {},
+        }
+
+        result = adapter.authenticate_and_parse(
+            _channel_raw(text="<@UBOT> help", ts="T1", thread_ts="T0")
+        )
+
+        assert "[U2]: human msg" in result.channel_context
+        assert "bot noise" not in result.channel_context
+        assert result.mention_candidate_ids == ["U1", "U2"]
+
+    def test_replay_no_prior_messages(self, tmp_path: Path) -> None:
+        adapter, client, authorizer, _ = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.return_value = "Alice"
+        # Thread contains only the invocation message.
+        client.conversations_replies.return_value = {
+            "messages": [{"ts": "T1", "user": "U1", "text": "<@UBOT> help"}],
+            "response_metadata": {},
+        }
+
+        result = adapter.authenticate_and_parse(
+            _channel_raw(text="<@UBOT> help", ts="T1", thread_ts="T0")
+        )
+
+        # No preamble appended when there is no prior history.
+        assert "existing Slack thread" not in result.channel_context
+
+    def test_replay_trims_to_limit(self, tmp_path: Path) -> None:
+        from airut.gateway.slack.adapter import _HISTORY_REPLAY_LIMIT
+
+        adapter, client, authorizer, _ = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.side_effect = lambda uid: uid
+        history = [
+            {"ts": f"T{i}", "user": "U2", "text": f"msg{i}"}
+            for i in range(_HISTORY_REPLAY_LIMIT + 50)
+        ]
+        history.append({"ts": "TX", "user": "U1", "text": "<@UBOT> help"})
+        client.conversations_replies.return_value = {
+            "messages": history,
+            "response_metadata": {},
+        }
+
+        result = adapter.authenticate_and_parse(
+            _channel_raw(text="<@UBOT> help", ts="TX", thread_ts="T0")
+        )
+
+        assert "[50 earlier messages omitted]" in result.channel_context
+        # Oldest 50 are dropped from the rendered preamble.
+        assert "msg0" not in result.channel_context
+        assert "msg49" not in result.channel_context
+        assert "msg50" in result.channel_context
+
+    def test_replay_paginates(self, tmp_path: Path) -> None:
+        adapter, client, authorizer, _ = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.side_effect = lambda uid: uid
+        client.conversations_replies.side_effect = [
+            {
+                "messages": [{"ts": "T0", "user": "U2", "text": "first"}],
+                "response_metadata": {"next_cursor": "c1"},
+            },
+            {
+                "messages": [
+                    {"ts": "T0b", "user": "U2", "text": "second"},
+                    {"ts": "T1", "user": "U1", "text": "<@UBOT> help"},
+                ],
+                "response_metadata": {},
+            },
+        ]
+
+        result = adapter.authenticate_and_parse(
+            _channel_raw(text="<@UBOT> help", ts="T1", thread_ts="T0")
+        )
+
+        assert client.conversations_replies.call_count == 2
+        assert "[U2]: first" in result.channel_context
+        assert "[U2]: second" in result.channel_context
+
+    def test_replay_api_error_non_fatal(self, tmp_path: Path) -> None:
+        adapter, client, authorizer, _ = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.return_value = "Alice"
+        client.conversations_replies.side_effect = SlackApiError(
+            message="no", response=MagicMock(status_code=500, data={})
+        )
+
+        result = adapter.authenticate_and_parse(
+            _channel_raw(text="<@UBOT> help", ts="T1", thread_ts="T0")
+        )
+
+        # Replay failed but parsing continues with no preamble.
+        assert "existing Slack thread" not in result.channel_context
+
+
+class TestChannelReportPhase:
+    def test_channel_skips_status(self, tmp_path: Path) -> None:
+        adapter, client, _, _ = _make_adapter(tmp_path)
+        parsed = SlackParsedMessage(
+            sender="U1",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="C1",
+            slack_thread_ts="T1",
+            is_channel=True,
+        )
+
+        adapter.report_phase(parsed, TaskPhase.PREPARING)
+        adapter.report_phase(parsed, TaskPhase.RUNNING)
+
+        client.assistant_threads_setStatus.assert_not_called()
+
+
+class TestChannelSendReply:
+    def test_skips_thread_title_for_channel(self, tmp_path: Path) -> None:
+        adapter, client, _, _ = _make_adapter(tmp_path)
+        parsed = SlackParsedMessage(
+            sender="U1",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="C1",
+            slack_thread_ts="T1",
+            display_title="Some title",
+            is_channel=True,
+        )
+
+        adapter.send_reply(parsed, "conv1", "Response", "", [])
+
+        client.chat_postMessage.assert_called_once()
+        client.assistant_threads_setTitle.assert_not_called()
+
+    def test_rewrites_outbound_mentions(self, tmp_path: Path) -> None:
+        adapter, client, authorizer, _ = _make_adapter(tmp_path)
+        authorizer.get_user_info.side_effect = lambda uid: (
+            UserInfo(
+                user_id="U1",
+                team_id="T",
+                is_bot=False,
+                is_restricted=False,
+                is_ultra_restricted=False,
+                deleted=False,
+                display_name="alice",
+            )
+            if uid == "U1"
+            else None
+        )
+        parsed = SlackParsedMessage(
+            sender="U1",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="C1",
+            slack_thread_ts="T1",
+            is_channel=True,
+            mention_candidate_ids=["U1"],
+        )
+
+        adapter.send_reply(parsed, "conv1", "Thanks @alice", "", [])
+
+        text = client.chat_postMessage.call_args[1]["text"]
+        assert "<@U1>" in text
+
+
+class TestResolverLazyBuild:
+    def test_resolver_cached(self, tmp_path: Path) -> None:
+        adapter, _, _, _ = _make_adapter(tmp_path)
+        first = adapter._get_resolver()
+        second = adapter._get_resolver()
+        assert first is second

@@ -1,8 +1,8 @@
 # Slack Setup
 
 This guide covers setting up Slack as a channel for Airut, enabling users to
-interact with Claude Code through Slack DMs using Slack's Agents & AI Apps
-platform.
+interact with Claude Code through Slack DMs (using Slack's Agents & AI Apps
+platform) and through workspace channels the bot has been invited to.
 
 For email setup, see [email-setup.md](email-setup.md). Both channels can run
 simultaneously for the same repository.
@@ -41,17 +41,27 @@ simultaneously for the same repository.
 
 ## How It Works
 
-Airut's Slack integration uses **Agents & AI Apps** mode with **Socket Mode**:
+Airut's Slack integration offers two surfaces over a single **Socket Mode**
+connection:
 
-- **Agents & AI Apps** replaces the standard bot DM interface with a Chat tab
-  and History tab. Every interaction is automatically threaded — users cannot
-  send unthreaded messages. This maps cleanly to Airut's conversation model.
+- **DMs (Agents & AI Apps mode)** — the standard bot DM interface is replaced
+  with a Chat tab and History tab. Every interaction is automatically threaded —
+  users cannot send unthreaded messages — which maps cleanly to Airut's
+  conversation model.
+- **Channels** — once invited to a public or private channel via
+  `/invite @airut`, the bot engages whenever it is `@`-mentioned. The triggering
+  message's thread becomes a new Airut conversation; every subsequent message in
+  that thread is treated as additional input without needing to re-mention the
+  bot. Mid-thread mentions cause the bot to pull prior thread history into
+  context.
 - **Socket Mode** means Airut initiates an outbound WebSocket connection to
   Slack. No inbound HTTP endpoint, public DNS, or TLS certificates are needed —
   compatible with deployment behind a firewall.
 
-Each Slack thread maps to one Airut conversation. Opening the Chat tab starts a
-new conversation; replying in an existing thread resumes the previous one.
+Each Slack thread maps to one Airut conversation, regardless of whether the
+thread lives in a DM or a channel. Opening the Chat tab starts a new
+conversation; replying in an existing thread (DM or channel) resumes the
+previous one.
 
 ## Step 1: Create the Slack App
 
@@ -115,6 +125,14 @@ repos:
       # Evaluated in order; first match wins.
       authorized:
         - workspace_members: true
+
+      # Optional: restrict channel mode to specific channels.
+      # If omitted or empty, the bot engages in any channel it has
+      # been invited to. Use Slack channel IDs (stable across renames).
+      # DM events bypass this list.
+      # allowed_channels:
+      #   - C0123456789
+      #   - C9876543210
 
     repo_url: https://github.com/your-org/your-repo.git
 
@@ -235,19 +253,36 @@ authorized:
 
 The app manifest includes these bot token scopes:
 
-| Scope             | Purpose                                        |
-| ----------------- | ---------------------------------------------- |
-| `assistant:write` | Thread titles, status indicators (auto-added)  |
-| `chat:write`      | Send messages and replies in threads           |
-| `im:history`      | Read DM history for thread context             |
-| `users:read`      | User info for authorization checks             |
-| `files:read`      | Read files uploaded by users                   |
-| `files:write`     | Upload outbox files to threads                 |
-| `usergroups:read` | User group membership (for `user_group` rules) |
+| Scope               | Purpose                                                                                        |
+| ------------------- | ---------------------------------------------------------------------------------------------- |
+| `assistant:write`   | Thread titles, status indicators (DM-only, auto-added)                                         |
+| `chat:write`        | Send messages and replies in threads                                                           |
+| `im:history`        | Read DM history for thread context                                                             |
+| `users:read`        | User info for authorization and display-name resolution                                        |
+| `files:read`        | Read files uploaded by users                                                                   |
+| `files:write`       | Upload outbox files to threads                                                                 |
+| `app_mentions:read` | Receive `app_mention` events in channels                                                       |
+| `channels:history`  | Read public-channel thread history                                                             |
+| `groups:history`    | Read private-channel thread history                                                            |
+| `reactions:write`   | Add `:eyes:` acknowledgement reaction in channels                                              |
+| `usergroups:read`   | User group membership (for `user_group` rules and outbound `@group` rewriting)                 |
+| `channels:read`     | Outbound `#channel` rewriting and dashboard channel-ID lookup by name (optional, add manually) |
 
 The `usergroups:read` scope is only needed if you use `user_group` authorization
-rules. If you only use `workspace_members` or `user_id` rules, you can remove it
-from the manifest before creating the app.
+rules or rely on outbound `@group` mention rewriting. If you only use
+`workspace_members` or `user_id` rules, you can remove it from the manifest
+before creating the app.
+
+The `channels:read` scope is **not** in the manifest and must be added manually
+if you want it. It is only needed to rewrite `#channel` references in outbound
+replies into real channel links (and for dashboard channel-ID lookup by name).
+Without it, `#channel` tokens are left as plain text and a warning is logged;
+everything else works.
+
+The channel-mode scopes (`app_mentions:read`, `channels:history`,
+`groups:history`, `reactions:write`) are required even for DM-only deployments
+in the current manifest; removing them disables channel mode without affecting
+DM operation.
 
 ## Troubleshooting
 
@@ -314,7 +349,11 @@ as warnings. Caching TTLs:
 If the bot connects but messages don't appear:
 
 1. Verify the app has the required event subscriptions
-   (`assistant_thread_started`, `assistant_thread_context_changed`,
-   `message.im`) — these are configured by the manifest
-2. Check that the user is interacting through the Chat tab, not a standard DM
-3. Look for errors in the service logs during message handling
+   (`assistant_thread_started`, `assistant_thread_context_changed`, `message.im`
+   for DM mode; `app_mention`, `message.channels`, `message.groups` for channel
+   mode) — these are configured by the manifest.
+2. For DMs: check that the user is interacting through the Chat tab, not a
+   standard DM.
+3. For channels: confirm the bot is a member of the channel (`/invite @airut`),
+   and that the channel ID is in `allowed_channels` if that list is configured.
+4. Look for errors in the service logs during message handling.

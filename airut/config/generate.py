@@ -108,6 +108,11 @@ _COMPLEX_EXAMPLES: dict[str, list[str]] = {
         "  # Or restrict to specific users:",
         "  # - user_id: U12345678",
     ],
+    "SlackChannelConfig.allowed_channels": [
+        "allowed_channels:",
+        "  - C0123456789",
+        "  - C9876543210",
+    ],
     "RepoServerConfig.secrets": [
         "secrets:",
         "  ANTHROPIC_API_KEY: !env ANTHROPIC_API_KEY",

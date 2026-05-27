@@ -95,3 +95,29 @@ class TestSlackChannelConfig:
             ),
         )
         assert len(config.authorized) == 2
+
+    def test_allowed_channels_defaults_empty(self) -> None:
+        config = SlackChannelConfig(
+            bot_token="xoxb-test",
+            app_token="xapp-test",
+            authorized=({"workspace_members": True},),
+        )
+        assert config.allowed_channels == ()
+
+    def test_allowed_channels_set(self) -> None:
+        config = SlackChannelConfig(
+            bot_token="xoxb-test",
+            app_token="xapp-test",
+            authorized=({"workspace_members": True},),
+            allowed_channels=("C1", "C2"),
+        )
+        assert config.allowed_channels == ("C1", "C2")
+
+    def test_allowed_channels_list_coerced_to_tuple(self) -> None:
+        config = SlackChannelConfig(
+            bot_token="xoxb-test",
+            app_token="xapp-test",
+            authorized=({"workspace_members": True},),
+            allowed_channels=["C1", "C2"],  # ty:ignore[invalid-argument-type]
+        )
+        assert isinstance(config.allowed_channels, tuple)

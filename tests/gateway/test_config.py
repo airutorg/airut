@@ -3402,6 +3402,47 @@ class TestParseSlackChannelConfig:
         )
         assert config.authorized == ({"workspace_members": False},)
 
+    def test_allowed_channels_parsed(self) -> None:
+        raw = {
+            "bot_token": "xoxb-test-slack-token-ac1",
+            "app_token": "xapp-test-slack-token-ac1",
+            "authorized": [{"workspace_members": True}],
+            "allowed_channels": ["C0123456789", "C9876543210"],
+        }
+        config = _parse_slack_channel_config(raw, "repos.test")
+        assert config.allowed_channels == ("C0123456789", "C9876543210")
+
+    def test_allowed_channels_absent_defaults_empty(self) -> None:
+        raw = {
+            "bot_token": "xoxb-test-slack-token-ac2",
+            "app_token": "xapp-test-slack-token-ac2",
+            "authorized": [{"workspace_members": True}],
+        }
+        config = _parse_slack_channel_config(raw, "repos.test")
+        assert config.allowed_channels == ()
+
+    def test_allowed_channels_not_list_raises(self) -> None:
+        raw = {
+            "bot_token": "xoxb-test-slack-token-ac3",
+            "app_token": "xapp-test-slack-token-ac3",
+            "authorized": [{"workspace_members": True}],
+            "allowed_channels": "C0123456789",
+        }
+        with pytest.raises(
+            ConfigError, match="allowed_channels must be a list"
+        ):
+            _parse_slack_channel_config(raw, "repos.test")
+
+    def test_allowed_channels_non_string_entry_raises(self) -> None:
+        raw = {
+            "bot_token": "xoxb-test-slack-token-ac4",
+            "app_token": "xapp-test-slack-token-ac4",
+            "authorized": [{"workspace_members": True}],
+            "allowed_channels": [""],
+        }
+        with pytest.raises(ConfigError, match="non-empty channel ID"):
+            _parse_slack_channel_config(raw, "repos.test")
+
 
 def test_repo_server_config_slack_channel(
     master_repo: Path, tmp_path: Path

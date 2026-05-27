@@ -36,6 +36,9 @@ class SlackChannelConfig(ChannelConfig):
             is a dict with exactly one key: ``workspace_members``
             (bool), ``user_group`` (str handle), or ``user_id``
             (str Slack user ID).  First match grants access.
+        allowed_channels: Channel IDs the bot will engage in (channel
+            mode).  When empty, the bot engages in any channel it has
+            been invited to.  DM events bypass this list entirely.
     """
 
     bot_token: str = field(
@@ -58,6 +61,13 @@ class SlackChannelConfig(ChannelConfig):
             Scope.REPO,
         ),
     )
+    allowed_channels: tuple[str, ...] = field(
+        default=(),
+        metadata=meta(
+            "Channel IDs the bot may engage in (empty = any invited channel)",
+            Scope.REPO,
+        ),
+    )
 
     def __post_init__(self) -> None:
         """Validate configuration and register secrets.
@@ -70,6 +80,10 @@ class SlackChannelConfig(ChannelConfig):
         # Coerce list→tuple for true immutability on a frozen dataclass
         if not isinstance(self.authorized, tuple):
             object.__setattr__(self, "authorized", tuple(self.authorized))
+        if not isinstance(self.allowed_channels, tuple):
+            object.__setattr__(
+                self, "allowed_channels", tuple(self.allowed_channels)
+            )
         if not self.authorized:
             raise ValueError("At least one authorization rule is required")
 
