@@ -5,13 +5,13 @@
 
 """Integration tests for per-conversation message queuing.
 
-These tests validate the queuing behavior introduced in the task state machine
-redesign (5-state lifecycle with message queuing instead of refusal):
+These tests validate the coalescing queue behavior (5-state lifecycle with
+at-most-one pending message per conversation):
 
 1. Messages for a busy conversation are queued (PENDING state)
 2. Queued messages drain and execute after the active task completes
-3. Queue-full rejection when MAX_PENDING_PER_CONVERSATION is reached
-4. CompletionReason.REJECTED is tracked correctly
+3. A burst of messages coalesces into the single pending follow-up
+4. CompletionReason.COALESCED is tracked correctly
 5. Task timestamps (queued_at, started_at, completed_at) are consistent
 6. Dashboard API reflects pending/queued counts correctly
 7. authenticated_sender is set after authentication completes
@@ -27,7 +27,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from airut.dashboard.tracker import (
-    MAX_PENDING_PER_CONVERSATION,
     CompletionReason,
     TaskStatus,
 )
@@ -368,33 +367,35 @@ events = [
             service_thread.join(timeout=10.0)
 
 
-class TestQueueFullRejection:
-    """Test rejection when per-conversation queue is full."""
+class TestMessageCoalescing:
+    """Test that a burst coalesces into the single pending follow-up."""
 
-    def test_queue_overflow_rejected_with_correct_reason(
+    def test_burst_coalesces_into_single_pending(
         self,
         tmp_path: Path,
         create_email,
         extract_conversation_id,
     ) -> None:
-        """Messages beyond MAX_PENDING_PER_CONVERSATION are rejected.
+        """Messages arriving during the busy window merge into one entry.
 
         Scenario:
         1. First message starts executing (blocks)
-        2. Queue MAX_PENDING_PER_CONVERSATION more messages
-        3. One more message should be REJECTED
-        4. Verify CompletionReason.REJECTED in tracker
+        2. Three follow-ups arrive for the same conversation
+        3. The first follow-up becomes the single PENDING entry
+        4. The other two complete as COALESCED, linking to the survivor
 
         Validates:
-        - Queue limit is enforced
-        - Rejection email is sent to the user
-        - CompletionReason.REJECTED is recorded
+        - At most one PENDING entry exists per conversation
+        - CompletionReason.COALESCED is recorded with the survivor's
+          task ID in completion_detail
+        - No rejection email is sent
+        - The conversation drains to completion after release
         """
-        # First message: blocks for a long time
+        # First message: blocks until released.
         first_mock_code = """
 events = [
     generate_system_event(session_id),
-    generate_assistant_event("Rejection test first"),
+    generate_assistant_event("Coalesce test first"),
     generate_result_event(session_id, "First done"),
 ]
 
@@ -405,18 +406,11 @@ def sync_between_events(event_num):
         while not (workspace / '.release_first').exists():
             time.sleep(0.05)
 """
-        queued_mock_code = """
+        follow_mock_code = """
 events = [
     generate_system_event(session_id),
-    generate_assistant_event("Queued message done"),
+    generate_assistant_event("Follow-up done"),
     generate_result_event(session_id, "Done"),
-]
-"""
-        overflow_mock_code = """
-events = [
-    generate_system_event(session_id),
-    generate_assistant_event("This should be rejected"),
-    generate_result_event(session_id, "Should not run"),
 ]
 """
 
@@ -428,9 +422,9 @@ events = [
 
         try:
             msg1 = create_email(
-                subject="Rejection test",
+                subject="Coalesce test",
                 body=first_mock_code,
-                message_id="<reject-first@test.local>",
+                message_id="<coalesce-first@test.local>",
             )
             env.email_server.inject_message(msg1)
 
@@ -454,91 +448,70 @@ events = [
 
                 env.email_server.clear_outbox()
 
-                # Queue MAX_PENDING_PER_CONVERSATION messages
-                for i in range(MAX_PENDING_PER_CONVERSATION):
-                    queued_msg = create_email(
-                        subject=f"Re: [ID:{conv_id}] Rejection test",
-                        body=queued_mock_code,
-                        message_id=f"<reject-queued-{i}@test.local>",
+                # Send three follow-ups during the busy window.
+                for i in range(3):
+                    follow_msg = create_email(
+                        subject=f"Re: [ID:{conv_id}] Coalesce test",
+                        body=follow_mock_code,
+                        message_id=f"<coalesce-follow-{i}@test.local>",
                         in_reply_to=ack.get("Message-ID"),
                         references=[ack.get("Message-ID")]
                         if ack.get("Message-ID")
                         else [],
                     )
-                    env.email_server.inject_message(queued_msg)
+                    env.email_server.inject_message(follow_msg)
 
-                # Wait for all queued messages to enter PENDING
-                _poll_tracker(
-                    service.tracker,
-                    lambda tasks: (
-                        sum(1 for t in tasks if t.status == TaskStatus.PENDING)
-                        >= MAX_PENDING_PER_CONVERSATION
-                    ),
-                    timeout=20.0,
-                )
-
-                env.email_server.clear_outbox()
-
-                # Now queue one more (should be rejected)
-                overflow_msg = create_email(
-                    subject=f"Re: [ID:{conv_id}] Rejection test",
-                    body=overflow_mock_code,
-                    message_id="<reject-overflow@test.local>",
-                    in_reply_to=ack.get("Message-ID"),
-                    references=[ack.get("Message-ID")]
-                    if ack.get("Message-ID")
-                    else [],
-                )
-                env.email_server.inject_message(overflow_msg)
-
-                # Wait for rejection email
-                rejection = env.email_server.wait_for_sent(
-                    lambda m: (
-                        "too many" in get_message_text(m).lower()
-                        or "queue" in get_message_text(m).lower()
-                    ),
-                    timeout=15.0,
-                )
-                assert rejection is not None, (
-                    "Did not receive rejection email for overflow message"
-                )
-
-                # Verify REJECTED completion reason in tracker
-                rejected_tasks = _poll_tracker(
-                    service.tracker,
-                    lambda tasks: [
+                # Wait until exactly one PENDING entry exists and the
+                # other two have completed as COALESCED.
+                def _coalesced(tasks):
+                    pending = [
+                        t for t in tasks if t.status == TaskStatus.PENDING
+                    ]
+                    coalesced = [
                         t
                         for t in tasks
                         if t.status == TaskStatus.COMPLETED
-                        and t.completion_reason == CompletionReason.REJECTED
-                    ],
-                    timeout=10.0,
+                        and t.completion_reason == CompletionReason.COALESCED
+                    ]
+                    if len(pending) == 1 and len(coalesced) >= 2:
+                        return (pending[0], coalesced)
+                    return None
+
+                result = _poll_tracker(
+                    service.tracker, _coalesced, timeout=20.0
                 )
-                assert rejected_tasks, (
-                    "No task with REJECTED completion reason found. "
-                    "Tasks: "
+                assert result, (
+                    "Burst did not coalesce into one pending entry. Tasks: "
                     + repr(
                         [
-                            (
-                                t.conversation_id,
-                                t.status.value,
-                                t.completion_reason,
-                            )
+                            (t.status.value, t.completion_reason)
                             for t in service.tracker.get_all_tasks()
                         ]
                     )
                 )
+                survivor, coalesced = result
 
-                # Release the first task so the queued ones can drain
+                # Each coalesced task links back to the survivor.
+                for task in coalesced:
+                    assert task.completion_detail == survivor.task_id
+
+                # No rejection email is sent under coalescing.
+                rejection = env.email_server.wait_for_sent(
+                    lambda m: "too many" in get_message_text(m).lower(),
+                    timeout=2.0,
+                )
+                assert rejection is None
+
+                # Release the first task so the survivor drains.
                 workspace_dir = sync_file.parent
                 (workspace_dir / ".release_first").write_text("go")
 
-                # Wait for all tasks to complete
+                # Conversation settles: nothing left pending or executing.
                 _poll_tracker(
                     service.tracker,
                     lambda tasks: (
                         all(t.status == TaskStatus.COMPLETED for t in tasks)
-                        and len(tasks) >= 2
+                        and len(tasks) >= 4
                     ),
                     timeout=45.0,
                 )

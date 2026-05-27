@@ -657,7 +657,6 @@ The `SlackChannelAdapter` implements all `ChannelAdapter` methods from
 | `send_acknowledgment()`    | Register thread mapping, `chat.postMessage` with confirmation text and optional dashboard link (status is set by the listener before dispatch)                                               |
 | `send_reply()`             | Convert Markdown to `mrkdwn` via `render_mrkdwn()`, split if >40K chars (file upload beyond five chunks), `chat.postMessage` via the `text` parameter, upload outbox files, set thread title |
 | `send_error()`             | `chat.postMessage` with error text in thread                                                                                                                                                 |
-| `send_rejection()`         | `chat.postMessage` with rejection reason in thread, with optional dashboard link                                                                                                             |
 
 ### `SlackParsedMessage`
 

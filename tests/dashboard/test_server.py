@@ -1285,13 +1285,12 @@ class TestDashboardServer:
 
         assert "&#x2298;" in html_text
 
-    def test_index_rejected_completion_icon(self) -> None:
-        """Test dashboard renders ⊘ icon for REJECTED completion reason."""
+    def test_index_coalesced_completion_icon(self) -> None:
+        """Test dashboard renders ↳ icon for COALESCED completion reason."""
         tracker = TaskTracker()
-        tracker.add_task("rej", "Rejected Task")
-        tracker.set_authenticating("rej")
-        tracker.set_executing("rej")
-        tracker.complete_task("rej", CompletionReason.REJECTED)
+        tracker.add_task("coal", "Coalesced Task")
+        tracker.set_authenticating("coal")
+        tracker.complete_task("coal", CompletionReason.COALESCED, "survivor")
 
         server = DashboardServer(tracker)
         client = Client(server._wsgi_app)
@@ -1299,7 +1298,7 @@ class TestDashboardServer:
         response = client.get("/")
         html_text = response.get_data(as_text=True)
 
-        assert "&#x2298;" in html_text
+        assert "&#x21B3;" in html_text
 
     def test_task_detail_completed_no_reason(self) -> None:
         """Test task detail shows '- Failed' when completion_reason is None."""

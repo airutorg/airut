@@ -14,7 +14,6 @@ This module contains:
 from __future__ import annotations
 
 import argparse
-import collections
 import concurrent.futures
 import dataclasses
 import logging
@@ -40,7 +39,6 @@ from airut.dashboard import (
     VersionInfo,
 )
 from airut.dashboard.tracker import (
-    MAX_PENDING_PER_CONVERSATION,
     BootPhase,
     BootState,
     ChannelInfo,
@@ -103,15 +101,21 @@ def _build_channel_infos(
 class PendingMessage:
     """Authenticated message waiting for a busy conversation.
 
-    Stored in the per-conversation pending queue. When the active task
-    finishes, the next pending message is submitted for execution
-    without re-authentication.
+    At most one exists per conversation.  When the active task finishes,
+    ``_drain_pending()`` submits it for execution without
+    re-authentication.  Messages that arrive while this one is pending
+    coalesce into ``parsed.coalesced_entries`` rather than queueing
+    separately.
+
+    ``arrival_time`` is the wall-clock time this message was enqueued; it
+    seeds the first entry's timestamp when coalescing begins.
     """
 
     parsed: ParsedMessage
     task_id: str
     repo_handler: RepoHandler
     adapter: ChannelAdapter
+    arrival_time: float
 
 
 def capture_version_info() -> tuple[VersionInfo, GitVersionInfo]:
@@ -199,7 +203,11 @@ class GatewayService:
         self._conversation_locks: dict[str, threading.Lock] = {}
         self._conversation_locks_lock = threading.Lock()
 
-        # Per-conversation pending message queue.
+        # Per-conversation pending message (coalescing queue).
+        #
+        # Holds at most one ``PendingMessage`` per conversation: messages
+        # that arrive while a conversation is busy coalesce into the
+        # single pending follow-up rather than queueing separately.
         #
         # Lock ordering invariant (nested acquisition):
         #   _reload_lock → _pending_messages_lock → tracker._lock
@@ -215,9 +223,7 @@ class GatewayService:
         # (concurrent watcher triggers are dropped) but blocking in
         # ``_check_pending_repo_reload`` (worker threads wait briefly
         # for any in-progress reload to finish).
-        self._pending_messages: dict[
-            str, collections.deque[PendingMessage]
-        ] = {}
+        self._pending_messages: dict[str, PendingMessage] = {}
         self._pending_messages_lock = threading.Lock()
 
         # Conversation-to-repo mapping for O(1) stop-execution lookup
@@ -1333,15 +1339,14 @@ class GatewayService:
 
             conv_id = parsed.conversation_id
 
-            # Queue messages for conversations that already have an
-            # active task instead of rejecting them outright.
+            # Coalesce messages for conversations that already have an
+            # active task instead of queueing each separately.
             #
-            # The has_active_task check, set_conversation_id, depth-
-            # check, and enqueue are ALL done under
-            # _pending_messages_lock to prevent a TOCTOU race where the
-            # active task completes (and drains) between the check and
-            # the append — which would leave the message PENDING forever
-            # with nothing to drain it.
+            # The has_active_task check, set_conversation_id, and the
+            # enqueue/merge are ALL done under _pending_messages_lock to
+            # prevent a TOCTOU race where the active task completes (and
+            # drains) between the check and the append — which would
+            # leave the message PENDING forever with nothing to drain it.
             if conv_id:
                 with self._pending_messages_lock:
                     if not self.tracker.has_active_task(conv_id):
@@ -1349,61 +1354,52 @@ class GatewayService:
                         # execution below (outside the lock).
                         pass
                     else:
-                        # Set conversation_id on the task so the
-                        # pending task shows the correct conversation
-                        # in the dashboard.
+                        # Set conversation_id on the task so the pending
+                        # (or coalesced) task shows the correct
+                        # conversation in the dashboard.
                         self.tracker.set_conversation_id(task_id, conv_id)
 
-                        queue = self._pending_messages.get(conv_id)
-                        queue_len = len(queue) if queue else 0
-
-                        if queue_len >= MAX_PENDING_PER_CONVERSATION:
-                            logger.warning(
-                                "Rejecting message for conversation %s "
-                                "- queue full (%d pending)",
+                        existing = self._pending_messages.get(conv_id)
+                        if existing is not None:
+                            # A follow-up is already pending: merge this
+                            # message into it and complete this task as
+                            # COALESCED, linking back to the survivor.
+                            self._coalesce_into(existing, parsed)
+                            self.tracker.update_task_display_title(
+                                existing.task_id,
+                                parsed.display_title or "(no subject)",
+                            )
+                            self.tracker.complete_task(
+                                task_id,
+                                CompletionReason.COALESCED,
+                                existing.task_id,
+                            )
+                            logger.info(
+                                "Coalesced message into pending task %s "
+                                "for conversation %s",
+                                existing.task_id,
                                 conv_id,
-                                queue_len,
                             )
-                            reject_reason = (
-                                "Too many messages queued for this "
-                                "conversation. Please wait for current "
-                                "tasks to complete before sending another "
-                                "message."
+                        else:
+                            # First follow-up during the busy window:
+                            # enqueue it and free the worker thread.
+                            self._pending_messages[conv_id] = PendingMessage(
+                                parsed=parsed,
+                                task_id=task_id,
+                                repo_handler=repo_handler,
+                                adapter=adapter,
+                                arrival_time=time.time(),
                             )
-                            adapter.send_rejection(
-                                parsed,
+                            self.tracker.set_pending(task_id)
+                            logger.info(
+                                "Queued message for busy conversation %s",
                                 conv_id,
-                                reject_reason,
-                                self.global_config.dashboard_base_url,
                             )
-                            reason = CompletionReason.REJECTED
-                            detail = "queue full"
-                            return
 
-                        # Enqueue and free the worker thread.
-                        pending = PendingMessage(
-                            parsed=parsed,
-                            task_id=task_id,
-                            repo_handler=repo_handler,
-                            adapter=adapter,
-                        )
-                        if conv_id not in self._pending_messages:
-                            self._pending_messages[conv_id] = (
-                                collections.deque()
-                            )
-                        self._pending_messages[conv_id].append(pending)
-
-                        self.tracker.set_pending(task_id)
-                        logger.info(
-                            "Queued message for busy conversation %s "
-                            "(queue depth: %d)",
-                            conv_id,
-                            queue_len + 1,
-                        )
-
-                        # Mark as queued so the finally block skips
-                        # completion.  Task stays PENDING until
-                        # _drain_pending picks it up.
+                        # Mark as handled so the finally block skips
+                        # completion and draining.  A pending task stays
+                        # PENDING until _drain_pending picks it up; a
+                        # coalesced task is already COMPLETED.
                         completed_elsewhere = True
                         return
 
@@ -1447,10 +1443,36 @@ class GatewayService:
                 if conv_id:
                     self._drain_pending(conv_id)
 
-    def _drain_pending(self, conv_id: str) -> None:
-        """Submit the next queued message for a conversation, if any.
+    def _coalesce_into(
+        self, pending: PendingMessage, parsed: ParsedMessage
+    ) -> None:
+        """Merge a newly-arrived message into an existing pending one.
 
-        Called after a task completes to pick up the next pending
+        Must be called with ``_pending_messages_lock`` held.  On the
+        first merge the entry list is seeded with the original pending
+        message so the rendered prompt attributes every part of the
+        burst; the new message is then appended.  Each entry is
+        ``(sender, arrival_timestamp, body)``.
+
+        Args:
+            pending: The existing pending message to merge into.
+            parsed: The newly-arrived message being coalesced.
+        """
+        entries = pending.parsed.coalesced_entries
+        if not entries:
+            entries.append(
+                (
+                    pending.parsed.sender,
+                    pending.arrival_time,
+                    pending.parsed.body,
+                )
+            )
+        entries.append((parsed.sender, time.time(), parsed.body))
+
+    def _drain_pending(self, conv_id: str) -> None:
+        """Submit the pending message for a conversation, if any.
+
+        Called after a task completes to pick up the single pending
         message. The pending message has already been authenticated,
         so it skips straight to execution.
 
@@ -1458,12 +1480,9 @@ class GatewayService:
             conv_id: Conversation ID to drain.
         """
         with self._pending_messages_lock:
-            queue = self._pending_messages.get(conv_id)
-            if not queue:
+            pending = self._pending_messages.pop(conv_id, None)
+            if pending is None:
                 return
-            pending = queue.popleft()
-            if not queue:
-                del self._pending_messages[conv_id]
 
         if not self._executor_pool:
             logger.error(

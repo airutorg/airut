@@ -20,6 +20,7 @@ from airut.gateway.service import build_recovery_prompt
 from airut.gateway.service.message_processing import (
     SandboxTaskResult,
     build_image,
+    compose_message_body,
     process_message,
     run_in_sandbox,
 )
@@ -89,6 +90,26 @@ def _make_failure_result(
         web_fetch_count=0,
         error_summary=error_summary,
     )
+
+
+class TestComposeMessageBody:
+    """Tests for compose_message_body (coalesced burst rendering)."""
+
+    def test_empty_entries_returns_body_verbatim(self) -> None:
+        """No coalescing — the body is used unchanged."""
+        parsed = _make_parsed_message(body="just this")
+        assert compose_message_body(parsed) == "just this"
+
+    def test_entries_rendered_with_headers(self) -> None:
+        """Coalesced entries get a [sender HH:MM:SS] header each."""
+        parsed = _make_parsed_message(body="ignored")
+        parsed.coalesced_entries = [
+            ("alice", 0.0, "hello"),
+            ("bob", 0.0, "world"),
+        ]
+        assert compose_message_body(parsed) == (
+            "[alice 00:00:00]\nhello\n\n[bob 00:00:00]\nworld"
+        )
 
 
 class TestMakeTodoCallback:
@@ -437,6 +458,29 @@ class TestProcessMessage:
         assert reason == CompletionReason.SUCCESS
         assert conv_id == "conv1"
         adapter.send_reply.assert_called_once()
+
+    def test_coalesced_entries_composed_into_prompt(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """Coalesced bodies are concatenated with headers in the prompt."""
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        parsed = _make_parsed_message(body="first body")
+        parsed.coalesced_entries = [
+            ("alice", 1717000000.0, "first body"),
+            ("bob", 1717000005.0, "second body"),
+        ]
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+
+        prompt = svc._mock_task.execute.call_args.args[0]
+        assert "[alice " in prompt
+        assert "first body" in prompt
+        assert "[bob " in prompt
+        assert "second body" in prompt
 
     def test_empty_body_rejected_for_resumed_conversation(
         self, email_config: RepoServerConfig, tmp_path: Path

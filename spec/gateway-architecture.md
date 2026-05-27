@@ -59,7 +59,7 @@ protocol handling (email IMAP/SMTP, Slack Socket Mode, etc.) via types in
 - **`ChannelAdapter`** — `typing.Protocol` defining the interface between the
   core and channel implementations: `listener` property (a `ChannelListener`),
   `authenticate_and_parse()`, `save_attachments()`, `send_acknowledgment()`,
-  `send_reply()`, `send_error()`, `send_rejection()`, `cleanup_conversations()`.
+  `send_reply()`, `send_error()`, `cleanup_conversations()`.
 
 Each channel implements `ChannelAdapter` (e.g., `EmailChannelAdapter` in
 `gateway/email/adapter.py`, `SlackChannelAdapter` in
@@ -129,16 +129,14 @@ Tasks progress through a 5-state lifecycle tracked by `TaskTracker`:
                     QUEUED
                       │
                       ▼
-                AUTHENTICATING ──→ COMPLETED (AUTH_FAILED / UNAUTHORIZED)
+                AUTHENTICATING ──→ COMPLETED (AUTH_FAILED / UNAUTHORIZED / COALESCED)
                       │
                       ├──→ EXECUTING ──→ COMPLETED (SUCCESS / EXECUTION_FAILED /
                       │                              TIMEOUT / CHANNEL_ERROR /
                       │                              INTERNAL_ERROR)
                       │
-                      ▼  (conversation busy)
+                      ▼  (conversation busy, no pending entry yet)
                    PENDING ──→ EXECUTING ──→ COMPLETED
-                      │
-                      └──→ COMPLETED (REJECTED, if queue full)
 ```
 
 Transition methods enforce preconditions — `set_authenticating()` requires
@@ -147,28 +145,58 @@ AUTHENTICATING or PENDING. Invalid transitions return False.
 
 Each task is assigned a `CompletionReason` when it reaches COMPLETED:
 
-| Reason             | Meaning                                      |
-| ------------------ | -------------------------------------------- |
-| `SUCCESS`          | Sandbox ran and produced a response          |
-| `AUTH_FAILED`      | DMARC verification failed                    |
-| `UNAUTHORIZED`     | Sender not in allowlist                      |
-| `EXECUTION_FAILED` | Container/sandbox failure                    |
-| `TIMEOUT`          | Execution exceeded configured limit          |
-| `CHANNEL_ERROR`    | Reply delivery failed (e.g. SMTP rate limit) |
-| `INTERNAL_ERROR`   | Unexpected exception (e.g. git clone)        |
-| `REJECTED`         | Per-conversation pending queue full          |
+| Reason             | Meaning                                          |
+| ------------------ | ------------------------------------------------ |
+| `SUCCESS`          | Sandbox ran and produced a response              |
+| `AUTH_FAILED`      | DMARC verification failed                        |
+| `UNAUTHORIZED`     | Sender not in allowlist                          |
+| `EXECUTION_FAILED` | Container/sandbox failure                        |
+| `TIMEOUT`          | Execution exceeded configured limit              |
+| `CHANNEL_ERROR`    | Reply delivery failed (e.g. SMTP rate limit)     |
+| `INTERNAL_ERROR`   | Unexpected exception (e.g. git clone)            |
+| `COALESCED`        | Message merged into an already-pending follow-up |
 
 ### Per-Conversation Message Queuing
 
 When a message arrives for a conversation that already has an active task
 (QUEUED, AUTHENTICATING, PENDING, or EXECUTING), the message is queued instead
-of rejected. Each conversation has a bounded pending queue
-(`MAX_PENDING_PER_CONVERSATION = 3`). When the active task completes,
-`_drain_pending()` pops the next message and submits it to the thread pool.
-Pending messages skip authentication (already verified at receive time).
+of rejected. The queue is **coalescing**: at most one `PendingMessage` exists
+per conversation at any moment, regardless of how many messages arrive during
+the busy window.
 
-If the queue is full, the message is rejected with `send_rejection()` and
-completed with `CompletionReason.REJECTED`.
+- The **first** arriving message during a busy window becomes the
+  `PendingMessage`. Its tracker task transitions QUEUED → AUTHENTICATING →
+  PENDING and stays PENDING until the active task completes and
+  `_drain_pending()` picks it up.
+- **Subsequent** arriving messages during the same busy window merge their body,
+  sender, and arrival timestamp into the existing `PendingMessage`'s
+  `coalesced_entries` field (a `list[tuple[str, float, str]]` on the base
+  `ParsedMessage` dataclass, so the gateway stays channel-agnostic). Their
+  tracker tasks transition QUEUED → AUTHENTICATING → COMPLETED with
+  `CompletionReason.COALESCED`; the completion `detail` field records the
+  pending `task_id` they merged into.
+- When `_drain_pending()` runs, the prompt body is composed from
+  `coalesced_entries` if non-empty, otherwise from `parsed.body` as before. The
+  format is `[<sender> <HH:MM:SS>]\n<body>` per entry, separated by blank lines.
+  No coalescing leaves `coalesced_entries` empty (the merge seeds the original
+  message only on the *second* arrival, so the list is never length one), so a
+  single-message follow-up uses `parsed.body` verbatim and looks identical to
+  the pre-coalescing world.
+
+The "busy window" is exactly the period during which a `PendingMessage` for the
+conversation exists in `_pending_messages[conv_id]` or an EXECUTING task for it
+is active without a pending entry yet. The window closes when `_drain_pending()`
+pops the pending entry; a message arriving between the pop and the popped task's
+transition to EXECUTING simply creates a fresh pending entry, because
+`has_active_task(conv_id)` still returns true.
+
+`MAX_PENDING_PER_CONVERSATION`, `CompletionReason.REJECTED`, and the adapters'
+`send_rejection()` method are removed in the same change that introduces
+coalescing. With at-most-one pending per conversation by construction, the cap
+is unreachable and the rejection path is dead, so the code is deleted rather
+than retained "in case."
+
+Pending messages skip authentication (already verified at receive time).
 
 ### Data Flow
 
@@ -198,9 +226,12 @@ GatewayService._process_message_worker()  [worker thread]:
   -> tracker.update_task_display_title(task_id, authenticated_sender=...)
   -> tracker.set_conversation_id(task_id, conv_id)
   -> If conversation already active (has_active_task):
-     -> If queue full: send_rejection(), complete_task(REJECTED)
-     -> Else: enqueue PendingMessage, tracker.set_pending(task_id) → PENDING
-       (executing task stays EXECUTING; pending task is a separate entry)
+     -> If a PendingMessage already exists for this conversation:
+        -> Merge body/sender/timestamp into pending.parsed.coalesced_entries
+        -> tracker.complete_task(task_id, COALESCED, detail=<pending_task_id>)
+     -> Else (no pending yet):
+        -> Enqueue PendingMessage, tracker.set_pending(task_id) → PENDING
+          (executing task stays EXECUTING; pending task is a separate entry)
      -> return
   -> _execute_and_complete(parsed, task_id, ...)
     -> tracker.set_executing(task_id)                    → EXECUTING
@@ -686,21 +717,32 @@ thread pool.
 
 ### Per-Conversation Serialization
 
-Messages to the same conversation are serialized via the pending queue. Each
-pending message has its own `TaskState` in the tracker (keyed by its stable
-`task_id`) with status PENDING — visible separately from the executing task.
+Messages to the same conversation are serialized via the coalescing pending
+queue. Each arriving message has its own `TaskState` in the tracker (keyed by
+its stable `task_id`) so the dashboard shows the full audit trail; the queue
+itself holds at most one `PendingMessage` per conversation.
 
-1. Worker checks `tracker.has_active_task(conv_id)` after authentication
-2. If active: message is enqueued as `PendingMessage` (up to
-   `MAX_PENDING_PER_CONVERSATION = 3`), worker thread is freed immediately. The
-   pending task's `conversation_id` is set so it appears in the dashboard
-   alongside the executing task.
-3. If not active: message proceeds to execution
-4. On completion: `_drain_pending()` submits the next queued message
+1. Worker checks `tracker.has_active_task(conv_id)` after authentication.
+2. If no active task: message proceeds to execution.
+3. If active and **no** `PendingMessage` exists yet for the conversation:
+   enqueue a fresh `PendingMessage`, transition the tracker task to PENDING,
+   free the worker thread. The pending task's `conversation_id` is set so it
+   appears in the dashboard alongside the executing task.
+4. If active and a `PendingMessage` already exists: merge the new message's
+   body/sender/arrival timestamp into `pending.parsed.coalesced_entries`,
+   transition the new tracker task to COMPLETED with
+   `CompletionReason.COALESCED` (and a `detail` pointing at the pending task ID
+   for dashboard linking), free the worker thread. No new `PendingMessage` is
+   created.
+5. On completion: `_drain_pending()` pops the single pending entry (if any) and
+   submits it. `_process_pending_message` composes the prompt body from
+   `coalesced_entries` when present.
 
 This avoids blocking worker threads on conversation locks. With explicit
 queuing, worker slots are only consumed during actual execution, not while
-waiting for a conversation to become free.
+waiting for a conversation to become free. Coalescing ensures bursts of short
+user messages produce a single, coherent follow-up reply rather than one reply
+per message.
 
 ## Scheduler
 

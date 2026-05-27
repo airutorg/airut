@@ -253,6 +253,7 @@ h2 {
 .task-row.failed { border-left-color: var(--status-error); }
 .task-row.executing { border-left-color: var(--status-info); }
 .task-row.pending { border-left-color: var(--status-warning); }
+.task-row.coalesced { border-left-color: var(--status-info); }
 .task-row-id {
   font-family: var(--font-mono);
   font-size: 12px;
