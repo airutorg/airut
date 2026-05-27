@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 from graphql import parse
 from graphql.language import ast as gql_ast
+from request_filter import FilterRequest, FilterResult
 
 
 class OperationVerdict(enum.Enum):
@@ -233,3 +234,41 @@ def check_operations(
     # Step 8: All fields match — allowed.
     tag = f"{op_type}/{fields[0]}"
     return OperationResult(OperationVerdict.ALLOWED, operation_tag=tag)
+
+
+class GraphQLOperationFilter:
+    """Request-body filter wrapping :func:`check_operations`.
+
+    Applies to allowlist entries that carry a ``graphql`` block (opt-in
+    per entry). The operation tag is logged on both allowed and blocked
+    requests.
+    """
+
+    name = "graphql-op"
+
+    def matches(self, req: FilterRequest) -> bool:
+        return (
+            req.matched_entry is not None
+            and req.matched_entry.get("graphql") is not None
+        )
+
+    def apply(self, req: FilterRequest, body: bytes) -> FilterResult:
+        assert req.matched_entry is not None
+        graphql_config = req.matched_entry.get("graphql")
+        assert graphql_config is not None
+
+        result = check_operations(body, graphql_config)
+        if result.verdict is OperationVerdict.ALLOWED:
+            return FilterResult.passthrough(log_tag=result.operation_tag)
+
+        detail = result.detail or ""
+        return FilterResult.block(
+            error="graphql_operation_blocked",
+            message=(
+                f"GraphQL operation '{detail}' is not in the operation "
+                f"allowlist. To request access, update the graphql block "
+                f"in .airut/network-allowlist.yaml and submit a PR."
+            ),
+            detail=detail,
+            log_tag=result.operation_tag,
+        )

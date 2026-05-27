@@ -7,7 +7,7 @@ RUN pip install --no-cache-dir --no-deps -r /requirements.txt
 
 # Copy all application files in a single layer and set entrypoint
 # executable in the same COPY (avoids a separate RUN chmod layer).
-COPY dns_responder.py aws_signing.py github_app.py graphql_operations.py graphql_scope.py host_match.py node_id.py tool_domains.py proxy_filter.py /
+COPY dns_responder.py aws_signing.py github_app.py graphql_operations.py graphql_scope.py host_match.py node_id.py request_filter.py tool_domains.py proxy_filter.py /
 COPY --chmod=755 proxy-entrypoint.sh /proxy-entrypoint.sh
 
 ENTRYPOINT ["/proxy-entrypoint.sh"]

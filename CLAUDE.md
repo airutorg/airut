@@ -55,6 +55,8 @@ Implementation specs in `spec/` (see `spec/README.md` for full list):
   replacement
 - `spec/aws-sigv4-resigning.md` — AWS SigV4/SigV4A credential masking via proxy
   re-signing
+- `spec/request-body-filters.md` — request-body filter pipeline (shared
+  structure for service-specific payload filtering at the proxy layer)
 - `spec/graphql-operation-allowlist.md` — generic GraphQL operation filtering at
   the proxy layer
 - `spec/anthropic-tool-domain-trim.md` — proxy-side trimming of Anthropic

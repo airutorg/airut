@@ -147,8 +147,12 @@ configured allowlist*.
 
 ### Scope
 
-The trim runs in `ProxyFilter.request()` after URL allowlist matching and
-GraphQL operation checks, and before AWS re-signing and credential replacement.
+The trim is packaged as `tool_domains.ToolDomainFilter`, a member of the
+request-body filter pipeline (see
+[`request-body-filters.md`](request-body-filters.md)). The pipeline runs in
+`ProxyFilter.request()` after URL allowlist matching, and before AWS re-signing
+and credential replacement; the GraphQL operation filter runs ahead of it in the
+same pipeline.
 
 The trim applies whenever the **incoming request** targets `api.anthropic.com`
 and its path is `/v1/messages` itself or any sub-path of `/v1/messages/`. The
@@ -156,7 +160,8 @@ gate is deliberately on the request (not on the shape of the matched allowlist
 entry): a broader allowlist configuration — e.g. a user who allows `/v1/*` —
 must not silently disable the trim. Other Anthropic endpoints (`oauth/*`,
 `event_logging/*`, `eval/*`, `claude_code_*`) carry no `tools` field and do not
-need parsing. See `ProxyFilter._is_anthropic_messages_request`.
+need parsing. See `tool_domains.is_anthropic_messages_request`, which the
+filter's `matches()` method delegates to.
 
 ### Algorithm
 
@@ -244,23 +249,25 @@ Blocked requests return HTTP 403 with a JSON body:
 ## Logging
 
 Each rewrite produces one log annotation in the existing network-log format,
-attached to the same flow line as the access decision:
+attached to the same flow line as the access decision, under the filter's
+`tool-domains` namespace:
 
 ```
 ALLOWED POST https://api.anthropic.com/v1/messages -> 200
-  [tool-trim: web_fetch_20250910: dropped 1 of 1 domains: airut.org]
+  [tool-domains: web_fetch_20250910: dropped 1 of 1 domains: airut.org]
 ```
 
 Multiple covered tool entries in a single request produce a single
 semicolon-separated annotation. Rule 1 / rule 2 rejections log as
-`BLOCKED ... [tool-config: <tool_type>: <reason>]` to surface in syslog. No
-annotation is emitted when a request has no covered tools — that is the quiet
-path.
+`BLOCKED ... [tool-domains: <tool_type>: <reason>]` to surface in syslog (the
+`403` status code distinguishes a rejection from a rewrite). No annotation is
+emitted when a request has no covered tools — that is the quiet path.
 
-Implementation: the rewrite stores its annotation in
-`flow.metadata["tool_trim"]`; rejections store theirs in
-`flow.metadata["tool_config"]`. `ProxyFilter.response()` emits the
-bracket-wrapped annotation in the same line as the other access metadata.
+Implementation: the filter returns its annotation in `FilterResult.log_tag`, and
+the pipeline records it under the `tool-domains` namespace (see
+[`request-body-filters.md`](request-body-filters.md)). `ProxyFilter.response()`
+emits the bracket-wrapped annotation in the same line as the other access
+metadata.
 
 ## Streaming
 

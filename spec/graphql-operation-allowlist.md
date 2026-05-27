@@ -152,9 +152,12 @@ POST /graphql arrives at proxy
       Forward request
 ```
 
-The operation check runs in the `request()` hook, after URL allowlist matching
-and before credential handling. URL pattern entries without a `graphql` block
-are unaffected (backwards compatible).
+The operation check is packaged as `graphql_operations.GraphQLOperationFilter`,
+a member of the request-body filter pipeline (see
+[`request-body-filters.md`](request-body-filters.md)) that runs in the
+`request()` hook after URL allowlist matching and before credential handling.
+The filter's `matches()` opts in only for entries that carry a `graphql` block,
+so URL pattern entries without one are unaffected (backwards compatible).
 
 ### Algorithm
 

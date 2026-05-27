@@ -44,6 +44,8 @@ For high-level documentation, see [doc/](../doc/).
   proxy-level token replacement
 - [aws-sigv4-resigning.md](aws-sigv4-resigning.md) — AWS SigV4/SigV4A credential
   masking via proxy re-signing
+- [request-body-filters.md](request-body-filters.md) — Request-body filter
+  pipeline (shared structure for service-specific payload filtering)
 - [graphql-operation-allowlist.md](graphql-operation-allowlist.md) — Generic
   GraphQL operation filtering at the proxy layer
 - [anthropic-tool-domain-trim.md](anthropic-tool-domain-trim.md) — Trimming
