@@ -40,6 +40,8 @@ class UserInfo:
         is_ultra_restricted: Whether the user is a single-channel guest.
         deleted: Whether the user is deactivated.
         display_name: Human-readable display name.
+        real_name: The user's real name (profile real name).
+        name: The Slack handle (login name).
     """
 
     user_id: str
@@ -49,6 +51,8 @@ class UserInfo:
     is_ultra_restricted: bool
     deleted: bool
     display_name: str
+    real_name: str = ""
+    name: str = ""
 
 
 @dataclass
@@ -92,6 +96,9 @@ class SlackAuthorizer:
 
         # Group handle -> group ID mapping (resolved lazily)
         self._group_ids: dict[str, str] | None = None
+
+        # Channel name -> channel ID mapping, bulk-loaded with TTL.
+        self._channel_ids: _CacheEntry[dict[str, str]] | None = None
 
     def authorize(self, user_id: str) -> tuple[bool, str]:
         """Check whether a user is authorized.
@@ -159,6 +166,97 @@ class SlackAuthorizer:
             return entry.value.display_name or user_id
         return user_id
 
+    def get_user_info(self, user_id: str) -> UserInfo | None:
+        """Return user info, fetching and caching it on a miss.
+
+        Args:
+            user_id: Slack user ID.
+
+        Returns:
+            UserInfo or None if the API call fails.
+        """
+        return self._get_user_info(user_id)
+
+    def lookup_group_id(self, handle: str) -> str | None:
+        """Resolve a user group handle to its ID, quietly on a miss.
+
+        Reuses the lazily-populated handle-to-ID cache (loaded once via
+        ``usergroups.list``).  Unlike :meth:`_resolve_group_id`, this does
+        not log a warning when the handle is absent, so it is safe to call
+        for arbitrary ``@token`` candidates during outbound rewriting.
+
+        Args:
+            handle: User group handle (without the leading ``@``).
+
+        Returns:
+            Group ID or None if the handle is not a known user group.
+        """
+        with self._lock:
+            if self._group_ids is not None:
+                return self._group_ids.get(handle)
+
+        try:
+            resp = self._client.usergroups_list()
+            groups = resp.get("usergroups", [])
+            resolved = {
+                g["handle"]: g["id"]
+                for g in groups
+                if "handle" in g and "id" in g
+            }
+        except SlackApiError as e:
+            logger.warning("Failed to list user groups: %s", e)
+            resolved = {}
+
+        with self._lock:
+            self._group_ids = resolved
+        return resolved.get(handle)
+
+    def resolve_channel_id(self, name: str) -> str | None:
+        """Resolve a channel name to its ID via a TTL-cached bulk lookup.
+
+        The full channel list is fetched lazily via ``conversations.list``
+        (paginated) and cached for the same TTL as user info.  Requires the
+        ``channels:read`` scope; if the call fails the cache is left empty
+        and the method returns None, disabling channel rewriting gracefully.
+
+        Args:
+            name: Channel name without the leading ``#``.
+
+        Returns:
+            Channel ID or None if no channel by that name is known.
+        """
+        now = time.monotonic()
+
+        with self._lock:
+            entry = self._channel_ids
+            if entry is not None and entry.expires_at > now:
+                return entry.value.get(name)
+
+        channels: dict[str, str] = {}
+        try:
+            cursor: str | None = None
+            while True:
+                resp = self._client.conversations_list(
+                    types="public_channel,private_channel",
+                    exclude_archived=True,
+                    limit=1000,
+                    cursor=cursor,
+                )
+                for channel in resp.get("channels", []):
+                    if "name" in channel and "id" in channel:
+                        channels[channel["name"]] = channel["id"]
+                cursor = resp.get("response_metadata", {}).get("next_cursor")
+                if not cursor:
+                    break
+        except SlackApiError as e:
+            logger.warning("Failed to list channels: %s", e)
+
+        with self._lock:
+            self._channel_ids = _CacheEntry(
+                value=channels, expires_at=now + _CACHE_TTL
+            )
+        return channels.get(name)
+
     def _get_user_info(self, user_id: str) -> UserInfo | None:
         """Fetch user info with TTL cache.
 
@@ -181,11 +279,9 @@ class SlackAuthorizer:
             user = resp["user"]
 
             profile = user.get("profile", {})
-            display_name = (
-                profile.get("display_name")
-                or profile.get("real_name")
-                or user.get("name", "")
-            )
+            name = user.get("name", "")
+            real_name = profile.get("real_name") or user.get("real_name", "")
+            display_name = profile.get("display_name") or real_name or name
 
             info = UserInfo(
                 user_id=user_id,
@@ -195,6 +291,8 @@ class SlackAuthorizer:
                 is_ultra_restricted=user.get("is_ultra_restricted", False),
                 deleted=user.get("deleted", False),
                 display_name=display_name,
+                real_name=real_name,
+                name=name,
             )
 
             with self._lock:
@@ -245,9 +343,10 @@ class SlackAuthorizer:
         return user_id in members
 
     def _resolve_group_id(self, handle: str) -> str | None:
-        """Resolve a group handle to its ID via usergroups.list.
+        """Resolve a configured group handle to its ID, warning on a miss.
 
-        Resolved once and cached for the process lifetime.
+        Used by authorization rule evaluation, where a missing handle
+        indicates a misconfigured rule worth surfacing in the logs.
 
         Args:
             handle: User group handle (without ``@``).
@@ -255,31 +354,7 @@ class SlackAuthorizer:
         Returns:
             Group ID or None if not found.
         """
-        with self._lock:
-            if self._group_ids is not None:
-                group_id = self._group_ids.get(handle)
-                if group_id is None:
-                    logger.warning(
-                        "User group '%s' not found in workspace", handle
-                    )
-                return group_id
-
-        try:
-            resp = self._client.usergroups_list()
-            groups = resp.get("usergroups", [])
-            resolved = {
-                g["handle"]: g["id"]
-                for g in groups
-                if "handle" in g and "id" in g
-            }
-        except SlackApiError as e:
-            logger.warning("Failed to list user groups: %s", e)
-            resolved = {}
-
-        with self._lock:
-            self._group_ids = resolved
-
-        group_id = resolved.get(handle)
+        group_id = self.lookup_group_id(handle)
         if group_id is None:
             logger.warning("User group '%s' not found in workspace", handle)
         return group_id

@@ -422,3 +422,170 @@ class TestUsergroupsListFailure:
         )
         authorized, _ = authorizer.authorize("U123")
         assert not authorized
+
+
+class TestGetUserInfo:
+    def test_returns_full_user_info(self) -> None:
+        client = _mock_client()
+        client.users_info.return_value = _user_info_response(
+            display_name="Alice"
+        )
+
+        authorizer = SlackAuthorizer(
+            client=client, rules=[{"workspace_members": True}]
+        )
+        info = authorizer.get_user_info("U123")
+        assert info is not None
+        assert info.display_name == "Alice"
+        assert info.real_name == "Test User Real"
+        assert info.name == "testuser"
+
+    def test_returns_none_on_failure(self) -> None:
+        client = _mock_client()
+        client.users_info.side_effect = SlackApiError(
+            message="error", response=MagicMock(status_code=500, data={})
+        )
+
+        authorizer = SlackAuthorizer(
+            client=client, rules=[{"workspace_members": True}]
+        )
+        assert authorizer.get_user_info("U123") is None
+
+    def test_real_name_falls_back_to_user_real_name(self) -> None:
+        """real_name uses top-level user.real_name when profile lacks it."""
+        client = _mock_client()
+        client.users_info.return_value = {
+            "user": {
+                "id": "U123",
+                "team_id": "T001",
+                "name": "handle",
+                "real_name": "Top Level",
+                "profile": {"display_name": ""},
+            }
+        }
+
+        authorizer = SlackAuthorizer(
+            client=client, rules=[{"workspace_members": True}]
+        )
+        info = authorizer.get_user_info("U123")
+        assert info is not None
+        assert info.real_name == "Top Level"
+        # display_name falls back to real_name when profile name is empty
+        assert info.display_name == "Top Level"
+        assert info.name == "handle"
+
+
+class TestLookupGroupId:
+    def test_resolves_handle(self) -> None:
+        client = _mock_client()
+        client.usergroups_list.return_value = {
+            "usergroups": [{"handle": "eng", "id": "G001"}]
+        }
+
+        authorizer = SlackAuthorizer(client=client, rules=[])
+        assert authorizer.lookup_group_id("eng") == "G001"
+
+    def test_unknown_handle_returns_none(self) -> None:
+        client = _mock_client()
+        client.usergroups_list.return_value = {"usergroups": []}
+
+        authorizer = SlackAuthorizer(client=client, rules=[])
+        assert authorizer.lookup_group_id("eng") is None
+
+    def test_caches_after_first_lookup(self) -> None:
+        client = _mock_client()
+        client.usergroups_list.return_value = {
+            "usergroups": [{"handle": "eng", "id": "G001"}]
+        }
+
+        authorizer = SlackAuthorizer(client=client, rules=[])
+        authorizer.lookup_group_id("eng")
+        authorizer.lookup_group_id("other")
+        assert client.usergroups_list.call_count == 1
+
+    def test_api_failure_returns_none(self) -> None:
+        client = _mock_client()
+        client.usergroups_list.side_effect = SlackApiError(
+            message="error", response=MagicMock(status_code=500, data={})
+        )
+
+        authorizer = SlackAuthorizer(client=client, rules=[])
+        assert authorizer.lookup_group_id("eng") is None
+
+
+class TestResolveChannelId:
+    def test_resolves_name(self) -> None:
+        client = _mock_client()
+        client.conversations_list.return_value = {
+            "channels": [
+                {"name": "general", "id": "C1"},
+                {"name": "random", "id": "C2"},
+            ]
+        }
+
+        authorizer = SlackAuthorizer(client=client, rules=[])
+        assert authorizer.resolve_channel_id("general") == "C1"
+        assert authorizer.resolve_channel_id("random") == "C2"
+        # Second batch of lookups served from cache.
+        assert client.conversations_list.call_count == 1
+
+    def test_unknown_name_returns_none(self) -> None:
+        client = _mock_client()
+        client.conversations_list.return_value = {
+            "channels": [{"name": "general", "id": "C1"}]
+        }
+
+        authorizer = SlackAuthorizer(client=client, rules=[])
+        assert authorizer.resolve_channel_id("nope") is None
+
+    def test_paginates(self) -> None:
+        client = _mock_client()
+        client.conversations_list.side_effect = [
+            {
+                "channels": [{"name": "general", "id": "C1"}],
+                "response_metadata": {"next_cursor": "page2"},
+            },
+            {"channels": [{"name": "eng", "id": "C9"}]},
+        ]
+
+        authorizer = SlackAuthorizer(client=client, rules=[])
+        assert authorizer.resolve_channel_id("eng") == "C9"
+        assert client.conversations_list.call_count == 2
+
+    def test_skips_malformed_channels(self) -> None:
+        client = _mock_client()
+        client.conversations_list.return_value = {
+            "channels": [
+                {"name": "general"},  # missing id
+                {"id": "C2"},  # missing name
+                {"name": "ok", "id": "C3"},
+            ]
+        }
+
+        authorizer = SlackAuthorizer(client=client, rules=[])
+        assert authorizer.resolve_channel_id("general") is None
+        assert authorizer.resolve_channel_id("ok") == "C3"
+
+    def test_api_failure_returns_none(self) -> None:
+        client = _mock_client()
+        client.conversations_list.side_effect = SlackApiError(
+            message="error", response=MagicMock(status_code=500, data={})
+        )
+
+        authorizer = SlackAuthorizer(client=client, rules=[])
+        assert authorizer.resolve_channel_id("general") is None
+
+    def test_cache_expiry_refetches(self) -> None:
+        client = _mock_client()
+        client.conversations_list.return_value = {
+            "channels": [{"name": "general", "id": "C1"}]
+        }
+
+        authorizer = SlackAuthorizer(client=client, rules=[])
+        assert authorizer.resolve_channel_id("general") == "C1"
+
+        # Expire the channel cache to force a refetch.
+        assert authorizer._channel_ids is not None
+        authorizer._channel_ids.expires_at = 0
+        assert authorizer.resolve_channel_id("general") == "C1"
+        assert client.conversations_list.call_count == 2
