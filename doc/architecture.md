@@ -351,9 +351,9 @@ SlackChannelAdapter.authenticate_and_parse()
     ▼
 SlackChannelAdapter.send_reply()
     │
-    ├──▶ Sanitize Markdown (tables, code fences, horizontal rules)
+    ├──▶ Render Markdown to Slack mrkdwn (tables → code blocks, em-dash rules)
     │
-    ├──▶ Split long messages, post with Block Kit markdown blocks
+    ├──▶ Split long messages, post via the text parameter (mrkdwn)
     │
     ├──▶ Upload files from /outbox
     │

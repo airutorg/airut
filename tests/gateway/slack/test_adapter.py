@@ -20,11 +20,9 @@ from airut.gateway.channel import (
 from airut.gateway.slack.adapter import (
     SlackChannelAdapter,
     SlackParsedMessage,
-    _is_invalid_blocks,
     _is_slack_file_url,
-    _post_with_fallback,
     _send_long_message,
-    _split_blocks,
+    _split_message,
     _upload_file,
 )
 from airut.gateway.slack.authorizer import SlackAuthorizer
@@ -340,6 +338,9 @@ class TestSendReply:
         adapter.send_reply(parsed, "conv1", "Response text", "", [])
 
         client.chat_postMessage.assert_called_once()
+        call_kw = client.chat_postMessage.call_args[1]
+        assert call_kw["text"] == "Response text"
+        assert "blocks" not in call_kw
 
     def test_appends_usage_footer(self, tmp_path: Path) -> None:
         adapter, client, _, _ = _make_adapter(tmp_path)
@@ -356,9 +357,8 @@ class TestSendReply:
         adapter.send_reply(parsed, "conv1", "Done", "Cost: $0.01", [])
 
         call_kw = client.chat_postMessage.call_args[1]
-        blocks = call_kw["blocks"]
-        text = blocks[0]["text"]
-        assert "Cost: $0.01" in text
+        # Footer is rendered as italic mrkdwn (``_…_``).
+        assert call_kw["text"] == "Done\n\n_Cost: $0.01_"
 
     def test_uploads_outbox_files(self, tmp_path: Path) -> None:
         adapter, client, _, _ = _make_adapter(tmp_path)
@@ -556,44 +556,57 @@ class TestFromConfig:
         assert adapter.listener is mock_listener.return_value
 
 
-class TestSplitBlocks:
-    def test_short_text_single_block(self) -> None:
-        text = "Short text"
-        blocks = _split_blocks(text)
-        assert blocks == ["Short text"]
-
+class TestSplitMessage:
     def test_splits_at_paragraph_boundary(self) -> None:
-        p1 = "A" * 6000
-        p2 = "B" * 6000
+        p1 = "A" * 30000
+        p2 = "B" * 30000
         text = f"{p1}\n\n{p2}"
-        blocks = _split_blocks(text)
-        assert len(blocks) == 2
-        assert blocks[0] == p1
-        assert blocks[1] == p2
+        chunks = _split_message(text)
+        assert chunks == [p1, p2]
+
+    def test_accumulates_paragraphs_under_limit(self) -> None:
+        # Two small paragraphs plus one that forces a flush, so the first
+        # chunk holds both accumulated paragraphs.
+        p1 = "A" * 100
+        p2 = "B" * 100
+        p3 = "C" * 39999
+        text = f"{p1}\n\n{p2}\n\n{p3}"
+        chunks = _split_message(text)
+        assert chunks[0] == f"{p1}\n\n{p2}"
+        assert chunks[1] == p3
 
     def test_single_large_paragraph_splits_at_lines(self) -> None:
-        lines = ["A" * 100 for _ in range(200)]
+        lines = ["X" * 1000 for _ in range(60)]
         text = "\n".join(lines)
-        blocks = _split_blocks(text)
-        assert len(blocks) > 1
-        for block in blocks:
-            assert len(block) <= 12000
+        chunks = _split_message(text)
+        assert len(chunks) > 1
+        for chunk in chunks:
+            assert len(chunk) <= 40000
 
 
 class TestSendLongMessage:
-    def test_medium_text_multiple_messages(self) -> None:
-        """Text between 13K and 65K chars splits into multiple messages."""
+    def test_short_text_single_message(self) -> None:
+        """Text within the ceiling ships as a single ``text`` message."""
         client = MagicMock(spec=WebClient)
-        # Build text with paragraphs that exceeds 13K total
-        paragraphs = [f"Para {i}: " + "X" * 5000 for i in range(6)]
+        _send_long_message(client, "C123", "ts1", "short reply")
+        client.chat_postMessage.assert_called_once_with(
+            channel="C123", thread_ts="ts1", text="short reply"
+        )
+
+    def test_medium_text_multiple_messages(self) -> None:
+        """Text between 40K and 200K chars splits into multiple messages."""
+        client = MagicMock(spec=WebClient)
+        paragraphs = [f"Para {i}: " + "X" * 30000 for i in range(4)]
         text = "\n\n".join(paragraphs)
         _send_long_message(client, "C123", "ts1", text)
         assert client.chat_postMessage.call_count > 1
+        for call in client.chat_postMessage.call_args_list:
+            assert "blocks" not in call[1]
 
     def test_very_long_text_uploaded_as_file(self) -> None:
-        """Text exceeding 65K chars is uploaded as a file."""
+        """Text beyond five messages' worth is uploaded as a file."""
         client = MagicMock(spec=WebClient)
-        text = "A" * 70000
+        text = "A" * 200001
         _send_long_message(client, "C123", "ts1", text)
         client.files_upload_v2.assert_called_once()
         client.chat_postMessage.assert_not_called()
@@ -883,144 +896,6 @@ class TestCleanupConversations:
 
         # Should not raise
         adapter.cleanup_conversations({"conv1"})
-
-
-class TestSplitBlocksTruncation:
-    def test_long_line_truncated_with_marker(self) -> None:
-        """Lines exceeding block limit get [truncated] marker."""
-        from airut.gateway.slack.adapter import _MAX_BLOCK_CHARS
-
-        # Single line exceeding block limit (no paragraph/line breaks)
-        text = "X" * (_MAX_BLOCK_CHARS + 5000)
-        blocks = _split_blocks(text)
-        assert len(blocks) >= 1
-        assert "[truncated]" in blocks[0]
-
-
-def _make_invalid_blocks_error() -> SlackApiError:
-    """Create a ``SlackApiError`` with ``invalid_blocks`` response."""
-    return SlackApiError(
-        message="The request to the Slack API failed.",
-        response={"ok": False, "error": "invalid_blocks"},
-    )
-
-
-class TestIsInvalidBlocks:
-    def test_detects_invalid_blocks(self) -> None:
-        err = _make_invalid_blocks_error()
-        assert _is_invalid_blocks(err) is True
-
-    def test_rejects_other_errors(self) -> None:
-        err = SlackApiError(
-            message="fail",
-            response={"ok": False, "error": "channel_not_found"},
-        )
-        assert _is_invalid_blocks(err) is False
-
-    def test_rejects_non_dict_response(self) -> None:
-        err = SlackApiError(
-            message="fail",
-            response=MagicMock(status_code=500, data={}),
-        )
-        assert _is_invalid_blocks(err) is False
-
-
-class TestPostWithFallback:
-    def test_posts_blocks_on_success(self) -> None:
-        """When blocks are accepted, no fallback is needed."""
-        client = MagicMock(spec=WebClient)
-        blocks = [{"type": "markdown", "text": "hello"}]
-        _post_with_fallback(client, "C1", "ts1", "hello", blocks)
-        assert client.chat_postMessage.call_count == 1
-        call_kw = client.chat_postMessage.call_args[1]
-        assert call_kw["blocks"] == blocks
-
-    def test_falls_back_to_plain_text_on_invalid_blocks(self) -> None:
-        """On invalid_blocks, retries with plain text."""
-        client = MagicMock(spec=WebClient)
-        client.chat_postMessage.side_effect = [
-            _make_invalid_blocks_error(),
-            MagicMock(),  # plain-text retry succeeds
-        ]
-        blocks = [{"type": "markdown", "text": "hello"}]
-        _post_with_fallback(client, "C1", "ts1", "hello", blocks)
-
-        assert client.chat_postMessage.call_count == 2
-        # Second call should be plain text (no blocks key)
-        second_call_kw = client.chat_postMessage.call_args_list[1][1]
-        assert "blocks" not in second_call_kw
-        assert second_call_kw["text"] == "hello"
-
-    def test_plain_text_truncated_at_limit(self) -> None:
-        """Plain-text fallback truncates at 40K chars."""
-        from airut.gateway.slack.adapter import _MAX_TEXT_CHARS
-
-        client = MagicMock(spec=WebClient)
-        long_text = "A" * (_MAX_TEXT_CHARS + 5000)
-        client.chat_postMessage.side_effect = [
-            _make_invalid_blocks_error(),
-            MagicMock(),
-        ]
-        blocks = [{"type": "markdown", "text": long_text}]
-        _post_with_fallback(client, "C1", "ts1", long_text, blocks)
-
-        second_call_kw = client.chat_postMessage.call_args_list[1][1]
-        assert len(second_call_kw["text"]) == _MAX_TEXT_CHARS
-
-    def test_reraises_non_invalid_blocks_error(self) -> None:
-        """Non-invalid_blocks errors propagate normally."""
-        client = MagicMock(spec=WebClient)
-        client.chat_postMessage.side_effect = SlackApiError(
-            message="fail",
-            response={"ok": False, "error": "channel_not_found"},
-        )
-        blocks = [{"type": "markdown", "text": "hello"}]
-        with pytest.raises(SlackApiError, match="fail"):
-            _post_with_fallback(client, "C1", "ts1", "hello", blocks)
-
-
-class TestSendLongMessageFallback:
-    def test_single_message_falls_back_on_invalid_blocks(self) -> None:
-        """Short messages fall back to plain text on invalid_blocks."""
-        client = MagicMock(spec=WebClient)
-        client.chat_postMessage.side_effect = [
-            _make_invalid_blocks_error(),
-            MagicMock(),  # plain-text retry
-        ]
-        _send_long_message(client, "C1", "ts1", "short text")
-        assert client.chat_postMessage.call_count == 2
-        second_kw = client.chat_postMessage.call_args_list[1][1]
-        assert "blocks" not in second_kw
-        assert second_kw["text"] == "short text"
-
-    def test_multi_message_falls_back_on_invalid_blocks(self) -> None:
-        """Multi-message splits also fall back per-message."""
-        client = MagicMock(spec=WebClient)
-        # Build text that triggers multi-message path (>13K, <=65K)
-        paragraphs = [f"Para {i}: " + "X" * 5000 for i in range(6)]
-        text = "\n\n".join(paragraphs)
-
-        # First message blocks fail, then plain text succeeds;
-        # remaining messages succeed with blocks
-        client.chat_postMessage.side_effect = [
-            _make_invalid_blocks_error(),
-            MagicMock(),  # plain text retry for first chunk
-            MagicMock(),  # second chunk blocks OK
-            MagicMock(),  # third chunk blocks OK
-            MagicMock(),  # etc.
-            MagicMock(),
-            MagicMock(),
-            MagicMock(),
-            MagicMock(),
-        ]
-        _send_long_message(client, "C1", "ts1", text)
-
-        # The first call used blocks and failed, second was plain text,
-        # then remaining chunks used blocks successfully
-        first_kw = client.chat_postMessage.call_args_list[0][1]
-        assert "blocks" in first_kw
-        second_kw = client.chat_postMessage.call_args_list[1][1]
-        assert "blocks" not in second_kw
 
 
 class TestCreatePlanStreamer:
