@@ -1609,7 +1609,7 @@ class ServerConfig:
 
         # Build GlobalConfig kwargs.  Only fields present in YAML are
         # passed; absent fields fall through to dataclass defaults.
-        gc_overrides = {}
+        gc_overrides: dict[str, Any] = {}
         max_concurrent = _resolve(execution.get("max_concurrent"), int)
         if max_concurrent is not None:
             gc_overrides["max_concurrent_executions"] = max_concurrent
@@ -1738,7 +1738,7 @@ def _parse_repo_server_config(repo_id: str, raw: dict) -> RepoServerConfig:
         channels["slack"] = _parse_slack_channel_config(raw["slack"], prefix)
 
     # Build optional overrides
-    repo_overrides = {}
+    repo_overrides: dict[str, Any] = {}
     sandbox_enabled = _resolve(network.get("sandbox_enabled"), bool)
     if sandbox_enabled is not None:
         repo_overrides["network_sandbox_enabled"] = sandbox_enabled
@@ -2334,7 +2334,7 @@ def _resolve_github_app_credentials(
                 raise ConfigError(f"{key}.repositories must be a list")
             repositories = tuple(str(r) for r in raw_repositories)
 
-        ga_overrides = {}
+        ga_overrides: dict[str, Any] = {}
         if raw_allow_foreign is not None:
             ga_overrides["allow_foreign_credentials"] = bool(raw_allow_foreign)
         if base_url:

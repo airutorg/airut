@@ -18,7 +18,7 @@ from urllib.parse import urlencode
 
 from werkzeug.wrappers import Request, Response
 
-from airut._json_types import JsonDict
+from airut._json_types import JsonDict, JsonValue
 from airut.claude_output.types import StreamEvent
 from airut.conversation import (
     ConversationMetadata,
@@ -1714,7 +1714,7 @@ class RequestHandlers:
             if conversation is None:
                 conversation = self._load_conversation(task.conversation_id)
             if conversation:
-                replies_data = []
+                replies_data: list[JsonValue] = []
                 for i, r in enumerate(conversation.replies):
                     reply_dict: JsonDict = {
                         "session_id": r.session_id,
@@ -1747,12 +1747,13 @@ class RequestHandlers:
 
                     replies_data.append(reply_dict)
 
-                result["conversation"] = {
+                conversation_data: JsonDict = {
                     "total_cost_usd": conversation.total_cost_usd,
                     "total_turns": conversation.total_turns,
                     "reply_count": len(conversation.replies),
                     "replies": replies_data,
                 }
+                result["conversation"] = conversation_data
             else:
                 result["conversation"] = None
 
