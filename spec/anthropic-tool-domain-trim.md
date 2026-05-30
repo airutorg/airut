@@ -57,7 +57,10 @@ any tool definition Anthropic supports, current or future.
 ## Design Principles
 
 1. **Default-deny.** A covered tool without an explicit, intersection-checked
-   `allowed_domains` ends up with `allowed_domains: []`.
+   `allowed_domains` ends up with `allowed_domains: []` — except for tools that
+   reject an empty list upstream (see
+   [Empty-list handling](#empty-list-handling)), where default-deny is expressed
+   by removing the key instead.
 2. **Fail-secure.** Anything ambiguous (malformed JSON, oversized body, unknown
    blocklist shape) yields a 403, never an unfiltered pass-through.
 3. **Generic.** No tool-specific schema knowledge beyond the `type` prefix list;
@@ -109,23 +112,52 @@ parsed body for every reachable `tools` array — so the Batches API shape
 (`requests[i].params.tools[]`) is covered as well as the top-level Messages
 shape — and applies the per-entry rules below to covered tools only.
 
-| Condition (covered tool unless noted)                                                | Result                                    |
-| ------------------------------------------------------------------------------------ | ----------------------------------------- |
-| Body exceeds 1 MiB                                                                   | 403                                       |
-| Body is empty / not valid JSON / not valid UTF-8                                     | 403                                       |
-| `blocked_domains` present and non-empty (or not a list)                              | 403                                       |
-| `allowed_domains` element is empty, non-string, or has `*` `?` whitespace `.`-prefix | 403                                       |
-| `allowed_domains` missing or not a list                                              | injected as `[]`                          |
-| `allowed_domains` present                                                            | trimmed to reachable hosts (`[]` if none) |
-| No `tools` array reachable                                                           | pass-through                              |
-| Only `custom` / `mcp` / unknown tool types                                           | pass-through                              |
+| Condition (covered tool unless noted)                                                | Result                          |
+| ------------------------------------------------------------------------------------ | ------------------------------- |
+| Body exceeds 1 MiB                                                                   | 403                             |
+| Body is empty / not valid JSON / not valid UTF-8                                     | 403                             |
+| `blocked_domains` present and non-empty (or not a list)                              | 403                             |
+| `allowed_domains` element is empty, non-string, or has `*` `?` whitespace `.`-prefix | 403                             |
+| `allowed_domains` missing or not a list (default-deny tool)                          | injected as `[]`                |
+| `allowed_domains` missing or not a list (unrestricted-on-empty tool)                 | left absent (runs unrestricted) |
+| `allowed_domains` present, trims non-empty                                           | trimmed to reachable hosts      |
+| `allowed_domains` present, trims empty (default-deny tool)                           | set to `[]`                     |
+| `allowed_domains` present, trims empty (unrestricted-on-empty tool)                  | key removed (runs unrestricted) |
+| No `tools` array reachable                                                           | pass-through                    |
+| Only `custom` / `mcp` / unknown tool types                                           | pass-through                    |
 
 A blocklist is rejected because it cannot be reconciled with a positive
 allowlist — anything not blocked would be implicitly permitted, inverting the
 security default. Wildcards are rejected so the trim does not silently fall out
-of sync with whatever wildcard syntax Anthropic might later adopt. A trimmed
-entry is left with `allowed_domains: []` rather than deleted, since Anthropic
-treats an empty list as deny-all.
+of sync with whatever wildcard syntax Anthropic might later adopt. For
+default-deny tools a trimmed entry is left with `allowed_domains: []` rather
+than deleted, since Anthropic treats an empty list as deny-all.
+
+### Empty-list handling
+
+The default-deny-via-`[]` strategy assumes Anthropic honours an empty
+`allowed_domains` as deny-all. That holds for `web_fetch`, but **not** for
+`web_search`: Anthropic rejects an empty list with
+`400 ... allowed_domains: Empty list of domains is ambiguous. Provide at least one domain or null.`,
+which fails the entire `/v1/messages` request — so the default-deny injection
+would break web search outright rather than restricting it.
+
+Tools with this behavior are listed in `_UNRESTRICTED_ON_EMPTY_PREFIXES`
+(`web_search_*` today). For them, an empty effective allow-list — whether
+because none was declared or because the trim removed every host — is expressed
+by **removing the `allowed_domains` key**, leaving the tool unrestricted, rather
+than injecting or leaving `[]`. A list that trims to a non-empty subset is still
+narrowed to that subset, exactly as for default-deny tools.
+
+This is an accepted policy trade-off, not a containment regression: `web_search`
+returns search-engine snippets rather than full page bodies, so its
+`allowed_domains` only scopes which result *domains* surface. Snippet content
+from arbitrary third-party URLs already leaks regardless of the trim (see
+[Threat Model](#threat-model) and [Open Questions](#open-questions)), so running
+search unrestricted does not widen the exfiltration surface the way it would for
+a full-content fetcher like `web_fetch`. The host-level trim is preserved for
+`web_fetch_*`, `computer_*`, `bash_*`, and `code_execution_*`, where
+`allowed_domains: []` remains a valid deny-all.
 
 Blocked requests return a 403 and rewrites/rejections are annotated on the
 access-decision log line under the `tool-domains` namespace; both the JSON error
@@ -145,6 +177,12 @@ maintainer decision:
    via a parameter other than `allowed_domains` / `blocked_domains` (e.g. a
    path-level `allowed_urls`), the trim must be extended to cover it or to
    reject the tool outright.
+3. **Empty-list rejection.** If a covered tool rejects `allowed_domains: []`
+   upstream instead of honouring it as deny-all (as `web_search` does), add its
+   prefix to `_UNRESTRICTED_ON_EMPTY_PREFIXES` so an empty allow-list removes
+   the key rather than 400'ing the request. Weigh this against the tool's
+   leakage profile first — key removal runs it unrestricted, which is only
+   acceptable for snippet-style tools, not full-content fetchers.
 
 Monitoring Anthropic's tool-release notes is part of routine maintenance.
 
@@ -153,13 +191,17 @@ Monitoring Anthropic's tool-release notes is part of routine maintenance.
 - **`web_search` snippet leakage.** Even with a trimmed `allowed_domains`,
   `web_search` returns engine snippets containing content from arbitrary
   third-party URLs. If snippets carry enough data to reconstruct a canary, the
-  trim does not fully contain it. A future decision: block `web_search_*`
-  outright (drop the entry rather than trim) or accept snippet leakage as the
-  cost of keeping search.
+  trim does not fully contain it. **Resolved:** snippet leakage is accepted as
+  the cost of keeping search. Because `web_search` rejects `allowed_domains: []`
+  upstream, an empty effective allow-list runs the tool unrestricted rather than
+  blocking it (see [Empty-list handling](#empty-list-handling)).
 - **Default-deny vs. drop-tool.** Leaving a covered entry with an empty
-  `allowed_domains` is friendlier to the agent (it sees an explicit deny) but
-  assumes Anthropic always treats `allowed_domains: []` as deny-all. If that
-  assumption ever changes, dropping the entry entirely is more robust.
+  `allowed_domains` assumes Anthropic always treats `allowed_domains: []` as
+  deny-all. **Partially resolved:** that assumption is false for `web_search`
+  (Anthropic 400s on `[]`), so it is on `_UNRESTRICTED_ON_EMPTY_PREFIXES` and an
+  empty allow-list is expressed by key removal instead. `web_fetch` and the
+  other covered tools still rely on `[]` as deny-all; if that ever changes for
+  one of them, add it to the same list.
 - **Future fetchers without a domain allowlist.** A server-side fetcher with no
   domain-allowlist parameter cannot be trimmed; injecting `allowed_domains: []`
   may be silently ignored upstream. Such a tool should switch from "trim" to

@@ -521,7 +521,20 @@ class TestCoveredTypes:
         result = check_and_trim_tools(_body(payload), _open)
         assert result.verdict is ToolConfigVerdict.REWRITTEN
 
-    def test_web_search(self) -> None:
+    def test_web_search_no_allowed_domains_left_unrestricted(self) -> None:
+        # web_search rejects an empty allowed_domains with a 400, so the
+        # default-deny []-injection must NOT apply. With no declared
+        # domains the entry is left untouched (unrestricted search).
+        payload = {
+            "tools": [{"type": "web_search_20250305", "name": "web_search"}]
+        }
+        result = check_and_trim_tools(_body(payload), _open)
+        assert result.verdict is ToolConfigVerdict.UNCHANGED
+
+    def test_web_search_trim_to_empty_removes_key(self) -> None:
+        # All declared domains are outside the allowlist: the trim would
+        # leave [], which Anthropic 400s. The key must be removed
+        # entirely so search runs unrestricted instead of failing.
         payload = {
             "tools": [
                 {
@@ -532,6 +545,55 @@ class TestCoveredTypes:
         }
         result = check_and_trim_tools(_body(payload), _open)
         assert result.verdict is ToolConfigVerdict.REWRITTEN
+        new = json.loads(result.body or b"")
+        assert "allowed_domains" not in new["tools"][0]
+        assert "airut.org" in (result.log_tag or "")
+
+    def test_web_search_trim_to_nonempty_keeps_subset(self) -> None:
+        # A partially-allowlisted list trims to the reachable subset,
+        # exactly like web_fetch — search stays scoped to those hosts.
+        payload = {
+            "tools": [
+                {
+                    "type": "web_search_20250305",
+                    "allowed_domains": ["docs.slack.dev", "airut.org"],
+                }
+            ]
+        }
+        result = check_and_trim_tools(_body(payload), _open)
+        assert result.verdict is ToolConfigVerdict.REWRITTEN
+        new = json.loads(result.body or b"")
+        assert new["tools"][0]["allowed_domains"] == ["docs.slack.dev"]
+
+    def test_web_search_fully_allowlisted_passes_through(self) -> None:
+        # Every declared domain is reachable — nothing to trim.
+        payload = {
+            "tools": [
+                {
+                    "type": "web_search_20250305",
+                    "allowed_domains": ["docs.slack.dev", "pypi.org"],
+                }
+            ]
+        }
+        result = check_and_trim_tools(_body(payload), _open)
+        assert result.verdict is ToolConfigVerdict.UNCHANGED
+
+    def test_web_search_explicit_empty_removed(self) -> None:
+        # An agent-supplied empty list is also invalid upstream; it must
+        # be removed rather than forwarded as [].
+        payload = {
+            "tools": [{"type": "web_search_20250305", "allowed_domains": []}]
+        }
+        result = check_and_trim_tools(_body(payload), _open)
+        assert result.verdict is ToolConfigVerdict.REWRITTEN
+        new = json.loads(result.body or b"")
+        assert "allowed_domains" not in new["tools"][0]
+
+    def test_web_search_versioned_variant_left_unrestricted(self) -> None:
+        # A future date-stamped release of web_search behaves the same.
+        payload = {"tools": [{"type": "web_search_20991231"}]}
+        result = check_and_trim_tools(_body(payload), _open)
+        assert result.verdict is ToolConfigVerdict.UNCHANGED
 
     def test_bash_tool(self) -> None:
         # bash_* (cloud-hosted) — even though it doesn't have
