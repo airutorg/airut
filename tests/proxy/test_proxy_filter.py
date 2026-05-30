@@ -4832,6 +4832,64 @@ class TestProxyFilterToolDomainTrim:
         assert "web_fetch_20250910" in tags[0]
         assert "airut.org" in tags[0]
 
+    def test_web_search_without_domains_passes_through(self) -> None:
+        # web_search rejects allowed_domains: [], so the default-deny
+        # injection must not fire — the body must reach Anthropic
+        # untouched and run unrestricted.
+        pf = self._filter()
+        body = json.dumps(
+            {
+                "model": "claude",
+                "tools": [
+                    {"type": "web_search_20250305", "name": "web_search"}
+                ],
+                "messages": [{"role": "user", "content": "x"}],
+            }
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.anthropic.com",
+            path="/v1/messages",
+            content=body,
+        )
+        pf.request(flow)
+        assert flow.response is None
+        assert flow.metadata["allowlist_action"] == "ALLOWED"
+        assert flow.request.content == body
+        assert "filter_tags" not in flow.metadata
+
+    def test_web_search_disallowed_domain_removes_key(self) -> None:
+        # A web_search domain outside the allowlist trims to empty, which
+        # must drop the key entirely (not forward []).
+        pf = self._filter()
+        body = json.dumps(
+            {
+                "model": "claude",
+                "tools": [
+                    {
+                        "type": "web_search_20250305",
+                        "allowed_domains": ["airut.org"],
+                    }
+                ],
+                "messages": [{"role": "user", "content": "x"}],
+            }
+        ).encode()
+        flow = _flow(
+            method="POST",
+            host="api.anthropic.com",
+            path="/v1/messages",
+            content=body,
+        )
+        pf.request(flow)
+        assert flow.response is None
+        assert flow.metadata["allowlist_action"] == "ALLOWED"
+        new = json.loads(flow.request.content)
+        assert "allowed_domains" not in new["tools"][0]
+        tags = flow.metadata["filter_tags"]
+        assert len(tags) == 1
+        assert tags[0].startswith("tool-domains: web_search_20250305")
+        assert "airut.org" in tags[0]
+
     def test_request_blocked_domains_returns_403(self) -> None:
         pf = self._filter()
         body = json.dumps(

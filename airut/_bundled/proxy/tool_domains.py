@@ -22,7 +22,9 @@ This module parses ``/v1/messages*`` POST bodies and:
 3. **Rejects** any wildcard / glob-shaped entry in ``allowed_domains``.
 4. **Forces** ``allowed_domains: []`` (default-deny) for covered tool
    entries that declare neither ``allowed_domains`` nor a usable
-   ``blocked_domains``.
+   ``blocked_domains`` — except for tools that reject an empty list
+   upstream (``web_search_*``), where an empty effective allow-list is
+   expressed by removing the key (running unrestricted) instead.
 
 See ``spec/anthropic-tool-domain-trim.md`` for the full design.
 """
@@ -53,6 +55,23 @@ _COVERED_TOOL_PREFIXES: tuple[str, ...] = (
     "bash_",
     "code_execution_",
 )
+
+
+# Covered tools for which an empty ``allowed_domains`` is rejected by
+# Anthropic with a 400 (``"Empty list of domains is ambiguous"``) instead
+# of being honoured as deny-all. The default-deny ``allowed_domains: []``
+# strategy cannot be applied to these — it would 400 the entire
+# ``/v1/messages`` request and break the tool outright. Instead, whenever
+# the effective allow-list for such a tool is empty, the key is removed so
+# the tool runs unrestricted.
+#
+# ``web_search`` returns search-engine snippets, not full page bodies, so
+# its ``allowed_domains`` only scopes which result *domains* appear; the
+# snippet content leaks regardless of the trim (see
+# ``spec/anthropic-tool-domain-trim.md``). Running it unrestricted is
+# therefore an accepted policy trade-off rather than a containment
+# regression for full-content fetchers like ``web_fetch``.
+_UNRESTRICTED_ON_EMPTY_PREFIXES: tuple[str, ...] = ("web_search_",)
 
 
 # Maximum request body size accepted for parsing. Larger bodies are
@@ -148,6 +167,19 @@ def _is_covered_tool_type(tool_type: object) -> bool:
     return any(lowered.startswith(p) for p in _COVERED_TOOL_PREFIXES)
 
 
+def _is_unrestricted_on_empty(tool_type: str) -> bool:
+    """Return True if an empty allow-list must be expressed by key removal.
+
+    Such tools (``web_search_*``) reject ``allowed_domains: []`` with a
+    400, so a trimmed-to-empty or absent list is handled by dropping the
+    key (running unrestricted) rather than injecting / leaving ``[]``.
+    Matched case-insensitively for the same reason as
+    :func:`_is_covered_tool_type`.
+    """
+    lowered = tool_type.lower()
+    return any(lowered.startswith(p) for p in _UNRESTRICTED_ON_EMPTY_PREFIXES)
+
+
 def _is_wildcard_entry(domain: str) -> bool:
     """Return True if ``domain`` looks like a wildcard / glob.
 
@@ -205,8 +237,15 @@ def _process_tools_array(
                     log_tag=f"{tool_type}: blocked-domains",
                 )
 
+        unrestricted_on_empty = _is_unrestricted_on_empty(tool_type)
+
         allowed = entry.get("allowed_domains")
         if not isinstance(allowed, list):
+            if unrestricted_on_empty:
+                # web_search and friends reject allowed_domains: [], and
+                # policy accepts running them unrestricted — leave the
+                # key absent (no injection, body untouched).
+                continue
             # Rule 4 (extended): no usable allowed_domains — inject
             # an explicit default-deny so any future Anthropic default
             # that fails open is contained.
@@ -233,7 +272,24 @@ def _process_tools_array(
         # Rule 3: trim to the intersection with host_get_open.
         original: list[str] = list(allowed)
         trimmed = [d for d in original if host_get_open_fn(d)]
-        if trimmed != original:
+
+        if not trimmed and unrestricted_on_empty:
+            # The effective allow-list is empty and [] is invalid
+            # upstream for this tool. Remove the key so it runs
+            # unrestricted rather than 400'ing the whole request.
+            del entry["allowed_domains"]
+            if original:
+                # trimmed is empty here, so every declared host was dropped.
+                annotations.append(
+                    f"{tool_type}: cleared allowed_domains "
+                    f"({len(original)} outside allowlist: "
+                    f"{','.join(original)})"
+                )
+            else:
+                annotations.append(
+                    f"{tool_type}: removed empty allowed_domains"
+                )
+        elif trimmed != original:
             dropped = [d for d in original if d not in trimmed]
             entry["allowed_domains"] = trimmed
             annotations.append(
