@@ -65,11 +65,25 @@ class EmailParsedMessage(ParsedMessage):
     decoded_subject: str = ""
     """Decoded subject line for reply construction."""
 
-    _raw_message: Message | None = field(default=None, repr=False)
-    """Raw email message retained for deferred attachment extraction.
+    _raw_messages: list[Message] = field(default_factory=list, repr=False)
+    """Raw email messages retained for deferred attachment extraction.
 
-    Set by authenticate_and_parse() and consumed by save_attachments().
-    Not part of the public ParsedMessage interface."""
+    Seeded with the incoming email by authenticate_and_parse() and extended
+    with each coalesced follow-up's email by coalesce(), so attachments on
+    messages that merge into a busy conversation are saved too.  Consumed by
+    save_attachments().  Not part of the public ParsedMessage interface."""
+
+    def coalesce(self, other: ParsedMessage) -> None:
+        """Merge a follow-up, also retaining its email for attachments.
+
+        Attachments are extracted from the raw email after the conversation
+        layout exists; without carrying the merged messages' emails here, a
+        follow-up that coalesces into a busy conversation would lose its
+        attachments (only the survivor's would be saved).
+        """
+        super().coalesce(other)
+        if isinstance(other, EmailParsedMessage):
+            self._raw_messages.extend(other._raw_messages)
 
 
 class EmailChannelAdapter(ChannelAdapter):
@@ -253,7 +267,7 @@ class EmailChannelAdapter(ChannelAdapter):
             original_message_id=email_msg.get("Message-ID"),
             original_references=references,
             decoded_subject=subject,
-            _raw_message=email_msg,
+            _raw_messages=[email_msg],
         )
 
     def save_attachments(
@@ -269,12 +283,14 @@ class EmailChannelAdapter(ChannelAdapter):
             inbox_dir: Path to save attachments to.
 
         Returns:
-            List of saved filenames.
+            List of saved filenames across the triggering email and any
+            coalesced follow-ups, in arrival order.
         """
         assert isinstance(parsed, EmailParsedMessage)
-        if parsed._raw_message is None:
-            return []
-        return extract_attachments(parsed._raw_message, inbox_dir)
+        saved: list[str] = []
+        for message in parsed._raw_messages:
+            saved.extend(extract_attachments(message, inbox_dir))
+        return saved
 
     def send_acknowledgment(
         self,
