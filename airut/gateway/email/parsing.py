@@ -15,6 +15,7 @@ from email.header import decode_header
 from email.message import Message
 from pathlib import Path
 
+from airut.conversation import unique_inbox_path
 from airut.html_to_text import html_to_text
 
 
@@ -291,16 +292,18 @@ def extract_attachments(
                     filename = Path(filename).name
                     if not filename or filename in (".", ".."):
                         continue
-                    filepath = inbox_dir / filename
+                    # Avoid clobbering an earlier attachment (or a prior
+                    # turn's file) that shares the same name.
+                    filepath = unique_inbox_path(inbox_dir, filename)
                     payload = part.get_payload(decode=True)
                     if payload:
                         assert isinstance(payload, bytes)
                         with open(filepath, "wb") as f:
                             f.write(payload)
-                        filenames.append(filename)
+                        filenames.append(filepath.name)
                         logger.debug(
                             "Saved attachment: %s (%d bytes)",
-                            filename,
+                            filepath.name,
                             len(payload),
                         )
 

@@ -12,6 +12,7 @@ from airut.conversation import (
     create_conversation_layout,
     get_container_mounts,
     prepare_conversation,
+    unique_inbox_path,
 )
 
 
@@ -72,6 +73,45 @@ class TestPrepareConversation:
         prepare_conversation(layout)
 
         assert layout.claude.is_dir()
+
+
+class TestUniqueInboxPath:
+    """Tests for unique_inbox_path() collision avoidance."""
+
+    def test_no_collision_returns_name(self, tmp_path: Path) -> None:
+        """An unused name is returned unchanged."""
+        assert unique_inbox_path(tmp_path, "data.csv") == tmp_path / "data.csv"
+
+    def test_single_collision_appends_counter(self, tmp_path: Path) -> None:
+        """A collision inserts ``-1`` before the extension."""
+        (tmp_path / "data.csv").write_bytes(b"existing")
+        assert (
+            unique_inbox_path(tmp_path, "data.csv") == tmp_path / "data-1.csv"
+        )
+
+    def test_multiple_collisions_increment_counter(
+        self, tmp_path: Path
+    ) -> None:
+        """Successive collisions increment the counter until free."""
+        (tmp_path / "data.csv").write_bytes(b"a")
+        (tmp_path / "data-1.csv").write_bytes(b"b")
+        (tmp_path / "data-2.csv").write_bytes(b"c")
+        assert (
+            unique_inbox_path(tmp_path, "data.csv") == tmp_path / "data-3.csv"
+        )
+
+    def test_collision_without_extension(self, tmp_path: Path) -> None:
+        """A name with no extension still gets a ``-N`` counter."""
+        (tmp_path / "README").write_bytes(b"x")
+        assert unique_inbox_path(tmp_path, "README") == tmp_path / "README-1"
+
+    def test_collision_multi_dot_extension(self, tmp_path: Path) -> None:
+        """The counter is inserted before the final extension only."""
+        (tmp_path / "archive.tar.gz").write_bytes(b"x")
+        assert (
+            unique_inbox_path(tmp_path, "archive.tar.gz")
+            == tmp_path / "archive.tar-1.gz"
+        )
 
 
 class TestGetContainerMounts:

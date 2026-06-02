@@ -22,6 +22,7 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
 from airut._json_types import JsonDict
+from airut.conversation import unique_inbox_path
 from airut.gateway.channel import (
     AuthenticationError,
     ChannelAdapter,
@@ -33,7 +34,7 @@ from airut.gateway.channel import (
 )
 from airut.gateway.slack.authorizer import SlackAuthorizer
 from airut.gateway.slack.config import SlackChannelConfig
-from airut.gateway.slack.listener import SlackChannelListener
+from airut.gateway.slack.listener import CONTENT_SUBTYPES, SlackChannelListener
 from airut.gateway.slack.mention_resolver import MentionResolver
 from airut.gateway.slack.mrkdwn import render_mrkdwn
 from airut.gateway.slack.plan_streamer import SlackPlanStreamer
@@ -112,10 +113,16 @@ class SlackParsedMessage(ParsedMessage):
     members of user groups named in the authorization rules."""
 
     def coalesce(self, other: ParsedMessage) -> None:
-        """Merge a follow-up, also accumulating its reaction targets."""
+        """Merge a follow-up, also accumulating reaction targets and files.
+
+        The follow-up's pending file downloads are appended so attachments
+        posted while the conversation was busy are saved to the inbox when
+        the coalesced survivor runs (rather than silently dropped).
+        """
         super().coalesce(other)
         if isinstance(other, SlackParsedMessage):
             self.acknowledged_message_ts.extend(other.acknowledged_message_ts)
+            self.slack_file_urls.extend(other.slack_file_urls)
 
 
 class SlackChannelAdapter(ChannelAdapter):
@@ -270,33 +277,28 @@ class SlackChannelAdapter(ChannelAdapter):
 
         # Mid-thread engagement: the bot was mentioned inside an existing
         # thread it has not joined.  Replay the prior messages so Claude
-        # has the same context a human reading the thread would.
+        # has the same context a human reading the thread would, and queue
+        # any files those earlier messages carried for inbox download.
         channel_context = self.channel_context()
         candidate_ids: list[str] = [user_id]
+        slack_file_urls: list[tuple[str, str]] = []
         if is_channel and conversation_id is None and raw_thread_ts:
-            preamble, history_authors = self._replay_history(
+            preamble, history_authors, history_file_urls = self._replay_history(
                 channel_id, thread_ts, message_ts, resolver
             )
             if preamble:
                 channel_context = f"{channel_context}\n\n{preamble}"
             candidate_ids.extend(history_authors)
+            slack_file_urls.extend(history_file_urls)
         candidate_ids.extend(self._authorizer.candidate_group_member_ids())
 
         # Resolve inbound mention tokens so Claude sees human-readable names.
         # The bot's own mention is stripped from the invocation (redundant).
         body = resolver.resolve_in(text, strip_bot_mention=True)
 
-        # Extract file metadata for deferred download
-        slack_file_urls: list[tuple[str, str]] = []
-        for raw_file in cast(list[JsonDict], payload.get("files", [])):
-            name = cast(str, raw_file.get("name", "unnamed"))
-            url = cast(
-                str,
-                raw_file.get("url_private_download")
-                or raw_file.get("url_private", ""),
-            )
-            if url:
-                slack_file_urls.append((name, url))
+        # Queue the triggering message's own files for deferred download,
+        # after any files replayed from thread history (chronological order).
+        slack_file_urls.extend(_extract_file_urls(payload.get("files")))
 
         # Build display title
         display_title = body[:_MAX_TITLE_LENGTH].split("\n")[0] if body else ""
@@ -377,7 +379,7 @@ class SlackChannelAdapter(ChannelAdapter):
         thread_ts: str,
         triggering_ts: str,
         resolver: MentionResolver,
-    ) -> tuple[str, list[str]]:
+    ) -> tuple[str, list[str], list[tuple[str, str]]]:
         """Fetch prior thread messages and render them as a prompt preamble.
 
         Reads the thread via ``conversations.replies`` (paginated, bounded
@@ -388,6 +390,11 @@ class SlackChannelAdapter(ChannelAdapter):
         delivered separately via the attributed message body, so it is not
         repeated here.
 
+        Files attached to the replayed messages are collected for deferred
+        download so they land in the inbox alongside the triggering
+        message's own attachments, and each preamble line notes the
+        filenames it carried.
+
         Args:
             channel_id: Channel the thread lives in.
             thread_ts: Root timestamp of the thread.
@@ -395,22 +402,28 @@ class SlackChannelAdapter(ChannelAdapter):
             resolver: Mention resolver for inbound token resolution.
 
         Returns:
-            ``(preamble, author_ids)`` — the preamble is empty when no
-            prior messages exist; ``author_ids`` lists the distinct human
-            authors for the outbound mention candidate set.
+            ``(preamble, author_ids, file_urls)`` — the preamble is empty
+            when no prior messages exist; ``author_ids`` lists the distinct
+            human authors for the outbound mention candidate set;
+            ``file_urls`` is the ``(name, url)`` pairs of attachments to
+            download, in thread order.
         """
         messages = self._fetch_thread_messages(channel_id, thread_ts)
 
+        # Keep human messages, including file uploads (Slack tags those
+        # ``file_share``); drop the trigger, bot posts, and system/edit
+        # subtypes.  The content-subtype carve-out matches the listener so a
+        # file shared before the invocation is replayed and downloaded.
         history = [
             m
             for m in messages
             if m.get("ts") != triggering_ts
             and m.get("user")
-            and not m.get("subtype")
             and not m.get("bot_id")
+            and (not m.get("subtype") or m.get("subtype") in CONTENT_SUBTYPES)
         ]
         if not history:
-            return "", []
+            return "", [], []
 
         omitted = len(history) - _HISTORY_REPLAY_LIMIT
         if omitted > 0:
@@ -427,6 +440,7 @@ class SlackChannelAdapter(ChannelAdapter):
             lines.append(f"[{omitted} earlier messages omitted]")
 
         author_ids: list[str] = []
+        file_urls: list[tuple[str, str]] = []
         for message in history:
             author = cast(str, message.get("user", ""))
             author_ids.append(author)
@@ -434,9 +448,18 @@ class SlackChannelAdapter(ChannelAdapter):
             resolved = resolver.resolve_in(
                 cast(str, message.get("text", "")), strip_bot_mention=False
             )
-            lines.append(f"[{display}]: {resolved}")
+            message_files = _extract_file_urls(message.get("files"))
+            file_urls.extend(message_files)
+            rendered = resolved
+            if message_files:
+                names = ", ".join(name for name, _ in message_files)
+                suffix = f"[attached: {names}]"
+                # A file_share message may have no comment text; avoid the
+                # double space that ``{resolved} {suffix}`` would leave then.
+                rendered = f"{resolved} {suffix}" if resolved else suffix
+            lines.append(f"[{display}]: {rendered}")
 
-        return "\n".join(lines), author_ids
+        return "\n".join(lines), author_ids, file_urls
 
     def _fetch_thread_messages(
         self, channel_id: str, thread_ts: str
@@ -516,10 +539,12 @@ class SlackChannelAdapter(ChannelAdapter):
                 safe_name = Path(filename).name
                 if not safe_name:
                     safe_name = "unnamed"
-                filepath = inbox_dir / safe_name
+                # Avoid clobbering an earlier attachment (or a prior turn's
+                # file) that shares the same name.
+                filepath = unique_inbox_path(inbox_dir, safe_name)
                 filepath.write_bytes(data)
-                saved.append(safe_name)
-                logger.info("Saved Slack attachment: %s", safe_name)
+                saved.append(filepath.name)
+                logger.info("Saved Slack attachment: %s", filepath.name)
 
             except Exception as e:
                 logger.warning(
@@ -752,6 +777,37 @@ class SlackChannelAdapter(ChannelAdapter):
 def _dedup_preserving_order(ids: list[str]) -> list[str]:
     """Return *ids* with duplicates removed, keeping first-seen order."""
     return list(dict.fromkeys(ids))
+
+
+def _extract_file_urls(raw_files: object) -> list[tuple[str, str]]:
+    """Pull ``(filename, download_url)`` tuples from a message's ``files``.
+
+    Shared by the triggering-message parse and the thread-history replay so
+    attachments are queued for deferred download identically wherever they
+    appear.  Files lacking a usable URL are skipped.
+
+    Args:
+        raw_files: The ``files`` field of a Slack message payload (any
+            type; non-lists yield no files).
+
+    Returns:
+        List of ``(name, url)`` pairs, in payload order.
+    """
+    if not isinstance(raw_files, list):
+        return []
+    result: list[tuple[str, str]] = []
+    for raw_file in cast(list[object], raw_files):
+        if not isinstance(raw_file, dict):
+            continue
+        entry = cast(JsonDict, raw_file)
+        name = cast(str, entry.get("name", "unnamed"))
+        url = cast(
+            str,
+            entry.get("url_private_download") or entry.get("url_private", ""),
+        )
+        if url:
+            result.append((name, url))
+    return result
 
 
 def _is_slack_file_url(url: str) -> bool:

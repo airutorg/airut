@@ -135,11 +135,15 @@ lookup.
 
 For each non-DM message, the adapter decides whether to engage:
 
-1. If the event carries a `subtype` or a `bot_id` (a bot-authored message,
-   including the Airut bot's own posts): drop. This guard is applied identically
-   in both channel handlers — `app_mention` and `message.channels`/`.groups` —
-   so a bot that `@`-mentions Airut cannot trigger a run. See
-   [Bot Messages Are Never Accepted](#bot-messages-are-never-accepted).
+1. If the event carries a `bot_id` (a bot-authored message, including the Airut
+   bot's own posts): drop. A `subtype` also drops the event, **except** content
+   subtypes such as `file_share` (a file upload, even one with a text comment),
+   which carry genuine user input — otherwise a file posted into an engaged
+   thread would be silently lost. The `app_mention` handler drops on any
+   `subtype` (file uploads never arrive as `app_mention`); the
+   `message.channels`/`.groups` handler keeps the content subtypes. The `bot_id`
+   guard is identical in both, so a bot that `@`-mentions Airut cannot trigger a
+   run. See [Bot Messages Are Never Accepted](#bot-messages-are-never-accepted).
 2. If `(channel_id, thread_ts)` (using `message.ts` for top-level messages)
    resolves to a known conversation: engage. This is the "sticky thread" path
    that lets follow-ups land without re-mention.
@@ -182,9 +186,12 @@ The invocation itself is **not** repeated in the preamble: it is delivered
 through the normal user-message path with its per-message
 `[<sender> <timestamp>]` attribution header (see
 [gateway-architecture.md](gateway-architecture.md)), which doubles as the seam
-between background and invocation. The triggering message (matched by `ts`) and
-non-human messages (bot posts, join/leave subtypes) are dropped from the
-preamble.
+between background and invocation. The triggering message (matched by `ts`), bot
+posts, and system/edit subtypes (join/leave, edits) are dropped from the
+preamble. File uploads (subtype `file_share`) are **kept**: their files are
+downloaded into `inbox/` alongside the invocation's own attachments, and the
+rendered line notes them as `[attached: <names>]`, so a file shared before the
+bot was invited is still available to Claude.
 
 Display names come from the authorizer's user cache; missing entries fall back
 to the raw user ID. Inbound mention tokens inside the replayed bodies are
@@ -492,6 +499,17 @@ directory, matching the email adapter's two-phase pattern. Downloads are gated
 to known Slack file-hosting hosts so the bot token is never sent to an arbitrary
 URL appearing in an event payload.
 
+Slack delivers a file upload as a message with subtype `file_share`, so the
+channel listener admits that subtype (see
+[Channel Engagement Rule](#channel-engagement-rule)) and mid-thread replay
+collects files from prior messages as well — attachments posted both before and
+after the bot joined a thread reach `inbox/`. When several attachments share a
+filename (within one message, across a coalesced burst, across replayed history,
+or across turns), later files are written under a `-N`-suffixed name rather than
+overwriting earlier ones (shared with the email adapter via
+`unique_inbox_path`). On the DM surface the Agents & AI Apps middleware already
+admits `file_share`, so no extra carve-out is needed there.
+
 **Outbound** (bot → user): Files from `outbox/` are uploaded to the thread via
 Slack's `files_upload_v2` method.
 
@@ -614,10 +632,12 @@ the other's posts, a single mention could ping-pong between them indefinitely.
 This is enforced at two independent layers:
 
 1. **Listener guard (cheap, early).** Both channel handlers drop events carrying
-   a `subtype` or `bot_id` before any work is queued — no `:eyes:` reaction, no
-   worker task, no API call, no dedup slot consumed. A bot post that
-   `@`-mentions Airut arrives as an `app_mention` (and a `message.*` duplicate);
-   both are dropped here.
+   a `bot_id` before any work is queued — no `:eyes:` reaction, no worker task,
+   no API call, no dedup slot consumed. A bot post that `@`-mentions Airut
+   arrives as an `app_mention` (and a `message.*` duplicate); both are dropped
+   here. System/edit subtypes are dropped too, but content subtypes such as
+   `file_share` are kept (so uploaded files survive); the `bot_id` check
+   enforces the no-loop invariant independently of subtype.
 2. **Authorizer baseline (defense in depth).** Even if an event reached the
    worker, the authorizer rejects any sender whose Slack profile has `is_bot`
    set (see [Baseline Checks](#baseline-checks-always-applied)). This covers the
@@ -826,15 +846,16 @@ It wires two sets of handlers:
   worker thread, not in the event handler.
 - **Direct channel handlers:** `app_mention` is the primary engagement signal;
   `message.channels`/`message.groups` are submitted only when the thread is
-  already engaged or the body mentions the bot. Both handlers first drop events
-  carrying a `subtype` or `bot_id`, so bot-authored mentions never trigger a run
-  (see [Bot Messages Are Never Accepted](#bot-messages-are-never-accepted)). The
-  membership check is done inline against the in-memory thread store (no API
-  call) so noisy channels do not flood the worker pool. The listener also drops
-  events for channels outside `allowed_channels` before any submit, and
-  deduplicates the `app_mention`/`message.*` double-delivery on
-  `(channel_id, ts)` via a bounded LRU (256 entries, oldest-first eviction, no
-  time-based expiry).
+  already engaged or the body mentions the bot. Both handlers drop events
+  carrying a `bot_id`, so bot-authored mentions never trigger a run (see
+  [Bot Messages Are Never Accepted](#bot-messages-are-never-accepted)); they
+  also drop system/edit subtypes while keeping content subtypes like
+  `file_share`, so uploaded files are not lost. The membership check is done
+  inline against the in-memory thread store (no API call) so noisy channels do
+  not flood the worker pool. The listener also drops events for channels outside
+  `allowed_channels` before any submit, and deduplicates the
+  `app_mention`/`message.*` double-delivery on `(channel_id, ts)` via a bounded
+  LRU (256 entries, oldest-first eviction, no time-based expiry).
 
 The bot's own user ID is resolved once at startup (via `auth.test`) and shared
 with the adapter so mention tokens can be recognised without re-resolving.
@@ -850,9 +871,10 @@ whole burst), an `is_channel` flag (gates the DM-only `setStatus`/`setTitle`
 calls), and the set of user IDs eligible for outbound `@`-mention rewriting
 (sender, replayed thread authors, configured user-group members). Coalescing is
 polymorphic: the adapter's `coalesce()` override extends the
-acknowledged-timestamp list on top of the base entry merge. The core sees a
-`ParsedMessage`; the adapter downcasts to access these fields when sending
-replies.
+acknowledged-timestamp list **and the pending file-download list** on top of the
+base entry merge, so attachments on a message that coalesces into a busy
+conversation are still saved to `inbox/`. The core sees a `ParsedMessage`; the
+adapter downcasts to access these fields when sending replies.
 
 ### Thread-to-Conversation Store
 
