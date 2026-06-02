@@ -87,6 +87,35 @@ def prepare_conversation(layout: ConversationLayout) -> None:
         logger.debug("Created/verified directory: %s", directory)
 
 
+def unique_inbox_path(inbox_dir: Path, safe_name: str) -> Path:
+    """Return a path in *inbox_dir* for *safe_name* that does not collide.
+
+    Channels save attachments into a shared inbox directory.  When two
+    files carry the same name — within one message, across a coalesced
+    burst, across replayed thread history, or across conversation turns —
+    a direct write would silently clobber the earlier file and lose data.
+    This inserts a ``-N`` counter before the extension until a free name is
+    found, so every attachment is preserved.
+
+    Args:
+        inbox_dir: Directory the file will be written to (must exist).
+        safe_name: Sanitized basename (caller is responsible for stripping
+            path components and rejecting traversal sequences).
+
+    Returns:
+        A path under *inbox_dir* that does not currently exist.
+    """
+    candidate = inbox_dir / safe_name
+    if not candidate.exists():
+        return candidate
+    stem = Path(safe_name).stem
+    suffix = Path(safe_name).suffix
+    counter = 1
+    while (candidate := inbox_dir / f"{stem}-{counter}{suffix}").exists():
+        counter += 1
+    return candidate
+
+
 def get_container_mounts(layout: ConversationLayout) -> list[str]:
     """Return podman volume mount strings for a conversation.
 

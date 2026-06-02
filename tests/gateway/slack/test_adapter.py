@@ -23,6 +23,7 @@ from airut.gateway.slack.adapter import (
     _MAX_TEXT_CHARS,
     SlackChannelAdapter,
     SlackParsedMessage,
+    _extract_file_urls,
     _is_slack_file_url,
     _send_long_message,
     _split_message,
@@ -278,6 +279,184 @@ class TestSaveAttachments:
 
         result = adapter.save_attachments(parsed, inbox)
         assert result == []
+
+    def test_duplicate_names_are_uniquified(self, tmp_path: Path) -> None:
+        """Two attachments sharing a name are both saved, not clobbered."""
+        adapter, _, _, _ = _make_adapter(tmp_path)
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+
+        parsed = SlackParsedMessage(
+            sender="U123",
+            body="see attached",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="D456",
+            slack_thread_ts="ts1",
+            slack_file_urls=[
+                (
+                    "data.csv",
+                    "https://files.slack.com/files-pri/T1-F1/data.csv",
+                ),
+                (
+                    "data.csv",
+                    "https://files.slack.com/files-pri/T1-F2/data.csv",
+                ),
+            ],
+        )
+
+        contents = [b"first", b"second"]
+
+        def fake_urlopen(req: object) -> MagicMock:
+            resp = MagicMock()
+            resp.read.return_value = contents.pop(0)
+            resp.__enter__ = MagicMock(return_value=resp)
+            resp.__exit__ = MagicMock(return_value=False)
+            return resp
+
+        with patch(
+            "airut.gateway.slack.adapter.urllib.request.urlopen",
+            side_effect=fake_urlopen,
+        ):
+            result = adapter.save_attachments(parsed, inbox)
+
+        # Both files saved under distinct names; neither overwrites the other.
+        assert result == ["data.csv", "data-1.csv"]
+        assert (inbox / "data.csv").read_bytes() == b"first"
+        assert (inbox / "data-1.csv").read_bytes() == b"second"
+
+    def test_duplicate_of_existing_inbox_file(self, tmp_path: Path) -> None:
+        """A new attachment colliding with a prior turn's file is preserved."""
+        adapter, _, _, _ = _make_adapter(tmp_path)
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+        (inbox / "report.txt").write_bytes(b"old turn")
+
+        parsed = SlackParsedMessage(
+            sender="U123",
+            body="see attached",
+            conversation_id=None,
+            model_hint=None,
+            slack_channel_id="D456",
+            slack_thread_ts="ts1",
+            slack_file_urls=[
+                (
+                    "report.txt",
+                    "https://files.slack.com/files-pri/T1-F1/report.txt",
+                ),
+            ],
+        )
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"new turn"
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch(
+            "airut.gateway.slack.adapter.urllib.request.urlopen",
+            return_value=mock_resp,
+        ):
+            result = adapter.save_attachments(parsed, inbox)
+
+        assert result == ["report-1.txt"]
+        assert (inbox / "report.txt").read_bytes() == b"old turn"
+        assert (inbox / "report-1.txt").read_bytes() == b"new turn"
+
+
+class TestExtractFileUrls:
+    def test_extracts_download_url(self) -> None:
+        files = [
+            {
+                "name": "a.txt",
+                "url_private_download": "https://files.slack.com/a",
+            }
+        ]
+        assert _extract_file_urls(files) == [
+            ("a.txt", "https://files.slack.com/a")
+        ]
+
+    def test_falls_back_to_url_private(self) -> None:
+        files = [{"name": "a.txt", "url_private": "https://files.slack.com/a"}]
+        assert _extract_file_urls(files) == [
+            ("a.txt", "https://files.slack.com/a")
+        ]
+
+    def test_non_list_yields_empty(self) -> None:
+        assert _extract_file_urls(None) == []
+
+    def test_non_dict_entries_skipped(self) -> None:
+        files = [
+            "not-a-dict",
+            {"name": "a.txt", "url_private": "https://files.slack.com/a"},
+        ]
+        assert _extract_file_urls(files) == [
+            ("a.txt", "https://files.slack.com/a")
+        ]
+
+    def test_file_without_url_skipped(self) -> None:
+        assert _extract_file_urls([{"name": "a.txt"}]) == []
+
+
+class TestCoalesce:
+    def test_coalesce_merges_file_urls(self) -> None:
+        """A coalesced follow-up's attachments join the survivor's list."""
+        survivor = SlackParsedMessage(
+            sender="U1",
+            body="first",
+            conversation_id="c1",
+            model_hint=None,
+            slack_channel_id="C1",
+            slack_thread_ts="T1",
+            slack_file_urls=[("a.txt", "https://files.slack.com/a")],
+            acknowledged_message_ts=["T1"],
+            is_channel=True,
+        )
+        follow_up = SlackParsedMessage(
+            sender="U2",
+            body="second",
+            conversation_id="c1",
+            model_hint=None,
+            slack_channel_id="C1",
+            slack_thread_ts="T1",
+            slack_file_urls=[("b.txt", "https://files.slack.com/b")],
+            acknowledged_message_ts=["T2"],
+            is_channel=True,
+        )
+
+        survivor.coalesce(follow_up)
+
+        # Both messages' attachments are downloaded when the survivor runs.
+        assert survivor.slack_file_urls == [
+            ("a.txt", "https://files.slack.com/a"),
+            ("b.txt", "https://files.slack.com/b"),
+        ]
+        # Reaction targets and burst entries still accumulate as before.
+        assert survivor.acknowledged_message_ts == ["T1", "T2"]
+        assert [body for _, _, body in survivor.coalesced_entries] == [
+            "first",
+            "second",
+        ]
+
+    def test_coalesce_with_plain_parsed_message(self) -> None:
+        """Coalescing a non-Slack message does not touch Slack-only state."""
+        from airut.gateway.channel import ParsedMessage
+
+        survivor = SlackParsedMessage(
+            sender="U1",
+            body="first",
+            conversation_id="c1",
+            model_hint=None,
+            slack_file_urls=[("a.txt", "https://files.slack.com/a")],
+        )
+        other = ParsedMessage(
+            sender="U2", body="second", conversation_id="c1", model_hint=None
+        )
+
+        survivor.coalesce(other)
+
+        assert survivor.slack_file_urls == [
+            ("a.txt", "https://files.slack.com/a")
+        ]
 
 
 class TestSendAcknowledgment:
@@ -1123,6 +1302,7 @@ def _channel_raw(
     thread_ts: str | None = None,
     event_type: str = "app_mention",
     channel_type: str | None = None,
+    files: list | None = None,
 ) -> RawMessage:
     payload: dict = {
         "type": event_type,
@@ -1135,6 +1315,8 @@ def _channel_raw(
         payload["thread_ts"] = thread_ts
     if channel_type is not None:
         payload["channel_type"] = channel_type
+    if files is not None:
+        payload["files"] = files
     return RawMessage(sender=user, content=payload, display_title=text[:60])
 
 
@@ -1265,6 +1447,136 @@ class TestMidThreadReplay:
         assert "U2" in result.mention_candidate_ids
         # The invocation message itself is not repeated in the preamble.
         assert result.channel_context.count("please help") == 0
+
+    def test_replay_collects_history_attachments(self, tmp_path: Path) -> None:
+        """Files posted earlier in the thread are queued for inbox download."""
+        adapter, client, authorizer, _ = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.side_effect = lambda uid: {
+            "U1": "Alice",
+            "U2": "Bob",
+        }.get(uid, uid)
+        # Slack tags an uploaded file with subtype "file_share"; the replay
+        # must keep such messages rather than drop them as a system subtype.
+        client.conversations_replies.return_value = {
+            "messages": [
+                {
+                    "ts": "T0",
+                    "user": "U2",
+                    "subtype": "file_share",
+                    "text": "here is the spec",
+                    "files": [
+                        {
+                            "name": "spec.pdf",
+                            "url_private_download": (
+                                "https://files.slack.com/spec.pdf"
+                            ),
+                        }
+                    ],
+                },
+                {"ts": "T1", "user": "U1", "text": "<@UBOT> please help"},
+            ],
+            "response_metadata": {},
+        }
+
+        result = adapter.authenticate_and_parse(
+            _channel_raw(text="<@UBOT> please help", ts="T1", thread_ts="T0")
+        )
+
+        # The earlier attachment is queued for download to /inbox.
+        assert (
+            "spec.pdf",
+            "https://files.slack.com/spec.pdf",
+        ) in result.slack_file_urls
+        # The preamble renders the file_share message and flags attachments.
+        assert (
+            "[Bob]: here is the spec [attached: spec.pdf]"
+            in result.channel_context
+        )
+
+    def test_replay_file_share_without_comment(self, tmp_path: Path) -> None:
+        """A file_share with no comment renders the attachment cleanly."""
+        adapter, client, authorizer, _ = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.side_effect = lambda uid: {"U2": "Bob"}.get(
+            uid, uid
+        )
+        client.conversations_replies.return_value = {
+            "messages": [
+                {
+                    "ts": "T0",
+                    "user": "U2",
+                    "subtype": "file_share",
+                    "text": "",
+                    "files": [
+                        {
+                            "name": "spec.pdf",
+                            "url_private_download": (
+                                "https://files.slack.com/spec.pdf"
+                            ),
+                        }
+                    ],
+                },
+                {"ts": "T1", "user": "U1", "text": "<@UBOT> help"},
+            ],
+            "response_metadata": {},
+        }
+
+        result = adapter.authenticate_and_parse(
+            _channel_raw(text="<@UBOT> help", ts="T1", thread_ts="T0")
+        )
+
+        # No double space between the colon and the attachment marker.
+        assert "[Bob]: [attached: spec.pdf]" in result.channel_context
+        assert "[Bob]:  [attached" not in result.channel_context
+
+    def test_replay_history_attachments_precede_trigger(
+        self, tmp_path: Path
+    ) -> None:
+        """History files are ordered before the triggering message's files."""
+        adapter, client, authorizer, _ = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.side_effect = lambda uid: uid
+        client.conversations_replies.return_value = {
+            "messages": [
+                {
+                    "ts": "T0",
+                    "user": "U2",
+                    "text": "earlier",
+                    "files": [
+                        {
+                            "name": "old.txt",
+                            "url_private_download": (
+                                "https://files.slack.com/old.txt"
+                            ),
+                        }
+                    ],
+                },
+                {"ts": "T1", "user": "U1", "text": "<@UBOT> help"},
+            ],
+            "response_metadata": {},
+        }
+
+        result = adapter.authenticate_and_parse(
+            _channel_raw(
+                text="<@UBOT> help",
+                ts="T1",
+                thread_ts="T0",
+                files=[
+                    {
+                        "name": "new.txt",
+                        "url_private_download": (
+                            "https://files.slack.com/new.txt"
+                        ),
+                    }
+                ],
+            )
+        )
+
+        assert result.slack_file_urls == [
+            ("old.txt", "https://files.slack.com/old.txt"),
+            ("new.txt", "https://files.slack.com/new.txt"),
+        ]
 
     def test_replay_excludes_bots_and_subtypes(self, tmp_path: Path) -> None:
         adapter, client, authorizer, _ = _make_adapter(tmp_path)

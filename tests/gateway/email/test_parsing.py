@@ -499,6 +499,26 @@ def test_extract_attachments_multiple(tmp_path: Path) -> None:
     assert "file2.txt" in filenames
 
 
+def test_extract_attachments_duplicate_names(tmp_path: Path) -> None:
+    """Two attachments sharing a name are both saved, not clobbered."""
+    inbox_dir = tmp_path / "inbox"
+    inbox_dir.mkdir()
+
+    msg = MIMEMultipart()
+    for content in ["first", "second"]:
+        attachment = MIMEText(content)
+        attachment.add_header(
+            "Content-Disposition", "attachment", filename="report.txt"
+        )
+        msg.attach(attachment)
+
+    filenames = extract_attachments(msg, inbox_dir)
+
+    assert filenames == ["report.txt", "report-1.txt"]
+    assert (inbox_dir / "report.txt").read_text() == "first"
+    assert (inbox_dir / "report-1.txt").read_text() == "second"
+
+
 def test_extract_attachments_no_attachments(tmp_path: Path) -> None:
     """Test extracting attachments when none present."""
     inbox_dir = tmp_path / "inbox"

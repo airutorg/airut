@@ -229,6 +229,35 @@ class FakeWebClient:
         resp.data = {"ok": True, "ts": kwargs.get("ts", str(time.time()))}
         return resp
 
+    # -- reactions.add / reactions.remove (channel lifecycle) -----------
+
+    def reactions_add(self, **kwargs: JsonValue | bytes) -> MagicMock:
+        """Record a reactions.add call (channel acknowledgement)."""
+        self._server._record_sent(
+            SentSlackMessage(method="reactions_add", kwargs=kwargs)
+        )
+        resp = MagicMock()
+        resp.data = {"ok": True}
+        return resp
+
+    def reactions_remove(self, **kwargs: JsonValue | bytes) -> MagicMock:
+        """Record a reactions.remove call (terminal reaction swap)."""
+        self._server._record_sent(
+            SentSlackMessage(method="reactions_remove", kwargs=kwargs)
+        )
+        resp = MagicMock()
+        resp.data = {"ok": True}
+        return resp
+
+    # -- conversations.replies (mid-thread history replay) --------------
+
+    def conversations_replies(self, **kwargs: JsonValue | bytes) -> JsonDict:
+        """Return the canned thread history set on the server."""
+        return {
+            "messages": list(self._server.thread_history),
+            "response_metadata": {},
+        }
+
 
 # ------------------------------------------------------------------
 # Fake SocketModeHandler
@@ -300,6 +329,8 @@ class TestSlackServer:
         self._lock = threading.Lock()
         self._new_message_event = threading.Event()
         self._file_server = _FileServer()
+        self.thread_history: list[JsonDict] = []
+        """Canned ``conversations.replies`` messages for mid-thread replay."""
 
         self._web_client: FakeWebClient | None = None
         self._handler: FakeSocketModeHandler | None = None
@@ -419,6 +450,45 @@ class TestSlackServer:
 
         display_title = text[:60].split("\n")[0] if text else ""
 
+        raw: RawMessage[JsonDict] = RawMessage(
+            sender=user_id,
+            content=payload,
+            display_title=display_title,
+        )
+
+        if self._submit_callback is not None:
+            self._submit_callback(raw)
+        else:
+            raise RuntimeError(
+                "No submit callback registered. Call wait_for_ready() first."
+            )
+
+    def inject_channel_message(
+        self,
+        user_id: str,
+        text: str,
+        channel_id: str = "C_TEST",
+        ts: str = "1700000000.000100",
+        thread_ts: str | None = None,
+    ) -> None:
+        """Simulate a Slack channel ``app_mention`` event.
+
+        Unlike ``inject_user_message`` (which models the DM/assistant
+        surface), this sets ``type`` to ``app_mention`` so the adapter
+        treats it as a channel message: reaction acknowledgement,
+        mid-thread replay, and the sticky-thread lifecycle all apply.
+        """
+        payload: JsonDict = {
+            "type": "app_mention",
+            "user": user_id,
+            "text": text,
+            "channel": channel_id,
+            "ts": ts,
+        }
+        if thread_ts is not None:
+            payload["thread_ts"] = thread_ts
+
+        display_title = text[:60].split("\n")[0] if text else ""
         raw: RawMessage[JsonDict] = RawMessage(
             sender=user_id,
             content=payload,

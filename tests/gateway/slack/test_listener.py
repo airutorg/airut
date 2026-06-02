@@ -585,6 +585,55 @@ class TestChannelMessageHandler:
         listener._on_channel_message(self._event(subtype="message_changed"))
         submit.assert_not_called()
 
+    def test_file_share_subtype_submits_when_sticky(self) -> None:
+        """A file uploaded to an engaged thread must be processed.
+
+        Slack tags file uploads with ``subtype: "file_share"``; the blanket
+        subtype filter would otherwise drop attachments posted after the bot
+        joined the thread.
+        """
+        listener, submit, _ = self._listener(sticky_conv="conv1")
+        listener._on_channel_message(
+            self._event(
+                subtype="file_share",
+                text="",
+                files=[{"name": "data.csv", "url_private": "u"}],
+            )
+        )
+        submit.assert_called_once()
+
+    def test_file_share_subtype_submits_with_mention(self) -> None:
+        """A file uploaded with a bot mention engages a fresh thread."""
+        listener, submit, _ = self._listener(sticky_conv=None)
+        listener._on_channel_message(
+            self._event(
+                subtype="file_share",
+                text="<@UBOT> look at this",
+                files=[{"name": "data.csv", "url_private": "u"}],
+            )
+        )
+        submit.assert_called_once()
+
+    def test_file_share_without_engagement_dropped(self) -> None:
+        """A file upload to a non-engaged thread with no mention is ignored."""
+        listener, submit, _ = self._listener(sticky_conv=None)
+        listener._on_channel_message(
+            self._event(
+                subtype="file_share",
+                text="just sharing",
+                files=[{"name": "data.csv", "url_private": "u"}],
+            )
+        )
+        submit.assert_not_called()
+
+    def test_file_share_bot_id_skipped(self) -> None:
+        """The bot's own file uploads (bot_id set) never re-trigger."""
+        listener, submit, _ = self._listener(sticky_conv="conv1")
+        listener._on_channel_message(
+            self._event(subtype="file_share", bot_id="B1")
+        )
+        submit.assert_not_called()
+
     def test_bot_message_skipped(self) -> None:
         listener, submit, _ = self._listener(sticky_conv="conv1")
         listener._on_channel_message(self._event(bot_id="B1"))

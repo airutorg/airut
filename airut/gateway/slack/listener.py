@@ -47,6 +47,13 @@ logger = logging.getLogger(__name__)
 #: single channel mention.
 _DEDUP_CAPACITY = 256
 
+#: Message subtypes that still carry genuine user content and must not be
+#: filtered out with the system/edit subtypes.  Slack tags a file upload as
+#: ``file_share`` (even when it includes a text comment); dropping it would
+#: lose attachments posted into an engaged thread.  Shared with the adapter's
+#: thread-history replay so the two stay in sync on what counts as content.
+CONTENT_SUBTYPES: frozenset[str] = frozenset({"file_share"})
+
 
 class SlackChannelListener(ChannelListener):
     """Socket Mode listener implementing the ChannelListener protocol.
@@ -311,15 +318,20 @@ class SlackChannelListener(ChannelListener):
         """Handle a ``message`` event in a public or private channel.
 
         DMs (``channel_type == "im"``) are handled by the Assistant
-        middleware and skipped here.  Subtyped messages (edits, joins,
-        bot posts) and bot-authored messages are ignored.  A message is
-        submitted only when it lands in an already-engaged thread (the
-        sticky-thread rule) or it ``@``-mentions the bot.
+        middleware and skipped here.  System/edit subtypes (edits, joins,
+        bot posts) and bot-authored messages are ignored, but content
+        subtypes such as ``file_share`` are kept so attachments are not
+        dropped.  A message is submitted only when it lands in an
+        already-engaged thread (the sticky-thread rule) or it
+        ``@``-mentions the bot.
         """
         channel_type = cast(str, event.get("channel_type", ""))
         if channel_type not in ("channel", "group"):
             return
-        if event.get("subtype") or event.get("bot_id"):
+        subtype = cast(str, event.get("subtype", ""))
+        if subtype and subtype not in CONTENT_SUBTYPES:
+            return
+        if event.get("bot_id"):
             return
 
         channel = cast(str, event.get("channel", ""))
