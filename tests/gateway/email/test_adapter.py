@@ -5,6 +5,8 @@
 
 """Tests for EmailChannelAdapter."""
 
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from email.parser import BytesParser
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -75,6 +77,32 @@ def _make_raw_message(**kwargs: str) -> RawMessage:
     return RawMessage(sender=sender, content=email_msg, display_title=subject)
 
 
+def _make_email_with_attachments(
+    attachments: list[tuple[str, str]],
+    *,
+    sender: str = "user@example.com",
+    subject: str = "Hello",
+    message_id: str = "<msg1@example.com>",
+    body: str = "see attached",
+) -> RawMessage:
+    """Build a RawMessage wrapping a multipart email carrying attachments.
+
+    Each attachment is a ``(filename, text content)`` pair.
+    """
+    msg = MIMEMultipart()
+    msg["From"] = sender
+    msg["To"] = "bot@example.com"
+    msg["Subject"] = subject
+    msg["Message-ID"] = message_id
+    msg["Authentication-Results"] = "mx.example.com; dmarc=pass; spf=pass"
+    msg.attach(MIMEText(body))
+    for filename, content in attachments:
+        part = MIMEText(content)
+        part.add_header("Content-Disposition", "attachment", filename=filename)
+        msg.attach(part)
+    return RawMessage(sender=sender, content=msg, display_title=subject)
+
+
 def _make_adapter(
     config: EmailChannelConfig | None = None,
 ) -> tuple[
@@ -115,7 +143,7 @@ class TestAuthenticateAndParse:
         assert result.body == "Do something"
         assert result.conversation_id is None
         assert result.original_message_id == "<msg1@example.com>"
-        assert result._raw_message is msg.content
+        assert result._raw_messages == [msg.content]
 
     def test_sender_display_preserves_from_display_name(self) -> None:
         adapter, auth, authz, _ = _make_adapter()
@@ -289,7 +317,7 @@ class TestSaveAttachments:
             conversation_id=None,
             model_hint=None,
         )
-        parsed._raw_message = _make_email()
+        parsed._raw_messages = [_make_email()]
 
         with patch(
             "airut.gateway.email.adapter.extract_attachments",
@@ -298,7 +326,7 @@ class TestSaveAttachments:
             result = adapter.save_attachments(parsed, tmp_path)
 
         assert result == ["file.txt"]
-        mock_extract.assert_called_once_with(parsed._raw_message, tmp_path)
+        mock_extract.assert_called_once_with(parsed._raw_messages[0], tmp_path)
 
     def test_returns_empty_when_no_raw_message(self, tmp_path: Path) -> None:
         adapter, _, _, _ = _make_adapter()
@@ -311,6 +339,88 @@ class TestSaveAttachments:
 
         result = adapter.save_attachments(parsed, tmp_path)
         assert result == []
+
+    def test_coalesced_attachments_all_saved(self, tmp_path: Path) -> None:
+        """Attachments on coalesced follow-up emails are not dropped."""
+        adapter, auth, authz, _ = _make_adapter()
+        auth.authenticate.return_value = "user@example.com"
+        authz.is_authorized.return_value = True
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+
+        survivor = adapter.authenticate_and_parse(
+            _make_email_with_attachments(
+                [("first.txt", "AAA")], message_id="<a@example.com>"
+            )
+        )
+        follow_up = adapter.authenticate_and_parse(
+            _make_email_with_attachments(
+                [("second.txt", "BBB")], message_id="<b@example.com>"
+            )
+        )
+
+        # A second message arrives while the conversation is busy and
+        # coalesces into the pending survivor.
+        survivor.coalesce(follow_up)
+
+        saved = adapter.save_attachments(survivor, inbox)
+
+        assert sorted(saved) == ["first.txt", "second.txt"]
+        assert (inbox / "first.txt").read_text() == "AAA"
+        assert (inbox / "second.txt").read_text() == "BBB"
+
+    def test_coalesced_duplicate_names_uniquified(self, tmp_path: Path) -> None:
+        """Duplicate names across coalesced emails do not clobber."""
+        adapter, auth, authz, _ = _make_adapter()
+        auth.authenticate.return_value = "user@example.com"
+        authz.is_authorized.return_value = True
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+
+        survivor = adapter.authenticate_and_parse(
+            _make_email_with_attachments(
+                [("report.txt", "FIRST")], message_id="<a@example.com>"
+            )
+        )
+        follow_up = adapter.authenticate_and_parse(
+            _make_email_with_attachments(
+                [("report.txt", "SECOND")], message_id="<b@example.com>"
+            )
+        )
+        survivor.coalesce(follow_up)
+
+        saved = adapter.save_attachments(survivor, inbox)
+
+        assert saved == ["report.txt", "report-1.txt"]
+        assert (inbox / "report.txt").read_text() == "FIRST"
+        assert (inbox / "report-1.txt").read_text() == "SECOND"
+
+    def test_coalesce_with_non_email_message(self, tmp_path: Path) -> None:
+        """Coalescing a plain ParsedMessage leaves raw messages untouched."""
+        from airut.gateway.channel import ParsedMessage
+
+        adapter, auth, authz, _ = _make_adapter()
+        auth.authenticate.return_value = "user@example.com"
+        authz.is_authorized.return_value = True
+        inbox = tmp_path / "inbox"
+        inbox.mkdir()
+
+        survivor = adapter.authenticate_and_parse(
+            _make_email_with_attachments(
+                [("only.txt", "ONLY")], message_id="<a@example.com>"
+            )
+        )
+        other = ParsedMessage(
+            sender="x@example.com",
+            body="no raw message",
+            conversation_id=None,
+            model_hint=None,
+        )
+
+        survivor.coalesce(other)
+
+        saved = adapter.save_attachments(survivor, inbox)
+        assert saved == ["only.txt"]
 
 
 class TestSendAcknowledgment:
