@@ -6,6 +6,8 @@
 """Tests for EmailChannelListener."""
 
 from email.message import Message
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from email.parser import BytesParser
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -20,7 +22,10 @@ from airut.gateway.config import (
     ImapConfig,
     SmtpConfig,
 )
-from airut.gateway.email.channel_listener import EmailChannelListener
+from airut.gateway.email.channel_listener import (
+    EmailChannelListener,
+    _content_fingerprint,
+)
 from airut.gateway.email.listener import IMAPConnectionError, IMAPIdleError
 
 
@@ -51,14 +56,23 @@ def _make_config(
     )
 
 
-def _make_message(subject: str = "Test") -> Message:
-    """Build a simple email Message for testing."""
-    raw = (
-        f"From: user@example.com\r\n"
-        f"Subject: {subject}\r\n"
-        f"Message-ID: <msg1@example.com>\r\n"
-        f"\r\nHello"
-    )
+def _make_message(
+    subject: str = "Test",
+    message_id: str | None = "<msg1@example.com>",
+    body: str = "Hello",
+) -> Message:
+    """Build a simple email Message for testing.
+
+    Args:
+        subject: Subject header value.
+        message_id: Message-ID header value, or None to omit the header
+            entirely (simulating a non-conforming sender).
+        body: Plain-text body content.
+    """
+    headers = f"From: user@example.com\r\nSubject: {subject}\r\n"
+    if message_id is not None:
+        headers += f"Message-ID: {message_id}\r\n"
+    raw = f"{headers}\r\n{body}"
     return BytesParser().parsebytes(raw.encode())
 
 
@@ -446,6 +460,282 @@ class TestPollingLoop:
         cl._polling_loop()
 
         assert ChannelHealth.DEGRADED in statuses
+
+
+class TestDeduplication:
+    """Deduplication of duplicate deliveries by (Message-ID, content).
+
+    An upstream mail server can deliver the same email to the mailbox more
+    than once (each copy a distinct IMAP UID but sharing the Message-ID
+    header).  Without dedup this maps to the correct conversation but
+    creates a second task — see the duplicate-task report.
+    """
+
+    def test_duplicate_message_id_submitted_once(self) -> None:
+        """Same Message-ID across fetch cycles is submitted only once."""
+        cl, mock_el = _make_polling_listener()
+        submit = MagicMock(return_value=True)
+        cl._submit = submit
+        call_count = 0
+
+        def fake_fetch():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [("1", _make_message())]
+            if call_count == 2:
+                # Same email re-delivered under a fresh IMAP UID.
+                return [("2", _make_message())]
+            cl._running = False
+            return []
+
+        mock_el.fetch_unread.side_effect = fake_fetch
+
+        cl._polling_loop()
+
+        # Both copies are removed from the mailbox...
+        assert mock_el.delete_message.call_count == 2
+        # ...but only the first one becomes a task.
+        submit.assert_called_once()
+
+    def test_duplicate_message_id_same_batch_submitted_once(self) -> None:
+        """Duplicates within a single fetch batch are submitted once."""
+        cl, mock_el = _make_polling_listener()
+        submit = MagicMock(return_value=True)
+        cl._submit = submit
+        call_count = 0
+
+        def fake_fetch():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [("1", _make_message()), ("2", _make_message())]
+            cl._running = False
+            return []
+
+        mock_el.fetch_unread.side_effect = fake_fetch
+
+        cl._polling_loop()
+
+        assert mock_el.delete_message.call_count == 2
+        submit.assert_called_once()
+
+    def test_distinct_message_ids_both_submitted(self) -> None:
+        """Different Message-IDs are processed independently."""
+        cl, mock_el = _make_polling_listener()
+        submit = MagicMock(return_value=True)
+        cl._submit = submit
+        call_count = 0
+
+        def fake_fetch():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [
+                    ("1", _make_message(message_id="<a@example.com>")),
+                    ("2", _make_message(message_id="<b@example.com>")),
+                ]
+            cl._running = False
+            return []
+
+        mock_el.fetch_unread.side_effect = fake_fetch
+
+        cl._polling_loop()
+
+        assert submit.call_count == 2
+
+    def test_missing_message_id_always_submitted(self) -> None:
+        """Messages without a Message-ID are never deduplicated.
+
+        A missing Message-ID is not a stable identity, so such messages
+        must not suppress one another.
+        """
+        cl, mock_el = _make_polling_listener()
+        submit = MagicMock(return_value=True)
+        cl._submit = submit
+        call_count = 0
+
+        def fake_fetch():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [
+                    ("1", _make_message(message_id=None)),
+                    ("2", _make_message(message_id=None)),
+                ]
+            cl._running = False
+            return []
+
+        mock_el.fetch_unread.side_effect = fake_fetch
+
+        cl._polling_loop()
+
+        assert submit.call_count == 2
+
+    def test_same_message_id_different_body_both_submitted(self) -> None:
+        """A reused Message-ID with different content is not dropped.
+
+        The dedup key pairs the Message-ID with a content fingerprint, so
+        two genuinely distinct messages that share a Message-ID (e.g. a
+        sender reusing one) are both processed instead of silently
+        suppressed.
+        """
+        cl, mock_el = _make_polling_listener()
+        submit = MagicMock(return_value=True)
+        cl._submit = submit
+        call_count = 0
+
+        def fake_fetch():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [
+                    ("1", _make_message(message_id="<x@e>", body="first")),
+                    ("2", _make_message(message_id="<x@e>", body="second")),
+                ]
+            cl._running = False
+            return []
+
+        mock_el.fetch_unread.side_effect = fake_fetch
+
+        cl._polling_loop()
+
+        assert submit.call_count == 2
+
+    def test_same_message_id_same_content_deduplicated(self) -> None:
+        """A re-delivery with identical Message-ID and content is dropped."""
+        cl, mock_el = _make_polling_listener()
+        submit = MagicMock(return_value=True)
+        cl._submit = submit
+        call_count = 0
+
+        def fake_fetch():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [("1", _make_message(message_id="<x@e>", body="same"))]
+            if call_count == 2:
+                return [("2", _make_message(message_id="<x@e>", body="same"))]
+            cl._running = False
+            return []
+
+        mock_el.fetch_unread.side_effect = fake_fetch
+
+        cl._polling_loop()
+
+        submit.assert_called_once()
+
+    def test_idle_loop_deduplicates(self) -> None:
+        """The IDLE loop also deduplicates by (Message-ID, content)."""
+        cl, mock_el = _make_idle_listener()
+        submit = MagicMock(return_value=True)
+        cl._submit = submit
+        call_count = 0
+
+        def fake_fetch():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [("1", _make_message())]
+            if call_count == 2:
+                return [("2", _make_message())]
+            cl._running = False
+            return []
+
+        mock_el.fetch_unread.side_effect = fake_fetch
+
+        cl._idle_loop()
+
+        submit.assert_called_once()
+
+
+class TestContentFingerprint:
+    def test_identical_messages_hash_equally(self) -> None:
+        """Identical originator fields and body hash to the same value."""
+        a = _make_message(subject="S", body="body")
+        b = _make_message(subject="S", body="body")
+        assert _content_fingerprint(a) == _content_fingerprint(b)
+
+    def test_different_body_hashes_differently(self) -> None:
+        """A changed body changes the fingerprint."""
+        a = _make_message(body="one")
+        b = _make_message(body="two")
+        assert _content_fingerprint(a) != _content_fingerprint(b)
+
+    def test_different_subject_hashes_differently(self) -> None:
+        """A changed subject changes the fingerprint."""
+        a = _make_message(subject="A")
+        b = _make_message(subject="B")
+        assert _content_fingerprint(a) != _content_fingerprint(b)
+
+    def test_trace_headers_do_not_affect_hash(self) -> None:
+        """Per-delivery trace headers must not change the fingerprint.
+
+        Two copies of one re-delivered message differ only in headers the
+        receiving infrastructure adds (Received, Return-Path, ...); they
+        must still hash equally.
+        """
+        base = _make_message(body="hi")
+        delivered_again = _make_message(body="hi")
+        delivered_again["Received"] = "from relay by mx; today"
+        delivered_again["Return-Path"] = "<user@example.com>"
+        assert _content_fingerprint(base) == _content_fingerprint(
+            delivered_again
+        )
+
+    def test_multipart_message(self) -> None:
+        """Multipart messages hash over their leaf parts."""
+        msg = MIMEMultipart("mixed")
+        msg["From"] = "user@example.com"
+        msg["Subject"] = "Multipart"
+        msg.attach(MIMEText("text body", "plain"))
+        attachment = MIMEText("attachment payload", "plain")
+        attachment.add_header(
+            "Content-Disposition", "attachment", filename="a.txt"
+        )
+        msg.attach(attachment)
+
+        # Stable: same structure hashes equally; a changed leaf differs.
+        same = MIMEMultipart("mixed")
+        same["From"] = "user@example.com"
+        same["Subject"] = "Multipart"
+        same.attach(MIMEText("text body", "plain"))
+        same_attachment = MIMEText("attachment payload", "plain")
+        same_attachment.add_header(
+            "Content-Disposition", "attachment", filename="a.txt"
+        )
+        same.attach(same_attachment)
+
+        assert _content_fingerprint(msg) == _content_fingerprint(same)
+
+        changed = MIMEMultipart("mixed")
+        changed["From"] = "user@example.com"
+        changed["Subject"] = "Multipart"
+        changed.attach(MIMEText("different body", "plain"))
+        assert _content_fingerprint(msg) != _content_fingerprint(changed)
+
+    def test_attachment_filename_changes_hash(self) -> None:
+        """Same attachment bytes under a different filename hash differently.
+
+        Guards against dropping a distinct message that reuses a
+        Message-ID and differs only in an attachment's name.
+        """
+
+        def _with_attachment(filename: str) -> MIMEMultipart:
+            msg = MIMEMultipart("mixed")
+            msg["From"] = "user@example.com"
+            msg["Subject"] = "Report"
+            msg.attach(MIMEText("see attached", "plain"))
+            attachment = MIMEText("payload", "plain")
+            attachment.add_header(
+                "Content-Disposition", "attachment", filename=filename
+            )
+            msg.attach(attachment)
+            return msg
+
+        assert _content_fingerprint(
+            _with_attachment("report.txt")
+        ) != _content_fingerprint(_with_attachment("invoice.txt"))
 
 
 class TestIdleLoop:

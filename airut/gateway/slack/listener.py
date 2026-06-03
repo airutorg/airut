@@ -13,8 +13,6 @@ interface.
 from __future__ import annotations
 
 import logging
-import threading
-from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any, cast
 
@@ -35,6 +33,7 @@ from airut.gateway.channel import (
     ChannelStatus,
     RawMessage,
 )
+from airut.gateway.dedup import SeenKeyCache
 from airut.gateway.slack.authorizer import SlackAuthorizer
 from airut.gateway.slack.config import SlackChannelConfig
 from airut.gateway.slack.thread_store import SlackThreadStore
@@ -96,9 +95,9 @@ class SlackChannelListener(ChannelListener):
         self._status = ChannelStatus(health=ChannelHealth.STARTING)
         self._submit: Callable[[RawMessage[JsonDict]], bool] | None = None
         self._started = False
-        # Ordered set of recently-seen (channel, ts) keys for dedup.
-        self._seen_events: OrderedDict[tuple[str, str], None] = OrderedDict()
-        self._dedup_lock = threading.Lock()
+        # Recently-seen (channel, ts) keys for deduplicating the
+        # app_mention / message double-delivery of a single mention.
+        self._seen_events: SeenKeyCache = SeenKeyCache(_DEDUP_CAPACITY)
 
     def start(self, submit: Callable[[RawMessage[Any]], bool]) -> None:
         """Connect Socket Mode and start receiving events.
@@ -401,14 +400,6 @@ class SlackChannelListener(ChannelListener):
 
         Returns True the first time a key is seen and False thereafter,
         so the duplicate ``app_mention`` / ``message`` delivery of one
-        mention is processed exactly once.  Retains the most recent
-        :data:`_DEDUP_CAPACITY` keys.
+        mention is processed exactly once.
         """
-        key = (channel, ts)
-        with self._dedup_lock:
-            if key in self._seen_events:
-                return False
-            self._seen_events[key] = None
-            if len(self._seen_events) > _DEDUP_CAPACITY:
-                self._seen_events.popitem(last=False)
-            return True
+        return self._seen_events.claim((channel, ts))

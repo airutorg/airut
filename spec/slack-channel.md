@@ -855,7 +855,8 @@ It wires two sets of handlers:
   not flood the worker pool. The listener also drops events for channels outside
   `allowed_channels` before any submit, and deduplicates the
   `app_mention`/`message.*` double-delivery on `(channel_id, ts)` via a bounded
-  LRU (256 entries, oldest-first eviction, no time-based expiry).
+  FIFO seen-set (the shared `SeenKeyCache`: 256 entries, oldest-first eviction,
+  no time-based expiry).
 
 The bot's own user ID is resolved once at startup (via `auth.test`) and shared
 with the adapter so mention tokens can be recognised without re-resolving.

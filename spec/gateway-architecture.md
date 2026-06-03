@@ -98,7 +98,13 @@ and feeds messages through the same processing pipeline.
   through the adapter.
 - **EmailChannelListener** — Implements `ChannelListener` for email. Manages the
   IMAP polling/IDLE loop in an internal thread with automatic reconnection and
-  health tracking. Wraps the low-level `EmailListener`.
+  health tracking. Wraps the low-level `EmailListener`. Deduplicates on
+  `(Message-ID, content fingerprint)` so an email the mail server delivers to
+  the mailbox more than once is processed exactly once, while a distinct message
+  that merely reuses a `Message-ID` is still processed (shares the
+  `SeenKeyCache` helper with Slack's `(channel, ts)` dedup). The fingerprint
+  hashes only origination fields (`From`/`Subject`/`Date` and body), not
+  per-delivery trace headers.
 - **EmailListener** — Low-level IMAP operations (connect, fetch, IDLE, close)
 - **EmailResponder** — SMTP reply construction with threading support
 - **SenderAuthenticator** — DMARC verification on trusted headers
