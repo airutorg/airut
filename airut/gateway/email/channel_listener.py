@@ -11,6 +11,7 @@ loops, reconnection logic, and health tracking.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 import time
@@ -24,6 +25,7 @@ from airut.gateway.channel import (
     RawMessage,
 )
 from airut.gateway.config import EmailChannelConfig
+from airut.gateway.dedup import SeenKeyCache
 from airut.gateway.email.listener import (
     EmailListener,
     IMAPConnectionError,
@@ -32,6 +34,41 @@ from airut.gateway.email.listener import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _content_fingerprint(message: Message) -> str:
+    """Return a stable hash of an email's originator fields and body.
+
+    Combined with the ``Message-ID`` as the dedup key so that a message
+    re-delivered to the mailbox is suppressed, while two genuinely
+    distinct messages that happen to share a ``Message-ID`` (e.g. a
+    sender that reuses one) still hash differently and are processed.
+
+    Only fields set at origination are hashed — the ``From``/``Subject``/
+    ``Date`` headers and, for every leaf part, its content type, filename,
+    and decoded payload (so body and attachments, including an
+    attachment's name, all contribute).  Per-delivery trace headers
+    (``Received``, ``Return-Path``, ...) are excluded, so two copies of
+    one re-delivered message produce the same fingerprint.
+    """
+    digest = hashlib.sha256()
+
+    def _feed(value: str | bytes) -> None:
+        if isinstance(value, str):
+            value = value.encode("utf-8", "replace")
+        digest.update(value)
+        digest.update(b"\x00")
+
+    for header in ("From", "Subject", "Date"):
+        _feed(str(message.get(header, "")))
+    for part in message.walk():
+        if part.is_multipart():
+            continue
+        _feed(part.get_content_type())
+        _feed(part.get_filename() or "")
+        payload = part.get_payload(decode=True)
+        _feed(payload if isinstance(payload, bytes) else b"")
+    return digest.hexdigest()
 
 
 class _ReconnectFailedError(Exception):
@@ -75,6 +112,9 @@ class EmailChannelListener(ChannelListener):
         self._running = False
         self._stop_event = threading.Event()
         self._status = ChannelStatus(health=ChannelHealth.STARTING)
+        # Recently-seen (Message-ID, content-hash) keys, for deduplicating
+        # an email the mail server delivers to the mailbox more than once.
+        self._seen_messages: SeenKeyCache = SeenKeyCache()
 
     def start(self, submit: Callable[[RawMessage[Message]], bool]) -> None:
         """Connect to IMAP and start the listener thread.
@@ -225,12 +265,75 @@ class EmailChannelListener(ChannelListener):
 
         return reconnect_attempts
 
+    def _claim_message(self, message: Message) -> bool:
+        """Claim a message for processing, deduplicating re-deliveries.
+
+        The dedup key is the ``Message-ID`` paired with a content
+        fingerprint (see :func:`_content_fingerprint`).  The first time a
+        key is seen this returns True; an identical re-delivery returns
+        False so it never becomes a second task.  Requiring the content to
+        match too means a distinct message that merely reuses a
+        ``Message-ID`` is still processed rather than silently dropped.
+
+        Messages without a ``Message-ID`` header carry no stable identity
+        and are always processed.
+
+        Args:
+            message: The parsed email message.
+
+        Returns:
+            Whether the message should be submitted for processing.
+        """
+        message_id = str(message.get("Message-ID", "")).strip()
+        if not message_id:
+            return True
+        key = (message_id, _content_fingerprint(message))
+        if self._seen_messages.claim(key):
+            return True
+        self._log.info("Skipping duplicate message %s", message_id)
+        return False
+
+    def _deliver_messages(self, messages: list[tuple[bytes, Message]]) -> None:
+        """Delete and submit each fetched message, skipping duplicates.
+
+        Every message is removed from the mailbox; a message that is an
+        exact re-delivery (same ``Message-ID`` and content, see
+        :meth:`_claim_message`) is then dropped instead of becoming a
+        second task.  Per-message failures are logged and skipped, but
+        connection errors propagate so the caller can reconnect.
+
+        Args:
+            messages: ``(imap_uid, parsed_message)`` tuples from
+                ``fetch_unread()``.
+
+        Raises:
+            IMAPConnectionError: If deletion fails on a connection error.
+        """
+        assert self._submit is not None
+        for msg_id, message in messages:
+            try:
+                self._email_listener.delete_message(msg_id)
+                if not self._claim_message(message):
+                    continue
+                raw = RawMessage(
+                    sender=message.get("From", ""),
+                    content=message,
+                    display_title=message.get("Subject", ""),
+                )
+                self._submit(raw)
+            except IMAPConnectionError:
+                raise  # Bubble up for reconnection
+            except Exception as e:
+                self._log.exception(
+                    "Failed to submit message: %s",
+                    e,
+                )
+
     def _polling_loop(self) -> None:
         """Polling-based message loop."""
         reconnect_attempts = 0
         max_reconnect_attempts = 5
         el = self._email_listener
-        assert self._submit is not None
 
         while self._running:
             try:
@@ -244,22 +347,7 @@ class EmailChannelListener(ChannelListener):
 
                 reconnect_attempts = 0
 
-                for msg_id, message in messages:
-                    try:
-                        el.delete_message(msg_id)
-                        raw = RawMessage(
-                            sender=message.get("From", ""),
-                            content=message,
-                            display_title=message.get("Subject", ""),
-                        )
-                        self._submit(raw)
-                    except IMAPConnectionError:
-                        raise  # Bubble up for reconnection
-                    except Exception as e:
-                        self._log.exception(
-                            "Failed to submit message: %s",
-                            e,
-                        )
+                self._deliver_messages(messages)
 
                 self._stop_event.wait(self._config.imap.poll_interval)
 
@@ -280,7 +368,6 @@ class EmailChannelListener(ChannelListener):
         last_reconnect = time.time()
         reconnect_interval = self._config.imap.idle_reconnect_interval
         el = self._email_listener
-        assert self._submit is not None
 
         while self._running:
             try:
@@ -307,22 +394,7 @@ class EmailChannelListener(ChannelListener):
 
                 reconnect_attempts = 0
 
-                for msg_id, message in messages:
-                    try:
-                        el.delete_message(msg_id)
-                        raw = RawMessage(
-                            sender=message.get("From", ""),
-                            content=message,
-                            display_title=message.get("Subject", ""),
-                        )
-                        self._submit(raw)
-                    except IMAPConnectionError:
-                        raise  # Bubble up for reconnection
-                    except Exception as e:
-                        self._log.exception(
-                            "Failed to submit message: %s",
-                            e,
-                        )
+                self._deliver_messages(messages)
 
                 if messages:
                     continue

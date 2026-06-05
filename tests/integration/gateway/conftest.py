@@ -17,6 +17,7 @@ from email.message import Message
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import make_msgid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock, patch
@@ -191,9 +192,10 @@ def create_email() -> Callable[..., MIMEMultipart | MIMEText]:
         msg["From"] = sender
         msg["To"] = recipient
         msg["Subject"] = subject
-        msg["Message-ID"] = (
-            message_id or f"<test-{int(time.time() * 1000)}@test.local>"
-        )
+        # Default to a guaranteed-unique Message-ID: real emails always
+        # carry distinct IDs, and the listener now deduplicates on them,
+        # so two emails built in the same millisecond must not collide.
+        msg["Message-ID"] = message_id or make_msgid(domain="test.local")
         if authentication_results:
             msg["Authentication-Results"] = authentication_results
 
