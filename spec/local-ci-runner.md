@@ -102,6 +102,17 @@ The license check resolves the transitive closure of runtime dependencies (via
 ensures the license audit covers exactly what ships in a production install,
 without being affected by dev tooling licenses.
 
+The three `uv-secure` vulnerability scans query PyPI's JSON API for every
+dependency, so a PyPI outage (e.g. a `502 Bad Gateway`) or network blip fails
+the step through no fault of the lockfile. These steps therefore carry
+`retries=2`: a failure whose output matches a transient-error marker (5xx
+status, 429 rate-limit, connection reset/refused/timeout, DNS resolution
+failure) is re-run up to two more times with a short backoff (capped to the
+remaining deadline). Real findings — vulnerabilities or requirements drift —
+never match those markers and fail fast on the first attempt. Retries stop early
+if the overall `--timeout` deadline has passed. No other step retries; for
+everything else a failure is fatal immediately.
+
 #### `integration` group
 
 | Step              | Command                                                   |

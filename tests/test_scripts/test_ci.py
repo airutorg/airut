@@ -18,6 +18,7 @@ from scripts.ci import (
     RESET,
     Step,
     _format_overall_timeout_message,
+    _is_transient_failure,
     colorize,
     main,
     run_ci,
@@ -290,6 +291,206 @@ class TestRunStep:
             )
             call_kwargs = mock_run.call_args[1]
             assert call_kwargs["timeout"] == 300.0
+
+
+class TestIsTransientFailure:
+    """Tests for _is_transient_failure function."""
+
+    @pytest.mark.parametrize(
+        "output",
+        [
+            "Error: service-identity raised exception: Server error "
+            "'502 Bad Gateway' for url 'https://pypi.org/pypi/...'",
+            "httpx.ConnectError: connection refused",
+            "503 Service Unavailable",
+            "Connection reset by peer",
+            "Temporary failure in name resolution",
+        ],
+    )
+    def test_detects_transient_markers(self, output: str) -> None:
+        """Recognizes transient external failures."""
+        assert _is_transient_failure(output) is True
+
+    def test_case_insensitive(self) -> None:
+        """Matching ignores case."""
+        assert _is_transient_failure("502 BAD GATEWAY") is True
+
+    def test_real_failure_not_transient(self) -> None:
+        """A real check failure is not treated as transient."""
+        output = (
+            "Vulnerability found in package foo 1.2.3 (CVE-2026-0001). "
+            "1 vulnerability detected."
+        )
+        assert _is_transient_failure(output) is False
+
+
+class TestRunStepRetries:
+    """Tests for run_step transient-failure retry behavior."""
+
+    def test_retries_transient_then_succeeds(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Retries a transient failure and returns the eventual success."""
+        step = Step(
+            name="Proxy vulnerability scan",
+            command="uv run uv-secure ...",
+            workflow="security",
+            retries=2,
+        )
+        with (
+            patch("scripts.ci._run_step_once") as mock_once,
+            patch("scripts.ci.time.sleep") as mock_sleep,
+            patch.object(sys.stdout, "isatty", return_value=False),
+        ):
+            mock_once.side_effect = [
+                (False, "Server error '502 Bad Gateway'"),
+                (True, "all good"),
+            ]
+            success, output = run_step(
+                step, fix_mode=False, verbose=False, step_timeout=300
+            )
+        assert success is True
+        assert output == "all good"
+        assert mock_once.call_count == 2
+        assert mock_sleep.call_count == 1
+        captured = capsys.readouterr()
+        assert "retrying (1/2)" in captured.out
+
+    def test_exhausts_retries_on_persistent_transient(self) -> None:
+        """Returns the final failure after exhausting retries."""
+        step = Step(
+            name="Vulnerability scan",
+            command="uv run uv-secure uv.lock",
+            workflow="security",
+            retries=2,
+        )
+        with (
+            patch("scripts.ci._run_step_once") as mock_once,
+            patch("scripts.ci.time.sleep") as mock_sleep,
+            patch.object(sys.stdout, "isatty", return_value=False),
+        ):
+            mock_once.return_value = (False, "502 Bad Gateway")
+            success, output = run_step(
+                step, fix_mode=False, verbose=False, step_timeout=300
+            )
+        assert success is False
+        assert "502 Bad Gateway" in output
+        assert mock_once.call_count == 3  # 1 initial + 2 retries
+        assert mock_sleep.call_count == 2
+
+    def test_does_not_retry_real_failure(self) -> None:
+        """A non-transient failure fails fast despite retries > 0."""
+        step = Step(
+            name="Vulnerability scan",
+            command="uv run uv-secure uv.lock",
+            workflow="security",
+            retries=2,
+        )
+        with (
+            patch("scripts.ci._run_step_once") as mock_once,
+            patch("scripts.ci.time.sleep") as mock_sleep,
+        ):
+            mock_once.return_value = (False, "1 vulnerability detected")
+            success, _ = run_step(
+                step, fix_mode=False, verbose=False, step_timeout=300
+            )
+        assert success is False
+        assert mock_once.call_count == 1
+        assert mock_sleep.call_count == 0
+
+    def test_no_retry_when_retries_zero(self) -> None:
+        """A step with retries=0 runs once even on transient failure."""
+        step = Step(name="Lint", command="ruff check .", workflow="code")
+        with (
+            patch("scripts.ci._run_step_once") as mock_once,
+            patch("scripts.ci.time.sleep") as mock_sleep,
+        ):
+            mock_once.return_value = (False, "502 Bad Gateway")
+            success, _ = run_step(
+                step, fix_mode=False, verbose=False, step_timeout=300
+            )
+        assert success is False
+        assert mock_once.call_count == 1
+        assert mock_sleep.call_count == 0
+
+    def test_stops_retrying_past_deadline(self) -> None:
+        """Stops retrying when the overall deadline has already passed."""
+        step = Step(
+            name="Vulnerability scan",
+            command="uv run uv-secure uv.lock",
+            workflow="security",
+            retries=2,
+        )
+        with (
+            patch("scripts.ci._run_step_once") as mock_once,
+            patch("scripts.ci.time") as mock_time,
+        ):
+            mock_once.return_value = (False, "502 Bad Gateway")
+            # Deadline already passed → no retry after first transient failure.
+            mock_time.monotonic.return_value = 200.0
+            success, _ = run_step(
+                step,
+                fix_mode=False,
+                verbose=False,
+                step_timeout=300,
+                deadline=100.0,
+            )
+        assert success is False
+        assert mock_once.call_count == 1
+        mock_time.sleep.assert_not_called()
+
+    def test_caps_backoff_to_remaining_deadline(self) -> None:
+        """Backoff never sleeps past the overall deadline."""
+        step = Step(
+            name="Vulnerability scan",
+            command="uv run uv-secure uv.lock",
+            workflow="security",
+            retries=2,
+        )
+        with (
+            patch("scripts.ci._run_step_once") as mock_once,
+            patch("scripts.ci.time") as mock_time,
+        ):
+            mock_once.side_effect = [
+                (False, "502 Bad Gateway"),
+                (True, "ok"),
+            ]
+            # 2.0s left before the deadline → backoff capped below the 5s base.
+            mock_time.monotonic.return_value = 98.0
+            success, _ = run_step(
+                step,
+                fix_mode=False,
+                verbose=False,
+                step_timeout=300,
+                deadline=100.0,
+            )
+        assert success is True
+        mock_time.sleep.assert_called_once_with(2.0)
+
+    def test_real_failure_on_retry_stops(self) -> None:
+        """A real failure surfacing on a retry stops further retries."""
+        step = Step(
+            name="Vulnerability scan",
+            command="uv run uv-secure uv.lock",
+            workflow="security",
+            retries=2,
+        )
+        with (
+            patch("scripts.ci._run_step_once") as mock_once,
+            patch("scripts.ci.time.sleep") as mock_sleep,
+            patch.object(sys.stdout, "isatty", return_value=False),
+        ):
+            mock_once.side_effect = [
+                (False, "502 Bad Gateway"),
+                (False, "1 vulnerability detected"),
+            ]
+            success, output = run_step(
+                step, fix_mode=False, verbose=False, step_timeout=300
+            )
+        assert success is False
+        assert "vulnerability detected" in output
+        assert mock_once.call_count == 2
+        assert mock_sleep.call_count == 1
 
 
 class TestFormatOverallTimeoutMessage:

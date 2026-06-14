@@ -55,6 +55,10 @@ class Step:
     command: str
     workflow: str
     fix_command: str | None = None
+    # Extra attempts when the step fails with a *transient external* error
+    # (e.g. a PyPI outage during a vulnerability scan). Real failures — output
+    # that does not match a transient marker — never retry. 0 = single attempt.
+    retries: int = 0
 
 
 # CI steps — the single source of truth for all checks.
@@ -121,6 +125,7 @@ STEPS: list[Step] = [
         name="Vulnerability scan",
         command="uv run uv-secure uv.lock --config pyproject.toml",
         workflow="security",
+        retries=2,
     ),
     Step(
         name="Proxy vulnerability scan",
@@ -129,6 +134,7 @@ STEPS: list[Step] = [
             " --config airut/_bundled/proxy/pyproject.toml"
         ),
         workflow="security",
+        retries=2,
     ),
     Step(
         name="Screenshots vulnerability scan",
@@ -137,6 +143,7 @@ STEPS: list[Step] = [
             " --config screenshots/pyproject.toml"
         ),
         workflow="security",
+        retries=2,
     ),
     Step(
         name="Proxy requirements.txt drift check",
@@ -169,6 +176,42 @@ STEPS: list[Step] = [
 # Number of output lines to show on failure
 FAILURE_OUTPUT_LINES = 50
 
+# Backoff between retry attempts for transient failures (seconds).
+RETRY_BACKOFF_SECONDS = 5
+
+# Substrings (lowercased) that mark a transient external failure rather than a
+# real check failure. The vulnerability scans query PyPI's JSON API for every
+# dependency, so a PyPI outage (5xx) or network blip fails the whole step
+# through no fault of the lockfile. Steps with retries > 0 are re-run when their
+# output matches one of these; everything else fails fast. Real findings
+# (vulnerabilities, drift) never match these markers, so they are not retried.
+TRANSIENT_FAILURE_MARKERS: tuple[str, ...] = (
+    "502 bad gateway",
+    "503 service unavailable",
+    "504 gateway timeout",
+    "429 too many requests",
+    "server error",
+    "connection reset",
+    "connection refused",
+    "connecterror",
+    "connecttimeout",
+    "readtimeout",
+    "remote end closed connection",
+    "temporary failure in name resolution",
+    "name or service not known",
+)
+
+
+def _is_transient_failure(output: str) -> bool:
+    """Return True if step output indicates a transient external failure.
+
+    Vulnerability scans call PyPI live, so a PyPI 5xx or network error fails
+    the step despite the lockfile being fine. Such failures are safe to retry;
+    real findings (vulnerabilities, drift) are not and must fail fast.
+    """
+    lowered = output.lower()
+    return any(marker in lowered for marker in TRANSIENT_FAILURE_MARKERS)
+
 
 def use_color() -> bool:
     """Check if stdout supports color output."""
@@ -189,7 +232,61 @@ def run_step(
     step_timeout: int,
     deadline: float | None = None,
 ) -> tuple[bool, str]:
-    """Run a single CI step.
+    """Run a CI step, retrying only transient external failures.
+
+    A step configured with ``retries > 0`` (the vulnerability scans, which
+    query PyPI live) is re-run when it fails with a transient error such as a
+    PyPI outage or network blip. Every other failure — and every other step —
+    fails fast on the first attempt. Retries stop early if the overall deadline
+    has passed.
+
+    Args:
+        step: The step to run
+        fix_mode: If True and step has fix_command, run that instead
+        verbose: If True, always return full output
+        step_timeout: Timeout in seconds for the step (0 = no timeout)
+        deadline: Monotonic clock deadline for overall CI run (None = no
+            deadline), passed through to each attempt.
+
+    Returns:
+        Tuple of (success, output_to_display) from the final attempt.
+    """
+    attempts = step.retries + 1
+    success = False
+    output = ""
+    for attempt in range(1, attempts + 1):
+        success, output = _run_step_once(
+            step, fix_mode, verbose, step_timeout, deadline
+        )
+        if success or attempt == attempts:
+            break
+        if not _is_transient_failure(output):
+            break
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+        print(
+            colorize(
+                f"  {step.name}: transient failure, "
+                f"retrying ({attempt}/{step.retries})...",
+                YELLOW,
+            )
+        )
+        # Never sleep past the overall deadline.
+        backoff = RETRY_BACKOFF_SECONDS
+        if deadline is not None:
+            backoff = min(backoff, max(0.0, deadline - time.monotonic()))
+        time.sleep(backoff)
+    return success, output
+
+
+def _run_step_once(
+    step: Step,
+    fix_mode: bool,
+    verbose: bool,
+    step_timeout: int,
+    deadline: float | None = None,
+) -> tuple[bool, str]:
+    """Run a single CI step once (no retries).
 
     Args:
         step: The step to run
