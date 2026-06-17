@@ -182,6 +182,7 @@ await task.execute(prompt, session_id=..., model=..., effort=...,
   |    +- --cap-drop=ALL --cap-add=CHOWN,DAC_OVERRIDE,FOWNER,SETGID,SETUID
   |    +- --security-opt=no-new-privileges:true
   |    +- Apply resource limits (--memory, --cpus, --pids-limit)
+  |    +- Force airut-owned Claude env vars over the caller's env
   |    +- Prompt on stdin, read stdout/stderr concurrently as async streams
   |    +- Parse each stdout line as StreamEvent, invoke on_event callback
   |    +- Invoke on_stderr_line callback for each stderr line
@@ -193,6 +194,21 @@ await task.execute(prompt, session_id=..., model=..., effort=...,
   |
   +- Build ExecutionResult from accumulator (no disk re-read)
 ```
+
+**Forced Claude environment**: Before running the container, `AgentTask` merges
+a fixed set of airut-owned environment variables on top of the caller-provided
+env, so they always win over repo or caller values. Currently this forces
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`. airut runs Claude headlessly
+(`claude -p`), which is single-shot: the process prints its result and exits
+when the model ends its turn. Background tasks are incompatible with that
+lifecycle — a foreground Bash command that blocks past Claude's ~15s
+"assistant-mode blocking budget" is auto-moved to the background and its result
+is delivered as an async notification, but `-p` exits (killing the task) before
+that notification can be processed. Disabling background tasks makes Bash
+commands and subagents run synchronously, so the turn blocks until they finish.
+Subagents still work — they just run inline rather than being backgrounded.
+Guaranteeing correct `-p` behavior is the sandbox's responsibility, not the
+repo's, so it is set here rather than in the repo Dockerfile.
 
 **Stateful accumulator**: An `ExecutionAccumulator` processes events and raw
 lines during streaming. Outcome classification flags are set from raw lines
