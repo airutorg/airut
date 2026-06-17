@@ -248,6 +248,73 @@ class TestAgentTaskExecute:
         model_index = cmd.index("--model")
         assert cmd[model_index + 1] == "sonnet"
 
+    async def test_execute_forces_disable_background_tasks(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """execute() forces CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1.
+
+        Background tasks are incompatible with headless ``claude -p``:
+        the process exits at end_turn, killing any backgrounded command
+        before its async completion notification can be processed.
+        """
+        task = _make_task(tmp_path)
+
+        calls: list[dict] = []
+
+        async def capture_rc(**kwargs):
+            calls.append(kwargs)
+            return await create_mock_run_container(
+                stdout='{"type": "result", "result": "test"}\n'
+            )(**kwargs)
+
+        monkeypatch.setattr("airut.sandbox.task.run_container", capture_rc)
+
+        await task.execute("Test prompt")
+
+        env = calls[0]["env"]
+        assert env.variables["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+
+    async def test_execute_disable_background_overrides_caller_env(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Forced var wins over a caller value, alongside other env vars.
+
+        airut owns the value, not the repo, so a caller-provided
+        ``CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`` is overridden while
+        unrelated env vars are preserved.
+        """
+        task = _make_task(
+            tmp_path,
+            env=ContainerEnv(
+                variables={
+                    "GITHUB_TOKEN": "secret",
+                    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "0",
+                }
+            ),
+        )
+
+        calls: list[dict] = []
+
+        async def capture_rc(**kwargs):
+            calls.append(kwargs)
+            return await create_mock_run_container(
+                stdout='{"type": "result", "result": "test"}\n'
+            )(**kwargs)
+
+        monkeypatch.setattr("airut.sandbox.task.run_container", capture_rc)
+
+        await task.execute("Test prompt")
+
+        env = calls[0]["env"]
+        # Forced value wins over the caller's "0".
+        assert env.variables["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+        # Other caller env vars are preserved.
+        assert env.variables["GITHUB_TOKEN"] == "secret"
+
     async def test_execute_effort_parameter(
         self,
         tmp_path: Path,

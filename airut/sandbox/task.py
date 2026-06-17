@@ -48,6 +48,27 @@ from airut.sandbox.types import (
 logger = logging.getLogger(__name__)
 
 
+# Environment variables airut forces into the container for every Claude
+# execution, overriding any caller- or repo-provided values.
+#
+# ``CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1``: airut runs Claude headlessly
+# (``claude -p``), which is single-shot -- the process prints its result and
+# exits when the model ends its turn. Background tasks are incompatible with
+# that lifecycle: a foreground Bash command that blocks longer than Claude's
+# ~15s "assistant-mode blocking budget" is auto-moved to the background and its
+# result is delivered as an async notification, but ``-p`` exits (killing the
+# task) before that notification can be processed -- so the agent reports
+# "standing by" and never sees, e.g., the CI verdict. Disabling background
+# tasks makes Bash commands and subagents run synchronously: the turn blocks
+# until they finish. Subagents still work; they just run inline rather than
+# being backgrounded.
+# Ensuring ``claude -p`` behaves correctly is airut's responsibility, not the
+# repo's, so this is set by the sandbox rather than relying on the Dockerfile.
+_FORCED_CLAUDE_ENV: dict[str, str] = {
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+}
+
+
 class EventCallback(Protocol):
     """Protocol for streaming event callbacks."""
 
@@ -392,6 +413,12 @@ class AgentTask:
                 task_proxy.network_name, task_proxy.proxy_ip
             )
 
+        # Force airut-owned Claude env vars on top of the caller's env so the
+        # repo cannot disable them (see _FORCED_CLAUDE_ENV).
+        claude_env = ContainerEnv(
+            variables={**self._env.variables, **_FORCED_CLAUDE_ENV}
+        )
+
         accumulator = ExecutionAccumulator()
 
         def on_stdout_cb(line: str) -> None:
@@ -426,7 +453,7 @@ class AgentTask:
                 container_command=self._container_command,
                 image_tag=self._image_tag,
                 mounts=all_mounts,
-                env=self._env,
+                env=claude_env,
                 resource_limits=self._resource_limits,
                 network_args=network_args,
                 command=claude_cmd,
