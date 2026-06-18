@@ -98,7 +98,8 @@ class TestInstallScriptCompat:
     # -- fixtures --------------------------------------------------------
 
     @pytest.fixture(scope="class")
-    def bootstrap_script(self) -> str:
+    @classmethod
+    def bootstrap_script(cls) -> str:
         """Fetch the bootstrap script from the CDN."""
         url = f"{DOWNLOADS_BASE}/bootstrap.sh"
         with httpx.Client(timeout=_HTTP_TIMEOUT) as c:
@@ -107,7 +108,8 @@ class TestInstallScriptCompat:
             return resp.text
 
     @pytest.fixture(scope="class")
-    def latest_version(self) -> str:
+    @classmethod
+    def latest_version(cls) -> str:
         """Resolve the ``latest`` channel to a concrete version."""
         url = f"{DOWNLOADS_BASE}/latest"
         with httpx.Client(timeout=_HTTP_TIMEOUT) as c:
@@ -120,7 +122,8 @@ class TestInstallScriptCompat:
             return version
 
     @pytest.fixture(scope="class")
-    def manifest_json(self, latest_version: str) -> str:
+    @classmethod
+    def manifest_json(cls, latest_version: str) -> str:
         """Fetch the manifest for the latest version."""
         url = f"{DOWNLOADS_BASE}/{latest_version}/manifest.json"
         with httpx.Client(timeout=_HTTP_TIMEOUT) as c:
