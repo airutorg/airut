@@ -113,7 +113,7 @@ class TestSlackAuthorization:
 
             task = wait_for_task(
                 service.tracker,
-                lambda t: _is_unauthorized_task(t, "U_BOT_USER"),
+                lambda t: _is_unauthorized_task(t, "Bot <U_BOT_USER>"),
                 timeout=10.0,
             )
             assert task is not None, "Bot user should be rejected by tracker"
@@ -152,7 +152,7 @@ class TestSlackAuthorization:
 
             task = wait_for_task(
                 service.tracker,
-                lambda t: _is_unauthorized_task(t, "U_DEACTIVATED"),
+                lambda t: _is_unauthorized_task(t, "Gone <U_DEACTIVATED>"),
                 timeout=10.0,
             )
             assert task is not None, (

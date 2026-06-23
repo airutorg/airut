@@ -478,17 +478,21 @@ entirely.
 
 #### Display name in `ParsedMessage`
 
-The `sender` field is set to the raw Slack user ID (the dashboard resolves it
-through the authorizer's cache). The human-readable display name is carried
-separately in `sender_display` (`DisplayName <U123>`) and embedded in the
-rendered prompt via the per-message attribution header (see
+The `sender` field is set to the raw Slack user ID — the canonical trust anchor,
+recorded as the dashboard's `authenticated_sender`. The human-readable display
+name is carried separately in `sender_display` (`DisplayName <U123>`), resolved
+from the authorizer's cache, and is used in two places: embedded in the rendered
+prompt via the per-message attribution header (see
 [gateway-architecture.md](gateway-architecture.md)) so Claude sees the human
-name without calling a tool. The bracketed ID is a bare `<U12345678>`, **not**
-`<@U12345678>`, so the resolved ID is never itself live-mention syntax. The
-display-name half is user-controlled and is trusted from an authorized sender
-(consistent with the message body); echo-safety comes from the outbound `mrkdwn`
-renderer, which escapes `<`/`>`/`&` so any mention markup Claude reproduces is
-inert.
+name without calling a tool, and shown as the dashboard's `sender` field so task
+cards are scannable by name rather than opaque ID. The same readable form is
+produced for rejected senders (auth failures), so the dashboard names them too —
+consistent with email, which surfaces the (unverified) `From` header. The
+bracketed ID is a bare `<U12345678>`, **not** `<@U12345678>`, so the resolved ID
+is never itself live-mention syntax. The display-name half is user-controlled
+and is trusted from an authorized sender (consistent with the message body);
+echo-safety comes from the outbound `mrkdwn` renderer, which escapes `<`/`>`/`&`
+so any mention markup Claude reproduces is inert.
 
 ### File Handling
 
