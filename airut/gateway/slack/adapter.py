@@ -215,6 +215,20 @@ class SlackChannelAdapter(ChannelAdapter):
             "your response text and the user will reply via Slack."
         )
 
+    def _format_sender_display(self, user_id: str) -> str:
+        """Render a user ID as a readable ``Name <U123>`` for attribution.
+
+        Reads the cached display name (no Slack API call) and falls back
+        to the bare ID when no name is cached.  The ID is rendered as a
+        bare ``<U123>`` rather than ``<@U123>`` so the resolved ID is never
+        itself live-mention syntax.  The name half is user-controlled and
+        not sanitized here (consistent with the message body); the outbound
+        mrkdwn renderer escapes ``<``/``>`` so anything Claude echoes is
+        inert regardless.
+        """
+        name = self._authorizer.get_display_name(user_id)
+        return f"{name} <{user_id}>" if name != user_id else user_id
+
     def authenticate_and_parse(
         self, raw_message: RawMessage[JsonDict]
     ) -> SlackParsedMessage:
@@ -259,7 +273,14 @@ class SlackChannelAdapter(ChannelAdapter):
                 user_id,
                 reason,
             )
-            raise AuthenticationError(sender=user_id, reason=reason)
+            # authorize() warmed the user cache (except when the user-info
+            # fetch itself failed, where this falls back to the bare ID),
+            # so the dashboard shows a readable name for rejected senders
+            # too — consistent with the authorized path and with email,
+            # which surfaces the (unverified) From header.
+            raise AuthenticationError(
+                sender=self._format_sender_display(user_id), reason=reason
+            )
 
         # Instant acknowledgement for channels: a :eyes: reaction on the
         # triggering message.  Added here (post-authorization, per arriving
@@ -303,16 +324,10 @@ class SlackChannelAdapter(ChannelAdapter):
         # Build display title
         display_title = body[:_MAX_TITLE_LENGTH].split("\n")[0] if body else ""
 
-        # Resolve the user ID to a readable name for prompt attribution.
-        # The authorize() call above warmed the user cache, so this is a
-        # cache hit (no extra Slack API request).  The ID is rendered as a
-        # bare ``<U123>`` rather than ``<@U123>`` so the resolved ID is never
-        # itself live-mention syntax.  The name half is user-controlled and
-        # not sanitized here (consistent with the message body); the outbound
-        # mrkdwn renderer escapes ``<``/``>`` so anything Claude echoes is
-        # inert regardless.
-        name = self._authorizer.get_display_name(user_id)
-        sender_display = f"{name} <{user_id}>" if name != user_id else user_id
+        # Resolve the user ID to a readable name for prompt attribution and
+        # dashboard display.  The authorize() call above warmed the user
+        # cache, so this is a cache hit (no extra Slack API request).
+        sender_display = self._format_sender_display(user_id)
 
         # A bare channel mention can strip to an empty body; mark it so the
         # gateway's empty-body guard lets the engagement proceed (the thread

@@ -496,6 +496,51 @@ class TestProcessMessageWorker:
             authenticated_sender="user@example.com",
         )
 
+    def test_display_sender_used_for_dashboard_sender(
+        self, email_config, tmp_path: Path
+    ) -> None:
+        """Dashboard sender uses the human-readable display_sender.
+
+        Slack resolves the canonical user ID to a readable "Name <U123>"
+        form via sender_display. The dashboard should show that readable
+        identity, while authenticated_sender keeps the canonical trust
+        anchor (the bare user ID).
+        """
+        from airut.dashboard.tracker import CompletionReason
+        from airut.gateway.channel import ParsedMessage
+
+        svc, handler = make_service(email_config, tmp_path)
+        parsed = ParsedMessage(
+            sender="U07ABC123",
+            sender_display="Alice Anderson <U07ABC123>",
+            body="Do something",
+            conversation_id=None,
+            model_hint=None,
+            display_title="Fix the login bug",
+            channel_context="",
+        )
+        handler.adapters["email"].authenticate_and_parse.return_value = parsed
+        handler.conversation_manager.exists.return_value = False
+        svc.tracker.has_active_task.return_value = False
+
+        msg = make_message(subject="Fix the login bug")
+        with patch(
+            "airut.gateway.service.gateway.process_message",
+            return_value=(CompletionReason.SUCCESS, "conv1"),
+        ):
+            svc._process_message_worker(
+                msg, "new-slack", handler, handler.adapters["email"]
+            )
+
+        # Dashboard sender shows the readable name; authenticated_sender
+        # keeps the canonical user ID.
+        svc.tracker.update_task_display_title.assert_called_once_with(
+            "new-slack",
+            "Fix the login bug",
+            sender="Alice Anderson <U07ABC123>",
+            authenticated_sender="U07ABC123",
+        )
+
     def test_auth_exception_completes_task(
         self, email_config, tmp_path: Path
     ) -> None:

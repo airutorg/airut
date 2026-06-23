@@ -289,10 +289,13 @@ class TaskState:
         display_title: Short display title for the dashboard
             (e.g. email subject line, first line of Slack message).
         repo_id: Repository identifier.
-        sender: Raw sender identity (pre-auth) for display.
-        authenticated_sender: Verified sender identity, set only after
-            authentication succeeds.  Empty if auth failed or not yet
-            attempted.
+        sender: Human-readable sender identity for display (e.g. Slack
+            "Name <U123>" or the email From header).  Falls back to the
+            canonical identity when no display form exists.
+        authenticated_sender: Verified canonical sender identity (the
+            trust anchor: bare Slack user ID, DMARC-verified email), set
+            only after authentication succeeds.  Empty if auth failed or
+            not yet attempted.
         status: Current task lifecycle status.
         completion_reason: Why the task completed, or None if still active.
         completion_detail: Human-readable detail about the completion
