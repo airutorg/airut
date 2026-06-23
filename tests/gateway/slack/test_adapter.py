@@ -1378,6 +1378,56 @@ class TestChannelEngagement:
         assert result.conversation_id == "conv1"
         assert result.slack_thread_ts == "T1"
 
+    def test_followup_by_other_user_acknowledged_with_eyes(
+        self, tmp_path: Path
+    ) -> None:
+        """A different user's non-mention follow-up still gets ``:eyes:``.
+
+        Regression guard for the reported scenario: user A starts a thread
+        by mentioning the bot; user B later replies in the same engaged
+        thread *without* mentioning the bot.  B's ``message`` event must be
+        acknowledged with an ``:eyes:`` reaction on its own ts (not A's),
+        and that ts must be recorded for the terminal swap — exactly as a
+        mention is.  The acknowledgement is sender-independent: it is gated
+        only by ``is_channel``, the same flag that later drives the
+        completion checkmark, so a checkmark can never appear without a
+        preceding ``:eyes:``.
+        """
+        adapter, client, authorizer, store = _make_adapter(tmp_path)
+        authorizer.authorize.return_value = (True, "")
+        authorizer.get_display_name.return_value = "Bob"
+        # User A's conversation is already mapped to the thread root T1.
+        store.register("C1", "T1", "conv1")
+
+        parsed = adapter.authenticate_and_parse(
+            _channel_raw(
+                user="UB",
+                event_type="message",
+                channel_type="channel",
+                text="continuing the conversation",
+                ts="T2",
+                thread_ts="T1",
+            )
+        )
+
+        # B's follow-up is acknowledged on B's own message (T2), not T1.
+        client.reactions_add.assert_called_once_with(
+            channel="C1", timestamp="T2", name="eyes"
+        )
+        assert parsed.acknowledged_message_ts == ["T2"]
+        assert parsed.conversation_id == "conv1"
+
+        # On completion the ack swaps to a checkmark on the same message,
+        # so the in-flight :eyes: and the terminal mark stay coupled.
+        client.reactions_add.reset_mock()
+        adapter.report_phase(parsed, TaskPhase.COMPLETED)
+        client.reactions_remove.assert_called_once_with(
+            channel="C1", timestamp="T2", name="eyes"
+        )
+        client.reactions_add.assert_called_once_with(
+            channel="C1", timestamp="T2", name="white_check_mark"
+        )
+
     def test_dm_is_not_channel(self, tmp_path: Path) -> None:
         adapter, client, authorizer, _ = _make_adapter(tmp_path)
         authorizer.authorize.return_value = (True, "")
