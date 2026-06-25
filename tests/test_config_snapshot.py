@@ -6,6 +6,7 @@
 """Tests for ConfigSnapshot user-set value tracking."""
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from airut.config.snapshot import ConfigSnapshot
 
@@ -151,7 +152,10 @@ class TestConfigSnapshotRaw:
         assert snap.raw is None
 
     def test_raw_preserved(self) -> None:
-        raw_doc = {"host": "example.com", "vars": {"key": "val"}}
+        raw_doc: dict[str, Any] = {
+            "host": "example.com",
+            "vars": {"key": "val"},
+        }
         config = SampleConfig(host="example.com")
         snap = ConfigSnapshot(config, frozenset({"host"}), raw=raw_doc)
         assert snap.raw is raw_doc

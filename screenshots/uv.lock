@@ -21,7 +21,7 @@ dependencies = [
 requires-dist = [
     { name = "inotify-simple", specifier = ">=2.0" },
     { name = "jinja2", specifier = ">=3.1" },
-    { name = "mistune", specifier = ">=3.2,<4" },
+    { name = "mistune", specifier = ">=3.2,<3.3" },
     { name = "msal", specifier = ">=1.31" },
     { name = "packaging", specifier = ">=21.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },

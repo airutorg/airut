@@ -12,7 +12,13 @@ requires-python = ">=3.13,<3.15"
 dependencies = [
     "inotify-simple>=2.0",
     "jinja2>=3.1",
-    "mistune>=3.2,<4",
+    # Held at <3.3: mistune 3.3.x rewrote the GFM table parser and dropped
+    # delimiter-row validation, so plain pipe-separated prose (e.g. "A | B |
+    # C\nD | E | F") is incorrectly parsed as a table. This regresses email
+    # rendering and breaks the documented "pipes in text are not tables"
+    # behavior (see airut/markdown.py and tests/test_markdown.py). Remove the
+    # upper bound once upstream restores delimiter validation.
+    "mistune>=3.2,<3.3",
     "msal>=1.31",
     "packaging>=21.0",
     "pyyaml>=6.0.3",
