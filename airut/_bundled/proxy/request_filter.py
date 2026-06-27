@@ -53,8 +53,10 @@ class FilterRequest:
 
     Attributes:
         host: Request hostname (``flow.request.pretty_host``).
-        path: Request path including any query string
-            (``flow.request.path``).
+        path: Request path including any query string, **percent-decoded**
+            (``unquote(flow.request.path)``) so filters that gate on the
+            literal path see the same canonical value the allowlist
+            matched and the upstream server resolves.
         matched_entry: The ``url_prefixes`` entry that allowlisted this
             request, or None when a top-level ``domains`` entry matched.
     """

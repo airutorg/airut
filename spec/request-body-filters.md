@@ -52,11 +52,11 @@ Defined in `airut/_bundled/proxy/request_filter.py`.
 The request context a filter sees, decoupled from mitmproxy's flow object so
 filters are unit-testable without the proxy:
 
-| Field           | Meaning                                                                                           |
-| --------------- | ------------------------------------------------------------------------------------------------- |
-| `host`          | Request hostname (`flow.request.pretty_host`).                                                    |
-| `path`          | Request path including any query string (`flow.request.path`).                                    |
-| `matched_entry` | The `url_prefixes` entry that allowlisted the request, or `None` for a top-level `domains` match. |
+| Field           | Meaning                                                                                                                                                               |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `host`          | Request hostname (`flow.request.pretty_host`).                                                                                                                        |
+| `path`          | Request path including any query string, percent-decoded (`unquote(flow.request.path)`) so it matches the canonical path the allowlist matched and upstream resolves. |
+| `matched_entry` | The `url_prefixes` entry that allowlisted the request, or `None` for a top-level `domains` match.                                                                     |
 
 ### `RequestBodyFilter`
 
@@ -106,9 +106,17 @@ already-allowed surface uses config-attachment.
 ## Pipeline Execution
 
 `ProxyFilter._run_body_filters(flow, host, path, matched_entry)` runs after URL
-allowlist matching and before AWS re-signing / credential replacement. It:
+allowlist matching and before AWS re-signing / credential replacement. The
+`path` it receives is **percent-decoded** (`unquote(flow.request.path)`),
+mirroring the decode in `_is_allowed`. A request-gated filter that compares
+against the literal path (e.g. the tool-domain trim's
+`is_anthropic_messages_request`) must see the same canonical path the allowlist
+matched and the upstream server resolves; otherwise an encoded path such as
+`/v1/messag%65s` would pass the allowlist (which decodes) yet evade the filter
+(which would see the still-encoded path), letting an untrimmed `allowed_domains`
+reach Anthropic. It:
 
-1. Builds a `FilterRequest` from the request.
+1. Builds a `FilterRequest` from the request (with the decoded `path`).
 2. Iterates `self._body_filters` **in registration order**. The registry is an
    explicit ordered list built in `ProxyFilter.__init__`; ordering is part of
    the contract (the GraphQL operation filter is registered before the
