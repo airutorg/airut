@@ -1478,7 +1478,16 @@ class ProxyFilter:
         # allowlist, Anthropic tool-domain trim, …). Each filter gates
         # itself on the request and may pass, rewrite the body, or block
         # with a 403. See spec/request-body-filters.md.
-        if self._run_body_filters(flow, host, path, matched_entry):
+        #
+        # Pass the percent-decoded path, mirroring the unquote() in
+        # _is_allowed().  Filters that gate on the literal path (e.g. the
+        # Anthropic tool-domain trim's is_anthropic_messages_request)
+        # must see the same canonical path the allowlist matched and the
+        # upstream server resolves.  Otherwise an encoded path such as
+        # /v1/messag%65s passes the allowlist (which decodes) yet evades
+        # the filter (which would compare against the raw, still-encoded
+        # path), letting an untrimmed allowed_domains reach Anthropic.
+        if self._run_body_filters(flow, host, unquote(path), matched_entry):
             return
 
         # If already re-signed in requestheaders(), skip token replacement

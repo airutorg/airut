@@ -107,10 +107,13 @@ outside the configured allowlist.*
 The filter runs for any request whose **incoming** target is `api.anthropic.com`
 with path `/v1/messages` or a sub-path of `/v1/messages/`. The gate is on the
 request, not the matched allowlist entry, so a broader configuration (e.g.
-allowing `/v1/*`) cannot silently disable this security control. It walks the
-parsed body for every reachable `tools` array — so the Batches API shape
-(`requests[i].params.tools[]`) is covered as well as the top-level Messages
-shape — and applies the per-entry rules below to covered tools only.
+allowing `/v1/*`) cannot silently disable this security control. The gate
+matches the **percent-decoded** path (the pipeline passes
+`unquote(flow.request.path)`, mirroring the allowlist), so an encoded path such
+as `/v1/messag%65s` — which the allowlist still admits — cannot evade the trim.
+It walks the parsed body for every reachable `tools` array — so the Batches API
+shape (`requests[i].params.tools[]`) is covered as well as the top-level
+Messages shape — and applies the per-entry rules below to covered tools only.
 
 | Condition (covered tool unless noted)                                                | Result                          |
 | ------------------------------------------------------------------------------------ | ------------------------------- |

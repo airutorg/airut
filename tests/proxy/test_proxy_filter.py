@@ -1229,6 +1229,76 @@ class TestProxyFilterRequest:
         assert flow.metadata["dropped_count"] == 1
 
 
+class TestRequestBodyFilterPathDecoding:
+    """Body filters must see the percent-decoded path.
+
+    Regression: ``is_anthropic_messages_request`` gates the tool-domain
+    trim on the literal path while ``_is_allowed`` decodes it.  An
+    encoded path like ``/v1/messag%65s`` therefore passed the allowlist
+    yet evaded the trim, letting an untrimmed ``allowed_domains`` reach
+    Anthropic's server-side tools (a network-sandbox exfiltration path).
+    """
+
+    _ANTHROPIC_PREFIXES: list[UrlPrefixEntry] = [
+        {
+            "host": "api.anthropic.com",
+            "path": "/v1/messages*",
+            "methods": ["POST"],
+        }
+    ]
+
+    @staticmethod
+    def _web_fetch_body() -> bytes:
+        # ``evil.test`` is not in the allowlist, so the trim must drop it.
+        return json.dumps(
+            {
+                "model": "claude-haiku-4-5",
+                "max_tokens": 16,
+                "tools": [
+                    {
+                        "type": "web_fetch_20250910",
+                        "name": "web_fetch",
+                        "allowed_domains": ["evil.test"],
+                    }
+                ],
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        ).encode()
+
+    def _run(self, path: str) -> MockHTTPFlow:
+        pf = ProxyFilter()
+        pf.url_prefixes = self._ANTHROPIC_PREFIXES
+        flow = _flow(
+            method="POST",
+            host="api.anthropic.com",
+            path=path,
+            content=self._web_fetch_body(),
+        )
+        pf.request(flow)
+        return flow
+
+    def test_plain_path_trims_tool_domains(self) -> None:
+        """The plain ``/v1/messages`` path trims ``allowed_domains``."""
+        flow = self._run("/v1/messages")
+        body = json.loads(flow.request.content)
+        assert body["tools"][0]["allowed_domains"] == []
+        assert any(
+            "tool-domains" in tag
+            for tag in flow.metadata.get("filter_tags", [])
+        )
+
+    def test_encoded_path_still_trims_tool_domains(self) -> None:
+        """Percent-encoded path must not evade the tool-domain trim."""
+        flow = self._run("/v1/messag%65s")
+        body = json.loads(flow.request.content)
+        # Before the fix the filter never ran, leaving ``evil.test`` intact.
+        assert body["tools"][0]["allowed_domains"] == []
+        assert any(
+            "tool-domains" in tag
+            for tag in flow.metadata.get("filter_tags", [])
+        )
+
+
 # ---------------------------------------------------------------------------
 # ProxyFilter.response — logging
 # ---------------------------------------------------------------------------
