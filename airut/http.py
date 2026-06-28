@@ -26,7 +26,7 @@ _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 
 def urlopen_with_retry(
-    url: str,
+    url: str | urllib.request.Request,
     *,
     timeout: int = 30,
     max_retries: int = 3,
@@ -43,7 +43,8 @@ def urlopen_with_retry(
     capped at *backoff_max*.
 
     Args:
-        url: URL to fetch.
+        url: URL string or :class:`urllib.request.Request` to fetch.
+            A ``Request`` lets callers set custom headers.
         timeout: Per-request timeout in seconds.
         max_retries: Maximum number of retry attempts after the
             initial request.  Total attempts = 1 + max_retries.
@@ -59,6 +60,9 @@ def urlopen_with_retry(
         urllib.error.HTTPError: If all attempts fail with a retryable
             HTTP status, or immediately for non-retryable HTTP errors.
     """
+    display_url = (
+        url.full_url if isinstance(url, urllib.request.Request) else url
+    )
     last_error: urllib.error.URLError | None = None
 
     for attempt in range(1 + max_retries):
@@ -71,7 +75,7 @@ def urlopen_with_retry(
             logger.debug(
                 "HTTP %d from %s (attempt %d/%d)",
                 e.code,
-                url,
+                display_url,
                 attempt + 1,
                 1 + max_retries,
             )
@@ -79,7 +83,7 @@ def urlopen_with_retry(
             last_error = e
             logger.debug(
                 "Fetch failed for %s: %s (attempt %d/%d)",
-                url,
+                display_url,
                 e,
                 attempt + 1,
                 1 + max_retries,

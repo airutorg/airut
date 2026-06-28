@@ -6,10 +6,20 @@
 """Tests for scripts/check_vendor_security.py."""
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+from urllib.error import URLError
 
 import pytest
 import scripts.check_vendor_security as check_vendor_security
+
+
+def _mock_cm_response(data: bytes) -> MagicMock:
+    """Create a context-manager response mock returning ``data`` on read."""
+    resp = MagicMock()
+    resp.read.return_value = data
+    resp.__enter__ = MagicMock(return_value=resp)
+    resp.__exit__ = MagicMock(return_value=False)
+    return resp
 
 
 class TestParseVersionFile:
@@ -345,9 +355,27 @@ class TestGithubGet:
 
     def test_returns_parsed_json(self) -> None:
         """Fetches and parses JSON from GitHub API."""
-        with patch("scripts.check_vendor_security.urlopen") as mock_urlopen:
-            mock_response = mock_urlopen.return_value.__enter__.return_value
+        with patch(
+            "scripts.check_vendor_security.urlopen_with_retry"
+        ) as mock_open:
+            mock_response = mock_open.return_value.__enter__.return_value
             mock_response.read.return_value = b'{"key": "value"}'
+            result = check_vendor_security._github_get(
+                "https://api.github.com/test"
+            )
+
+        assert result == {"key": "value"}
+
+    def test_retries_transient_failure(self) -> None:
+        """A transient network failure is retried, not propagated."""
+        resp = _mock_cm_response(b'{"key": "value"}')
+        with (
+            patch(
+                "airut.http.urllib.request.urlopen",
+                side_effect=[URLError("timeout"), resp],
+            ),
+            patch("airut.http.time.sleep"),
+        ):
             result = check_vendor_security._github_get(
                 "https://api.github.com/test"
             )
@@ -360,20 +388,36 @@ class TestGetLatestVersion:
 
     def test_returns_version_from_npm_registry(self) -> None:
         """Returns version from npm registry."""
-        with patch("scripts.check_vendor_security.urlopen") as mock_urlopen:
-            mock_response = mock_urlopen.return_value.__enter__.return_value
+        with patch(
+            "scripts.check_vendor_security.urlopen_with_retry"
+        ) as mock_open:
+            mock_response = mock_open.return_value.__enter__.return_value
             mock_response.read.return_value = b'{"version": "2.0.9"}'
             result = check_vendor_security.get_latest_version("htmx.org")
 
         assert result == "2.0.9"
 
-    def test_returns_none_on_url_error(self) -> None:
-        """Returns None when the request fails."""
-        from urllib.error import URLError
+    def test_retries_transient_failure(self) -> None:
+        """A transient network failure is retried, not returned as None."""
+        resp = _mock_cm_response(b'{"version": "2.0.9"}')
+        with (
+            patch(
+                "airut.http.urllib.request.urlopen",
+                side_effect=[URLError("timeout"), resp],
+            ),
+            patch("airut.http.time.sleep"),
+        ):
+            result = check_vendor_security.get_latest_version("htmx.org")
 
-        with patch(
-            "scripts.check_vendor_security.urlopen",
-            side_effect=URLError("timeout"),
+        assert result == "2.0.9"
+
+    def test_returns_none_on_url_error(self) -> None:
+        """Returns None when the request fails after retries are exhausted."""
+        with (
+            patch(
+                "scripts.check_vendor_security.urlopen_with_retry",
+                side_effect=URLError("timeout"),
+            ),
         ):
             result = check_vendor_security.get_latest_version("htmx.org")
 
@@ -381,8 +425,10 @@ class TestGetLatestVersion:
 
     def test_returns_none_on_non_dict_response(self) -> None:
         """Returns None when the response is not a dict."""
-        with patch("scripts.check_vendor_security.urlopen") as mock_urlopen:
-            mock_response = mock_urlopen.return_value.__enter__.return_value
+        with patch(
+            "scripts.check_vendor_security.urlopen_with_retry"
+        ) as mock_open:
+            mock_response = mock_open.return_value.__enter__.return_value
             mock_response.read.return_value = b"[]"
             result = check_vendor_security.get_latest_version("htmx.org")
 
@@ -390,8 +436,10 @@ class TestGetLatestVersion:
 
     def test_returns_none_on_non_string_version(self) -> None:
         """Returns None when version field is not a string."""
-        with patch("scripts.check_vendor_security.urlopen") as mock_urlopen:
-            mock_response = mock_urlopen.return_value.__enter__.return_value
+        with patch(
+            "scripts.check_vendor_security.urlopen_with_retry"
+        ) as mock_open:
+            mock_response = mock_open.return_value.__enter__.return_value
             mock_response.read.return_value = b'{"version": 123}'
             result = check_vendor_security.get_latest_version("htmx.org")
 
@@ -399,8 +447,10 @@ class TestGetLatestVersion:
 
     def test_returns_none_on_missing_version(self) -> None:
         """Returns None when version field is missing."""
-        with patch("scripts.check_vendor_security.urlopen") as mock_urlopen:
-            mock_response = mock_urlopen.return_value.__enter__.return_value
+        with patch(
+            "scripts.check_vendor_security.urlopen_with_retry"
+        ) as mock_open:
+            mock_response = mock_open.return_value.__enter__.return_value
             mock_response.read.return_value = b'{"name": "htmx.org"}'
             result = check_vendor_security.get_latest_version("htmx.org")
 
