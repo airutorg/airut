@@ -95,7 +95,7 @@ time. Locally, all groups run sequentially by default (or selectively via
 | Proxy vulnerability scan           | `uv run uv-secure airut/_bundled/proxy/uv.lock ...` |
 | Screenshots vulnerability scan     | `uv run uv-secure screenshots/uv.lock ...`          |
 | Proxy requirements.txt drift check | `uv export ... \| diff - ...`                       |
-| Vendor security check              | `uv run python scripts/check_vendor_security.py`    |
+| Vendor security check              | `uv run python -m scripts.check_vendor_security`    |
 
 The license check resolves the transitive closure of runtime dependencies (via
 `uv tree --no-dev`) and passes only those packages to `pip-licenses`. This

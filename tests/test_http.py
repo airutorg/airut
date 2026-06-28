@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import urllib.request
 from email.message import Message
 from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError, URLError
@@ -62,6 +63,17 @@ class TestSuccess:
         with patch(_URLOPEN, return_value=resp) as mock:
             urlopen_with_retry("https://example.com", timeout=60)
         mock.assert_called_once_with("https://example.com", timeout=60)
+
+    def test_accepts_request_object(self) -> None:
+        """A Request object (for custom headers) is forwarded to urlopen."""
+        request = urllib.request.Request(
+            "https://example.com", headers={"Accept": "application/json"}
+        )
+        resp = _mock_response()
+        with patch(_URLOPEN, return_value=resp) as mock:
+            result = urlopen_with_retry(request)
+        assert result is resp
+        mock.assert_called_once_with(request, timeout=30)
 
 
 # -------------------------------------------------------------------

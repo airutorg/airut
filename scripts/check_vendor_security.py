@@ -10,20 +10,25 @@ Reads the VERSION file from the vendored htmx directory, queries the GitHub
 Advisory Database for known vulnerabilities, and checks for newer versions.
 
 Fails CI if the vendored version has a known security advisory, or if any
-check (advisory lookup, latest version lookup) cannot be completed.
+check (advisory lookup, latest version lookup) cannot be completed.  Transient
+network failures are retried with exponential backoff before the check fails.
 
-Usage:
-    uv run python scripts/check_vendor_security.py
+Run as a module so the bundled ``airut`` package resolves instead of the
+``scripts/airut.py`` entry-point module:
+
+    uv run python -m scripts.check_vendor_security
 """
 
 import json
 import sys
 from typing import cast
 from urllib.error import URLError
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 from scripts.update_vendor import PACKAGES as _PACKAGES
 from scripts.update_vendor import VERSION_FILE, parse_version_file
+
+from airut.http import urlopen_with_retry
 
 
 # GitHub API for global security advisories (no auth required).
@@ -42,6 +47,9 @@ _GITHUB_HEADERS = {
 def _github_get(url: str) -> object:
     """Make a GET request to the GitHub API.
 
+    Transient failures (connection errors, timeouts, 429/5xx) are
+    retried with exponential backoff before the error propagates.
+
     Args:
         url: The URL to fetch.
 
@@ -49,10 +57,10 @@ def _github_get(url: str) -> object:
         Parsed JSON response.
 
     Raises:
-        URLError: If the request fails.
+        URLError: If the request fails after retries are exhausted.
     """
     request = Request(url, headers=_GITHUB_HEADERS)
-    with urlopen(request, timeout=30) as response:
+    with urlopen_with_retry(request, timeout=30) as response:
         return json.loads(response.read())
 
 
@@ -194,6 +202,9 @@ def _check_condition(ver: tuple[int, ...], condition: str) -> bool:
 def get_latest_version(npm_package: str) -> str | None:
     """Get the latest version of an npm package from the npm registry.
 
+    Transient failures (connection errors, timeouts, 429/5xx) are
+    retried with exponential backoff before giving up.
+
     Args:
         npm_package: The npm package name (e.g., "htmx.org").
 
@@ -203,7 +214,7 @@ def get_latest_version(npm_package: str) -> str | None:
     url = f"https://registry.npmjs.org/{npm_package}/latest"
     request = Request(url, headers={"Accept": "application/json"})
     try:
-        with urlopen(request, timeout=30) as response:
+        with urlopen_with_retry(request, timeout=30) as response:
             data = json.loads(response.read())
     except URLError:
         return None
