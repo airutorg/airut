@@ -1633,6 +1633,121 @@ class TestMultiRepoEnumeration:
 
 
 # -------------------------------------------------------------------
+# URL-addressed node lookup (pentest Finding 3)
+# -------------------------------------------------------------------
+
+
+class TestResourceUrlLookup:
+    """Tests that ``Query.resource(url:)`` is fail-secure blocked.
+
+    GitHub's ``Query.resource(url: URI!)`` resolves an arbitrary URL to
+    the node it addresses (a ``Repository``, ``Issue``, ``Commit``, …).
+    It targets a repository by URL rather than by an
+    ``owner``/``name`` argument (Layer 0), a ``repositoryId`` /
+    ``repositoryNameWithOwner`` field (Layers 1–2), or a decodable
+    ``*Id`` node ID (Layer 3), so none of those layers inspect it — an
+    in-scope surrogate token could read **any** repository the
+    installation token can see:
+
+        query { resource(url: "https://github.com/airutorg/website")
+          { ... on Repository
+            { object(expression: "HEAD:public/canary.txt")
+              { ... on Blob { text } } } } }
+
+    Regression for the pentest finding "GraphQL repository scope check
+    is bypassed by ``Query.resource(url:)`` URL-addressed node lookup".
+    """
+
+    def test_resource_url_blocked(self) -> None:
+        body = _body(
+            'query { resource(url: "https://github.com/airutorg/website")'
+            " { ... on Repository {"
+            '   object(expression: "HEAD:public/canary.txt")'
+            "   { ... on Blob { text } } } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<url-addressed:resource>"
+        )
+
+    def test_resource_url_blocked_for_in_scope_repo(self) -> None:
+        """Even an in-scope repo URL is blocked — the field is unscopeable.
+
+        ``resource(url:)`` is fail-secure blocked regardless of the URL
+        because the proxy does not parse the URL to bind it to the
+        allowed set; the field is simply not a supported addressing
+        shape.
+        """
+        body = _body(
+            'query { resource(url: "https://github.com/airutorg/airut")'
+            " { ... on Repository { nameWithOwner } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<url-addressed:resource>"
+        )
+
+    def test_resource_url_aliased_blocked(self) -> None:
+        """Aliases must not bypass the resource block."""
+        body = _body(
+            'query { r: resource(url: "https://github.com/octocat/Hello-World")'
+            " { ... on Repository { nameWithOwner } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<url-addressed:resource>"
+        )
+
+    def test_resource_url_variable_blocked(self) -> None:
+        """A variable-supplied URL is blocked before variable resolution."""
+        body = _body(
+            "query($u: URI!) { resource(url: $u)"
+            " { ... on Repository { nameWithOwner } } }",
+            {"u": "https://github.com/airutorg/website"},
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<url-addressed:resource>"
+        )
+
+    def test_resource_url_blocked_alongside_in_scope_repository(self) -> None:
+        """The resource block fires even next to an in-scope selection."""
+        body = _body(
+            "{"
+            '  ok: repository(owner: "airutorg", name: "airut") { description }'
+            '  evil: resource(url: "https://github.com/airutorg/website")'
+            "    { ... on Repository { nameWithOwner } }"
+            "}"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<url-addressed:resource>"
+        )
+
+    def test_resource_url_in_named_fragment_blocked(self) -> None:
+        """A ``resource(url:)`` reached via a named fragment is blocked.
+
+        The whole-document AST walk visits fragment definitions, so the
+        block fires regardless of how the selection is reached.
+        """
+        body = _body(
+            "query { ...F }"
+            " fragment F on Query {"
+            '   resource(url: "https://github.com/airutorg/website")'
+            "   { ... on Repository { nameWithOwner } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<url-addressed:resource>"
+        )
+
+    def test_resource_without_url_arg_not_blocked(self) -> None:
+        """A ``resource`` field with no ``url`` argument is not the lookup.
+
+        Only ``Query.resource(url:)`` addresses a node by URL.  An
+        unrelated schema field that happens to be named ``resource``
+        but takes no ``url`` argument has no cross-repo addressing
+        semantics and must not trigger the block.
+        """
+        body = _body("query { something { resource { name } } }")
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _OK
+
+
+# -------------------------------------------------------------------
 # Case-insensitive ID field matching (pentest Finding 2)
 # -------------------------------------------------------------------
 
