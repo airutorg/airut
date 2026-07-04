@@ -337,8 +337,8 @@ installation scope. They can additionally **read** any repository the underlying
 installation token is authorized to see (which on github.com includes every
 public repository) via the `Query.repository(owner, name)` selection — this
 entry point is invisible to any `*Id`/`Name` field extraction. To prevent data
-exfiltration via either of these vectors, the proxy performs five layers of
-scope checking on every GraphQL request.
+exfiltration via either of these vectors, the proxy performs six layers of scope
+checking on every GraphQL request.
 
 **Layer 0a — `repository(owner, name)` field selection check (string match):**
 
@@ -374,6 +374,21 @@ fields that do not enumerate) or `search` during the AST walk and returns
 `OUT_OF_SCOPE` with detail `<multi-repo:{field}>` before any other layer runs.
 The agent must use the singular `repository(owner, name)` form to target a
 specific allowed repo.
+
+**Layer 0c — URL-addressed node lookup check (fail-secure block):**
+
+GitHub's `Query.resource(url: URI!)` resolves an arbitrary URL to the node it
+addresses (a `Repository`, `Issue`, `Commit`, …). It targets a repository by URL
+rather than by an `owner`/`name` argument (Layer 0a), a
+`repositoryId`/`repositoryNameWithOwner` field (Layers 1–2), or a decodable
+`*Id` node ID (Layer 3), so none of those layers inspect it — an in-scope
+surrogate token could otherwise read any repository the installation token can
+see. `check_repo_scope()` collects any field named `resource` that carries a
+`url` argument during the AST walk and returns `OUT_OF_SCOPE` with detail
+`<url-addressed:resource>` before any other layer runs. (A field merely named
+`resource` with no `url` argument has no cross-repo addressing semantics and is
+not blocked.) The agent must use the singular `repository(owner, name)` form to
+target a specific allowed repo.
 
 **Layer 1 — `repositoryId` field check (string match):**
 
@@ -452,21 +467,23 @@ Layer 0a–3 catch every shape that addresses a single repository by node ID,
 multi-repo enumeration entry points (the plural `repositories` connection and
 `Query.search`, blocked outright by Layer 0b; bulk `Query.nodes(ids: [...])`
 lookups, validated per-ID by Layer 3 via the case-insensitive `ids`
-recognition). The following GraphQL shapes can still surface out-of-scope
-repositories under a permissive operation allowlist (e.g. `queries: ["*"]`) and
-are mitigated **only** by the operation allowlist (Layer 1 of
-`spec/graphql-operation-allowlist.md`):
+recognition). `Query.resource(url:)` — the global URL resolver that can return a
+Repository (or any other node) by GitHub.com URL — is blocked outright by Layer
+0c; it is **not** left to the operation allowlist, because the deployed config
+uses `queries: ["*"]` and would not constrain it.
+
+The following GraphQL shape can still surface out-of-scope repositories under a
+permissive operation allowlist (e.g. `queries: ["*"]`) and is mitigated **only**
+by the operation allowlist (Layer 1 of `spec/graphql-operation-allowlist.md`):
 
 - **Single-repo navigation fields** — `Repository.parent`,
   `Repository.mirrorSourceRepository`, `Repository.templateRepository`. These
   return a single repository linked to an already-validated `Repository` without
-  taking an `owner`/`name` argument the proxy can match on.
-- **`Query.resource(url:)`** — global URL resolver that can return a Repository
-  (or any other node) by GitHub.com URL.
-
-The agent's GraphQL allowlist must therefore enumerate the specific query fields
-it needs (e.g. `viewer`, `repository`) rather than allow `"*"` once any of these
-fields become reachable.
+  taking an `owner`/`name` argument the proxy can match on. Because they are
+  legitimate output fields on an in-scope `Repository`, blocking them outright
+  would break metadata queries; the operation allowlist must instead enumerate
+  the specific query fields the agent needs (e.g. `viewer`, `repository`) rather
+  than allow `"*"` once these fields become reachable.
 
 ## Future Enhancements
 

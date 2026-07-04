@@ -6,7 +6,7 @@
 """GraphQL repository scope checking for GitHub App credentials.
 
 Parses GitHub GraphQL requests to extract repository-targeting values
-and checks them against allowed repositories.  Five layers of
+and checks them against allowed repositories.  Six layers of
 checking:
 
 0a. **repository(owner, name) field selection check** — catches
@@ -29,6 +29,15 @@ checking:
     scopeable argument — outside the scope of every other layer, so
     an in-scope surrogate token could otherwise enumerate every
     repository the installation can see.
+
+0c. **URL-addressed node lookup check** — fail-secure blocks
+    ``Query.resource(url:)``, which resolves an arbitrary URL to the
+    node it addresses (a ``Repository``, ``Issue``, ``Commit``, …).
+    It targets a repository by URL rather than by an ``owner``/``name``
+    argument, a ``repositoryId``/``repositoryNameWithOwner`` field, or
+    a decodable ``*Id`` node ID, so none of the other layers inspect
+    it.  Without this check an in-scope surrogate token could read any
+    repository the installation token can see.
 
 1. **repositoryId field check** — extracts ``repositoryId`` values
    (inlined, variable-referenced, or in variable objects) and checks
@@ -124,6 +133,15 @@ _SKIP_FIELDS = frozenset({"clientMutationId"})
 # parent repository isn't bound by any argument the proxy can see).
 # Selections of these fields are fail-secure blocked.
 _MULTI_REPO_ENUM_FIELDS = frozenset({"repositories", "forks", "search"})
+
+# Field names that address a node by URL rather than by a scopeable
+# ``owner``/``name`` argument or ``*Id`` field.  ``Query.resource(url:)``
+# resolves an arbitrary URL to the node it addresses (a ``Repository``,
+# ``Issue``, ``Commit``, …); because the parent repository is bound only
+# by the opaque URL string, no other layer can match it against the
+# allowed set.  Selections of these fields (when carrying a ``url``
+# argument) are fail-secure blocked.
+_URL_ADDRESSED_FIELDS = frozenset({"resource"})
 
 # Identifier field names that match exactly.  Anything ending in the
 # camelCase ``Id``/``Ids`` suffix is also treated as an ID-bearing
@@ -262,6 +280,8 @@ class _IdFieldFinder(visitor.Visitor):
         self.repo_field_refs: list[_RepoFieldRef] = []
         # Layer 0b: multi-repo enumeration field name (first one wins)
         self.multi_repo_enum_field: str | None = None
+        # Layer 0c: URL-addressed node lookup field name (first one wins)
+        self.url_addressed_field: str | None = None
         # Primary: repositoryId values
         self.repo_inlined: list[str] = []
         self.repo_var_refs: list[str] = []
@@ -332,6 +352,16 @@ class _IdFieldFinder(visitor.Visitor):
           enumeration semantics.
         """
         field_name = node.name.value
+        if field_name in _URL_ADDRESSED_FIELDS:
+            # ``Query.resource(url:)`` addresses a node by URL.  Block it
+            # fail-secure, but only when a ``url`` argument is present —
+            # an unrelated field merely named ``resource`` with no
+            # ``url`` argument has no cross-repo addressing semantics.
+            if self.url_addressed_field is None and any(
+                arg.name.value == "url" for arg in node.arguments or ()
+            ):
+                self.url_addressed_field = field_name
+            return
         if field_name in _MULTI_REPO_ENUM_FIELDS:
             # ``search`` always blocks (no argument-less form exists on
             # GitHub's ``Query.search``).  ``repositories``/``forks``
@@ -424,7 +454,7 @@ def check_repo_scope(
 ) -> ScopeResult:
     """Check if a GraphQL request targets only allowed repositories.
 
-    Performs five layers of scope checking:
+    Performs six layers of scope checking:
 
     **Layer 0a — repository(owner, name) field selection check:**
 
@@ -444,6 +474,13 @@ def check_repo_scope(
     unrelated output field) or ``Query.search``.  Both return
     repositories or repo-scoped objects whose parent repository is
     not bound by any scopeable argument.
+
+    **Layer 0c — URL-addressed node lookup check:**
+
+    Fail-secure blocks ``Query.resource(url:)`` (a ``resource`` field
+    carrying a ``url`` argument), which resolves an arbitrary URL to
+    the node it addresses.  The parent repository is bound only by the
+    opaque URL, so no other layer can match it against the allowed set.
 
     **Layer 1 — repositoryId field check:**
 
@@ -533,6 +570,22 @@ def check_repo_scope(
         return ScopeResult(
             ScopeVerdict.OUT_OF_SCOPE,
             f"<multi-repo:{finder.multi_repo_enum_field}>",
+        )
+
+    # ------------------------------------------------------------------
+    # Layer 0c: URL-addressed node lookup check (fail-secure block)
+    # ------------------------------------------------------------------
+    # ``Query.resource(url:)`` resolves an arbitrary URL to the node it
+    # addresses (Repository/Issue/Commit/…).  The parent repository is
+    # bound only by the opaque URL string, so none of the other layers
+    # can match it against the allowed set.  Block outright so an
+    # in-scope surrogate token cannot read repositories outside its
+    # scope by URL.  Runs before the remaining layers so the detail is
+    # preserved.
+    if finder.url_addressed_field is not None:
+        return ScopeResult(
+            ScopeVerdict.OUT_OF_SCOPE,
+            f"<url-addressed:{finder.url_addressed_field}>",
         )
 
     allowed_names_lower = frozenset(n.lower() for n in allowed_repo_full_names)
