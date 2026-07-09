@@ -17,6 +17,7 @@ import time
 from collections.abc import Callable
 from email.message import Message
 
+from airut._threads import join_if_started
 from airut.gateway.channel import (
     ChannelHealth,
     ChannelListener,
@@ -125,9 +126,9 @@ class EmailChannelListener(ChannelListener):
         self._running = False
         self._stop_event.set()
         self._email_listener.interrupt()
-        if self._thread is not None:
-            self._thread.join(timeout=10)
-            if self._thread.is_alive():
+        thread = self._thread
+        if thread is not None and join_if_started(thread, timeout=10):
+            if thread.is_alive():
                 self._log.warning(
                     "Listener thread did not terminate within 10s"
                 )

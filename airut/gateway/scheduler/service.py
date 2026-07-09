@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
+from airut._threads import join_if_started
 from airut.gateway.scheduler.cron import CronExpression
 
 
@@ -116,8 +117,7 @@ class Scheduler:
     def stop(self) -> None:
         """Stop the scheduler thread."""
         self._stop_event.set()
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=5)
+        join_if_started(self._thread, timeout=5)
         logger.info("Scheduler stopped")
 
     def rebuild_repo(self, repo_id: str) -> None:

@@ -7,6 +7,7 @@
 
 import json
 import os
+import threading
 from typing import NoReturn
 from unittest.mock import MagicMock, patch
 
@@ -1608,6 +1609,26 @@ class TestDashboardServerStartStop:
         os.close(w)  # Close write end so os.write raises
 
         # Should not raise — _close_pipe() handles r
+        server.stop()
+
+    def test_stop_does_not_join_unstarted_thread(self) -> None:
+        """stop() must tolerate a thread that was assigned but not started.
+
+        start() and stop() run on different threads (start() in the
+        service boot thread, stop() from the caller). If stop() observes
+        self._thread in the window after ``self._thread = Thread(...)``
+        but before ``self._thread.start()``, joining it raises
+        ``RuntimeError: cannot join thread before it is started``.
+        join_if_started() swallows that so stop() is safe at any point.
+        """
+        tracker = TaskTracker()
+        server = DashboardServer(tracker, host="127.0.0.1", port=5200)
+
+        # Real, never-started thread — a MagicMock would hide the bug
+        # because its join() never raises.
+        server._thread = threading.Thread(target=lambda: None)
+
+        # Must not raise (previously raised RuntimeError on join()).
         server.stop()
 
     def test_serve_handles_request(self) -> None:

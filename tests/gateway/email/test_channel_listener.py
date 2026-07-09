@@ -5,6 +5,7 @@
 
 """Tests for EmailChannelListener."""
 
+import threading
 from email.message import Message
 from email.parser import BytesParser
 from typing import Any
@@ -187,6 +188,25 @@ class TestStartStop:
         mock_thread.join.assert_called_once_with(timeout=10)
         # Thread reference should be cleared even if alive
         assert cl._thread is None
+
+    def test_stop_does_not_join_unstarted_thread(self) -> None:
+        """stop() tolerates a thread assigned but never started.
+
+        start() and stop() run on different threads, so stop() can
+        observe self._thread in the window before its .start() ran,
+        where join() would raise 'cannot join thread before it is
+        started'.
+        """
+        config = _make_config()
+        mock_el = MagicMock()
+        cl = EmailChannelListener(config, email_listener=mock_el, repo_id="t")
+
+        # Real, never-started thread — a MagicMock would hide the bug.
+        cl._thread = threading.Thread(target=lambda: None)
+
+        cl.stop()  # Must not raise.
+
+        mock_el.close.assert_called_once()
 
     def test_initial_status_is_starting(
         self, listener_and_mock: tuple[EmailChannelListener, MagicMock]

@@ -21,6 +21,8 @@ from pathlib import Path
 
 from inotify_simple import INotify, flags
 
+from airut._threads import join_if_started
+
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +83,7 @@ class ConfigFileWatcher:
             os.write(self._wakeup_w, b"\x00")
         except OSError:
             pass  # Already closed
-        if self._thread is not None:
-            self._thread.join(timeout=3)
+        if join_if_started(self._thread, timeout=3):
             self._thread = None
         self._close_pipe()
         logger.info("Config file watcher stopped")

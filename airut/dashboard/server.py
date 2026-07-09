@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 from wsgiref.types import WSGIEnvironment
 
 from airut._json_types import JsonDict
+from airut._threads import join_if_started
 
 
 if TYPE_CHECKING:
@@ -341,8 +342,7 @@ class DashboardServer:
                 os.write(self._wakeup_w, b"\x00")
             except OSError:
                 pass
-        if self._thread:
-            self._thread.join(timeout=5)
+        if join_if_started(self._thread, timeout=5):
             self._thread = None
         if self._server:
             self._server.server_close()
