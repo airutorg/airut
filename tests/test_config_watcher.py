@@ -303,6 +303,23 @@ class TestConfigFileWatcher:
         finally:
             _cleanup_inotify_mock(mock_inotify)
 
+    def test_stop_does_not_join_unstarted_thread(self, tmp_path: Path) -> None:
+        """stop() tolerates a thread assigned but never started.
+
+        start() and stop() run on different threads, so stop() can
+        observe self._thread in the window before its .start() ran,
+        where join() would raise 'cannot join thread before it is
+        started'.
+        """
+        config_file = tmp_path / "airut.yaml"
+        config_file.write_text("model: opus\n")
+
+        watcher = ConfigFileWatcher(config_file, lambda: None)
+        # Real, never-started thread — a MagicMock would hide the bug.
+        watcher._thread = threading.Thread(target=lambda: None)
+
+        watcher.stop()  # Must not raise.
+
     def test_one_callback_per_batch(self, tmp_path: Path) -> None:
         """Multiple events in one batch produce one callback."""
         config_file = tmp_path / "airut.yaml"
