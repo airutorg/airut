@@ -132,3 +132,16 @@ MPL;
 Mozilla Public License
 """
 partial-match = true
+
+[tool.uv-secure.vulnerability_criteria]
+ignore_vulnerabilities = [
+    # mistune — GHSA-qcq2-496w-v96p (CVE-2026-49851): low-severity (CVSS 3.1)
+    # quadratic-time DoS in parse_link_text on crafted input with many "["
+    # characters. Fixed in 3.3.0, but mistune is deliberately held at <3.3
+    # because 3.3.x regresses GFM table parsing (see the dependency pin
+    # comment above and airut/markdown.py). Airut only renders trusted,
+    # agent-generated markdown to email/Slack HTML inside a resource-limited
+    # sandbox, so the availability impact does not apply. Remove once the pin
+    # is lifted (upstream restores delimiter validation). (2026-07)
+    "GHSA-qcq2-496w-v96p",
+]
