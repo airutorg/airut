@@ -10,3 +10,13 @@ dependencies = [
 
 [tool.uv.sources]
 airut = { path = "..", editable = true }
+
+[tool.uv-secure.vulnerability_criteria]
+ignore_vulnerabilities = [
+    # mistune — GHSA-qcq2-496w-v96p (CVE-2026-49851): low-severity (CVSS 3.1)
+    # quadratic-time DoS in parse_link_text. Pulled in transitively via the
+    # editable airut dependency, which pins mistune <3.3 (the fix is 3.3.0)
+    # to avoid a GFM table-parsing regression. See the matching entry in the
+    # top-level pyproject.toml for the full rationale. (2026-07)
+    "GHSA-qcq2-496w-v96p",
+]
