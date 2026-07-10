@@ -102,6 +102,16 @@ The license check resolves the transitive closure of runtime dependencies (via
 ensures the license audit covers exactly what ships in a production install,
 without being affected by dev tooling licenses.
 
+The three `uv-secure` scans fetch package metadata from PyPI. `uv-secure` fires
+all requests concurrently with a short per-request timeout and no retry, so an
+occasional fetch that times out or drops surfaces as
+`<package> raised exception: <error>` and fails the whole scan. The runner
+retries these steps (`retry_on_transient`) with linear backoff when the failure
+output matches a transient-failure marker (`raised exception:`) — a transport
+failure, never a real finding such as a reported vulnerability. A timeout of the
+step process itself is never retried — a step timeout is always treated as a
+bug, not a transient condition.
+
 #### `integration` group
 
 | Step              | Command                                                   |

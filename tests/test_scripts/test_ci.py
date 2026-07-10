@@ -8,16 +8,19 @@
 import subprocess
 import sys
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from scripts.ci import (
     DEFAULT_TIMEOUT_SECONDS,
     FAILURE_OUTPUT_LINES,
     GREEN,
+    MAX_TRANSIENT_RETRIES,
     RESET,
+    TRANSIENT_RETRY_BACKOFF_SECONDS,
     Step,
     _format_overall_timeout_message,
+    _is_transient_failure,
     colorize,
     main,
     run_ci,
@@ -290,6 +293,124 @@ class TestRunStep:
             )
             call_kwargs = mock_run.call_args[1]
             assert call_kwargs["timeout"] == 300.0
+
+
+class TestIsTransientFailure:
+    """Tests for _is_transient_failure marker matching."""
+
+    def test_matches_uv_secure_marker(self) -> None:
+        """uv-secure's fetch-failure line is treated as transient."""
+        output = "Error: email-validator raised exception: \n"
+        assert _is_transient_failure(output) is True
+
+    def test_real_finding_is_not_transient(self) -> None:
+        """Output without a transient marker is not transient."""
+        assert _is_transient_failure("Vulnerability found: GHSA-xxxx") is False
+
+
+class TestRunStepRetry:
+    """Tests for transient-failure retry behavior in run_step."""
+
+    _SCAN_STEP = Step(
+        name="Vulnerability scan",
+        command="uv run uv-secure uv.lock",
+        workflow="security",
+        retry_on_transient=True,
+    )
+
+    @staticmethod
+    def _failure(output: str) -> MagicMock:
+        return MagicMock(returncode=1, stdout=output, stderr="")
+
+    @staticmethod
+    def _success() -> MagicMock:
+        return MagicMock(returncode=0, stdout="ok\n", stderr="")
+
+    def test_transient_failure_retried_then_succeeds(self) -> None:
+        """A transient failure is retried and can then succeed."""
+        with (
+            patch("scripts.ci.subprocess.run") as mock_run,
+            patch("scripts.ci.time.sleep") as mock_sleep,
+        ):
+            mock_run.side_effect = [
+                self._failure("email-validator raised exception: "),
+                self._success(),
+            ]
+            success, _ = run_step(
+                self._SCAN_STEP, fix_mode=False, verbose=False, step_timeout=300
+            )
+        assert success is True
+        assert mock_run.call_count == 2
+        assert mock_sleep.call_count == 1
+
+    def test_transient_failure_retried_until_exhausted(self) -> None:
+        """Persistent transient failures fail after the retry budget."""
+        with (
+            patch("scripts.ci.subprocess.run") as mock_run,
+            patch("scripts.ci.time.sleep") as mock_sleep,
+        ):
+            mock_run.return_value = self._failure(
+                "email-validator raised exception: "
+            )
+            success, output = run_step(
+                self._SCAN_STEP, fix_mode=False, verbose=False, step_timeout=300
+            )
+        assert success is False
+        assert "raised exception:" in output
+        assert mock_run.call_count == 1 + MAX_TRANSIENT_RETRIES
+        # Linear backoff: 1x then 2x the base delay.
+        assert mock_sleep.call_args_list == [
+            call(TRANSIENT_RETRY_BACKOFF_SECONDS),
+            call(2 * TRANSIENT_RETRY_BACKOFF_SECONDS),
+        ]
+
+    def test_real_finding_not_retried(self) -> None:
+        """A real (non-transient) failure is reported without retrying."""
+        with (
+            patch("scripts.ci.subprocess.run") as mock_run,
+            patch("scripts.ci.time.sleep") as mock_sleep,
+        ):
+            mock_run.return_value = self._failure(
+                "Vulnerability found: GHSA-xxxx in requests\n"
+            )
+            success, _ = run_step(
+                self._SCAN_STEP, fix_mode=False, verbose=False, step_timeout=300
+            )
+        assert success is False
+        assert mock_run.call_count == 1
+        assert mock_sleep.call_count == 0
+
+    def test_transient_marker_ignored_when_not_opted_in(self) -> None:
+        """Steps without retry_on_transient are never retried."""
+        step = Step(name="Test", command="do-thing", workflow="code")
+        with (
+            patch("scripts.ci.subprocess.run") as mock_run,
+            patch("scripts.ci.time.sleep") as mock_sleep,
+        ):
+            mock_run.return_value = self._failure("boom raised exception: x")
+            success, _ = run_step(
+                step, fix_mode=False, verbose=False, step_timeout=300
+            )
+        assert success is False
+        assert mock_run.call_count == 1
+        assert mock_sleep.call_count == 0
+
+    def test_timeout_not_retried_for_transient_step(self) -> None:
+        """A timeout is never retried, even for a retryable step."""
+        with (
+            patch("scripts.ci.subprocess.run") as mock_run,
+            patch("scripts.ci.time.sleep") as mock_sleep,
+        ):
+            mock_run.side_effect = subprocess.TimeoutExpired(
+                cmd="uv run uv-secure uv.lock", timeout=300
+            )
+            success, output = run_step(
+                self._SCAN_STEP, fix_mode=False, verbose=False, step_timeout=300
+            )
+        assert success is False
+        assert "STEP TIMEOUT" in output
+        assert mock_run.call_count == 1
+        assert mock_sleep.call_count == 0
 
 
 class TestFormatOverallTimeoutMessage:
