@@ -36,6 +36,21 @@ DEFAULT_STEP_TIMEOUT_SECONDS = 300
 # Can be overridden with --timeout flag.
 DEFAULT_TIMEOUT_SECONDS = 120
 
+# Some steps fetch data over the network and can fail transiently. The
+# uv-secure vulnerability scans fire all PyPI metadata requests concurrently
+# with a short per-request timeout and no retry, so an occasional fetch that
+# times out or drops surfaces as "<package> raised exception: <error>" and
+# fails the whole scan. Steps flagged retry_on_transient are re-run when their
+# failure output matches one of these markers — signatures of a transient
+# transport failure, never a real finding (e.g. a reported vulnerability).
+_TRANSIENT_FAILURE_MARKERS: tuple[str, ...] = ("raised exception:",)
+
+# Retry budget and backoff for transient step failures. Total attempts for a
+# retryable step are 1 + MAX_TRANSIENT_RETRIES. Backoff grows linearly per
+# attempt (attempt * TRANSIENT_RETRY_BACKOFF_SECONDS).
+MAX_TRANSIENT_RETRIES = 2
+TRANSIENT_RETRY_BACKOFF_SECONDS = 3.0
+
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +70,10 @@ class Step:
     command: str
     workflow: str
     fix_command: str | None = None
+    # Retry the command on transient network failures (see
+    # _TRANSIENT_FAILURE_MARKERS). Only for network-dependent steps whose
+    # failures can legitimately be transient, e.g. the uv-secure scans.
+    retry_on_transient: bool = False
 
 
 # CI steps — the single source of truth for all checks.
@@ -121,6 +140,7 @@ STEPS: list[Step] = [
         name="Vulnerability scan",
         command="uv run uv-secure uv.lock --config pyproject.toml",
         workflow="security",
+        retry_on_transient=True,
     ),
     Step(
         name="Proxy vulnerability scan",
@@ -129,6 +149,7 @@ STEPS: list[Step] = [
             " --config airut/_bundled/proxy/pyproject.toml"
         ),
         workflow="security",
+        retry_on_transient=True,
     ),
     Step(
         name="Screenshots vulnerability scan",
@@ -137,6 +158,7 @@ STEPS: list[Step] = [
             " --config screenshots/pyproject.toml"
         ),
         workflow="security",
+        retry_on_transient=True,
     ),
     Step(
         name="Proxy requirements.txt drift check",
@@ -182,6 +204,133 @@ def colorize(text: str, color: str) -> str:
     return text
 
 
+def _compute_effective_timeout(
+    step_timeout: int, deadline: float | None
+) -> float | None:
+    """Compute the timeout for a single subprocess run.
+
+    The effective timeout is the minimum of the per-step timeout and the
+    time remaining before the overall CI deadline.
+
+    Args:
+        step_timeout: Timeout in seconds for the step (0 = no step timeout).
+        deadline: Monotonic clock deadline for the overall CI run, or None.
+
+    Returns:
+        Effective timeout in seconds, or None for no timeout.
+    """
+    effective_timeout: float | None = None
+    if step_timeout > 0:
+        effective_timeout = float(step_timeout)
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            remaining = 0.1  # Let subprocess start and fail immediately
+        if effective_timeout is None:
+            effective_timeout = remaining
+        else:
+            effective_timeout = min(effective_timeout, remaining)
+    return effective_timeout
+
+
+def _format_step_timeout_message(
+    reported_timeout: int, step_timeout: int
+) -> str:
+    """Format the error shown when a single CI step times out."""
+    return (
+        f"STEP TIMEOUT: Step timed out after {reported_timeout} seconds.\n"
+        "\n"
+        "─── IMPORTANT: Read carefully ───\n"
+        "\n"
+        "A timeout is ALWAYS a bug — never an environment issue.\n"
+        "Do NOT ignore, retry, or dismiss this as transient.\n"
+        "\n"
+        "1. INVESTIGATE: Find which test or check is hanging.\n"
+        "   Run the step command directly with verbose output\n"
+        "   (e.g. pytest --timeout=10 -v) to identify the culprit.\n"
+        "\n"
+        "2. ROOT-CAUSE: Common causes are missing mocks, real network\n"
+        "   calls, unbounded retries, sleep() in tests, or deadlocks.\n"
+        "\n"
+        "3. FIX the underlying issue. Do not increase the timeout\n"
+        "   unless you have confirmed that total execution time has\n"
+        "   legitimately increased (new tests, heavier checks).\n"
+        "\n"
+        f"Override once:   ci.py --step-timeout {step_timeout * 2}\n"
+        "Disable:         ci.py --step-timeout 0"
+    )
+
+
+def _is_transient_failure(output: str) -> bool:
+    """Return True if *output* matches a known transient-failure marker.
+
+    Transient markers identify network/transport failures (e.g. a PyPI
+    metadata fetch that timed out mid-scan) as opposed to a real finding
+    such as a reported vulnerability.
+    """
+    return any(marker in output for marker in _TRANSIENT_FAILURE_MARKERS)
+
+
+def _run_command_once(
+    step: Step,
+    command: str,
+    verbose: bool,
+    step_timeout: int,
+    deadline: float | None,
+) -> tuple[bool, str, bool]:
+    """Run *command* for *step* exactly once.
+
+    Returns:
+        Tuple of (success, output_to_display, retryable). ``retryable`` is
+        True only for a transient network failure on a step that opts into
+        retries — a timeout or a real finding is never retryable.
+    """
+    effective_timeout = _compute_effective_timeout(step_timeout, deadline)
+
+    try:
+        result = subprocess.run(
+            command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=effective_timeout,
+        )
+    except subprocess.TimeoutExpired:
+        reported_timeout = (
+            int(effective_timeout)
+            if effective_timeout is not None
+            else step_timeout
+        )
+        return (
+            False,
+            _format_step_timeout_message(reported_timeout, step_timeout),
+            False,
+        )
+
+    output = result.stdout + result.stderr
+
+    # Special handling for worktree clean check
+    if step.name == "Worktree clean check":
+        if result.stdout.strip():
+            # There are uncommitted changes
+            return False, f"Uncommitted changes:\n{result.stdout}", False
+        return True, "", False
+
+    if result.returncode == 0:
+        return True, output if verbose else "", False
+
+    # Transient network failures (for steps that opt in) are worth retrying;
+    # a real finding is not.
+    retryable = step.retry_on_transient and _is_transient_failure(output)
+
+    # On failure, return last N lines
+    lines = output.strip().split("\n")
+    if len(lines) > FAILURE_OUTPUT_LINES:
+        truncated = lines[-FAILURE_OUTPUT_LINES:]
+        return False, "\n".join(truncated), retryable
+    return False, output, retryable
+
+
 def run_step(
     step: Step,
     fix_mode: bool,
@@ -189,7 +338,7 @@ def run_step(
     step_timeout: int,
     deadline: float | None = None,
 ) -> tuple[bool, str]:
-    """Run a single CI step.
+    """Run a single CI step, retrying transient network failures.
 
     Args:
         step: The step to run
@@ -209,76 +358,25 @@ def run_step(
     else:
         command = step.command
 
-    # Calculate effective timeout: min of step timeout and remaining deadline
-    effective_timeout: float | None = None
-    if step_timeout > 0:
-        effective_timeout = float(step_timeout)
-    if deadline is not None:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            remaining = 0.1  # Let subprocess start and fail immediately
-        if effective_timeout is None:
-            effective_timeout = remaining
-        else:
-            effective_timeout = min(effective_timeout, remaining)
-
-    # Run the command with timeout (if enabled)
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=effective_timeout,
+    max_attempts = 1 + (MAX_TRANSIENT_RETRIES if step.retry_on_transient else 0)
+    attempt = 0
+    while True:
+        success, display, retryable = _run_command_once(
+            step, command, verbose, step_timeout, deadline
         )
-    except subprocess.TimeoutExpired:
-        reported_timeout = (
-            int(effective_timeout)
-            if effective_timeout is not None
-            else step_timeout
+        attempt += 1
+        if success or not retryable or attempt >= max_attempts:
+            return success, display
+
+        logger.warning(
+            "%s failed with a transient error; retrying "
+            "(attempt %d/%d after %.0fs backoff)",
+            step.name,
+            attempt + 1,
+            max_attempts,
+            TRANSIENT_RETRY_BACKOFF_SECONDS * attempt,
         )
-        error_msg = (
-            f"STEP TIMEOUT: Step timed out after {reported_timeout} seconds.\n"
-            "\n"
-            "─── IMPORTANT: Read carefully ───\n"
-            "\n"
-            "A timeout is ALWAYS a bug — never an environment issue.\n"
-            "Do NOT ignore, retry, or dismiss this as transient.\n"
-            "\n"
-            "1. INVESTIGATE: Find which test or check is hanging.\n"
-            "   Run the step command directly with verbose output\n"
-            "   (e.g. pytest --timeout=10 -v) to identify the culprit.\n"
-            "\n"
-            "2. ROOT-CAUSE: Common causes are missing mocks, real network\n"
-            "   calls, unbounded retries, sleep() in tests, or deadlocks.\n"
-            "\n"
-            "3. FIX the underlying issue. Do not increase the timeout\n"
-            "   unless you have confirmed that total execution time has\n"
-            "   legitimately increased (new tests, heavier checks).\n"
-            "\n"
-            f"Override once:   ci.py --step-timeout {step_timeout * 2}\n"
-            "Disable:         ci.py --step-timeout 0"
-        )
-        return False, error_msg
-
-    output = result.stdout + result.stderr
-
-    # Special handling for worktree clean check
-    if step.name == "Worktree clean check":
-        if result.stdout.strip():
-            # There are uncommitted changes
-            return False, f"Uncommitted changes:\n{result.stdout}"
-        return True, ""
-
-    if result.returncode == 0:
-        return True, output if verbose else ""
-
-    # On failure, return last N lines
-    lines = output.strip().split("\n")
-    if len(lines) > FAILURE_OUTPUT_LINES:
-        truncated = lines[-FAILURE_OUTPUT_LINES:]
-        return False, "\n".join(truncated)
-    return False, output
+        time.sleep(TRANSIENT_RETRY_BACKOFF_SECONDS * attempt)
 
 
 def _format_overall_timeout_message(elapsed: float, timeout: int) -> str:
