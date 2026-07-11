@@ -1510,9 +1510,19 @@ class TestMultiRepoEnumeration:
     in-scope surrogate token enumerate (and read) any repository the
     installation token could see.
 
+    The same class of bypass applies to every other connection field
+    that returns ``Repository`` (or repo-scoped) nodes without a
+    scopeable ``owner``/``name`` argument: ``pinnedItems`` /
+    ``pinnableItems`` / ``itemShowcase`` (profile showcase),
+    ``starredRepositories``, ``watching``, ``repositoriesContributedTo``
+    and ``topRepositories``.  All are fail-secure blocked.
+
     Regression for the pentest finding "GraphQL repository scope check
     is bypassed by ``organization(login).repositories.nodes`` (and
-    similar plural traversals)".
+    similar plural traversals)" and the follow-up finding that
+    ``pinnedItems`` / ``starredRepositories`` / ``watching`` (and
+    similar repo-returning connections) were not covered by the
+    original three-field denylist.
     """
 
     def test_organization_repositories_blocked(self) -> None:
@@ -1629,6 +1639,123 @@ class TestMultiRepoEnumeration:
         # No arguments — not the GitHub connection shape.
         body = _body("query { something { repositories { name } } }")
         # No repository-targeting values at all -> ALLOWED.
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _OK
+
+    def test_pinned_items_blocked(self) -> None:
+        """``User.pinnedItems`` (PinnableItemConnection) enumerates repos."""
+        body = _body(
+            '{ user(login: "octocat")'
+            " { pinnedItems(first: 5, types: [REPOSITORY])"
+            " { nodes { ... on Repository { nameWithOwner } } } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<multi-repo:pinnedItems>"
+        )
+
+    def test_pinned_items_on_organization_blocked(self) -> None:
+        """The exact follow-up pentest payload (org pinnedItems) is blocked."""
+        body = _body(
+            '{ organization(login: "airutorg")'
+            " { pinnedItems(first: 10, types: [REPOSITORY]) { nodes {"
+            "   ... on Repository { nameWithOwner"
+            '     object(expression: "HEAD:public/canary.txt")'
+            "       { ... on Blob { text } } } } } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<multi-repo:pinnedItems>"
+        )
+
+    def test_pinnable_items_blocked(self) -> None:
+        """``pinnableItems`` is the same connection as ``pinnedItems``."""
+        body = _body(
+            '{ user(login: "octocat")'
+            " { pinnableItems(first: 5, types: [REPOSITORY])"
+            " { nodes { ... on Repository { nameWithOwner } } } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<multi-repo:pinnableItems>"
+        )
+
+    def test_starred_repositories_blocked(self) -> None:
+        """``User.starredRepositories`` is a StarredRepositoryConnection."""
+        body = _body(
+            '{ user(login: "octocat")'
+            " { starredRepositories(first: 5)"
+            "   { nodes { nameWithOwner } } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<multi-repo:starredRepositories>"
+        )
+
+    def test_watching_blocked(self) -> None:
+        """``User.watching`` is a RepositoryConnection."""
+        body = _body(
+            '{ user(login: "octocat")'
+            " { watching(first: 5) { nodes { nameWithOwner } } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<multi-repo:watching>"
+        )
+
+    def test_repositories_contributed_to_blocked(self) -> None:
+        """``User.repositoriesContributedTo`` is a RepositoryConnection."""
+        body = _body(
+            '{ user(login: "octocat")'
+            " { repositoriesContributedTo(first: 5)"
+            "   { nodes { nameWithOwner } } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<multi-repo:repositoriesContributedTo>"
+        )
+
+    def test_top_repositories_blocked(self) -> None:
+        """``User.topRepositories`` is a RepositoryConnection."""
+        body = _body(
+            '{ user(login: "octocat")'
+            ' { topRepositories(first: 5, since: "2020-01-01T00:00:00Z")'
+            "   { nodes { nameWithOwner } } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<multi-repo:topRepositories>"
+        )
+
+    def test_item_showcase_blocked(self) -> None:
+        """``itemShowcase`` takes no args; its ``items`` connection leaks repos.
+
+        ``ProfileOwner.itemShowcase`` is an argument-less field whose
+        ``items`` ``PinnableItemConnection`` returns the owner's pinned
+        repositories.  Because the enumerating field itself carries no
+        arguments, it is blocked unconditionally rather than gated on
+        argument presence.
+        """
+        body = _body(
+            '{ organization(login: "airutorg")'
+            " { itemShowcase { items(first: 5)"
+            "   { nodes { ... on Repository { nameWithOwner } } } } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<multi-repo:itemShowcase>"
+        )
+
+    def test_pinned_items_aliased_blocked(self) -> None:
+        """Aliases must not bypass the connection block."""
+        body = _body(
+            '{ u: user(login: "octocat")'
+            " { pins: pinnedItems(first: 5, types: [REPOSITORY])"
+            " { nodes { ... on Repository { nameWithOwner } } } } }"
+        )
+        assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _oos(
+            "<multi-repo:pinnedItems>"
+        )
+
+    def test_pinned_items_argumentless_not_blocked(self) -> None:
+        """Bare argument-less ``pinnedItems`` has no connection semantics.
+
+        Mirrors ``test_repositories_argumentless_not_blocked``: the block
+        is gated on the connection shape (pagination arguments), so an
+        unrelated argument-less field of the same name does not trip it.
+        """
+        body = _body("query { something { pinnedItems { name } } }")
         assert check_repo_scope(body, ALLOWED, ALLOWED_NAMES) == _OK
 
 

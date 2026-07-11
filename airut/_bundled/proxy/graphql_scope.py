@@ -21,14 +21,18 @@ checking:
     underlying installation token is authorized to see.
 
 0b. **Multi-repo enumeration field check** — fail-secure blocks the
+    connection fields that return repositories (or repo-scoped
+    objects) without a scopeable ``owner``/``name`` argument: the
     plural ``repositories`` connection
     (``organization.repositories``, ``user.repositories``,
-    ``viewer.repositories``, ``repositoryOwner.repositories``) and
-    ``Query.search``.  Both shapes return repositories — or
-    repo-scoped objects whose parent repository isn't bound by any
-    scopeable argument — outside the scope of every other layer, so
-    an in-scope surrogate token could otherwise enumerate every
-    repository the installation can see.
+    ``viewer.repositories``, ``repositoryOwner.repositories``),
+    ``Repository.forks``, the profile pin connections (``pinnedItems``
+    / ``pinnableItems`` / ``itemShowcase``), the ``User`` repository
+    connections (``starredRepositories`` / ``watching`` /
+    ``repositoriesContributedTo`` / ``topRepositories``) and
+    ``Query.search``.  Each returns repositories outside the scope of
+    every other layer, so an in-scope surrogate token could otherwise
+    enumerate every repository the installation can see.
 
 0c. **URL-addressed node lookup check** — fail-secure blocks
     ``Query.resource(url:)``, which resolves an arbitrary URL to the
@@ -119,20 +123,50 @@ _MAX_BODY_SIZE = 1024 * 1024
 # Fields ending in "Id" that are NOT GitHub node IDs.
 _SKIP_FIELDS = frozenset({"clientMutationId"})
 
-# Field names whose selection enumerates multiple repositories without
-# taking an ``owner``/``name`` argument the proxy can match against
-# ``allowed_repo_full_names``.  ``repositories`` covers the
-# ``Organization.repositories`` / ``User.repositories`` /
-# ``RepositoryOwner.repositories`` / ``Viewer.repositories`` connections
-# and any other plural connection that returns repository data without a
-# scopeable selector.  ``forks`` covers ``Repository.forks`` — a
-# ``RepositoryConnection`` that enumerates child fork repositories from
-# an already-validated repository selection.  ``search`` covers
-# ``Query.search`` for any type (``REPOSITORY`` enumerates repos
-# directly; ``ISSUE``/``DISCUSSION`` enumerate repo-scoped objects whose
-# parent repository isn't bound by any argument the proxy can see).
-# Selections of these fields are fail-secure blocked.
-_MULTI_REPO_ENUM_FIELDS = frozenset({"repositories", "forks", "search"})
+# Connection fields whose selection enumerates multiple repositories (or
+# repo-scoped objects) without taking an ``owner``/``name`` argument the
+# proxy can match against ``allowed_repo_full_names``.  Each returns
+# ``Repository`` nodes — or ``PinnableItem`` nodes that may be
+# repositories — outside the reach of every other scope layer, so an
+# in-scope surrogate token could otherwise read any repository the
+# installation token can see:
+#
+# - ``repositories`` — ``Organization`` / ``User`` / ``RepositoryOwner``
+#   / ``Viewer`` ``.repositories`` connections.
+# - ``forks`` — ``Repository.forks`` (child forks of a validated repo).
+# - ``pinnedItems`` / ``pinnableItems`` — ``ProfileOwner`` pinned /
+#   pinnable ``PinnableItemConnection`` (``Repository | Gist``).
+# - ``starredRepositories`` / ``watching`` / ``repositoriesContributedTo``
+#   / ``topRepositories`` — ``User`` repository connections.
+#
+# These block only when invoked as a connection (i.e. with arguments such
+# as ``first``/``last``); a bare argument-less field of the same name in
+# an unrelated schema has no enumeration semantics.
+_MULTI_REPO_ENUM_FIELDS = frozenset(
+    {
+        "repositories",
+        "forks",
+        "pinnedItems",
+        "pinnableItems",
+        "starredRepositories",
+        "watching",
+        "repositoriesContributedTo",
+        "topRepositories",
+    }
+)
+
+# Repository-enumerating fields blocked **unconditionally**, regardless of
+# arguments, because the enumerating field itself carries no scopeable
+# argument (so the argument-presence gate used for
+# ``_MULTI_REPO_ENUM_FIELDS`` does not apply):
+#
+# - ``search`` — ``Query.search`` (no argument-less form exists;
+#   ``REPOSITORY`` enumerates repos directly, ``ISSUE``/``DISCUSSION``
+#   enumerate repo-scoped objects whose parent repo is unbound).
+# - ``itemShowcase`` — ``ProfileOwner.itemShowcase`` is an argument-less
+#   ``ProfileItemShowcase`` whose ``items`` ``PinnableItemConnection``
+#   returns the owner's pinned repositories.
+_ALWAYS_BLOCK_ENUM_FIELDS = frozenset({"search", "itemShowcase"})
 
 # Field names that address a node by URL rather than by a scopeable
 # ``owner``/``name`` argument or ``*Id`` field.  ``Query.resource(url:)``
@@ -344,12 +378,17 @@ class _IdFieldFinder(visitor.Visitor):
           ``repository`` as an argument-less output field that cannot
           itself address a new repository.
         - Multi-repo enumeration field selections (Layer 0b) — the
-          plural ``repositories`` connection and ``search`` — which
-          return repositories (or repo-scoped objects) outside of any
+          repository-returning connection fields (``repositories``,
+          ``forks``, ``pinnedItems``, ``pinnableItems``,
+          ``starredRepositories``, ``watching``,
+          ``repositoriesContributedTo``, ``topRepositories``) plus
+          ``Query.search`` and ``itemShowcase`` — which return
+          repositories (or repo-scoped objects) outside of any
           scopeable ``owner``/``name`` argument and must be
-          fail-secure blocked.  The bare ``repositories`` output field
+          fail-secure blocked.  A bare argument-less connection field
           (no arguments) is skipped: it is not a connection and has no
-          enumeration semantics.
+          enumeration semantics.  ``search`` and ``itemShowcase`` block
+          unconditionally (they carry no scopeable argument).
         """
         field_name = node.name.value
         if field_name in _URL_ADDRESSED_FIELDS:
@@ -362,16 +401,19 @@ class _IdFieldFinder(visitor.Visitor):
             ):
                 self.url_addressed_field = field_name
             return
+        if field_name in _ALWAYS_BLOCK_ENUM_FIELDS:
+            # ``search`` and ``itemShowcase`` carry no scopeable argument
+            # on the enumerating field itself, so they block
+            # unconditionally.
+            if self.multi_repo_enum_field is None:
+                self.multi_repo_enum_field = field_name
+            return
         if field_name in _MULTI_REPO_ENUM_FIELDS:
-            # ``search`` always blocks (no argument-less form exists on
-            # GitHub's ``Query.search``).  ``repositories``/``forks``
-            # only block when invoked as a connection (i.e. with
-            # arguments like ``first:``/``last:``) — a bare
-            # argument-less ``repositories`` field belongs to an
-            # unrelated schema and has no enumeration semantics.
-            if self.multi_repo_enum_field is None and (
-                field_name == "search" or node.arguments
-            ):
+            # These connections only block when invoked as a connection
+            # (i.e. with pagination arguments like ``first:``/``last:``)
+            # — a bare argument-less field of the same name in an
+            # unrelated schema has no enumeration semantics.
+            if self.multi_repo_enum_field is None and node.arguments:
                 self.multi_repo_enum_field = field_name
             return
         if field_name != "repository":
@@ -469,11 +511,15 @@ def check_repo_scope(
 
     **Layer 0b — multi-repo enumeration field check:**
 
-    Fail-secure blocks any selection of the plural ``repositories``
-    connection (with arguments — the bare argument-less form is an
-    unrelated output field) or ``Query.search``.  Both return
-    repositories or repo-scoped objects whose parent repository is
-    not bound by any scopeable argument.
+    Fail-secure blocks any selection of a connection field that
+    returns repositories (or repo-scoped objects) without a scopeable
+    ``owner``/``name`` argument — ``repositories``, ``forks``,
+    ``pinnedItems`` / ``pinnableItems``, ``starredRepositories`` /
+    ``watching`` / ``repositoriesContributedTo`` / ``topRepositories``
+    — or ``Query.search`` / ``itemShowcase``.  The argument-gated
+    connections block only in their connection shape (with pagination
+    arguments); ``search`` and the argument-less ``itemShowcase`` block
+    unconditionally.
 
     **Layer 0c — URL-addressed node lookup check:**
 
@@ -559,13 +605,16 @@ def check_repo_scope(
     # ------------------------------------------------------------------
     # Layer 0b: multi-repo enumeration field check (fail-secure block)
     # ------------------------------------------------------------------
-    # ``repositories`` (plural connection on Organization/User/Viewer/
-    # RepositoryOwner) and ``search`` return repositories or
-    # repo-scoped objects without any ``owner``/``name`` argument the
-    # proxy can match against the allowed set.  Block these outright
-    # so an in-scope surrogate token cannot enumerate repositories the
-    # underlying installation token can see.  Runs before all other
-    # layers so the detail is preserved.
+    # The repository-returning connection fields
+    # (``_MULTI_REPO_ENUM_FIELDS``: ``repositories``, ``forks``,
+    # ``pinnedItems``, ``pinnableItems``, ``starredRepositories``,
+    # ``watching``, ``repositoriesContributedTo``, ``topRepositories``)
+    # and the argument-less enumerators (``_ALWAYS_BLOCK_ENUM_FIELDS``:
+    # ``search``, ``itemShowcase``) return repositories without any
+    # ``owner``/``name`` argument the proxy can match against the allowed
+    # set.  Block these outright so an in-scope surrogate token cannot
+    # enumerate repositories the underlying installation token can see.
+    # Runs before all other layers so the detail is preserved.
     if finder.multi_repo_enum_field is not None:
         return ScopeResult(
             ScopeVerdict.OUT_OF_SCOPE,
