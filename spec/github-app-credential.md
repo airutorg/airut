@@ -363,14 +363,20 @@ selection's own scope checks.
 
 **Layer 0b — multi-repo enumeration field check (fail-secure block):**
 
-The plural `repositories` connection (`organization(login).repositories`,
-`user(login).repositories`, `viewer.repositories`,
-`repositoryOwner(login).repositories`), `Repository.forks`, and the
-`Query.search` field return repositories — or repo-scoped objects whose parent
-repository is unbound — outside of any `owner`/`name` argument the proxy can
-match on. `check_repo_scope()` collects any field named `repositories` or
-`forks` (with arguments — the bare argument-less forms are unrelated output
-fields that do not enumerate) or `search` during the AST walk and returns
+Any connection field that returns repositories — or repo-scoped objects whose
+parent repository is unbound — outside of an `owner`/`name` argument the proxy
+can match on is blocked. This covers the plural `repositories` connection
+(`organization(login).repositories`, `user(login).repositories`,
+`viewer.repositories`, `repositoryOwner(login).repositories`),
+`Repository.forks`, the profile pin connections (`pinnedItems`, `pinnableItems`,
+`itemShowcase`), the `User` repository connections (`starredRepositories`,
+`watching`, `repositoriesContributedTo`, `topRepositories`), and `Query.search`.
+`check_repo_scope()` collects any of the argument-gated connection fields
+(`repositories`, `forks`, `pinnedItems`, `pinnableItems`, `starredRepositories`,
+`watching`, `repositoriesContributedTo`, `topRepositories`) **when invoked with
+arguments** — the bare argument-less forms are unrelated output fields that do
+not enumerate — plus `search` and `itemShowcase` **unconditionally** (these
+carry no scopeable argument on the enumerating field), and returns
 `OUT_OF_SCOPE` with detail `<multi-repo:{field}>` before any other layer runs.
 The agent must use the singular `repository(owner, name)` form to target a
 specific allowed repo.
@@ -464,17 +470,25 @@ with no mitmproxy dependency, taking `bytes` in and returning a structured
 
 Layer 0a–3 catch every shape that addresses a single repository by node ID,
 `owner/name`, or chained `owner.repository(name)` selection, plus the documented
-multi-repo enumeration entry points (the plural `repositories` connection and
-`Query.search`, blocked outright by Layer 0b; bulk `Query.nodes(ids: [...])`
-lookups, validated per-ID by Layer 3 via the case-insensitive `ids`
-recognition). `Query.resource(url:)` — the global URL resolver that can return a
-Repository (or any other node) by GitHub.com URL — is blocked outright by Layer
-0c; it is **not** left to the operation allowlist, because the deployed config
-uses `queries: ["*"]` and would not constrain it.
+multi-repo enumeration entry points (the plural `repositories` connection,
+`Repository.forks`, the profile pin connections `pinnedItems` / `pinnableItems`
+/ `itemShowcase`, the `User` repository connections `starredRepositories` /
+`watching` / `repositoriesContributedTo` / `topRepositories`, and `Query.search`
+— all blocked outright by Layer 0b; bulk `Query.nodes(ids: [...])` lookups,
+validated per-ID by Layer 3 via the case-insensitive `ids` recognition).
+`Query.resource(url:)` — the global URL resolver that can return a Repository
+(or any other node) by GitHub.com URL — is blocked outright by Layer 0c; it is
+**not** left to the operation allowlist, because the deployed config uses
+`queries: ["*"]` and would not constrain it.
 
-The following GraphQL shape can still surface out-of-scope repositories under a
-permissive operation allowlist (e.g. `queries: ["*"]`) and is mitigated **only**
-by the operation allowlist (Layer 1 of `spec/graphql-operation-allowlist.md`):
+The following GraphQL shapes can still surface out-of-scope repositories under a
+permissive operation allowlist (e.g. `queries: ["*"]`) and are mitigated
+**only** by the operation allowlist (Layer 1 of
+`spec/graphql-operation-allowlist.md`). Layer 0b's connection denylist is a
+**best-effort defense-in-depth** measure for the repository-returning
+connections it can name; it does **not** claim to close every path that reaches
+an out-of-scope repository. Moving `graphql.queries` off `"*"` to an explicit
+field allowlist is the complete mitigation.
 
 - **Single-repo navigation fields** — `Repository.parent`,
   `Repository.mirrorSourceRepository`, `Repository.templateRepository`. These
@@ -484,6 +498,22 @@ by the operation allowlist (Layer 1 of `spec/graphql-operation-allowlist.md`):
   would break metadata queries; the operation allowlist must instead enumerate
   the specific query fields the agent needs (e.g. `viewer`, `repository`) rather
   than allow `"*"` once these fields become reachable.
+
+- **Owner-scoped object-enumeration connections** — `User.issues`,
+  `User.pullRequests`, `User.repositoryDiscussions` (and the `viewer` forms).
+  Selected on a profile owner (not on a validated `Repository`), these enumerate
+  issues / pull requests / discussions across **every** repository the
+  installation token can see; each node then navigates to its parent repository
+  via the argument-less `.repository` output field (which Layer 0a intentionally
+  does not block — it is a legitimate output field on already-validated
+  repo-scoped objects) and can read file content via
+  `.repository.object(expression:) { ... on Blob { text } }`. They are **not**
+  added to Layer 0b's name denylist because the same field names on `Repository`
+  (`repository(owner, name).issues`) are legitimately scoped and must stay
+  allowed, and a parent-type check does not hold up against fragment / inline-
+  fragment indirection. This is the same root cause as the navigation fields
+  (argument-less `.repository` traversal from an out-of-scope node); the robust
+  mitigation is the operation allowlist, not further denylist growth.
 
 ## Future Enhancements
 

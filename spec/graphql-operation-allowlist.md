@@ -271,8 +271,8 @@ POST /graphql with GitHub App surrogate token
 │  (graphql_scope.py — five sub-layers)│
 │                                     │  "Does this target an allowed repo?"
 │  GitHub-specific                    │  Catches repository(owner, name)
-│                                     │  selections, the plural repositories
-│                                     │  connection + search (fail-secure),
+│                                     │  selections, repo-returning connection
+│                                     │  fields + search (fail-secure),
 │                                     │  repositoryId fields,
 │                                     │  repositoryNameWithOwner fields, and
 │                                     │  *Id ownership via node-ID decoding
