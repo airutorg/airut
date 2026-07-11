@@ -753,3 +753,131 @@ class TestEdgeCases:
         )
         assert result.verdict is _BLOCKED
         assert result.detail == "viewer"
+
+
+# -------------------------------------------------------------------
+# Tightened GitHub App query allowlist (shipped .airut config)
+# -------------------------------------------------------------------
+
+
+class TestTightenedGithubAppQueries:
+    """Behavioral tests for the shipped restricted ``queries`` allowlist.
+
+    The deployed ``.airut/network-allowlist.yaml`` restricts GraphQL query
+    root fields to a safe set instead of ``"*"``. This is defense-in-depth
+    on top of repository scoping: only repo-bound roots
+    (``repository`` / ``node`` / ``nodes``) and introspection-only roots
+    (``__type`` / ``__schema``) are allowed. The owner-level enumeration
+    entry points (``user`` / ``organization`` / ``repositoryOwner`` /
+    ``viewer`` / ``search`` / ``resource``) are blocked at the operation
+    layer — which closes the whole class of repository-returning
+    connection / object-enumeration bypasses (``user.pinnedItems``,
+    ``user.pullRequests``, ``organization.repositories``, ``search``, …)
+    regardless of whether the repository scope check's denylist covers the
+    specific field.
+    """
+
+    # Mirrors the queries list in .airut/network-allowlist.yaml.
+    CONFIG: dict[str, list[str]] = {
+        "queries": ["repository", "node", "nodes", "__type", "__schema"],
+        "mutations": ["createPullRequest", "mergePullRequest"],
+        "subscriptions": [],
+    }
+
+    def test_repository_query_allowed(self) -> None:
+        result = check_operations(
+            _body(
+                'query { repository(owner: "airutorg", name: "airut")'
+                " { name } }"
+            ),
+            self.CONFIG,
+        )
+        assert result.verdict is _OK
+
+    def test_node_query_allowed(self) -> None:
+        result = check_operations(
+            _body('query { node(id: "PR_kwDO") { id } }'), self.CONFIG
+        )
+        assert result.verdict is _OK
+
+    def test_introspection_allowed(self) -> None:
+        result = check_operations(
+            _body('query { __type(name: "PullRequest") { name } }'),
+            self.CONFIG,
+        )
+        assert result.verdict is _OK
+
+    def test_user_root_blocked(self) -> None:
+        """Blocks the pentest ``user(login).pinnedItems`` enumeration."""
+        result = check_operations(
+            _body(
+                'query { user(login: "octocat")'
+                " { pinnedItems(first: 5, types: [REPOSITORY])"
+                " { nodes { ... on Repository { nameWithOwner } } } } }"
+            ),
+            self.CONFIG,
+        )
+        assert result.verdict is _BLOCKED
+        assert result.detail == "user"
+
+    def test_user_pull_requests_blocked(self) -> None:
+        """Blocks the residual ``user.pullRequests`` content-read vector."""
+        result = check_operations(
+            _body(
+                'query { user(login: "octocat")'
+                " { pullRequests(first: 5)"
+                " { nodes { repository { nameWithOwner } } } } }"
+            ),
+            self.CONFIG,
+        )
+        assert result.verdict is _BLOCKED
+        assert result.detail == "user"
+
+    def test_organization_root_blocked(self) -> None:
+        result = check_operations(
+            _body('query { organization(login: "airutorg") { login } }'),
+            self.CONFIG,
+        )
+        assert result.verdict is _BLOCKED
+        assert result.detail == "organization"
+
+    def test_search_root_blocked(self) -> None:
+        result = check_operations(
+            _body(
+                'query { search(query: "org:airutorg", type: REPOSITORY,'
+                " first: 5) { repositoryCount } }"
+            ),
+            self.CONFIG,
+        )
+        assert result.verdict is _BLOCKED
+        assert result.detail == "search"
+
+    def test_resource_root_blocked(self) -> None:
+        result = check_operations(
+            _body(
+                'query { resource(url: "https://github.com/airutorg/website")'
+                " { ... on Repository { name } } }"
+            ),
+            self.CONFIG,
+        )
+        assert result.verdict is _BLOCKED
+        assert result.detail == "resource"
+
+    def test_viewer_root_blocked(self) -> None:
+        result = check_operations(
+            _body("query { viewer { login } }"), self.CONFIG
+        )
+        assert result.verdict is _BLOCKED
+        assert result.detail == "viewer"
+
+    def test_extra_root_field_blocks_whole_query(self) -> None:
+        """Every root field must match; an un-listed co-root blocks all."""
+        result = check_operations(
+            _body(
+                'query { repository(owner: "airutorg", name: "airut")'
+                " { name } rateLimit { remaining } }"
+            ),
+            self.CONFIG,
+        )
+        assert result.verdict is _BLOCKED
+        assert result.detail == "rateLimit"

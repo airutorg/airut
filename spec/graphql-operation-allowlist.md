@@ -55,13 +55,19 @@ url_prefixes:
     path: /graphql
     methods: [POST]
 
-  # With graphql block — default-deny operation filtering
+  # With graphql block — default-deny operation filtering.
+  # queries is restricted to a safe root-field set (not "*") — see
+  # "Restricting queries for scoped credentials" below.
   - host: api.github.com
     path: /graphql
     methods: [POST]
     graphql:
       queries:
-        - "*"                          # allow all queries
+        - repository                   # single repo — repo-scope checked
+        - node                         # node by ID — repo-scope checked
+        - nodes                        # nodes by ID — repo-scope checked
+        - __type                       # introspection (no repo data)
+        - __schema                     # introspection (no repo data)
       mutations:
         - createIssue
         - createPullRequest
@@ -298,6 +304,45 @@ slip through.
 
 See [`github-app-credential.md`](github-app-credential.md) for the full
 sub-layer breakdown.
+
+### Restricting queries for scoped credentials
+
+Because patterns match **root field names**, the `queries` list is itself a
+scope control, not just a read/write toggle. `queries: ["*"]` leaves every
+repository-enumeration entry point reachable and relies entirely on Layer 2's
+denylist keeping pace with GitHub's schema — the same fragility that let
+`repository`-returning connection fields (`user.pinnedItems`,
+`organization.repositories`, `user.pullRequests`, …) and `search` bypass earlier
+scope checks. Restricting `queries` to the roots a workflow actually needs
+closes that whole class at Layer 1, before Layer 2 runs.
+
+The recommended GitHub App query allowlist (used by `airutorg/airut`'s own
+`.airut/network-allowlist.yaml`) is:
+
+| Root field            | Why it is safe to allow                                            |
+| --------------------- | ------------------------------------------------------------------ |
+| `repository`          | Addresses one repo by `owner`/`name`; validated by Layer 2 (0a).   |
+| `node` / `nodes`      | Address nodes by global ID; validated by Layer 2 (node-ID owner).  |
+| `__type` / `__schema` | Introspection — returns only public schema metadata, no repo data. |
+
+Every other root field (`user`, `organization`, `repositoryOwner`, `viewer`,
+`search`, `resource`) is a repository-enumeration or URL-addressing entry point
+and is intentionally **omitted**. Airut's own tooling (`scripts/pr.py`,
+`airut/gh/`) uses only `repository` / `node` (plus `__type` for `gh` field
+detection); commands that rely on `search` or `viewer` (e.g. `gh pr status`) are
+intentionally blocked. If a legitimate operation is blocked, the 403 `detail`
+names the offending root — add it only if it cannot reach an out-of-scope
+repository.
+
+Note that some `gh` commands request `viewer { login }` in the *same* document
+as `repository(...)` (e.g. `gh pr create` fork/remote resolution on some `gh`
+versions). Since every root must match, that request is blocked whole
+(`detail: viewer`). Because this allowlist only activates once merged to the
+mirror's default branch, the change's own task runs under the previous config;
+verify `gh pr create` / `view` / `merge` after deploying. Adding `viewer` is a
+safe remediation for GitHub App installation tokens (`viewer` resolves to the
+app's bot identity, and Layer 2 still scopes any repository-returning fields
+beneath it).
 
 ## Error Responses
 
