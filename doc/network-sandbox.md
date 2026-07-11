@@ -325,9 +325,12 @@ url_prefixes:
     methods: [POST]
     graphql:
       queries:
-        - "*"                          # allow all queries
+        - repository # single repo by owner/name — repo-scope checked
+        - node # single node by global ID — repo-scope checked
+        - nodes # bulk nodes by global ID — repo-scope checked
+        - __type # schema introspection (gh CLI); returns no repo data
+        - __schema # schema introspection; returns no repo data
       mutations:
-        - createIssue
         - createPullRequest
         - updatePullRequest
         - mergePullRequest
@@ -341,17 +344,61 @@ url_prefixes:
 - Each operation type (`queries`, `mutations`, `subscriptions`) is an optional
   list of fnmatch patterns. Omitted or empty lists block all operations of that
   type (default-deny)
+- Patterns match the operation's **top-level (root) field names**. Every root
+  field of the executing operation must match at least one pattern, or the whole
+  request is blocked
 - Pattern matching is case-sensitive (GraphQL field names are case-sensitive per
   the GraphQL spec)
 - The same `fnmatch.fnmatch()` wildcards as host/path matching are supported:
   `"*"` (all), `"create*"` (prefix), `"*PullRequest"` (suffix)
 - Fail-secure: parse errors, batched queries, fragment spreads at the operation
   root, and any ambiguous structure result in a block
-- Blocked requests return HTTP 403 with `error: "graphql_operation_blocked"`
+- Blocked requests return HTTP 403 with `error: "graphql_operation_blocked"`;
+  the response `detail` names the offending root field
+
+**Restrict `queries` — do not use `"*"` for GitHub App credentials.** Because
+patterns match root field names, a tight `queries` list is a powerful complement
+to repository scoping. The example above allows only:
+
+- `repository` — addresses a single repo by `owner`/`name`, validated by the
+  repository scope check (Layer 2).
+- `node` / `nodes` — address nodes by global ID, validated by the node-ID
+  ownership check.
+- `__type` / `__schema` — GraphQL introspection; returns only public schema
+  metadata, never repository data. The `gh` CLI needs `__type` for field
+  detection.
+
+Every other root field — `user`, `organization`, `repositoryOwner`, `viewer`,
+`search`, `resource` — is a repository **enumeration entry point**: it can reach
+repositories outside the configured scope through connection fields
+(`user.pinnedItems`, `organization.repositories`, `user.pullRequests`, `search`,
+…) or by URL (`resource(url:)`). Allowing `queries: ["*"]` leaves these
+reachable and relies entirely on the scope check's denylist keeping pace with
+GitHub's evolving schema. Listing only the roots your workflow needs closes that
+whole class at the operation layer. Airut's own PR/review tooling
+(`scripts/pr.py`, `airut/gh/`) uses only `repository` and `node`, and commands
+that rely on `search` or `viewer` (e.g. `gh pr status`, `gh search`) are
+intentionally blocked.
+
+> **Verify your `gh` flows before relying on this in production.** Some `gh`
+> commands emit a combined document that requests `viewer { login }` *alongside*
+> `repository(...)` in a single query — notably `gh pr create`'s fork/remote
+> resolution on certain `gh` versions and remote topologies. Because every root
+> field must match, such a request is blocked as a whole (`detail: viewer`),
+> which would break the command. This allowlist only takes effect after it is
+> merged to the mirror's default branch, so a task that changes it runs its own
+> `gh pr create` under the *old* config — the regression first surfaces on the
+> *next* task. After deploying, exercise `gh pr create`, `gh pr view`,
+> `gh pr merge`, and posting a review. If `gh pr create` is blocked on `viewer`,
+> add `viewer` to `queries`: for a GitHub App installation token `viewer`
+> resolves to the app's own bot identity, so the residual read surface
+> (`viewer.pullRequests`) is far narrower than an attacker-chosen
+> `user(login:)`, and Layer 2 still blocks its repository-returning connection
+> fields.
 
 For GitHub App credentials, this acts as Layer 1 in a two-layer defense. Layer 2
 ([GraphQL Repository Scoping](#graphql-repository-scoping)) ensures that allowed
-mutations target only permitted repositories. See
+operations target only permitted repositories. See
 [spec/graphql-operation-allowlist.md](../spec/graphql-operation-allowlist.md)
 for the full specification.
 
