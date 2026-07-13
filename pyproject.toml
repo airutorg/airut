@@ -135,13 +135,36 @@ partial-match = true
 
 [tool.uv-secure.vulnerability_criteria]
 ignore_vulnerabilities = [
-    # mistune — GHSA-qcq2-496w-v96p (CVE-2026-49851): low-severity (CVSS 3.1)
-    # quadratic-time DoS in parse_link_text on crafted input with many "["
-    # characters. Fixed in 3.3.0, but mistune is deliberately held at <3.3
-    # because 3.3.x regresses GFM table parsing (see the dependency pin
-    # comment above and airut/markdown.py). Airut only renders trusted,
-    # agent-generated markdown to email/Slack HTML inside a resource-limited
-    # sandbox, so the availability impact does not apply. Remove once the pin
-    # is lifted (upstream restores delimiter validation). (2026-07)
+    # mistune — every advisory below is fixed only in 3.3.0, but mistune is
+    # deliberately held at <3.3 because the 3.3.x GFM table-parser rewrite
+    # dropped delimiter-row validation (still broken in 3.3.3), which would
+    # regress email/Slack table rendering and break the documented "pipes in
+    # prose are not tables" behavior (see the dependency pin comment above,
+    # airut/markdown.py, and tests/test_markdown.py). Airut renders only
+    # trusted, agent-generated markdown, loads a minimal plugin set (table /
+    # table_in_quote for email; strikethrough / url / task_lists for Slack),
+    # and never calls mistune's HTMLRenderer.safe_url() — EmailRenderer
+    # overrides link()/image() with mistune.escape() and SlackMrkdwnRenderer
+    # emits mrkdwn, not HTML. Remove this whole block once the pin is lifted
+    # (upstream restores delimiter validation). (2026-07)
+    #
+    # GHSA-qcq2-496w-v96p (CVE-2026-49851): quadratic-time DoS in
+    # parse_link_text on input with many "[" characters. Availability only;
+    # airut runs inside a resource- and time-limited sandbox.
     "GHSA-qcq2-496w-v96p",
+    # CPU-exhaustion (quadratic-time) DoS in active parsing paths. Availability
+    # only, bounded by the sandbox's resource/time limits:
+    "PYSEC-2026-2210",  # CVE-2026-59922: strikethrough/mark/insert markers
+    "PYSEC-2026-2213",  # CVE-2026-59925: long emphasis (**/***) runs
+    "PYSEC-2026-2216",  # CVE-2026-59928: repeated reference-link definitions
+    # safe_url()/XSS URL-scheme bypasses. Not reachable: airut never calls
+    # mistune's safe_url() (see renderer note above):
+    "PYSEC-2026-2211",  # CVE-2026-59923: percent-encoded javascript: URIs
+    "PYSEC-2026-2217",  # CVE-2026-59929: legacy/chained schemes (feed:, jar:, ...)
+    # Injection in directives/plugins airut does not load:
+    "PYSEC-2026-2214",  # CVE-2026-59926: admonition :class: attribute injection
+    "PYSEC-2026-2218",  # CVE-2026-59930: toc heading-anchor collision
+    # Include directive (not used by airut — no md.read()/Include plugin):
+    "PYSEC-2026-2212",  # CVE-2026-59924: include path traversal
+    "PYSEC-2026-2215",  # CVE-2026-59927: indirect include cycle → RecursionError
 ]
