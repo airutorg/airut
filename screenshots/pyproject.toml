@@ -13,10 +13,19 @@ airut = { path = "..", editable = true }
 
 [tool.uv-secure.vulnerability_criteria]
 ignore_vulnerabilities = [
-    # mistune — GHSA-qcq2-496w-v96p (CVE-2026-49851): low-severity (CVSS 3.1)
-    # quadratic-time DoS in parse_link_text. Pulled in transitively via the
-    # editable airut dependency, which pins mistune <3.3 (the fix is 3.3.0)
+    # mistune advisories, all fixed only in 3.3.0. Pulled in transitively via
+    # the editable airut dependency, which pins mistune <3.3 (the fix is 3.3.0)
     # to avoid a GFM table-parsing regression. See the matching entry in the
-    # top-level pyproject.toml for the full rationale. (2026-07)
-    "GHSA-qcq2-496w-v96p",
+    # top-level pyproject.toml for the full per-advisory rationale. Keep this
+    # list in sync with that entry. (2026-07)
+    "GHSA-qcq2-496w-v96p",  # CVE-2026-49851: parse_link_text quadratic DoS
+    "PYSEC-2026-2210",  # CVE-2026-59922: strikethrough/mark/insert DoS
+    "PYSEC-2026-2211",  # CVE-2026-59923: percent-encoded javascript: URIs
+    "PYSEC-2026-2212",  # CVE-2026-59924: include path traversal
+    "PYSEC-2026-2213",  # CVE-2026-59925: emphasis-run quadratic DoS
+    "PYSEC-2026-2214",  # CVE-2026-59926: admonition :class: injection
+    "PYSEC-2026-2215",  # CVE-2026-59927: indirect include cycle DoS
+    "PYSEC-2026-2216",  # CVE-2026-59928: reference-link definition DoS
+    "PYSEC-2026-2217",  # CVE-2026-59929: legacy/chained URL schemes
+    "PYSEC-2026-2218",  # CVE-2026-59930: toc anchor collision
 ]
