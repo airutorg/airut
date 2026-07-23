@@ -105,8 +105,10 @@ def test_lib_imports_covered_by_runtime_deps() -> None:
     """All third-party imports in lib/ are provided by runtime deps."""
     imports = _collect_imports(LIB_DIR)
 
-    # Filter out stdlib and internal imports
-    stdlib = sys.stdlib_module_names | {"_thread", "_io"}
+    # Filter out stdlib and internal imports. ``_typeshed`` is a
+    # type-checking-only stub module (imported under ``TYPE_CHECKING``,
+    # never present at runtime), so it has no runtime distribution.
+    stdlib = sys.stdlib_module_names | {"_thread", "_io", "_typeshed"}
     third_party = set()
     for name in imports:
         if name in stdlib:
