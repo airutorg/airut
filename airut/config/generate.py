@@ -35,10 +35,10 @@ from __future__ import annotations
 
 import dataclasses
 import sys
-from dataclasses import fields as dc_fields
 from pathlib import Path
 from typing import Any
 
+from airut.config.schema import dataclass_fields as dc_fields
 from airut.config.schema import get_field_meta
 from airut.config.source import (
     YAML_EMAIL_STRUCTURE,

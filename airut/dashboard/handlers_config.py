@@ -13,7 +13,7 @@ All handlers operate on a shared ``EditBuffer`` instance.
 import dataclasses
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from werkzeug.wrappers import Request, Response
@@ -1099,7 +1099,9 @@ class ConfigEditorHandlers:
         buf_vars = buffer.raw.get("vars", {})
         live_vars = (snapshot.raw or {}).get("vars", {})
         if isinstance(buf_vars, dict) and isinstance(live_vars, dict):
-            for vk in sorted(set(buf_vars) | set(live_vars)):
+            # vars-section keys are variable names (always strings).
+            var_keys = cast("set[str]", set(buf_vars) | set(live_vars))
+            for vk in sorted(var_keys):
                 old_v = live_vars.get(vk, MISSING)
                 new_v = buf_vars.get(vk, MISSING)
                 if not raw_values_equal(old_v, new_v):

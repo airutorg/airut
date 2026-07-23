@@ -16,7 +16,7 @@ import typing
 from dataclasses import dataclass
 from typing import Any
 
-from airut.config.schema import get_field_meta
+from airut.config.schema import dataclass_fields, get_field_meta
 
 
 # Sentinel for missing defaults (distinct from None).
@@ -134,7 +134,7 @@ def _type_tag_for(annotation: object, qualified_name: str) -> str:
     if dataclasses.is_dataclass(annotation) and isinstance(annotation, type):
         meta_fields = [
             f
-            for f in dataclasses.fields(annotation)
+            for f in dataclass_fields(annotation)
             if get_field_meta(f) is not None
         ]
         if meta_fields:
@@ -185,7 +185,7 @@ def _walk_fields(
     hints = typing.get_type_hints(cls)
     cls_name = cls.__name__
 
-    for f in dataclasses.fields(cls):
+    for f in dataclass_fields(cls):
         fm = get_field_meta(f)
         if fm is None:
             continue

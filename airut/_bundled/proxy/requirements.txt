@@ -131,9 +131,9 @@ brotli==1.2.0 \
     --hash=sha256:e7c0af964e0b4e3412a0ebf341ea26ec767fa0b4cf81abb5e897c9338b5ad6a3 \
     --hash=sha256:fc1530af5c3c275b8524f2e24841cbe2599d74462455e9bae5109e9ff42e9361
     # via mitmproxy
-certifi==2026.6.17 \
-    --hash=sha256:024c88eeec92ca068db80f02b8b07c9cef7b9fe261d1d535abfd5abd6f6af432 \
-    --hash=sha256:2227dcbaafe0d2f59279d1762ddddc37783ed4354594f194ffc31d20f41fc3db
+certifi==2026.7.22 \
+    --hash=sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775 \
+    --hash=sha256:741e2c3b351ddf169a738da9f2c048608ff7f2c5cc02f1ebc6b118bb090d5d55
     # via
     #   aioquic
     #   mitmproxy
@@ -359,23 +359,23 @@ markupsafe==3.0.3 \
 mitmproxy==12.2.3 \
     --hash=sha256:df75ccd15ccb39ab55ce9dd4130312270e8ba208eb927a7cbe50cb52678ec722
     # via airut-proxy
-mitmproxy-linux==0.12.9 ; sys_platform == 'linux' \
-    --hash=sha256:94b10fee02aa42287739623cef921e1a53955005d45c9e2fa309ae9f0bf8d37d \
-    --hash=sha256:b4413e27c692f30036ad6d73432826e728ede026fac8e51651d0c545dd0177f2 \
-    --hash=sha256:ee842865a05f69196004ddcb29d50af0602361d9d6acee04f370f7e01c3674e8
+mitmproxy-linux==0.12.11 ; sys_platform == 'linux' \
+    --hash=sha256:0e5670a6b82546ebc0f947d79adfcb3c001ba3136a10ce848a2f4e2f336611c4 \
+    --hash=sha256:3155d4aa6b3e038f97b39ed5aa7b1fc89e5b7d25d119a19581aa472dc606ae5c \
+    --hash=sha256:3de4f96c11565cca2d051655f8ca23f8f24f4b3220e9ca3b0ad81007f293e9da
     # via mitmproxy-rs
-mitmproxy-macos==0.12.9 ; sys_platform == 'darwin' \
-    --hash=sha256:20e024fbfeeecbdb4ee2a1e8361d18782146777fdc1e00dcfecd52c22a3219bf
+mitmproxy-macos==0.12.11 ; sys_platform == 'darwin' \
+    --hash=sha256:63349d9b46514ca679547651f7c0548f9222892edfbcba087b82b3244fbae859
     # via mitmproxy-rs
-mitmproxy-rs==0.12.9 \
-    --hash=sha256:1fb9fb4aac9ecb82e2c3c5c439ef5e4961be7934d80ade5e9a99c0a944b8ea2f \
-    --hash=sha256:1fd716e87da8be3c62daa4325a5ff42bedd951fb8614c5f66caa94b7c21e2593 \
-    --hash=sha256:245922663440330c4b5a36d0194ed559b1dbd5e38545db2eb947180ed12a5e92 \
-    --hash=sha256:afeb3a2da2bc26474e1a2febaea4432430c5fde890dfce33bc4c1e65e6baef1b \
-    --hash=sha256:c6ffc35c002c675cac534442d92d1cdebd66fafd63754ad33b92ae968ea6e449
+mitmproxy-rs==0.12.11 \
+    --hash=sha256:6f5ecf3dd3c21e56191b84fc90364dc4d1dc95c660beedab4c816a0119ecb785 \
+    --hash=sha256:93f86706e779dd4a798c2d53cb82886b8c1f20edac5dee05da35f5c644da3531 \
+    --hash=sha256:9a55abf1b9cb0bf0ac073b1297a4fd83a7ae8a6b8311156cb71fb61320be233e \
+    --hash=sha256:c5d00a02414de0a81c088e1b3b8bcb6af4c55332fa106dd8c454512b671477ba \
+    --hash=sha256:d57eabeb5317e42a26d2878046c46079865e488f667898b1d67cc6f28d5bf85d
     # via mitmproxy
-mitmproxy-windows==0.12.9 ; os_name == 'nt' \
-    --hash=sha256:fdec21fb66a5ba237d9106bfdc09d9428f315551bf4b41ba06b261e7beb56417
+mitmproxy-windows==0.12.11 ; os_name == 'nt' \
+    --hash=sha256:59addc8864669a08f8cb48d8b29129efb1ca5f6cba9696e2d91f1f506b21a2d7
     # via mitmproxy-rs
 msgpack==1.2.1 \
     --hash=sha256:04c721c2c7448767e9e3f2520a475663d8ee0f09c31890f6d2bd70fd636a9647 \

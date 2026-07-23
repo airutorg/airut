@@ -23,7 +23,11 @@ import dataclasses
 import typing
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+
+if TYPE_CHECKING:
+    from _typeshed import DataclassInstance
 
 
 class Scope(Enum):
@@ -100,6 +104,19 @@ def get_field_meta(f: dataclasses.Field[Any]) -> FieldMeta | None:
     return f.metadata.get(_META_KEY)
 
 
+def dataclass_fields(cls: type) -> tuple[dataclasses.Field[Any], ...]:
+    """Return the fields of a config dataclass *class*.
+
+    The declarative-config layer resolves config dataclasses dynamically
+    and threads them around as plain ``type`` (e.g. from ``__annotations__``
+    or per-class lookup tables).  ``dataclasses.fields`` is stub-typed to
+    accept only ``type[DataclassInstance]``, so this thin wrapper performs
+    the narrowing in one place; every call site already operates on a known
+    config dataclass.
+    """
+    return dataclasses.fields(typing.cast("type[DataclassInstance]", cls))
+
+
 @dataclass(frozen=True)
 class FieldSchema:
     """UI-consumable field description.
@@ -137,7 +154,7 @@ def schema_for_ui(config_cls: type) -> list[FieldSchema]:
     """
     result: list[FieldSchema] = []
     hints = typing.get_type_hints(config_cls)
-    for f in dataclasses.fields(config_cls):
+    for f in dataclass_fields(config_cls):
         fm = get_field_meta(f)
         if fm is None:
             continue
