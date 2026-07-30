@@ -31,8 +31,12 @@ url_prefixes:
     path: /graphql
     methods: [POST]
     graphql:                     # optional: filter GraphQL operations
-      queries:
-        - "*"                    # allow all queries
+      queries:                   # restrict root fields (avoid "*") — see note
+        - repository             # single repo — repo-scope checked
+        - node                   # node by ID — repo-scope checked
+        - nodes                  # nodes by ID — repo-scope checked
+        - __type                 # introspection (no repo data)
+        - __schema               # introspection (no repo data)
       mutations:                 # allow only specific mutations (default-deny)
         - createPullRequest
         - updatePullRequest
@@ -43,7 +47,10 @@ url_prefixes:
 **GraphQL operation filtering:** URL prefix entries for GraphQL endpoints can
 include an optional `graphql` block that filters operations by type (query,
 mutation, subscription) and top-level field name. Omitted operation types are
-blocked (default-deny). Pattern matching uses fnmatch wildcards (`*`, `?`). See
+blocked (default-deny). Pattern matching uses fnmatch wildcards (`*`, `?`). For
+GitHub App credentials, **restrict `queries` to a safe root-field set instead of
+`"*"`** — owner-level roots (`user`, `organization`, `search`, `resource`, …)
+can enumerate repositories outside the configured scope. See
 `doc/network-sandbox.md` for full details and
 `spec/graphql-operation-allowlist.md` for the specification.
 

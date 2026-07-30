@@ -107,6 +107,41 @@ url_prefixes:
   - host: api.github.com
     path: /graphql
     methods: [POST]
+    # Restrict GraphQL root fields — do NOT use queries: ["*"]. Owner-level
+    # roots (user, organization, repositoryOwner, viewer, search, resource)
+    # can enumerate repositories outside your configured scope via connection
+    # fields (user.pinnedItems, organization.repositories, …). List only the
+    # roots your workflow needs. See doc/network-sandbox.md#graphql-operation-filtering.
+    graphql:
+      queries:
+        - repository # single repo by owner/name — repo-scope checked
+        - node # single node by global ID — repo-scope checked
+        - nodes # bulk nodes by global ID — repo-scope checked
+        - __type # schema introspection (gh CLI field detection); no repo data
+        - __schema # schema introspection; no repo data
+      mutations:
+        # Pull request lifecycle
+        - createPullRequest
+        - closePullRequest
+        - reopenPullRequest
+        - updatePullRequest
+        - mergePullRequest
+        - enablePullRequestAutoMerge
+        - disablePullRequestAutoMerge
+        - markPullRequestReadyForReview
+        - convertPullRequestToDraft
+        # Code review
+        - addPullRequestReview
+        - submitPullRequestReview
+        - requestReviews
+        - resolveReviewThread
+        - unresolveReviewThread
+        # Git refs (branch management)
+        - createRef
+        - updateRef
+        - deleteRef
+        # Commits
+        - createCommitOnBranch
   - host: uploads.github.com
     path: /repos/your-org/your-repo*
     methods: [POST]
