@@ -331,7 +331,13 @@ class OutboxContent:
     unreadable: list[str]
 
     def unreadable_note(self) -> str:
-        """Render the line naming the files that could not be read."""
+        """Render the line naming the files that could not be read.
+
+        Returns:
+            The note, or an empty string when everything was readable.
+        """
+        if not self.unreadable:
+            return ""
         names = ", ".join(self.unreadable)
         return f"Could not attach {len(self.unreadable)} file(s): {names}"
 

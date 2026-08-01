@@ -87,8 +87,9 @@ def _deliver_via_email(
     body = result.response_text
     # The outbox is cleared below, so name anything that could not be
     # read rather than dropping it silently.
-    if outbox.unreadable:
-        body = f"{body}\n\n{outbox.unreadable_note()}"
+    unreadable_note = outbox.unreadable_note()
+    if unreadable_note:
+        body = f"{body}\n\n{unreadable_note}"
     if result.usage_stats and result.usage_stats.has_any():
         footer = result.usage_stats.format_summary()
         if footer:

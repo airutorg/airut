@@ -744,7 +744,11 @@ class SlackChannelAdapter(ChannelAdapter):
     def _report_failed_uploads(
         self, parsed: SlackParsedMessage, filenames: list[str]
     ) -> None:
-        """Tell the thread which outbox files could not be uploaded."""
+        """Tell the thread which outbox files could not be uploaded.
+
+        Never raises: escaping here would skip the core's outbox cleanup
+        and bring back the re-upload on the next turn.
+        """
         names = ", ".join(f"`{name}`" for name in filenames)
         try:
             self._client.chat_postMessage(
@@ -752,7 +756,7 @@ class SlackChannelAdapter(ChannelAdapter):
                 thread_ts=parsed.slack_thread_ts,
                 text=f"Could not upload {len(filenames)} file(s): {names}",
             )
-        except SlackApiError as e:
+        except (SlackApiError, SlackRequestError) as e:
             logger.warning(
                 "Failed to report Slack upload failures (non-fatal): %s", e
             )

@@ -469,7 +469,7 @@ class TestProcessMessage:
         outbox = tmp_path / "conversations" / "outbox"
         outbox.mkdir(parents=True, exist_ok=True)
         outfile = outbox / name
-        outfile.write_text("report content")
+        outfile.write_text(f"contents of {name}")
         return outfile
 
     def test_new_conversation_success(
@@ -663,6 +663,31 @@ class TestProcessMessage:
         delivered = adapter.send_reply.call_args.args[4]
         assert [p.name for p in delivered] == ["report.txt"]
         assert (nested / "inner.txt").exists()
+
+    def test_outbox_kept_on_timeout(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """A timeout takes the error path and keeps the outbox.
+
+        Nothing was delivered, so partial output stays for the next
+        reply instead of being dropped.
+        """
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        svc._mock_task.execute = AsyncMock(
+            return_value=_make_failure_result(outcome=Outcome.TIMEOUT)
+        )
+        outfile = self._seed_outbox(tmp_path, "partial.txt")
+        parsed = _make_parsed_message(body="Do something")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            reason, _ = process_message(svc, parsed, "task1", handler, adapter)
+
+        assert reason == CompletionReason.TIMEOUT
+        adapter.send_reply.assert_not_called()
+        assert outfile.exists()
 
     def test_outbox_kept_when_delivery_fails(
         self, email_config: RepoServerConfig, tmp_path: Path

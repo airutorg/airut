@@ -145,6 +145,22 @@ class TestListOutboxFiles:
         """A missing outbox directory yields nothing to deliver."""
         assert list_outbox_files(tmp_path / "nonexistent") == []
 
+    def test_skips_symlinks(self, tmp_path: Path) -> None:
+        """Symlinks are never delivered.
+
+        The gateway reads the outbox on the host, where a link written
+        inside the container resolves against a different filesystem —
+        delivering it would ship whatever host file it happens to name.
+        """
+        outbox = tmp_path / "outbox"
+        outbox.mkdir()
+        secret = tmp_path / "server-config.yaml"
+        secret.write_text("token: hunter2")
+        (outbox / "report.txt").symlink_to(secret)
+        (outbox / "real.txt").write_text("fine")
+
+        assert list_outbox_files(outbox) == [outbox / "real.txt"]
+
 
 class TestClearOutbox:
     """Tests for clear_outbox() post-delivery cleanup."""
@@ -170,6 +186,22 @@ class TestClearOutbox:
         clear_outbox(outbox)
 
         assert list(outbox.iterdir()) == [outbox / "nested"]
+
+    def test_removes_symlinks_without_touching_targets(
+        self, tmp_path: Path
+    ) -> None:
+        """Undelivered symlinks go too, so they aren't re-reported."""
+        outbox = tmp_path / "outbox"
+        outbox.mkdir()
+        target = tmp_path / "target.txt"
+        target.write_text("keep me")
+        (outbox / "link.txt").symlink_to(target)
+        (outbox / "dirlink").symlink_to(tmp_path)
+
+        clear_outbox(outbox)
+
+        assert list(outbox.iterdir()) == []
+        assert target.read_text() == "keep me"
 
     def test_noop_for_missing_outbox(self, tmp_path: Path) -> None:
         """A missing outbox directory is not an error."""

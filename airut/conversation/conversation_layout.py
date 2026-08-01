@@ -119,9 +119,15 @@ def unique_inbox_path(inbox_dir: Path, safe_name: str) -> Path:
 def list_outbox_files(outbox_dir: Path) -> list[Path]:
     """Return the deliverable files in *outbox_dir*, ordered by name.
 
-    Only files in the outbox root are deliverable — channels send flat
-    files — so sub-directories are skipped.  Sorting keeps attachment
-    order stable instead of following directory order.
+    Only regular files in the outbox root are deliverable — channels send
+    flat files — so sub-directories are skipped.  Sorting keeps
+    attachment order stable instead of following directory order.
+
+    Symlinks are skipped too: the gateway resolves them on the host,
+    where the same path means something different than it did inside the
+    container, so a link is either dangling or points at a host file the
+    conversation was never given (a symlink to the server config would
+    otherwise be delivered verbatim).
 
     Args:
         outbox_dir: Conversation outbox directory (need not exist).
@@ -131,28 +137,43 @@ def list_outbox_files(outbox_dir: Path) -> list[Path]:
     """
     if not outbox_dir.exists():
         return []
-    return sorted(path for path in outbox_dir.iterdir() if path.is_file())
+    files: list[Path] = []
+    for path in outbox_dir.iterdir():
+        if path.is_symlink():
+            logger.warning("Skipping symlink in outbox: %s", path)
+            continue
+        if path.is_file():
+            files.append(path)
+    return sorted(files)
 
 
 def clear_outbox(outbox_dir: Path) -> None:
-    """Delete the files in *outbox_dir* once they have been delivered.
+    """Delete the outbox entries once the reply has been delivered.
 
     Called by the gateway after a channel adapter has delivered a reply,
     so the outbox — which lives as long as the conversation — does not
-    hand the same files to the next turn.  Removes exactly what
-    :func:`list_outbox_files` offers for delivery; unlink failures are
-    logged rather than raised, since a file that cannot be removed is
-    not worth failing a delivered reply over.
+    hand the same files to the next turn.  Removes everything
+    :func:`list_outbox_files` offered for delivery plus the symlinks it
+    refused (which would otherwise be re-reported every turn);
+    sub-directories are left alone.  Unlink failures are logged rather
+    than raised, since a file that cannot be removed is not worth
+    failing a delivered reply over.
 
     Args:
         outbox_dir: Conversation outbox directory (need not exist).
     """
+    if not outbox_dir.exists():
+        return
     removed = 0
-    for filepath in list_outbox_files(outbox_dir):
+    for path in outbox_dir.iterdir():
+        # Only a real directory is kept; a symlink to one is unlinked
+        # (which removes the link, never the target).
+        if path.is_dir() and not path.is_symlink():
+            continue
         try:
-            filepath.unlink()
+            path.unlink()
         except OSError as e:
-            logger.warning("Failed to delete outbox file %s: %s", filepath, e)
+            logger.warning("Failed to delete outbox file %s: %s", path, e)
         else:
             removed += 1
     if removed:

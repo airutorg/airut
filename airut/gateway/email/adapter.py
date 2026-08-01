@@ -371,8 +371,7 @@ class EmailChannelAdapter(ChannelAdapter):
         unreadable_note = ""
         if outbox_files:
             outbox = read_outbox_files(outbox_files)
-            if outbox.unreadable:
-                unreadable_note = outbox.unreadable_note()
+            unreadable_note = outbox.unreadable_note()
             if outbox.attachments:
                 attachments = outbox.attachments
                 logger.info(
