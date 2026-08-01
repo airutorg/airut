@@ -15,10 +15,10 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from airut.conversation import clear_outbox
+from airut.conversation import clear_outbox, list_outbox_files
 from airut.gateway.config import ScheduleConfig
 from airut.gateway.email.adapter import EmailChannelAdapter
-from airut.gateway.email.parsing import collect_outbox_files
+from airut.gateway.email.parsing import read_outbox_files
 from airut.gateway.service.message_processing import SandboxTaskResult
 
 
@@ -81,12 +81,14 @@ def _deliver_via_email(
 
     # Collect outbox files
     outbox_dir = result.layout.outbox
-    attachments: list[tuple[str, bytes]] = []
-    if outbox_dir.exists():
-        attachments = collect_outbox_files(outbox_dir)
+    outbox = read_outbox_files(list_outbox_files(outbox_dir))
 
     # Build body with usage footer if available
     body = result.response_text
+    # The outbox is cleared below, so name anything that could not be
+    # read rather than dropping it silently.
+    if outbox.unreadable:
+        body = f"{body}\n\n{outbox.unreadable_note()}"
     if result.usage_stats and result.usage_stats.has_any():
         footer = result.usage_stats.format_summary()
         if footer:
@@ -98,7 +100,7 @@ def _deliver_via_email(
             subject=subject,
             body=body,
             conversation_id=result.conversation_id,
-            attachments=attachments,
+            attachments=outbox.attachments,
         )
         # The conversation outlives the schedule run — recipients can
         # reply to continue it — so delivered files must not stay behind

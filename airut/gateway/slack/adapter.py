@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import cast
 
 from slack_sdk import WebClient
-from slack_sdk.errors import SlackApiError
+from slack_sdk.errors import SlackApiError, SlackRequestError
 
 from airut._json_types import JsonDict
 from airut.conversation import unique_inbox_path
@@ -711,19 +711,19 @@ class SlackChannelAdapter(ChannelAdapter):
         # not make it rather than losing them silently.
         failed: list[str] = []
         for filepath in outbox_files:
-            if filepath.exists():
-                try:
-                    _upload_file(
-                        self._client,
-                        parsed.slack_channel_id,
-                        parsed.slack_thread_ts,
-                        filepath,
-                    )
-                except SlackApiError as e:
-                    logger.warning(
-                        "Failed to upload file %s: %s", filepath.name, e
-                    )
-                    failed.append(filepath.name)
+            try:
+                _upload_file(
+                    self._client,
+                    parsed.slack_channel_id,
+                    parsed.slack_thread_ts,
+                    filepath,
+                )
+            except (SlackApiError, SlackRequestError, OSError) as e:
+                # OSError covers a file that vanished or cannot be read
+                # between listing and upload; it must not escape as an
+                # unhandled error after the reply text is already out.
+                logger.warning("Failed to upload file %s: %s", filepath.name, e)
+                failed.append(filepath.name)
         if failed:
             self._report_failed_uploads(parsed, failed)
 

@@ -20,8 +20,8 @@ from airut.gateway.email.listener import (
     IMAPIdleError,
 )
 from airut.gateway.email.parsing import (
+    OutboxContent,
     ParseError,
-    collect_outbox_files,
     decode_subject,
     extract_attachments,
     extract_body,
@@ -48,8 +48,8 @@ __all__ = [
     "IMAPConnectionError",
     "IMAPIdleError",
     # parsing
+    "OutboxContent",
     "ParseError",
-    "collect_outbox_files",
     "decode_subject",
     "extract_attachments",
     "extract_body",

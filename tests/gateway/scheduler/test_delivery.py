@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from airut.conversation import ConversationLayout
 from airut.gateway.config import ScheduleConfig, ScheduleDelivery
@@ -166,6 +166,22 @@ class TestDeliverViaEmail:
 
         # Should not raise
         _deliver_via_email(adapter, "daily", config, result)
+
+    def test_unreadable_outbox_file_named_in_body(self, tmp_path: Path) -> None:
+        """A file that cannot be read is named in the delivered body."""
+        adapter = MagicMock(spec=EmailChannelAdapter)
+        config = _make_schedule_config()
+        outbox = tmp_path / "outbox"
+        outbox.mkdir()
+        (outbox / "locked.bin").write_text("unreadable")
+        result = _make_result(outbox=outbox)
+
+        with patch.object(Path, "read_bytes", side_effect=OSError("denied")):
+            _deliver_via_email(adapter, "daily", config, result)
+
+        kwargs = adapter.send_new_message.call_args.kwargs
+        assert kwargs["attachments"] == []
+        assert "Could not attach 1 file(s): locked.bin" in kwargs["body"]
 
     def test_outbox_kept_when_delivery_fails(self, tmp_path: Path) -> None:
         """A failed send leaves the files for the next attempt."""

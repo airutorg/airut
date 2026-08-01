@@ -280,9 +280,9 @@ GatewayService._process_message_worker()  [worker thread]:
       -> Spawn Podman container
       -> Mount conversation directories
       -> Run claude CLI
-    -> tracker.complete_task(task_id, reason)             → COMPLETED
     -> ChannelAdapter.send_reply() or send_error()
       -> outbox/ cleared once send_reply() returns
+    -> tracker.complete_task(task_id, reason)             → COMPLETED
     -> _drain_pending(conv_id)
       -> Pop first pending message
       -> Submit _process_pending_message() to thread pool

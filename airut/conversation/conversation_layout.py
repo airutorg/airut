@@ -116,27 +116,39 @@ def unique_inbox_path(inbox_dir: Path, safe_name: str) -> Path:
     return candidate
 
 
+def list_outbox_files(outbox_dir: Path) -> list[Path]:
+    """Return the deliverable files in *outbox_dir*, ordered by name.
+
+    Only files in the outbox root are deliverable — channels send flat
+    files — so sub-directories are skipped.  Sorting keeps attachment
+    order stable instead of following directory order.
+
+    Args:
+        outbox_dir: Conversation outbox directory (need not exist).
+
+    Returns:
+        Paths of the files to deliver, empty if there are none.
+    """
+    if not outbox_dir.exists():
+        return []
+    return sorted(path for path in outbox_dir.iterdir() if path.is_file())
+
+
 def clear_outbox(outbox_dir: Path) -> None:
     """Delete the files in *outbox_dir* once they have been delivered.
 
     Called by the gateway after a channel adapter has delivered a reply,
     so the outbox — which lives as long as the conversation — does not
-    hand the same files to the next turn.
-
-    Sub-directories are left alone (channels only send files from the
-    outbox root) and unlink failures are logged rather than raised: a
-    file that cannot be removed is not worth failing a delivered reply
-    over.
+    hand the same files to the next turn.  Removes exactly what
+    :func:`list_outbox_files` offers for delivery; unlink failures are
+    logged rather than raised, since a file that cannot be removed is
+    not worth failing a delivered reply over.
 
     Args:
         outbox_dir: Conversation outbox directory (need not exist).
     """
-    if not outbox_dir.exists():
-        return
     removed = 0
-    for filepath in outbox_dir.iterdir():
-        if not filepath.is_file():
-            continue
+    for filepath in list_outbox_files(outbox_dir):
         try:
             filepath.unlink()
         except OSError as e:

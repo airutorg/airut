@@ -17,6 +17,7 @@ from airut.conversation.conversation_layout import (
     clear_outbox,
     create_conversation_layout,
     get_container_mounts,
+    list_outbox_files,
     prepare_conversation,
     unique_inbox_path,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "clear_outbox",
     "create_conversation_layout",
     "get_container_mounts",
+    "list_outbox_files",
     "prepare_conversation",
     "unique_inbox_path",
     "CONVERSATION_FILE_NAME",

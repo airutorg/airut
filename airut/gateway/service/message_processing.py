@@ -35,6 +35,7 @@ from airut.conversation import (
     ReplySummary,
     clear_outbox,
     create_conversation_layout,
+    list_outbox_files,
     prepare_conversation,
 )
 from airut.dashboard.tracker import (
@@ -745,12 +746,10 @@ def _deliver_reply(
 ) -> None:
     """Send the reply with any outbox files, then clear the outbox.
 
-    Only files in the outbox root are delivered; sub-directories are
-    skipped (channels send flat files) so an adapter is never handed a
-    path it cannot upload.  Clearing here — rather than in each adapter
-    — keeps every channel consistent, and happens only once
-    ``send_reply`` returns: a raised ``ChannelSendError`` means nothing
-    was delivered, so the files stay for the next attempt.
+    Clearing here — rather than in each adapter — keeps every channel
+    consistent, and happens only once ``send_reply`` returns: a raised
+    ``ChannelSendError`` means nothing was delivered, so the files stay
+    for the next attempt.
 
     Args:
         adapter: Channel adapter delivering the reply.
@@ -760,11 +759,7 @@ def _deliver_reply(
         usage_footer: Formatted usage summary, or empty for none.
     """
     outbox = result.layout.outbox
-    outbox_files = (
-        [path for path in outbox.iterdir() if path.is_file()]
-        if outbox.exists()
-        else []
-    )
+    outbox_files = list_outbox_files(outbox)
     adapter.send_reply(
         parsed,
         result.conversation_id,

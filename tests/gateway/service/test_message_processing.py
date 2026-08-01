@@ -617,7 +617,7 @@ class TestProcessMessage:
             reason, _ = process_message(svc, parsed, "task1", handler, adapter)
 
         assert reason == CompletionReason.SUCCESS
-        delivered = adapter.send_reply.call_args[0][4]
+        delivered = adapter.send_reply.call_args.args[4]
         assert [p.name for p in delivered] == ["report.txt"]
         assert not outfile.exists()
 
@@ -639,7 +639,7 @@ class TestProcessMessage:
             reason, _ = process_message(svc, parsed, "task1", handler, adapter)
 
         assert reason == CompletionReason.EXECUTION_FAILED
-        delivered = adapter.send_reply.call_args[0][4]
+        delivered = adapter.send_reply.call_args.args[4]
         assert [p.name for p in delivered] == ["partial.txt"]
         assert not outfile.exists()
 
@@ -660,7 +660,7 @@ class TestProcessMessage:
         ):
             process_message(svc, parsed, "task1", handler, adapter)
 
-        delivered = adapter.send_reply.call_args[0][4]
+        delivered = adapter.send_reply.call_args.args[4]
         assert [p.name for p in delivered] == ["report.txt"]
         assert (nested / "inner.txt").exists()
 

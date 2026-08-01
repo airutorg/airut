@@ -13,6 +13,7 @@ from airut.conversation import (
     clear_outbox,
     create_conversation_layout,
     get_container_mounts,
+    list_outbox_files,
     prepare_conversation,
     unique_inbox_path,
 )
@@ -116,6 +117,35 @@ class TestUniqueInboxPath:
         )
 
 
+class TestListOutboxFiles:
+    """Tests for list_outbox_files() delivery selection."""
+
+    def test_returns_files_sorted_by_name(self, tmp_path: Path) -> None:
+        """Attachment order is stable, not directory order."""
+        outbox = tmp_path / "outbox"
+        outbox.mkdir()
+        (outbox / "b.txt").write_text("b")
+        (outbox / "a.txt").write_text("a")
+
+        assert list_outbox_files(outbox) == [
+            outbox / "a.txt",
+            outbox / "b.txt",
+        ]
+
+    def test_skips_subdirectories(self, tmp_path: Path) -> None:
+        """Only the outbox root is delivered; channels send flat files."""
+        outbox = tmp_path / "outbox"
+        outbox.mkdir()
+        (outbox / "nested").mkdir()
+        (outbox / "file.txt").write_text("a")
+
+        assert list_outbox_files(outbox) == [outbox / "file.txt"]
+
+    def test_missing_outbox_is_empty(self, tmp_path: Path) -> None:
+        """A missing outbox directory yields nothing to deliver."""
+        assert list_outbox_files(tmp_path / "nonexistent") == []
+
+
 class TestClearOutbox:
     """Tests for clear_outbox() post-delivery cleanup."""
 
@@ -144,6 +174,8 @@ class TestClearOutbox:
     def test_noop_for_missing_outbox(self, tmp_path: Path) -> None:
         """A missing outbox directory is not an error."""
         clear_outbox(tmp_path / "nonexistent")
+
+        assert not (tmp_path / "nonexistent").exists()
 
     def test_handles_unlink_error(self, tmp_path: Path) -> None:
         """An undeletable file is logged, not raised."""

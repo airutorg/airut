@@ -552,6 +552,47 @@ class TestSendReply:
         # Removing delivered files is the gateway's job, not the adapter's.
         assert outfile.exists()
 
+    def test_unreadable_outbox_file_named_in_body(self, tmp_path: Path) -> None:
+        """A file that cannot be read is named, not silently dropped.
+
+        The core clears the outbox once this returns, so the user would
+        otherwise never learn the file existed.
+        """
+        adapter, _, _, responder = _make_adapter()
+        parsed = EmailParsedMessage(
+            sender="user@example.com",
+            body="body",
+            conversation_id=None,
+            model_hint=None,
+            original_message_id="<msg1@ex.com>",
+            decoded_subject="Test",
+        )
+
+        outbox = tmp_path / "outbox"
+        outbox.mkdir()
+        good = outbox / "report.txt"
+        good.write_text("report content")
+        bad = outbox / "locked.bin"
+        bad.write_text("unreadable")
+
+        original_read_bytes = Path.read_bytes
+
+        def fake_read_bytes(self: Path) -> bytes:
+            if self.name == "locked.bin":
+                raise OSError("Permission denied")
+            return original_read_bytes(self)
+
+        with patch.object(Path, "read_bytes", fake_read_bytes):
+            adapter.send_reply(parsed, "conv1", "Done", "Cost: $1", [good, bad])
+
+        call_kw = responder.send_reply.call_args[1]
+        assert call_kw["attachments"] == [("report.txt", b"report content")]
+        assert "Could not attach 1 file(s): locked.bin" in call_kw["body"]
+        # The note precedes the usage footer.
+        assert call_kw["body"].index("locked.bin") < call_kw["body"].index(
+            "Cost: $1"
+        )
+
     def test_retry_resends_attachments(self, tmp_path: Path) -> None:
         adapter, _, _, responder = _make_adapter()
         parsed = EmailParsedMessage(
