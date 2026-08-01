@@ -740,41 +740,39 @@ def run_in_sandbox(
 def _deliver_reply(
     adapter: ChannelAdapter,
     parsed: ParsedMessage,
-    conversation_id: str,
     result: SandboxTaskResult,
     usage_footer: str,
 ) -> None:
     """Send the reply with any outbox files, then clear the outbox.
 
-    The outbox is mounted for the whole life of a conversation, so files
-    left behind after a reply are collected again on the next turn and
-    re-sent with every later reply.  Clearing here — rather than in each
-    adapter — keeps every channel consistent.
-
-    The outbox is cleared only once ``send_reply`` returns: a raised
-    ``ChannelSendError`` means nothing was delivered, so the files stay
-    for the next attempt.
+    Only files in the outbox root are delivered; sub-directories are
+    skipped (channels send flat files) so an adapter is never handed a
+    path it cannot upload.  Clearing here — rather than in each adapter
+    — keeps every channel consistent, and happens only once
+    ``send_reply`` returns: a raised ``ChannelSendError`` means nothing
+    was delivered, so the files stay for the next attempt.
 
     Args:
         adapter: Channel adapter delivering the reply.
         parsed: Parsed message being replied to.
-        conversation_id: Conversation the reply belongs to.
-        result: Sandbox result carrying the response and layout.
+        result: Sandbox result carrying the response, conversation ID,
+            and layout.
         usage_footer: Formatted usage summary, or empty for none.
     """
+    outbox = result.layout.outbox
     outbox_files = (
-        list(result.layout.outbox.iterdir())
-        if result.layout.outbox.exists()
+        [path for path in outbox.iterdir() if path.is_file()]
+        if outbox.exists()
         else []
     )
     adapter.send_reply(
         parsed,
-        conversation_id,
+        result.conversation_id,
         result.response_text,
         usage_footer,
         outbox_files,
     )
-    clear_outbox(result.layout.outbox)
+    clear_outbox(outbox)
 
 
 def process_message(
@@ -986,14 +984,12 @@ def process_message(
                 and sandbox_result.usage_stats.has_any()
                 else ""
             )
-            _deliver_reply(
-                adapter, parsed, conv_id, sandbox_result, usage_footer
-            )
+            _deliver_reply(adapter, parsed, sandbox_result, usage_footer)
         elif sandbox_result.outcome == Outcome.TIMEOUT:
             adapter.send_error(parsed, conv_id, sandbox_result.response_text)
             return CompletionReason.TIMEOUT, conv_id
         else:
-            _deliver_reply(adapter, parsed, conv_id, sandbox_result, "")
+            _deliver_reply(adapter, parsed, sandbox_result, "")
 
         logger.info(
             "Repo '%s': sent reply to %s for conversation %s",

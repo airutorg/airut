@@ -542,18 +542,10 @@ class TestSendReply:
         outbox.mkdir()
         outfile = outbox / "report.txt"
         outfile.write_text("report content")
+        # A sibling the core did not pass must not be attached.
+        (outbox / "ignored.txt").write_text("not delivered")
 
-        with patch(
-            "airut.gateway.email.adapter.collect_outbox_files",
-            return_value=[("report.txt", b"report content")],
-        ):
-            adapter.send_reply(
-                parsed,
-                "conv1",
-                "Done",
-                "",
-                [outfile],
-            )
+        adapter.send_reply(parsed, "conv1", "Done", "", [outfile])
 
         call_kw = responder.send_reply.call_args[1]
         assert call_kw["attachments"] == [("report.txt", b"report content")]
@@ -582,17 +574,7 @@ class TestSendReply:
             None,
         ]
 
-        with patch(
-            "airut.gateway.email.adapter.collect_outbox_files",
-            return_value=[("report.txt", b"data")],
-        ):
-            adapter.send_reply(
-                parsed,
-                "conv1",
-                "Done",
-                "",
-                [outfile],
-            )
+        adapter.send_reply(parsed, "conv1", "Done", "", [outfile])
 
         # The retry carries the same attachments as the first attempt.
         assert responder.send_reply.call_count == 2

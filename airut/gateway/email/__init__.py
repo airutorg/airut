@@ -28,6 +28,7 @@ from airut.gateway.email.parsing import (
     extract_conversation_id,
     extract_conversation_id_from_headers,
     extract_model_from_address,
+    read_outbox_files,
 )
 from airut.gateway.email.responder import (
     EmailResponder,
@@ -55,6 +56,7 @@ __all__ = [
     "extract_conversation_id",
     "extract_conversation_id_from_headers",
     "extract_model_from_address",
+    "read_outbox_files",
     # responder
     "EmailResponder",
     "SMTPSendError",

@@ -76,12 +76,20 @@ create adapters. A single repo can have multiple channels configured
 simultaneously (e.g. both email and Slack); each channel runs its own listener
 and feeds messages through the same processing pipeline.
 
-**Outbox ownership:** the core lists `conversations/{ID}/outbox/` and passes the
-files to `send_reply()`; adapters attach or upload them but never delete them.
-Once `send_reply()` returns, the core clears the outbox. The outbox is mounted
-for the whole life of a conversation, so files left behind would be re-sent with
-every later reply. A failed delivery raises `ChannelSendError`, which skips the
-cleanup and leaves the files for the next attempt.
+**Outbox ownership:** the core lists the files in `conversations/{ID}/outbox/`
+(sub-directories are skipped) and passes them to `send_reply()`; adapters attach
+or upload them but never delete them. Once `send_reply()` returns, the core
+clears the outbox. The outbox is mounted for the whole life of a conversation,
+so files left behind would be re-sent with every later reply. Scheduled-task
+delivery follows the same rule — its conversation outlives the run, since
+recipients can reply to continue it.
+
+A delivery that fails entirely raises `ChannelSendError`, which skips the
+cleanup and leaves the files for the next attempt. An adapter that gives up on
+an individual file without raising (Slack treats a single failed upload as
+non-fatal) must tell the user, because that file is cleared either way. The
+`TIMEOUT` outcome takes the `send_error()` path and deliberately leaves the
+outbox untouched, so partial output ships with the next reply.
 
 ### Components
 

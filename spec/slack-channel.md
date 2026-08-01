@@ -518,7 +518,10 @@ admits `file_share`, so no extra carve-out is needed there.
 Slack's `files_upload_v2` method. The gateway clears `outbox/` once the reply
 has been delivered (see
 [Outbox ownership](gateway-architecture.md#channel-abstraction)), so a file is
-uploaded to the thread exactly once and not repeated on later turns.
+uploaded to the thread exactly once and not repeated on later turns. A single
+failed upload does not fail the reply — the message text is already posted — but
+the failed filenames are named in a follow-up thread message, since the file is
+cleared from the outbox regardless.
 
 ## Authorization Model
 

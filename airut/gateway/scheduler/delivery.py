@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from airut.conversation import clear_outbox
 from airut.gateway.config import ScheduleConfig
 from airut.gateway.email.adapter import EmailChannelAdapter
 from airut.gateway.email.parsing import collect_outbox_files
@@ -99,6 +100,10 @@ def _deliver_via_email(
             conversation_id=result.conversation_id,
             attachments=attachments,
         )
+        # The conversation outlives the schedule run — recipients can
+        # reply to continue it — so delivered files must not stay behind
+        # to be attached again to every later reply.
+        clear_outbox(outbox_dir)
         logger.info(
             "Schedule '%s': delivered result to %s via email",
             schedule_name,

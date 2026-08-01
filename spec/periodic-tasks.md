@@ -336,6 +336,12 @@ name.
 the parameters are inherently channel-specific. The `delivery.py` module
 dispatches on the adapter type (`isinstance` check).
 
+Files in `/outbox` are attached to the message and the outbox is cleared once
+the send succeeds, matching the interactive reply path (see
+[Outbox ownership](gateway-architecture.md#channel-abstraction)). The
+conversation outlives the run — recipients reply to continue it — so files left
+behind would be attached again to every later reply.
+
 ### Error Delivery
 
 If the `AgentTask` fails (timeout, container error), an error message is

@@ -315,8 +315,40 @@ def extract_attachments(
     return filenames
 
 
+def read_outbox_files(paths: list[Path]) -> list[tuple[str, bytes]]:
+    """Read outbox files into ``(filename, content)`` attachment tuples.
+
+    Args:
+        paths: Files to attach.  Entries that are not readable files are
+            skipped rather than failing the whole reply.
+
+    Returns:
+        List of (filename, content) tuples, in the order given.
+    """
+    attachments: list[tuple[str, bytes]] = []
+    for filepath in paths:
+        if not filepath.is_file():
+            continue
+        try:
+            content = filepath.read_bytes()
+        except OSError as e:
+            logger.warning("Failed to read outbox file %s: %s", filepath, e)
+            continue
+        attachments.append((filepath.name, content))
+        logger.debug(
+            "Collected outbox file: %s (%d bytes)",
+            filepath.name,
+            len(content),
+        )
+    return attachments
+
+
 def collect_outbox_files(outbox_dir: Path) -> list[tuple[str, bytes]]:
     """Collect files from outbox directory for email attachment.
+
+    Used where no file list is supplied by the caller (scheduled task
+    delivery); the reply path passes its paths to
+    :func:`read_outbox_files` instead.
 
     Args:
         outbox_dir: Directory to scan for files to attach.
@@ -329,19 +361,7 @@ def collect_outbox_files(outbox_dir: Path) -> list[tuple[str, bytes]]:
         logger.debug("Outbox directory does not exist: %s", outbox_dir)
         return []
 
-    attachments = []
-    for filepath in outbox_dir.iterdir():
-        if filepath.is_file():
-            try:
-                content = filepath.read_bytes()
-                attachments.append((filepath.name, content))
-                logger.debug(
-                    "Collected outbox file: %s (%d bytes)",
-                    filepath.name,
-                    len(content),
-                )
-            except OSError as e:
-                logger.warning("Failed to read outbox file %s: %s", filepath, e)
+    attachments = read_outbox_files(list(outbox_dir.iterdir()))
 
     if attachments:
         logger.info("Collected %d files from outbox", len(attachments))

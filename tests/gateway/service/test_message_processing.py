@@ -464,6 +464,14 @@ class TestProcessMessage:
 
         return svc, handler, mock_conv_store, adapter
 
+    def _seed_outbox(self, tmp_path: Path, name: str = "report.txt") -> Path:
+        """Create a file in the conversation outbox and return its path."""
+        outbox = tmp_path / "conversations" / "outbox"
+        outbox.mkdir(parents=True, exist_ok=True)
+        outfile = outbox / name
+        outfile.write_text("report content")
+        return outfile
+
     def test_new_conversation_success(
         self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
@@ -590,14 +598,6 @@ class TestProcessMessage:
         assert conv_id == "conv1"
         adapter.send_reply.assert_called_once()
 
-    def _seed_outbox(self, tmp_path: Path, name: str = "report.txt") -> Path:
-        """Create a file in the conversation outbox and return its path."""
-        outbox = tmp_path / "conversations" / "outbox"
-        outbox.mkdir(parents=True, exist_ok=True)
-        outfile = outbox / name
-        outfile.write_text("report content")
-        return outfile
-
     def test_outbox_files_delivered_then_cleared(
         self, email_config: RepoServerConfig, tmp_path: Path
     ) -> None:
@@ -642,6 +642,27 @@ class TestProcessMessage:
         delivered = adapter.send_reply.call_args[0][4]
         assert [p.name for p in delivered] == ["partial.txt"]
         assert not outfile.exists()
+
+    def test_outbox_subdirectories_not_delivered(
+        self, email_config: RepoServerConfig, tmp_path: Path
+    ) -> None:
+        """Only files in the outbox root are handed to the adapter."""
+        svc, handler, mock_cs, adapter = self._setup_svc(email_config, tmp_path)
+        outfile = self._seed_outbox(tmp_path)
+        nested = outfile.parent / "nested"
+        nested.mkdir()
+        (nested / "inner.txt").write_text("kept")
+        parsed = _make_parsed_message(body="Do something")
+
+        with patch(
+            "airut.gateway.service.message_processing.ConversationStore",
+            return_value=mock_cs,
+        ):
+            process_message(svc, parsed, "task1", handler, adapter)
+
+        delivered = adapter.send_reply.call_args[0][4]
+        assert [p.name for p in delivered] == ["report.txt"]
+        assert (nested / "inner.txt").exists()
 
     def test_outbox_kept_when_delivery_fails(
         self, email_config: RepoServerConfig, tmp_path: Path

@@ -21,6 +21,7 @@ from airut.gateway.email.parsing import (
     extract_conversation_id,
     extract_conversation_id_from_headers,
     extract_model_from_address,
+    read_outbox_files,
 )
 
 
@@ -847,3 +848,25 @@ def test_collect_outbox_files_handles_read_error(
     # Should have logged warning for bad file
     assert "Failed to read outbox file" in caplog.text
     assert "bad.txt" in caplog.text
+
+
+def test_read_outbox_files_preserves_order(tmp_path: Path) -> None:
+    """Files are read in the order given, not directory order."""
+    (tmp_path / "b.txt").write_text("second")
+    (tmp_path / "a.txt").write_text("first")
+
+    files = read_outbox_files([tmp_path / "b.txt", tmp_path / "a.txt"])
+
+    assert files == [("b.txt", b"second"), ("a.txt", b"first")]
+
+
+def test_read_outbox_files_skips_non_files(tmp_path: Path) -> None:
+    """Directories and missing paths are skipped, not fatal."""
+    (tmp_path / "subdir").mkdir()
+    (tmp_path / "file.txt").write_text("content")
+
+    files = read_outbox_files(
+        [tmp_path / "subdir", tmp_path / "gone.txt", tmp_path / "file.txt"]
+    )
+
+    assert files == [("file.txt", b"content")]

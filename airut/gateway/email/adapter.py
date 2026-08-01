@@ -28,13 +28,13 @@ from airut.gateway.channel import (
 from airut.gateway.config import EmailChannelConfig
 from airut.gateway.email.channel_listener import EmailChannelListener
 from airut.gateway.email.parsing import (
-    collect_outbox_files,
     decode_subject,
     extract_attachments,
     extract_body,
     extract_conversation_id,
     extract_conversation_id_from_headers,
     extract_model_from_address,
+    read_outbox_files,
 )
 from airut.gateway.email.responder import (
     EmailResponder,
@@ -369,12 +369,12 @@ class EmailChannelAdapter(ChannelAdapter):
             conversation_id, self._config.account.from_address
         )
 
-        # Collect attachments from outbox directory.  Removing them once
-        # delivered is the gateway's job (see ``_deliver_reply``), so that
-        # every channel behaves the same.
+        # Attach the outbox files the core handed us.  Removing them once
+        # delivered is the core's job (see ``ChannelAdapter.send_reply``),
+        # so that every channel behaves the same.
         attachments: list[tuple[str, bytes]] | None = None
         if outbox_files:
-            attachments_data = collect_outbox_files(outbox_files[0].parent)
+            attachments_data = read_outbox_files(outbox_files)
             if attachments_data:
                 attachments = attachments_data
                 logger.info(

@@ -186,6 +186,7 @@ events = [
             assert conv_id is not None
             completed = wait_for_conv_completion(service.tracker, conv_id)
             assert completed is not None
+            assert completed.status.value == "completed"
 
             outbox = (
                 slack_env.storage_dir / "conversations" / conv_id / "outbox"
@@ -261,9 +262,11 @@ events = [
             assert tasks
             conv_id = tasks[0].conversation_id
             assert conv_id is not None
-            assert (
-                wait_for_conv_completion(service.tracker, conv_id) is not None
-            ), "First turn did not complete"
+            turn1 = wait_for_conv_completion(service.tracker, conv_id)
+            assert turn1 is not None
+            assert turn1.status.value == "completed", (
+                "First turn did not finish"
+            )
 
             uploads = server.get_sent_messages(method="files_upload_v2")
             assert [u.kwargs.get("filename") for u in uploads] == ["report.txt"]
@@ -287,9 +290,11 @@ events = [
 
             # The reply text is posted before the uploads, so wait for the
             # follow-up task to finish before counting them.
-            assert (
-                wait_for_conv_completion(service.tracker, conv_id) is not None
-            ), "Second turn did not complete"
+            turn2 = wait_for_conv_completion(service.tracker, conv_id)
+            assert turn2 is not None
+            assert turn2.status.value == "completed", (
+                "Second turn did not finish"
+            )
 
             uploads = server.get_sent_messages(method="files_upload_v2")
             assert [u.kwargs.get("filename") for u in uploads] == [

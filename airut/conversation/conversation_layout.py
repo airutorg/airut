@@ -119,13 +119,12 @@ def unique_inbox_path(inbox_dir: Path, safe_name: str) -> Path:
 def clear_outbox(outbox_dir: Path) -> None:
     """Delete the files in *outbox_dir* once they have been delivered.
 
-    The outbox is mounted for the whole life of a conversation, so a file
-    that survives delivery is collected again on the next turn and sent
-    with every later reply.  Callers invoke this after the channel
-    adapter has delivered the reply.
+    Called by the gateway after a channel adapter has delivered a reply,
+    so the outbox — which lives as long as the conversation — does not
+    hand the same files to the next turn.
 
     Sub-directories are left alone (channels only send files from the
-    outbox root) and unlink failures are logged rather than raised — a
+    outbox root) and unlink failures are logged rather than raised: a
     file that cannot be removed is not worth failing a delivered reply
     over.
 
@@ -134,6 +133,7 @@ def clear_outbox(outbox_dir: Path) -> None:
     """
     if not outbox_dir.exists():
         return
+    removed = 0
     for filepath in outbox_dir.iterdir():
         if not filepath.is_file():
             continue
@@ -141,7 +141,10 @@ def clear_outbox(outbox_dir: Path) -> None:
             filepath.unlink()
         except OSError as e:
             logger.warning("Failed to delete outbox file %s: %s", filepath, e)
-    logger.debug("Cleared outbox directory: %s", outbox_dir)
+        else:
+            removed += 1
+    if removed:
+        logger.info("Cleared %d file(s) from outbox %s", removed, outbox_dir)
 
 
 def get_container_mounts(layout: ConversationLayout) -> list[str]:
