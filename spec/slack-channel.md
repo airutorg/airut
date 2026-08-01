@@ -515,7 +515,10 @@ overwriting earlier ones (shared with the email adapter via
 admits `file_share`, so no extra carve-out is needed there.
 
 **Outbound** (bot → user): Files from `outbox/` are uploaded to the thread via
-Slack's `files_upload_v2` method.
+Slack's `files_upload_v2` method. The gateway clears `outbox/` once the reply
+has been delivered (see
+[Outbox ownership](gateway-architecture.md#channel-abstraction)), so a file is
+uploaded to the thread exactly once and not repeated on later turns.
 
 ## Authorization Model
 

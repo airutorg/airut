@@ -76,6 +76,13 @@ create adapters. A single repo can have multiple channels configured
 simultaneously (e.g. both email and Slack); each channel runs its own listener
 and feeds messages through the same processing pipeline.
 
+**Outbox ownership:** the core lists `conversations/{ID}/outbox/` and passes the
+files to `send_reply()`; adapters attach or upload them but never delete them.
+Once `send_reply()` returns, the core clears the outbox. The outbox is mounted
+for the whole life of a conversation, so files left behind would be re-sent with
+every later reply. A failed delivery raises `ChannelSendError`, which skips the
+cleanup and leaves the files for the next attempt.
+
 ### Components
 
 **Protocol-agnostic core** (`gateway/service/`):
@@ -267,6 +274,7 @@ GatewayService._process_message_worker()  [worker thread]:
       -> Run claude CLI
     -> tracker.complete_task(task_id, reason)             → COMPLETED
     -> ChannelAdapter.send_reply() or send_error()
+      -> outbox/ cleared once send_reply() returns
     -> _drain_pending(conv_id)
       -> Pop first pending message
       -> Submit _process_pending_message() to thread pool

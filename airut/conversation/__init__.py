@@ -14,6 +14,7 @@ Also provides ConversationStore for conversation metadata persistence
 
 from airut.conversation.conversation_layout import (
     ConversationLayout,
+    clear_outbox,
     create_conversation_layout,
     get_container_mounts,
     prepare_conversation,
@@ -29,6 +30,7 @@ from airut.conversation.conversation_store import (
 
 __all__ = [
     "ConversationLayout",
+    "clear_outbox",
     "create_conversation_layout",
     "get_container_mounts",
     "prepare_conversation",

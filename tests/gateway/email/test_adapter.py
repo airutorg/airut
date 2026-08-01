@@ -24,7 +24,6 @@ from airut.gateway.config import (
 from airut.gateway.email.adapter import (
     EmailChannelAdapter,
     EmailParsedMessage,
-    _clean_outbox,
 )
 from airut.gateway.email.responder import SMTPSendError
 
@@ -558,8 +557,10 @@ class TestSendReply:
 
         call_kw = responder.send_reply.call_args[1]
         assert call_kw["attachments"] == [("report.txt", b"report content")]
+        # Removing delivered files is the gateway's job, not the adapter's.
+        assert outfile.exists()
 
-    def test_retry_cleans_outbox_on_success(self, tmp_path: Path) -> None:
+    def test_retry_resends_attachments(self, tmp_path: Path) -> None:
         adapter, _, _, responder = _make_adapter()
         parsed = EmailParsedMessage(
             sender="user@example.com",
@@ -593,8 +594,10 @@ class TestSendReply:
                 [outfile],
             )
 
-        # Outbox should be cleaned after retry success
-        assert not outfile.exists()
+        # The retry carries the same attachments as the first attempt.
+        assert responder.send_reply.call_count == 2
+        for send_call in responder.send_reply.call_args_list:
+            assert send_call[1]["attachments"] == [("report.txt", b"data")]
 
     def test_retry_on_smtp_failure(self) -> None:
         adapter, _, _, responder = _make_adapter()
@@ -828,48 +831,6 @@ class TestBuildReplyHeaders:
 
         _, refs = adapter._build_reply_headers(parsed, "conv1")
         assert refs == []
-
-
-class TestCleanOutbox:
-    def test_removes_files(self, tmp_path: Path) -> None:
-        outbox = tmp_path / "outbox"
-        outbox.mkdir()
-        (outbox / "file1.txt").write_text("a")
-        (outbox / "file2.txt").write_text("b")
-
-        _clean_outbox(
-            [("file1.txt", b"a"), ("file2.txt", b"b")],
-            outbox,
-        )
-
-        remaining = list(outbox.iterdir())
-        assert len(remaining) == 0
-
-    def test_noop_for_empty_attachments(self, tmp_path: Path) -> None:
-        outbox = tmp_path / "outbox"
-        outbox.mkdir()
-        (outbox / "file.txt").write_text("keep me")
-
-        _clean_outbox([], outbox)
-
-        # File should still exist
-        assert (outbox / "file.txt").exists()
-
-    def test_noop_for_missing_outbox(self, tmp_path: Path) -> None:
-        nonexistent = tmp_path / "nonexistent"
-
-        # Should not raise
-        _clean_outbox([("file.txt", b"data")], nonexistent)
-
-    def test_handles_unlink_error(self, tmp_path: Path) -> None:
-        outbox = tmp_path / "outbox"
-        outbox.mkdir()
-        f = outbox / "file.txt"
-        f.write_text("data")
-
-        with patch.object(Path, "unlink", side_effect=OSError("perm denied")):
-            # Should not raise
-            _clean_outbox([("file.txt", b"data")], outbox)
 
 
 class TestResponderProperty:

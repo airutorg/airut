@@ -369,12 +369,12 @@ class EmailChannelAdapter(ChannelAdapter):
             conversation_id, self._config.account.from_address
         )
 
-        # Collect attachments from outbox directory
+        # Collect attachments from outbox directory.  Removing them once
+        # delivered is the gateway's job (see ``_deliver_reply``), so that
+        # every channel behaves the same.
         attachments: list[tuple[str, bytes]] | None = None
-        outbox_path: Path | None = None
         if outbox_files:
-            outbox_path = outbox_files[0].parent
-            attachments_data = collect_outbox_files(outbox_path)
+            attachments_data = collect_outbox_files(outbox_files[0].parent)
             if attachments_data:
                 attachments = attachments_data
                 logger.info(
@@ -393,10 +393,6 @@ class EmailChannelAdapter(ChannelAdapter):
                 attachments=attachments,
                 message_id=outgoing_message_id,
             )
-
-            if outbox_path:
-                _clean_outbox(attachments or [], outbox_path)
-
         except SMTPSendError as e:
             logger.error("Failed to send reply: %s", e)
             # Retry once
@@ -411,10 +407,6 @@ class EmailChannelAdapter(ChannelAdapter):
                     attachments=attachments,
                     message_id=outgoing_message_id,
                 )
-
-                if outbox_path:
-                    _clean_outbox(attachments or [], outbox_path)
-
             except SMTPSendError as retry_error:
                 logger.critical("SMTP retry failed: %s", retry_error)
                 raise ChannelSendError(str(retry_error)) from retry_error
@@ -527,22 +519,3 @@ class EmailChannelAdapter(ChannelAdapter):
         )
 
         return subject, references_list
-
-
-def _clean_outbox(
-    attachments: list[tuple[str, bytes]], outbox_path: Path
-) -> None:
-    """Remove files from outbox after successful send."""
-    if not attachments or not outbox_path.exists():
-        return
-    for filepath in outbox_path.iterdir():
-        if filepath.is_file():
-            try:
-                filepath.unlink()
-            except OSError as e:
-                logger.warning(
-                    "Failed to delete outbox file %s: %s",
-                    filepath,
-                    e,
-                )
-    logger.info("Cleaned up outbox directory")

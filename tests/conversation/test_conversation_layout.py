@@ -6,9 +6,11 @@
 """Tests for conversation layout module."""
 
 from pathlib import Path
+from unittest.mock import patch
 
 from airut.conversation import (
     ConversationLayout,
+    clear_outbox,
     create_conversation_layout,
     get_container_mounts,
     prepare_conversation,
@@ -112,6 +114,47 @@ class TestUniqueInboxPath:
             unique_inbox_path(tmp_path, "archive.tar.gz")
             == tmp_path / "archive.tar-1.gz"
         )
+
+
+class TestClearOutbox:
+    """Tests for clear_outbox() post-delivery cleanup."""
+
+    def test_removes_files(self, tmp_path: Path) -> None:
+        """Every file in the outbox is deleted."""
+        outbox = tmp_path / "outbox"
+        outbox.mkdir()
+        (outbox / "file1.txt").write_text("a")
+        (outbox / "file2.txt").write_text("b")
+
+        clear_outbox(outbox)
+
+        assert list(outbox.iterdir()) == []
+
+    def test_keeps_subdirectories(self, tmp_path: Path) -> None:
+        """Sub-directories are left alone; only root files are sent."""
+        outbox = tmp_path / "outbox"
+        outbox.mkdir()
+        (outbox / "nested").mkdir()
+        (outbox / "file.txt").write_text("a")
+
+        clear_outbox(outbox)
+
+        assert list(outbox.iterdir()) == [outbox / "nested"]
+
+    def test_noop_for_missing_outbox(self, tmp_path: Path) -> None:
+        """A missing outbox directory is not an error."""
+        clear_outbox(tmp_path / "nonexistent")
+
+    def test_handles_unlink_error(self, tmp_path: Path) -> None:
+        """An undeletable file is logged, not raised."""
+        outbox = tmp_path / "outbox"
+        outbox.mkdir()
+        (outbox / "file.txt").write_text("data")
+
+        with patch.object(Path, "unlink", side_effect=OSError("perm denied")):
+            clear_outbox(outbox)
+
+        assert (outbox / "file.txt").exists()
 
 
 class TestGetContainerMounts:
